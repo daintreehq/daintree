@@ -174,9 +174,7 @@ describe("HostCallRuntime holding a host for agents its assistants launched (#16
     expect(listAgentTargets).toHaveBeenCalledTimes(2);
 
     let answer: (list: HostFleetTargetList) => void = () => {};
-    listAgentTargets.mockImplementation(
-      () => new Promise((resolve) => void (answer = resolve))
-    );
+    listAgentTargets.mockImplementation(() => new Promise((resolve) => void (answer = resolve)));
     mono += 30_000;
     expect(await sweep()).toBe(true);
     mono += 60_000;
