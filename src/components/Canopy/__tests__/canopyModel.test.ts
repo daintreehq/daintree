@@ -1030,7 +1030,7 @@ describe("unmatchedAlternatives", () => {
     expect(heavy.overRuns).toBe(true);
     expect(heavy.targets.length).toBeGreaterThan(0);
     expect(heavy.targets.length).toBeLessThan(200);
-    expect(JSON.stringify(heavy.targets).length).toBeLessThan(16 * 1024 * 1024 / 3);
+    expect(JSON.stringify(heavy.targets).length).toBeLessThan((16 * 1024 * 1024) / 3);
   });
 });
 

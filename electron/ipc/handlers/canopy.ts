@@ -523,7 +523,8 @@ function isSearchAlternative(terms: unknown): terms is string[] {
     terms.length > 0 &&
     terms.length <= CANOPY_SEARCH_MAX_TERMS &&
     terms.every(
-      (term) => typeof term === "string" && term.length > 0 && term.length <= CANOPY_SEARCH_MAX_TERM_LENGTH
+      (term) =>
+        typeof term === "string" && term.length > 0 && term.length <= CANOPY_SEARCH_MAX_TERM_LENGTH
     )
   );
 }

@@ -206,8 +206,7 @@ function installElectron(
     searchScreens: vi.fn(
       async (
         _targets: Array<{ runId: string; spawnedAt: number; terms: string[]; orTerms?: string[][] }>
-      ) =>
-        [] as string[]
+      ) => [] as string[]
     ),
     // No assistants: a full, empty directory of this machine.
     readAgentDirectory: vi.fn(async () => ({
@@ -398,9 +397,9 @@ function searchInput() {
 }
 
 function searchNotes() {
-  return [
-    ...document.querySelectorAll<HTMLElement>("[data-testid=canopy-search-notes] p"),
-  ].map((note) => note.textContent);
+  return [...document.querySelectorAll<HTMLElement>("[data-testid=canopy-search-notes] p")].map(
+    (note) => note.textContent
+  );
 }
 
 function selectedRun(container: HTMLElement) {
@@ -574,10 +573,11 @@ describe("CanopyView search", () => {
 
     await search("dfat-xth8, failing install, fallback-review: dfat-vjv0");
     // Each item on its own names a run: together they name both, not neither.
-    expect(cards(container).map((card) => card.id).sort()).toEqual([
-      "canopy-card-waiting",
-      "canopy-card-working",
-    ]);
+    expect(
+      cards(container)
+        .map((card) => card.id)
+        .sort()
+    ).toEqual(["canopy-card-waiting", "canopy-card-working"]);
     await screenSearchSettled();
     expect(canopy.searchScreens).toHaveBeenCalledTimes(1);
     // Only the run whose names hold no item is asked, for every item.

@@ -53,9 +53,12 @@ describe("textMatchesSearch", () => {
     const text = "fix login redirect\nwaiting on staging";
     expect(textMatchesSearch(text, [])).toBe(true);
     expect(textMatchesSearch(text, [["segfault"], ["login", "staging"]])).toBe(true);
-    expect(textMatchesSearch(text, [["login", "segfault"], ["staging", "econnreset"]])).toBe(
-      false
-    );
+    expect(
+      textMatchesSearch(text, [
+        ["login", "segfault"],
+        ["staging", "econnreset"],
+      ])
+    ).toBe(false);
   });
 });
 
