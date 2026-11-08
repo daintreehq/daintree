@@ -1,12 +1,15 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
+import { Button } from "@/components/ui/button";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import type { ErrorRecord, RetryAction } from "@/store/errorStore";
 import { RECURRENCE_THRESHOLD, useErrorStore } from "@/store/errorStore";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { actionService } from "@/services/ActionService";
 import { boundedErrorText, sanitizeErrorText } from "@/utils/errorText";
+import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
 
 /**
@@ -48,6 +51,13 @@ function bannerCtaFor(error: ErrorRecord, hasOnRetry: boolean): BannerCta {
  * card's 320px — and the rest stays in the tooltip.
  */
 const MESSAGE_LIMIT = 300;
+
+/**
+ * Said in the row's own description slot when the recovery button's request
+ * fails. Fixed copy: the cause is in the log, and the error row already shows
+ * what went wrong in the first place.
+ */
+const RECOVERY_FAILED_COPY = "Recovery failed. Try again, or open Diagnostics.";
 
 /**
  * Whether the clamp is hiding lines. `useTruncationDetection` measures width
@@ -113,17 +123,64 @@ export function ErrorBanner({
     useErrorStore.getState().promoteErrors([error.id]);
   }, [error.id]);
 
+  // Keyed to the occurrence it ran against: a repeat of the same error keeps
+  // the id but replaces the timestamp (and may replace the recovery action), so
+  // a result that lands after the row has moved on is dropped rather than shown
+  // against something it never ran for.
+  const recoveryKey = error.recoveryAction
+    ? `${error.recoveryAction.actionId}@${error.timestamp}`
+    : null;
+  const [recovery, setRecovery] = useState<{
+    key: string;
+    status: "pending" | "failed";
+  } | null>(null);
+  const recoveryInFlight = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const recoveryStatus = recovery && recovery.key === recoveryKey ? recovery.status : "idle";
+
   const handleRecovery = useCallback(async () => {
-    if (!error.recoveryAction) return;
-    const result = await actionService.dispatch(
-      error.recoveryAction.actionId,
-      error.recoveryAction.args,
-      { source: "user" }
-    );
-    if (!result.ok) {
-      console.warn("Recovery action dispatch failed:", result.error);
+    const recoveryAction = error.recoveryAction;
+    if (!recoveryAction || recoveryKey === null || recoveryInFlight.current) return;
+    recoveryInFlight.current = true;
+    setRecovery({ key: recoveryKey, status: "pending" });
+    let failure: unknown;
+    try {
+      const result = await actionService.dispatch(recoveryAction.actionId, recoveryAction.args, {
+        source: "user",
+      });
+      if (!result.ok) failure = result.error;
+    } catch (err) {
+      failure = err;
     }
-  }, [error.recoveryAction]);
+    recoveryInFlight.current = false;
+    if (failure === undefined) {
+      setRecovery((current) => (current?.key === recoveryKey ? null : current));
+      return;
+    }
+    // The arguments are left out: they can carry paths and branch names.
+    logError("Recovery action failed from error banner", failure, {
+      errorId: error.id,
+      actionId: recoveryAction.actionId,
+    });
+    setRecovery((current) =>
+      current?.key === recoveryKey ? { key: recoveryKey, status: "failed" } : current
+    );
+    // The row stays quiet by design, so a failure after the arrival has been
+    // announced needs its own, once per attempt.
+    if (mounted.current) useAnnouncerStore.getState().announce(RECOVERY_FAILED_COPY, "polite");
+  }, [error.id, error.recoveryAction, recoveryKey]);
+
+  const handleOpenDiagnostics = useCallback(() => {
+    // Not `handleViewErrors`: promoting the error flips this row's button to
+    // "View errors", which takes away the retry the user was just told to try.
+    useDiagnosticsStore.getState().openDock("problems");
+  }, []);
 
   const message = sanitizeErrorText(error.message);
   const shown = boundedErrorText(message, MESSAGE_LIMIT);
@@ -131,6 +188,7 @@ export function ErrorBanner({
   const progress = error.retryProgress;
 
   let action: BannerAction | undefined;
+  let recoveryFailed = false;
   if (progress) {
     // An automatic retry is under way, so there is nothing to start — only
     // something to stop, and only when the host can stop it.
@@ -142,10 +200,15 @@ export function ErrorBanner({
     if (cta === "retry") {
       action = { id: "retry", label: "Retry", icon: RefreshCw, onClick: handleRetry };
     } else if (cta === "recovery" && error.recoveryAction) {
+      // Only while the button that failed is still the one on screen: once the
+      // row hands recovery to the dock, a failure line would describe a
+      // button that is gone.
+      recoveryFailed = recoveryStatus === "failed";
       action = {
         id: "recovery",
         label: error.recoveryAction.label,
         onClick: () => void handleRecovery(),
+        loading: recoveryStatus === "pending",
       };
     } else {
       action = { id: "view-errors", label: "View errors", onClick: handleViewErrors };
@@ -154,9 +217,11 @@ export function ErrorBanner({
 
   const description = progress
     ? `Retrying ${progress.attempt} of ${progress.maxAttempts}…`
-    : error.recoveryHint
-      ? sanitizeErrorText(error.recoveryHint)
-      : undefined;
+    : recoveryFailed
+      ? RECOVERY_FAILED_COPY
+      : error.recoveryHint
+        ? sanitizeErrorText(error.recoveryHint)
+        : undefined;
 
   return (
     <InlineStatusBanner
@@ -191,6 +256,13 @@ export function ErrorBanner({
       }
       description={description}
       action={action}
+      trailingSlot={
+        recoveryFailed ? (
+          <Button variant="ghost" size="sm" onClick={handleOpenDiagnostics}>
+            Open Diagnostics
+          </Button>
+        ) : undefined
+      }
       onClose={() => onDismiss(error.id)}
       closeAriaLabel="Dismiss error"
     />

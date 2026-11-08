@@ -52,6 +52,19 @@ export const SAFE_MODE_BANNER_COPY = {
   title: "Safe mode — panels weren't restored",
 } as const;
 
+/**
+ * What a recovery button says when its request fails. These are the buttons
+ * pressed when something is already broken, so a failure that looks like
+ * nothing happened has the user pressing the same button again with no next
+ * step. One short line naming what didn't work and where to look; the cause
+ * stays in the log.
+ */
+export const RECOVERY_FAILURE_COPY = {
+  hostRestart: "Couldn't restart the terminal service. Try again, or send diagnostics.",
+  watchdogRestart: "Couldn't restart the crash watchdog. Try again, or open Diagnostics.",
+  safeModeRestart: "Couldn't restart Daintree. Try again, or view the logs.",
+} as const;
+
 export const RESTORE_CONFIRMATION_TITLE = "Session recovered after unexpected exit";
 
 /**

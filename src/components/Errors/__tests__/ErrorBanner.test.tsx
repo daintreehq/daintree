@@ -8,12 +8,21 @@ import { ErrorBanner } from "../ErrorBanner";
 import type { ErrorRecord } from "@/store/errorStore";
 import { useErrorStore } from "@/store/errorStore";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { logError } from "@/utils/logger";
 
 const mockDispatch = vi.fn().mockResolvedValue({ ok: true });
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: (...args: unknown[]) => mockDispatch(...args),
   },
+}));
+
+vi.mock("@/utils/logger", () => ({
+  logError: vi.fn(),
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
 }));
 
 // The app root supplies the provider the message tooltip needs.
@@ -361,6 +370,188 @@ describe("ErrorBanner", () => {
         { tab: "code-forge", subtab: "github" },
         { source: "user" }
       );
+    });
+
+    describe("when the recovery request fails", () => {
+      const withHint = {
+        retryability: "user-gated",
+        recoveryAction,
+        recoveryHint: "Pull the remote changes first",
+      } as const;
+      const failure = { ok: false, error: { code: "EXECUTION_ERROR", message: "git exploded" } };
+
+      const clickRecovery = async () => {
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Pull and rebase" }));
+        });
+      };
+
+      beforeEach(() => {
+        mockDispatch.mockReset();
+        mockDispatch.mockResolvedValue({ ok: true });
+        vi.mocked(logError).mockClear();
+        useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+      });
+
+      it("says so in place of the hint, and leaves the action available to retry", async () => {
+        mockDispatch.mockResolvedValueOnce(failure);
+        render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
+        expect(screen.getByText("Pull the remote changes first")).toBeTruthy();
+
+        await clickRecovery();
+
+        expect(screen.getByText(/Recovery failed/)).toBeTruthy();
+        expect(screen.queryByText("Pull the remote changes first")).toBeNull();
+        const button = screen.getByRole("button", { name: "Pull and rebase" });
+        expect(button.getAttribute("aria-disabled")).toBeNull();
+
+        await clickRecovery();
+        expect(mockDispatch).toHaveBeenCalledTimes(2);
+      });
+
+      it("treats a rejected dispatch the same as a refused one", async () => {
+        mockDispatch.mockRejectedValueOnce(new Error("IPC closed"));
+        render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
+        await clickRecovery();
+        expect(screen.getByText(/Recovery failed/)).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Pull and rebase" })).toBeTruthy();
+      });
+
+      it("logs the cause without the recovery arguments", async () => {
+        mockDispatch.mockResolvedValueOnce(failure);
+        const secret = { ...recoveryAction, args: { branch: "feature/private-name" } };
+        render(
+          <ErrorBanner
+            error={makeError({ retryability: "user-gated", recoveryAction: secret })}
+            onDismiss={onDismiss}
+          />
+        );
+        await clickRecovery();
+        expect(logError).toHaveBeenCalledTimes(1);
+        const [, cause, context] = vi.mocked(logError).mock.calls[0];
+        expect(cause).toBe(failure.error);
+        expect(context).toEqual({ errorId: "err-1", actionId: "git.pullRebase" });
+        expect(JSON.stringify(context)).not.toContain("private-name");
+      });
+
+      it("announces each failed attempt once, since the row itself stays quiet", async () => {
+        mockDispatch.mockResolvedValue(failure);
+        render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
+        await clickRecovery();
+        expect(useAnnouncerStore.getState().nextId).toBe(2);
+        expect(useAnnouncerStore.getState().polite?.msg).toMatch(/Recovery failed/);
+        await clickRecovery();
+        expect(useAnnouncerStore.getState().nextId).toBe(3);
+      });
+
+      it("does not announce a success", async () => {
+        render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
+        await clickRecovery();
+        expect(useAnnouncerStore.getState().nextId).toBe(1);
+        expect(screen.queryByText(/Recovery failed/)).toBeNull();
+      });
+
+      it("clears the line when the retry starts and when it succeeds", async () => {
+        mockDispatch.mockResolvedValueOnce(failure);
+        render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
+        await clickRecovery();
+        expect(screen.getByText(/Recovery failed/)).toBeTruthy();
+
+        let settle!: (value: unknown) => void;
+        mockDispatch.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+        await clickRecovery();
+        expect(screen.queryByText(/Recovery failed/)).toBeNull();
+        expect(screen.getByText("Pull the remote changes first")).toBeTruthy();
+
+        await act(async () => settle({ ok: true }));
+        expect(screen.queryByText(/Recovery failed/)).toBeNull();
+      });
+
+      it("holds a second click until the first request settles", async () => {
+        let settle!: (value: unknown) => void;
+        mockDispatch.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+        render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
+        await clickRecovery();
+        await clickRecovery();
+        expect(mockDispatch).toHaveBeenCalledTimes(1);
+        await act(async () => settle({ ok: true }));
+        await clickRecovery();
+        expect(mockDispatch).toHaveBeenCalledTimes(2);
+      });
+
+      it("opens Problems from the pointer without promoting the error", async () => {
+        mockDispatch.mockResolvedValueOnce(failure);
+        const id = useErrorStore.getState().addError({
+          type: "unknown",
+          message: "Push rejected",
+          retryability: "user-gated",
+          recoveryAction,
+        });
+        render(
+          <ErrorBanner
+            error={useErrorStore.getState().errors.find((e) => e.id === id)!}
+            onDismiss={onDismiss}
+          />
+        );
+        await clickRecovery();
+        fireEvent.click(screen.getByRole("button", { name: "Open Diagnostics" }));
+        expect(useDiagnosticsStore.getState().isOpen).toBe(true);
+        expect(useDiagnosticsStore.getState().activeTab).toBe("problems");
+        expect(
+          useErrorStore.getState().errors.find((e) => e.id === id)?.promotedToDock
+        ).toBeFalsy();
+      });
+
+      it("offers no Diagnostics pointer before anything has failed", () => {
+        render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
+        expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
+      });
+
+      it("drops the line when the same error recurs with a new occurrence", async () => {
+        mockDispatch.mockResolvedValueOnce(failure);
+        const error = makeError({ ...withHint, timestamp: 1000 });
+        const { rerender } = render(<ErrorBanner error={error} onDismiss={onDismiss} />);
+        await clickRecovery();
+        expect(screen.getByText(/Recovery failed/)).toBeTruthy();
+
+        rerender(<ErrorBanner error={{ ...error, timestamp: 2000 }} onDismiss={onDismiss} />);
+        expect(screen.queryByText(/Recovery failed/)).toBeNull();
+        expect(screen.getByText("Pull the remote changes first")).toBeTruthy();
+      });
+
+      it("keeps the failure to the row whose button failed", async () => {
+        mockDispatch.mockResolvedValueOnce(failure);
+        render(
+          <>
+            <ErrorBanner error={makeError({ ...withHint, id: "a" })} onDismiss={onDismiss} />
+            <ErrorBanner
+              error={makeError({
+                ...withHint,
+                id: "b",
+                recoveryAction: { label: "Sign in", actionId: "auth.signIn" },
+              })}
+              onDismiss={onDismiss}
+            />
+          </>
+        );
+        await clickRecovery();
+        expect(screen.getAllByText(/Recovery failed/)).toHaveLength(1);
+      });
+
+      it("lets an automatic retry's progress take the description back", async () => {
+        mockDispatch.mockResolvedValueOnce(failure);
+        const error = makeError(withHint);
+        const { rerender } = render(<ErrorBanner error={error} onDismiss={onDismiss} />);
+        await clickRecovery();
+        rerender(
+          <ErrorBanner
+            error={{ ...error, retryProgress: { attempt: 1, maxAttempts: 3 } }}
+            onDismiss={onDismiss}
+          />
+        );
+        expect(screen.queryByText(/Recovery failed/)).toBeNull();
+        expect(screen.getByText("Retrying 1 of 3…")).toBeTruthy();
+      });
     });
   });
 

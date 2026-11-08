@@ -8,7 +8,11 @@ import { actionService } from "@/services/ActionService";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { logError } from "@/utils/logger";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { HOST_CRASH_RECOVERING_COPY, getHostCrashBannerCopy } from "./recoveryCopy";
+import {
+  HOST_CRASH_RECOVERING_COPY,
+  RECOVERY_FAILURE_COPY,
+  getHostCrashBannerCopy,
+} from "./recoveryCopy";
 
 export function HostCrashBanner() {
   const backendStatus = usePanelStore((s) => s.backendStatus);
@@ -16,7 +20,20 @@ export function HostCrashBanner() {
   const isCollectingDiagnostics = useDiagnosticsReviewStore((s) => s.isCollecting);
   const diagnosticsError = useDiagnosticsReviewStore((s) => s.downloadError);
   const [isRestarting, setIsRestarting] = useState(false);
+  const [restartFailed, setRestartFailed] = useState(false);
+  const [seenStatus, setSeenStatus] = useState(backendStatus);
   const recoveringShown = useDohertyGate(backendStatus === "recovering");
+
+  // The component stays mounted while it renders nothing, so a manual attempt
+  // from one crash would otherwise leave its loading button or failure line on
+  // the next. Only a settled disconnect owns them.
+  if (seenStatus !== backendStatus) {
+    setSeenStatus(backendStatus);
+    if (backendStatus !== "disconnected") {
+      setIsRestarting(false);
+      setRestartFailed(false);
+    }
+  }
 
   if (backendStatus === "connected") return null;
 
@@ -41,13 +58,18 @@ export function HostCrashBanner() {
   const handleRestart = async () => {
     if (isRestarting) return;
     setIsRestarting(true);
-    const result = await actionService.dispatch("terminal.restartService", undefined, {
-      source: "user",
-    });
-    if (!result.ok) {
+    setRestartFailed(false);
+    try {
+      const result = await actionService.dispatch("terminal.restartService", undefined, {
+        source: "user",
+      });
+      if (result.ok) return;
       logError("Failed to restart terminal service from host crash banner", result.error);
-      setIsRestarting(false);
+    } catch (error) {
+      logError("Failed to restart terminal service from host crash banner", error);
     }
+    setIsRestarting(false);
+    setRestartFailed(true);
   };
 
   const handleSendDiagnostics = () => {
@@ -90,13 +112,25 @@ export function HostCrashBanner() {
       animated={false}
       trailingSlot={sendDiagnosticsButton}
       descriptionExtras={
-        diagnosticsError ? (
-          <p
-            className="text-xs mt-1 break-words text-text-primary"
-            data-testid="host-crash-banner-diagnostics-error"
-          >
-            Diagnostics collection failed: {diagnosticsError}
-          </p>
+        restartFailed || diagnosticsError ? (
+          <>
+            {restartFailed && (
+              <p
+                className="text-xs mt-1 break-words text-text-primary"
+                data-testid="host-crash-banner-restart-error"
+              >
+                {RECOVERY_FAILURE_COPY.hostRestart}
+              </p>
+            )}
+            {diagnosticsError && (
+              <p
+                className="text-xs mt-1 break-words text-text-primary"
+                data-testid="host-crash-banner-diagnostics-error"
+              >
+                Diagnostics collection failed: {diagnosticsError}
+              </p>
+            )}
+          </>
         ) : null
       }
       action={{

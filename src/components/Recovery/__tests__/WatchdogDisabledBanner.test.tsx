@@ -19,6 +19,7 @@ import { WatchdogDisabledBanner } from "../WatchdogDisabledBanner";
 import { usePanelStore } from "@/store/panelStore";
 import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
 import { actionService } from "@/services/ActionService";
+import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 
 const mockedDispatch = vi.mocked(actionService.dispatch);
 
@@ -116,6 +117,109 @@ describe("WatchdogDisabledBanner", () => {
     });
     expect(button.disabled).toBe(false);
     expect(button.textContent).toMatch(/Restart watchdog/);
+  });
+
+  describe("when the restart request fails", () => {
+    const refused = {
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "boom" },
+    } as never;
+
+    const restartButton = () => screen.getByRole("button", { name: /Restart watchdog/i });
+    const failureLine = () => screen.queryByTestId("watchdog-banner-restart-error");
+
+    beforeEach(() => {
+      usePanelStore.setState({
+        watchdogStatus: "disabled",
+        watchdogDisabledInfo: { attemptCount: 3, lastExitCode: null, timestamp: 0 },
+      });
+      useDiagnosticsStore.getState().reset();
+    });
+
+    it("says so on the banner and keeps Restart watchdog available", async () => {
+      mockedDispatch.mockResolvedValueOnce(refused);
+      render(<WatchdogDisabledBanner />);
+      expect(failureLine()).toBeNull();
+      expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()?.textContent).toMatch(/Couldn't restart the crash watchdog/);
+      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+      // The standing explanation stays; the failure is added to it.
+      expect(screen.getByText(/Deadlock detection stopped after 3 restart attempts/)).toBeTruthy();
+    });
+
+    it("reports a rejected dispatch the same way", async () => {
+      mockedDispatch.mockRejectedValueOnce(new Error("IPC closed"));
+      render(<WatchdogDisabledBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()).not.toBeNull();
+      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+    });
+
+    it("opens the Logs tab from the Diagnostics pointer", async () => {
+      mockedDispatch.mockResolvedValueOnce(refused);
+      render(<WatchdogDisabledBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Open Diagnostics" }));
+      expect(useDiagnosticsStore.getState().isOpen).toBe(true);
+      expect(useDiagnosticsStore.getState().activeTab).toBe("logs");
+    });
+
+    it("clears the line and the pointer when the retry starts", async () => {
+      mockedDispatch.mockResolvedValueOnce(refused);
+      render(<WatchdogDisabledBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()).not.toBeNull();
+
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(mockedDispatch).toHaveBeenCalledTimes(2);
+      expect(failureLine()).toBeNull();
+      expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
+    });
+
+    it("starts the next disable with neither the failure line nor a stuck button", async () => {
+      mockedDispatch.mockResolvedValueOnce(refused);
+      render(<WatchdogDisabledBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()).not.toBeNull();
+
+      act(() => {
+        usePanelStore.setState({ watchdogStatus: "active" });
+      });
+      act(() => {
+        usePanelStore.setState({ watchdogStatus: "disabled" });
+      });
+      expect(failureLine()).toBeNull();
+      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+    });
+
+    it("does not carry a successful restart's loading state into the next disable", async () => {
+      render(<WatchdogDisabledBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(restartButton().getAttribute("aria-disabled")).toBe("true");
+
+      act(() => {
+        usePanelStore.setState({ watchdogStatus: "active" });
+      });
+      act(() => {
+        usePanelStore.setState({ watchdogStatus: "disabled" });
+      });
+      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+    });
   });
 
   it("disappears when watchdogStatus transitions back to active", () => {

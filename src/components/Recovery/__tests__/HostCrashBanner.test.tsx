@@ -19,6 +19,7 @@ vi.mock("@/utils/logger", () => ({
 import { HostCrashBanner } from "../HostCrashBanner";
 import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
+import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
 
 const mockedDispatch = vi.mocked(actionService.dispatch);
 
@@ -162,6 +163,106 @@ describe("HostCrashBanner", () => {
     });
     expect(button.getAttribute("aria-disabled")).toBeNull();
     expect(button.textContent).toMatch(/Restart service/);
+  });
+
+  describe("when the restart request fails", () => {
+    const refused = {
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "boom" },
+    } as never;
+
+    const restartButton = () => screen.getByRole("button", { name: /Restart service/i });
+    const failureLine = () => screen.queryByTestId("host-crash-banner-restart-error");
+
+    beforeEach(() => {
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: null });
+      useDiagnosticsReviewStore.setState({ downloadError: null });
+    });
+
+    it("says so on the banner and keeps Restart service available", async () => {
+      mockedDispatch.mockResolvedValueOnce(refused);
+      render(<HostCrashBanner />);
+      expect(failureLine()).toBeNull();
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()?.textContent).toMatch(/Couldn't restart the terminal service/);
+      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+      // The pointer it names is on the same banner.
+      expect(screen.getByRole("button", { name: /Send diagnostics/i })).toBeTruthy();
+    });
+
+    it("reports a rejected dispatch the same way", async () => {
+      mockedDispatch.mockRejectedValueOnce(new Error("IPC closed"));
+      render(<HostCrashBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()).not.toBeNull();
+      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+    });
+
+    it("clears the line when the retry starts and leaves none after it succeeds", async () => {
+      mockedDispatch.mockResolvedValueOnce(refused);
+      render(<HostCrashBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()).not.toBeNull();
+
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(mockedDispatch).toHaveBeenCalledTimes(2);
+      expect(failureLine()).toBeNull();
+    });
+
+    it("sits beside a diagnostics collection failure rather than replacing it", async () => {
+      mockedDispatch.mockResolvedValueOnce(refused);
+      useDiagnosticsReviewStore.setState({ downloadError: "disk full" });
+      render(<HostCrashBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()).not.toBeNull();
+      expect(screen.getByTestId("host-crash-banner-diagnostics-error").textContent).toMatch(
+        /disk full/
+      );
+    });
+
+    it("starts the next crash with neither the failure line nor a stuck button", async () => {
+      mockedDispatch.mockResolvedValueOnce(refused);
+      render(<HostCrashBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()).not.toBeNull();
+
+      act(() => {
+        usePanelStore.setState({ backendStatus: "connected" });
+      });
+      act(() => {
+        usePanelStore.setState({ backendStatus: "disconnected" });
+      });
+      expect(failureLine()).toBeNull();
+      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+    });
+
+    it("does not carry a successful restart's loading state into the next crash", async () => {
+      render(<HostCrashBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(restartButton().getAttribute("aria-disabled")).toBe("true");
+
+      act(() => {
+        usePanelStore.setState({ backendStatus: "connected" });
+      });
+      act(() => {
+        usePanelStore.setState({ backendStatus: "disconnected" });
+      });
+      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+    });
   });
 
   it("disappears when backend transitions back to connected", () => {
