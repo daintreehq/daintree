@@ -95,8 +95,8 @@ function plans(): NonNullable<typeof corpora> {
         seed: 300 + index,
       })
     ),
-    // Large retained history: long enough that every ring is trimming on
-    // essentially every chunk, which is the cost this scenario is named for.
+    // Large retained history: long enough that the forensics ring is trimming
+    // on essentially every chunk, which is the cost this scenario is named for.
     large: buildPipelinePlan({
       chunks: 1800,
       linesPerChunk: 4,
