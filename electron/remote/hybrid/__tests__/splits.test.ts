@@ -810,9 +810,53 @@ describe("opening host files", () => {
     );
   });
 
+  it("opens Zed through its own SSH link, at the line when one is given", async () => {
+    const forward = vi.fn(() => ({ preferredEditor: { id: "zed" }, discoveredEditors: [] }));
+    const { invoke, listener } = setup(forward, () => "local");
+
+    await expect(
+      invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [
+        { path: "/home/greg/repo/src/a b.ts", line: 3, col: 7, projectId: "p1" },
+      ])
+    ).resolves.toBeUndefined();
+    await invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [{ path: "/home/greg/repo", projectId: "p1" }]);
+
+    expect(mocks.openExternal.mock.calls.map((call) => (call as unknown[])[0])).toEqual([
+      "zed://ssh/greg@studio-01/home/greg/repo/src/a%20b.ts:3:7",
+      "zed://ssh/greg@studio-01/home/greg/repo",
+    ]);
+    expect(mocks.writeText).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("copies the host path when nothing here handles Zed's link", async () => {
+    mocks.openExternal.mockRejectedValueOnce(new Error("no handler"));
+    const { invoke } = setup(
+      () => ({ preferredEditor: { id: "zed" }, discoveredEditors: [] }),
+      () => "local"
+    );
+    await expect(
+      invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [{ path: "/home/greg/b.ts", projectId: "p1" }])
+    ).resolves.toMatchObject({ outcome: "copied-host-path", path: "/home/greg/b.ts" });
+    expect(mocks.openExternal).toHaveBeenCalledTimes(1);
+    expect(mocks.writeText).toHaveBeenCalledWith("/home/greg/b.ts");
+  });
+
+  it("copies the host path instead of opening Zed at a path it would misread", async () => {
+    const { invoke } = setup(
+      () => ({ preferredEditor: { id: "zed" }, discoveredEditors: [] }),
+      () => "local"
+    );
+    await expect(
+      invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [{ path: "/srv/a:5", line: 12, projectId: "p1" }])
+    ).resolves.toMatchObject({ outcome: "copied-host-path", path: "/srv/a:5" });
+    expect(mocks.openExternal).not.toHaveBeenCalled();
+    expect(mocks.writeText).toHaveBeenCalledWith("/srv/a:5");
+  });
+
   it("copies the host path and says so, naming the host, for an editor with no remote URL", async () => {
     const { invoke, listener } = setup(
-      () => ({ preferredEditor: { id: "zed" }, discoveredEditors: [] }),
+      () => ({ preferredEditor: { id: "neovim" }, discoveredEditors: [] }),
       () => "local"
     );
     await expect(
@@ -846,7 +890,7 @@ describe("opening host files", () => {
     CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED,
   ])("reports an asynchronous clipboard failure from %s", async (channel) => {
     const { invoke } = setup(
-      () => ({ preferredEditor: { id: "zed" }, discoveredEditors: [] }),
+      () => ({ preferredEditor: { id: "neovim" }, discoveredEditors: [] }),
       () => "local"
     );
     mocks.writeText.mockRejectedValueOnce(new Error("clipboard unavailable"));
@@ -978,6 +1022,17 @@ describe("opening host files", () => {
         { activate: true }
       );
     });
+
+    it("copies the host path for Zed, which has no link to its WSL remote", async () => {
+      const forward = vi.fn(() => ({ preferredEditor: { id: "zed" }, discoveredEditors: [] }));
+      const { invoke } = setup(forward, () => "local");
+      await expect(
+        invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [
+          { path: "/home/dt/repo/a.ts", line: 3, projectId: "p1" },
+        ])
+      ).resolves.toMatchObject({ outcome: "copied-host-path", path: "/home/dt/repo/a.ts" });
+      expect(mocks.openExternal).not.toHaveBeenCalled();
+    });
   });
 
   it("refuses native pickers and clipboard capture clearly", async () => {
@@ -1025,6 +1080,175 @@ describe("opening host files", () => {
     expect(buildRemoteEditorUrl({ ...base, editorId: "vscode", line: 0 })).toBeNull();
   });
 
+  // The URLs and refusals here were checked against Chromium's canonicalisation in
+  // the pinned Electron, then Zed 1.27's parse_ssh_url and PathWithPosition::parse_str.
+  describe("Zed's SSH link", () => {
+    const zed = (sshTarget: string, path: string, line?: number, col?: number) =>
+      buildRemoteEditorUrl({ editorId: "zed", sshTarget, path, line, col });
+
+    it("spells the target and the path as Zed reads them, with the line and column last", () => {
+      expect(zed("studio", "/srv/x.ts")).toBe("zed://ssh/studio/srv/x.ts");
+      expect(zed("me@studio.lan", "/srv/x.ts", 4)).toBe("zed://ssh/me@studio.lan/srv/x.ts:4");
+      expect(zed("me@studio.lan", "/srv/x.ts", 4, 7)).toBe("zed://ssh/me@studio.lan/srv/x.ts:4:7");
+      expect(zed("studio", "/srv/repo")).toBe("zed://ssh/studio/srv/repo");
+      expect(zed("studio", "/srv/repo/")).toBe("zed://ssh/studio/srv/repo/");
+      expect(zed("studio", "/")).toBe("zed://ssh/studio/");
+      // A column means nothing without its line.
+      expect(zed("studio", "/srv/x.ts", undefined, 7)).toBe("zed://ssh/studio/srv/x.ts");
+    });
+
+    it("keeps an alias's case and the target characters Zed leaves alone", () => {
+      expect(zed("Studio-01", "/a")).toBe("zed://ssh/Studio-01/a");
+      expect(zed("192.168.1.10", "/a")).toBe("zed://ssh/192.168.1.10/a");
+      expect(zed("dev+prod", "/a")).toBe("zed://ssh/dev+prod/a");
+      expect(zed("user+tag@dev+prod", "/a")).toBe("zed://ssh/user+tag@dev+prod/a");
+      expect(zed("user@domain.tld@host", "/a")).toBe("zed://ssh/user@domain.tld@host/a");
+      expect(zed("under_score.host", "/a")).toBe("zed://ssh/under_score.host/a");
+      expect(zed(".studio", "/a")).toBe("zed://ssh/.studio/a");
+      expect(zed("+studio", "/a")).toBe("zed://ssh/+studio/a");
+      expect(zed("user-name@studio", "/a")).toBe("zed://ssh/user-name@studio/a");
+    });
+
+    it("encodes the path once, by segment, as Zed decodes it once", () => {
+      expect(zed("studio", "/srv/a b.ts", 3, 7)).toBe("zed://ssh/studio/srv/a%20b.ts:3:7");
+      expect(zed("studio", "/srv/a?b#c.ts")).toBe("zed://ssh/studio/srv/a%3Fb%23c.ts");
+      expect(zed("studio", "/srv/100%.ts")).toBe("zed://ssh/studio/srv/100%25.ts");
+      expect(zed("studio", "/srv/%25.ts")).toBe("zed://ssh/studio/srv/%2525.ts");
+      expect(zed("studio", "/srv/%2e/x.ts")).toBe("zed://ssh/studio/srv/%252e/x.ts");
+      expect(zed("studio", "/srv/a\tb.ts")).toBe("zed://ssh/studio/srv/a%09b.ts");
+      expect(zed("studio", "/srv/x ")).toBe("zed://ssh/studio/srv/x%20");
+      expect(zed("studio", "/srv/日本.ts", 2)).toBe("zed://ssh/studio/srv/%E6%97%A5%E6%9C%AC.ts:2");
+      expect(zed("studio", "/srv/😀.ts")).toBe("zed://ssh/studio/srv/%F0%9F%98%80.ts");
+    });
+
+    it("opens names that only look like a position when they can't be read as one", () => {
+      expect(zed("studio", "/srv/a:5/b.ts", 3)).toBe("zed://ssh/studio/srv/a%3A5/b.ts:3");
+      expect(zed("studio", "/srv/foo(1).pdf", 4)).toBe("zed://ssh/studio/srv/foo(1).pdf:4");
+      expect(zed("studio", "/srv/(marketing)/page.tsx", 9)).toBe(
+        "zed://ssh/studio/srv/(marketing)/page.tsx:9"
+      );
+      expect(zed("studio", "/srv/~x.ts")).toBe("zed://ssh/studio/srv/~x.ts");
+      // Zed's parser needs a file name before the bracket.
+      expect(zed("studio", "/srv/app/(2026)")).toBe("zed://ssh/studio/srv/app/(2026)");
+      expect(zed("studio", "/srv/app/(2026)", 4)).toBe("zed://ssh/studio/srv/app/(2026):4");
+      expect(zed("studio", "/srv/((1)")).toBe("zed://ssh/studio/srv/((1)");
+    });
+
+    it("refuses a file name Zed would read a position out of", () => {
+      // Zed reads `a%3A5:12` as `/srv/a` at 5:12, and `foo%3A:4` as `/srv/foo` at 4.
+      for (const path of [
+        "/srv/a:5",
+        "/srv/foo:",
+        "/srv/foo:(1,2)",
+        "/srv/a:5/",
+        "/srv/a:b.ts",
+        "/srv/a:5/ ", // Zed trims this back to `/srv/a:5/`.
+      ]) {
+        expect(zed("studio", path)).toBeNull();
+        expect(zed("studio", path, 4)).toBeNull();
+      }
+    });
+
+    it("refuses a file name that is only safe while the file exists", () => {
+      // Zed prefers the literal path, but reads `foo(1)` as `foo` at line 1 once it has gone.
+      for (const path of [
+        "/srv/foo(1)",
+        "/srv/foo(1,2)",
+        "/srv/foo(1) ",
+        "/srv/project (2)/",
+        "/srv/foo(1)// ",
+        "/srv/foo(1)\u0085", // Rust trims this and JavaScript's `\s` doesn't match it.
+        "/srv/foo(1,\u0662)", // Rust's `\d` matches this, and the row alone still parses.
+      ]) {
+        expect(zed("studio", path)).toBeNull();
+        expect(zed("studio", path, 4)).toBeNull();
+      }
+    });
+
+    it("refuses a path Zed would expand on the host", () => {
+      for (const path of ["/~/x.ts", "/~foo/x.ts", "/~"]) {
+        expect(zed("studio", path)).toBeNull();
+      }
+    });
+
+    it("refuses dot segments, which resolve away before Zed sees them", () => {
+      // `zed://ssh/studio/../other/a.ts` reaches Zed as host `other`.
+      for (const path of ["/../other/a.ts", "/srv/../a.ts", "/srv/./a.ts", "/srv/..", "/."]) {
+        expect(zed("studio", path)).toBeNull();
+      }
+    });
+
+    it("refuses a target Zed would change, fail on, or read as something else", () => {
+      for (const sshTarget of [
+        "box%1", // Zed keeps it in a host and decodes it in a user: `a%41@host` is user `aA`.
+        "a%41@host",
+        "me@[bastion]", // Not an IPv6 address, so Zed logs an error and opens nothing.
+        "[bastion]",
+        "@-oFoo", // No user, so the host is `-oFoo`.
+        "me@", // No host.
+        "a@@b",
+        "a@-b",
+        ".", // Resolved away, leaving the path's first segment as the host.
+        "..",
+        // What the transport refuses, Zed never sees either.
+        "-oProxyCommand=x",
+        "-user@studio",
+        "host:22",
+        "a b",
+        "",
+        "a".repeat(256),
+      ]) {
+        expect(zed(sshTarget, "/a")).toBeNull();
+      }
+    });
+
+    it("refuses what any remote editor refuses", () => {
+      expect(zed("studio", "relative.ts")).toBeNull();
+      expect(zed("studio", "/a\nb")).toBeNull();
+      expect(zed("studio", "/a", 0)).toBeNull();
+      expect(zed("studio", "/a", 1, -1)).toBeNull();
+      expect(zed("studio", "/a", 1.5)).toBeNull();
+      expect(zed("studio", "/a", Number.NaN)).toBeNull();
+      expect(zed("studio", "/a", Number.POSITIVE_INFINITY)).toBeNull();
+      expect(zed("studio", "/a", 1, 1)).toBe("zed://ssh/studio/a:1:1");
+    });
+
+    it("stays within the u32 Zed parses a position as", () => {
+      expect(zed("studio", "/a", 4294967295, 4294967295)).toBe(
+        "zed://ssh/studio/a:4294967295:4294967295"
+      );
+      expect(zed("studio", "/a", 4294967296)).toBeNull();
+      expect(zed("studio", "/a", 1, 4294967296)).toBeNull();
+    });
+
+    it("leaves the VS Code family's URLs alone", () => {
+      const vscode = { editorId: "vscode", sshTarget: "studio" } as const;
+      expect(buildRemoteEditorUrl({ ...vscode, path: "/srv/a:5", line: 4 })).toBe(
+        "vscode://vscode-remote/ssh-remote+studio/srv/a%3A5:4"
+      );
+      expect(buildRemoteEditorUrl({ ...vscode, path: "/~foo/a(1)" })).toBe(
+        "vscode://vscode-remote/ssh-remote+studio/~foo/a(1)"
+      );
+      expect(buildRemoteEditorUrl({ ...vscode, path: "/a", line: 4294967296 })).toBe(
+        "vscode://vscode-remote/ssh-remote+studio/a:4294967296"
+      );
+    });
+
+    it("has no WSL link, so a WSL host keeps the copy-path fallback", () => {
+      expect(
+        buildRemoteEditorUrl({ editorId: "zed", wslDistro: "Debian", path: "/srv/x.ts" })
+      ).toBeNull();
+    });
+  });
+
+  it("refuses a path holding a lone surrogate for every editor, rather than throw on encoding it", () => {
+    for (const editorId of ["vscode", "cursor", "zed"] as const) {
+      for (const path of ["/srv/\uD800.ts", "/srv/\uDC00.ts"]) {
+        expect(buildRemoteEditorUrl({ editorId, sshTarget: "studio", path })).toBeNull();
+      }
+    }
+  });
+
   it("builds a WSL editor URL with the distro encoded and refuses one that isn't a distro name", () => {
     expect(
       buildRemoteEditorUrl({
@@ -1041,7 +1265,7 @@ describe("opening host files", () => {
     expect(buildRemoteEditorUrl({ editorId: null, wslDistro: "Debian", path: "a" })).toBeNull();
   });
 
-  it("opens every target the SSH transport accepts, hex-encoding the ones a URI would mangle", () => {
+  it("opens every target the SSH transport accepts through the VS Code remote, hex-encoding the ones a URI would mangle", () => {
     const hexAuthority = (hostName: string) =>
       `ssh-remote+${Buffer.from(JSON.stringify({ hostName }), "utf8").toString("hex")}`;
     for (const sshTarget of ["dev+prod", "box%1", "me@[bastion]", "user@dev+prod"]) {
