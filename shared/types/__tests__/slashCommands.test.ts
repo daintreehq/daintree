@@ -319,6 +319,16 @@ describe("/clear and /new", () => {
     expect(new Set(descriptions).size).toBe(agentsWithClear.length);
   });
 
+  it("says Claude's /clear empties the context and leaves the old session resumable", () => {
+    const description = commandFor("claude", "clear")?.description;
+    expect(description).toMatch(/\bempty context\b/i);
+    expect(description).toMatch(/\bresum/i);
+  });
+
+  it("says Gemini's /clear clears the screen too", () => {
+    expect(commandFor("gemini", "clear")?.description).toMatch(/\bclear the screen\b/i);
+  });
+
   it("lists /new only for Codex, the one CLI where it is a command of its own", () => {
     expect(BUILT_IN_AGENT_IDS.filter((agentId) => commandFor(agentId, "new"))).toEqual(["codex"]);
   });
@@ -334,8 +344,11 @@ describe("/clear and /new", () => {
     }
   );
 
-  it("keeps Claude's /reset reachable through its /clear", () => {
-    expect(commandFor("claude", "clear")?.aliases).toContain("reset");
+  it("keeps /reset to Claude, the only CLI whose /clear answers to it", () => {
+    const withReset = agentsWithClear.filter((agentId) =>
+      commandFor(agentId, "clear")?.aliases?.includes("reset")
+    );
+    expect(withReset).toEqual(["claude"]);
   });
 
   it("never lets an alias shadow one of the agent's own commands", () => {

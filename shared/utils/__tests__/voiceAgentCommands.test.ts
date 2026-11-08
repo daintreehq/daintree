@@ -263,6 +263,19 @@ describe("a spoken alias", () => {
     }
   });
 
+  it("only gives way to a name under the same prefix", () => {
+    const clear = custom("codex", "/clear", { scope: "built-in", aliases: ["reset"] });
+    const skill = custom("codex", "$reset", { kind: "skill" });
+    for (const commands of [
+      [clear, skill],
+      [skill, clear],
+    ]) {
+      const vocabulary = buildVoiceCommandVocabulary(commands, sourcesOf("codex"));
+      expect(rewriteSpokenCommand("slash reset", vocabulary)).toBe("/reset");
+      expect(rewriteSpokenCommand("dollar reset", vocabulary)).toBe("$reset");
+    }
+  });
+
   it("is not read from a command another trigger opens", () => {
     const skill = custom("codex", "$github", { kind: "plugin", aliases: ["gh"] });
     const vocabulary = buildVoiceCommandVocabulary([skill], sourcesOf("codex"));
