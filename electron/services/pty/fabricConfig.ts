@@ -7,8 +7,8 @@
  * placement/sizing policy is unit-testable in isolation from PtyClient.
  *
  * Kill switch: the fabric is OFF unless `DAINTREE_PTY_FABRIC=1` (or "true").
- * Off means exactly one shard ("main") with the exact legacy behavior —
- * fixed 512 MB heap, one process, one governor.
+ * Off means exactly one shard ("main"): one process, one governor, with the
+ * same RAM-scaled heap budget a fabric shard gets.
  */
 
 import { createHash } from "crypto";
@@ -46,18 +46,40 @@ export function maxProjectShards(cpuCount: number): number {
 }
 
 /**
- * Per-shard V8 heap budget, scaled from machine RAM. The legacy singleton
- * pinned 512 MB on every machine; with the fabric each shard gets
- * `totalMem / 32` clamped to [512, 2048] MB — an 8 GB laptop keeps the legacy
- * 512, a 64 GB workstation gets 2 GB per shard. These are ceilings, not
- * allocations: V8 only commits what the shard actually uses. The same value
- * is forwarded to the shard's ResourceGovernor via DAINTREE_PTY_HEAP_BUDGET_MB
- * so governance thresholds track the real cap instead of a hardcoded 512.
+ * Per-shard V8 heap budget, scaled from machine RAM. Every shard, including the
+ * single host when the fabric is off, gets `totalMem / 32` clamped to
+ * [512, 2048] MB — an 8 GB laptop keeps the historical 512, a 64 GB
+ * workstation gets 2 GB. These are ceilings, not allocations: V8 only commits
+ * what the shard actually uses. The same value is forwarded to the shard's
+ * ResourceGovernor via DAINTREE_PTY_HEAP_BUDGET_MB so governance thresholds
+ * track the real cap instead of a hardcoded 512.
  */
 export function shardHeapBudgetMb(totalMemBytes: number): number {
   if (!Number.isFinite(totalMemBytes) || totalMemBytes <= 0) return 512;
   const totalMemMb = totalMemBytes / (1024 * 1024);
   return Math.min(2048, Math.max(512, Math.floor(totalMemMb / 32)));
+}
+
+/**
+ * The range of DAINTREE_PTY_HEAP_BUDGET_MB the pty-host ResourceGovernor
+ * accepts; anything else makes it budget against the fallback.
+ */
+export const PTY_HEAP_BUDGET_MIN_MB = 256;
+export const PTY_HEAP_BUDGET_MAX_MB = 8192;
+export const PTY_HEAP_BUDGET_FALLBACK_MB = 512;
+
+/**
+ * The heap a pty-host is forked with. PtyHostLifecycle writes this one value to
+ * both `--max-old-space-size` and DAINTREE_PTY_HEAP_BUDGET_MB, so it is held to
+ * the range the governor accepts: an out-of-range override would otherwise fork
+ * a host whose governor budgets against the 512 fallback instead of its cap.
+ */
+export function ptyHostHeapMb(requestedMb: number): number {
+  if (!Number.isFinite(requestedMb)) return PTY_HEAP_BUDGET_FALLBACK_MB;
+  return Math.min(
+    PTY_HEAP_BUDGET_MAX_MB,
+    Math.max(PTY_HEAP_BUDGET_MIN_MB, Math.floor(requestedMb))
+  );
 }
 
 /**

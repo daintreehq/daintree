@@ -10,6 +10,11 @@ import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
 import { XTERM_BYTES_PER_CELL } from "../../shared/config/terminalBufferMemory.js";
 import type { WorkerMemoryAccounting } from "../services/pty/analysis/AnalysisWorkerPool.js";
+import {
+  PTY_HEAP_BUDGET_FALLBACK_MB,
+  PTY_HEAP_BUDGET_MAX_MB,
+  PTY_HEAP_BUDGET_MIN_MB,
+} from "../services/pty/fabricConfig.js";
 import { FdMonitor } from "./FdMonitor.js";
 import { metricsEnabled } from "./metrics.js";
 import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
@@ -108,8 +113,8 @@ export interface ResourceGovernorDeps {
 // Process memory budget for the combined heap + external signal. The host is
 // forked with a --max-old-space-size that the parent mirrors into
 // DAINTREE_PTY_HEAP_BUDGET_MB (PtyHostLifecycle sets both from the same
-// memoryLimitMb), so the governor's budget tracks the real V8 cap: 512 on the
-// legacy singleton path, RAM-scaled per shard under the PTY fabric. That cap
+// memoryLimitMb), so the governor's budget tracks the real V8 cap, RAM-scaled
+// per shard by shardHeapBudgetMb whether or not the PTY fabric is on. That cap
 // bounds only the V8 heap; ArrayBuffer backing stores (queued PTY output
 // slabs, xterm typed arrays) are allocated outside it and show up in
 // process.memoryUsage().external, so the governor budgets them separately.
@@ -124,14 +129,16 @@ export interface ResourceGovernorDeps {
 // oversized DAINTREE_ANALYSIS_WORKERS override spends its own headroom.
 function resolveHeapBudgetMb(): number {
   const raw = Number(process.env.DAINTREE_PTY_HEAP_BUDGET_MB);
-  if (Number.isFinite(raw) && raw >= 256 && raw <= 8192) return Math.floor(raw);
-  return 512;
+  if (Number.isFinite(raw) && raw >= PTY_HEAP_BUDGET_MIN_MB && raw <= PTY_HEAP_BUDGET_MAX_MB) {
+    return Math.floor(raw);
+  }
+  return PTY_HEAP_BUDGET_FALLBACK_MB;
 }
 const HEAP_BUDGET_MB = resolveHeapBudgetMb();
 // External headroom scales with the heap budget (heap/2, floor 256) so the
 // heap-vs-total ratio stays ~67% at every shard size — a fixed 256 on a
 // 2048MB fabric shard would let the heap term dominate and effectively stop
-// budgeting ArrayBuffer growth. At the legacy 512 budget this is exactly the
+// budgeting ArrayBuffer growth. At a 512 budget this is exactly the
 // historical 256.
 const EXTERNAL_HEADROOM_MB = Math.max(256, Math.floor(HEAP_BUDGET_MB / 2));
 const TOTAL_PROCESS_BUDGET_MB = HEAP_BUDGET_MB + EXTERNAL_HEADROOM_MB;

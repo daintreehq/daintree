@@ -46,6 +46,7 @@ import type {
 } from "../../../shared/types/pty-host.js";
 import { mainBootAbsMs, markPerformance } from "../../utils/performance.js";
 import { describeProcessDeath } from "../processDeathDescription.js";
+import { ptyHostHeapMb } from "./fabricConfig.js";
 import { getTerminationIntent, noteTerminationIntent } from "../processTerminationIntent.js";
 
 /**
@@ -367,6 +368,7 @@ export class PtyHostLifecycle {
     this.readyPromise = this.createReadyPromise();
 
     const hostPath = path.join(this.config.electronDir, "pty-host-bootstrap.js");
+    const heapMb = ptyHostHeapMb(this.config.memoryLimitMb);
 
     // Anchor cross-process timing for the host's per-phase marks. The child
     // has its own `performance.timeOrigin`, so we ship a wall-clock-aligned
@@ -383,7 +385,7 @@ export class PtyHostLifecycle {
         // (set in pty-host.ts) into the app's logs directory instead of the
         // utility process CWD (homedir).
         execArgv: [
-          `--max-old-space-size=${this.config.memoryLimitMb}`,
+          `--max-old-space-size=${heapMb}`,
           // Cap the young generation: PTY relay churns short-lived strings with
           // a tiny live set, so an uncapped nursery (V8 scales it with machine
           // RAM) just commits slack pages per shard. 8 MB keeps scavenges
@@ -396,9 +398,9 @@ export class PtyHostLifecycle {
           ...(process.env as Record<string, string>),
           DAINTREE_USER_DATA: app.getPath("userData"),
           // Keep the host's ResourceGovernor budget in lockstep with the V8
-          // cap above — the fabric RAM-scales the cap per shard, and a
-          // governor still assuming 512 would throttle a 2 GB shard at 25%.
-          DAINTREE_PTY_HEAP_BUDGET_MB: String(this.config.memoryLimitMb),
+          // cap above — the cap is RAM-scaled per shard, and a governor still
+          // assuming 512 would throttle a 2 GB host at 25%.
+          DAINTREE_PTY_HEAP_BUDGET_MB: String(heapMb),
           // Shard identity for per-process file scoping (emergency log) —
           // Electron does not expose serviceName to the child itself.
           DAINTREE_PTY_SHARD_SERVICE: this.config.serviceName ?? DEFAULT_SERVICE_NAME,
