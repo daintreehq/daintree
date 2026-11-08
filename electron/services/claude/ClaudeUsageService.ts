@@ -7,6 +7,7 @@
  */
 
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { CLAUDE_USAGE_WINDOWS } from "../../../shared/types/ipc/agentQuota.js";
 import type {
   ClaudeUsageAccount,
@@ -149,7 +150,11 @@ export async function readClaudeUsageAccounts(
     // In the shell the probe ran, only a pane already on the profile's folder
     // is certain to still be on it. A pane in another shell never ran that
     // profile, so its launch folder stands, as it does with no probe at all.
-    const ranProfile = record.shell === null || record.shell === observation?.shell;
+    // By name, as a shell picks its startup files: `/usr/bin/bash` reads what `/bin/bash` does.
+    const ranProfile =
+      record.shell === null ||
+      (observation !== undefined &&
+        path.basename(record.shell) === path.basename(observation.shell));
     const identity =
       profileIdentity !== undefined && ranProfile && record.configDir !== profileIdentity
         ? null

@@ -198,12 +198,21 @@ describe("readClaudeUsageAccounts (#16370)", () => {
     const observation = { shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: STRAY } };
     recordClaudeUsageObservation(record({ terminalId: "t1", configDir: WORK, shell: "/bin/bash" }));
     recordClaudeUsageObservation(record({ terminalId: "t2", configDir: WORK, shell: null }));
+    // The probed shell under another path reads the same profile.
+    recordClaudeUsageObservation(
+      record({
+        terminalId: "t3",
+        window: "5-hour limit",
+        configDir: WORK,
+        shell: "/usr/local/bin/zsh",
+      })
+    );
 
     const accounts = await readClaudeUsageAccounts(
       deps({ readShellObservation: () => observation })
     );
 
-    // The bash pane never ran zsh's profile; a pane of unknown shell might have.
+    // The bash pane never ran zsh's profile; the others might have.
     expect(
       accounts.map((account) => [
         account.kind,
@@ -211,7 +220,7 @@ describe("readClaudeUsageAccounts (#16370)", () => {
       ])
     ).toEqual([
       ["account", ["t1"]],
-      ["unknown", ["t2"]],
+      ["unknown", ["t3", "t2"]],
     ]);
   });
 
