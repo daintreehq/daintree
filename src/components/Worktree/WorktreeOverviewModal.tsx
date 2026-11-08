@@ -54,6 +54,8 @@ import {
   isWorktreeMergedForCleanup,
 } from "@/lib/worktreeAgentBuckets";
 import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
+import { useWorktreeDiskUsage } from "@/hooks/useWorktreeDiskUsage";
+import { orderWorktreesBySize } from "@/lib/worktreeSizeOrder";
 import { pluralize } from "@/lib/pluralize";
 import { LazyOtherHostsWorktrees } from "@/components/Hosts/Overview/LazyHostOverviewParts";
 
@@ -255,7 +257,7 @@ export function WorktreeOverviewModal({
 
   const hasNonMainWorktrees = useMemo(() => worktrees.some((w) => !w.isMainWorktree), [worktrees]);
 
-  const { filteredWorktrees, groupedSections, quickStateCounts, finishedUnseenCount } =
+  const { filteredWorktrees, typeSections, quickStateCounts, finishedUnseenCount } =
     useMemo(() => {
       const hasActiveQuery = liveQuery.trim().length > 0;
       // Counted over what the search and facets leave, before the quick-state
@@ -304,7 +306,7 @@ export function WorktreeOverviewModal({
 
       return {
         filteredWorktrees: sorted,
-        groupedSections: isGroupedByType
+        typeSections: isGroupedByType
           ? groupByType(sorted, orderBy, validPinnedWorktrees)
           : null,
         quickStateCounts: counts,
@@ -327,6 +329,17 @@ export function WorktreeOverviewModal({
       hasFacetFiltersActive,
     ]);
 
+  // Sizes are measured only while the overview is mounted, and ordering by
+  // them is this opening's choice, not the sidebar's persisted order: it gives
+  // way to the shared order and grouping again on the next opening.
+  const diskUsage = useWorktreeDiskUsage(isOpen, worktrees);
+  const [sortBySize, setSortBySize] = useState(false);
+  const orderedWorktrees = useMemo(
+    () => (sortBySize ? orderWorktreesBySize(filteredWorktrees, diskUsage) : filteredWorktrees),
+    [sortBySize, filteredWorktrees, diskUsage]
+  );
+  const groupedSections = sortBySize ? null : typeSections;
+
   // ── Multi-select state ────────────────────────────────────────────────
   // Selection lives on the modal so it resets naturally when the modal
   // unmounts. Persistent stores would outlive the modal session and
@@ -339,13 +352,13 @@ export function WorktreeOverviewModal({
 
   // Must mirror DOM render order so keyboard navigation indexes into the right
   // row. When grouped, the DOM flattens groupedSections in section order; the
-  // flat sorted order in filteredWorktrees does not match.
+  // flat order in orderedWorktrees does not match.
   const visibleIds = useMemo(
     () =>
       groupedSections
         ? groupedSections.flatMap((s) => s.worktrees.map((w) => w.id))
-        : filteredWorktrees.map((w) => w.id),
-    [groupedSections, filteredWorktrees]
+        : orderedWorktrees.map((w) => w.id),
+    [groupedSections, orderedWorktrees]
   );
   const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
 
@@ -694,6 +707,7 @@ export function WorktreeOverviewModal({
       isCursor={activeDescendantId === getWorktreeOverviewCellId(worktree.id)}
       isSelecting={hasSelection}
       isLast={isLast}
+      diskUsage={diskUsage.get(worktree.id)}
       onActivate={activateWorktree}
       onToggleSelect={handleRowToggleSelect}
       onBeforeMenuAction={onClose}
@@ -754,7 +768,12 @@ export function WorktreeOverviewModal({
             )}
           </AppPaletteDialog.Header>
 
-          {filteredWorktrees.length > 0 && <WorktreeOverviewColumnHeaders />}
+          {filteredWorktrees.length > 0 && (
+            <WorktreeOverviewColumnHeaders
+              sortBySize={sortBySize}
+              onSortBySizeChange={setSortBySize}
+            />
+          )}
 
           <ScrollShadow className="min-h-0 flex-1 max-h-[60vh]" scrollClassName="scroll-py-2">
             {isLoading && worktrees.length === 0 ? (
@@ -823,8 +842,8 @@ export function WorktreeOverviewModal({
                         renderRow(worktree, i === section.worktrees.length - 1)
                       ),
                     ])
-                  : filteredWorktrees.map((worktree, i) =>
-                      renderRow(worktree, i === filteredWorktrees.length - 1)
+                  : orderedWorktrees.map((worktree, i) =>
+                      renderRow(worktree, i === orderedWorktrees.length - 1)
                     )}
               </div>
             )}
