@@ -2,7 +2,12 @@ import { useLayoutEffect, useRef } from "react";
 import type { FocusEvent, KeyboardEvent, RefObject } from "react";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { describeAnchor } from "./DiffNoteWidgets";
-import { hashLineRange, type DiffLineIndex, type DiffNoteLines, type DiffNoteSide } from "./diffNotes";
+import {
+  hashLineRange,
+  type DiffLineIndex,
+  type DiffNoteLines,
+  type DiffNoteSide,
+} from "./diffNotes";
 
 const TARGET_SELECTOR = "[data-note-line]";
 
