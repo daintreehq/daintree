@@ -13,8 +13,8 @@
  * reports it hydrated or reached first-interactive. A reload's `app:boot`
  * replaces the old session, so an invoke the previous document left open
  * settles against a session nothing reads any more. Views that never report
- * either (the Canopy window, surface hosts) stop recording new invokes once
- * the session is past {@link TRACKING_WINDOW_MS}. Sessions of views destroyed
+ * either (the Canopy window, surface hosts) stop recording new invokes
+ * {@link TRACKING_WINDOW_MS} after their boot payload arrived. Sessions of views destroyed
  * mid-startup are pruned on the next session start rather than through a
  * `destroyed` listener per view. Outside a session the wrapper is one map
  * lookup.
@@ -25,9 +25,10 @@ import { CHANNELS } from "./channels.js";
 const MAX_REPORTED_INVOKES = 20;
 
 /**
- * How long after `app:boot` new invokes are still recorded. A stuck view's card
- * reports at six seconds, or when a hidden view is first shown; the invokes it
- * opened early stay listed either way.
+ * How long after the boot payload settles new invokes are still recorded.
+ * Hydration's own invokes follow the payload at once, so a view whose payload
+ * took minutes still has them listed; a stuck view's early invokes stay listed
+ * whenever its card reports.
  */
 const TRACKING_WINDOW_MS = 2 * 60_000;
 
@@ -49,6 +50,8 @@ interface StartupSession {
   sender: TrackedSender;
   /** When this document's `app:boot` arrived; null when it never did. */
   bootAt: number | null;
+  /** When that `app:boot` settled; null while it is open. */
+  bootSettledAt: number | null;
   pending: Set<PendingInvoke>;
   reported: boolean;
 }
@@ -72,7 +75,13 @@ function pruneDestroyed(): void {
 
 function openSession(sender: TrackedSender, bootAt: number | null): StartupSession {
   pruneDestroyed();
-  const session: StartupSession = { sender, bootAt, pending: new Set(), reported: false };
+  const session: StartupSession = {
+    sender,
+    bootAt,
+    bootSettledAt: null,
+    pending: new Set(),
+    reported: false,
+  };
   sessions.set(sender.id, session);
   return session;
 }
@@ -92,13 +101,17 @@ export function trackStartupInvoke(
   let session = sessions.get(sender.id);
   if (channel === CHANNELS.APP_BOOT) session = openSession(sender, now);
   if (!session) return run();
-  if (session.bootAt !== null && now - session.bootAt > TRACKING_WINDOW_MS) return run();
+  if (session.bootSettledAt !== null && now - session.bootSettledAt > TRACKING_WINDOW_MS) {
+    return run();
+  }
 
   const entry: PendingInvoke = { channel, startedAt: now };
   const owner = session;
+  const isBoot = channel === CHANNELS.APP_BOOT;
   owner.pending.add(entry);
   const settle = (): void => {
     owner.pending.delete(entry);
+    if (isBoot) owner.bootSettledAt = Date.now();
   };
 
   let result: unknown;

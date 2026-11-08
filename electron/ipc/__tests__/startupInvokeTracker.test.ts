@@ -155,14 +155,36 @@ describe("startupInvokeTracker", () => {
     });
   });
 
-  it("records no new invokes once a session outlives its window, keeping the early ones", () => {
+  it("records no new invokes long after the boot payload settled, keeping the early ones", async () => {
     const view = sender(8);
-    trackStartupInvoke(view, "app:boot", never);
-    vi.advanceTimersByTime(3 * 60_000);
+    trackStartupInvoke(view, "app:boot", () => Promise.resolve());
+    trackStartupInvoke(view, "worktree:get-all-with-status", never);
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
     trackStartupInvoke(view, "canopy:list", never);
 
     expect(claimStartupWaitSnapshot(view, REPORT, true)?.pending.map((p) => p.channel)).toEqual([
+      "worktree:get-all-with-status",
+    ]);
+  });
+
+  it("keeps recording after a boot payload that took minutes", async () => {
+    const view = sender(14);
+    let finishBoot: () => void = () => {};
+    trackStartupInvoke(
+      view,
       "app:boot",
+      () =>
+        new Promise<void>((resolve) => {
+          finishBoot = resolve;
+        })
+    );
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    finishBoot();
+    await vi.advanceTimersByTimeAsync(1_000);
+    trackStartupInvoke(view, "worktree:get-all-with-status", never);
+
+    expect(claimStartupWaitSnapshot(view, REPORT, true)?.pending.map((p) => p.channel)).toEqual([
+      "worktree:get-all-with-status",
     ]);
   });
 
@@ -190,7 +212,7 @@ describe("startupInvokeTracker", () => {
     expect(trackStartupInvoke(undefined, "app:boot", () => "ok")).toBe("ok");
   });
 
-  it("sees every local invoke through the dispatcher, remote-bound or not", async () => {
+  it("sees a local view's invokes through the dispatcher", async () => {
     const view = sender(12);
     const event = { sender: view } as unknown as IpcMainInvokeEvent;
     const dispatcher = getIpcDispatcher();
@@ -203,6 +225,36 @@ describe("startupInvokeTracker", () => {
         "app:boot",
       ]);
     } finally {
+      dispatcher.setInvokeEnveloper(null);
+    }
+  });
+
+  it("sees a remote-bound view's split boot and forwarded invokes through the dispatcher", () => {
+    const view = sender(15);
+    const event = { sender: view } as unknown as IpcMainInvokeEvent;
+    const dispatcher = getIpcDispatcher();
+    const forwardInvoke = vi.fn(() => never());
+    const localListener = vi.fn(never);
+    dispatcher.setInvokeEnveloper(async (_channel, _args, run) => wrapSuccess(await run()));
+    dispatcher.setRemoteRouter({
+      hostForSender: () => "host-1",
+      forwardInvoke,
+      forwardSend: () => {},
+    });
+    const unregisterSplit = dispatcher.registerHybridSplit("app:boot", ({ remote }) => remote());
+    try {
+      void dispatcher.dispatchLocalInvoke("app:boot", event, [], localListener);
+      void dispatcher.dispatchLocalInvoke("worktree:get-all-with-status", event, [], localListener);
+
+      expect(claimStartupWaitSnapshot(view, REPORT, true)?.pending.map((p) => p.channel)).toEqual([
+        "app:boot",
+        "worktree:get-all-with-status",
+      ]);
+      expect(forwardInvoke).toHaveBeenCalledTimes(2);
+      expect(localListener).not.toHaveBeenCalled();
+    } finally {
+      unregisterSplit();
+      dispatcher.setRemoteRouter(null);
       dispatcher.setInvokeEnveloper(null);
     }
   });
