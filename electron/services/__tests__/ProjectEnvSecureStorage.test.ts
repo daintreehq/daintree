@@ -245,7 +245,10 @@ describe("ProjectEnvSecureStorage", () => {
     });
 
     it("pre-existing destination key takes precedence over migrated value", async () => {
-      storeState.data.projectEnv = { "old-id:API_KEY": "from-old", "new-id:API_KEY": "pre-existing" };
+      storeState.data.projectEnv = {
+        "old-id:API_KEY": "from-old",
+        "new-id:API_KEY": "pre-existing",
+      };
       const service = await getService();
 
       service.migrateAllForProject("old-id", "new-id");
