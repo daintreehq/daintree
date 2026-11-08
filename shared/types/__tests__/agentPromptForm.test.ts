@@ -549,17 +549,19 @@ describe("a declared prompt form", () => {
 
   it("puts the subcommand right after the command when the registry lacks the word it replaces", () => {
     const form: AgentPromptForm = {
-      subcommand: { name: "run", replaces: "session" },
+      subcommand: { name: "ask it", replaces: "chat" },
       args: ["-t", PROMPT_FORM_PLACEHOLDER],
     };
     declare({ args: ["--verbose"], initialPromptForm: { interactive: form, headless: form } });
     // The same word in a preset is that preset's value, not the subcommand.
-    expect(
-      generateAgentCommand("task", {}, "task", {
-        initialPrompt: "Fix it",
-        presetArgs: ["--name", "session"],
-      })
-    ).toBe("task run --verbose --name 'session' -t 'Fix it'");
+    const launch = { initialPrompt: "Fix it", presetArgs: ["--topic", "chat"] };
+    expect(generateAgentCommand("task", {}, "task", launch)).toBe(
+      "task 'ask it' --verbose --topic 'chat' -t 'Fix it'"
+    );
+    setAgentCommandDialectResolver(() => "windows");
+    expect(generateAgentCommand("task", {}, "task", launch)).toBe(
+      "task 'ask it' --verbose --topic 'chat' -t 'Fix it'"
+    );
   });
 
   it("applies nothing to a launch without a prompt", () => {
