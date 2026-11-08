@@ -300,6 +300,7 @@ describe("SafeModeBanner", () => {
       resetAndRelaunch.mockReturnValueOnce(new Promise<void>((resolve) => (accept = resolve)));
       render(<SafeModeBanner />);
       await openAndConfirm();
+      expect(resetAndRelaunch).toHaveBeenCalledTimes(1);
       await act(async () => accept());
       expect(dialogHint()).toBeNull();
       expect(screen.getByRole("status").textContent).not.toMatch(/Couldn't restart Daintree/);

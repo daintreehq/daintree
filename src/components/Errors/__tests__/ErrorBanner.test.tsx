@@ -632,6 +632,8 @@ describe("ErrorBanner", () => {
         const error = makeError(withHint);
         const { rerender } = render(<ErrorBanner error={error} onDismiss={onDismiss} />);
         await clickRecovery();
+        expect(screen.getByText(/Recovery failed/)).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Open Diagnostics" })).toBeTruthy();
         rerender(
           <ErrorBanner
             error={{ ...error, retryProgress: { attempt: 1, maxAttempts: 3 } }}
