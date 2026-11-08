@@ -15,12 +15,17 @@ vi.mock("../openWindowsTracker.js", async (importOriginal) => ({
 }));
 
 import {
+  acknowledgePopOut,
+  CANOPY_POP_OUT_TIMEOUT_MS,
   closeCanopyWindow,
   focusCanopyWindow,
   isCanopyWindowView,
   openCanopyWindow,
+  peekPendingPopOut,
+  popOutToCanopyWindow,
   setCanopyBrowserWindowFactory,
 } from "../canopyWindow.js";
+import type { CanopyPopOut } from "../../../shared/types/ipc/canopy.js";
 import { WindowRegistry } from "../WindowRegistry.js";
 import { setWindowRegistry } from "../windowRef.js";
 import { snapshotOpenWorld } from "../windowOpenState.js";
@@ -42,7 +47,11 @@ type FakeWindow = EventEmitter & {
   contentView: EventEmitter;
   webContents: EventEmitter & { id: number };
   view: {
-    webContents: EventEmitter & { id: number };
+    webContents: EventEmitter & {
+      id: number;
+      send: ReturnType<typeof vi.fn>;
+      isDestroyed: ReturnType<typeof vi.fn>;
+    };
     setBounds: ReturnType<typeof vi.fn>;
     getBounds: ReturnType<typeof vi.fn>;
   };
@@ -69,7 +78,11 @@ function makeWindow(): FakeWindow {
   win.contentView = new EventEmitter();
   win.webContents = Object.assign(new EventEmitter(), { id: 500 + id });
   win.view = {
-    webContents: Object.assign(new EventEmitter(), { id: 1000 + id }),
+    webContents: Object.assign(new EventEmitter(), {
+      id: 1000 + id,
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => destroyed),
+    }),
     setBounds: vi.fn(),
     getBounds: vi.fn(() => ({ x: 0, y: 0, width: 900, height: 700 })),
   };
@@ -363,5 +376,112 @@ describe("the Canopy window beside project targeting", () => {
 
     closeCanopyWindow();
     expect(isProjectlessAppView(viewId)).toBe(false);
+  });
+});
+
+describe("popping a dialog out into the window (#16338)", () => {
+  const place: CanopyPopOut = {
+    hostId: "local",
+    query: "deploy",
+    selection: { kind: "worker", runId: "run-2" },
+    roleFilter: "workers",
+    unreadOnly: true,
+    keptUnread: ["run-2"],
+    archivedExpanded: true,
+    trashExpanded: false,
+    workOf: null,
+  };
+
+  /** Settles to "taken" or the refusal's words, without awaiting a pending one. */
+  function outcome(promise: Promise<void>): { value: string | null } {
+    const seen: { value: string | null } = { value: null };
+    promise.then(
+      () => (seen.value = "taken"),
+      (error: { userMessage?: string }) => (seen.value = error.userMessage ?? "refused")
+    );
+    return seen;
+  }
+
+  afterEach(() => vi.useRealTimers());
+
+  it("opens a new window with the place waiting, and settles once the window says it has it", async () => {
+    const seen = outcome(popOutToCanopyWindow(place, noWatch));
+
+    expect(made).toHaveLength(1);
+    expect(loadRenderer).toHaveBeenCalledTimes(1);
+    // A new window asks as it boots: nothing is pushed to a page not yet there.
+    expect(made[0]!.view.webContents.send).not.toHaveBeenCalled();
+    const pending = peekPendingPopOut();
+    expect(pending?.popOut).toEqual(place);
+    // Asking doesn't take it: a reload, or a second ask, still finds it.
+    expect(peekPendingPopOut()?.id).toBe(pending!.id);
+    await Promise.resolve();
+    expect(seen.value).toBeNull();
+
+    expect(acknowledgePopOut(pending!.id)).toBe(true);
+    await Promise.resolve();
+    expect(seen.value).toBe("taken");
+    expect(peekPendingPopOut()).toBeNull();
+    expect(acknowledgePopOut(pending!.id)).toBe(false);
+  });
+
+  it("brings a window already open forward and tells it, rather than opening another", async () => {
+    openCanopyWindow(noWatch);
+    const win = made[0]!;
+
+    const seen = outcome(popOutToCanopyWindow(place, noWatch));
+
+    expect(made).toHaveLength(1);
+    expect(win.focus).toHaveBeenCalledTimes(1);
+    expect(win.view.webContents.send).toHaveBeenCalledWith("canopy-window:pop-out-waiting");
+    acknowledgePopOut(peekPendingPopOut()!.id);
+    await Promise.resolve();
+    expect(seen.value).toBe("taken");
+  });
+
+  it("fails when the window closes before taking it, and nothing waits on", async () => {
+    const seen = outcome(popOutToCanopyWindow(place, noWatch));
+
+    closeCanopyWindow();
+    await Promise.resolve();
+
+    expect(seen.value).toMatch(/closed/);
+    expect(peekPendingPopOut()).toBeNull();
+  });
+
+  it("fails when the window's page is gone before taking it", async () => {
+    const seen = outcome(popOutToCanopyWindow(place, noWatch));
+
+    made[0]!.view.webContents.emit("render-process-gone", {}, { reason: "crashed" });
+    await Promise.resolve();
+
+    expect(seen.value).toMatch(/stopped/);
+    expect(peekPendingPopOut()).toBeNull();
+  });
+
+  it("fails when the window never takes it up in time, and a late answer changes nothing", async () => {
+    vi.useFakeTimers();
+    const seen = outcome(popOutToCanopyWindow(place, noWatch));
+    const id = peekPendingPopOut()!.id;
+
+    await vi.advanceTimersByTimeAsync(CANOPY_POP_OUT_TIMEOUT_MS);
+
+    expect(seen.value).toMatch(/in time/);
+    expect(peekPendingPopOut()).toBeNull();
+    expect(acknowledgePopOut(id)).toBe(false);
+  });
+
+  it("refuses a second pop-out while one is under way, keeping the first", async () => {
+    const first = outcome(popOutToCanopyWindow(place, noWatch));
+    const id = peekPendingPopOut()!.id;
+
+    const second = outcome(popOutToCanopyWindow({ ...place, query: "other" }, noWatch));
+    await Promise.resolve();
+
+    expect(second.value).toMatch(/already/);
+    expect(peekPendingPopOut()).toEqual({ id, popOut: place });
+    acknowledgePopOut(id);
+    await Promise.resolve();
+    expect(first.value).toBe("taken");
   });
 });
