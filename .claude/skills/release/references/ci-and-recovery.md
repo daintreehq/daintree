@@ -109,7 +109,7 @@ A fix pushed blind costs an hour per guess. Before pushing one, make the failure
 
 ### Re-tag
 
-In `WT`, with every fix proven on `release-fix/vX.Y.Z` and every old run terminal:
+In `WT`, with every fix proven on `release-fix/vX.Y.Z` and every old run terminal (a fix that added a database migration also needs `npm run db:freeze` committed on that branch):
 
 ```bash
 set -euo pipefail
@@ -117,6 +117,7 @@ git fetch origin
 git checkout --detach origin/main
 git merge --no-ff release-fix/vX.Y.Z -m "chore(release): merge release fix into main for vX.Y.Z"
 test "$(node -p "require('./package.json').version")" = "X.Y.Z"
+npm run db:freeze -- --check
 git tag -f -a vX.Y.Z -m "Release vX.Y.Z"
 MAIN=$(git rev-parse HEAD)
 git checkout --detach origin/develop
@@ -135,7 +136,7 @@ The tag push starts three fresh runs on the new commit. Resolve their IDs (`gh r
 
 A gitflow hotfix: `X.Y.(Z+1)` is `X.Y.Z` plus the fix and nothing else from `develop`. No question to the user; the version is determined.
 
-1. With every `vX.Y.Z` run terminal and `vX.Y.Z` left where it is, on `release-fix/vX.Y.Z` in `WT`: `npm version X.Y.(Z+1) --no-git-tag-version`, and add a short `CHANGELOG.md` section above `## [X.Y.Z]`: an intro saying what was wrong with `X.Y.Z` and on which platforms, and the fix under Bug Fixes. Commit `chore(release): release vX.Y.(Z+1)`.
+1. With every `vX.Y.Z` run terminal and `vX.Y.Z` left where it is, on `release-fix/vX.Y.Z` in `WT`: `npm version X.Y.(Z+1) --no-git-tag-version`, `npm run db:freeze` (a no-op unless the fix added a migration), and add a short `CHANGELOG.md` section above `## [X.Y.Z]`: an intro saying what was wrong with `X.Y.Z` and on which platforms, and the fix under Bug Fixes. Commit `chore(release): release vX.Y.(Z+1)`.
 2. Run the Phase 4 step 5 block from SKILL.md with `release-fix/vX.Y.Z` in place of `release/vX.Y.Z` and `X.Y.(Z+1)` as the version. The develop merge resolves `CHANGELOG.md` the same way: `develop`'s Unreleased entries first, then `X.Y.(Z+1)`, then `X.Y.Z` and the rest in order. Then delete the fix branch on origin.
 3. Watch all three runs as in Phase 5. Every feed takes the patch, including those already on `X.Y.Z`, since it's a greater version; a feed that never got `X.Y.Z` goes straight to `X.Y.(Z+1)`, which the monotonic gate allows.
 4. Create GitHub Releases for both versions; the `X.Y.Z` notes stay as written.

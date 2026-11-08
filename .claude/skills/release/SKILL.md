@@ -131,10 +131,10 @@ followed by the full section, so the user can read exactly what ships. Carry on 
 
 In `WT`, on `release/vX.Y.Z`:
 
-1. `npm version X.Y.Z --no-git-tag-version` (updates `package.json` and both version fields in `package-lock.json`).
+1. `npm version X.Y.Z --no-git-tag-version` (updates `package.json` and both version fields in `package-lock.json`), then `npm run db:freeze`, which records every database migration this release ships in `electron/services/persistence/frozen-migrations.json` so a later edit to one fails CI. It prints "No new migrations to freeze." when the release adds none, and changes nothing then. If it refuses because a frozen migration drifted, that drift is a release blocker: restore the shipped migration rather than re-freezing it.
 2. Write the section into `CHANGELOG.md` directly under `# Changelog`, replacing the `## [Unreleased]` section. Date it today. If a fix made during readiness was user-visible, add it.
-3. `npx prettier --check CHANGELOG.md package.json package-lock.json`, trusting the exit code over the summary.
-4. Commit `chore(release): release vX.Y.Z` with those three files only and no attribution trailers. It's the release's own bookkeeping commit, so it doesn't go through the `commit` skill. Push the release branch.
+3. `npx prettier --check CHANGELOG.md package.json package-lock.json electron/services/persistence/frozen-migrations.json`, trusting the exit code over the summary.
+4. Commit `chore(release): release vX.Y.Z` with those files only (the ledger only when `db:freeze` changed it) and no attribution trailers. It's the release's own bookkeeping commit, so it doesn't go through the `commit` skill. Push the release branch.
 5. Merge, tag and push, building `main` and `develop` on detached heads:
 
    ```bash
@@ -143,10 +143,12 @@ In `WT`, on `release/vX.Y.Z`:
    git checkout --detach origin/main
    git merge --no-ff release/vX.Y.Z -m "chore(release): merge release/vX.Y.Z into main"
    test "$(node -p "require('./package.json').version")" = "X.Y.Z"
+   npm run db:freeze -- --check
    git tag -a vX.Y.Z -m "Release vX.Y.Z"
    MAIN=$(git rev-parse HEAD)
    git checkout --detach origin/develop
    git merge --no-ff "${MAIN}" -m "chore(release): merge main into develop after vX.Y.Z release"
+   npm test -- electron/services/persistence/__tests__/migrationLedger.test.ts > "${W}/ledger.log" 2>&1 || { tail -40 "${W}/ledger.log"; exit 1; }
    DEV=$(git rev-parse HEAD)
    git push --atomic origin "${MAIN}:refs/heads/main" "${DEV}:refs/heads/develop" "refs/tags/vX.Y.Z" > "${W}/push.log" 2>&1 || { cat "${W}/push.log"; exit 1; }
    git ls-remote origin refs/heads/main "refs/tags/vX.Y.Z^{}"
@@ -154,7 +156,9 @@ In `WT`, on `release/vX.Y.Z`:
 
    The last line must show `main` and the tag both at `${MAIN}`. `--atomic` means `main`, `develop` and the tag land together or not at all, so the tag can never trigger a release whose `main` was rejected.
 
-   - **The develop merge conflicts in `CHANGELOG.md`** when PRs added `## [Unreleased]` entries after the pin. Keep `develop`'s `## [Unreleased]` heading with only the entries that aren't in the new release section, then the new `## [X.Y.Z]` section, then every older section in order. Other conflicts mean `develop` and the release branch both changed a file since the pin; keep `develop`'s side unless the release branch's change was a release fix, in which case keep both.
+   - **The develop merge conflicts in `CHANGELOG.md`** when PRs added `## [Unreleased]` entries after the pin. Keep `develop`'s `## [Unreleased]` heading with only the entries that aren't in the new release section, then the new `## [X.Y.Z]` section, then every older section in order. Other conflicts mean `develop` and the release branch both changed a file since the pin; keep `develop`'s side unless the release branch's change was a release fix, in which case keep both. `electron/services/persistence/frozen-migrations.json` always keeps the release branch's frozen entries; dropping them unfreezes what this release shipped.
+   - **`db:freeze -- --check` fails** on `main`: a migration reached the release branch after step 1. Run `npm run db:freeze` on `release/vX.Y.Z`, commit the ledger, push the branch, then run the block again from the top.
+   - **The ledger test fails on the merged `develop`**: a PR changed, after the pin, a migration this release ships, so `develop` now disagrees with what users install. Nothing was pushed: `git tag -d vX.Y.Z`, restore the shipped SQL and journal entry on `develop` through a PR (any change it carried becomes a new migration), then run the block again from the top.
    - **The push is rejected** because `main` or `develop` moved on origin: `git tag -d vX.Y.Z`, then run the block again from the top. Never force it.
 
 6. Only after `ls-remote` confirms the push: `git push origin --delete release/vX.Y.Z`. Then post: "Tagged vX.Y.Z; main, develop and the tag pushed together."

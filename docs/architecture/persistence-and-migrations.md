@@ -166,6 +166,10 @@ A snapshot — `meta/_journal.json` is the source of truth for what has been app
 
 These are **generated**, not hand-written: edit `schema.ts`, then `npm run db:generate` (`drizzle-kit generate`); `npm run db:check` validates the journal. Do not edit applied SQL by hand.
 
+**Shipped migrations are frozen.** Drizzle records a hash per migration but never compares it: it applies every journal entry whose `when` is later than the newest one already applied. So editing a shipped migration's SQL only changes fresh installs, and a `when` that moves backwards is skipped on every existing database. `electron/services/persistence/frozen-migrations.json` records the idx, tag, `when`, breakpoints and SQL sha256 (the hash Drizzle stores in `__drizzle_migrations.hash`) of every migration a release has shipped. `__tests__/migrationLedger.test.ts` fails, naming the migration, when any of those drift, when journal `when` values stop strictly increasing, or when an idx falls out of step with its position or tag prefix. A migration added since the last release can change freely until it ships; to change what a shipped one did, add a new migration.
+
+**Freezing a release's migrations** is one step: `npm run db:freeze` on the release branch, committing `frozen-migrations.json` with the release commit (the `release` skill does this in Phase 4). It appends every journal entry not yet frozen and refuses to run while a frozen migration has drifted, so it can't be used to make the test pass. `npm run db:freeze -- --check` writes nothing and fails while any migration is still unfrozen; the release runs it on the tree it tags.
+
 ## Early-boot read: `readLastActiveProjectIdSync`
 
 `electron/services/persistence/readLastProjectId.ts` exports `readLastActiveProjectIdSync()`, called from `electron/main.ts` **before any window is created**. It opens its **own read-only** `better-sqlite3` connection (independent of `getSharedDb()` / `ProjectStore.initialize()`), reads `app_state` where `key='currentProjectId'`, and returns `null` on first launch, missing table, or any error.

@@ -68,6 +68,7 @@
     "test:integration:watch": "vitest --config vitest.integration.config.ts",
     "db:generate": "drizzle-kit generate",
     "db:check": "drizzle-kit check",
+    "db:freeze": "tsx scripts/freeze-migrations.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "lint:ratchet": "node --max-old-space-size=8192 scripts/lint-ratchet.mjs",
