@@ -45,7 +45,8 @@ function makeGit(): { git: SimpleGit; spawn: (child: FakeChild) => void } {
   return {
     git,
     spawn: (child) => {
-      for (const plugin of plugins) plugin(undefined, { spawned: child as unknown as ChildProcess });
+      for (const plugin of plugins)
+        plugin(undefined, { spawned: child as unknown as ChildProcess });
     },
   };
 }

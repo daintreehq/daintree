@@ -1,9 +1,4 @@
-import type {
-  FileChangeDetail,
-  GitStatusUnanswered,
-  RepoState,
-  WorktreeChanges,
-} from "./git.js";
+import type { FileChangeDetail, GitStatusUnanswered, RepoState, WorktreeChanges } from "./git.js";
 import type { CIStatusState } from "./forge.js";
 import type { PluginWorktreeLinked } from "./plugin.js";
 

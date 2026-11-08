@@ -1675,7 +1675,9 @@ describe("createWorktreeStore — unanswered git status", () => {
   it("does not churn the map identity for an unchanged observation", () => {
     const store = createWorktreeStore();
     const unanswered = { reason: "timed-out" as const, since };
-    store.getState().applyUpdate(makeSnapshot("wt-1", { gitStatusUnanswered: unanswered }), nextV());
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { gitStatusUnanswered: unanswered }), nextV());
     const mapBefore = store.getState().worktrees;
 
     store
