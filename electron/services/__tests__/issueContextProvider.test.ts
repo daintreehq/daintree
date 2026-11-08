@@ -20,6 +20,7 @@ import {
   ISSUE_CONTEXT_PLUGIN_ID,
   createIssueContextProvider,
   formatIssueContext,
+  pendingIssueSearchesForTests,
   resetIssueContextProviderForTests,
   withHostContextProviders,
   type IssueContextDeps,
@@ -240,6 +241,23 @@ describe("issue search (#16382)", () => {
     expect(await otherView).toHaveLength(1);
     expect(await otherProject).toHaveLength(1);
     expect(d.resolveSource.mock.calls).toEqual([["p1"], ["p1"], ["p2"]]);
+    expect(pendingIssueSearchesForTests()).toBe(0);
+  });
+
+  it("keeps a newer search's place when an older one is cancelled", async () => {
+    const p = createIssueContextProvider("p1", {
+      deadlineAt: Infinity,
+      deps: deps(provider({ listIssues: vi.fn(async () => page([issue()])) })),
+    });
+    const older = new AbortController();
+    const first = p.search("f", { signal: older.signal });
+    const second = p.search("fi", { signal: signal() });
+    older.abort(new Error("timed out"));
+    await expect(first).rejects.toThrow("timed out");
+    expect(pendingIssueSearchesForTests()).toBe(1);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(await second).toHaveLength(1);
+    expect(pendingIssueSearchesForTests()).toBe(0);
   });
 
   it("keeps whichever read answered when the other fails or stalls past its cutoff", async () => {
@@ -261,6 +279,18 @@ describe("issue search (#16382)", () => {
     const pending = q.search("4", { signal: signal() });
     await vi.advanceTimersByTimeAsync(2_700);
     expect((await pending).map((r) => r.id)).toEqual(["4"]);
+
+    const stalledLookup = provider({
+      getIssue: vi.fn(() => new Promise<never>(() => {})),
+      listIssues: vi.fn(async () => page([issue({ number: 40 })])),
+    });
+    const t = createIssueContextProvider("p1", {
+      deadlineAt: Date.now() + 3_000,
+      deps: deps(stalledLookup),
+    });
+    const lookupPending = t.search("4", { signal: signal() });
+    await vi.advanceTimersByTimeAsync(2_700);
+    expect((await lookupPending).map((row) => row.id)).toEqual(["40"]);
 
     const failingLookup = provider({
       getIssue: vi.fn(async () => {
@@ -298,6 +328,7 @@ describe("issue search (#16382)", () => {
     const aborted = new AbortController();
     aborted.abort(new Error("gone"));
     await expect(p.search("x", { signal: aborted.signal })).rejects.toThrow("gone");
+    expect(pendingIssueSearchesForTests()).toBe(0);
   });
 });
 

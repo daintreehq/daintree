@@ -513,6 +513,11 @@ export function createIssueContextProvider(
   };
 }
 
+/** Test seam: searches still settling. */
+export function pendingIssueSearchesForTests(): number {
+  return latestSearch.size;
+}
+
 /** Test seam. */
 export function resetIssueContextProviderForTests(): void {
   latestSearch.clear();
