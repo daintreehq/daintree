@@ -169,7 +169,7 @@ describe("runWorktreeNote (#16406)", () => {
     });
   });
 
-  it("says it was removed once the worktrees are known and it isn't among them, with or without a session", () => {
+  it("says it's gone once the worktrees are known and it isn't among them, with or without a session", () => {
     expect(runWorktreeNote(run({}), new Set(["/wt/other"]))).toEqual({
       branch: "schedule-x",
       removed: true,

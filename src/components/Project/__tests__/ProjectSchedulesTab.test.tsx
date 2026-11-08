@@ -30,11 +30,15 @@ vi.mock("@/services/scheduledRunLanding", () => ({ revealRunTerminal: reveal }))
 const worktreeList = vi.hoisted(() => ({
   current: [] as Array<{ id: string; path: string; name: string; isMainWorktree: boolean }>,
   initialized: true,
+  reconnecting: false,
 }));
 vi.mock("@/hooks/useWorktrees", () => ({
   useWorktrees: () => ({
     worktrees: worktreeList.current,
     isInitialized: worktreeList.initialized,
+    isLoading: false,
+    isReconnecting: worktreeList.reconnecting,
+    error: null,
   }),
 }));
 const resumeSession = vi.hoisted(() => vi.fn());
@@ -426,9 +430,15 @@ describe("ProjectSchedulesTab — a run in its own new worktree (#16369)", () =>
     ...overrides,
   });
 
+  // The main checkout is always listed once the host has reported.
+  beforeEach(() => {
+    worktreeList.current = [{ id: "/repo", path: "/repo", name: "repo", isMainWorktree: true }];
+  });
+
   afterEach(() => {
     worktreeList.current = [];
     worktreeList.initialized = true;
+    worktreeList.reconnecting = false;
     resumeSession.mockReset();
     client.listScheduleRuns.mockReset();
     client.listScheduleRuns.mockImplementation(async () => []);
@@ -456,7 +466,7 @@ describe("ProjectSchedulesTab — a run in its own new worktree (#16369)", () =>
     expect(await screen.findByText(/New worktree from origin\/develop/)).toBeTruthy();
     expect(await screen.findByText("schedule-nightly-a")).toBeTruthy();
     expect(screen.getByText(/In worktree/)).toBeTruthy();
-    expect(screen.queryByText(/was removed/)).toBeNull();
+    expect(screen.queryByText(/no longer exists/)).toBeNull();
     expect(screen.queryByText(/Main checkout/)).toBeNull();
   });
 
@@ -479,7 +489,7 @@ describe("ProjectSchedulesTab — a run in its own new worktree (#16369)", () =>
     fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
 
     expect(await screen.findByText("schedule-nightly-a")).toBeTruthy();
-    expect(screen.getByText(/was removed/)).toBeTruthy();
+    expect(screen.getByText(/no longer exists/)).toBeTruthy();
     expect(screen.queryByText(/In worktree/)).toBeNull();
     expect(screen.queryByText("Worktree removed")).toBeNull();
   });
@@ -490,13 +500,17 @@ describe("ProjectSchedulesTab — a run in its own new worktree (#16369)", () =>
     renderTab();
     fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
 
-    expect(await screen.findByText(/was removed/)).toBeTruthy();
+    expect(await screen.findByText(/no longer exists/)).toBeTruthy();
     expect(screen.getByText("Worktree removed")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Resume run from/ })).toBeNull();
   });
 
-  it("claims no worktree removed until the project's worktrees have loaded", async () => {
-    worktreeList.initialized = false;
+  it.each([
+    ["before the project's worktrees have loaded", () => (worktreeList.initialized = false)],
+    ["while the host is empty-handed", () => (worktreeList.current = [])],
+    ["while the host reconnects", () => (worktreeList.reconnecting = true)],
+  ])("claims no worktree gone %s", async (_when, setUp) => {
+    setUp();
     client.list.mockResolvedValue(snapshot([NIGHTLY]));
     client.listScheduleRuns.mockResolvedValue([runAt(RUN_WORKTREE)]);
     renderTab();
@@ -504,7 +518,7 @@ describe("ProjectSchedulesTab — a run in its own new worktree (#16369)", () =>
 
     expect(await screen.findByText("schedule-nightly-a")).toBeTruthy();
     expect(screen.getByText(/In worktree/)).toBeTruthy();
-    expect(screen.queryByText(/was removed/)).toBeNull();
+    expect(screen.queryByText(/no longer exists/)).toBeNull();
     expect(screen.queryByText("Worktree removed")).toBeNull();
   });
 

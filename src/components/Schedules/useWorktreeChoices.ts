@@ -8,7 +8,7 @@ import type { WorktreeChoice } from "./ScheduleEditor";
  * and each other worktree's label by id, as the list and history name it.
  */
 export function useWorktreeChoices() {
-  const { worktrees, isInitialized } = useWorktrees();
+  const { worktrees, isInitialized, isLoading, isReconnecting, error } = useWorktrees();
   const choices = useMemo<WorktreeChoice[]>(() => {
     const main = worktrees.find((worktree) => worktree.isMainWorktree);
     const others = worktrees.filter((worktree) => !worktree.isMainWorktree);
@@ -26,10 +26,14 @@ export function useWorktreeChoices() {
       new Map(choices.flatMap((choice) => (choice.id ? [[choice.id, choice.label] as const] : []))),
     [choices]
   );
-  // Null until the project's worktrees have loaded: an empty list then isn't "all removed".
+  // Null until the project's worktrees are known, as a landing judges it
+  // (`knowsWorktrees`): the main checkout is always listed, so an empty list only
+  // says the host hasn't reported, and a reconnecting one may be out of date.
+  const known = isInitialized && !isLoading && !isReconnecting && error === null;
   const ids = useMemo(
-    () => (isInitialized ? new Set(worktrees.map((worktree) => worktree.id)) : null),
-    [worktrees, isInitialized]
+    () =>
+      known && worktrees.length > 0 ? new Set(worktrees.map((worktree) => worktree.id)) : null,
+    [worktrees, known]
   );
   return { choices, labels, ids };
 }

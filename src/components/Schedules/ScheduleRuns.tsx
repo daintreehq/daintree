@@ -205,7 +205,7 @@ function RunRow({
             <p className="mt-0.5 break-words text-xs text-text-secondary">
               {worktree.removed ? "Worktree " : "In worktree "}
               <span className="font-mono">{worktree.branch}</span>
-              {worktree.removed && " was removed"}
+              {worktree.removed && " no longer exists"}
             </p>
           )}
           {workers.length > 0 && (
