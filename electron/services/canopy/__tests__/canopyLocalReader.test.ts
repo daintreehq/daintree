@@ -433,43 +433,117 @@ describe("CanopyLocalReader", () => {
 });
 
 describe("tryReaderModel", () => {
-  function trialProcess(outcome: { load?: Error; read?: Error }) {
+  function trialProcess(outcome: { load?: Error | "never"; read?: Error; exit?: "held" } = {}) {
     let exited!: () => void;
     const process = {
-      ready: outcome.load ? Promise.reject(outcome.load) : Promise.resolve(),
+      ready:
+        outcome.load === "never"
+          ? new Promise<void>(() => {})
+          : outcome.load
+            ? Promise.reject(outcome.load)
+            : Promise.resolve(),
       read: vi.fn(async () => {
         if (outcome.read) throw outcome.read;
         return { reading: reading(), ms: 9 };
       }),
       whenExited: new Promise<void>((resolve) => (exited = resolve)),
-      retire: vi.fn(() => exited()),
+      retire: vi.fn(() => {
+        if (outcome.exit !== "held") exited();
+      }),
+      exit: () => exited(),
     };
     process.ready.catch(() => {});
     return process;
   }
 
-  it("loads the model in its own reader, reads one screen, and waits for that reader to go", async () => {
+  it("loads the model in its own reader, reads one screen, and waits for that reader to exit", async () => {
     const { tryReaderModel } = await import("../canopyLocalReader.js");
-    const made: Array<ReturnType<typeof trialProcess>> = [];
+    const p = trialProcess({ exit: "held" });
     const dirs: string[] = [];
-    await tryReaderModel("/updates/abc.download", (dir) => {
+    let done = false;
+    const trying = tryReaderModel("/updates/abc.download", undefined, (dir) => {
       dirs.push(dir);
-      const p = trialProcess({});
-      made.push(p);
       return p as never;
-    });
+    }).then(() => (done = true));
+    await vi.waitFor(() => expect(p.retire).toHaveBeenCalledTimes(1));
     expect(dirs).toEqual(["/updates/abc.download"]);
-    expect(made[0]!.read).toHaveBeenCalledTimes(1);
-    expect(made[0]!.retire).toHaveBeenCalledTimes(1);
+    expect(p.read).toHaveBeenCalledTimes(1);
+    // Its folder is not to be moved while it holds the files.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(done).toBe(false);
+    p.exit();
+    await trying;
+    expect(done).toBe(true);
   });
 
   it.each([
     ["can't load", { load: new Error("This model needs a newer version of Daintree") }],
     ["can't read a screen", { read: new Error("Tokenizer has no [SEP]") }],
-  ])("throws for a model that %s, letting its reader go", async (_label, outcome) => {
+  ])(
+    "says a model that the reader reports %s can never run here, letting its reader go",
+    async (_label, outcome) => {
+      const { tryReaderModel } = await import("../canopyLocalReader.js");
+      const { CanopyReaderError } = await import("../canopyReaderProcess.js");
+      const { CanopyModelUnrunnable } = await import("../canopyModels.js");
+      const reported = new CanopyReaderError(
+        (outcome.load ?? outcome.read)!.message,
+        outcome.load !== undefined,
+        true
+      );
+      const p = trialProcess(outcome.load ? { load: reported } : { read: reported });
+      await expect(
+        tryReaderModel("/updates/abc.download", undefined, () => p as never)
+      ).rejects.toBeInstanceOf(CanopyModelUnrunnable);
+      expect(p.retire).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each([
+    ["a load that timed out", () => new Error("Model took too long to load")],
+    ["a reader process lost", () => new Error("Reader process exited")],
+  ])("leaves %s to a later try", async (_label, error) => {
     const { tryReaderModel } = await import("../canopyLocalReader.js");
-    const p = trialProcess(outcome);
-    await expect(tryReaderModel("/updates/abc.download", () => p as never)).rejects.toThrow();
+    const { CanopyReaderError } = await import("../canopyReaderProcess.js");
+    const { CanopyModelUnrunnable } = await import("../canopyModels.js");
+    const p = trialProcess({ load: new CanopyReaderError(error().message, true) });
+    const thrown = await tryReaderModel("/updates/abc.download", undefined, () => p as never).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(CanopyModelUnrunnable);
+  });
+
+  it("stops a load once told to, letting its reader go", async () => {
+    const { tryReaderModel } = await import("../canopyLocalReader.js");
+    const { CanopyModelUnrunnable } = await import("../canopyModels.js");
+    const p = trialProcess({ load: "never" });
+    const stop = new AbortController();
+    const trying = tryReaderModel("/updates/abc.download", stop.signal, () => p as never);
+    stop.abort();
+    const thrown = await trying.then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect((thrown as Error).message).toBe("cancelled");
+    expect(thrown).not.toBeInstanceOf(CanopyModelUnrunnable);
     expect(p.retire).toHaveBeenCalledTimes(1);
+    expect(p.read).not.toHaveBeenCalled();
+  });
+
+  it("leaves a model whose reader won't exit to a later try, its folder not to be moved", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { tryReaderModel } = await import("../canopyLocalReader.js");
+      const p = trialProcess({ exit: "held" });
+      const trying = tryReaderModel("/updates/abc.download", undefined, () => p as never).then(
+        () => null,
+        (e: unknown) => e
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(((await trying) as Error).message).toMatch(/hasn't exited/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

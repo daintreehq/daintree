@@ -210,7 +210,8 @@ function getModels(): CanopyModels {
     updates: modelUpdatesDir(),
     // An update is loaded and read with once in a reader of its own before
     // the reader in use lets go of the copy that works.
-    trial: (dir) => tryReaderModel(dir),
+    trial: (dir, signal) => tryReaderModel(dir, signal),
+    build: app.getVersion(),
   });
   return models;
 }

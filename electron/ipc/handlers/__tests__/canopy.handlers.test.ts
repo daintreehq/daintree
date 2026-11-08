@@ -100,6 +100,7 @@ vi.mock("electron", () => ({
   app: {
     getPath: () => "/tmp",
     getAppPath: () => "/repo",
+    getVersion: () => "1.4.0",
     get isPackaged() {
       return state.packaged;
     },
@@ -287,6 +288,7 @@ import { getDefaultPanelTitle } from "../../../../shared/config/panelKindRegistr
 import { canopyPanelsListing, registerCanopyHandlers } from "../canopy.js";
 import type { CanopySnapshot, CanopyTerminalView } from "../../../../shared/types/ipc/canopy.js";
 import { CanopyModels } from "../../../services/canopy/canopyModels.js";
+import { tryReaderModel } from "../../../services/canopy/canopyLocalReader.js";
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
 import { activeTerminalWatches, sizeHolds } from "../canopyTerminalWatch.js";
 import { markProjectlessView } from "../../../window/projectlessViews.js";
@@ -898,16 +900,30 @@ describe("canopy IPC", () => {
       path.join("/repo", "electron", "resources", "canopy-reader")
     );
     // Updates go beside the user's data, never where earlier versions downloaded to.
-    expect(vi.mocked(CanopyModels).mock.calls[0]?.[2]).toEqual({
+    const options = vi.mocked(CanopyModels).mock.calls[0]?.[2];
+    expect(options).toEqual({
       updates: path.join("/tmp", "canopy", "reader-updates"),
       trial: expect.any(Function),
+      build: "1.4.0",
     });
+
     expect(models.cancel).not.toHaveBeenCalled();
     await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset");
     // An update under way stops.
     expect(models.cancel).toHaveBeenCalled();
     // No read was made, so no reader was ever started.
     expect(localReader.read).not.toHaveBeenCalled();
+
+    // An update runs in a reader of its own first, stopping when the update does.
+    const stop = new AbortController();
+    vi.mocked(tryReaderModel).mockRejectedValueOnce(new Error("Model took too long to load"));
+    await expect(
+      options!.trial!("/tmp/canopy/reader-updates/x.download", stop.signal)
+    ).rejects.toThrow("Model took too long to load");
+    expect(tryReaderModel).toHaveBeenCalledWith(
+      "/tmp/canopy/reader-updates/x.download",
+      stop.signal
+    );
   });
 
   it.each(["unset", "hidden"] as const)(

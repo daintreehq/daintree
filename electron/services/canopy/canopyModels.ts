@@ -325,8 +325,12 @@ interface Operation {
   done: Promise<void>;
 }
 
-/** Raised when a fetched revision can't be read with here, whatever its hashes say. */
-class Unrunnable extends Error {}
+/**
+ * A fetched revision this build can never read with, whatever its hashes say:
+ * noted so it isn't fetched again by this build. Any other failure to run one
+ * is tried again on a later launch.
+ */
+export class CanopyModelUnrunnable extends Error {}
 
 export interface CanopyModelsOptions {
   /**
@@ -338,10 +342,13 @@ export interface CanopyModelsOptions {
   /** The revision the app ships in its folder, and its files' pins. */
   shipped?: CanopyModelRevision;
   /**
-   * Runs a fetched revision before it is read with, from its folder: throws
-   * when it can't load or read here. A revision that throws is never used.
+   * Runs a fetched revision before it is read with, from its folder, and
+   * stops once `signal` aborts. A revision it throws for is never put in
+   * place; `CanopyModelUnrunnable` keeps this build from fetching it again.
    */
-  trial?: (dir: string) => Promise<void>;
+  trial?: (dir: string, signal: AbortSignal) => Promise<void>;
+  /** Names this build: a revision it couldn't run may run on another. */
+  build?: string;
 }
 
 export class CanopyModels {
@@ -359,7 +366,8 @@ export class CanopyModels {
   private disposed = false;
   private readonly updates: string | null;
   private readonly shipped: CanopyModelRevision;
-  private readonly trial: ((dir: string) => Promise<void>) | null;
+  private readonly trial: ((dir: string, signal: AbortSignal) => Promise<void>) | null;
+  private readonly build: string | null;
 
   constructor(
     /** The folder the app ships the model in. */
@@ -371,6 +379,7 @@ export class CanopyModels {
     this.updates = options.updates ?? null;
     this.shipped = options.shipped ?? SHIPPED;
     this.trial = options.trial ?? null;
+    this.build = options.build ?? null;
   }
 
   /**
@@ -506,7 +515,7 @@ export class CanopyModels {
       this.tell();
       if (previous?.source === "update") await this.discard(previous.revision.revision);
     } catch (error) {
-      if (error instanceof Unrunnable) {
+      if (error instanceof CanopyModelUnrunnable) {
         console.warn(
           `[Canopy] Model update ${target.revision} can't be read with here:`,
           error.message
@@ -623,16 +632,21 @@ export class CanopyModels {
     // The reader.json the Hub served said this build reads it; the config.json
     // the reader opens has to say so too.
     const meta: unknown = JSON.parse(await readFile(path.join(staging, "config.json"), "utf8"));
-    if (!isReaderMeta(meta)) throw new Unrunnable("its config.json is not one this build reads");
+    if (!isReaderMeta(meta))
+      throw new CanopyModelUnrunnable("its config.json is not one this build reads");
     if (signal.aborted) throw new Error("cancelled");
     // Run where it was fetched, before anything reads with it: one stopped
     // here is tried again, never put in place untried.
     if (this.trial) {
       try {
-        await this.trial(staging);
+        await this.trial(staging, signal);
       } catch (error) {
         if (signal.aborted) throw new Error("cancelled", { cause: error });
-        throw new Unrunnable(formatErrorMessage(error, "it doesn't run"), { cause: error });
+        if (error instanceof CanopyModelUnrunnable) throw error;
+        // Kept as it is: the next launch runs it again.
+        throw new Error(`it didn't run here this time: ${formatErrorMessage(error, "")}`, {
+          cause: error,
+        });
       }
     }
     if (signal.aborted) throw new Error("cancelled");
@@ -652,12 +666,16 @@ export class CanopyModels {
     this.tell();
   }
 
-  /** A revision this build fetched and couldn't run, so it isn't fetched again. */
+  /** A revision this build fetched and couldn't run, so it isn't fetched again; another build tries. */
   private async wasRejected(revision: string): Promise<boolean> {
-    return stat(path.join(this.updates!, `${revision}${REJECTED}`)).then(
-      () => true,
-      () => false
-    );
+    try {
+      const raw = JSON.parse(
+        await readFile(path.join(this.updates!, `${revision}${REJECTED}`), "utf8")
+      ) as { build?: unknown };
+      return (raw.build ?? null) === this.build;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -673,6 +691,7 @@ export class CanopyModels {
       revision: target.revision,
       published: target.published,
       files: target.files,
+      build: this.build,
     });
     await writeFile(path.join(root, `${target.revision}${REJECTED}`), record, "utf8").catch(
       (error: unknown) => console.warn("[Canopy] Couldn't note a model update that failed:", error)

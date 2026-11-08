@@ -34,7 +34,9 @@ export class CanopyReaderError extends Error {
   constructor(
     message: string,
     /** The process went, or never loaded: a new one may do better. */
-    readonly processLost = false
+    readonly processLost = false,
+    /** The reader itself said so: the model, not the moment, is at fault. */
+    readonly reported = false
   ) {
     super(message);
     this.name = "CanopyReaderError";
@@ -107,7 +109,7 @@ export class CanopyReaderProcess {
       } else if (message.type === "error") {
         clearTimeout(loadTimer);
         logWarn(`${P} Reader reported an error`, { message: message.message });
-        readyReject(new CanopyReaderError(message.message, true));
+        readyReject(new CanopyReaderError(message.message, true, true));
         this.retire();
       } else if (message.type === "reading" || message.type === "read-failed") {
         const read = this.pending.get(message.id);
@@ -115,7 +117,7 @@ export class CanopyReaderProcess {
         this.pending.delete(message.id);
         clearTimeout(read.timer);
         if (message.type === "reading") read.resolve({ reading: message.reading, ms: message.ms });
-        else read.reject(new CanopyReaderError(message.message));
+        else read.reject(new CanopyReaderError(message.message, false, true));
       }
     });
     this.child.on("error", (type, location) => {

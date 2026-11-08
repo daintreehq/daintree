@@ -19,6 +19,7 @@ import {
   type ClassifierResult,
   type DescriberResult,
 } from "./canopyProviders.js";
+import { CanopyModelUnrunnable } from "./canopyModels.js";
 import { cleanStatusLine } from "./canopyScreen.js";
 import { irreversibleReason } from "./canopyRisk.js";
 
@@ -142,31 +143,55 @@ export function toCanopyReading(reading: Reading, input: CanopyScreenInput): Can
 
 /**
  * Loads the model in `dir` in a reader process of its own, reads one screen
- * with it, and lets it go. Throws when either fails: an update that does is
- * never read with, so the copy in use reads on (#16416).
+ * with it, and waits for that process to exit. Throws
+ * `CanopyModelUnrunnable` when the reader says the model can't load or read
+ * here; any other failure (a timeout, a lost process, one slow to exit) may
+ * pass, and a later try may do better (#16416). Stops once `signal` aborts.
  */
 export async function tryReaderModel(
   dir: string,
+  signal?: AbortSignal,
   spawn: (dir: string, onExit: () => void) => CanopyReaderProcess = (d, onExit) =>
     new CanopyReaderProcess(d, onExit)
 ): Promise<void> {
+  if (signal?.aborted) throw new Error("cancelled");
   const trial = spawn(dir, () => {});
+  let stop: () => void = () => {};
+  const stopped = new Promise<never>((_resolve, reject) => {
+    stop = () => reject(new Error("cancelled"));
+    signal?.addEventListener("abort", stop, { once: true });
+  });
+  stopped.catch(() => {});
+  let failure: unknown = null;
   try {
-    await trial.ready;
-    await trial.read({ agent_program: "shell", terminal_title: "" }, ["$ "]);
-  } finally {
-    trial.retire();
-    // Gone before its folder is moved: Windows holds the files of a live reader.
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([trial.ready, stopped]);
     await Promise.race([
-      trial.whenExited,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, READER_RETIRE_KILL_MS + TRIAL_EXIT_GRACE_MS);
-        timer.unref?.();
-      }),
+      trial.read({ agent_program: "shell", terminal_title: "" }, ["$ "]),
+      stopped,
     ]);
-    clearTimeout(timer);
+  } catch (error) {
+    failure = error;
+  } finally {
+    signal?.removeEventListener("abort", stop);
   }
+  trial.retire();
+  // Gone before its folder is moved: Windows holds the files of a live reader.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const exited = await Promise.race([
+    trial.whenExited.then(() => true),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), READER_RETIRE_KILL_MS + TRIAL_EXIT_GRACE_MS);
+      timer.unref?.();
+    }),
+  ]);
+  clearTimeout(timer);
+  if (failure !== null) {
+    if (failure instanceof CanopyReaderError && failure.reported) {
+      throw new CanopyModelUnrunnable(failure.message, { cause: failure });
+    }
+    throw failure;
+  }
+  if (!exited) throw new Error("the trial reader hasn't exited yet");
 }
 
 /**

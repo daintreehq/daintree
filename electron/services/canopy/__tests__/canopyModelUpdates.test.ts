@@ -15,6 +15,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CANOPY_MODEL,
+  CanopyModelUnrunnable,
   CanopyModels,
   removeStaleUpdates,
   type CanopyModelFileSpec,
@@ -94,6 +95,8 @@ interface Repo {
   files: Record<string, string>;
   /** Served for a weights file in place of what its published hash describes. */
   servedWeights?: string;
+  /** Sizes the Hub says, in place of the files' own. */
+  sizes?: Record<string, number>;
 }
 
 function repo(sha: string, at: number, overrides: Partial<Repo> = {}): Repo {
@@ -148,7 +151,7 @@ function hub(r: Repo | null, options: { hold?: string; wrongRangeHeader?: boolea
         private: false,
         siblings: Object.entries(r.files).map(([name, content]) => ({
           rfilename: name,
-          size: Buffer.byteLength(content),
+          size: r.sizes?.[name] ?? Buffer.byteLength(content),
           blobId: blobId(content),
           ...(LFS.has(name) ? { lfs: { sha256: sha256(content), size: content.length } } : {}),
         })),
@@ -451,6 +454,33 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     expect(m.state()).toMatchObject({ revision: SHIPPED_REVISION, source: "bundled" });
   });
 
+  it("fetches nothing of a revision the Hub says is far larger than this model", async () => {
+    const huge = repo(NEWER, SHIPPED_AT + DAY);
+    huge.sizes = { "model.int8.onnx": 600 * 1024 * 1024 };
+    const { fetchMock, requests } = hub(huge);
+    vi.stubGlobal("fetch", fetchMock);
+    await models().ensure();
+
+    expect(requests.map((r) => r.url)).toEqual([
+      `https://huggingface.co/api/models/${CANOPY_MODEL}?blobs=true`,
+    ]);
+  });
+
+  it("stops a resumed file once what was kept and what comes pass the size the Hub published", async () => {
+    const newer = repo(NEWER, SHIPPED_AT + DAY);
+    started(newer);
+    // Three bytes too many in all, though the rest alone fits.
+    newer.servedWeights = `INT8-${NEWER}xyz`;
+    const { fetchMock } = hub(newer);
+    vi.stubGlobal("fetch", fetchMock);
+    await models().ensure();
+
+    expect(console.warn).toHaveBeenCalledWith(
+      "[Canopy] Model update failed:",
+      expect.stringMatching(/model\.int8\.onnx is larger than Hugging Face published/)
+    );
+  });
+
   it("stops a file at the size the Hub published", async () => {
     const big = repo(NEWER, SHIPPED_AT + DAY);
     big.servedWeights = `INT8-${NEWER}`.repeat(3);
@@ -638,14 +668,14 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     expect(await m.installedDir()).toBe(path.join(updates, NEWER));
   });
 
-  it("never reads with a revision that fails its run here, and never fetches it again", async () => {
+  it("never reads with a revision that can't run here, and this build never fetches it again", async () => {
     const newer = repo(NEWER, SHIPPED_AT + DAY);
     const first = hub(newer);
     vi.stubGlobal("fetch", first.fetchMock);
     const trial = vi.fn(async () => {
-      throw new Error("Model took too long to load");
+      throw new CanopyModelUnrunnable("This model needs a newer version of Daintree");
     });
-    const m = models(() => {}, { trial });
+    const m = models(() => {}, { trial, build: "1.4.0" });
     await m.ensure();
 
     expect(trial).toHaveBeenCalledTimes(1);
@@ -658,11 +688,63 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     // The next launch: the Hub names it still, and nothing of it is fetched or run.
     const second = hub(newer);
     vi.stubGlobal("fetch", second.fetchMock);
-    const next = models(() => {}, { trial });
+    const next = models(() => {}, { trial, build: "1.4.0" });
     await next.ensure();
     expect(fetchedFiles(second.requests)).toEqual([]);
     expect(trial).toHaveBeenCalledTimes(1);
     expect(await next.installedDir()).toBe(shippedDir);
+
+    // Another build may read it: it tries.
+    const third = hub(newer);
+    vi.stubGlobal("fetch", third.fetchMock);
+    const later = models(() => {}, { trial: async () => {}, build: "1.5.0" });
+    await later.ensure();
+    expect(await later.installedDir()).toBe(path.join(updates, NEWER));
+  });
+
+  it("runs a revision again on the next launch when its run failed for the moment", async () => {
+    const newer = repo(NEWER, SHIPPED_AT + DAY);
+    const first = hub(newer);
+    vi.stubGlobal("fetch", first.fetchMock);
+    const m = models(() => {}, {
+      trial: async () => {
+        throw new Error("Model took too long to load");
+      },
+    });
+    await m.ensure();
+
+    expect(await m.installedDir()).toBe(shippedDir);
+    expect(existsSync(path.join(updates, `${NEWER}.rejected`))).toBe(false);
+    // What was fetched stays for the next try.
+    expect(existsSync(path.join(updates, `${NEWER}.download`, "model.int8.onnx"))).toBe(true);
+
+    const second = hub(newer);
+    vi.stubGlobal("fetch", second.fetchMock);
+    const trial = vi.fn(async () => {});
+    const next = models(() => {}, { trial });
+    await next.ensure();
+    expect(trial).toHaveBeenCalledTimes(1);
+    expect(fetchedFiles(second.requests)).not.toContain("model.int8.onnx");
+    expect(await next.installedDir()).toBe(path.join(updates, NEWER));
+  });
+
+  it("hands the run a way to stop, and puts nothing in place once it is stopped", async () => {
+    const { fetchMock } = hub(repo(NEWER, SHIPPED_AT + DAY));
+    vi.stubGlobal("fetch", fetchMock);
+    const signals: AbortSignal[] = [];
+    const m: CanopyModels = models(() => {}, {
+      trial: (_dir, signal) => {
+        signals.push(signal);
+        m.cancel();
+        return Promise.reject(new Error("cancelled"));
+      },
+    });
+    await m.ensure();
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(m.currentDir()).toBe(shippedDir);
+    expect(existsSync(path.join(updates, `${NEWER}.rejected`))).toBe(false);
   });
 
   it("puts nothing in place once stopped while a fetched revision runs, and runs it again next time", async () => {
