@@ -1074,7 +1074,12 @@ describe("captured agent session persistence (#12433)", () => {
     const ENDED_ID = "af2ad2f5-cbb1-4eb8-a5cc-26f56d37b075";
 
     function claudePane(overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot {
-      return pane({ launchAgentId: "claude", title: "Claude", agentSessionId: LAUNCH_ID, ...overrides });
+      return pane({
+        launchAgentId: "claude",
+        title: "Claude",
+        agentSessionId: LAUNCH_ID,
+        ...overrides,
+      });
     }
 
     /** A Claude spawn the host confirmed, handed `agentSessionId` at launch. */
