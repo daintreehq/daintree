@@ -175,6 +175,7 @@ import {
   installRetiredSendsNotice,
 } from "../install.js";
 import type { McpCallAnswer, ThrowawayCallAnswer } from "../linkMethods.js";
+import { LAUNCHED_AGENT_GONE_MS } from "../launchedAgents.js";
 import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { TEST_HANDSHAKE } from "../../link/__tests__/linkTestUtils.js";
 import { HostRegistry } from "../../client/HostRegistry.js";
@@ -695,10 +696,10 @@ describe("assistantsUseHost (#15878)", () => {
     await vi.advanceTimersByTimeAsync(3 * IDLE_RELEASE_MS);
     expect(manager!.get(h.hostId)).toBeDefined();
     expect(h.listAgentTargets).toHaveBeenCalledWith(h.hostId);
-    // Once the host stops listing it, the link goes after the usual window
-    // unused, counted from the last sweep that found it held.
+    // Once the host has stopped listing it for a while, the link goes after
+    // the usual window unused, counted from the last sweep that found it held.
     h.agentEnds();
-    await vi.advanceTimersByTimeAsync(IDLE_RELEASE_MS);
+    await vi.advanceTimersByTimeAsync(IDLE_RELEASE_MS + LAUNCHED_AGENT_GONE_MS);
     expect(manager!.get(h.hostId)).toBeDefined();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(manager!.get(h.hostId)).toBeUndefined();

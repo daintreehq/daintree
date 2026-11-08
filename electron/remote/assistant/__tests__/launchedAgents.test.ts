@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  LAUNCHED_AGENT_GONE_MS,
   LAUNCHED_AGENT_UNLISTED_MS,
   LaunchedAgents,
   launchedTerminalIds,
@@ -81,26 +82,35 @@ describe("LaunchedAgents (#16492)", () => {
     expect(agents.launchOf("c1")).toBeNull();
   });
 
-  it("lets go of a listed agent on the first full list without it, an unlisted one only once it had time to start", () => {
-    let mono = 0;
-    const agents = new LaunchedAgents(() => mono, 10 * LAUNCHED_AGENT_UNLISTED_MS);
-    agents.launched("studio", "c1", ["t-1", "t-2"]);
+  it("lets go of a listed agent once full lists go without it for a while, a restart's gap included", () => {
+    const agents = new LaunchedAgents(() => 0, 10 * LAUNCHED_AGENT_UNLISTED_MS);
+    agents.launched("studio", "c1", ["t-1"]);
     agents.launched("other", "c2", ["t-1"]);
     agents.listed("studio", new Set(["t-1"]), 0);
-    mono = 1_000;
+    // Missing, then back under the same id: the count starts again.
     agents.listed("studio", new Set(), 1_000);
-    // t-1 was listed, so it ended; t-2 may still be starting.
+    agents.listed("studio", new Set(["t-1"]), 1_000 + LAUNCHED_AGENT_GONE_MS);
+    agents.listed("studio", new Set(), 2_000 + LAUNCHED_AGENT_GONE_MS);
+    agents.listed("studio", new Set(), 1_999 + 2 * LAUNCHED_AGENT_GONE_MS);
     expect(agents.holds("studio")).toBe(true);
+    agents.listed("studio", new Set(), 2_000 + 2 * LAUNCHED_AGENT_GONE_MS);
+    expect(agents.holds("studio")).toBe(false);
+    // Another host's agent under the same id is untouched; an ended one stays ended.
+    expect(agents.holds("other")).toBe(true);
+    agents.launched("studio", "c1", ["t-1"]);
+    expect(agents.holds("studio")).toBe(false);
+    agents.forgetHost("other");
+    expect(agents.holds("other")).toBe(false);
+  });
+
+  it("gives an agent the host never listed its time to start, however many lists miss it", () => {
+    const agents = new LaunchedAgents(() => 0, 10 * LAUNCHED_AGENT_UNLISTED_MS);
+    agents.launched("studio", "c1", ["t-1"]);
+    agents.listed("studio", new Set(), 0);
     agents.listed("studio", new Set(), LAUNCHED_AGENT_UNLISTED_MS - 1);
     expect(agents.holds("studio")).toBe(true);
     agents.listed("studio", new Set(), LAUNCHED_AGENT_UNLISTED_MS);
     expect(agents.holds("studio")).toBe(false);
-    // Ended ones stay ended when an answer names them again; the other host is untouched.
-    agents.launched("studio", "c1", ["t-1", "t-2"]);
-    expect(agents.holds("studio")).toBe(false);
-    expect(agents.holds("other")).toBe(true);
-    agents.forgetHost("other");
-    expect(agents.holds("other")).toBe(false);
   });
 
   it("lets the oldest go past each cap rather than growing", () => {

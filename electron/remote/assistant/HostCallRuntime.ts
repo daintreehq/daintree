@@ -1045,9 +1045,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * Whether agents one of this Shell's assistants launched on `hostId` may
    * still be running there (#16492), so its link stays up and every window
    * here shows the host's own counts of them with nobody opening it. Each is
-   * held until a full list of the host's agents no longer names it, or the
-   * notice window passes; asking reads that list now and then, only over a
-   * link already up. Holding the link never keeps the host awake.
+   * held until full lists of the host's agents stop naming it, or the notice
+   * window passes; asking reads that list now and then, only over a link
+   * already up. Holding the link never keeps the host awake.
    */
   holdsLaunchedAgents(hostId: HostId): boolean {
     if (this.disposed || !this.launchedAgents.holds(hostId)) return false;

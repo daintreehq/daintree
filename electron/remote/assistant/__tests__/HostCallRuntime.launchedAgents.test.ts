@@ -3,7 +3,7 @@ import type { HostCallArgs } from "../../../../shared/types/hostControl.js";
 import type { HostFleetTargetList } from "../../../../shared/types/ipc/hostMetrics.js";
 import { HostCallRuntime, type ObservedHost, type OpenRun } from "../HostCallRuntime.js";
 import { RELAY_NOTICE_WINDOW_MS, type McpCallAnswer } from "../linkMethods.js";
-import { LAUNCHED_AGENT_UNLISTED_MS } from "../launchedAgents.js";
+import { LAUNCHED_AGENT_GONE_MS, LAUNCHED_AGENT_UNLISTED_MS } from "../launchedAgents.js";
 
 const RUN_A: OpenRun = {
   projectId: "proj-1",
@@ -104,6 +104,15 @@ describe("HostCallRuntime holding a host for agents its assistants launched (#16
     return held;
   }
 
+  /** Full lists missing what the host listed before, for as long as it takes to count as ended. */
+  async function goneFor(terminalIds: string[] = []): Promise<void> {
+    listAgentTargets.mockResolvedValue(listing(terminalIds));
+    for (const step of [30_000, LAUNCHED_AGENT_GONE_MS]) {
+      mono += step;
+      expect(await sweep()).toBe(true);
+    }
+  }
+
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     hosts = [observed("studio")];
@@ -133,10 +142,16 @@ describe("HostCallRuntime holding a host for agents its assistants launched (#16
     // Every read that answered left no timer behind.
     expect(vi.getTimerCount()).toBe(0);
 
+    // Listed before: one full list without it may be a restart's gap, so it
+    // ends only once lists have gone without it for a while.
     listAgentTargets.mockResolvedValue(listing(["someone-elses"]));
     mono += 30_000;
-    // Listed before, so the first full list without it is the end of it; the
-    // read that says so answers after this ask.
+    expect(await sweep()).toBe(true);
+    mono += LAUNCHED_AGENT_GONE_MS - 1;
+    expect(await sweep()).toBe(true);
+    expect(await sweep()).toBe(true);
+    mono += 30_000;
+    // The read that says it ended answers after this ask.
     expect(await sweep()).toBe(true);
     expect(await sweep()).toBe(false);
     expect(runtime.holdsLaunchedAgents("other")).toBe(false);
@@ -164,14 +179,10 @@ describe("HostCallRuntime holding a host for agents its assistants launched (#16
     );
     listAgentTargets.mockResolvedValue(listing(["t-1", "t-3"]));
     expect(await sweep()).toBe(true);
-    listAgentTargets.mockResolvedValue(listing(["t-1"]));
-    mono += 30_000;
-    expect(await sweep()).toBe(true);
+    await goneFor(["t-1"]);
     // t-3 ended; t-1 alone still holds the host.
     expect(await sweep()).toBe(true);
-    listAgentTargets.mockResolvedValue(listing([]));
-    mono += 30_000;
-    expect(await sweep()).toBe(true);
+    await goneFor();
     expect(await sweep()).toBe(false);
 
     relayCall.mockResolvedValueOnce({
@@ -299,9 +310,7 @@ describe("HostCallRuntime holding a host for agents its assistants launched (#16
     await runtime.call("a", { ...LAUNCH, callId: callIdOf(lost) }, { tier: "core" });
     mono += 30_000;
     expect(await sweep()).toBe(true);
-    listAgentTargets.mockResolvedValue(listing([]));
-    mono += 30_000;
-    expect(await sweep()).toBe(true);
+    await goneFor();
     expect(await sweep()).toBe(false);
 
     // A tool that threw after it was dispatched answers with nothing readable.
@@ -341,9 +350,7 @@ describe("HostCallRuntime holding a host for agents its assistants launched (#16
   it("never brings back an agent seen ended when its answer comes again", async () => {
     const first = await runtime.call("a", LAUNCH, { tier: "core" });
     expect(await sweep()).toBe(true);
-    listAgentTargets.mockResolvedValue(listing([]));
-    mono += 30_000;
-    expect(await sweep()).toBe(true);
+    await goneFor();
     expect(runtime.holdsLaunchedAgents("studio")).toBe(false);
 
     await runtime.call("a", { ...LAUNCH, callId: callIdOf(first) }, { tier: "core" });
