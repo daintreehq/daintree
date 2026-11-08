@@ -350,6 +350,7 @@ describe("re-checking after the command runs", () => {
     expect(client.activity.size).toBe(0);
     expect(client.exit.size).toBe(0);
     expect(panels.listeners.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
 
     // Nothing is left to fire.
     await vi.advanceTimersByTimeAsync(60 * 60_000);

@@ -282,7 +282,10 @@ describe("MissingPrerequisiteBanner", () => {
         healthCheckMock.mockRejectedValue(new Error("probe failed"));
         useMissingPrerequisiteStore.setState({
           missing: [
-            missingGit({ installBlocks: { macos: [{ commands: ["sudo port install git"] }] } }),
+            missingGit({
+              installUrl: undefined,
+              installBlocks: { macos: [{ commands: ["sudo port install git"] }] },
+            }),
           ],
         });
 

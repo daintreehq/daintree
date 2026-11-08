@@ -54,6 +54,14 @@ describe("recheckPrerequisite", () => {
     await expect(recheckPrerequisite("not-probed")).resolves.toBe(false);
   });
 
+  it("is false for a tool installed below the version Daintree needs", async () => {
+    const outdated = { ...result("git", "fatal", true), meetsMinVersion: false };
+    healthCheck.mockResolvedValue({ prerequisites: [outdated], allRequired: false });
+
+    await expect(recheckPrerequisite("git")).resolves.toBe(false);
+    expect(useMissingPrerequisiteStore.getState().missing).toEqual([outdated]);
+  });
+
   it("publishes only the fatal failures it found", async () => {
     healthCheck.mockResolvedValue({
       prerequisites: [result("git", "fatal", false), result("gh", "warn", false)],
