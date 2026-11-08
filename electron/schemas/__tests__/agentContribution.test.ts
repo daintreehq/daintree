@@ -463,3 +463,278 @@ describe("permissionBypassArgs (#16374)", () => {
     });
   });
 });
+
+describe("discovery metadata (#16468)", () => {
+  const schema = getPluginManifestSchema("user");
+  const withAgent = (agent: Record<string, unknown>) =>
+    schema.safeParse(
+      manifestWith({
+        capabilities: ["agent:register"],
+        contributes: { agents: [{ ...VALID_AGENT, ...agent }] },
+      })
+    );
+  const errorCodes = (agent: Record<string, unknown>) =>
+    withAgent(agent).error?.issues.map((issue) => (issue as { params?: { errorCode?: string } }).params?.errorCode) ?? [];
+  const issuePaths = (agent: Record<string, unknown>) =>
+    withAgent(agent).error?.issues.map((issue) => issue.path.join(".")) ?? [];
+
+  it("accepts the Pi and mini-swe-agent shapes the issue names", () => {
+    expect(
+      withAgent({
+        id: "pi",
+        command: "pi",
+        packages: { npm: "@earendil-works/pi-coding-agent" },
+      }).success
+    ).toBe(true);
+    expect(
+      withAgent({
+        id: "mini-swe-agent",
+        command: "mini",
+        packages: { pypi: "mini-swe-agent" },
+        nativePaths: ["%USERPROFILE%\\.local\\bin\\mini.exe", "~/.local/bin/mini"],
+      }).success
+    ).toBe(true);
+  });
+
+  it("keeps both fields optional", () => {
+    const result = withAgent({});
+    expect(result.success).toBe(true);
+    const agent = result.data?.contributes.agents[0];
+    expect(agent).not.toHaveProperty("nativePaths");
+    expect(agent).not.toHaveProperty("packages");
+  });
+
+  describe("nativePaths", () => {
+    const parses = (nativePaths: unknown, command = "acme") =>
+      withAgent({ command, nativePaths }).success;
+
+    it.each([
+      "~/.acme/bin/acme",
+      "~/Library/Application Support/Acme (beta)/bin/acme",
+      "/opt/acme/bin/acme",
+      "/opt/@acme/c++_tools/acme",
+      "%USERPROFILE%\\.acme\\bin\\acme.exe",
+      "%LOCALAPPDATA%\\Programs\\Acme\\acme.cmd",
+      "%APPDATA%\\npm\\acme.cmd",
+      "%ProgramFiles%\\Acme\\acme.exe",
+      "%PROGRAMFILES%\\Acme\\acme.exe",
+      "%ProgramFiles(x86)%\\Acme\\acme.exe",
+      "%ProgramData%\\Acme\\acme.bat",
+    ])("accepts %s", (entry) => {
+      expect(parses([entry])).toBe(true);
+    });
+
+    it.each([
+      ["relative", "bin/acme"],
+      ["dot-relative", "./bin/acme"],
+      ["parent-relative", "../bin/acme"],
+      ["bare", "acme"],
+      ["another user's home", "~other/bin/acme"],
+      ["a bare tilde", "~"],
+      ["a drive path", "C:\\tools\\acme.exe"],
+      ["a forward-slash drive path", "C:/tools/acme.exe"],
+      ["drive-relative", "C:acme.exe"],
+      ["UNC", "\\\\server\\share\\acme.exe"],
+      ["forward-slash UNC", "//server/share/acme"],
+      ["mixed-slash UNC", "/\\server\\share\\acme"],
+      ["a device path", "\\\\?\\C:\\tools\\acme.exe"],
+      ["root-relative backslash", "\\tools\\acme.exe"],
+      ["a variable outside the list", "%TEMP%\\acme.exe"],
+      ["a variable that can name a network share", "%LOGONSERVER%\\share\\acme.exe"],
+      ["a variable holding a drive-relative path", "%HOMEPATH%\\acme.exe"],
+      ["a second variable", "%USERPROFILE%\\%APPDATA%\\acme.exe"],
+      ["a variable below a POSIX root", "~/%APPDATA%/acme"],
+      ["a variable with forward slashes", "%USERPROFILE%/bin/acme"],
+      ["a backslash in a POSIX entry", "/opt\\acme"],
+      ["a forward slash in a Windows entry", "%USERPROFILE%\\bin/acme.exe"],
+      ["traversal", "~/../../bin/acme"],
+      ["Windows traversal", "%USERPROFILE%\\..\\..\\acme.exe"],
+      ["a dot segment", "/opt/./acme"],
+      ["traversal Win32 would normalize", "%USERPROFILE%\\.. \\acme.exe"],
+      ["dots Win32 would normalize", "%USERPROFILE%\\...\\acme.exe"],
+      ["an empty segment", "/opt//acme"],
+      ["a trailing separator", "/opt/acme/"],
+      ["only a root", "~/"],
+      ["only a variable root", "%USERPROFILE%\\"],
+      ["an alternate data stream", "%USERPROFILE%\\acme.exe:stream\\acme.exe"],
+      ["a settings template", "~/${settings:dir}/acme"],
+      ["a shell expansion", "~/$HOME/acme"],
+      ["a newline", "~/bin\n/acme"],
+      ["NUL", "~/bin\0/acme"],
+      ["a non-ASCII lookalike", "~/bіn/acme"],
+    ])("refuses %s", (_name, entry) => {
+      expect(parses([entry])).toBe(false);
+    });
+
+    it("caps the count and the length", () => {
+      const entry = "~/bin/acme";
+      expect(parses(Array.from({ length: 16 }, () => entry))).toBe(true);
+      expect(parses(Array.from({ length: 17 }, () => entry))).toBe(false);
+      expect(parses([])).toBe(false);
+      const atCap = `~/${"a".repeat(256 - "~/".length - "/acme".length)}/acme`;
+      expect(atCap).toHaveLength(256);
+      expect(parses([atCap])).toBe(true);
+      expect(parses([`~/a${atCap.slice(2)}`])).toBe(false);
+    });
+
+    describe("each ending in the agent's own command", () => {
+      it.each([
+        ["acme", "~/bin/acme"],
+        ["acme", "~/bin/acme.exe"],
+        ["acme", "~/bin/acme.cmd"],
+        ["acme", "~/bin/acme.bat"],
+        ["acme", "~/bin/acme.com"],
+        ["acme", "%USERPROFILE%\\bin\\acme.EXE"],
+        ["acme.dev", "~/bin/acme.dev"],
+        ["acme.dev", "~/bin/acme.dev.exe"],
+        ["acme.cmd", "~/bin/acme.cmd"],
+      ])("a %s command accepts %s", (command, entry) => {
+        expect(parses([entry], command)).toBe(true);
+      });
+
+      it.each([
+        ["acme", "~/bin/notacme"],
+        ["acme", "~/bin/acme-beta"],
+        ["acme", "~/bin/acme.sh"],
+        ["acme", "~/bin/acme.ps1"],
+        ["acme", "~/bin/acme.exe.exe"],
+        ["acme", "~/acme/bin"],
+        ["acme", "~/bin/ACME"],
+        ["acme", "%USERPROFILE%\\bin\\ACME.exe"],
+        ["acme.cmd", "~/bin/acme"],
+        ["acme.cmd", "~/bin/acme.exe"],
+        ["acme.cmd", "~/bin/acme.cmd.cmd"],
+      ])("a %s command refuses %s", (command, entry) => {
+        expect(parses([entry], command)).toBe(false);
+      });
+
+      it("points at the entry that doesn't", () => {
+        const agent = { nativePaths: ["~/bin/acme", "~/bin/other"] };
+        expect(issuePaths(agent)).toEqual(["contributes.agents.0.nativePaths.1"]);
+        expect(errorCodes(agent)).toEqual(["agent_native_path_not_command"]);
+      });
+    });
+  });
+
+  describe("packages", () => {
+    const parses = (packages: unknown) => withAgent({ packages }).success;
+
+    it.each([
+      "acme",
+      "acme-agent",
+      "acme_agent",
+      "acme.agent",
+      "@acme/agent",
+      "@earendil-works/pi-coding-agent",
+    ])("accepts the npm name %s", (npm) => {
+      expect(parses({ npm })).toBe(true);
+    });
+
+    it.each([
+      "",
+      "Acme",
+      "@Acme/agent",
+      "@acme",
+      "@acme/",
+      "/agent",
+      "acme/agent",
+      "@acme/agent/extra",
+      "@acme/../agent",
+      "acme@1.2.3",
+      "@acme/agent@latest",
+      "https://example.com/acme.tgz",
+      "git+ssh://git@example.com/acme.git",
+      "../acme",
+      ".acme",
+      "_acme",
+      "acme agent",
+      "acme\n",
+      "a".repeat(215),
+    ])("refuses the npm name %j", (npm) => {
+      expect(parses({ npm })).toBe(false);
+    });
+
+    it("accepts an npm name at npm's own length limit", () => {
+      expect(parses({ npm: "a".repeat(214) })).toBe(true);
+    });
+
+    it.each(["acme", "mini-swe-agent", "aider-chat", "a1-b2"])(
+      "accepts the PyPI name %s",
+      (pypi) => {
+        expect(parses({ pypi })).toBe(true);
+      }
+    );
+
+    it.each([
+      "",
+      // uv and pipx name their directories by the normalized form, so any other
+      // spelling would validate and then quietly never be found.
+      "Acme",
+      "acme_agent",
+      "acme.agent",
+      "acme--agent",
+      "-acme",
+      "acme-",
+      "acme[extra]",
+      "acme==1.2.3",
+      "acme>=1",
+      "../acme",
+      "acme/agent",
+      "acme\\agent",
+      "..",
+      "acme agent",
+      "acme\n",
+      "https://example.com/acme.whl",
+      "a".repeat(129),
+    ])("refuses the PyPI name %j", (pypi) => {
+      expect(parses({ pypi })).toBe(false);
+    });
+
+    it("accepts a PyPI name at the cap", () => {
+      expect(parses({ pypi: "a".repeat(128) })).toBe(true);
+    });
+
+    it("refuses other ecosystems and an empty declaration", () => {
+      expect(parses({})).toBe(false);
+      expect(parses({ brew: "acme" })).toBe(false);
+      expect(parses({ npm: "acme", cargo: "acme" })).toBe(false);
+    });
+  });
+
+  it("refuses fields that would run the agent or stand in for the declared ones", () => {
+    expect(withAgent({ supportsWsl: true }).success).toBe(false);
+    expect(withAgent({ npmGlobalPackage: "acme" }).success).toBe(false);
+  });
+
+  describe("beside a bundled command", () => {
+    const command = "./bin/acme";
+
+    it("refuses nativePaths, which is never probed for one", () => {
+      const agent = { command, nativePaths: ["~/bin/acme"] };
+      expect(issuePaths(agent)).toEqual(["contributes.agents.0.nativePaths"]);
+      expect(errorCodes(agent)).toEqual(["agent_discovery_bundled_command"]);
+    });
+
+    it("refuses packages, which are never probed for one", () => {
+      const agent = { command, packages: { npm: "acme" } };
+      expect(issuePaths(agent)).toEqual(["contributes.agents.0.packages"]);
+      expect(errorCodes(agent)).toEqual(["agent_discovery_bundled_command"]);
+    });
+
+    it("still accepts the command alone", () => {
+      expect(withAgent({ command }).success).toBe(true);
+    });
+  });
+
+  describe("packages beside a command that already names its launcher", () => {
+    it("refuses them, since the package layers would look for acme.cmd.cmd", () => {
+      const agent = { command: "acme.cmd", packages: { npm: "acme" } };
+      expect(issuePaths(agent)).toEqual(["contributes.agents.0.packages"]);
+      expect(errorCodes(agent)).toEqual(["agent_discovery_suffixed_command"]);
+    });
+
+    it("leaves a dotted name that isn't a launcher alone", () => {
+      expect(withAgent({ command: "acme.dev", packages: { npm: "acme" } }).success).toBe(true);
+    });
+  });
+});

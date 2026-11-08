@@ -445,6 +445,90 @@ export const AgentResumeConfigSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+/**
+ * The Windows roots a declared native path may start from (#16468), lowercase
+ * because Windows reads variable names without regard to case. Each is set by
+ * the system to a fully qualified location. Any other variable could hold
+ * nothing, a drive-relative path (`%HOMEPATH%`) or a network share
+ * (`%LOGONSERVER%`), and discovery checks known locations.
+ */
+const NATIVE_PATH_ENV_ROOTS = new Set([
+  "userprofile",
+  "appdata",
+  "localappdata",
+  "programfiles",
+  "programfiles(x86)",
+  "programdata",
+]);
+
+/**
+ * One directory or file name in a declared native path. The closed set leaves
+ * out separators, so a path can't mix them, and every character a shell, a
+ * `%VAR%` or `${settings:…}` expansion or an NTFS stream would read. The last
+ * character can't be a dot or a space because Win32 strips those, which would
+ * turn `.. ` back into `..`; that also refuses `.`, `..` and an empty name.
+ */
+const NATIVE_PATH_SEGMENT_PATTERN = /^[A-Za-z0-9 ._+@()-]*[A-Za-z0-9_+@()-]$/;
+
+/**
+ * Whether a declared native path is rooted at `~/`, `/` or an allowed `%VAR%\`,
+ * so nothing is ever probed relative to the working directory. Drive letters
+ * and UNC paths aren't among the roots, and `//server` fails on its empty name:
+ * a probe of a share would reach for the network, and a hit would launch from it.
+ */
+function isRootedNativePath(entry: string): boolean {
+  const envRoot = /^%([^%\\/]+)%\\/.exec(entry);
+  if (envRoot) {
+    if (!NATIVE_PATH_ENV_ROOTS.has((envRoot[1] as string).toLowerCase())) return false;
+    return hasOnlySafeSegments(entry.slice(envRoot[0].length), "\\");
+  }
+  if (entry.startsWith("~/")) return hasOnlySafeSegments(entry.slice(2), "/");
+  if (entry.startsWith("/")) return hasOnlySafeSegments(entry.slice(1), "/");
+  return false;
+}
+
+function hasOnlySafeSegments(rest: string, separator: string): boolean {
+  return rest.split(separator).every((segment) => NATIVE_PATH_SEGMENT_PATTERN.test(segment));
+}
+
+const PluginAgentNativePathSchema = z.string().min(1).max(256).refine(isRootedNativePath, {
+  message:
+    "A native path must start at ~/, / or %USERPROFILE%\\, %APPDATA%\\, %LOCALAPPDATA%\\, %ProgramFiles%\\, %ProgramFiles(x86)%\\ or %ProgramData%\\, use one kind of separator, and name only letters, digits, spaces and . _ + @ ( ) - with no . or .. segment",
+});
+
+/**
+ * `contributes.agents[].packages` (#16468): the two ecosystems discovery can
+ * find an install from, and nothing else. The npm name only switches the
+ * npm-global probe on, and is checked so an author's tag, version or URL fails
+ * loudly instead of reading as accepted. The PyPI name goes into the uv and
+ * pipx paths, so it can't hold a separator, and it must be the normalized form
+ * those tools name their directories by: `Foo_Bar` would validate and then
+ * quietly never be found. Strict so other install metadata stays out, and
+ * neither name ever reaches an install command.
+ */
+export const AgentPackagesContributionSchema = z
+  .object({
+    npm: z
+      .string()
+      .max(214)
+      .regex(/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/, {
+        message: "packages.npm must be a bare npm package name, optionally scoped",
+      })
+      .optional(),
+    pypi: z
+      .string()
+      .max(128)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
+        message:
+          "packages.pypi must be the normalized PyPI name: lowercase letters and digits joined by single hyphens",
+      })
+      .optional(),
+  })
+  .strict()
+  .refine((packages) => packages.npm !== undefined || packages.pypi !== undefined, {
+    message: "packages must name an npm or a pypi package",
+  });
+
 export const AgentContributionSchema = z
   .object({
     id: z
@@ -464,6 +548,8 @@ export const AgentContributionSchema = z
     color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
     iconId: z.string().min(1).max(64),
     supportsContextInjection: z.boolean().default(false),
+    nativePaths: z.array(PluginAgentNativePathSchema).min(1).max(16).optional(),
+    packages: AgentPackagesContributionSchema.optional(),
     detection: AgentDetectionConfigSchema.optional(),
     resume: AgentResumeConfigSchema.optional(),
     launchMcp: z

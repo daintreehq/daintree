@@ -2147,12 +2147,50 @@ Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CL
 | `color` | yes | Brand color as a 6-digit hex (`#rrggbb`). |
 | `iconId` | yes | At most 64 characters. **A different namespace from panel/toolbar icon IDs** — agents render bundled brand marks, so this must name one of Daintree's built-in agent IDs (`claude`, `codex`, `gemini`, …). A panel icon ID like `terminal` doesn't resolve here; unrecognized values silently fall back to the Claude mark. Shipping a custom icon asset isn't supported yet. |
 | `supportsContextInjection` | no | Whether copy-tree context injection targets this agent. Defaults to `false`. |
+| `nativePaths` | no | Where the CLI's native installer puts it, for an install `PATH` doesn't reach: 1–16 paths, each at most 256 characters. Each ends in the agent's own `command`, optionally with `.cmd`, `.exe`, `.bat` or `.com`, and starts at `~/`, `/`, `%USERPROFILE%\`, `%APPDATA%\`, `%LOCALAPPDATA%\`, `%ProgramFiles%\`, `%ProgramFiles(x86)%\` or `%ProgramData%\`. Rejected beside a `./` command. See **Finding an install off `PATH`** below. |
+| `packages` | no | `{ "npm": …, "pypi": … }`, the packages the CLI ships as, naming at least one. `npm` is a bare package name, optionally scoped, at most 214 characters. `pypi` is the normalized name, lowercase letters and digits joined by single hyphens, at most 128 characters. Rejected beside a `./` command, or a command that already names its launcher (`acme.cmd`). See **Finding an install off `PATH`** below. |
 | `launchMcp` | no | `{ "format": … }`, one of the additive mechanisms in [Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints): `claude-mcp-config`, `codex-config-overrides`, `gemini-system-defaults`, `qwen-mcp-config`, `opencode-config-content`, `copilot-additional-mcp-config`, `amp-mcp-config`, `vibe-mcp-servers-env`. Declare the one your CLI actually merges over the user's own servers. It grants nothing: the agent gets the orchestration server and plugin endpoints only as the project's MCP tier and plugin access allow. Daintree owns any environment variable the format uses, so a manifest cannot name one. |
 | `permissionBypassArgs` | no | The arguments the CLI takes to skip its permission prompts, e.g. `["--yolo"]` or `["--approval", "never"]`: 1–20 options, each optionally followed by one value, every token 1–256 characters with no whitespace, NUL, `{sessionId}` or `${…}` template. Declaring them turns nothing on: they are added only to a launch whose resolved **Skip permission prompts** setting is on, which follows the same order as for a built-in agent (a preset's on/off, then the agent's own on/off, then the global switch), and they make the agent eligible for the global switch, which skips any agent that declares none. Restore, restart and resume strip a declared flag from a pane's saved launch when the setting is now off, including a flag from an earlier version of the declaration. None of these options (with its value) may also appear in `args`, `resume.args` or `resume.resumeLatestArgs`, where it would skip prompts on every launch; that check catches the obvious mistake, not a determined plugin, which can always pass a flag some other way. The install dialog, the update review and the plugin's Permissions tab name each agent that declares them. |
 
 A plugin agent is launchable and selectable as a named entry in the effective registry. It launches as a named terminal. Without a `detection` block it runs as a plain named terminal whose working/waiting state Daintree doesn't track; declare `detection` (below) to wire it into the agent-state UI like a built-in agent. Without a `launchMcp` block a plugin agent is never handed Daintree's own MCP servers or any plugin's agent MCP credentials at launch; declare one (below) to receive them the way a built-in agent with the same mechanism does.
 
 `command` and `args` support the same `${settings:settingId}` syntax as MCP servers — e.g. `"args": ["--token", "${settings:apiToken}"]`. Templates resolve at spawn time against the plugin's **user-scope** setting with that ID (project scope is never read). If a referenced setting is unset, the launch fails with a clear error rather than spawning the agent with a literal `${settings:…}` (or a silently blanked value) on its command line — so a missing credential surfaces as a spawn error instead of an opaque auth failure inside the agent. Unlike MCP server tokens, `${settings:*}` tokens in agent `command`/`args` are **not** validated at manifest parse time — an undeclared setting id only surfaces as a spawn-time error, not a load error.
+
+**Finding an install off `PATH`.** A bare `command` is looked up on `PATH`, which often misses an install that a person's shell finds but Daintree's inherited environment doesn't. `nativePaths` and `packages` add the locations a built-in agent falls back to, and a hit is the file the agent launches from:
+
+```jsonc
+{
+  "contributes": {
+    "agents": [
+      {
+        "id": "pi",
+        "name": "Pi",
+        "command": "pi",
+        "color": "#3366ff",
+        "iconId": "claude",
+        "packages": { "npm": "@earendil-works/pi-coding-agent" }
+      },
+      {
+        "id": "mini-swe-agent",
+        "name": "mini-swe-agent",
+        "command": "mini",
+        "color": "#3366ff",
+        "iconId": "claude",
+        "packages": { "pypi": "mini-swe-agent" },
+        "nativePaths": ["~/.mini/bin/mini", "%LOCALAPPDATA%\\Programs\\mini\\mini.exe"]
+      }
+    ]
+  }
+}
+```
+
+After `PATH` misses, Daintree checks these in order and stops at the first file it finds:
+
+1. **Each of `nativePaths`, as listed.** A `%VAR%\` entry is read only on Windows, and skipped if the variable is unset or doesn't hold a fully qualified path. A `/` entry is read everywhere but Windows, where it would name no drive. On Windows an entry with no launcher suffix is checked with `.cmd`, `.exe`, `.bat` and `.com` appended, so `~/.mini/bin/mini` also covers a Windows install with the same layout.
+2. **The uv and pipx locations `packages.pypi` names.** The package names the tool's directory and `command` names the file in it, so the two can differ, as they do for mini-swe-agent: `~/.local/bin/<command>`, `~/.local/share/uv/tools/<pypi>/bin/<command>`, `~/.local/share/pipx/venvs/<pypi>/bin/<command>` and `~/.local/pipx/venvs/<pypi>/bin/<command>`, or on Windows `%USERPROFILE%\.local\bin\<command>.exe`, `%APPDATA%\uv\tools\<pypi>\Scripts\<command>.exe`, `%USERPROFILE%\.local\pipx\venvs\<pypi>\Scripts\<command>.exe` and `%LOCALAPPDATA%\pipx\pipx\venvs\<pypi>\Scripts\<command>.exe`. These are the tools' default layouts; a relocated `UV_TOOL_DIR` or `PIPX_HOME` isn't followed. Declare that location in `nativePaths` if your CLI's users commonly have it.
+3. **The global npm shim `packages.npm` switches on.** The name is only the switch: Daintree asks the npm on `PATH` for its prefix and looks for `<prefix>/bin/<command>`, or `<prefix>\<command>.cmd` on Windows. Another npm's prefix isn't searched.
+
+Discovery is passive. It checks whether each file exists and can be executed, and never runs one, so the only process it starts is `npm config get prefix`. It never installs or updates anything, and declaring a package adds no install offer. A file that exists but can't be executed reads `blocked`, the same as a built-in. Where nothing declared applies, the agent reads `missing`; there is no separate state for a platform the CLI doesn't run on. A `./` command is checked directly and never reaches these locations, so declaring them beside one is rejected.
 
 **Output-pattern detection** is supported (#10587). An optional `detection` block on an agent contribution lets the plugin describe its working/waiting/completed states with regex patterns and confidence weights, so the agent joins the same agent-state UI as built-in agents instead of running as an untracked named terminal. The block is `strict` — a typo'd field is a loud manifest error.
 

@@ -717,8 +717,14 @@ export class CliAvailabilityService {
       return shellProbe;
     }
 
-    if (config.nativePaths && config.nativePaths.length > 0) {
-      const nativeProbe = await this.probeNativePaths(config.nativePaths);
+    // A `/x` entry names no drive on Windows, so it would land on whichever one
+    // is current, where any local user can create the folder.
+    const nativePaths =
+      process.platform === "win32"
+        ? config.nativePaths?.filter((entry) => !entry.startsWith("/"))
+        : config.nativePaths;
+    if (nativePaths && nativePaths.length > 0) {
+      const nativeProbe = await this.probeNativePaths(nativePaths);
       if (nativeProbe.status !== "missing") {
         return nativeProbe;
       }
@@ -1007,6 +1013,9 @@ export class CliAvailabilityService {
       // (env var not set) to avoid probing a literal path like
       // "%LOCALAPPDATA%\Microsoft\WinGet\Links\claude.exe".
       if (expanded.includes("%")) return null;
+      // A variable set to nothing or to a relative path would leave this
+      // resolving against the current drive or the working directory.
+      if (input.startsWith("%") && !isFullyQualifiedPath(expanded)) return null;
     } else if (input.includes("\\")) {
       // Windows-only candidates should not be probed on Unix. Inspect the
       // original input rather than `expanded`, since `join(home, …)` on a

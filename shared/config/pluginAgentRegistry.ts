@@ -94,7 +94,10 @@ function contributionToAgentConfig(
   // processes, so it must never carry the function-shaped `resume`. Mapped
   // explicitly (not spread) so no other contribution field can leak onto the
   // resolved config. Optional blocks are forwarded only when present, keeping
-  // the fields absent for the common launch-only case.
+  // the fields absent for the common launch-only case. `nativePaths` and
+  // `packages` (#16468) stop at what discovery reads: the built-ins' `version`,
+  // `update`, `install` and `supportsWsl` run something, so none has a way in.
+  const { npm, pypi } = contribution.packages ?? {};
   return {
     id: contribution.id,
     name: contribution.name,
@@ -103,6 +106,8 @@ function contributionToAgentConfig(
     color: contribution.color,
     iconId: contribution.iconId,
     supportsContextInjection: contribution.supportsContextInjection ?? false,
+    ...(contribution.nativePaths?.length ? { nativePaths: [...contribution.nativePaths] } : {}),
+    ...(npm || pypi ? { packages: { ...(npm ? { npm } : {}), ...(pypi ? { pypi } : {}) } } : {}),
     ...(contribution.detection ? { detection: contribution.detection } : {}),
     ...(contribution.resume ? { resumeTemplate: contribution.resume } : {}),
     ...(contribution.launchMcp

@@ -7,6 +7,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { CliAvailabilityService, isFullyQualifiedPath } from "../CliAvailabilityService.js";
 import { getAgentConfig, getAgentIds } from "../../../shared/config/agentRegistry.js";
+import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
 import { execFile, execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
 import { broadcastToRenderer, hasBroadcastAudience } from "../../ipc/utils.js";
@@ -2848,6 +2849,299 @@ describe("CliAvailabilityService", () => {
       } finally {
         clearPluginAgentRegistryForTests();
       }
+    });
+  });
+
+  describe("discovery metadata a plugin declares (#16468)", () => {
+    const AGENT = { color: "#3366ff", iconId: "terminal" };
+    const PI = {
+      ...AGENT,
+      id: "pi",
+      name: "Pi",
+      command: "pi",
+      packages: { npm: "@earendil-works/pi-coding-agent" },
+    };
+    // The package and the command differ: the name finds the tool's directory,
+    // the command finds the launcher inside it.
+    const MINI = {
+      ...AGENT,
+      id: "mini-swe-agent",
+      name: "mini-swe-agent",
+      command: "mini",
+      packages: { pypi: "mini-swe-agent" },
+    };
+    const originalPlatform = process.platform;
+    const savedEnv: Record<string, string | undefined> = {};
+    const ENV_NAMES = ["USERPROFILE", "LOCALAPPDATA", "APPDATA", "PATH"];
+
+    // Through the manifest's own schema, so a field it drops can't pass here.
+    const contribute = async (...agents: Record<string, unknown>[]) => {
+      const { registerPluginAgents } =
+        await import("../../../shared/config/pluginAgentRegistry.js");
+      const { AgentContributionSchema } = await import("../../schemas/plugin.js");
+      registerPluginAgents(
+        "acme.plugin",
+        agents.map((agent) => AgentContributionSchema.parse(agent))
+      );
+    };
+
+    const onlyExisting = async (...existing: string[]) => {
+      const { access } = await import("fs/promises");
+      vi.mocked(access).mockImplementation(async (p) => {
+        if (existing.includes(String(p))) return undefined;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+    };
+
+    const answerNpmPrefix = (isNpm: (file: string, args: string[]) => boolean, prefix: string) => {
+      mockedExecFile.mockImplementation(((...args: unknown[]) => {
+        const [file, fileArgs] = args as [string, string[]];
+        const callback = args.find(
+          (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
+        );
+        if (isNpm(file, fileArgs)) {
+          queueMicrotask(() => callback?.(null, `${prefix}\n`));
+        } else {
+          const err = Object.assign(new Error("not found"), { code: "ENOENT" });
+          queueMicrotask(() => callback?.(err));
+        }
+        return {} as never;
+      }) as never);
+    };
+
+    const spawned = () =>
+      mockedExecFile.mock.calls.map(([file, args]) =>
+        [file, ...((args as unknown as string[]) ?? [])].join(" ")
+      );
+
+    beforeEach(() => {
+      for (const name of ENV_NAMES) savedEnv[name] = process.env[name];
+      // Off PATH: every agent misses the PATH layer.
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+    });
+
+    afterEach(async () => {
+      const { clearPluginAgentRegistryForTests } =
+        await import("../../../shared/config/pluginAgentRegistry.js");
+      clearPluginAgentRegistryForTests();
+      Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+      for (const name of ENV_NAMES) {
+        if (savedEnv[name] === undefined) delete process.env[name];
+        else process.env[name] = savedEnv[name];
+      }
+    });
+
+    it("finds an npm install under a prefix PATH doesn't reach", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      await contribute(PI);
+      answerNpmPrefix((file) => file === "npm", "/Users/test/.npm-custom");
+      const shim = join("/Users/test/.npm-custom", "bin", "pi");
+      await onlyExisting(shim);
+
+      const result = await service.checkAvailability();
+
+      expect(result.pi).toBe("ready");
+      expect(service.getDetails()!.pi?.via).toBe("npm-global");
+      expect(service.getDetails()!.pi?.resolvedPath).toBe(shim);
+    });
+
+    it("finds a Windows npm install through its .cmd shim", async () => {
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      const npmCmd = "C:\\Program Files\\nodejs\\npm.cmd";
+      process.env.PATH = "C:\\Program Files\\nodejs";
+      virtualWindowsFiles.set({
+        [npmCmd]:
+          '@ECHO OFF\r\nSETLOCAL\r\n"%~dp0\\node.exe" "%~dp0\\npm-cli.js" %*\r\nCALL :x\r\n',
+      });
+      await contribute(PI);
+      const prefix = "C\\:\\Users\\test\\AppData\\Roaming\\npm";
+      answerNpmPrefix(
+        (file, args) =>
+          /\\System32\\cmd\.exe$/i.test(file) &&
+          args.at(-1)?.toLowerCase().includes(npmCmd.toLowerCase()) === true,
+        prefix
+      );
+      const shim = join(prefix, "pi.cmd");
+      await onlyExisting(shim);
+
+      const result = await service.checkAvailability();
+
+      expect(result.pi).toBe("ready");
+      expect(service.getDetails()!.pi?.via).toBe("npm-global");
+      expect(service.getDetails()!.pi?.resolvedPath).toBe(shim);
+    });
+
+    it.each([
+      ["uv tool", "/Users/test/.local/share/uv/tools/mini-swe-agent/bin/mini"],
+      ["pipx", "/Users/test/.local/share/pipx/venvs/mini-swe-agent/bin/mini"],
+      ["legacy pipx", "/Users/test/.local/pipx/venvs/mini-swe-agent/bin/mini"],
+    ])("finds a %s install from the package and the command together", async (_name, path) => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      await contribute(MINI);
+      await onlyExisting(path);
+
+      const result = await service.checkAvailability();
+
+      expect(result["mini-swe-agent"]).toBe("ready");
+      expect(service.getDetails()!["mini-swe-agent"]?.via).toBe("native");
+      expect(service.getDetails()!["mini-swe-agent"]?.resolvedPath).toBe(path);
+    });
+
+    it.each([
+      ["the shared launcher", "C:\\Users\\test\\.local\\bin\\mini.exe"],
+      ["pipx", "C:\\Users\\test\\.local\\pipx\\venvs\\mini-swe-agent\\Scripts\\mini.exe"],
+    ])("finds a Windows install through %s", async (_name, path) => {
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      process.env.USERPROFILE = "C:\\Users\\test";
+      await contribute(MINI);
+      await onlyExisting(path);
+
+      const result = await service.checkAvailability();
+
+      expect(result["mini-swe-agent"]).toBe("ready");
+      expect(service.getDetails()!["mini-swe-agent"]?.resolvedPath).toBe(path);
+    });
+
+    it("finds a declared native path, and a launch starts from it", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      await contribute({ ...PI, packages: undefined, nativePaths: ["~/.pi/agent/bin/pi"] });
+      const path = "/Users/test/.pi/agent/bin/pi";
+      await onlyExisting(path);
+
+      const result = await service.checkAvailability();
+
+      expect(result.pi).toBe("ready");
+      const detail = service.getDetails()!.pi;
+      expect(detail?.via).toBe("native");
+      expect(detail?.resolvedPath).toBe(path);
+      expect(resolveAgentLaunchBaseCommandFor("pi", detail, "posix", "/Users/test")).toContain(
+        path
+      );
+    });
+
+    it("tries native paths before the package layers", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      await contribute({ ...MINI, nativePaths: ["/opt/mini/bin/mini"] });
+      await onlyExisting(
+        "/opt/mini/bin/mini",
+        "/Users/test/.local/share/uv/tools/mini-swe-agent/bin/mini"
+      );
+
+      await service.checkAvailability();
+
+      expect(service.getDetails()!["mini-swe-agent"]?.resolvedPath).toBe("/opt/mini/bin/mini");
+    });
+
+    it("reports a declared file it can't execute as blocked", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      await contribute({ ...MINI, nativePaths: ["/opt/mini/bin/mini"] });
+      const { access } = await import("fs/promises");
+      vi.mocked(access).mockImplementation(async (p) => {
+        const code = String(p) === "/opt/mini/bin/mini" ? "EACCES" : "ENOENT";
+        throw Object.assign(new Error(code), { code });
+      });
+
+      const result = await service.checkAvailability();
+
+      expect(result["mini-swe-agent"]).toBe("blocked");
+      expect(service.getDetails()!["mini-swe-agent"]?.blockReason).toBe("permissions");
+      expect(service.getDetails()!["mini-swe-agent"]?.via).toBe("native");
+    });
+
+    it("reads missing when nothing declared exists, running nothing but npm's prefix read", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      await contribute(PI, { ...MINI, nativePaths: ["~/.mini/bin/mini"] });
+      answerNpmPrefix((file) => file === "npm", "/Users/test/.npm-custom");
+      await onlyExisting();
+
+      const result = await service.checkAvailability();
+
+      expect(result.pi).toBe("missing");
+      expect(result["mini-swe-agent"]).toBe("missing");
+      // A probe that ran the agent, npx or an install would show up here.
+      expect(new Set(spawned())).toEqual(new Set(["npm config get prefix"]));
+    });
+
+    it("never reaches the declared layers for a bundled command", async () => {
+      // The manifest refuses this pairing; the registry is handed it directly to
+      // show the probe holds the invariant by itself.
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      const { registerPluginAgents } =
+        await import("../../../shared/config/pluginAgentRegistry.js");
+      registerPluginAgents(
+        "acme.plugin",
+        [
+          {
+            ...AGENT,
+            id: "bundled",
+            name: "Bundled",
+            command: "./bin/bundled",
+            nativePaths: ["~/.bundled/bin/bundled"],
+            packages: { pypi: "bundled" },
+          },
+        ],
+        "/tmp/daintree-plugins/acme"
+      );
+      await onlyExisting(
+        "/Users/test/.bundled/bin/bundled",
+        "/Users/test/.local/share/uv/tools/bundled/bin/bundled"
+      );
+
+      const result = await service.checkAvailability();
+
+      expect(result.bundled).toBe("missing");
+    });
+
+    describe("on Windows", () => {
+      beforeEach(() => {
+        Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      });
+
+      it("skips a /-rooted entry, which would land on whichever drive is current", async () => {
+        await contribute({ ...PI, packages: undefined, nativePaths: ["/opt/pi/bin/pi"] });
+        await onlyExisting("/opt/pi/bin/pi.cmd", "/opt/pi/bin/pi.exe");
+
+        const result = await service.checkAvailability();
+
+        expect(result.pi).toBe("missing");
+      });
+
+      it("expands a declared %VAR%\\ root", async () => {
+        process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
+        await contribute({
+          ...PI,
+          packages: undefined,
+          nativePaths: ["%LOCALAPPDATA%\\Programs\\pi\\pi.exe"],
+        });
+        const path = "C:\\Users\\test\\AppData\\Local\\Programs\\pi\\pi.exe";
+        await onlyExisting(path);
+
+        const result = await service.checkAvailability();
+
+        expect(result.pi).toBe("ready");
+        expect(service.getDetails()!.pi?.resolvedPath).toBe(path);
+      });
+
+      it.each([
+        ["is unset", undefined, "%LOCALAPPDATA%\\Programs\\pi\\pi.exe"],
+        ["is relative", "relative\\dir", "relative\\dir\\Programs\\pi\\pi.exe"],
+        ["is empty", "", "\\Programs\\pi\\pi.exe"],
+      ])("skips a %%VAR%%\\ root whose variable %s", async (_name, value, expanded) => {
+        if (value === undefined) delete process.env.LOCALAPPDATA;
+        else process.env.LOCALAPPDATA = value;
+        await contribute({
+          ...PI,
+          packages: undefined,
+          nativePaths: ["%LOCALAPPDATA%\\Programs\\pi\\pi.exe"],
+        });
+        await onlyExisting(expanded);
+
+        const result = await service.checkAvailability();
+
+        expect(result.pi).toBe("missing");
+      });
     });
   });
 

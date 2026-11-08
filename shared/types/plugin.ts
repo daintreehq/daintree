@@ -2660,7 +2660,8 @@ export interface PluginManifestScopes {
  *
  * Plugin agents launch as named, untracked terminals: the schema surfaces
  * `id`, `name`, `command`, `args`, `color`, `iconId`,
- * `supportsContextInjection`, an optional `resume` block (#13687), and an
+ * `supportsContextInjection`, optional `nativePaths` and `packages` for finding
+ * an install off PATH (#16468), an optional `resume` block (#13687), and an
  * optional `detection` block. The
  * `detection` field (#10587) lets a contributed agent describe its
  * working/waiting/completed output patterns so it participates in the
@@ -2677,6 +2678,22 @@ export interface PluginAgentContribution {
   color: string;
   iconId: string;
   supportsContextInjection?: boolean;
+  /**
+   * Where the CLI's native installer puts it, for an install PATH doesn't reach
+   * (#16468). Each entry ends in this agent's own `command`, optionally with a
+   * Windows launcher suffix, and is rooted at `~/`, `/` or `%VAR%\` for a listed
+   * variable. Checked for existence and never run. Not allowed beside a `./`
+   * command, which is probed directly.
+   */
+  nativePaths?: string[];
+  /**
+   * The packages the CLI ships as, for an install PATH doesn't reach (#16468).
+   * `npm` switches on the npm-global shim check, and `pypi` names the uv and
+   * pipx tool directories, in its normalized form. Discovery only: nothing
+   * installs or updates from these. Not allowed beside a `./` command, or a
+   * command that already names its launcher (`acme.cmd`).
+   */
+  packages?: { npm?: string; pypi?: string };
   /**
    * Optional output-pattern detection config (#10587). Passive observation
    * only — patterns are matched against terminal output to drive the
