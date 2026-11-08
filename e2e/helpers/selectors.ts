@@ -100,7 +100,7 @@ export const SEL = {
     searchStatus: "[data-terminal-search-status]",
     scrollIndicator: '[aria-label="New output below, scroll to latest output"]',
     agentStateChip: '[role="status"][aria-label^="Agent state:"]',
-    restartBannerAction: '[aria-label="Restart session"]',
+    restartBannerAction: '[aria-label="Restart terminal"]',
     reconnectRetryAction: '[aria-label="Retry reconnecting"]',
   },
   worktree: {
