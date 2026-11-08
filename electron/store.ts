@@ -1405,32 +1405,13 @@ export function _resetPendingSettingsRecovery(): void {
 let storeInstance: Store<StoreSchema> | undefined;
 
 /**
- * In-memory snapshot of the on-disk store. electron-store v11 (conf) has no
- * cache of its own — every `get()` re-reads and re-parses config.json from
- * disk. The proxy below populates this snapshot lazily on the first read and
- * serves all subsequent reads from memory. Plain `set(key, value)` calls are
- * written through (the snapshot is replaced with the one conf just wrote);
- * every other mutation invalidates synchronously BEFORE it is delegated (main
- * is single-threaded, so a pre-write snapshot can never be served after the
- * write — cf. the agentSettingsClient write-window precedent). Only the main
- * process writes config.json (the pty-host and workspace-host subprocesses
- * never import this module), so no cross-process invalidation channel is
- * needed.
- */
-let storeValueCache: Record<string, unknown> | null = null;
-// Bumped by every mutation, so a write-through set can tell whether a nested
-// write (from a synchronous change listener) superseded its snapshot.
-let storeMutationEpoch = 0;
-
-/**
  * Drop the cached store snapshot. The proxy invalidates automatically for all
  * mutations routed through it; this export exists for the rare paths that
  * replace config.json behind electron-store's back (MigrationRunner's
  * restore-from-backup file swap) and for tests.
  */
 export function invalidateStoreValueCache(): void {
-  storeMutationEpoch++;
-  storeValueCache = null;
+  primaryStore.invalidate();
 }
 
 /** Dot-path lookup mirroring conf's `accessPropertiesByDotNotation` reads. */
@@ -1600,7 +1581,7 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
 
 export function _resetStoreInstance(): void {
   storeInstance = undefined;
-  storeValueCache = null;
+  primaryStore.invalidate();
   deferredBackupTask = null;
   storeWasFreshAtBoot = false;
 }
@@ -1675,85 +1656,118 @@ export function writeWslGitMap(
  */
 const STORE_MUTATING_METHODS = new Set(["set", "delete", "clear", "reset", "appendToArray"]);
 
-export const store = new Proxy({} as Store<StoreSchema>, {
-  get(_target, prop) {
-    const instance = getOrLazyInitInstance();
-    const value = Reflect.get(instance as object, prop, instance);
-    if (typeof value !== "function") return value;
-    const bound = (value as (...args: unknown[]) => unknown).bind(instance);
-    // Cached read path. Skipped for the in-memory fallback (path === ""),
-    // whose Map-backed `store` property is always empty.
-    if (prop === "get" && instance.path !== "") {
-      return (key: string, defaultValue?: unknown) => {
-        if (storeValueCache === null) {
-          // One disk read + parse; every get until the next write is a memory hit.
-          storeValueCache = instance.store as unknown as Record<string, unknown>;
-        }
-        const resolved = getCachedValue(storeValueCache, key);
-        if (resolved === undefined) return defaultValue;
-        // conf returns a freshly-parsed object per get; clone so a caller
-        // mutating the returned value can't corrupt the shared snapshot.
-        return typeof resolved === "object" && resolved !== null
-          ? structuredClone(resolved)
-          : resolved;
-      };
-    }
-    if (prop === "set" && instance.path !== "") {
-      // conf's own set() reads + parses config.json twice (the `store` getter,
-      // then the setter's __internal__ preservation read), and nulling the
-      // snapshot made the next get() read it a third time. Build the next
-      // snapshot from the cached one and hand it to conf's public `store`
-      // setter, which keeps conf's validate / atomic write / change event.
-      // The value is cached as its JSON round-trip so the snapshot matches the
-      // bytes on disk and the caller keeps no alias into it.
-      return (...args: unknown[]) => {
-        const segments = args.length === 2 ? writeThroughSegments(args[0], args[1]) : null;
-        const target = segments
-          ? copyPathForSet(
-              storeValueCache ?? (instance.store as unknown as Record<string, unknown>),
-              segments
-            )
-          : null;
-        if (!segments || !target) {
-          storeMutationEpoch++;
-          storeValueCache = null;
+/**
+ * A lazy proxy over a conf store that keeps an in-memory snapshot of its file,
+ * so a `get()` doesn't re-read and re-parse it on Main's thread. conf's own
+ * `cache` option can't stand in: it drops its cache on every write, so the next
+ * read goes back to disk, and the values it hands out are frozen. The snapshot
+ * is populated lazily on the first read and serves all subsequent reads from
+ * memory. Plain `set(key, value)` calls are written through (the snapshot is
+ * replaced with the one conf just wrote); every other mutation invalidates
+ * synchronously BEFORE it is delegated (main is single-threaded, so a pre-write
+ * snapshot can never be served after the write — cf. the agentSettingsClient
+ * write-window precedent). Only the main process writes these files (the
+ * pty-host and workspace-host subprocesses never import this module), so no
+ * cross-process invalidation channel is needed.
+ */
+function createCachedStoreProxy<TStore extends { path: string; store: unknown }>(
+  getInstance: () => TStore
+): { proxy: TStore; invalidate: () => void } {
+  let valueCache: Record<string, unknown> | null = null;
+  // Bumped by every mutation, so a write-through set can tell whether a nested
+  // write (from a synchronous change listener) superseded its snapshot.
+  let mutationEpoch = 0;
+  const invalidate = () => {
+    mutationEpoch++;
+    valueCache = null;
+  };
+
+  const proxy = new Proxy({} as TStore, {
+    get(_target, prop) {
+      const instance = getInstance();
+      const value = Reflect.get(instance as object, prop, instance);
+      if (typeof value !== "function") return value;
+      const bound = (value as (...args: unknown[]) => unknown).bind(instance);
+      // Cached read path. Skipped for the in-memory fallback (path === ""),
+      // whose Map-backed `store` property is always empty.
+      if (prop === "get" && instance.path !== "") {
+        return (key: string, defaultValue?: unknown) => {
+          if (valueCache === null) {
+            // One disk read + parse; every get until the next write is a memory hit.
+            valueCache = instance.store as unknown as Record<string, unknown>;
+          }
+          const resolved = getCachedValue(valueCache, key);
+          if (resolved === undefined) return defaultValue;
+          // conf returns a freshly-parsed object per get; clone so a caller
+          // mutating the returned value can't corrupt the shared snapshot.
+          return typeof resolved === "object" && resolved !== null
+            ? structuredClone(resolved)
+            : resolved;
+        };
+      }
+      if (prop === "set" && instance.path !== "") {
+        // conf's own set() reads + parses the file, and nulling the snapshot
+        // made the next get() read it again. Build the next snapshot from the
+        // cached one and hand it to conf's public `store` setter, which keeps
+        // conf's validate / atomic write / change event, and the one read of
+        // the file (for its __internal__ bookkeeping) no public write skips.
+        // The value is cached as its JSON round-trip so the snapshot matches
+        // the bytes on disk and the caller keeps no alias into it.
+        return (...args: unknown[]) => {
+          const segments = args.length === 2 ? writeThroughSegments(args[0], args[1]) : null;
+          const target = segments
+            ? copyPathForSet(
+                valueCache ?? (instance.store as unknown as Record<string, unknown>),
+                segments
+              )
+            : null;
+          if (!segments || !target) {
+            invalidate();
+            return bound(...args);
+          }
+          // Serialize under the leaf key so a toJSON(key) sees what conf's
+          // whole-store serialize passes it; a toJSON() returning undefined
+          // leaves the key out on disk, so it is left out of the snapshot too.
+          const leaf = segments[segments.length - 1]!;
+          const wrapped = JSON.parse(JSON.stringify({ [leaf]: args[1] })) as Record<
+            string,
+            unknown
+          >;
+          if (Object.hasOwn(wrapped, leaf)) target.parent[leaf] = wrapped[leaf];
+          else delete target.parent[leaf];
+          const epoch = ++mutationEpoch;
+          valueCache = null;
+          (instance as unknown as { store: Record<string, unknown> }).store = target.root;
+          // A change listener that wrote re-entrantly already published a newer snapshot.
+          if (epoch === mutationEpoch) valueCache = target.root;
+          return undefined;
+        };
+      }
+      if (STORE_MUTATING_METHODS.has(prop as string)) {
+        return (...args: unknown[]) => {
+          invalidate();
           return bound(...args);
-        }
-        // Serialize under the leaf key so a toJSON(key) sees what conf's
-        // whole-store serialize passes it; a toJSON() returning undefined
-        // leaves the key out on disk, so it is left out of the snapshot too.
-        const leaf = segments[segments.length - 1]!;
-        const wrapped = JSON.parse(JSON.stringify({ [leaf]: args[1] })) as Record<string, unknown>;
-        if (Object.hasOwn(wrapped, leaf)) target.parent[leaf] = wrapped[leaf];
-        else delete target.parent[leaf];
-        const epoch = ++storeMutationEpoch;
-        storeValueCache = null;
-        (instance as unknown as { store: Record<string, unknown> }).store = target.root;
-        // A change listener that wrote re-entrantly already published a newer snapshot.
-        if (epoch === storeMutationEpoch) storeValueCache = target.root;
-        return undefined;
-      };
-    }
-    if (STORE_MUTATING_METHODS.has(prop as string)) {
-      return (...args: unknown[]) => {
-        storeMutationEpoch++;
-        storeValueCache = null;
-        return bound(...args);
-      };
-    }
-    return bound;
-  },
-  set(_target, prop, value) {
-    storeMutationEpoch++;
-    storeValueCache = null;
-    const instance = getOrLazyInitInstance();
-    return Reflect.set(instance as object, prop, value, instance);
-  },
-  has(_target, prop) {
-    const instance = getOrLazyInitInstance();
-    return Reflect.has(instance as object, prop);
-  },
-});
+        };
+      }
+      return bound;
+    },
+    set(_target, prop, value) {
+      invalidate();
+      const instance = getInstance();
+      return Reflect.set(instance as object, prop, value, instance);
+    },
+    has(_target, prop) {
+      const instance = getInstance();
+      return Reflect.has(instance as object, prop);
+    },
+  });
+
+  return { proxy, invalidate };
+}
+
+const primaryStore = createCachedStoreProxy(getOrLazyInitInstance);
+
+export const store = primaryStore.proxy;
 
 let windowStatesInstance: Store<WindowStatesStoreSchema> | undefined;
 
@@ -1777,8 +1791,9 @@ function initializeWindowStatesStore(): Store<WindowStatesStoreSchema> {
     );
     const memoryStore = new Map();
     const fallback = {
-      get: (key: string) => memoryStore.get(key),
-      set: (key: string, value: unknown) => memoryStore.set(key, value),
+      // Callers edit the map they read before saving it, so this keeps its own copies.
+      get: (key: string) => structuredClone(memoryStore.get(key)),
+      set: (key: string, value: unknown) => memoryStore.set(key, structuredClone(value)),
       delete: (key: string) => memoryStore.delete(key),
       has: (key: string) => memoryStore.has(key),
       clear: () => memoryStore.clear(),
@@ -1793,23 +1808,7 @@ function initializeWindowStatesStore(): Store<WindowStatesStoreSchema> {
 // Lazy like the main `store` Proxy: defers the sync read+parse of
 // window-states.json past the single-instance lock check, so a losing second
 // instance never constructs it.
-export const windowStatesStore = new Proxy({} as Store<WindowStatesStoreSchema>, {
-  get(_target, prop) {
-    const instance = initializeWindowStatesStore();
-    const value = Reflect.get(instance as object, prop, instance);
-    return typeof value === "function"
-      ? (value as (...args: unknown[]) => unknown).bind(instance)
-      : value;
-  },
-  set(_target, prop, value) {
-    const instance = initializeWindowStatesStore();
-    return Reflect.set(instance as object, prop, value, instance);
-  },
-  has(_target, prop) {
-    const instance = initializeWindowStatesStore();
-    return Reflect.has(instance as object, prop);
-  },
-});
+export const windowStatesStore = createCachedStoreProxy(initializeWindowStatesStore).proxy;
 
 /**
  * Where each audit ring lived in config.json up to v0.18. Migrations 022/023
