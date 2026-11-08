@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { EventEmitter } from "events";
+import os from "os";
 
 vi.mock("electron", () => ({
   utilityProcess: {
@@ -201,12 +202,28 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
-    it("forks with the configured 512MB heap and mirrors it into the governor env", () => {
-      const client = new PtyClientClass({ fabric: false });
-      expect(forks[0].execArgv).toContain("--max-old-space-size=512");
-      expect(forks[0].env.DAINTREE_PTY_HEAP_BUDGET_MB).toBe("512");
-      client.dispose();
-    });
+    it.each([
+      [4, 512],
+      [8, 512],
+      [16, 512],
+      [32, 1024],
+      [64, 2048],
+      [256, 2048],
+    ])(
+      "RAM-scales the single host's heap on a %i GB machine to %i MB and mirrors it into the governor env",
+      (totalMemGb, expectedMb) => {
+        const totalmem = vi.spyOn(os, "totalmem").mockReturnValue(totalMemGb * 1024 ** 3);
+        try {
+          const client = new PtyClientClass({ fabric: false });
+          expect(forks).toHaveLength(1);
+          expect(forks[0].execArgv).toContain(`--max-old-space-size=${expectedMb}`);
+          expect(forks[0].env.DAINTREE_PTY_HEAP_BUDGET_MB).toBe(String(expectedMb));
+          client.dispose();
+        } finally {
+          totalmem.mockRestore();
+        }
+      }
+    );
   });
 
   describe("dispose (#13167)", () => {

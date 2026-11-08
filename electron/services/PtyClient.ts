@@ -294,9 +294,9 @@ export interface PtyClientConfig {
   /** Whether to show dialog on crash */
   showCrashDialog?: boolean;
   /**
-   * Memory limit in MB for PTY Host process (default: 512). Applies to the
-   * legacy singleton path; with the PTY fabric enabled every shard instead
-   * gets a RAM-scaled budget from {@link shardHeapBudgetMb}.
+   * Override the V8 heap ceiling in MB of every PTY host shard. Without it each
+   * shard, including the single host when the fabric is off, gets the
+   * RAM-scaled budget from {@link shardHeapBudgetMb}. Primarily a test hook.
    */
   memoryLimitMb?: number;
   /**
@@ -317,7 +317,9 @@ export interface PtyClientConfig {
   maxProjectShards?: number;
 }
 
-type ResolvedPtyClientConfig = Required<Omit<PtyClientConfig, "fabric" | "maxProjectShards">>;
+type ResolvedPtyClientConfig = Required<
+  Omit<PtyClientConfig, "fabric" | "maxProjectShards" | "memoryLimitMb">
+>;
 
 const DEFAULT_CONFIG: ResolvedPtyClientConfig = {
   // 5s heartbeat. Watchdog checks the missed-pong count before incrementing,
@@ -326,7 +328,6 @@ const DEFAULT_CONFIG: ResolvedPtyClientConfig = {
   // at frozen terminals long enough to assume the app had hung.
   healthCheckIntervalMs: 5000,
   showCrashDialog: true,
-  memoryLimitMb: 512,
   deferStart: false,
 };
 
@@ -411,7 +412,7 @@ export class PtyClient extends EventEmitter {
   private readonly fabricEnabled: boolean;
   /** Max concurrent project shards; overflow projects co-locate on the default shard. */
   private readonly projectShardCap: number;
-  /** Per-shard V8 heap budget (RAM-scaled under the fabric, config value otherwise). */
+  /** Per-shard V8 heap budget: RAM-scaled unless the config overrides it. */
   private readonly shardMemoryLimitMb: number;
   private readonly electronDir: string;
   /** Live shards by key: "main" plus one per project under the fabric. */
@@ -580,13 +581,14 @@ export class PtyClient extends EventEmitter {
 
   constructor(config: PtyClientConfig = {}) {
     super();
-    const { fabric, maxProjectShards: shardCapOverride, ...baseConfig } = config;
+    const { fabric, maxProjectShards: shardCapOverride, memoryLimitMb, ...baseConfig } = config;
     this.config = { ...DEFAULT_CONFIG, ...baseConfig };
     this.fabricEnabled = fabric ?? isPtyFabricEnabled();
     this.projectShardCap = shardCapOverride ?? maxProjectShards(os.cpus().length);
-    this.shardMemoryLimitMb = this.fabricEnabled
-      ? shardHeapBudgetMb(os.totalmem())
-      : this.config.memoryLimitMb;
+    // The single host carries every project's terminals when the fabric is off,
+    // so a fixed 512 MB cap stalled high-RAM machines on the governor's global
+    // PTY pause (#10948).
+    this.shardMemoryLimitMb = memoryLimitMb ?? shardHeapBudgetMb(os.totalmem());
     installWindowsTreeKillNotice();
 
     // SharedArrayBuffer cannot be sent to Electron UtilityProcess via postMessage
