@@ -11,6 +11,7 @@ import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
 import { forgeClient } from "@/clients/forgeClient";
 import { cn } from "@/lib/utils";
 import {
+  checkRowLabel,
   composePrChecksAgentText,
   preparePrChecks,
   summarizePrChecks,
@@ -508,10 +509,13 @@ function ChecksList({
 /**
  * Matrix jobs repeat names, so the name alone leaves two buttons identically
  * labelled when a reader tabs the list without hearing the rows between them.
- * The outcome separates most of them; an ordinal separates whatever is left.
+ * The workflow or app qualifier separates same-named jobs from different
+ * sources, the outcome most of the rest, and an ordinal whatever is left.
  */
 function labelDetailsButtons(rows: readonly PrCheckRow[]): Map<string, string> {
-  const base = new Map(rows.map((row) => [row.key, `${row.name} (${describeOutcome(row)})`]));
+  const base = new Map(
+    rows.map((row) => [row.key, `${checkRowLabel(row)} (${describeOutcome(row)})`])
+  );
   const totals = new Map<string, number>();
   for (const text of base.values()) totals.set(text, (totals.get(text) ?? 0) + 1);
   const seen = new Map<string, number>();
@@ -552,7 +556,12 @@ function CheckRows({
           >
             <Icon className={cn("w-3.5 h-3.5 shrink-0 mt-px", toneClass)} aria-hidden="true" />
             <span className="min-w-0 flex-1">
-              <span className="block font-medium text-text-primary break-words">{row.name}</span>
+              <span className="block font-medium text-text-primary break-words">
+                {row.source && (
+                  <span className="font-normal text-text-secondary">{row.source} / </span>
+                )}
+                {row.name}
+              </span>
               <span className="block text-text-secondary">{outcomeText}</span>
             </span>
             {detailsUrl && (
