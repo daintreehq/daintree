@@ -951,6 +951,23 @@ describe("restartTerminal and panes that run away from their conversation (#1243
     expect(mockSpawn).toHaveBeenCalled();
     expect(ptyAfterRestart().restoreProvenance).toBeUndefined();
   });
+
+  it("brings a saved --fullscreen inline even when the settings can't be read (#16356)", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockRejectedValue(new Error("settings unreadable"));
+    const grokPane = {
+      ...agentPanelBase,
+      launchAgentId: "grok",
+      agentLaunchFlags: ["--fullscreen", "--model", "grok-build"],
+    };
+    usePanelStore.setState({ panelsById: { [grokPane.id]: grokPane }, panelIds: [grokPane.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const inline = ["--no-alt-screen", "--model", "grok-build"];
+    expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual(inline);
+    expect(ptyAfterRestart().agentLaunchFlags).toEqual(inline);
+  });
 });
 
 describe("restartTerminal captured live-session resume", () => {

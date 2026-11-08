@@ -28,7 +28,6 @@ import {
   reconcileInlineModeFlag,
   resolveKeepDecorations,
   resolveEffectiveBypass,
-  resolveEffectiveInlineMode,
 } from "@shared/types";
 import {
   agentClipboardDirectory,
@@ -187,8 +186,6 @@ interface LoadedAgentRuntimeSettings {
   tmpDir: string;
   /** Global skip-permissions override at restart time (#10432). */
   globalSkipPermissions: boolean;
-  /** Global "use alt-screen mode by default" override at restart time (#10876). */
-  globalUseAltScreen: boolean;
   /** Bypass args plugins have declared for this agent, stripped from saved flags (#16374). */
   pluginBypassArgHistory: string[][];
 }
@@ -702,7 +699,6 @@ export const createRestartActions = (
           settings,
           tmpDir,
           globalSkipPermissions: agentSettings?.globalSkipPermissions ?? false,
-          globalUseAltScreen: agentSettings?.globalUseAltScreen ?? false,
           pluginBypassArgHistory: getPluginBypassArgHistory(agentSettings, effectiveAgentId),
         };
         if (settings.presetWasStale) {
@@ -731,7 +727,6 @@ export const createRestartActions = (
           // applies and has no settings to be rebuilt from (#12431).
           systemPromptArgs: extractSystemPromptArgs(storedBaseFlags, effectiveAgentId),
           globalSkipPermissions: runtimeForEnv.globalSkipPermissions,
-          globalUseAltScreen: runtimeForEnv.globalUseAltScreen,
         }
       );
     }
@@ -744,28 +739,28 @@ export const createRestartActions = (
           presetForLaunchFlags
         );
       }
-      // Reconcile the persisted bypass (#10432) and inline (#10876) flags against
-      // the current effective settings before any resume/from-flags command is
-      // built (the "resume trap"): a snapshot captured while the global
-      // skip-permissions or alt-screen switch was in a different state must not
-      // survive once it's flipped. `nextAgentLaunchFlags` (stored + from-flags
-      // rebuild) reconciles only captured flags; `resumeFlags` additionally
-      // injects the tokens into an empty snapshot so a session launched before
-      // either feature honours the current resolution.
+      // Reconcile the persisted bypass flag (#10432) against the current
+      // effective settings before any resume/from-flags command is built (the
+      // "resume trap"): a snapshot captured while the global skip-permissions
+      // switch was in a different state must not survive once it's flipped. The
+      // screen-mode token is brought to inline whatever the snapshot held
+      // (#16356). `nextAgentLaunchFlags` (stored + from-flags rebuild)
+      // reconciles only captured flags; `resumeFlags` additionally injects the
+      // tokens into an empty snapshot so a session launched before either
+      // feature honours the current resolution.
       resumeFlags = nextAgentLaunchFlags;
+      // The screen-mode token needs no settings, so it is reconciled even when
+      // they couldn't be read; bypass and decorations then keep what was captured.
+      let reconcileFlags = (base: string[]): string[] =>
+        reconcileInlineModeFlag(base, effectiveAgentId);
       if (runtimeForEnv) {
         const effectiveBypass = resolveEffectiveBypass(
           runtimeForEnv.settings.effectiveEntry,
           effectiveAgentId,
           runtimeForEnv.globalSkipPermissions
         );
-        const effectiveInline = resolveEffectiveInlineMode(
-          runtimeForEnv.settings.effectiveEntry,
-          effectiveAgentId,
-          runtimeForEnv.globalUseAltScreen
-        );
         const dangerousArgs = runtimeForEnv.settings.effectiveEntry.dangerousArgs;
-        const reconcileFlags = (base: string[]): string[] =>
+        reconcileFlags = (base: string[]): string[] =>
           reconcileDecorationFlags(
             reconcileInlineModeFlag(
               reconcileBypassFlags(
@@ -775,21 +770,20 @@ export const createRestartActions = (
                 dangerousArgs,
                 runtimeForEnv.pluginBypassArgHistory
               ),
-              effectiveAgentId,
-              effectiveInline
+              effectiveAgentId
             ),
             effectiveAgentId,
             resolveKeepDecorations(runtimeForEnv.settings.effectiveEntry)
           );
-        // A caller-only snapshot is still a captured configuration: its empty
-        // settings-derived part gets the tokens the fresh command replays too.
-        if ((nextAgentLaunchFlags?.length ?? 0) > 0 || callerLaunchFlags.length > 0) {
-          nextAgentLaunchFlags = reconcileFlags(nextAgentLaunchFlags ?? []);
-          resumeFlags = nextAgentLaunchFlags;
-        } else {
-          const injectedFromEmpty = reconcileFlags([]);
-          if (injectedFromEmpty.length > 0) resumeFlags = injectedFromEmpty;
-        }
+      }
+      // A caller-only snapshot is still a captured configuration: its empty
+      // settings-derived part gets the tokens the fresh command replays too.
+      if ((nextAgentLaunchFlags?.length ?? 0) > 0 || callerLaunchFlags.length > 0) {
+        nextAgentLaunchFlags = reconcileFlags(nextAgentLaunchFlags ?? []);
+        resumeFlags = nextAgentLaunchFlags;
+      } else {
+        const injectedFromEmpty = reconcileFlags([]);
+        if (injectedFromEmpty.length > 0) resumeFlags = injectedFromEmpty;
       }
       if (callerLaunchFlags.length > 0) {
         nextAgentLaunchFlags = [...(nextAgentLaunchFlags ?? []), ...callerLaunchFlags];
@@ -820,7 +814,6 @@ export const createRestartActions = (
             {
               modelId: currentTerminal.agentModelId,
               globalSkipPermissions: runtimeSettings.globalSkipPermissions,
-              globalUseAltScreen: runtimeSettings.globalUseAltScreen,
             }
           );
           hasPersistedFlags = freshLaunchFlags.length > 0;
@@ -862,7 +855,6 @@ export const createRestartActions = (
                   modelId: currentTerminal.agentModelId,
                   presetArgs: runtimeSettings.settings.preset?.args,
                   globalSkipPermissions: runtimeSettings.globalSkipPermissions,
-                  globalUseAltScreen: runtimeSettings.globalUseAltScreen,
                 }
               );
             }
@@ -1928,7 +1920,6 @@ async function respawnAgentOnPreset(
       await getCurrentLaunchCliDetail(effectiveAgentId)
     );
     const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
-    const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
     // A failover swaps the provider, not the caller's standing instruction
     // or its own verbatim flags (#13046).
     const { base: storedBaseFlags, caller: storedCallerFlags } = splitCallerLaunchFlags(
@@ -1954,7 +1945,6 @@ async function respawnAgentOnPreset(
           systemPromptArgs,
           presetArgs: nextPreset?.args,
           globalSkipPermissions,
-          globalUseAltScreen,
         }),
         keptCallerFlags
       ),
@@ -1964,7 +1954,6 @@ async function respawnAgentOnPreset(
           systemPromptArgs,
           presetArgs: nextPreset?.args,
           globalSkipPermissions,
-          globalUseAltScreen,
         }),
         ...keptCallerFlags,
       ],

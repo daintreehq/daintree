@@ -36,7 +36,6 @@ import {
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
   resolveEffectiveBypass,
-  resolveEffectiveInlineMode,
   resolveKeepDecorations,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
@@ -356,7 +355,6 @@ interface ReconnectedTerminalData {
 interface AgentSettingsData {
   agents?: Record<string, Record<string, unknown>>;
   globalSkipPermissions?: boolean;
-  globalUseAltScreen?: boolean;
   pluginBypassArgHistory?: Record<string, string[][]>;
 }
 
@@ -803,9 +801,7 @@ export function buildArgsForRespawn(
     // once it's toggled off, and vice-versa. Strip-and-re-add against the
     // current resolution so every restart/restore replays clean flags.
     const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
-    const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
     const effectiveBypass = resolveEffectiveBypass(effectiveEntry, agentId, globalSkipPermissions);
-    const effectiveInline = resolveEffectiveInlineMode(effectiveEntry, agentId, globalUseAltScreen);
     const dangerousArgs = effectiveEntry.dangerousArgs as string | undefined;
     const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
     // A stale preset voids the captured flags, but not the caller's standing
@@ -816,10 +812,11 @@ export function buildArgsForRespawn(
       ? extractSystemPromptArgs(savedBaseFlags, agentId)
       : [];
     const hasPersistedFlags = Boolean(rawPersistedFlags && rawPersistedFlags.length > 0);
-    // Reconcile the persisted snapshot against both live resolutions (#10432 the
-    // bypass token, #10876 the `--no-alt-screen` inline flag): a snapshot must
-    // not carry a stale flag forward once the global switch or per-agent choice
-    // is flipped. Applied together so restart/restore/resume replay clean flags.
+    // Reconcile the persisted snapshot against the live bypass resolution
+    // (#10432): a snapshot must not carry a stale bypass token forward once the
+    // global switch or per-agent choice is flipped. The screen-mode token is
+    // brought to inline whatever the snapshot held (#16356), so a pane saved
+    // with Grok's `--fullscreen` restores inline.
     const reconcileFlags = (base: string[]): string[] =>
       reconcileDecorationFlags(
         reconcileInlineModeFlag(
@@ -830,8 +827,7 @@ export function buildArgsForRespawn(
             dangerousArgs,
             getPluginBypassArgHistory(agentSettings, agentId)
           ),
-          agentId,
-          effectiveInline
+          agentId
         ),
         agentId,
         resolveKeepDecorations(effectiveEntry)
@@ -853,7 +849,6 @@ export function buildArgsForRespawn(
             modelId: saved.agentModelId,
             systemPromptArgs: staleSystemPromptArgs,
             globalSkipPermissions,
-            globalUseAltScreen,
           })
         ),
         ...callerLaunchFlags,
@@ -912,7 +907,6 @@ export function buildArgsForRespawn(
                 systemPromptArgs: staleSystemPromptArgs,
                 presetArgs: preset?.args,
                 globalSkipPermissions,
-                globalUseAltScreen,
               }),
               callerLaunchFlags
             )
@@ -961,7 +955,6 @@ export function buildArgsForRespawn(
             systemPromptArgs: staleSystemPromptArgs,
             presetArgs: preset?.args,
             globalSkipPermissions,
-            globalUseAltScreen,
             sessionId: mintFreshSessionId(),
           }),
           callerLaunchFlags
@@ -1045,7 +1038,6 @@ export function buildArgsForRespawn(
             systemPromptArgs: staleSystemPromptArgs,
             presetArgs: preset?.args,
             globalSkipPermissions,
-            globalUseAltScreen,
             sessionId: mintFreshSessionId(),
           }),
           callerLaunchFlags

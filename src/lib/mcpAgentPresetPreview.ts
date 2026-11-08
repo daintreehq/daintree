@@ -83,15 +83,6 @@ const PRESET_FIELDS: readonly PresetField[] = [
     unset: "the agent's setting",
   },
   {
-    label: "Alt-screen mode",
-    read: (p) => {
-      if (p.inlineMode === "on" || p.inlineMode === true) return "Inline";
-      if (p.inlineMode === "off" || p.inlineMode === false) return "Alt screen";
-      return undefined;
-    },
-    unset: "the agent's setting",
-  },
-  {
     label: "Display title",
     read: (p) => (typeof p.displayTitle === "string" ? quote(p.displayTitle) : undefined),
     unset: "the name",

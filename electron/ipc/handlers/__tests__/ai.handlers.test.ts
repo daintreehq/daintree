@@ -221,38 +221,6 @@ describe("ai handler payload validation", () => {
     );
   });
 
-  it("rejects AGENT_SETTINGS_SET_GLOBAL_INLINE payload that is not a boolean (#10876)", async () => {
-    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE);
-    await expect(handler({} as never, "true" as never)).rejects.toThrow(
-      "Invalid globalUseAltScreen"
-    );
-    await expect(handler({} as never, 1 as never)).rejects.toThrow("Invalid globalUseAltScreen");
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
-  it("writes AGENT_SETTINGS_SET_GLOBAL_INLINE via a dot-path leaf without rewriting the slice (#10876)", async () => {
-    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE);
-    (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) => {
-      if (key === "agentSettings") {
-        return { agents: { codex: { inlineMode: "on" } }, settingsVersion: 1 };
-      }
-      return defaultValue;
-    });
-
-    const result = await handler({} as never, true as never);
-
-    // Dot-path leaf write — never the whole `agentSettings` slice.
-    expect(storeMock.set).toHaveBeenCalledWith("agentSettings.globalUseAltScreen", true);
-    expect(storeMock.set).not.toHaveBeenCalledWith("agentSettings", expect.anything());
-    // Per-agent records are preserved untouched (no inlineMode mutation).
-    expect(result).toEqual(
-      expect.objectContaining({
-        globalUseAltScreen: true,
-        agents: { codex: { inlineMode: "on" } },
-      })
-    );
-  });
-
   it("rejects AGENT_SETTINGS_SET_RESUME_ON_RESTART values it doesn't know (#13509)", async () => {
     const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART);
     for (const value of ["sometimes", true, undefined]) {
@@ -537,12 +505,6 @@ describe("agent settings change broadcast (#14700)", () => {
       { agents: { claude: { customFlags: "--after" } } },
     ],
     ["setGlobal", CHANNELS.AGENT_SETTINGS_SET_GLOBAL, true, { globalSkipPermissions: true }],
-    [
-      "setGlobalInline",
-      CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE,
-      true,
-      { globalUseAltScreen: true },
-    ],
     [
       "setResumeOnRestart",
       CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART,

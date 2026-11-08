@@ -29,7 +29,6 @@ function fakeHost() {
     "idleTerminalNotify.enabled": false,
     "idleTerminalNotify.thresholdMinutes": 60,
     "agentSettings.resumeOnRestart": "always",
-    "agentSettings.globalUseAltScreen": false,
     globalEnvironmentVariables: { LANG: "en_US.UTF-8" },
     "terminalConfig.resourceMonitoringEnabled": false,
     "terminalConfig.memoryLeakDetectionEnabled": false,

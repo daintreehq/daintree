@@ -113,7 +113,6 @@ const PresetEnvSchema = z.record(z.string(), z.string());
 const PresetModeSchema = z.enum(["inherit", "on", "off"]);
 const PRESET_ARGS_DESCRIPTION = "CLI argv, one argument each.";
 const PRESET_SKIP_DESCRIPTION = "Skip permissions.";
-const PRESET_INLINE_DESCRIPTION = "on: inline, off: alt screen.";
 const PRESET_COLOR_DESCRIPTION = "Hex colour, e.g. #3b82f6.";
 const PRESET_TITLE_DESCRIPTION = "Panel title; defaults to the name.";
 const PRESET_FALLBACKS_DESCRIPTION =
@@ -133,7 +132,6 @@ export const AgentCreatePresetArgsSchema = z.strictObject({
   args: z.array(z.string()).optional().describe(PRESET_ARGS_DESCRIPTION),
   customFlags: z.string().optional().describe("Flags used instead of the agent's own."),
   dangerousMode: PresetModeSchema.optional().describe(PRESET_SKIP_DESCRIPTION),
-  inlineMode: PresetModeSchema.optional().describe(PRESET_INLINE_DESCRIPTION),
   color: z.string().optional().describe(PRESET_COLOR_DESCRIPTION),
   displayTitle: z.string().optional().describe(PRESET_TITLE_DESCRIPTION),
   fallbacks: z.array(z.string()).optional().describe(PRESET_FALLBACKS_DESCRIPTION),
@@ -159,7 +157,6 @@ export const AgentUpdatePresetArgsSchema = z.strictObject({
     .optional()
     .describe("Flags used instead of the agent's own; null restores them."),
   dangerousMode: PresetModeSchema.optional().describe(PRESET_SKIP_DESCRIPTION),
-  inlineMode: PresetModeSchema.optional().describe(PRESET_INLINE_DESCRIPTION),
   color: z.string().optional().describe(PRESET_COLOR_DESCRIPTION),
   displayTitle: z.string().optional().describe(PRESET_TITLE_DESCRIPTION),
   fallbacks: z.array(z.string()).optional().describe(PRESET_FALLBACKS_DESCRIPTION),

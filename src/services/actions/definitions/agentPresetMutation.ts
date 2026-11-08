@@ -95,7 +95,6 @@ interface PresetPatch {
   args?: string[];
   customFlags?: string | null;
   dangerousMode?: PresetMode;
-  inlineMode?: PresetMode;
   color?: string;
   displayTitle?: string;
   fallbacks?: string[];
@@ -110,7 +109,6 @@ const PATCH_FIELDS = [
   "args",
   "customFlags",
   "dangerousMode",
-  "inlineMode",
   "color",
   "displayTitle",
   "fallbacks",
@@ -426,10 +424,6 @@ function applyPresetPatch(base: AgentPreset, patch: PresetPatch): AgentPreset {
       next.dangerousMode = patch.dangerousMode;
       next.dangerousEnabled = patch.dangerousMode === "on";
     }
-  }
-  if (patch.inlineMode !== undefined) {
-    if (patch.inlineMode === "inherit") delete next.inlineMode;
-    else next.inlineMode = patch.inlineMode;
   }
   if (patch.color !== undefined) {
     if (patch.color === "") delete next.color;

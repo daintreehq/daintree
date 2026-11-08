@@ -1,15 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import { withResumeDisplayChoices } from "../HelpSessionController";
-import {
-  setAgentSettingsEntryAccessor,
-  setGlobalUseAltScreenAccessor,
-} from "@/store/storeAccessors";
+import { setAgentSettingsEntryAccessor } from "@/store/storeAccessors";
 import type { AgentSettingsEntry } from "@shared/types";
 
-function configure(entry: AgentSettingsEntry | undefined, globalUseAltScreen?: boolean) {
+function configure(entry: AgentSettingsEntry | undefined) {
   setAgentSettingsEntryAccessor(() => entry);
-  setGlobalUseAltScreenAccessor(() => globalUseAltScreen);
 }
 
 describe("withResumeDisplayChoices (#14186)", () => {
@@ -20,14 +16,18 @@ describe("withResumeDisplayChoices (#14186)", () => {
     expect(withResumeDisplayChoices([], "codex")).toContain("--no-alt-screen");
   });
 
-  it("omits the inline flag when the global alt-screen switch is on", () => {
-    configure(undefined, true);
-    expect(withResumeDisplayChoices([], "codex")).not.toContain("--no-alt-screen");
+  it("keeps the inline flag when an older build stored an alt-screen choice (#16356)", () => {
+    configure({ inlineMode: "off" });
+    expect(withResumeDisplayChoices([], "codex")).toContain("--no-alt-screen");
   });
 
-  it("omits the inline flag when the agent's own choice is off", () => {
-    configure({ inlineMode: "off" } as AgentSettingsEntry);
-    expect(withResumeDisplayChoices([], "codex")).not.toContain("--no-alt-screen");
+  it("rewrites a saved --fullscreen to the inline flag (#16356)", () => {
+    configure(undefined);
+    expect(withResumeDisplayChoices(["--fullscreen", "--model", "x"], "grok")).toEqual([
+      "--no-alt-screen",
+      "--model",
+      "x",
+    ]);
   });
 
   it("never doubles a flag that is already present", () => {

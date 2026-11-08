@@ -110,7 +110,6 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         });
         const { preset, presetWasStale, effectiveEntry } = runtimeSettings;
         const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
-        const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
         const clipboardDirectory = tmpDir
           ? agentClipboardDirectory(tmpDir, isRemoteWindow())
           : undefined;
@@ -137,7 +136,6 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
             systemPromptArgs,
             presetArgs: preset?.args,
             globalSkipPermissions,
-            globalUseAltScreen,
             sessionId: agentSessionId,
           }
         );
@@ -150,7 +148,6 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
             modelId: panel.agentModelId,
             systemPromptArgs,
             globalSkipPermissions,
-            globalUseAltScreen,
           }
         );
         // The copy runs on the source pane's account, not whichever is the

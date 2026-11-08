@@ -87,8 +87,6 @@ export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
       }
       case "agentSettings.resumeOnRestart":
         return leaf(resolveResumeOnRestart(store.get("agentSettings")));
-      case "agentSettings.globalUseAltScreen":
-        return leaf(store.get("agentSettings")?.globalUseAltScreen === true);
       case "globalEnvironmentVariables":
         return leaf(sortedEnv(store.get("globalEnvironmentVariables")));
       case "terminalConfig.resourceMonitoringEnabled":
@@ -158,11 +156,6 @@ export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
       const resume = patch["agentSettings.resumeOnRestart"];
       if (resume !== undefined) {
         store.set("agentSettings.resumeOnRestart", resume);
-        storeChanged = true;
-      }
-      const altScreen = patch["agentSettings.globalUseAltScreen"];
-      if (altScreen !== undefined) {
-        store.set("agentSettings.globalUseAltScreen", altScreen);
         storeChanged = true;
       }
       const env = patch.globalEnvironmentVariables;

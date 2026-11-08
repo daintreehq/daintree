@@ -265,7 +265,6 @@ vi.mock("@/config/agents", () => ({
 vi.mock("@shared/types/agentSettings", () => ({
   reconcileDecorationFlags: (flags: string[]) => flags,
   reconcileInlineModeFlag: (flags: string[]) => flags,
-  resolveEffectiveInlineMode: () => false,
   resolveKeepDecorations: () => false,
   buildResumeCommand: (...args: unknown[]) => mockBuildResumeCommand(...args),
   buildResumeLatestCommand: (...args: unknown[]) => mockBuildResumeLatestCommand(...args),

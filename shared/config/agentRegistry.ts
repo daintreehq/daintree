@@ -242,14 +242,6 @@ export interface AgentPreset {
   dangerousMode?: "inherit" | "on" | "off";
   /** Per-preset override: extra CLI flags merged on top of agent-level customFlags */
   customFlags?: string;
-  /**
-   * Per-preset tri-state alt-screen override (`InlineMode`), layered on top of
-   * the agent's resolved mode: `"off"` (alt-screen) vetoes an agent/global
-   * `"on"` (inline), `"inherit"`/absent defers to the agent's Default scope. A
-   * legacy boolean is read literally (`true → "on"`). Inlined union to avoid a
-   * config→types import cycle.
-   */
-  inlineMode?: boolean | "inherit" | "on" | "off";
   /** Optional brand color (CSS hex) this preset's mark inks are derived from */
   color?: string;
   /** Optional free-form panel/button title; falls back to `name` when unset */
@@ -296,7 +288,6 @@ export interface AgentProviderTemplate {
   dangerousEnabled?: boolean;
   dangerousMode?: "inherit" | "on" | "off";
   customFlags?: string;
-  inlineMode?: boolean | "inherit" | "on" | "off";
 }
 
 /**
@@ -908,30 +899,20 @@ export interface AgentConfig {
     blockMouseReporting?: boolean;
     /** Use `settled` for sticky cursor-relative TUIs that should receive one stable final grid. */
     resizeStrategy?: "default" | "settled";
-    /** CLI flag to disable alt-screen and use inline rendering (e.g., "--no-alt-screen") */
+    /**
+     * CLI flag that keeps the agent off the alternate screen (e.g.
+     * "--no-alt-screen"). Every launch, restart and resume of an agent that
+     * declares one carries it (#16356); there is no setting to turn it off.
+     */
     inlineModeFlag?: string;
     /**
-     * CLI flag that forces the full-screen alternate buffer (e.g. "--fullscreen"),
-     * the opposite polarity of {@link inlineModeFlag}. Declare it for a CLI that
-     * picks inline on its own — via its own config file or terminal
-     * auto-detection — so choosing "Alt screen" is more than the absence of the
-     * inline flag (#11423). Omit it when the CLI already defaults to alt-screen;
-     * dropping `inlineModeFlag` is then enough.
-     *
-     * Both are single tokens and mutually exclusive: exactly one is injected per
-     * launch, and the launch path strips the other. Never pair this with
-     * `blockAltScreen: true` — forcing a full-screen TUI while the terminal
-     * strips its alt-screen escape sequences leaves the agent unusable.
+     * The CLI's opposite-polarity full-screen flag (e.g. "--fullscreen"), for a
+     * build of Daintree that once launched the agent with it (#11423). Never
+     * injected: a saved launch snapshot carrying it is rewritten to
+     * {@link inlineModeFlag} on restart, restore and resume (#16356), so it is
+     * read only beside one.
      */
     altScreenFlag?: string;
-    /**
-     * Default inline-mode state when the user hasn't chosen one. Agents with an
-     * `inlineModeFlag` otherwise default to inline (`true`); set this to `false`
-     * for a full-screen TUI that renders better on the alternate screen (clean
-     * scroll region, no garbled redraw history in scrollback) while still
-     * exposing the inline flag as an opt-in.
-     */
-    defaultInlineMode?: boolean;
     /**
      * Environment that keeps the CLI's renderer on the main screen whatever its
      * own config picks, for a CLI whose full-screen mode is chosen in the user's

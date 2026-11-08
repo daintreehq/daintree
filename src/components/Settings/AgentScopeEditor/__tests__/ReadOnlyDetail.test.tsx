@@ -13,7 +13,6 @@ function renderDetail(env: Record<string, string>) {
       agentName="Claude"
       agentCustomFlags=""
       effectiveSkipPerms={false}
-      effectiveInline={undefined}
       onDuplicate={vi.fn()}
     />
   );

@@ -6,7 +6,6 @@ const clientMock = vi.hoisted(() => ({
   invalidate: vi.fn(),
   set: vi.fn(),
   setGlobal: vi.fn(),
-  setGlobalInline: vi.fn(),
   setResumeOnRestart: vi.fn(),
   reset: vi.fn(),
   stampVersion: vi.fn(),
@@ -553,37 +552,29 @@ describe("agentSettingsStore adversarial", () => {
     expect(state.error).toBeTruthy();
   });
 
-  it("setGlobalUseAltScreen optimistically updates the root field without touching per-agent inlineMode (#10876)", async () => {
-    useAgentSettingsStore.setState({
-      settings: {
-        agents: { codex: { inlineMode: "on" } },
-        globalUseAltScreen: false,
+  it("loads settings an older build saved with alt-screen choices without an error (#16356)", async () => {
+    clientMock.get.mockResolvedValue({
+      agents: {
+        codex: { inlineMode: "off", customFlags: "--search" },
+        claude: {
+          customPresets: [
+            { id: "user-a", name: "A", inlineMode: false, args: ["--model", "opus"] },
+          ],
+        },
       },
+      globalUseAltScreen: true,
     });
-    clientMock.setGlobalInline.mockResolvedValueOnce({});
 
-    await useAgentSettingsStore.getState().setGlobalUseAltScreen(true);
-
-    expect(clientMock.setGlobalInline).toHaveBeenCalledWith(true);
-    const settings = useAgentSettingsStore.getState().settings;
-    expect(settings?.globalUseAltScreen).toBe(true);
-    // The per-agent choice must be left untouched — the global is a live override.
-    expect(settings?.agents.codex?.inlineMode).toBe("on");
-  });
-
-  it("setGlobalUseAltScreen rolls back to the prior value when the IPC write rejects (#10876)", async () => {
-    useAgentSettingsStore.setState({
-      settings: { agents: { codex: {} }, globalUseAltScreen: false },
-    });
-    clientMock.setGlobalInline.mockRejectedValueOnce(new Error("ipc down"));
-
-    await expect(useAgentSettingsStore.getState().setGlobalUseAltScreen(true)).rejects.toThrow(
-      "ipc down"
-    );
+    await useAgentSettingsStore.getState().initialize();
 
     const state = useAgentSettingsStore.getState();
-    expect(state.settings?.globalUseAltScreen).toBe(false);
-    expect(state.error).toBeTruthy();
+    expect(state.isInitialized).toBe(true);
+    expect(state.error).toBeNull();
+    expect(state.settings?.agents.codex?.customFlags).toBe("--search");
+    // A preset that carries one still loads with everything else it sets.
+    expect(state.settings?.agents.claude?.customPresets).toEqual([
+      expect.objectContaining({ id: "user-a", name: "A", args: ["--model", "opus"] }),
+    ]);
   });
 
   it("setResumeOnRestart writes the root field and rolls back when the IPC write rejects (#13509)", async () => {

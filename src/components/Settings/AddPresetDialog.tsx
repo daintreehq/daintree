@@ -105,7 +105,6 @@ export function AddPresetDialog({
           dangerousEnabled: selectedTemplate.dangerousEnabled,
           dangerousMode: selectedTemplate.dangerousMode,
           customFlags: selectedTemplate.customFlags,
-          inlineMode: selectedTemplate.inlineMode,
         });
         break;
     }

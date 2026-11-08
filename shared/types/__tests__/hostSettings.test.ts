@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { HostSettingsPatchSchema, hostSettingRefusal } from "../hostSettings.js";
+import { HostSettingsPatchSchema, hostSettingRefusal, isHostSettingKey } from "../hostSettings.js";
+
+describe("the retired alt-screen setting (#16356)", () => {
+  it("is no setting a host reads or takes, so a peer never asks one for it", () => {
+    // A host lists its keys in `describe`, and a Shell asks only for keys both
+    // know: dropping this one from the list is what keeps a mixed pair working.
+    expect(isHostSettingKey("agentSettings.globalUseAltScreen")).toBe(false);
+    expect(
+      HostSettingsPatchSchema.safeParse({ "agentSettings.globalUseAltScreen": false }).success
+    ).toBe(false);
+  });
+});
 
 describe("hostSettings canopyModel", () => {
   it("takes only one of Canopy's published models, refusing anything a host would refuse", () => {
@@ -50,7 +61,7 @@ describe("work settings on a host (#14706)", () => {
     }
     const patches: Record<string, unknown> = {
       globalEnvironmentVariables: { A: "1" },
-      "agentSettings.globalUseAltScreen": true,
+      "agentSettings.resumeOnRestart": "never",
       "sessionRestore.enabled": false,
       "terminalConfig.resourceMonitoringEnabled": true,
     };

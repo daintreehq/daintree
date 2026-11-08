@@ -146,7 +146,6 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
             const baseCommand = agentConfig?.command ?? "";
             const entry = agentSettings?.agents?.[agentId] ?? {};
             const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
-            const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
             // One id per spawned pane (#11782) — a recipe fans out several
             // panes at once, and reusing an id across them would collide.
             const assignedSessionId = mintAssignedSessionId(agentId);
@@ -159,7 +158,6 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
               systemPromptArgs: extractSystemPromptArgs(t.agentLaunchFlags, agentId),
               recipeArgs: t.args?.trim() || undefined,
               globalSkipPermissions,
-              globalUseAltScreen,
               sessionId: assignedSessionId,
             });
             // Preserve flags the caller already captured (the clone-layout path
@@ -175,7 +173,6 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
                 modelId: t.agentModelId,
                 recipeArgs: t.args,
                 globalSkipPermissions,
-                globalUseAltScreen,
               });
 
             panelId = await store.addPanel({

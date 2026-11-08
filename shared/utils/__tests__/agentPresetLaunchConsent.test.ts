@@ -32,7 +32,6 @@ describe("presetLaunchContent", () => {
     ["the bypass mode", { dangerousMode: "on" }],
     ["the legacy bypass switch", { dangerousEnabled: true }],
     ["the extra flags, even blank", { customFlags: "" }],
-    ["the inline mode", { inlineMode: "on" }],
     ["the account pin", { accountId: "work" }],
     ["the fallback chain", { fallbacks: ["other", "third"] }],
     ["the rate-limit fallback switch", { fallbackOnRateLimit: true }],
@@ -48,6 +47,38 @@ describe("presetLaunchContent", () => {
   it("ignores keys the preset type doesn't define", () => {
     const withStray = { ...preset, stray: "ignored" } as AgentPreset;
     expect(presetLaunchContent(withStray)).toBe(presetLaunchContent(preset));
+  });
+
+  it("keeps the encoding, so a grant for a preset that never set a screen mode still matches (#16356)", () => {
+    // What version 1 wrote for this preset, the retired inline mode's slot
+    // included: a grant stored then must still match it. One for a preset that
+    // did set a mode no longer matches, so that preset is asked about again.
+    expect(presetLaunchContent(preset)).toBe(
+      JSON.stringify([
+        1,
+        "zai",
+        "Z.ai",
+        null,
+        ["--model", "glm"],
+        [
+          ["A_URL", "a"],
+          ["B_TOKEN", "b"],
+        ],
+        null,
+        "inherit",
+        null,
+        null,
+        null,
+        null,
+        ["other"],
+        null,
+        null,
+        null,
+      ])
+    );
+    // A stored screen mode no longer reaches a launch, so it is no part of one.
+    const withLegacyMode = { ...preset, inlineMode: "off" } as AgentPreset;
+    expect(presetLaunchContent(withLegacyMode)).toBe(presetLaunchContent(preset));
   });
 });
 
