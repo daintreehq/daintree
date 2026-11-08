@@ -54,6 +54,14 @@ import {
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { pluralize } from "@/lib/pluralize";
+import type { EnvVarDraft } from "@/components/Settings/EnvVarRow";
+import { RecipeStepEnvironment } from "./RecipeStepEnvironment";
+import {
+  draftsToEnv,
+  envToDrafts,
+  serializeEnvDrafts,
+  validateRecipeEnvRows,
+} from "./recipeStepEnv";
 
 const RECIPE_VARIABLES = getAvailableVariables();
 
@@ -84,9 +92,15 @@ const WHEN_DONE_OPTIONS: ReadonlyArray<[RecipeWhenDone | "keep", string]> = [
   ["close", "Close, keeping the session"],
 ];
 
+/**
+ * `envRows` lines up with `terminals`: a step's variables are edited as rows,
+ * which can hold a name the save would refuse, so they and not `t.env` are what
+ * the dirty check reads.
+ */
 function serializeEditorState(
   name: string,
   terminals: RecipeTerminal[],
+  envRows: ReadonlyArray<readonly EnvVarDraft[]>,
   showInEmptyState: boolean,
   autoAssign: "always" | "never" | "prompt"
 ): string {
@@ -94,7 +108,7 @@ function serializeEditorState(
     name,
     showInEmptyState,
     autoAssign,
-    terminals: terminals.map((t) => ({
+    terminals: terminals.map((t, i) => ({
       type: t.type,
       title: t.title ?? "",
       command: t.command ?? "",
@@ -103,7 +117,7 @@ function serializeEditorState(
       devCommand: t.devCommand ?? "",
       exitBehavior: normalizeExitBehavior(t),
       whenDone: normalizeWhenDone(t),
-      env: Object.fromEntries(Object.entries(t.env ?? {}).sort(([a], [b]) => a.localeCompare(b))),
+      env: serializeEnvDrafts(envRows[i] ?? []),
     })),
   });
 }
@@ -276,6 +290,11 @@ export function RecipeEditor({
   const typeStashRef = useRef(new Map<number, TypeStash>());
   // Per card, an unoffered captured type the step has switched away from.
   const [leftTypes, setLeftTypes] = useState<Record<number, RecipeTerminalType>>({});
+  // Per card, the step's variables as editable rows; `env` is built from them
+  // on save. Keyed by card, so a type switch or a removed card above keeps them.
+  const [envDrafts, setEnvDrafts] = useState<Record<number, EnvVarDraft[]>>({});
+  // Set by a save refused over a variable; from then each row is judged live.
+  const [envAttempted, setEnvAttempted] = useState(false);
   // Where focus goes once an add or remove has rendered.
   const pendingFocusIdRef = useRef<string | null>(null);
   const initialStateRef = useRef<string>("");
@@ -309,52 +328,82 @@ export function RecipeEditor({
     if (!isOpen) return;
     typeStashRef.current.clear();
     setLeftTypes({});
+    // Fresh card keys for the steps being loaded, each with its rows; returns
+    // the rows in step order for the baseline the dirty check compares against.
+    const seedEnvDrafts = (steps: RecipeTerminal[]) => {
+      const keys = freshCardKeys(steps.length);
+      const rows = steps.map((step) => envToDrafts(step.env));
+      setCardKeys(keys);
+      setEnvDrafts(Object.fromEntries(keys.map((key, i) => [key, rows[i]!])));
+      return rows;
+    };
     if (recipe) {
       const nextTerminals = recipe.terminals.map(cloneTerminal);
       const nextShowInEmptyState = recipe.showInEmptyState ?? false;
       const nextAutoAssign = recipe.autoAssign ?? "always";
+      const nextEnvRows = seedEnvDrafts(nextTerminals);
       setRecipeName(recipe.name);
       setTerminals(nextTerminals);
-      setCardKeys(freshCardKeys(nextTerminals.length));
       setShowInEmptyState(nextShowInEmptyState);
       setAutoAssign(nextAutoAssign);
       setScope(isInRepoRecipeId(recipe) || recipe.projectId !== undefined ? "project" : "global");
       initialStateRef.current = serializeEditorState(
         recipe.name,
         nextTerminals,
+        nextEnvRows,
         nextShowInEmptyState,
         nextAutoAssign
       );
     } else if (initialTerminals && initialTerminals.length > 0) {
       const nextTerminals = initialTerminals.map(cloneTerminal);
+      const nextEnvRows = seedEnvDrafts(nextTerminals);
       setRecipeName("");
       setTerminals(nextTerminals);
-      setCardKeys(freshCardKeys(nextTerminals.length));
       setShowInEmptyState(false);
       setAutoAssign("always");
       setScope(newRecipeScope);
-      initialStateRef.current = serializeEditorState("", nextTerminals, false, "always");
+      initialStateRef.current = serializeEditorState(
+        "",
+        nextTerminals,
+        nextEnvRows,
+        false,
+        "always"
+      );
     } else {
       const nextTerminals: RecipeTerminal[] = [
         { type: "terminal", title: "", command: "", env: {} },
       ];
+      const nextEnvRows = seedEnvDrafts(nextTerminals);
       setRecipeName("");
       setTerminals(nextTerminals);
-      setCardKeys(freshCardKeys(nextTerminals.length));
       setShowInEmptyState(false);
       setAutoAssign("always");
       setScope(newRecipeScope);
-      initialStateRef.current = serializeEditorState("", nextTerminals, false, "always");
+      initialStateRef.current = serializeEditorState(
+        "",
+        nextTerminals,
+        nextEnvRows,
+        false,
+        "always"
+      );
     }
     setError(null);
     setNameAttempted(false);
+    setEnvAttempted(false);
   }, [recipe, initialTerminals, newRecipeScope, isOpen]);
+
+  // Lines up with `terminals`, as `cardKeys` does.
+  const envRows = useMemo(() => cardKeys.map((key) => envDrafts[key] ?? []), [cardKeys, envDrafts]);
+  const envErrors = useMemo(
+    () => (envAttempted ? envRows.map(validateRecipeEnvRows) : []),
+    [envAttempted, envRows]
+  );
 
   const isDirty = useMemo(
     () =>
-      serializeEditorState(recipeName, terminals, showInEmptyState, autoAssign) !==
+      serializeEditorState(recipeName, terminals, envRows, showInEmptyState, autoAssign) !==
       initialStateRef.current,
-    [recipeName, terminals, showInEmptyState, autoAssign]
+    [recipeName, terminals, envRows, showInEmptyState, autoAssign]
   );
 
   const { onBeforeClose, isConfirmOpen, closeConfirm } = useUnsavedChanges({ isDirty });
@@ -386,7 +435,14 @@ export function RecipeEditor({
     }
     setTerminals(terminals.filter((_, i) => i !== index));
     const removedKey = cardKeys[index];
-    if (removedKey !== undefined) typeStashRef.current.delete(removedKey);
+    if (removedKey !== undefined) {
+      typeStashRef.current.delete(removedKey);
+      setEnvDrafts((prev) => {
+        const next = { ...prev };
+        delete next[removedKey];
+        return next;
+      });
+    }
     setCardKeys(cardKeys.filter((_, i) => i !== index));
     // The card that slid into this slot, or the new last one.
     pendingFocusIdRef.current = `terminal-type-${Math.min(index, terminals.length - 2)}`;
@@ -462,13 +518,37 @@ export function RecipeEditor({
       return;
     }
 
+    const firstEnvError = envRows
+      .flatMap((rows) => {
+        const errors = validateRecipeEnvRows(rows);
+        return rows.flatMap((row) => {
+          const error = errors[row.id];
+          return error ? [{ rowId: row.id, field: error.field }] : [];
+        });
+      })
+      .at(0);
+    if (firstEnvError) {
+      useAnnouncerStore.getState().announce("Fix the variables to save the recipe", "assertive");
+      setEnvAttempted(true);
+      // The row's inputs are the name, then the value.
+      document
+        .getElementById(firstEnvError.rowId)
+        ?.querySelectorAll("input")
+        [firstEnvError.field === "value" ? 1 : 0]?.focus();
+      return;
+    }
+    const savedTerminals = terminals.map((terminal, i) => ({
+      ...terminal,
+      env: draftsToEnv(envRows[i] ?? []),
+    }));
+
     setIsSaving(true);
 
     try {
       if (recipe) {
         const result = await updateRecipe(recipe.id, {
           name: recipeName,
-          terminals,
+          terminals: savedTerminals,
           showInEmptyState,
           autoAssign,
         });
@@ -491,7 +571,7 @@ export function RecipeEditor({
           targetProjectId,
           recipeName,
           isGlobal ? undefined : worktreeId,
-          terminals,
+          savedTerminals,
           showInEmptyState,
           autoAssign
         );
@@ -499,13 +579,13 @@ export function RecipeEditor({
 
       if (onSave) {
         const savedRecipe: TerminalRecipe = recipe
-          ? { ...recipe, name: recipeName, terminals }
+          ? { ...recipe, name: recipeName, terminals: savedTerminals }
           : {
               id: `recipe-${crypto.randomUUID()}`,
               name: recipeName,
               projectId: scope === "global" ? undefined : currentProject!.id,
               worktreeId: scope === "global" ? undefined : worktreeId,
-              terminals,
+              terminals: savedTerminals,
               createdAt: Date.now(),
             };
         onSave(savedRecipe);
@@ -520,6 +600,10 @@ export function RecipeEditor({
   };
 
   const recipeDisplayName = (recipe?.name ?? recipeName).trim();
+
+  // A team recipe's file keeps variable names only, so its values are this
+  // machine's alone; a new recipe is a team one when saved to the project.
+  const envValuesStayLocal = recipe ? getRecipeScope(recipe).label === "Team" : scope === "project";
 
   // Describes the capture the draft started from, so it stays put while steps
   // are edited or removed.
@@ -971,6 +1055,29 @@ export function RecipeEditor({
                           {exitBehaviorRow(index, terminal, "terminal-dev-exit-behavior", "trash")}
                         </>
                       )}
+
+                      <FormRow
+                        label="Environment"
+                        labelClassName="self-start pt-2"
+                        hint={hint(
+                          `terminal-env-help-${index}`,
+                          envValuesStayLocal
+                            ? "Names are saved to the repository; values stay on this machine"
+                            : "Set for this terminal when the recipe runs"
+                        )}
+                      >
+                        <RecipeStepEnvironment
+                          step={index + 1}
+                          rows={envRows[index] ?? []}
+                          errors={envErrors[index] ?? {}}
+                          valuesStayLocal={envValuesStayLocal}
+                          disabled={isSaving}
+                          onChange={(rows) => {
+                            if (cardKey === undefined) return;
+                            setEnvDrafts((prev) => ({ ...prev, [cardKey]: rows }));
+                          }}
+                        />
+                      </FormRow>
                     </div>
                   );
                 })}
