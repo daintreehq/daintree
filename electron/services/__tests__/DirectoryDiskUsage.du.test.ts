@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -18,6 +19,9 @@ vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 vi.mock("node:fs/promises", () => ({ default: fsMock, ...fsMock }));
 
 import { measureDirectorySize } from "../DirectoryDiskUsage.js";
+
+// What the measurer resolves "/repo" to on this machine (a drive path on Windows).
+const ROOT = path.resolve("/repo");
 
 class FakeChild extends EventEmitter {
   readonly stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
@@ -56,7 +60,7 @@ describe("measureDirectorySize — the walk", () => {
     let releaseSlow: (() => void) | null = null;
     fsMock.readdir.mockImplementation(async () => [{ name: "denied" }, { name: "slow" }] as never);
     fsMock.lstat.mockImplementation(async (target: unknown, options?: unknown) => {
-      if (target === "/repo" && options === undefined) return { isDirectory: () => true };
+      if (target === ROOT && options === undefined) return { isDirectory: () => true };
       if (String(target).endsWith("denied")) {
         throw Object.assign(new Error("EACCES"), { code: "EACCES" });
       }
@@ -67,7 +71,7 @@ describe("measureDirectorySize — the walk", () => {
     });
 
     let settled = false;
-    const pending = measureDirectorySize("/repo", { platform: "win32" }).then((value) => {
+    const pending = measureDirectorySize(ROOT, { platform: "win32" }).then((value) => {
       settled = true;
       return value;
     });
@@ -93,14 +97,14 @@ describe("measureDirectorySize — du outcomes", () => {
 
   it("runs one du over the root with a grand total, in the C locale, without following symlinks", async () => {
     script({ code: 0, stdout: "8\t/repo\n8\ttotal\n" });
-    expect(await measureDirectorySize("/repo", { platform: "linux" })).toBe(8 * 1024);
+    expect(await measureDirectorySize(ROOT, { platform: "linux" })).toBe(8 * 1024);
     const [file, args, opts] = spawnMock.mock.calls[0] as [
       string,
       string[],
       { env: NodeJS.ProcessEnv },
     ];
     expect(file).toBe("du");
-    expect(args).toEqual(["-skc", "--", "/repo"]);
+    expect(args).toEqual(["-skc", "--", ROOT]);
     expect(args.some((arg) => /^-[a-zA-Z]*[LH]/.test(arg))).toBe(false);
     expect(opts.env.LC_ALL).toBe("C");
   });
@@ -108,7 +112,7 @@ describe("measureDirectorySize — du outcomes", () => {
   it("reads only the closing total, however long the per-operand output", async () => {
     const perOperand = Array.from({ length: 2_000 }, (_, i) => `1\t/repo/f${i}\n`).join("");
     script({ code: 0, stdout: `${perOperand}2000\ttotal\n` });
-    expect(await measureDirectorySize("/repo", { platform: "linux" })).toBe(2000 * 1024);
+    expect(await measureDirectorySize(ROOT, { platform: "linux" })).toBe(2000 * 1024);
   });
 
   it("retries a du that skipped something, and takes the clean second run", async () => {
@@ -116,7 +120,7 @@ describe("measureDirectorySize — du outcomes", () => {
       { code: 1, stdout: "8\t/repo\n8\ttotal\n" },
       { code: 0, stdout: "6\t/repo\n6\ttotal\n" }
     );
-    expect(await measureDirectorySize("/repo", { platform: "linux" })).toBe(6 * 1024);
+    expect(await measureDirectorySize(ROOT, { platform: "linux" })).toBe(6 * 1024);
     expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
@@ -125,13 +129,13 @@ describe("measureDirectorySize — du outcomes", () => {
       { code: 1, stdout: "8\t/repo\n8\ttotal\n" },
       { code: 1, stdout: "8\t/repo\n8\ttotal\n" }
     );
-    expect(await measureDirectorySize("/repo", { platform: "linux" })).toBeNull();
+    expect(await measureDirectorySize(ROOT, { platform: "linux" })).toBeNull();
     expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
   it("answers null when du prints no total", async () => {
     script({ code: 0, stdout: "8\t/repo\n" }, { code: 0, stdout: "" });
-    expect(await measureDirectorySize("/repo", { platform: "linux" })).toBeNull();
+    expect(await measureDirectorySize(ROOT, { platform: "linux" })).toBeNull();
   });
 
   it("answers null when du can't be started", async () => {
@@ -140,14 +144,14 @@ describe("measureDirectorySize — du outcomes", () => {
       queueMicrotask(() => child.emit("error", new Error("spawn du ENOENT")));
       return child;
     });
-    expect(await measureDirectorySize("/repo", { platform: "linux" })).toBeNull();
+    expect(await measureDirectorySize(ROOT, { platform: "linux" })).toBeNull();
   });
 
   it("kills du outright on abort and settles only once it has exited", async () => {
     const children = script();
     const controller = new AbortController();
     let settled = false;
-    const pending = measureDirectorySize("/repo", {
+    const pending = measureDirectorySize(ROOT, {
       platform: "linux",
       signal: controller.signal,
     }).then((value) => {
