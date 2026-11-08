@@ -183,17 +183,24 @@ export function runAction(
           explanation: `${agentName} didn't report a session for this run, so there's no conversation to reopen`,
         };
   }
-  if (
-    resume.worktreeId !== null &&
-    context.worktreeIds !== null &&
-    !context.worktreeIds.has(resume.worktreeId)
-  ) {
-    return {
-      kind: "none",
-      label: "Worktree removed",
-      explanation:
-        "The worktree this run worked in has been removed, so its conversation can't be reopened there",
-    };
+  if (resume.worktreeId !== null) {
+    // Resume lands in the run's worktree and does nothing when it's gone, so it's
+    // offered only once the worktrees say it's there.
+    if (context.worktreeIds === null) {
+      return {
+        kind: "none",
+        label: null,
+        explanation: "Reopening waits until the project's worktrees have loaded",
+      };
+    }
+    if (!context.worktreeIds.has(resume.worktreeId)) {
+      return {
+        kind: "none",
+        label: "Worktree removed",
+        explanation:
+          "The worktree this run worked in has been removed, so its conversation can't be reopened there",
+      };
+    }
   }
   const resumable =
     buildResumeCommand(resume.agentId, resume.agentSessionId, resume.agentLaunchFlags) ??

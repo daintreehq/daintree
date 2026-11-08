@@ -27,8 +27,9 @@ export function useWorktreeChoices() {
     [choices]
   );
   // Null until the project's worktrees are known, as a landing judges it
-  // (`knowsWorktrees`): the main checkout is always listed, so an empty list only
-  // says the host hasn't reported, and a reconnecting one may be out of date.
+  // (`knowsWorktrees`): a git project always lists its main checkout, so an empty
+  // list only says the host hasn't reported (a folder that isn't one has no
+  // worktree for a run to name), and a reconnecting one may be out of date.
   const known = isInitialized && !isLoading && !isReconnecting && error === null;
   const ids = useMemo(
     () =>

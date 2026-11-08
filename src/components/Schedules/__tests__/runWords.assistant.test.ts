@@ -130,11 +130,21 @@ describe("runAction: a run in its own new worktree (#16369)", () => {
     });
   });
 
-  it("can't tell a worktree is gone before the project's worktrees have loaded", () => {
-    expect(runAction(run({}), { terminalExists: false, worktreeIds: null })).toEqual({
-      kind: "resume",
-      sessionId: resume.agentSessionId,
+  it("holds Resume back for a recorded worktree until the project's worktrees are known", () => {
+    // Resume into a worktree that turns out to be gone does nothing, and nothing says it's gone yet.
+    expect(runAction(run({}), { terminalExists: false, worktreeIds: null })).toMatchObject({
+      kind: "none",
+      label: null,
     });
+    expect(runAction(run({}), { terminalExists: true, worktreeIds: null })).toEqual({
+      kind: "open",
+    });
+    expect(
+      runAction(run({ resume: { ...resume, worktreeId: null } }), {
+        terminalExists: false,
+        worktreeIds: null,
+      })
+    ).toEqual({ kind: "resume", sessionId: resume.agentSessionId });
   });
 
   it("offers no conversation for a run refused with its worktree left standing", () => {
@@ -169,12 +179,26 @@ describe("runWorktreeNote (#16406)", () => {
     });
   });
 
-  it("says it's gone once the worktrees are known and it isn't among them, with or without a session", () => {
-    expect(runWorktreeNote(run({}), new Set(["/wt/other"]))).toEqual({
+  it.each([
+    ["with a session to resume", true],
+    ["with none saved", false],
+  ])("says it's gone once the worktrees are known and it isn't among them, %s", (_name, saved) => {
+    const resume = {
+      agentId: "claude",
+      agentSessionId: saved ? "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1" : null,
+      cwd: "/wt/new",
+      worktreeId: "/wt/new",
+      agentLaunchFlags: [],
+      agentModelId: null,
+      agentPresetId: null,
+    };
+    expect(runWorktreeNote(run({ resume }), new Set(["/wt/other"]))).toEqual({
       branch: "schedule-x",
       removed: true,
     });
-    expect(runWorktreeNote(run({}), new Set())).toMatchObject({ removed: true });
+    expect(runWorktreeNote(run({ resume }), new Set(["/wt/new"]))).toMatchObject({
+      removed: false,
+    });
   });
 
   it("claims nothing removed before the worktrees have loaded", () => {

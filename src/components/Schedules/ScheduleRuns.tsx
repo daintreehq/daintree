@@ -55,7 +55,7 @@ interface ScheduleRunsProps {
   onRetryRuns: () => void;
   /** Terminal ids that still have a pane in this view. */
   liveTerminalIds: ReadonlySet<string>;
-  /** The project's worktree ids; null until they've loaded, so nothing reads as removed meanwhile. */
+  /** The project's worktree ids; null until they're known, so nothing reads as gone (or resumes into one) meanwhile. */
   worktreeIds: ReadonlySet<string> | null;
   /** A Run now failure the history didn't record, so the page is the only place it can be said. */
   runNowError: string | null;

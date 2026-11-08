@@ -30,15 +30,17 @@ vi.mock("@/services/scheduledRunLanding", () => ({ revealRunTerminal: reveal }))
 const worktreeList = vi.hoisted(() => ({
   current: [] as Array<{ id: string; path: string; name: string; isMainWorktree: boolean }>,
   initialized: true,
+  loading: false,
   reconnecting: false,
+  error: null as string | null,
 }));
 vi.mock("@/hooks/useWorktrees", () => ({
   useWorktrees: () => ({
     worktrees: worktreeList.current,
     isInitialized: worktreeList.initialized,
-    isLoading: false,
+    isLoading: worktreeList.loading,
     isReconnecting: worktreeList.reconnecting,
-    error: null,
+    error: worktreeList.error,
   }),
 }));
 const resumeSession = vi.hoisted(() => vi.fn());
@@ -438,7 +440,9 @@ describe("ProjectSchedulesTab — a run in its own new worktree (#16369)", () =>
   afterEach(() => {
     worktreeList.current = [];
     worktreeList.initialized = true;
+    worktreeList.loading = false;
     worktreeList.reconnecting = false;
+    worktreeList.error = null;
     resumeSession.mockReset();
     client.listScheduleRuns.mockReset();
     client.listScheduleRuns.mockImplementation(async () => []);
@@ -508,8 +512,10 @@ describe("ProjectSchedulesTab — a run in its own new worktree (#16369)", () =>
   it.each([
     ["before the project's worktrees have loaded", () => (worktreeList.initialized = false)],
     ["while the host is empty-handed", () => (worktreeList.current = [])],
+    ["while they load", () => (worktreeList.loading = true)],
     ["while the host reconnects", () => (worktreeList.reconnecting = true)],
-  ])("claims no worktree gone %s", async (_when, setUp) => {
+    ["after the host reported an error", () => (worktreeList.error = "The host stopped")],
+  ])("claims no worktree gone, nor offers to resume into one, %s", async (_when, setUp) => {
     setUp();
     client.list.mockResolvedValue(snapshot([NIGHTLY]));
     client.listScheduleRuns.mockResolvedValue([runAt(RUN_WORKTREE)]);
@@ -520,6 +526,57 @@ describe("ProjectSchedulesTab — a run in its own new worktree (#16369)", () =>
     expect(screen.getByText(/In worktree/)).toBeTruthy();
     expect(screen.queryByText(/no longer exists/)).toBeNull();
     expect(screen.queryByText("Worktree removed")).toBeNull();
+    // A Resume into a worktree that is gone does nothing, so none is offered until it's known.
+    expect(screen.queryByRole("button", { name: /Resume run from/ })).toBeNull();
+  });
+
+  it("judges the worktree once the list is known, without the history being reopened", async () => {
+    worktreeList.initialized = false;
+    client.list.mockResolvedValue(snapshot([NIGHTLY]));
+    client.listScheduleRuns.mockResolvedValue([runAt(RUN_WORKTREE)]);
+    const { update } = renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+    expect(await screen.findByText(/In worktree/)).toBeTruthy();
+
+    // The same list object, now reported: only the readiness changed.
+    worktreeList.initialized = true;
+    update({});
+
+    expect(await screen.findByText(/no longer exists/)).toBeTruthy();
+    expect(screen.queryByText(/In worktree/)).toBeNull();
+  });
+
+  it("names the worktree of a run that was refused after it was made", async () => {
+    const refused = (): Partial<ScheduledRun> => ({
+      terminalId: null,
+      terminalSpawnedAt: null,
+      resume: null,
+      process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
+      settlement: {
+        state: "settled",
+        settledAt: NOW - 100,
+        outcome: "failed",
+        evidence: { kind: "launch-error", message: "The new worktree's setup failed" },
+      },
+    });
+    worktreeList.current = [
+      { id: "/repo", path: "/repo", name: "repo", isMainWorktree: true },
+      { id: RUN_WORKTREE, path: RUN_WORKTREE, name: "run", isMainWorktree: false },
+    ];
+    client.list.mockResolvedValue(snapshot([NIGHTLY]));
+    client.listScheduleRuns.mockResolvedValue([runAt(RUN_WORKTREE, refused())]);
+    const { unmount } = renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+    expect(await screen.findByText("The new worktree's setup failed")).toBeTruthy();
+    expect(screen.getByText(/In worktree/)).toBeTruthy();
+    unmount();
+
+    // Left standing and later deleted, the row says so, and still offers nothing to reopen.
+    worktreeList.current = [{ id: "/repo", path: "/repo", name: "repo", isMainWorktree: true }];
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+    expect(await screen.findByText(/no longer exists/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Open run from|Resume run from/ })).toBeNull();
   });
 
   it("names no branch on a run whose worktree was never made", async () => {
