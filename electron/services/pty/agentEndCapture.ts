@@ -5,7 +5,11 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../utils/logger.js";
 import { events } from "../events.js";
 import { resolveCaptureBranch, trackAgentSessionCapture } from "./agentSessionCaptureDelivery.js";
-import { createSessionIdMatcher, tailMatchesPattern } from "./sessionIdCapture.js";
+import {
+  createSessionIdMatcher,
+  tailMatchesPattern,
+  type SessionIdMatch,
+} from "./sessionIdCapture.js";
 import type { TerminalInfo } from "./types.js";
 import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
 
@@ -61,6 +65,7 @@ type AgentEndBoundary = "exit" | "demotion";
 type AgentEndCaptureOutcome =
   | "captured"
   | "preassigned"
+  | "switched"
   | "assistant"
   | "no-resume-config"
   | "no-pattern"
@@ -128,7 +133,11 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): AgentEndObser
       agentId,
       boundary,
       outcome,
-      captured: outcome === "captured" || outcome === "preassigned" || outcome === "launch-id",
+      captured:
+        outcome === "captured" ||
+        outcome === "preassigned" ||
+        outcome === "switched" ||
+        outcome === "launch-id",
       selfUpdateSucceeded,
       resumeRefused,
     });
@@ -147,35 +156,50 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): AgentEndObser
     return observe(false);
   }
 
-  // The id was chosen at launch, so there is nothing to scrape and no
-  // false-positive risk (#11782). It still has to belong to THIS agent: a pane
-  // that launched one agent and now hosts another carries an id from the
-  // previous conversation, and filing it under the wrong agent would resume the
-  // wrong thing.
+  const matcher = createSessionIdMatcher(resume.sessionIdPattern);
+  const match: SessionIdMatch = matcher
+    ? matcher(recentOutput, {
+        occurrence: "last",
+        // An exited PTY can deliver nothing further, so its end-of-output is a
+        // real token boundary. A demoted pane is still live and still writing.
+        boundary: boundary === "exit" ? "eof" : "stream",
+        tailLines: CAPTURE_SCAN_LINES,
+        tailChars: CAPTURE_SCAN_CHARS,
+      })
+    : { kind: "none" };
+
+  // The id was chosen at launch (#11782), so it needs no scrape. It still has
+  // to belong to THIS agent: a pane that launched one agent and now hosts
+  // another carries an id from the previous conversation, and filing it under
+  // the wrong agent would resume the wrong thing.
   if (
     terminal.agentSessionId &&
     agentId === terminal.launchAgentId &&
     supportsSessionIdAssignment(agentId)
   ) {
+    // Choosing the id doesn't pin the conversation: Claude Code's `/resume`
+    // and `/clear` move the run to another session without touching argv, and
+    // the farewell names the one it ended in (#16377). Only a complete
+    // farewell naming another id overrides the assigned one.
+    if (match.kind === "match" && match.sessionId !== terminal.agentSessionId) {
+      // The host's copy is what a renderer reload and a later close read, so
+      // it follows the launched run to where it ended. A later run in the same
+      // shell is another conversation, not this pane's.
+      if (launchedRun) terminal.agentSessionId = match.sessionId;
+      emitCapture(args, match.sessionId);
+      logOutcome("switched");
+      return observe(true);
+    }
     emitCapture(args, terminal.agentSessionId);
     logOutcome("preassigned");
     return observe(true);
   }
 
-  const matcher = createSessionIdMatcher(resume.sessionIdPattern);
   if (!matcher) {
     logOutcome("no-pattern");
     return observe(false);
   }
 
-  const match = matcher(recentOutput, {
-    occurrence: "last",
-    // An exited PTY can deliver nothing further, so its end-of-output is a real
-    // token boundary. A demoted pane is still live and still writing.
-    boundary: boundary === "exit" ? "eof" : "stream",
-    tailLines: CAPTURE_SCAN_LINES,
-    tailChars: CAPTURE_SCAN_CHARS,
-  });
   if (match.kind !== "match") {
     // No farewell, but the launched run was opened on a known conversation —
     // a restored `codex resume <id>` that exited at its updater, say. Journal
