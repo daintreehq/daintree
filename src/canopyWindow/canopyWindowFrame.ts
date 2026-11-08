@@ -68,4 +68,6 @@ export const CANOPY_WINDOW_FRAME = standaloneCanopyFrame({
     });
   },
   openAssistant: async () => "Open this assistant from its project's Assistant panel.",
+  // Open all day beside the agents' own panes: a row left selected moves no PTY.
+  takesTerminalSize: "on-use",
 });

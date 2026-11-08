@@ -308,6 +308,9 @@ export function CanopyCard({
     ended: false,
     secretPrompt: false,
   });
+  // What the user sent the run from here: each takes the size where only use does.
+  const [uses, setUses] = useState(0);
+  const countUse = () => setUses((count) => count + 1);
   const composerRef = useRef<HybridInputBarHandle>(null);
   // The pane the keyboard is in lifts its title bar, as a focused grid pane does.
   const [focused, setFocused] = useState(false);
@@ -493,6 +496,7 @@ export function CanopyCard({
       return;
     }
     setAnswerArmed(null);
+    countUse();
     onAnswer(item, label);
   };
 
@@ -752,6 +756,7 @@ export function CanopyCard({
   ): Promise<boolean> => {
     const watchId = stream.watchId;
     if (watchId === null && mountedRef.current) return false;
+    countUse();
     const images = imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined;
     try {
       if (mountedRef.current && watchId !== null) {
@@ -776,6 +781,7 @@ export function CanopyCard({
     }
     const watchId = stream.watchId;
     if (watchId === null) return;
+    countUse();
     terminalApi.terminalSendKey(watchId, key).then(
       // Only Enter answers anything; arrows and Escape steer the agent's own
       // menu and are not a reply.
@@ -1081,6 +1087,8 @@ export function CanopyCard({
           reconnecting={reconnecting}
           onStreamChange={setStream}
           onSubmitted={() => onSent(item)}
+          sizesOnUse={frame.takesTerminalSize === "on-use"}
+          uses={uses}
           {...(canGoTo
             ? {
                 onGoTo: (event: MouseEvent<HTMLButtonElement>) =>

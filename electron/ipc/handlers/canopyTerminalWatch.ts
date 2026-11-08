@@ -170,6 +170,8 @@ function stopViewWatches(webContentsId: number): void {
  * One surface owns the size at a time, and only the user moves it: the
  * interaction that hands it over is what `yieldSizeToPane` and
  * `claimWatchedSize` hear. Until then every other view follows the PTY's grid.
+ * A view that `followsUntilUsed` starts out following, so selecting a run
+ * there moves nothing until the user works in its panel (#16339).
  */
 export async function watchTerminal(
   ptyClient: PtyClient,
@@ -185,7 +187,12 @@ export async function watchTerminal(
   mayResize: () => boolean = () => true,
   binding: AssistantWatchBinding | null = null,
   remote = false,
-  slot: CanopyWatchSlot = "detail"
+  slot: CanopyWatchSlot = "detail",
+  /**
+   * The view takes no size by being shown the run: a window left open all day
+   * would otherwise size the agent for as long as the row stays selected.
+   */
+  followsUntilUsed = false
 ): Promise<CanopyTerminalView> {
   const key = watchKey(sender.id, slot);
   stopWatch(key);
@@ -276,7 +283,8 @@ export async function watchTerminal(
     heldSize: null,
     pendingHolds: [],
     appliedSize: null,
-    following: false,
+    // Another machine's hold answers to the drive lease alone, and never follows.
+    following: followsUntilUsed && !remote,
     // Bound now, not at the first resize echo: a restart before any echo would
     // otherwise hand the successor's generation to this stream.
     launchGeneration,
@@ -384,6 +392,9 @@ export async function watchTerminal(
   if (watch.following) watch.announceGrid();
   return {
     watchId,
+    // In the answer too, so the panel never measures for a size it won't get
+    // while that message is still on its way.
+    ...(watch.following ? { following: true } : {}),
     snapshot: snapshot
       ? {
           data: snapshot.data,
