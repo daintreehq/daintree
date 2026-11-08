@@ -212,10 +212,11 @@ describe("JiraSettingsTab", () => {
     expect(stored).toEqual({ siteUrl: "https://old.atlassian.net", email: "old@example.com" });
   });
 
-  it("doesn't undo another window's save while putting things back", async () => {
+  it("leaves the connection to another window that saved in the meantime", async () => {
     stored.siteUrl = "https://old.atlassian.net";
     stored.email = "old@example.com";
     setCredential.mockImplementationOnce(async () => {
+      stored.siteUrl = "https://new.atlassian.net";
       stored.email = "other-window@example.com";
       return { valid: false, error: "Jira rejected the token" };
     });
@@ -226,7 +227,7 @@ describe("JiraSettingsTab", () => {
 
     await screen.findAllByText("Jira rejected the token");
     expect(stored).toEqual({
-      siteUrl: "https://old.atlassian.net",
+      siteUrl: "https://new.atlassian.net",
       email: "other-window@example.com",
     });
   });

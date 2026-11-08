@@ -258,6 +258,20 @@ describe("jiraRequest", () => {
       await expect(jiraRequest(OTHER, "/myself")).resolves.toEqual({ accountId: "abc" });
     });
 
+    it("doesn't come back from a response landing after a clear", async () => {
+      let respond: (response: Response) => void = () => undefined;
+      fetchMock.mockImplementationOnce(() => new Promise((resolve) => (respond = resolve)));
+      const pending = jiraRequest(CONNECTION, "/myself").catch(() => undefined);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+      clearJiraCooldown();
+      respond(json({}, { status: 401 }));
+      await pending;
+
+      fetchMock.mockImplementationOnce(async () => json({ accountId: "abc" }));
+      await expect(jiraRequest(CONNECTION, "/myself")).resolves.toEqual({ accountId: "abc" });
+    });
+
     it("doesn't start for ordinary failures", async () => {
       fetchMock.mockImplementation(async () => json({}, { status: 500 }));
       await failure();

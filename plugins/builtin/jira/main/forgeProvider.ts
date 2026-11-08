@@ -22,7 +22,7 @@ import {
   type JiraConnection,
 } from "./JiraClient.js";
 import { buildIssueJql, issueFilterJql, issueKeyInSearch, textSearchClause } from "./jql.js";
-import { ISSUE_FIELDS, mapIssue, type JiraIssueNode } from "./mappers.js";
+import { ISSUE_FIELDS, issueNumberOf, mapIssue, type JiraIssueNode } from "./mappers.js";
 
 const DEFAULT_PAGE_SIZE = 50;
 /** Jira caps a search that returns fields at 100 per page, whatever is asked for. */
@@ -206,7 +206,8 @@ const repoStatsCapability: RepoStatsCapability = {
       statsCache.clear();
       statsCacheScope = op.scope;
     }
-    const key = repo.repo;
+    // Qualified anyway: a count landing after a switch mustn't pass for the new one's.
+    const key = `${op.scope}\u0000${repo.repo}`;
     const now = Date.now();
     const cached = statsCache.get(key);
     if (!opts?.bypassCache && cached && now - cached.at < STATS_CACHE_TTL_MS) {
@@ -285,8 +286,16 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
       namedKey ? fetchIssue(namedKey, op) : null,
       searchIssues(jql, opts, op),
     ]);
-    // A moved issue answers to its old key under its new one, and isn't this project's.
-    if (!named || named.key !== namedKey || !matchesState(named, opts.state)) return page;
+    // A moved issue answers to its old key with a new number, and isn't this
+    // project's. A renamed project keeps the number.
+    if (
+      !named ||
+      !namedKey ||
+      named.number !== issueNumberOf(namedKey) ||
+      !matchesState(named, opts.state)
+    ) {
+      return page;
+    }
     return { ...page, items: [named, ...page.items.filter((item) => item.id !== named.id)] };
   },
 

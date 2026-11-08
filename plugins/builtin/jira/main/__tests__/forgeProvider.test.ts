@@ -367,6 +367,15 @@ describe("listIssues", () => {
     expect(page.items).toEqual([]);
   });
 
+  it("keeps an issue whose project was renamed", async () => {
+    route({
+      "/issue/ENG-12": () => json(node("OPS-12")),
+      "/search/jql": () => json({ issues: [], isLast: true }),
+    });
+    const page = await jiraForgeProvider.listIssues(REPO, { search: "ENG-12" });
+    expect(page.items.map((issue) => issue.key)).toEqual(["OPS-12"]);
+  });
+
   it("holds a named issue to the requested state", async () => {
     route({
       "/issue/ENG-12": () => json(node("ENG-12", DONE)),
@@ -539,6 +548,24 @@ describe("repoStats", () => {
     await expect(jiraForgeProvider.repoStats!.getRepoStats(REPO)).resolves.toMatchObject({
       source: "network",
     });
+  });
+
+  it("doesn't let a count landing after a switch pass for the new connection's", async () => {
+    let respond: (response: Response) => void = () => undefined;
+    fetchMock.mockImplementationOnce(() => new Promise((resolve) => (respond = resolve)));
+    const stale = jiraForgeProvider.repoStats!.getRepoStats(REPO);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    settings = { siteUrl: "https://other.atlassian.net", email: "ada@example.com" };
+    fetchMock.mockImplementation(async () => json({ count: 2 }));
+    await jiraForgeProvider.repoStats!.getRepoStats(REPO);
+
+    respond(json({ count: 99 }));
+    await stale;
+
+    const current = await jiraForgeProvider.repoStats!.getRepoStats(REPO);
+    expect(current.source).toBe("memory-cache");
+    expect(current.counts.issueCount).toBe(2);
   });
 
   it("counts each project separately", async () => {

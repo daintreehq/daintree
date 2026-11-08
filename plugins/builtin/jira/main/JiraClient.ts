@@ -57,8 +57,11 @@ export function setMemoryToken(token: string | null): void {
 let cooldown: { connectionKey: string; until: number; status: number; message: string } | null =
   null;
 
+let cooldownEpoch = 0;
+
 export function clearJiraCooldown(): void {
   cooldown = null;
+  cooldownEpoch++;
 }
 
 function connectionKeyOf(connection: JiraConnection): string {
@@ -104,6 +107,9 @@ export async function jiraRequest<T>(
   } = {}
 ): Promise<T> {
   const connectionKey = connectionKeyOf(connection);
+  const epoch = cooldownEpoch;
+  // A response landing after a clear must not put back what the clear let go of.
+  const canStartCooldown = () => !options.ignoreCooldown && epoch === cooldownEpoch;
   if (
     !options.ignoreCooldown &&
     cooldown?.connectionKey === connectionKey &&
@@ -138,7 +144,7 @@ export async function jiraRequest<T>(
     response.status === 401 ||
     FAILED_LOGIN_REASONS.some((reason) => loginReason.includes(reason))
   ) {
-    if (!options.ignoreCooldown) {
+    if (canStartCooldown()) {
       cooldown = {
         connectionKey,
         until: Date.now() + REJECTED_COOLDOWN_MS,
@@ -150,7 +156,7 @@ export async function jiraRequest<T>(
   }
   if (response.status === 429) {
     const seconds = retryAfterSeconds(response);
-    if (!options.ignoreCooldown) {
+    if (canStartCooldown()) {
       cooldown = {
         connectionKey,
         until:

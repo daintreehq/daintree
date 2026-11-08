@@ -40,6 +40,75 @@ function stringSetting(values: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+function writeSetting(key: string, value: string) {
+  return window.electron.plugin.setSettingValue(JIRA_PLUGIN_ID, key, value, "user", null);
+}
+
+/**
+ * A connection that didn't check out must not replace one that did: the saved
+ * token would go on running against settings it was never checked with. If
+ * anything this save wrote has since been overwritten, another window has saved
+ * and the whole connection is left to it. Says whether that worked.
+ */
+async function restoreConnection(
+  previous: Connection | null,
+  written: Partial<Connection>
+): Promise<boolean> {
+  if (!previous) return true;
+  try {
+    const { values } = await window.electron.plugin.getSettingValues(JIRA_PLUGIN_ID, "user", null);
+    const overwritten =
+      (written.siteUrl !== undefined &&
+        stringSetting(values, SITE_URL_SETTING) !== written.siteUrl) ||
+      (written.email !== undefined && stringSetting(values, EMAIL_SETTING) !== written.email);
+    if (overwritten) return true;
+    if (written.siteUrl !== undefined) await writeSetting(SITE_URL_SETTING, previous.siteUrl);
+    if (written.email !== undefined) await writeSetting(EMAIL_SETTING, previous.email);
+    return true;
+  } catch (err) {
+    logError("Failed to restore the Jira connection", err);
+    return false;
+  }
+}
+
+type SaveOutcome = { saved: true; account: string | null } | { saved: false; error: string };
+
+/**
+ * Check the token against these details and keep all three, or keep none. The
+ * settings go first, because the provider reads them when it checks the token.
+ */
+async function saveConnection(next: Connection, token: string): Promise<SaveOutcome> {
+  const written: Partial<Connection> = {};
+  let previous: Connection | null = null;
+  try {
+    const { values } = await window.electron.plugin.getSettingValues(JIRA_PLUGIN_ID, "user", null);
+    previous = {
+      siteUrl: stringSetting(values, SITE_URL_SETTING),
+      email: stringSetting(values, EMAIL_SETTING),
+    };
+    await writeSetting(SITE_URL_SETTING, next.siteUrl);
+    written.siteUrl = next.siteUrl;
+    await writeSetting(EMAIL_SETTING, next.email);
+    written.email = next.email;
+    const validation = await window.electron.forge.setCredential(BUILTIN_JIRA_PROVIDER_ID, {
+      token,
+    });
+    if (validation.valid) return { saved: true, account: validation.account ?? null };
+    const restored = await restoreConnection(previous, written);
+    return {
+      saved: false,
+      error: saveFailureMessage(validation.error || "Jira didn't accept these details", restored),
+    };
+  } catch (err) {
+    logError("Failed to save the Jira connection", err);
+    const restored = await restoreConnection(previous, written);
+    return {
+      saved: false,
+      error: saveFailureMessage("Couldn't save the Jira connection", restored),
+    };
+  }
+}
+
 /**
  * The connection's three values on one form. The host's generic credential form
  * can't serve this: it hands the provider only the token, so the site and email
@@ -97,36 +166,6 @@ export function JiraSettingsTab() {
     setSignedInAs(null);
   };
 
-  const writeSetting = (key: string, value: string) =>
-    window.electron.plugin.setSettingValue(JIRA_PLUGIN_ID, key, value, "user", null);
-
-  /**
-   * A connection that didn't check out must not replace one that did: the saved
-   * token would go on running against settings it was never checked with. Only
-   * what's still this save's is undone, so a save from another window survives.
-   * Says whether that worked.
-   */
-  const restoreConnection = async (previous: Connection | null, written: Connection) => {
-    if (!previous) return true;
-    try {
-      const { values } = await window.electron.plugin.getSettingValues(
-        JIRA_PLUGIN_ID,
-        "user",
-        null
-      );
-      if (stringSetting(values, SITE_URL_SETTING) === written.siteUrl) {
-        await writeSetting(SITE_URL_SETTING, previous.siteUrl);
-      }
-      if (stringSetting(values, EMAIL_SETTING) === written.email) {
-        await writeSetting(EMAIL_SETTING, previous.email);
-      }
-      return true;
-    } catch (err) {
-      logError("Failed to restore the Jira connection", err);
-      return false;
-    }
-  };
-
   const handleSave = async () => {
     if (busyRef.current) return;
     const nextSiteUrl = normalizeSiteUrl(siteUrl);
@@ -141,40 +180,19 @@ export function JiraSettingsTab() {
 
     busyRef.current = true;
     setIsSaving(true);
-    const written: Connection = { siteUrl: nextSiteUrl, email: nextEmail };
-    let previous: Connection | null = null;
-    try {
-      const snapshot = await window.electron.plugin.getSettingValues(JIRA_PLUGIN_ID, "user", null);
-      previous = {
-        siteUrl: stringSetting(snapshot.values, SITE_URL_SETTING),
-        email: stringSetting(snapshot.values, EMAIL_SETTING),
-      };
-      await writeSetting(SITE_URL_SETTING, nextSiteUrl);
-      await writeSetting(EMAIL_SETTING, nextEmail);
-      const validation = await window.electron.forge.setCredential(BUILTIN_JIRA_PROVIDER_ID, {
-        token: token.trim(),
-      });
-      if (validation.valid) {
-        setSiteUrl(nextSiteUrl);
-        setEmail(nextEmail);
-        setToken("");
-        setHasCredential(true);
-        setSignedInAs(validation.account ?? null);
-        void actionService.dispatch("worktree.refresh", undefined, { source: "user" });
-      } else {
-        const restored = await restoreConnection(previous, written);
-        setSaveError(
-          saveFailureMessage(validation.error || "Jira didn't accept these details", restored)
-        );
-      }
-    } catch (err) {
-      logError("Failed to save the Jira connection", err);
-      const restored = await restoreConnection(previous, written);
-      setSaveError(saveFailureMessage("Couldn't save the Jira connection", restored));
-    } finally {
-      busyRef.current = false;
-      setIsSaving(false);
+    const outcome = await saveConnection({ siteUrl: nextSiteUrl, email: nextEmail }, token.trim());
+    if (outcome.saved) {
+      setSiteUrl(nextSiteUrl);
+      setEmail(nextEmail);
+      setToken("");
+      setHasCredential(true);
+      setSignedInAs(outcome.account);
+      void actionService.dispatch("worktree.refresh", undefined, { source: "user" });
+    } else {
+      setSaveError(outcome.error);
     }
+    busyRef.current = false;
+    setIsSaving(false);
   };
 
   const handleClear = async () => {
@@ -190,10 +208,9 @@ export function JiraSettingsTab() {
     } catch (err) {
       logError("Failed to clear the Jira API token", err);
       setSaveError("Couldn't clear the API token");
-    } finally {
-      busyRef.current = false;
-      setIsClearing(false);
     }
+    busyRef.current = false;
+    setIsClearing(false);
   };
 
   const openTokensPage = () => {
