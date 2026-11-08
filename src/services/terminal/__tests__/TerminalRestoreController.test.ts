@@ -927,7 +927,7 @@ describe("TerminalRestoreController", () => {
       const promise = controller.fetchAndRestore("t1", { authoritative: true });
       await flushMicrotasks();
       managed.deferredOutput.push({ data: "held-output", chunkCount: 2 });
-      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(5000);
 
       expect(await promise).toBe(false);
       expect(mockTerminal.reset).not.toHaveBeenCalled();
