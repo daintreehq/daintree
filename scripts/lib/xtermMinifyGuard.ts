@@ -100,10 +100,7 @@ export function probeXtermParser(
   });
 }
 
-function describeDivergence(
-  reference: XtermProbeResult,
-  shipped: XtermProbeResult
-): string | null {
+function describeDivergence(reference: XtermProbeResult, shipped: XtermProbeResult): string | null {
   if (shipped.firstLine !== PROBE_TRAILER) {
     return `its parser stopped before the text after the queries (line 0 reads ${JSON.stringify(shipped.firstLine)})`;
   }
