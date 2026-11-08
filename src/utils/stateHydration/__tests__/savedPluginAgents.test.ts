@@ -27,7 +27,13 @@ const PI: PluginAgentContribution = {
 const OTHER: PluginAgentContribution = { ...PI, id: "other", name: "Other", command: "other" };
 
 function pane(launchAgentId?: string): TerminalState {
-  return { id: `pane-${launchAgentId}`, title: "Pane", kind: "terminal", cwd: "/repo", launchAgentId };
+  return {
+    id: `pane-${launchAgentId}`,
+    title: "Pane",
+    kind: "terminal",
+    cwd: "/repo",
+    launchAgentId,
+  };
 }
 
 /** A registry snapshot as main answers with it, without leaving it registered here. */

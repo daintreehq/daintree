@@ -621,7 +621,10 @@ function expandResumeTemplate(template: AgentResumeTemplate): AgentResume {
     kind: "session-id",
     args: (sessionId) => fillSessionIdPlaceholder(args, sessionId),
     ...(assignArgs
-      ? { assignSessionIdArgs: (sessionId: string) => fillSessionIdPlaceholder(assignArgs, sessionId) }
+      ? {
+          assignSessionIdArgs: (sessionId: string) =>
+            fillSessionIdPlaceholder(assignArgs, sessionId),
+        }
       : {}),
     ...(template.sessionIdPattern ? { sessionIdPattern: template.sessionIdPattern } : {}),
     ...(resumeLatestArgs ? { resumeLatestArgs } : {}),

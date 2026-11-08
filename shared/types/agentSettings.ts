@@ -1401,7 +1401,10 @@ export function stripConversationSelectorFlags(
  * binary is never a candidate, and a quoted prompt stays one word that no
  * selector matches.
  */
-export function stripConversationSelectorArgs(command: string, agentId: string | undefined): string {
+export function stripConversationSelectorArgs(
+  command: string,
+  agentId: string | undefined
+): string {
   const [binary, ...args] = splitShellWords(command);
   if (binary === undefined) return command;
   const kept = stripConversationSelectorFlags(args, agentId);

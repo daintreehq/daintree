@@ -50,7 +50,10 @@ function launchPane(id: string) {
 
 /** What the last save holds when the process goes away, however it went. */
 function savedSnapshot(pane: ReturnType<typeof launchPane>): Saved {
-  return { ...pane, ...serializePtyPanel(pane as Parameters<typeof serializePtyPanel>[0]) } as Saved;
+  return {
+    ...pane,
+    ...serializePtyPanel(pane as Parameters<typeof serializePtyPanel>[0]),
+  } as Saved;
 }
 
 function respawn(saved: Saved) {

@@ -161,7 +161,10 @@ import { getPanelSlotReservations } from "../slices/panelRegistry/panelSlotReser
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { RecipeImportDropsTerminalsError } from "@/utils/recipeImport";
-import { buildLaunchCommandFromFlags, stripAssignedSessionIdArgs } from "@shared/types/agentSettings";
+import {
+  buildLaunchCommandFromFlags,
+  stripAssignedSessionIdArgs,
+} from "@shared/types/agentSettings";
 import { mergeRecipes } from "@shared/utils/recipeListing";
 
 /** A host approval that genuinely covers `recipe`, as the bridge would issue it. */

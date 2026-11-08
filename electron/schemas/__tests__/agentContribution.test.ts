@@ -304,9 +304,9 @@ describe("AgentContributionSchema (issue #9560)", () => {
 
       it("refuses control characters and oversized templates like any resume arg", () => {
         expect(assigning(["--session-id\n", "{sessionId}"])).toBe(false);
-        expect(
-          assigning([...Array.from({ length: 20 }, () => "-x"), "--id", "{sessionId}"])
-        ).toBe(false);
+        expect(assigning([...Array.from({ length: 20 }, () => "-x"), "--id", "{sessionId}"])).toBe(
+          false
+        );
       });
     });
   });
