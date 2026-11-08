@@ -1223,3 +1223,141 @@ describe("a panel on this machine holding the size (#16333)", () => {
     });
   });
 });
+
+describe("a view that takes the size only once used (#16339)", () => {
+  const resizes = (pty: PtyClient) =>
+    (pty.resize as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => call.slice(1));
+
+  const echo = (emitter: EventEmitter, cols: number, rows: number) =>
+    emitter.emit("resize-result", "run-1", {
+      launchGeneration: 1,
+      requestedCols: cols,
+      requestedRows: rows,
+      appliedCols: cols,
+      appliedRows: rows,
+      outcome: "applied",
+    });
+
+  /** The Canopy window's stream: shown all day, and sized only by the user's use. */
+  function openUnused(pty: PtyClient, sender: WebContents, runId = "run-1", remote = false) {
+    return watchTerminal(
+      pty,
+      sender,
+      runId,
+      100,
+      beginWatchRequest(sender.id),
+      undefined,
+      undefined,
+      null,
+      remote,
+      "detail",
+      true
+    );
+  }
+
+  it("opens following, says so in its answer and on the stream, and holds nothing however it measures", async () => {
+    const { pty } = fakePty();
+    const { sender, sent } = fakeSender(1);
+    const heard: string[][] = [];
+    const off = onSizeHoldsChange((ids) => heard.push(ids));
+
+    const opened = await openUnused(pty, sender);
+    resizeWatchedTerminal(pty, 1, opened.watchId!, 100, 30);
+    resizeWatchedTerminal(pty, 1, opened.watchId!, 90, 28);
+
+    expect(opened.following).toBe(true);
+    expect(sent).toEqual([
+      { kind: "resize", watchId: opened.watchId, runId: "run-1", cols: 120, rows: 36, following: true },
+    ]);
+    expect(pty.resize).not.toHaveBeenCalled();
+    expect(sizeHolds()).toEqual([]);
+    expect(heard).toEqual([]);
+    off();
+  });
+
+  it("moves nothing as rows are selected, changed and cleared, or the window is put away", async () => {
+    const { pty } = fakePty();
+    const { sender } = fakeSender(1);
+    for (const runId of ["run-1", "run-1", "run-2"]) {
+      const opened = await openUnused(pty, sender, runId);
+      resizeWatchedTerminal(pty, 1, opened.watchId!, 100, 30);
+    }
+    releaseViewSizeHolds(1);
+    stopTerminalWatch(1);
+    expect(pty.resize).not.toHaveBeenCalled();
+  });
+
+  it("draws what the pane sets meanwhile, and hands that size back once used and closed", async () => {
+    const { pty, emitter } = fakePty();
+    const { sender, sent } = fakeSender(1);
+    const opened = await openUnused(pty, sender);
+    const watchId = opened.watchId!;
+    echo(emitter, 132, 40);
+    expect(sent.at(-1)).toEqual({
+      kind: "resize",
+      watchId,
+      runId: "run-1",
+      cols: 132,
+      rows: 40,
+      following: true,
+    });
+
+    claimWatchedSize(1, watchId);
+    expect(sent.at(-1)).toEqual({ kind: "resize", watchId, runId: "run-1", cols: 132, rows: 40 });
+    expect(pty.resize).not.toHaveBeenCalled();
+
+    resizeWatchedTerminal(pty, 1, watchId, 100, 30);
+    echo(emitter, 100, 30);
+    expect(resizes(pty)).toEqual([[100, 30]]);
+    expect(sizeHolds()).toEqual(["run-1"]);
+
+    vi.mocked(pty.resize).mockClear();
+    stopTerminalWatch(1);
+    expect(resizes(pty)).toEqual([[132, 40]]);
+  });
+
+  it("follows again once the agent's pane takes the size back, until used again", async () => {
+    const { pty } = fakePty();
+    const { sender } = fakeSender(1);
+    const opened = await openUnused(pty, sender);
+    claimWatchedSize(1, opened.watchId!);
+    resizeWatchedTerminal(pty, 1, opened.watchId!, 100, 30);
+    vi.mocked(pty.resize).mockClear();
+
+    yieldSizeToPane("run-1");
+    resizeWatchedTerminal(pty, 1, opened.watchId!, 100, 30);
+
+    expect(pty.resize).not.toHaveBeenCalled();
+    expect(sizeHolds()).toEqual([]);
+  });
+
+  it("takes a dialog's hold across on use, so no pane fits in between", async () => {
+    const { pty } = fakePty();
+    const dialog = fakeSender(2);
+    const held = await open(pty, dialog.sender, "run-1");
+    resizeWatchedTerminal(pty, 2, held.watchId!, 100, 30);
+    const window = fakeSender(1);
+    const opened = await openUnused(pty, window.sender);
+    resizeWatchedTerminal(pty, 1, opened.watchId!, 90, 28);
+    vi.mocked(pty.resize).mockClear();
+    const heard: string[][] = [];
+    const off = onSizeHoldsChange((ids) => heard.push(ids));
+
+    claimWatchedSize(1, opened.watchId!);
+    resizeWatchedTerminal(pty, 1, opened.watchId!, 90, 28);
+
+    expect(heard).toEqual([]);
+    expect(resizes(pty)).toEqual([[90, 28]]);
+    expect(dialog.sent.at(-1)).toMatchObject({ kind: "resize", following: true });
+    off();
+  });
+
+  it("never starts a panel from another machine following: its hold answers to the drive alone", async () => {
+    const { pty } = fakePty();
+    const { sender } = fakeSender(1);
+    const opened = await openUnused(pty, sender, "run-1", true);
+    resizeWatchedTerminal(pty, 1, opened.watchId!, 100, 30);
+    expect(opened.following).toBeUndefined();
+    expect(resizes(pty)).toEqual([[100, 30]]);
+  });
+});

@@ -54,6 +54,14 @@ export interface CanopyFrame {
   ) => void;
   /** Resolves to why it couldn't, in words, or null once it did. */
   openAssistant: (item: CanopyAssistantItem, mounted: () => boolean) => Promise<string | null>;
+  /**
+   * When the live terminal takes the PTY's size: as a row is selected, in a
+   * dialog the user is looking at, or only once the user works in it, in a
+   * window left open all day beside the agent's own pane (#16339). Main holds
+   * this machine's runs to the window's choice itself; this is the inbox's
+   * answer for a run on another host.
+   */
+  takesTerminalSize: "on-select" | "on-use";
 }
 
 /** Everything in the surface, header included, whichever host draws it. */
@@ -110,6 +118,7 @@ export const CANOPY_DIALOG_FRAME: CanopyFrame = {
   close: closeDialog,
   goToRun: goToRunFromDialog,
   restoreElsewhere: restoreInItsProject,
+  takesTerminalSize: "on-select",
   openAssistant: async (item, mounted) => {
     const refused = await openAssistantItem(item);
     if (refused === null && mounted()) closeDialog();

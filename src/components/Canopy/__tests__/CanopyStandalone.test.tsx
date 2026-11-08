@@ -285,6 +285,7 @@ function hostFrame(refusal: string | null = null) {
     goToRun: vi.fn(),
     restoreElsewhere: vi.fn(),
     openAssistant: vi.fn(async (_item: CanopyAssistantItem) => refusal),
+    takesTerminalSize: "on-use" as const,
   };
   return { ...decisions, frame: standaloneCanopyFrame(decisions) };
 }

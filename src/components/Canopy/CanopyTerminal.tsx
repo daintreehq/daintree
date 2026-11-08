@@ -153,6 +153,17 @@ interface CanopyTerminalProps {
   onSubmitted?: () => void;
   /** Go to the run's own pane: the way to see a screen this view couldn't show. */
   onGoTo?: (event: MouseEvent<HTMLButtonElement>) => void;
+  /**
+   * Showing the run takes no size: only the user working in it does, in a
+   * window left open all day (#16339). Main holds the window's own host's runs
+   * to this; a run on another host is held to it here.
+   */
+  sizesOnUse?: boolean;
+  /**
+   * Counts what the user sent the run from beside the terminal — a reply, a
+   * key, an answer — each a use of it, as a keystroke into it is.
+   */
+  uses?: number;
 }
 
 /**
@@ -172,6 +183,8 @@ interface CanopyTerminalProps {
  * the PTY's geometry: the bottom rows, where an agent asks, stay in view, and
  * a grid wider than the pane scrolls sideways. While the stream is open the
  * terminal's own pane in this view is frozen, so it doesn't take the PTY back.
+ * With `sizesOnUse` the pane draws the PTY's grid from the start, and takes the
+ * size only once the user clicks, types or replies in it.
  *
  * Only what the user does here reaches the terminal. xterm also answers the
  * program's own queries (cursor position, device attributes) through the same
@@ -190,6 +203,8 @@ export function CanopyTerminal({
   onStreamChange,
   onSubmitted,
   onGoTo,
+  sizesOnUse = false,
+  uses = 0,
 }: CanopyTerminalProps) {
   const frameRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -198,11 +213,13 @@ export function CanopyTerminal({
   const onSubmittedRef = useRef(onSubmitted);
   const cwdRef = useRef(cwd);
   const projectIdRef = useRef(projectId);
+  const sizesOnUseRef = useRef(sizesOnUse);
   useEffect(() => {
     onStreamChangeRef.current = onStreamChange;
     onSubmittedRef.current = onSubmitted;
     cwdRef.current = cwd;
     projectIdRef.current = projectId;
+    sizesOnUseRef.current = sizesOnUse;
   });
   const rootRef = useRef<HTMLDivElement>(null);
   // The current xterm's menu, for handlers that outlive one generation.
@@ -221,6 +238,8 @@ export function CanopyTerminal({
   const suspendRef = useRef<(() => void) | null>(null);
   const resumeRef = useRef<(() => void) | null>(null);
   const reopenRef = useRef<((next: "reconnecting" | "opening") => void) | null>(null);
+  // The current stream's way to hear of a use made from beside the terminal.
+  const usedRef = useRef<(() => void) | null>(null);
   /**
    * Each reopening starts the stream over on a new xterm: a reset one keeps
    * its parser mid-sequence and its queued writes, which would land the fresh
@@ -397,6 +416,9 @@ export function CanopyTerminal({
     // The size is this pane's to take: main is asked even for a grid the PTY
     // already has, as holding is what stops the terminal's other views fitting.
     let mustHold = true;
+    // Another host's run, shown where only use takes the size: that host never
+    // tells this pane to follow, so the pane holds itself back until used.
+    let awaitingUse = false;
 
     let inset = FRAME_PADDING_PX;
     const bufferChange = terminal.buffer.onBufferChange((buffer) => {
@@ -420,7 +442,16 @@ export function CanopyTerminal({
         const watchId = stream.watchId;
         const cell = getXtermCellDimensions(terminal);
         // A host that doesn't take the size keeps the one its own window gave it.
-        if (disposed || watchId === null || cell === null || !holdsSize || following) return;
+        if (
+          disposed ||
+          watchId === null ||
+          cell === null ||
+          !holdsSize ||
+          following ||
+          awaitingUse
+        ) {
+          return;
+        }
         // The list's or the dock's edge is still moving: the drag's end asks again.
         if (isCanopyEdgeDragging(useCanopyStore.getState())) return;
         // Fractional bounds, truncated, as the grid pane measures them: a
@@ -601,7 +632,16 @@ export function CanopyTerminal({
       frame.scrollLeft += event.deltaX;
     };
     frame.addEventListener("wheel", sideways, { capture: true, passive: false });
+    // The user's first use asks another host for the size this pane fits.
+    const markUsed = () => {
+      if (!awaitingUse || stream.watchId === null) return;
+      awaitingUse = false;
+      mustHold = true;
+      requestPanelSize();
+    };
+    usedRef.current = markUsed;
     const claimSize = () => {
+      markUsed();
       const watchId = stream.watchId;
       if (!following || watchId === null) return;
       api
@@ -807,8 +847,10 @@ export function CanopyTerminal({
       }
       view = opened;
       holdsSize = localId !== null || opened.holdsSize === true;
-      // A new stream is a new selection, which takes the size as a first one does.
-      following = false;
+      // A new stream is a new selection, which takes the size as a first one
+      // does, unless it is shown where only use does: main says so for its own runs.
+      following = opened.following === true;
+      awaitingUse = localId === null && sizesOnUseRef.current;
       mustHold = true;
       const snapshot = opened.snapshot;
       ptySize = { cols: snapshot.cols, rows: snapshot.rows };
@@ -862,6 +904,7 @@ export function CanopyTerminal({
       disposed = true;
       if (suspendRef.current === suspend) suspendRef.current = null;
       if (reopenRef.current === reopen) reopenRef.current = null;
+      if (usedRef.current === markUsed) usedRef.current = null;
       resumeRef.current = null;
       if (openTimer !== null) clearTimeout(openTimer);
       offResync();
@@ -913,6 +956,14 @@ export function CanopyTerminal({
     if (reconnecting) suspendRef.current?.();
     else if (was) resumeRef.current?.();
   }, [reconnecting]);
+
+  // Counted from the value the pane mounted with, so a count from before it is no use of it.
+  const usesSeenRef = useRef(uses);
+  useEffect(() => {
+    if (usesSeenRef.current === uses) return;
+    usesSeenRef.current = uses;
+    usedRef.current?.();
+  }, [uses]);
 
   useEffect(() => {
     const terminal = terminalRef.current;

@@ -228,6 +228,11 @@ export interface CanopyTerminalView {
    * another machine then never asks to size.
    */
   holdsSize?: boolean;
+  /**
+   * The stream opens following the PTY's grid, taking no size until the user
+   * works in it: the Canopy window's, which stays open all day (#16339).
+   */
+  following?: boolean;
 }
 
 /**

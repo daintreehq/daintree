@@ -275,10 +275,11 @@ import { _resetRateLimitQueuesForTest, getProjectPushTargets } from "../../utils
 import { events } from "../../../services/events.js";
 import { getDefaultPanelTitle } from "../../../../shared/config/panelKindRegistry.js";
 import { canopyPanelsListing, registerCanopyHandlers } from "../canopy.js";
-import type { CanopySnapshot } from "../../../../shared/types/ipc/canopy.js";
+import type { CanopySnapshot, CanopyTerminalView } from "../../../../shared/types/ipc/canopy.js";
 import { CanopyModels } from "../../../services/canopy/canopyModels.js";
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
 import { activeTerminalWatches, sizeHolds } from "../canopyTerminalWatch.js";
+import { markProjectlessView } from "../../../window/projectlessViews.js";
 import { getIpcDispatcher } from "../../dispatcher.js";
 import { resetCanopyTrashRemovalsForTests } from "../../../services/pty/canopyTrashRemovals.js";
 import type { ClientEndpoint } from "../../endpoint.js";
@@ -3129,6 +3130,105 @@ describe("canopy IPC", () => {
       await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
 
       expect(ptyClient.resize).not.toHaveBeenCalled();
+    });
+
+    describe("in the Canopy window, which sizes nothing until used (#16339)", () => {
+      /** A Canopy window's one view: no project, open all day. */
+      function canopyWindowView(id: number) {
+        const win = fakeWindow();
+        const sender = fakeSender(id);
+        state.windows.set(sender, win);
+        markProjectlessView(
+          sender as unknown as Electron.WebContents,
+          win as unknown as Electron.BrowserWindow
+        );
+        return { win, sender };
+      }
+
+      const select = async (sender: unknown, runId: string) => {
+        const view = (await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, runId, {
+          spawnedAt: 100,
+        })) as { data?: CanopyTerminalView } & Partial<CanopyTerminalView>;
+        const opened = (view.data ?? view) as CanopyTerminalView;
+        // The panel measures whatever it is told, as a settled layout would.
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, opened.watchId, 100, 30);
+        return opened;
+      };
+
+      beforeEach(() => {
+        state.runs = [
+          { runId: "run-1", spawnedAt: 100, workspaceId: "project-1" },
+          { runId: "run-2", spawnedAt: 100, workspaceId: "project-1" },
+        ];
+      });
+
+      it("moves the PTY once when the user types there, and once more when the pane takes it back", async () => {
+        const first = canopyWindowView(9);
+        await invoke(CANOPY_METHOD_CHANNELS.setActive, first.sender, true);
+        const opened = await select(first.sender, "run-1");
+        expect(opened.following).toBe(true);
+        await select(first.sender, "run-1");
+        const changed = await select(first.sender, "run-2");
+        await invoke(CANOPY_METHOD_CHANNELS.unwatchTerminal, first.sender, changed.watchId);
+        first.win.emit("focus");
+        first.win.emit("show");
+        await select(first.sender, "run-1");
+        first.sender.emit("destroyed");
+
+        const reopened = canopyWindowView(10);
+        await invoke(CANOPY_METHOD_CHANNELS.setActive, reopened.sender, true);
+        const shown = await select(reopened.sender, "run-1");
+        reopened.win.emit("focus");
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+        expect(await holds(reopened.sender)).toEqual([]);
+
+        // The keystroke's gesture claims, and the panel's next measure holds.
+        await invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, reopened.sender, shown.watchId);
+        await invoke(CANOPY_METHOD_CHANNELS.terminalInput, reopened.sender, shown.watchId, "y");
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, reopened.sender, shown.watchId, 100, 30);
+        expect(ptyClient.resize.mock.calls).toEqual([["run-1", 100, 30]]);
+        expect(await holds(reopened.sender)).toEqual(["run-1"]);
+
+        // Main lets go and moves nothing: the pane's own fit is the one resize.
+        await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "run-1");
+        expect(await holds(reopened.sender)).toEqual([]);
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, reopened.sender, shown.watchId, 100, 30);
+        reopened.sender.emit("destroyed");
+        expect(ptyClient.resize).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        ["a key from the composer", CANOPY_METHOD_CHANNELS.terminalSendKey, ["escape"]],
+        ["a message from the composer", CANOPY_METHOD_CHANNELS.terminalSubmit, ["navy"]],
+      ] as const)("takes the size on %s", async (_case, channel, args) => {
+        const { sender } = canopyWindowView(9);
+        const shown = await select(sender, "run-1");
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+
+        await invoke(channel, sender, shown.watchId, ...args);
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, shown.watchId, 100, 30);
+
+        expect(ptyClient.resize.mock.calls).toEqual([["run-1", 100, 30]]);
+      });
+
+      it("takes the size on a reply sent by the run", async () => {
+        const { sender } = canopyWindowView(9);
+        const shown = await select(sender, "run-1");
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+
+        await invoke(CANOPY_METHOD_CHANNELS.submitReply, sender, "run-1", { spawnedAt: 100 }, "navy");
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, shown.watchId, 100, 30);
+
+        expect(ptyClient.resize.mock.calls).toEqual([["run-1", 100, 30]]);
+      });
+
+      it("leaves the dialog in a project window taking the size as a row is selected", async () => {
+        const dialog = fakeSender(4);
+        state.windows.set(dialog, fakeWindow());
+        const opened = await select(dialog, "run-1");
+        expect(opened.following).toBeUndefined();
+        expect(ptyClient.resize.mock.calls).toEqual([["run-1", 100, 30]]);
+      });
     });
 
     it("tells the windows when the drive takes a local hold away, for the driver's panes to fit", async () => {

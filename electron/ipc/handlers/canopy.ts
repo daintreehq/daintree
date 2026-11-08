@@ -80,6 +80,7 @@ import {
 import type { IpcContext } from "../types.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
+import { isProjectlessAppView } from "../../window/projectlessViews.js";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { getIpcDispatcher } from "../dispatcher.js";
@@ -1361,6 +1362,15 @@ function followWindow(viewId: number, win: BrowserWindow | null): void {
   win.on("hide", letGo);
 }
 
+/**
+ * The Canopy window's own view, the one view here that holds no project. It
+ * stays open all day beside the agents' own panes, so its terminals follow the
+ * PTY's grid until the user works in them (#16339). A remote endpoint's id is
+ * its handle, not a WebContents', so only a local caller is looked up.
+ */
+const followsUntilUsed = (ctx: IpcContext): boolean =>
+  ctx.event !== null && isProjectlessAppView(ctx.webContentsId);
+
 /** A measure can land after the window went, ahead of nothing that would say so. */
 const isPutAway = (win: BrowserWindow | null): boolean =>
   win !== null && (win.isMinimized() || !win.isVisible());
@@ -1646,7 +1656,9 @@ export const canopyNamespace = defineIpcNamespace({
           // Sizing follows typing: only while the view drives the run's project.
           () => drivesRun(ctx, runId),
           null,
-          remote
+          remote,
+          "detail",
+          followsUntilUsed(ctx)
         );
         // Says to a panel on another machine that this host takes its size;
         // one that predates it says nothing, and is never asked.
@@ -1695,7 +1707,8 @@ export const canopyNamespace = defineIpcNamespace({
           isViewer(ctx) ? () => false : () => drivesRun(ctx, terminalId) && binding.mayType(viewId),
           binding,
           false,
-          slot
+          slot,
+          followsUntilUsed(ctx)
         );
       },
       { withContext: true }
