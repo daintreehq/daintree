@@ -1630,14 +1630,12 @@ describe("createWorktreeStore — setup clone results", () => {
       .applyUpdate(makeSnapshot("wt-1", { setupStatus: { ...running, clones } }), nextV());
     const mapBefore = store.getState().worktrees;
 
-    store
-      .getState()
-      .applyUpdate(
-        makeSnapshot("wt-1", {
-          setupStatus: { ...running, clones: clones.map((c) => ({ ...c })) },
-        }),
-        nextV()
-      );
+    store.getState().applyUpdate(
+      makeSnapshot("wt-1", {
+        setupStatus: { ...running, clones: clones.map((c) => ({ ...c })) },
+      }),
+      nextV()
+    );
 
     expect(store.getState().worktrees).toBe(mapBefore);
   });

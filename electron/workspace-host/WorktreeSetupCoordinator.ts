@@ -18,6 +18,9 @@ import {
 } from "./WorktreeLifecycleService.js";
 import type { WorktreeMonitor } from "./WorktreeMonitor.js";
 
+/** How long a delete waits for a cancelled clone to wind down before going on. */
+export const CLONE_CANCEL_WAIT_MS = 10_000;
+
 /**
  * What {@link WorktreeSetupCoordinator.runLifecycleSetup} learned, as a value rather
  * than as mutable state a later phase can overwrite.
@@ -126,7 +129,15 @@ export class WorktreeSetupCoordinator {
   private pluginSetupRuns = new Map<WorktreeMonitor, AbortController>();
   // `cloneIgnored` clones in flight, by incarnation, for the same reason: a
   // removed worktree's clone must stop writing into the tree being deleted.
-  private cloneRuns = new Map<WorktreeMonitor, AbortController>();
+  // `done` settles once the clone's child has exited and its staging is gone,
+  // which is what a delete waits for before removing the tree.
+  private cloneRuns = new Map<
+    WorktreeMonitor,
+    { controller: AbortController; done: Promise<void> }
+  >();
+  // Incarnations whose clone was cancelled, so a create tail that only reaches
+  // its clone step after the delete started never begins one.
+  private cancelledClones = new WeakSet<WorktreeMonitor>();
   // Which plugin step declarations succeeded for an incarnation, so a resumed
   // setup skips them only while the declaration is the one that succeeded.
   private pluginStepSuccesses = new WeakMap<WorktreeMonitor, Set<string>>();
@@ -142,25 +153,56 @@ export class WorktreeSetupCoordinator {
   dispose(): void {
     for (const controller of this.pluginSetupRuns.values()) controller.abort();
     this.pluginSetupRuns.clear();
-    for (const controller of this.cloneRuns.values()) controller.abort();
+    for (const { controller } of this.cloneRuns.values()) controller.abort();
     this.cloneRuns.clear();
   }
 
-  /** Track a `cloneIgnored` run for this incarnation; removing the worktree aborts it. */
-  beginCloneRun(monitor: WorktreeMonitor): AbortSignal {
+  /**
+   * Run this incarnation's `cloneIgnored` step under a signal that cancelling
+   * aborts. Already aborted when the incarnation was cancelled before the step
+   * began, so `run` must check it before starting anything.
+   */
+  async runCloneRun<T>(
+    monitor: WorktreeMonitor,
+    run: (signal: AbortSignal) => Promise<T>
+  ): Promise<T> {
     const controller = new AbortController();
-    this.cloneRuns.set(monitor, controller);
-    return controller.signal;
+    if (this.cancelledClones.has(monitor)) controller.abort();
+    const promise = run(controller.signal);
+    const entry = {
+      controller,
+      done: promise.then(
+        () => undefined,
+        () => undefined
+      ),
+    };
+    this.cloneRuns.set(monitor, entry);
+    try {
+      return await promise;
+    } finally {
+      if (this.cloneRuns.get(monitor) === entry) this.cloneRuns.delete(monitor);
+    }
   }
 
-  endCloneRun(monitor: WorktreeMonitor, signal: AbortSignal): void {
-    if (this.cloneRuns.get(monitor)?.signal === signal) this.cloneRuns.delete(monitor);
-  }
-
-  /** Stop the `cloneIgnored` run for this incarnation, if any. */
-  cancelCloneRun(monitor: WorktreeMonitor): void {
-    this.cloneRuns.get(monitor)?.abort();
+  /**
+   * Stop this incarnation's `cloneIgnored` step, now and for good, and resolve
+   * once it has wound down. Bounded: a delete must not hang on a child stuck
+   * in the kernel, and the clone writes only inside its own staging directory.
+   */
+  async cancelCloneRun(monitor: WorktreeMonitor, waitMs = CLONE_CANCEL_WAIT_MS): Promise<void> {
+    this.cancelledClones.add(monitor);
+    const entry = this.cloneRuns.get(monitor);
+    if (!entry) return;
     this.cloneRuns.delete(monitor);
+    entry.controller.abort();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      entry.done,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, waitMs);
+      }),
+    ]);
+    clearTimeout(timer);
   }
 
   /**

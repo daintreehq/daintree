@@ -195,9 +195,65 @@ describe("cloneIgnoredDirectories", () => {
       { cloneTree: plainCopy }
     );
 
-    expect(results.map((r) => r.outcome)).toEqual(Array(7).fill("skipped"));
-    expect(results[5].reason).toBe("It's a symlink in the main checkout");
+    const notRelative = "It isn't a relative path inside the project";
+    expect(results.map((r) => r.reason)).toEqual([
+      notRelative,
+      notRelative,
+      notRelative,
+      notRelative,
+      notRelative,
+      "It's a symlink in the main checkout",
+      "That name is reserved for Daintree's staging folders",
+    ]);
+    expect(results.every((r) => r.outcome === "skipped")).toBe(true);
     expect(existsSync(join(dest, "build"))).toBe(false);
+  });
+
+  it("refuses a path whose folders lead out of either tree through a symlink", async () => {
+    const { src, dest } = makeCheckouts("node_modules/\n");
+    const outside = tempDir("daintree-wtclone-outside-");
+    write(outside, "linked/node_modules/a.js", "outside source");
+    symlinkSync(join(outside, "linked"), join(src, "linked"));
+    write(src, "deep/inner/node_modules/b.js", "b");
+    mkdirSync(join(outside, "inner"));
+    symlinkSync(outside, join(dest, "deep"));
+
+    const results = await cloneIgnoredDirectories(
+      src,
+      dest,
+      ["linked/node_modules", "deep/inner/node_modules"],
+      { cloneTree: plainCopy }
+    );
+
+    expect(results.map((r) => r.reason)).toEqual([
+      "It leads out of the main checkout",
+      "Its parent folder leads out of the worktree",
+    ]);
+    expect(readdirSync(join(outside, "inner"))).toEqual([]);
+  });
+
+  it("publishes nothing when the destination's parent is swapped for a symlink mid-clone", async () => {
+    const { src, dest } = makeCheckouts();
+    write(src, "packages/app/node_modules/x.js", "x");
+    const outside = tempDir("daintree-wtclone-outside-");
+    const cloneTree: CloneTree = async (from, to, signal) => {
+      await plainCopy(from, to, signal);
+      rmSync(join(dest, "packages/app"), { recursive: true, force: true });
+      symlinkSync(outside, join(dest, "packages/app"));
+      return { ok: true };
+    };
+
+    const results = await cloneIgnoredDirectories(src, dest, ["packages/app/node_modules"], {
+      cloneTree,
+    });
+
+    expect(results[0]).toEqual({
+      path: "packages/app/node_modules",
+      outcome: "skipped",
+      reason: "Its parent folder changed while it was being cloned",
+    });
+    expect(readdirSync(outside)).toEqual([]);
+    expect(stagingDirs(dest)).toEqual([]);
   });
 
   it("clones a nested path only when its parent folder exists in the worktree", async () => {
@@ -242,7 +298,7 @@ describe("cloneIgnoredDirectories", () => {
   it("reports a failed clone as skipped and removes the partial tree", async () => {
     const { src, dest } = makeCheckouts();
     write(src, "node_modules/a.js", "a");
-    const cloneTree: CloneTree = async (from, to) => {
+    const cloneTree: CloneTree = async (_from, to) => {
       mkdirSync(to);
       writeFileSync(join(to, "partial.js"), "half");
       return { ok: false, reason: "This volume doesn't support copy-on-write clones" };
@@ -260,6 +316,26 @@ describe("cloneIgnoredDirectories", () => {
     expect(existsSync(join(dest, "node_modules"))).toBe(false);
     expect(stagingDirs(dest)).toEqual([]);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "removes a failed partial tree even when it holds read-only folders",
+    async () => {
+      const { src, dest } = makeCheckouts();
+      write(src, "node_modules/a.js", "a");
+      const cloneTree: CloneTree = async (_from, to) => {
+        mkdirSync(join(to, "locked/inner"), { recursive: true });
+        writeFileSync(join(to, "locked/inner/file.js"), "x");
+        chmodSync(join(to, "locked/inner"), 0o555);
+        chmodSync(join(to, "locked"), 0o555);
+        return { ok: false, reason: "cp --reflink=always exited 1" };
+      };
+
+      const results = await cloneIgnoredDirectories(src, dest, ["node_modules"], { cloneTree });
+
+      expect(results[0].reason).toBe("cp --reflink=always exited 1");
+      expect(stagingDirs(dest)).toEqual([]);
+    }
+  );
 
   it("aborts a clone that outruns its budget and skips the rest", async () => {
     const { src, dest } = makeCheckouts();

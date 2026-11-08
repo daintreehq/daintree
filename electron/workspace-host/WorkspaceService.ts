@@ -1719,7 +1719,7 @@ export class WorkspaceService {
     this.resourceActionExecutor.cleanupResourceActionState(id);
     this.attachmentService.handleWorktreeRemoved(id);
     this.setupCoordinator.cancelPluginSetup(monitor);
-    this.setupCoordinator.cancelCloneRun(monitor);
+    void this.setupCoordinator.cancelCloneRun(monitor);
     monitor.stop();
     this.monitors.delete(id);
     this.emitGate.forget(monitor);
@@ -4522,26 +4522,25 @@ export class WorkspaceService {
     worktreeId: string,
     generation: number | undefined
   ): Promise<WorktreeSetupClone[] | undefined> {
-    let entries: string[] | undefined;
-    try {
-      entries = (await this.lifecycleService.loadConfig(worktreePath, rootPath))?.cloneIgnored;
-    } catch (err) {
-      logWarn("[WorkspaceHost] could not read cloneIgnored; nothing cloned", {
-        worktreePath,
-        error: formatErrorMessage(err, "config read failed"),
-      });
-      return undefined;
-    }
-    if (!entries || entries.length === 0) return undefined;
     const monitor = this.monitors.get(worktreeId);
     if (!monitor || monitor.generation !== generation) return undefined;
 
-    const signal = this.setupCoordinator.beginCloneRun(monitor);
-    try {
-      return await cloneIgnoredDirectories(rootPath, worktreePath, entries, { signal });
-    } finally {
-      this.setupCoordinator.endCloneRun(monitor, signal);
-    }
+    // The config read runs under the same signal as the clone, so a delete
+    // that starts while it is pending still stops the clone from starting.
+    return this.setupCoordinator.runCloneRun(monitor, async (signal) => {
+      let entries: string[] | undefined;
+      try {
+        entries = (await this.lifecycleService.loadConfig(worktreePath, rootPath))?.cloneIgnored;
+      } catch (err) {
+        logWarn("[WorkspaceHost] could not read cloneIgnored; nothing cloned", {
+          worktreePath,
+          error: formatErrorMessage(err, "config read failed"),
+        });
+        return undefined;
+      }
+      if (!entries || entries.length === 0 || signal.aborted) return undefined;
+      return cloneIgnoredDirectories(rootPath, worktreePath, entries, { signal });
+    });
   }
 
   private async runLifecycleTeardown(
@@ -4550,9 +4549,10 @@ export class WorkspaceService {
     force: boolean
   ): Promise<void> {
     // A plugin step still setting the worktree up is setting up one that is
-    // about to be gone, and a clone would still be writing into it.
+    // about to be gone. A clone would still be writing into it, so its child
+    // must have exited and its staging gone before git removes the tree.
     this.setupCoordinator.cancelPluginSetup(monitor);
-    this.setupCoordinator.cancelCloneRun(monitor);
+    await this.setupCoordinator.cancelCloneRun(monitor);
     // First, while the worktree's own stack is still up for its detach to talk to.
     await this.attachmentService.detachForDelete(worktreeId);
     const ctx = this.getLifecycleContext();

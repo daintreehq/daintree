@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import { randomUUID } from "crypto";
-import { lstat, mkdir, realpath, rename, rm, stat, writeFile } from "fs/promises";
+import type { Dirent } from "fs";
+import { chmod, lstat, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "fs/promises";
 import { join as pathJoin } from "path";
 import { getSystemErrorName } from "util";
 import type { WorktreeSetupClone } from "../../shared/types/worktree.js";
@@ -176,7 +177,8 @@ async function cloneWithReflink(
   return { ok: false, reason: `cp --reflink=always exited ${result.code ?? "on a signal"}` };
 }
 
-function defaultCloneTree(platform: NodeJS.Platform): CloneTree | undefined {
+/** The copy-on-write backend for `platform`, or undefined where there is none. */
+export function cloneTreeForPlatform(platform: NodeJS.Platform): CloneTree | undefined {
   if (platform === "darwin") return cloneWithClonefile;
   if (platform === "linux") return cloneWithReflink;
   return undefined;
@@ -206,6 +208,7 @@ interface Candidate {
   path: string;
   src: string;
   dest: string;
+  destParent: string;
 }
 
 /**
@@ -214,7 +217,6 @@ interface Candidate {
  */
 async function precheck(
   candidate: Candidate,
-  segments: string[],
   roots: { src: string; dest: string; realSrc: string; realDest: string }
 ): Promise<string | null> {
   const srcStats = await lstatOrNull(candidate.src);
@@ -228,13 +230,12 @@ async function precheck(
   if (await lstatOrNull(candidate.dest)) return "It already exists in the worktree";
   // The parent is never created: a missing one means this branch has no such
   // folder, and creating it would walk through whatever the checkout put there.
-  const destParent = pathJoin(roots.dest, ...segments.slice(0, -1));
-  const parentStats = await lstatOrNull(destParent);
+  const parentStats = await lstatOrNull(candidate.destParent);
   if (!parentStats || !parentStats.isDirectory()) return "Its parent folder isn't in the worktree";
-  if (!isInside(roots.realDest, await realpath(destParent))) {
+  if (!isInside(roots.realDest, await realpath(candidate.destParent))) {
     return "Its parent folder leads out of the worktree";
   }
-  if (srcStats.dev !== (await stat(destParent)).dev) {
+  if (srcStats.dev !== (await stat(candidate.destParent)).dev) {
     return "It's on a different volume from the worktree";
   }
   return null;
@@ -268,7 +269,7 @@ export async function cloneIgnoredDirectories(
   };
   if (paths.length === 0) return results;
 
-  const cloneTree = options.cloneTree ?? defaultCloneTree(platform);
+  const cloneTree = options.cloneTree ?? cloneTreeForPlatform(platform);
   if (!cloneTree) {
     paths.forEach((_, index) => skip(index, unsupportedPlatformReason(platform)));
     return finish(results, destRoot);
@@ -309,9 +310,10 @@ export async function cloneIgnoredDirectories(
       path,
       src: pathJoin(srcRoot, ...segments),
       dest: pathJoin(destRoot, ...segments),
+      destParent: pathJoin(destRoot, ...segments.slice(0, -1)),
     };
     try {
-      const reason = await precheck(candidate, segments, roots);
+      const reason = await precheck(candidate, roots);
       if (reason !== null) skip(index, reason);
       else candidates.push(candidate);
     } catch (err) {
@@ -367,7 +369,7 @@ export async function cloneIgnoredDirectories(
     }
     const outcome = await cloneOne(
       candidate,
-      destRoot,
+      roots,
       cloneTree,
       remaining,
       timeoutMs,
@@ -381,7 +383,7 @@ export async function cloneIgnoredDirectories(
 
 async function cloneOne(
   candidate: Candidate,
-  destRoot: string,
+  roots: { dest: string; realDest: string },
   cloneTree: CloneTree,
   remainingMs: number,
   budgetMs: number,
@@ -392,7 +394,7 @@ async function cloneOne(
     outcome: "skipped",
     reason,
   });
-  const staging = pathJoin(destRoot, `${CLONE_STAGING_PREFIX}${randomUUID()}`);
+  const staging = pathJoin(roots.dest, `${CLONE_STAGING_PREFIX}${randomUUID()}`);
   const payload = pathJoin(staging, "payload");
   const controller = new AbortController();
   let timedOut = false;
@@ -413,8 +415,18 @@ async function cloneOne(
 
     const cloned = await lstatOrNull(payload);
     if (!cloned?.isDirectory()) return skipped("It changed while it was being cloned");
-    // Last look before publishing: whatever reached the path meanwhile wins.
+    // Last look before publishing: whatever reached the path meanwhile wins,
+    // and the parent must still be the folder checked before cloning, since a
+    // rename goes wherever its path leads. A process swapping it in the
+    // instant left already runs as this user with write access to both trees.
     if (await lstatOrNull(candidate.dest)) return skipped("It already exists in the worktree");
+    const parent = await lstatOrNull(candidate.destParent);
+    if (!parent?.isDirectory() || !isInside(roots.realDest, await realpath(candidate.destParent))) {
+      return skipped("Its parent folder changed while it was being cloned");
+    }
+    // Rechecked after those awaits, with none between here and the rename.
+    if (timedOut) return skipped(`Cloning ran out of its ${Math.round(budgetMs / 1000)}s budget`);
+    if (controller.signal.aborted) return skipped("Setup was cancelled");
     try {
       await rename(payload, candidate.dest);
     } catch (err) {
@@ -426,7 +438,7 @@ async function cloneOne(
     }
     logInfo("[WorktreeClone] cloned ignored directory into new worktree", {
       path: candidate.path,
-      destRoot,
+      destRoot: roots.dest,
       ms: Date.now() - startedAt,
     });
     return { path: candidate.path, outcome: "cloned" };
@@ -436,12 +448,44 @@ async function cloneOne(
     clearTimeout(timer);
     outer?.removeEventListener("abort", forwardAbort);
     // Holds only the `.gitignore` after a success; a partial tree otherwise.
-    await rm(staging, { recursive: true, force: true }).catch((err: unknown) => {
+    await removeStaging(staging).catch((err: unknown) => {
       logWarn("[WorktreeClone] could not remove a staging directory", {
         staging,
         error: formatErrorMessage(err, "rm failed"),
       });
     });
+  }
+}
+
+/**
+ * Remove a staging directory, partial tree and all. A clone can leave
+ * read-only directories behind (`cp -a` applies a directory's mode once its
+ * contents are in; `clonefile` copies it outright), and nothing inside one can
+ * be unlinked, so a failed first pass makes every directory writable and tries
+ * again. Links are never followed: only real directories are touched.
+ */
+async function removeStaging(staging: string): Promise<void> {
+  try {
+    await rm(staging, { recursive: true, force: true });
+    return;
+  } catch {
+    await makeDirectoriesWritable(staging);
+  }
+  await rm(staging, { recursive: true, force: true });
+}
+
+async function makeDirectoriesWritable(dir: string): Promise<void> {
+  const stats = await lstatOrNull(dir).catch(() => null);
+  if (!stats?.isDirectory()) return;
+  await chmod(dir, (stats.mode & 0o7777) | 0o700).catch(() => {});
+  let entries: Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) await makeDirectoriesWritable(pathJoin(dir, entry.name));
   }
 }
 

@@ -682,6 +682,102 @@ describe("WorkspaceService.createWorktree", () => {
     await flushAsyncTail();
   });
 
+  it("never starts a clone once teardown has begun, even mid config read or before the step", async () => {
+    const { copyWorktreeIncludeFiles } = await import("../worktreeInclude.js");
+    const { cloneIgnoredDirectories } = await import("../worktreeClone.js");
+    vi.spyOn(service["lifecycleService"], "runLifecycleTeardown").mockResolvedValue(undefined);
+
+    // Teardown arrives while the config naming the clones is still being read.
+    let releaseConfig!: () => void;
+    vi.spyOn(service["lifecycleService"], "loadConfig").mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        releaseConfig = resolve;
+      });
+      return { cloneIgnored: ["node_modules"] };
+    });
+    await service.createWorktree("req-clone-mid-config", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/clone-mid-config",
+      path: "/test/worktree-clone-mid-config",
+    });
+    await flushAsyncTail();
+    const midConfig = service["monitors"].get(path.resolve("/test/worktree-clone-mid-config"))!;
+    expect(releaseConfig).toBeDefined();
+    const teardown = service["runLifecycleTeardown"](midConfig.path, midConfig, false);
+    releaseConfig();
+    await teardown;
+    await flushAsyncTail();
+
+    // Teardown arrives before the tail even reaches its clone step.
+    let releaseInclude!: () => void;
+    vi.mocked(copyWorktreeIncludeFiles).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        releaseInclude = resolve;
+      });
+      return {
+        copied: 0,
+        skippedExisting: 0,
+        skippedUnsafe: 0,
+        skippedOversized: 0,
+        skippedOverLimit: 0,
+      };
+    });
+    vi.spyOn(service["lifecycleService"], "loadConfig").mockResolvedValue({
+      cloneIgnored: ["node_modules"],
+    });
+    await service.createWorktree("req-clone-before-step", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/clone-before-step",
+      path: "/test/worktree-clone-before-step",
+    });
+    await flushAsyncTail();
+    const beforeStep = service["monitors"].get(path.resolve("/test/worktree-clone-before-step"))!;
+    await service["runLifecycleTeardown"](beforeStep.path, beforeStep, false);
+    releaseInclude();
+    await flushAsyncTail();
+    await flushAsyncTail();
+
+    expect(cloneIgnoredDirectories).not.toHaveBeenCalled();
+  });
+
+  it("holds teardown until a cancelled clone has wound down", async () => {
+    const { cloneIgnoredDirectories } = await import("../worktreeClone.js");
+    vi.spyOn(service["lifecycleService"], "runLifecycleTeardown").mockResolvedValue(undefined);
+    vi.spyOn(service["lifecycleService"], "loadConfig").mockResolvedValue({
+      cloneIgnored: ["node_modules"],
+    });
+    let windDown!: () => void;
+    vi.mocked(cloneIgnoredDirectories).mockImplementationOnce(async (_src, _dest, _e, opts) => {
+      await new Promise<void>((resolve) =>
+        opts?.signal?.addEventListener("abort", () => resolve(), { once: true })
+      );
+      // The child is killed but has not exited, and staging is not yet gone.
+      await new Promise<void>((resolve) => {
+        windDown = resolve;
+      });
+      return [{ path: "node_modules", outcome: "skipped", reason: "Setup was cancelled" }];
+    });
+
+    await service.createWorktree("req-clone-teardown", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/clone-teardown",
+      path: "/test/worktree-clone-teardown",
+    });
+    await flushAsyncTail();
+    const monitor = service["monitors"].get(path.resolve("/test/worktree-clone-teardown"))!;
+    let tornDown = false;
+    const teardown = service["runLifecycleTeardown"](monitor.path, monitor, false).then(() => {
+      tornDown = true;
+    });
+    await flushAsyncTail();
+    await flushAsyncTail();
+    expect(tornDown).toBe(false);
+
+    windDown();
+    await teardown;
+    expect(tornDown).toBe(true);
+  });
+
   it("logs async tail failure without firing a second create-worktree-result event", async () => {
     const requestId = "test-request-tail-fail";
     const options = {
