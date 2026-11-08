@@ -274,8 +274,9 @@ describe("remembered relevant paths against real git (#16424)", () => {
     const save = () => writeFileSync(join(root, "scratch.txt"), `${Math.random()}\n`);
 
     expect((await probe(save)).changes).toBeGreaterThan(0);
-    expect((await probe(() => appendFileSync(join(root, ".gitignore"), "scratch.txt\n"))).changes)
-      .toBeGreaterThan(0);
+    expect(
+      (await probe(() => appendFileSync(join(root, ".gitignore"), "scratch.txt\n"))).changes
+    ).toBeGreaterThan(0);
     expect(status(root)).not.toContain("scratch.txt");
 
     expect((await probe(save)).changes).toBe(0);
@@ -332,8 +333,9 @@ describe("remembered relevant paths against real git (#16424)", () => {
     expect((await probe(save)).changes).toBeGreaterThan(0);
 
     // `git rm --cached` leaves it untracked and ignored, which only the index shows.
-    expect((await probe(() => git(["rm", "--cached", "-q", ".output/forced.js"]))).changes)
-      .toBeGreaterThan(0);
+    expect(
+      (await probe(() => git(["rm", "--cached", "-q", ".output/forced.js"]))).changes
+    ).toBeGreaterThan(0);
     git(["commit", "-m", "unforce"]);
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
