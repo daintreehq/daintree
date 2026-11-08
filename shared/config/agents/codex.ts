@@ -4,6 +4,11 @@ export const config: AgentConfig = {
   id: "codex",
   name: "Codex",
   command: "codex",
+  // Codex: a bare positional seeds the TUI; the exec subcommand is one-shot.
+  initialPromptForm: {
+    interactive: { args: ["{prompt}"] },
+    headless: { args: ["exec", "{prompt}"] },
+  },
   npmGlobalPackage: "@openai/codex",
   // Codex Windows packaging lags behind Linux — Windows users commonly
   // install via WSL. WSL probing surfaces the availability in diagnostics

@@ -4,6 +4,11 @@ export const config: AgentConfig = {
   id: "copilot",
   name: "GitHub Copilot",
   command: "copilot",
+  // Copilot: -i seeds the interactive session, -p is one-shot.
+  initialPromptForm: {
+    interactive: { args: ["-i", "{prompt}"] },
+    headless: { args: ["-p", "{prompt}"] },
+  },
   color: "#8957e5",
   iconId: "copilot",
   supportsContextInjection: true,

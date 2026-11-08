@@ -5,6 +5,12 @@ export const config: AgentConfig = {
   id: "opencode",
   name: "OpenCode",
   command: "opencode",
+  // A bare positional is a project PATH (verified on 1.14.48): --prompt
+  // seeds the TUI, and the run subcommand is the one-shot path.
+  initialPromptForm: {
+    interactive: { args: ["--prompt", "{prompt}"] },
+    headless: { args: ["run", "{prompt}"] },
+  },
   // OpenCode's curl installer (https://opencode.ai/install) lands the binary
   // under ~/.opencode/bin when ~/.local/bin and XDG_BIN_DIR are unset;
   // otherwise it uses ~/.local/bin (already covered by getUnixFallbackPaths).

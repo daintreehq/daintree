@@ -6,6 +6,12 @@ export const config: AgentConfig = {
   id: "gemini",
   name: "Gemini",
   command: "gemini",
+  // Gemini: -i seeds the TUI; a bare positional also launches the TUI
+  // (verified on 0.41.2), so headless needs -p.
+  initialPromptForm: {
+    interactive: { args: ["-i", "{prompt}"] },
+    headless: { args: ["-p", "{prompt}"] },
+  },
   npmGlobalPackage: "@google/gemini-cli",
   color: "#4285F4",
   iconId: "gemini",
