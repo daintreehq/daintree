@@ -1149,7 +1149,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       // shadowed by aria-label per the accessible-name algorithm, so the count
       // lives in the label itself.
       expect(overflowButton!.getAttribute("aria-label")).toBe("Show 1 hidden tabs");
-      expect(overflowButton!.querySelector("span.bg-daintree-text\\/70")).toBeNull();
+      expect(overflowButton!.querySelector("span.bg-text-primary\\/70")).toBeNull();
     });
 
     it("renders the neutral dot and discloses 'including active' when the active tab is hidden", () => {
@@ -1170,7 +1170,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
         "Show 2 hidden tabs, including active"
       );
 
-      const dot = overflowButton!.querySelector("span.bg-daintree-text\\/70");
+      const dot = overflowButton!.querySelector("span.bg-text-primary\\/70");
       expect(dot).not.toBeNull();
       // Accent restraint: the neutral cue must NOT use any accent token.
       expect(dot!.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\w-])/);
