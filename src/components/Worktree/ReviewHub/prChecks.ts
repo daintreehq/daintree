@@ -16,6 +16,8 @@ import { boundedErrorText, sanitizeErrorText } from "@/utils/errorText";
 
 /** Long enough for a matrix job's full name, short enough that one row can't own the popover. */
 const CHECK_NAME_LIMIT = 120;
+/** Workflow and app names are short in practice; this only stops one from crowding out the job name. */
+const CHECK_SOURCE_LIMIT = 80;
 /** Well past any real job URL; a value longer than this is not a link we want to follow. */
 const DETAILS_URL_LIMIT = 2048;
 
@@ -45,6 +47,16 @@ export interface PrCheckRow {
   required?: boolean;
   /** Absent when the provider had no URL, or when the one it gave failed validation. */
   detailsUrl?: string;
+  /** Sanitized workflow that ran the check, when the provider reported one. */
+  workflow?: string;
+  /** Sanitized app that reported the check, when the provider reported one. */
+  app?: string;
+  /**
+   * What the row is qualified with on screen: the workflow, else the app. Set
+   * only when another check in the response has the same name, since that is
+   * the one case where the name alone can't say which check this is.
+   */
+  source?: string;
   /** Whether this check reported a terminal outcome a human has to act on. */
   isFailure: boolean;
   /**
@@ -143,9 +155,33 @@ export function getCheckOutcomeVisual(check: ForgeCheckRun): {
  * place this text reaches a shell; see {@link composePrChecksAgentText}.
  */
 export function sanitizeCheckName(raw: string): string {
-  const collapsed = sanitizeErrorText(raw).replace(/\s+/g, " ").trim();
+  const collapsed = collapseForgeLabel(raw);
   if (!collapsed) return "Unnamed check";
   return boundedErrorText(collapsed, CHECK_NAME_LIMIT);
+}
+
+/**
+ * The same cleaning as {@link sanitizeCheckName} for a workflow or app name,
+ * which is just as attacker-influenceable: a fork PR can rename the workflow it
+ * runs. Unlike a check name it is optional, so nothing usable means `undefined`
+ * rather than a placeholder that would read as a real workflow.
+ */
+export function sanitizeCheckSource(raw: string | undefined): string | undefined {
+  const collapsed = raw ? collapseForgeLabel(raw) : "";
+  if (!collapsed) return undefined;
+  return boundedErrorText(collapsed, CHECK_SOURCE_LIMIT);
+}
+
+function collapseForgeLabel(raw: string): string {
+  return sanitizeErrorText(raw).replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The words a row is known by, on screen and in its details button's label:
+ * GitHub's own "Workflow / job" form when the row carries a qualifier.
+ */
+export function checkRowLabel(row: Pick<PrCheckRow, "name" | "source">): string {
+  return row.source ? `${row.source} / ${row.name}` : row.name;
 }
 
 /**
@@ -208,22 +244,39 @@ function groupFor(sortKey: number): PrCheckGroup {
  * attention-first ordering (broken checks ahead of stopped ones), required checks ahead of optional ones within a
  * group, provider order preserved for ties. Duplicates are kept — matrix jobs
  * legitimately repeat a name, and collapsing them would hide a failing shard.
+ *
+ * A name shared by several checks gets its workflow or app as a qualifier, on
+ * every row that has one: two workflows each owning a `build` job otherwise
+ * read as one job listed twice. Collisions are counted across the whole
+ * response, so a failing `build` is qualified even when its namesake passed and
+ * sits in the collapsed section. A unique name stays bare.
  */
 export function preparePrChecks(checks: readonly ForgeCheckRun[]): PrCheckRow[] {
   const rows = checks.map((check, index) => {
     const { visual, isFailure } = getCheckOutcomeVisual(check);
     const sortKey = rank(isFailure, check);
+    const workflow = sanitizeCheckSource(check.workflow);
+    const app = sanitizeCheckSource(check.app);
     const row: PrCheckRow = {
       key: String(index),
       name: sanitizeCheckName(check.name),
       outcome: visual,
       required: check.required,
       detailsUrl: safeDetailsUrl(check.detailsUrl),
+      ...(workflow ? { workflow } : {}),
+      ...(app ? { app } : {}),
       isFailure,
       group: groupFor(sortKey),
     };
     return { row, sortKey, index };
   });
+
+  const nameCounts = new Map<string, number>();
+  for (const { row } of rows) nameCounts.set(row.name, (nameCounts.get(row.name) ?? 0) + 1);
+  for (const { row } of rows) {
+    const source = row.workflow ?? row.app;
+    if (source && nameCounts.get(row.name)! > 1) row.source = source;
+  }
 
   rows.sort((a, b) => {
     if (a.sortKey !== b.sortKey) return a.sortKey - b.sortKey;
@@ -346,8 +399,12 @@ export function composePrChecksAgentText({
   if (failing.length === 0) return null;
 
   const payload = {
+    // Workflow and app are added only when reported, so a provider without them
+    // hands off exactly the payload it always did.
     checks: failing.map((row) => ({
       name: row.name,
+      ...(row.workflow ? { workflow: row.workflow } : {}),
+      ...(row.app ? { app: row.app } : {}),
       outcome: row.outcome.label,
       required: row.required ?? null,
       detailsUrl: row.detailsUrl ?? null,
@@ -380,7 +437,7 @@ export function composePrChecksAgentText({
  * substitution), and `!` (history expansion, in an interactive bash or zsh).
  *
  * Applied to the whole composed string rather than field by field on purpose.
- * Check names, the per-check details URLs, the pull request URL, the worktree
+ * Check names, workflow and app names, the per-check details URLs, the pull request URL, the worktree
  * path and this function's own prose all end up on those lines, and a per-field
  * guard is one forgotten field away from being no guard at all.
  */

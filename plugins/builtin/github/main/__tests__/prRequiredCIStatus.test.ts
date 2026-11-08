@@ -543,6 +543,55 @@ describe("mapRollupContextToCheckRun", () => {
     expect(mappedFailing).toBe(derived.ciSummary?.requiredFailing);
   });
 
+  it("names the workflow and app that reported a check run", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "CheckRun",
+      name: "build",
+      status: "COMPLETED",
+      conclusion: "FAILURE",
+      checkSuite: { app: { name: " GitHub Actions " }, workflowRun: { workflow: { name: "CI" } } },
+    });
+    expect(check).toMatchObject({ workflow: "CI", app: "GitHub Actions" });
+  });
+
+  it("keeps the app when the workflow run was withheld or never existed", () => {
+    for (const workflowRun of [null, undefined, { workflow: null }, { workflow: { name: " " } }]) {
+      const check = mapRollupContextToCheckRun({
+        __typename: "CheckRun",
+        name: "deploy",
+        status: "COMPLETED",
+        conclusion: "SUCCESS",
+        checkSuite: { app: { name: "Vercel" }, workflowRun },
+      });
+      expect(check?.app).toBe("Vercel");
+      expect(check).not.toHaveProperty("workflow");
+    }
+  });
+
+  it("emits neither field when the read did not ask for identity", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "CheckRun",
+      name: "build",
+      status: "COMPLETED",
+      conclusion: "SUCCESS",
+    });
+    expect(check).not.toHaveProperty("workflow");
+    expect(check).not.toHaveProperty("app");
+  });
+
+  it("never gives a legacy commit status a workflow or app", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "StatusContext",
+      context: "ci/jenkins",
+      state: "FAILURE",
+      // Not something GitHub sends for a status; pins that the status branch
+      // never reads it even if a node carried one.
+      checkSuite: { app: { name: "Stray" }, workflowRun: { workflow: { name: "Stray" } } },
+    });
+    expect(check).not.toHaveProperty("workflow");
+    expect(check).not.toHaveProperty("app");
+  });
+
   it("carries the provider's own node through as rawData", () => {
     // The escape hatch must be the real node, not a reconstruction — a caller
     // reaching past the normalized fields needs what the provider actually sent.

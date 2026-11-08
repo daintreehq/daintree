@@ -206,6 +206,87 @@ describe("PrChecksPopover", () => {
     expect(new Set(names).size).toBe(2);
   });
 
+  it("names the workflow of each same-named job, on the row and on its link", async () => {
+    getChecksMock.mockResolvedValue({
+      checks: [
+        check({
+          name: "build",
+          conclusion: "failure",
+          workflow: "CI",
+          detailsUrl: "https://e.com/a",
+        }),
+        check({
+          name: "build",
+          conclusion: "failure",
+          workflow: "Release",
+          detailsUrl: "https://e.com/b",
+        }),
+        check({ name: "lint", conclusion: "failure", workflow: "CI" }),
+      ],
+    });
+    renderPopover();
+    await openAndSettle();
+    const list = await screen.findByTestId("pr-checks-list");
+
+    const rowText = [...list.querySelectorAll("li")].map((li) => li.textContent ?? "");
+    expect(rowText.some((t) => t.startsWith("CI / build"))).toBe(true);
+    expect(rowText.some((t) => t.startsWith("Release / build"))).toBe(true);
+    // Unique names stay as the forge printed them.
+    expect(rowText.some((t) => t.startsWith("lint"))).toBe(true);
+
+    const names = screen
+      .getAllByRole("button", { name: /open details for/i })
+      .map((b) => b.getAttribute("aria-label"));
+    // The qualifier already tells the two apart, so neither needs an ordinal.
+    expect(names).toEqual([
+      expect.stringContaining("CI / build"),
+      expect.stringContaining("Release / build"),
+    ]);
+    for (const name of names) expect(name).not.toMatch(/of \d/);
+  });
+
+  it("still numbers links whose qualified names read the same", async () => {
+    getChecksMock.mockResolvedValue({
+      checks: [
+        // Two shards of one workflow, and a status literally named like a
+        // qualified row: the qualifier alone can't tell any of these apart.
+        check({
+          name: "build",
+          conclusion: "failure",
+          workflow: "CI",
+          detailsUrl: "https://e.com/a",
+        }),
+        check({
+          name: "build",
+          conclusion: "failure",
+          workflow: "CI",
+          detailsUrl: "https://e.com/b",
+        }),
+        check({ name: "CI / build", conclusion: "failure", detailsUrl: "https://e.com/c" }),
+        check({
+          name: "build",
+          conclusion: "failure",
+          workflow: "Release",
+          detailsUrl: "https://e.com/d",
+        }),
+      ],
+    });
+    renderPopover();
+    await openAndSettle();
+    await screen.findByTestId("pr-checks-list");
+
+    const buttons = screen.getAllByRole("button", { name: /open details for/i });
+    const labels = buttons.map((b) => b.getAttribute("aria-label"));
+    expect(labels).toEqual([
+      "Open details for CI / build (Failed), 1 of 3",
+      "Open details for CI / build (Failed), 2 of 3",
+      "Open details for CI / build (Failed), 3 of 3",
+      "Open details for Release / build (Failed)",
+    ]);
+    fireEvent.click(buttons[2]!);
+    expect(onOpenExternal).toHaveBeenCalledWith("https://e.com/c");
+  });
+
   it("keeps details names distinct even when name, outcome and requiredness all repeat", async () => {
     getChecksMock.mockResolvedValue({
       checks: [
@@ -457,6 +538,22 @@ describe("PrChecksPopover", () => {
     expect(text).not.toContain("lint");
 
     await waitFor(() => expect(screen.queryByTestId("pr-checks-list")).toBeNull());
+  });
+
+  it("tells the agent which workflow each failing check came from", async () => {
+    getChecksMock.mockResolvedValue({
+      checks: [
+        check({ name: "build", conclusion: "failure", workflow: "Release" }),
+        check({ name: "test", conclusion: "success", workflow: "CI" }),
+      ],
+    });
+    renderPopover();
+    await openAndSettle();
+
+    fireEvent.click(await screen.findByTestId("pr-checks-send"));
+    const [{ text }] = openSendToAgentMock.mock.calls[0]!;
+    expect(text).toContain('"workflow": "Release"');
+    expect(text).not.toContain('"workflow": "CI"');
   });
 
   it("leaves focus with the palette instead of clawing it back to the trigger", async () => {

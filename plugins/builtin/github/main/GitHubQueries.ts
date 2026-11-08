@@ -1245,8 +1245,19 @@ export const REPO_METADATA_QUERY = `
 // about what CI reported. `pageInfo` is load-bearing for both: the roll-up
 // needs `hasNextPage` to know its required-check derivation saw every context,
 // and the per-check read needs `endCursor` to advance.
+//
+// `$withIdentity` adds the workflow and app that reported each check run, which
+// only the per-check read shows. It stays off for the roll-up because
+// `workflowRun` needs Actions read access that a fine-grained or App token may
+// lack, and the CI indicator must not start failing for a field it never shows.
 export const PR_CI_STATUS_QUERY = `
-  query GetPRCIStatus($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+  query GetPRCIStatus(
+    $owner: String!
+    $repo: String!
+    $number: Int!
+    $cursor: String
+    $withIdentity: Boolean! = false
+  ) {
     repository(owner: $owner, name: $repo) {
       pullRequest(number: $number) {
         commits(last: 1) {
@@ -1268,6 +1279,16 @@ export const PR_CI_STATUS_QUERY = `
                       status
                       detailsUrl
                       isRequired(pullRequestNumber: $number)
+                      checkSuite @include(if: $withIdentity) {
+                        app {
+                          name
+                        }
+                        workflowRun {
+                          workflow {
+                            name
+                          }
+                        }
+                      }
                     }
                     ... on StatusContext {
                       context

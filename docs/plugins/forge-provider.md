@@ -292,7 +292,7 @@ The capability fields and their sub-interfaces:
 
 Omitting the field is how you declare non-support — the base interface never changes when a capability is added.
 
-`ChecksCapability.getChecks(repo, prN, opts?)` is the per-check counterpart to `getCIStatus`: it returns every check on a PR as a `CheckRun` (`name`, `status`, `conclusion?`, `required?`, `detailsUrl?`), so an agent diagnosing a red PR can name the failing check and follow `detailsUrl` to its log. Return the complete list or reject — a silently truncated list is a wrong answer, not a partial one — and page your forge's API to the end rather than serving only its first page. `null` means the PR doesn't exist; a PR with no checks is `{ checks: [] }`.
+`ChecksCapability.getChecks(repo, prN, opts?)` is the per-check counterpart to `getCIStatus`: it returns every check on a PR as a `CheckRun` (`name`, `status`, `conclusion?`, `required?`, `detailsUrl?`, `workflow?`, `app?`), so an agent diagnosing a red PR can name the failing check and follow `detailsUrl` to its log. Report `workflow` (the workflow or pipeline that ran the check) and `app` (the integration that reported it) when your forge knows them: the Review Hub uses them to tell same-named jobs apart, and they ride along when failing checks are handed to an agent. Return the complete list or reject — a silently truncated list is a wrong answer, not a partial one — and page your forge's API to the end rather than serving only its first page. `null` means the PR doesn't exist; a PR with no checks is `{ checks: [] }`.
 
 ### Credential import
 

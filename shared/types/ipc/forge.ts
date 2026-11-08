@@ -135,6 +135,10 @@ export interface ForgeCheckRun {
   required?: boolean;
   /** Link to the check's output or job log. Omitted if the provider has no URL for it. */
   detailsUrl?: string;
+  /** Workflow or pipeline that ran the check. Omitted if the provider didn't report one. */
+  workflow?: string;
+  /** App or integration that reported the check. Omitted if the provider didn't report one. */
+  app?: string;
 }
 
 /** Payload for PR cleared notification. */
