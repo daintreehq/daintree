@@ -1670,6 +1670,47 @@ describe("pty-host adversarial", () => {
     expect(ipcQueue.applyBackpressure).not.toHaveBeenCalled();
   });
 
+  it("WINDOW_CLOSED_AFTER_ITS_PORT_FAILED_STOPS_SHOWING_ITS_PROJECT (#16497)", async () => {
+    // Window 1 shows project-1 and loses its port; window 2 shows project-2.
+    // Closing window 1 then has no connection to tear down, but must still
+    // forget that it showed project-1, or project-1 counts as on screen and
+    // its output stays on the pausing primary path.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+    const port1 = createRendererPort();
+    const port2 = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port1],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [port2],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-2" });
+    await flushMicrotasks();
+
+    port1.emit("close");
+    await flushMicrotasks();
+    const ipcQueue = hostState.ipcQueueManagers[0];
+    ipcQueue.applyBackpressure.mockClear();
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+    // Still shown in window 1: its view reads the primary IPC copy.
+    expect(ipcQueue.applyBackpressure).toHaveBeenCalled();
+    expect(ipcQueue.addHiddenBytes).not.toHaveBeenCalled();
+
+    parentPort.emit("message", { type: "disconnect-port", windowId: 1 });
+    await flushMicrotasks();
+    ipcQueue.applyBackpressure.mockClear();
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(ipcQueue.addHiddenBytes).toHaveBeenCalledWith("t1", "step\r\n".length);
+    expect(ipcQueue.applyBackpressure).not.toHaveBeenCalled();
+  });
+
   it("HIDDEN_PROJECT_OVER_BUDGET_SKIPS_WITH_ONE_REPAINT_NOTICE (#16497)", async () => {
     const parentPort = await loadHost();
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));

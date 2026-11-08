@@ -695,6 +695,50 @@ describe("TerminalInstanceService repaint after a hidden-view skip (#16497)", ()
     expect(restores.map((r) => r.id)).toEqual(["a", "a", "a", "b", "b", "a"]);
   });
 
+  it("lets a fresh notice's successful repaint stand over an earlier failure", async () => {
+    vi.useFakeTimers();
+    service.instances.set("a", makeManaged());
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+
+    // Another skip is reported while the first repaint is still running.
+    service.noteHiddenOutputSkipped("a");
+    restores[0]!.settle(false);
+    await settleMicrotasks();
+    expect(restores).toHaveLength(2);
+    restores[1]!.settle(true);
+    await settleMicrotasks();
+
+    vi.advanceTimersByTime(5000);
+    await settleMicrotasks();
+    expect(restores).toHaveLength(2);
+  });
+
+  it("runs a reactivation that arrives mid-pass once the pass ends", async () => {
+    vi.useFakeTimers();
+    service.instances.set("a", makeManaged());
+    service.instances.set("b", makeManaged());
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      restores.at(-1)!.settle(false);
+      await settleMicrotasks();
+      vi.advanceTimersByTime(1000);
+      await settleMicrotasks();
+    }
+    service.noteHiddenOutputSkipped("b");
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "a", "a", "b"]);
+
+    // The view is cached and comes back while b's repaint is in flight.
+    emit("cached");
+    emit("active");
+    restores.at(-1)!.settle(true);
+    await settleMicrotasks();
+
+    expect(restores.map((r) => r.id)).toEqual(["a", "a", "a", "b", "a"]);
+  });
+
   it("does not hand a failed repaint to a pane recreated under the same id", async () => {
     vi.useFakeTimers();
     service.instances.set("a", makeManaged());

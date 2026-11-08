@@ -5,6 +5,7 @@ import {
   IPC_HIGH_WATERMARK_PERCENT,
   IPC_LOW_WATERMARK_PERCENT,
   IPC_MAX_PAUSE_MS,
+  IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES,
 } from "../../services/pty/types.js";
 
 const HIGH_BYTES = Math.ceil((IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100);
@@ -383,6 +384,34 @@ describe("IpcQueueManager hidden-view balance (#16497)", () => {
     expect(mgr.getQueuedBytes("t1")).toBe(0);
     expect(mgr.getHiddenQueuedBytes("t1")).toBe(800);
     expect(mgr.getTotalQueuedBytes()).toBe(0);
+  });
+
+  it("resumes a sibling held by the aggregate gate once carried-over debt leaves it", () => {
+    const coordinators = new Map<string, FakeCoordinator>();
+    const deps = makeDeps(undefined);
+    deps.getPauseCoordinator = vi.fn((id: string) => {
+      let coord = coordinators.get(id);
+      if (!coord) {
+        coord = makeCoordinator();
+        coordinators.set(id, coord);
+      }
+      return coord as never;
+    });
+    const gated = new IpcQueueManager(deps);
+    const heavy = Array.from({ length: 9 }, (_, i) => `h${i}`);
+    for (const id of heavy) gated.addBytes(id, LOW_BYTES * 2 - 1);
+    gated.addBytes("small", 1024);
+    expect(gated.getTotalQueuedBytes()).toBeGreaterThanOrEqual(
+      IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES
+    );
+    expect(gated.applyBackpressure("small", 0)).toBe(true);
+
+    // Their projects are hidden: the first hidden copy carries the debt over.
+    for (const id of heavy) gated.addHiddenBytes(id, 1);
+
+    expect(gated.isPaused("small")).toBe(false);
+    expect(coordinators.get("small")!.isPaused).toBe(false);
+    gated.dispose();
   });
 
   it("leaves a paused terminal's primary debt to its safety timer", () => {

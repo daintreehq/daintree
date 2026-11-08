@@ -261,6 +261,9 @@ class TerminalInstanceService {
    */
   private hiddenSkipRepaints = new Map<string, number>();
   private hiddenSkipRepaintRunning = false;
+  // A pass requested while one runs, run when it ends: the running pass may
+  // already be past the pane the request was for.
+  private hiddenSkipRepaintRerun: { includeExhausted: boolean } | null = null;
   private hiddenSkipRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private exitHandlers = new Map<string, (exitCode: number) => void>();
   private offViewLifecycle: () => void;
@@ -1509,7 +1512,12 @@ class TerminalInstanceService {
    * whose repaint fails keeps its obligation.
    */
   private repaintHiddenSkips(includeExhausted = false): void {
-    if (this.hiddenSkipRepaintRunning) return;
+    if (this.hiddenSkipRepaintRunning) {
+      this.hiddenSkipRepaintRerun = {
+        includeExhausted: includeExhausted || !!this.hiddenSkipRepaintRerun?.includeExhausted,
+      };
+      return;
+    }
     this.hiddenSkipRepaintRunning = true;
     // Keyed by the instance the attempt ran against, so a failure never
     // carries over to a pane recreated under the same id.
@@ -1551,7 +1559,10 @@ class TerminalInstanceService {
           this.hiddenSkipRepaints.set(id, failures);
           if (failures < HIDDEN_SKIP_REPAINT_TIMED_ATTEMPTS) retry = true;
         }
-        if (retry) this.scheduleHiddenSkipRetry();
+        const rerun = this.hiddenSkipRepaintRerun;
+        this.hiddenSkipRepaintRerun = null;
+        if (rerun && !isProjectViewCached()) this.repaintHiddenSkips(rerun.includeExhausted);
+        else if (retry) this.scheduleHiddenSkipRetry();
       }
     })();
   }
