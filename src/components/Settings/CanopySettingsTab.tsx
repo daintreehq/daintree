@@ -54,7 +54,9 @@ export function CanopySettingsTab() {
   const hidden = mode === "hidden";
   const activated = mode === "on";
   const model = snapshot?.model;
-  const ready = model?.status === "ready" && model.revision ? model : null;
+  // A host from before updates names no revision: nothing to show then.
+  const ready = model?.status === "ready" ? model : null;
+  const revision = ready?.revision ?? null;
   const update = ready?.update ?? null;
 
   return (
@@ -94,12 +96,12 @@ export function CanopySettingsTab() {
       </SettingsSection>
 
       {/* Which copy reads, and an update on its way: shown here and nowhere more prominent. */}
-      {activated && ready && (
+      {activated && ready && revision && (
         <SettingsSection title="Model" id="canopy-model">
           <SettingsGroup>
             <SettingsRow
               id="canopy-model-revision"
-              label={`Revision ${shortRevision(ready.revision!)}`}
+              label={`Revision ${shortRevision(revision)}`}
               description={
                 ready.source === "update"
                   ? "An update from Hugging Face, newer than the copy that comes with Daintree"
@@ -113,7 +115,7 @@ export function CanopySettingsTab() {
                 description={
                   <>
                     <span className="block">
-                      {`${formatBytes(update.received)} of ${formatBytes(update.total)}. Canopy reads with revision ${shortRevision(ready.revision!)} until it's in place.`}
+                      {`${formatBytes(update.received)} of ${formatBytes(update.total)}. Canopy reads with revision ${shortRevision(revision)} until it's in place.`}
                     </span>
                     <ProgressBar
                       className="mt-2"

@@ -7,6 +7,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CANOPY_MODEL,
   CanopyModels,
+  removeStaleUpdates,
   type CanopyModelFileSpec,
   type CanopyModelRevision,
 } from "../canopyModels.js";
@@ -119,7 +121,7 @@ function pins(r: Repo): CanopyModelFileSpec[] {
  * files at that revision, with Range support. `hold` keeps a file's body back
  * until released.
  */
-function hub(r: Repo | null, options: { hold?: string } = {}) {
+function hub(r: Repo | null, options: { hold?: string; rangeFromZero?: boolean } = {}) {
   const requests: Array<{ url: string; range: string | null }> = [];
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -151,9 +153,13 @@ function hub(r: Repo | null, options: { hold?: string } = {}) {
       name === "model.int8.onnx" && r.servedWeights !== undefined ? r.servedWeights : r.files[name];
     if (content === undefined) return new Response("", { status: 404 });
     const bytes = Buffer.from(content);
-    const from = range ? Number(/bytes=(\d+)-/.exec(range)![1]) : 0;
-    if (from >= bytes.length && range) return new Response("", { status: 416 });
+    const asked = range ? Number(/bytes=(\d+)-/.exec(range)![1]) : 0;
+    const from = options.rangeFromZero ? 0 : asked;
+    if (asked >= bytes.length && range) return new Response("", { status: 416 });
     const body = bytes.subarray(from);
+    const headers: Record<string, string> = range
+      ? { "Content-Range": `bytes ${from}-${bytes.length - 1}/${bytes.length}` }
+      : {};
     if (options.hold === name) {
       // Half the file at once, the rest once released: a download under way.
       const half = Math.floor(body.length / 2);
@@ -165,9 +171,9 @@ function hub(r: Repo | null, options: { hold?: string } = {}) {
           controller.close();
         },
       });
-      return new Response(stream, { status: range ? 206 : 200 });
+      return new Response(stream, { status: range ? 206 : 200, headers });
     }
-    return new Response(body, { status: range ? 206 : 200 });
+    return new Response(body, { status: range ? 206 : 200, headers });
   });
   return { fetchMock, requests, release };
 }
@@ -194,6 +200,18 @@ const SHIPPED: CanopyModelRevision = {
 
 function models(changes: () => void = () => {}): CanopyModels {
   return new CanopyModels(shippedDir, changes, { updates, shipped: SHIPPED });
+}
+
+/** A download an earlier launch started for `r` and stopped part way. */
+function started(r: Repo): string {
+  const dir = path.join(updates, `${r.sha}.download`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, "model.int8.onnx.part"), "INT8-");
+  writeFileSync(
+    path.join(dir, "download.json"),
+    JSON.stringify({ id: CANOPY_MODEL, revision: r.sha, published: r.at, files: pins(r) })
+  );
+  return dir;
 }
 
 /** An update an earlier launch fetched and put in place. */
@@ -415,6 +433,7 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     const staging = path.join(updates, `${NEWER}.download`);
     expect(readdirSync(staging).sort()).toEqual([
       "config.json",
+      "download.json",
       "tokenizer.json",
       "tokenizer_config.json",
     ]);
@@ -458,6 +477,35 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     expect(fetchedFiles(second.requests)).not.toContain("tokenizer.json");
   });
 
+  it.each([
+    ["what was kept isn't the file's start", { kept: "INT8-wrong" }],
+    ["the server sends some other part of the file", { kept: "INT8-", fromZero: true }],
+  ])(
+    "starts a file again when %s, never putting it in place",
+    async (_label, { kept, fromZero }) => {
+      const newer = repo(NEWER, SHIPPED_AT + DAY);
+      const dir = started(newer);
+      writeFileSync(path.join(dir, "model.int8.onnx.part"), kept);
+      const first = hub(newer, { rangeFromZero: fromZero });
+      vi.stubGlobal("fetch", first.fetchMock);
+      const m = models();
+      await m.ensure();
+
+      expect(await m.installedDir()).toBe(shippedDir);
+      expect(existsSync(path.join(dir, "model.int8.onnx.part"))).toBe(false);
+
+      // The next look fetches it whole.
+      const second = hub(newer);
+      vi.stubGlobal("fetch", second.fetchMock);
+      await m.ensure();
+      expect(await m.installedDir()).toBe(path.join(updates, NEWER));
+      expect(second.requests.find((r) => r.url.endsWith("/model.int8.onnx"))?.range).toBeNull();
+      expect(readFileSync(path.join(updates, NEWER, "model.int8.onnx"), "utf8")).toBe(
+        `INT8-${NEWER}`
+      );
+    }
+  );
+
   it("replaces an update with a newer one, deleting the one it replaced", async () => {
     const previous = installed(repo(NEWER, SHIPPED_AT + DAY));
     const { fetchMock } = hub(repo(NEWEST, SHIPPED_AT + 2 * DAY));
@@ -471,9 +519,7 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
   });
 
   it("deletes a download the Hub has moved on from", async () => {
-    const abandoned = path.join(updates, `${NEWER}.download`);
-    mkdirSync(abandoned, { recursive: true });
-    writeFileSync(path.join(abandoned, "model.int8.onnx.part"), "INT8-");
+    const abandoned = started(repo(NEWER, SHIPPED_AT + DAY));
     const { fetchMock } = hub(repo(SHIPPED_REVISION, SHIPPED_AT));
     vi.stubGlobal("fetch", fetchMock);
     await models().ensure();
@@ -499,5 +545,46 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
 
     expect(await m.installedDir()).toBe(dir);
     expect(m.state()).toMatchObject({ status: "ready", source: "update" });
+  });
+});
+
+describe("removeStaleUpdates", () => {
+  it("deletes what the shipped copy has caught up with, finished or part way, reading only records", async () => {
+    const older = installed(repo(OLDER, SHIPPED_AT - DAY));
+    const same = installed(repo(SHIPPED_REVISION, SHIPPED_AT));
+    const olderStarted = started(repo("8".repeat(40), SHIPPED_AT - DAY));
+    const keep = installed(repo(NEWER, SHIPPED_AT + DAY));
+    const keepStarted = started(repo(NEWEST, SHIPPED_AT + 2 * DAY));
+    // A finished folder whose record can't be read is no update.
+    const broken = path.join(updates, "7".repeat(40));
+    mkdirSync(broken);
+    // A download with no record yet may be being written.
+    const unrecorded = path.join(updates, `${"6".repeat(40)}.download`);
+    mkdirSync(unrecorded);
+    const fetchMock = offline();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await removeStaleUpdates(updates, undefined, SHIPPED);
+
+    expect([older, same, olderStarted, broken].filter(existsSync)).toEqual([]);
+    expect([keep, keepStarted, unrecorded].every(existsSync)).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves an updates folder reached through a link alone", async () => {
+    const shared = path.join(root, "shared");
+    mkdirSync(shared);
+    const stale = path.join(shared, OLDER);
+    mkdirSync(stale);
+    mkdirSync(path.dirname(updates), { recursive: true });
+    symlinkSync(shared, updates, process.platform === "win32" ? "junction" : "dir");
+
+    await removeStaleUpdates(updates, undefined, SHIPPED);
+
+    expect(existsSync(stale)).toBe(true);
+  });
+
+  it("does nothing when no update was ever fetched", async () => {
+    await expect(removeStaleUpdates(updates, undefined, SHIPPED)).resolves.toBeUndefined();
   });
 });

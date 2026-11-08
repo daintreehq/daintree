@@ -23,6 +23,7 @@ const CONFIG = Buffer.from('{"max_len":512}');
 const manifest = {
   id: "daintreehq/canopy-reader-17m",
   revision: "0123456789abcdef0123456789abcdef01234567",
+  published: "2026-10-25T19:08:24.000Z",
   weights: "model.int8.onnx",
   files: [
     // `printf '{"max_len":512}' | git hash-object --stdin`
@@ -37,8 +38,13 @@ const manifest = {
 
 const BODIES = { "config.json": CONFIG, "model.int8.onnx": WEIGHTS };
 
-function serving(bodies = BODIES) {
+const REVISION_URL = `https://huggingface.co/api/models/${manifest.id}/revision/${manifest.revision}`;
+
+function serving(bodies = BODIES, published = manifest.published) {
   return vi.fn(async (url) => {
+    if (url === REVISION_URL) {
+      return Response.json({ sha: manifest.revision, lastModified: published });
+    }
     const name = url.slice(url.lastIndexOf("/") + 1);
     const body = bodies[name];
     if (!body) return new Response(null, { status: 404 });
@@ -117,6 +123,7 @@ describe("prepareModel", () => {
 
     expect(fetched).toEqual(["config.json", "model.int8.onnx"]);
     expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      REVISION_URL,
       `https://huggingface.co/${manifest.id}/resolve/${manifest.revision}/config.json`,
       `https://huggingface.co/${manifest.id}/resolve/${manifest.revision}/model.int8.onnx`,
     ]);
@@ -142,8 +149,10 @@ describe("prepareModel", () => {
 
     await prepareModel({ dir, manifest, fetchImpl, log: () => {} });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(fetchImpl.mock.calls[0][0]).toMatch(/\/model\.int8\.onnx$/);
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      REVISION_URL,
+      `https://huggingface.co/${manifest.id}/resolve/${manifest.revision}/model.int8.onnx`,
+    ]);
     expect(readFileSync(path.join(dir, "model.int8.onnx")).equals(WEIGHTS)).toBe(true);
     expect(readFileSync(path.join(dir, "config.json")).equals(CONFIG)).toBe(true);
     expect(invalidFiles(dir, manifest)).toEqual([]);
@@ -171,6 +180,16 @@ describe("prepareModel", () => {
     expect(existsSync(path.join(dir, "model.int8.onnx", "keep"))).toBe(true);
   });
 
+  it("refuses a manifest whose published date isn't the pinned revision's, fetching nothing", async () => {
+    const fetchImpl = serving(BODIES, "2026-10-24T00:00:00.000Z");
+
+    await expect(prepareModel({ dir, manifest, fetchImpl, log: () => {} })).rejects.toThrow(
+      /published in .* is 2026-10-25T19:08:24\.000Z, but Hugging Face published 0123456789ab at 2026-10-24/
+    );
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([REVISION_URL]);
+    expect(existsSync(path.join(dir, "model.int8.onnx"))).toBe(false);
+  });
+
   it("fails on an HTTP error", async () => {
     const fetchImpl = serving({ "config.json": CONFIG });
 
@@ -185,5 +204,7 @@ describe("the tracked manifest", () => {
     const real = readManifest();
     expect(real.files.every((f) => Boolean(f.sha256 || f.blobId) && f.size > 0)).toBe(true);
     expect(real.files.map((f) => f.name)).toContain(real.weights);
+    // What the app orders revisions by.
+    expect(Number.isFinite(Date.parse(real.published))).toBe(true);
   });
 });

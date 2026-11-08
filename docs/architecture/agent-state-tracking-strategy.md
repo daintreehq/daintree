@@ -106,7 +106,7 @@ The project counts (`computeProjectAgentCounts`) read the same report off the te
 
 ## Canopy
 
-Canopy is the one sanctioned interpretation layer: a reader, on by default and turned off or hidden from Settings, reading agent screens with a local model that ships inside the app (#16415). It may suggest where a run lands in the existing attention buckets (`FleetRunRow.canopy`, placed by `canopyPlacement` in `shared/utils/canopyRefinement.ts`), within these limits:
+Canopy is the one sanctioned interpretation layer: a reader, on by default and turned off or hidden from Settings, reading agent screens with a local model that ships inside the app (#16415) and is updated in the background when Hugging Face publishes a newer revision this build reads, never to one older than the shipped copy (#16416). It may suggest where a run lands in the existing attention buckets (`FleetRunRow.canopy`, placed by `canopyPlacement` in `shared/utils/canopyRefinement.ts`), within these limits:
 
 - It sits alongside the observed `agentState`/`waitingReason` and never rewrites them.
 - It never clears an approval or error Daintree observed.

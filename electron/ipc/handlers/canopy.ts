@@ -70,6 +70,7 @@ import {
   CanopyModels,
   canopyModelName,
   removeDownloadedModels,
+  removeStaleUpdates,
 } from "../../services/canopy/canopyModels.js";
 import { store } from "../../store.js";
 import { isE2EMode, isSmokeTest } from "../../setup/runtimeFlags.js";
@@ -353,7 +354,12 @@ export function changeCanopyMode(
   }
   if (mode !== was) modeRevision++;
   store.set("canopyMode", mode);
-  if (mode !== "on") stopWorkerTerminalWatches();
+  if (mode !== "on") {
+    stopWorkerTerminalWatches();
+    // An update under way stops, keeping what it fetched: a look begun
+    // before any service was made included.
+    models?.cancel();
+  }
   // Nothing was started, and nothing is wanted: no service to tell, but
   // every view still hears the change, as a service would have told them.
   if (!service && mode !== "on") {
@@ -366,9 +372,7 @@ export function changeCanopyMode(
   if (mode === "on") {
     ensureModel();
   } else {
-    // Off lets the model go; an update under way stops, keeping what it fetched.
     reader?.release();
-    models?.cancel();
   }
   return canopy.getSnapshot();
 }
@@ -2788,13 +2792,20 @@ export function registerCanopyHandlers(): () => void {
       payload: terminalIds,
     })
   );
-  // Whatever Canopy's mode: a user who hid it has a downloaded model too.
+  // Whatever Canopy's mode: a user who hid it has a downloaded model too, and
+  // an update an app update has made stale, deleted without a look online.
   const stopCleanup = new AbortController();
   const downloadedModelsCleanup = setTimeout(() => {
     removeDownloadedModels(
       path.join(app.getPath("userData"), "canopy", "models"),
       stopCleanup.signal
     ).catch((error: unknown) => console.warn("[Canopy] Couldn't delete downloaded models:", error));
+    const updates = modelUpdatesDir();
+    if (updates !== null) {
+      removeStaleUpdates(updates, stopCleanup.signal).catch((error: unknown) =>
+        console.warn("[Canopy] Couldn't delete stale model updates:", error)
+      );
+    }
   }, DOWNLOADED_MODELS_CLEANUP_DELAY_MS);
   downloadedModelsCleanup.unref?.();
   return () => {

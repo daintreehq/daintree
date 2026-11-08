@@ -2044,8 +2044,8 @@ export const SETTINGS_REGISTRY = [
     importer: LazyCanopySettingsTab.preload,
     LazyComponent: LazyCanopySettingsTab,
     searchNavDescription: "Show or hide Canopy, and turn its reading on or off",
-    // The model's own row only renders when the model that ships with Daintree fails its
-    // check, so model searches land on rows that are always there and describe it.
+    // The model's own rows render only while Canopy reads (its revision, an update on its
+    // way, a failed check), so model searches land on rows that are always there.
     searchNavKeywords: [
       "canopy",
       "inbox",
