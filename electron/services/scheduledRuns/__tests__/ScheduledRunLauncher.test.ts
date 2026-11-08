@@ -10,6 +10,7 @@ import type {
 import { createSchedule, occurrenceKeyFor } from "../../../../shared/utils/scheduledRuns.js";
 import { SCHEDULE_ASSISTANT_AGENT_ID } from "../../../../shared/utils/scheduledRuns.js";
 import {
+  _resetScheduledRunLauncherForTest,
   launchScheduledRun,
   ScheduledLaunchUnansweredError,
   type ScheduledAssistantLaunchRequest,
@@ -153,6 +154,7 @@ beforeEach(() => {
 
 afterEach(() => {
   _resetScheduledRunAdmissionForTest();
+  _resetScheduledRunLauncherForTest();
 });
 
 const run = (preferredWebContentsId?: number) =>
@@ -1241,12 +1243,383 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
   });
 });
 
+const ALREADY_LAUNCHING: ActionDispatchResult = {
+  ok: true,
+  result: { launched: false, terminalId: null, spawnStatus: "already-launching" },
+};
+const PANEL_LIMIT: ActionDispatchResult = {
+  ok: true,
+  result: { launched: false, terminalId: null, spawnStatus: "panel-limit" },
+};
+
+describe("launchScheduledRun with schedules of one agent due together (#16395)", () => {
+  /** Schedules beside `schedule-1`, read by id. */
+  let added: Schedule[];
+  /** Schedules whose scheduler decision no longer stands. */
+  let stale: Set<string>;
+  let quitting: boolean;
+
+  beforeEach(() => {
+    added = [];
+    stale = new Set();
+    quitting = false;
+    deps.isShuttingDown = () => quitting;
+  });
+
+  function addSchedule(id: string, agentId = schedule.launch.agentId): Schedule {
+    const entry: Schedule = {
+      ...schedule,
+      id,
+      name: `Schedule ${id}`,
+      launch: { ...schedule.launch, agentId },
+    };
+    added.push(entry);
+    deps.getSchedule = async (_projectId, scheduleId) => ({
+      schedule: added.find((candidate) => candidate.id === scheduleId) ?? schedule,
+      switches,
+    });
+    return entry;
+  }
+
+  const launchSchedule = (scheduleId: string, projectId = "project-1") =>
+    launchScheduledRun(
+      {
+        projectId,
+        scheduleId,
+        origin: SCHEDULED,
+        stillCurrent: () => !stale.has(scheduleId),
+      },
+      deps
+    );
+
+  /**
+   * A view's agent launcher: one launch of an agent at a time, a second
+   * declined while the first is still starting, as `useAgentLauncher` does.
+   */
+  function guardedLauncher(startMs = 10) {
+    const starting = new Set<string>();
+    return vi.fn(async (_target: unknown, request: ScheduledLaunchRequest) => {
+      const { agentId } = request.args;
+      if (starting.has(agentId)) return ALREADY_LAUNCHING;
+      starting.add(agentId);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, startMs));
+        spawnFor(request);
+        return launched(request.args.requestedId);
+      } finally {
+        starting.delete(agentId);
+      }
+    });
+  }
+
+  /**
+   * A launcher whose every answer waits for `answer()`, spawning first unless
+   * told not to; a spawn the admission refuses fails the launch.
+   */
+  function heldLauncher(spawn: (request: ScheduledLaunchRequest) => void = spawnFor) {
+    const held: Array<(spawns: boolean) => void> = [];
+    const launch = vi.fn(
+      (_target: unknown, request: ScheduledLaunchRequest) =>
+        new Promise<ActionDispatchResult>((resolve, reject) => {
+          held.push((spawns) => {
+            try {
+              if (spawns) spawn(request);
+              resolve(launched(request.args.requestedId));
+            } catch (error) {
+              reject(error);
+            }
+          });
+        })
+    );
+    return { launch, answer: (spawns = true) => held.shift()?.(spawns) };
+  }
+
+  /** Long enough for a launch that wasn't held back to have been asked. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+  it("launches both in the view, one after the other, recording no refusal", async () => {
+    addSchedule("schedule-2");
+    deps.launchInView = guardedLauncher();
+
+    const outcomes = await Promise.all([
+      launchSchedule("schedule-1"),
+      launchSchedule("schedule-2"),
+    ]);
+
+    expect(outcomes).toEqual([
+      expect.objectContaining({ status: "started" }),
+      expect.objectContaining({ status: "started" }),
+    ]);
+    expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+    expect(recorder.registerLaunch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { where: "in the view", noView: false },
+    { where: "in main when no view shows the project", noView: true },
+  ])("asks for the second launch $where only once the first has answered", async ({ noView }) => {
+    addSchedule("schedule-2");
+    const { launch, answer } = heldLauncher();
+    if (noView) {
+      deps.findView = () => null;
+      deps.launchWithoutView = launch;
+    } else {
+      deps.launchInView = launch;
+    }
+
+    const first = launchSchedule("schedule-1");
+    const second = launchSchedule("schedule-2");
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(launch).toHaveBeenCalledTimes(1);
+
+    answer();
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(2));
+    answer();
+    await expect(first).resolves.toMatchObject({ status: "started" });
+    await expect(second).resolves.toMatchObject({ status: "started" });
+    expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+  });
+
+  it("passes the turn on at the answer, not the spawn", async () => {
+    addSchedule("schedule-2");
+    deps.spawnTimeoutMs = 10_000;
+    const { launch, answer } = heldLauncher();
+    deps.launchInView = launch;
+    let firstRequest!: ScheduledLaunchRequest;
+    launch.mockImplementationOnce(async (_target, request) => {
+      firstRequest = request;
+      return launched(request.args.requestedId);
+    });
+
+    const first = launchSchedule("schedule-1");
+    const second = launchSchedule("schedule-2");
+    // The first answered and waits for its spawn; the second is asked meanwhile.
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(2));
+    answer();
+    await expect(second).resolves.toMatchObject({ status: "started" });
+
+    spawnFor(firstRequest);
+    await expect(first).resolves.toMatchObject({ status: "started" });
+  });
+
+  it("doesn't hold up a launch of another agent", async () => {
+    addSchedule("schedule-2", "codex");
+    const { launch, answer } = heldLauncher();
+    deps.launchInView = launch;
+
+    const first = launchSchedule("schedule-1");
+    const second = launchSchedule("schedule-2");
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(2));
+
+    answer();
+    answer();
+    await expect(first).resolves.toMatchObject({ status: "started" });
+    await expect(second).resolves.toMatchObject({ status: "started" });
+  });
+
+  it("doesn't hold up a launch of the agent in another project", async () => {
+    const elsewhere = { id: "project-2", path: "/repo-2", name: "Other", status: "active" };
+    deps.getProject = (projectId) =>
+      projectId === project.id
+        ? project
+        : projectId === elsewhere.id
+          ? (elsewhere as Project)
+          : null;
+    addSchedule("schedule-2");
+    const { launch, answer } = heldLauncher((request) =>
+      request.scheduledRun.scheduleId === "schedule-2"
+        ? spawnFor(request, {
+            projectId: elsewhere.id,
+            requestedCwd: elsewhere.path,
+            cwd: elsewhere.path,
+          })
+        : spawnFor(request)
+    );
+    deps.launchInView = launch;
+
+    const first = launchSchedule("schedule-1");
+    const second = launchSchedule("schedule-2", elsewhere.id);
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(2));
+
+    answer();
+    answer();
+    await expect(first).resolves.toMatchObject({ status: "started" });
+    await expect(second).resolves.toMatchObject({ status: "started" });
+  });
+
+  it("passes the turn on when a launch goes unanswered", async () => {
+    addSchedule("schedule-2");
+    const { launch, answer } = heldLauncher();
+    deps.launchInView = launch;
+    launch.mockImplementationOnce(async () => {
+      throw new ScheduledLaunchUnansweredError("The window showing the project closed.");
+    });
+
+    const first = launchSchedule("schedule-1");
+    const second = launchSchedule("schedule-2");
+    await expect(first).resolves.toEqual({
+      status: "failed",
+      runId: expect.any(String),
+      message: "The window showing the project closed.",
+    });
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(2));
+    answer();
+    await expect(second).resolves.toMatchObject({ status: "started" });
+  });
+
+  it("still records a real refusal, and passes the turn on after it", async () => {
+    addSchedule("schedule-2");
+    addSchedule("schedule-3");
+    const { launch: held, answer } = heldLauncher();
+    const launch = vi.fn((view: FakeView, request: ScheduledLaunchRequest) =>
+      request.scheduledRun.scheduleId === "schedule-2"
+        ? Promise.resolve(PANEL_LIMIT)
+        : held(view, request)
+    );
+    deps.launchInView = launch;
+
+    const first = launchSchedule("schedule-1");
+    const second = launchSchedule("schedule-2");
+    const third = launchSchedule("schedule-3");
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(launch).toHaveBeenCalledTimes(1);
+
+    answer();
+    await expect(second).resolves.toEqual({
+      status: "failed",
+      runId: expect.any(String),
+      message: "The project already has as many panels as it can hold.",
+    });
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(3));
+    answer();
+    await expect(first).resolves.toMatchObject({ status: "started" });
+    await expect(third).resolves.toMatchObject({ status: "started" });
+    expect(recorder.registerRefusedLaunch).toHaveBeenCalledTimes(1);
+    expect(recorder.registerRefusedLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduleId: "schedule-2" })
+    );
+  });
+
+  it("asks a view that opened while it waited its turn", async () => {
+    addSchedule("schedule-2");
+    const { launch, answer } = heldLauncher();
+    deps.findView = vi.fn(() => null);
+    deps.launchWithoutView = launch;
+    deps.launchInView = guardedLauncher();
+
+    const first = launchSchedule("schedule-1");
+    const second = launchSchedule("schedule-2");
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(1));
+    deps.findView = () => ({ id: 7 });
+    answer();
+
+    await expect(first).resolves.toMatchObject({ status: "started" });
+    await expect(second).resolves.toMatchObject({ status: "started" });
+    expect(deps.launchWithoutView).toHaveBeenCalledTimes(1);
+    expect(deps.launchInView).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "is removed",
+      change: () => cancelScheduledLaunches({ scheduleId: "schedule-2" }),
+      outcome: { status: "not-found" },
+      refused: false,
+    },
+    {
+      name: "no longer stands, its cadence changed",
+      change: () => {
+        stale.add("schedule-2");
+      },
+      outcome: { status: "not-found" },
+      refused: false,
+    },
+    {
+      name: "is caught by a quit",
+      change: () => {
+        quitting = true;
+      },
+      outcome: { status: "not-found" },
+      refused: false,
+    },
+    {
+      name: "is in a project going to sleep",
+      change: () => {
+        deps.isProjectSleeping = () => true;
+      },
+      outcome: {
+        status: "failed",
+        runId: expect.any(String),
+        message: "The project was going to sleep.",
+      },
+      refused: true,
+    },
+  ])(
+    "asks for nothing when a launch waiting its turn $name",
+    async ({ change, outcome, refused }) => {
+      addSchedule("schedule-2");
+      const { launch, answer } = heldLauncher();
+      deps.launchInView = launch;
+
+      const first = launchSchedule("schedule-1");
+      const second = launchSchedule("schedule-2");
+      await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(1));
+      change();
+      // No spawn: a quit or a sleep would refuse it, and the first run's fate is beside the point.
+      answer(false);
+
+      await expect(second).resolves.toEqual(outcome);
+      expect(launch).toHaveBeenCalledTimes(1);
+      await first;
+      expect(hasPendingScheduledLaunch("project-1")).toBe(false);
+      const secondRefusals = recorder.registerRefusedLaunch.mock.calls.filter(
+        (call) => (call[0] as { scheduleId: string }).scheduleId === "schedule-2"
+      );
+      expect(secondRefusals).toEqual(
+        refused ? [[expect.objectContaining({ terminalId: null, message: outcome.message })]] : []
+      );
+    }
+  );
+});
+
 describe("launchScheduledRun with the Daintree Assistant", () => {
   beforeEach(() => {
     schedule = {
       ...schedule,
       launch: { ...schedule.launch, agentId: SCHEDULE_ASSISTANT_AGENT_ID },
     };
+  });
+
+  it("doesn't wait on another schedule's Assistant, which claims its own session", async () => {
+    const other: Schedule = { ...schedule, id: "schedule-2" };
+    deps.getSchedule = async (_projectId, scheduleId) => ({
+      schedule: scheduleId === other.id ? other : schedule,
+      switches,
+    });
+    const held: Array<() => void> = [];
+    const launchAssistant = vi.fn(
+      (_project: Project, request: ScheduledAssistantLaunchRequest) =>
+        new Promise<{ status: "started" }>((resolve) => {
+          held.push(() => {
+            spawnAssistantFor(request);
+            resolve({ status: "started" });
+          });
+        })
+    );
+    deps.launchAssistant = launchAssistant;
+
+    const first = launchWith(SCHEDULED);
+    const second = launchScheduledRun(
+      { projectId: "project-1", scheduleId: "schedule-2", origin: SCHEDULED },
+      deps
+    );
+    await vi.waitFor(() => expect(launchAssistant).toHaveBeenCalledTimes(2));
+
+    for (const release of held) release();
+    await expect(first).resolves.toMatchObject({ status: "started" });
+    await expect(second).resolves.toMatchObject({ status: "started" });
   });
 
   it("starts the Assistant in main even with a view, registering the CLI it started", async () => {
