@@ -101,6 +101,7 @@ vi.mock("../../services/PullRequestService.js", () => ({
     start: vi.fn(),
     stop: vi.fn(),
     cleanup: vi.fn(),
+    reset: vi.fn(),
     refresh: vi.fn(),
     getStatus: vi.fn().mockReturnValue({
       state: "idle",
@@ -188,6 +189,8 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
   });
 
   afterEach(() => {
+    // Monitors installed through syncMonitors arm real poll timers.
+    service.dispose();
     vi.restoreAllMocks();
   });
 
