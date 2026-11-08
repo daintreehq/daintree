@@ -3982,6 +3982,15 @@ describe("terminal spawn handler - main-screen launch env (#16355)", () => {
   let tmpDir: string;
 
   const claudeInlineEnv = () => AGENT_REGISTRY.claude.capabilities?.inlineModeEnv ?? {};
+  const undeclaredAgentId = () => {
+    const agentId = (Object.keys(AGENT_REGISTRY) as Array<keyof typeof AGENT_REGISTRY>).find(
+      (id) =>
+        AGENT_REGISTRY[id].capabilities !== undefined &&
+        AGENT_REGISTRY[id].capabilities.inlineModeEnv === undefined
+    );
+    expect(agentId).toBeDefined();
+    return agentId!;
+  };
 
   async function spawnWith(options: Record<string, unknown>): Promise<Record<string, string>> {
     registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
@@ -4026,13 +4035,17 @@ describe("terminal spawn handler - main-screen launch env (#16355)", () => {
     ["a restart's", false],
     ["a restore's", true],
   ])("carries it on %s resume of the pane", async (_label, restore) => {
+    const sessionId = "0b6a1c2e-6f4b-4f43-9d55-1b7b2f1f8a10";
     const env = await spawnWith({
-      command: "claude --resume 0b6a1c2e-6f4b-4f43-9d55-1b7b2f1f8a10",
+      command: `claude --resume ${sessionId}`,
       launchAgentId: "claude",
-      agentSessionId: "0b6a1c2e-6f4b-4f43-9d55-1b7b2f1f8a10",
+      agentSessionId: sessionId,
       restore,
     });
 
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs).toMatchObject({ restore, agentSessionId: sessionId });
+    expect(spawnArgs.command).toContain(sessionId);
     expect(env).toMatchObject(claudeInlineEnv());
   });
 
@@ -4051,6 +4064,7 @@ describe("terminal spawn handler - main-screen launch env (#16355)", () => {
 
         const spawnArgs = ptyClient.spawn.mock.calls[0][1];
         expect(spawnArgs.shell).toBeUndefined();
+        expect(spawnArgs.args).toBeUndefined();
         expect(spawnArgs.postSpawnInput).toBe("claude\r");
         expect(env).toMatchObject(claudeInlineEnv());
       } finally {
@@ -4099,6 +4113,7 @@ describe("terminal spawn handler - main-screen launch env (#16355)", () => {
       env: { DAINTREE_MCP_TOKEN: "help-token" },
     });
 
+    expect(ptyClient.spawn.mock.calls[0][1].isAssistantTerminal).toBe(true);
     expect(env).toMatchObject({ ...claudeInlineEnv(), DAINTREE_MCP_TOKEN: "help-token" });
   });
 
@@ -4109,16 +4124,31 @@ describe("terminal spawn handler - main-screen launch env (#16355)", () => {
   });
 
   it("adds nothing for an agent that declares no main-screen env", async () => {
-    const agentId = (Object.keys(AGENT_REGISTRY) as Array<keyof typeof AGENT_REGISTRY>).find(
-      (id) => AGENT_REGISTRY[id].capabilities?.inlineModeEnv === undefined
-    );
-    expect(agentId).toBeDefined();
+    const agentId = undeclaredAgentId();
 
     const env = await spawnWith({
-      command: AGENT_REGISTRY[agentId!].command,
+      command: AGENT_REGISTRY[agentId].command,
       launchAgentId: agentId,
     });
 
     for (const key of Object.keys(claudeInlineEnv())) expect(env[key]).toBeUndefined();
+  });
+
+  it("follows each agent's own declaration rather than Claude's", async () => {
+    const agentId = undeclaredAgentId();
+    const capabilities = AGENT_REGISTRY[agentId].capabilities!;
+    capabilities.inlineModeEnv = { EXAMPLE_MAIN_SCREEN: "1" };
+    try {
+      const env = await spawnWith({
+        command: AGENT_REGISTRY[agentId].command,
+        launchAgentId: agentId,
+        env: { EXAMPLE_MAIN_SCREEN: "0", EXAMPLE_KEPT: "yes" },
+      });
+
+      expect(env).toMatchObject({ EXAMPLE_MAIN_SCREEN: "1", EXAMPLE_KEPT: "yes" });
+      for (const key of Object.keys(claudeInlineEnv())) expect(env[key]).toBeUndefined();
+    } finally {
+      delete capabilities.inlineModeEnv;
+    }
   });
 });
