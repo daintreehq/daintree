@@ -365,6 +365,7 @@ describe("permissionBypassArgs (#16374)", () => {
     expect(parses([])).toBe(false);
     expect(parses(Array.from({ length: 21 }, (_, i) => `--flag${i}`))).toBe(false);
     expect(parses(Array.from({ length: 20 }, (_, i) => `--flag${i}`))).toBe(true);
+    expect(parses([`--${"a".repeat(254)}`])).toBe(true);
     expect(parses([`--${"a".repeat(255)}`])).toBe(false);
     expect(parses(["--bad\nflag"])).toBe(false);
     expect(parses(["--bad\0flag"])).toBe(false);
@@ -377,6 +378,14 @@ describe("permissionBypassArgs (#16374)", () => {
     expect(parses(["--approval\tnever"])).toBe(false);
     expect(parses(["--session={sessionId}"])).toBe(false);
     expect(parses(["--token=${settings:apiToken}"])).toBe(false);
+    expect(parses(["--home=${HOME}"])).toBe(false);
+  });
+
+  it("takes options only, each followed by at most one value", () => {
+    expect(parses(["yolo"])).toBe(false);
+    expect(parses(["--approval", "never", "always"])).toBe(false);
+    expect(parses(["--yes", "--approval", "never"])).toBe(true);
+    expect(parses(["-y"])).toBe(true);
   });
 
   describe("kept out of args every launch or resume carries", () => {
@@ -429,6 +438,12 @@ describe("permissionBypassArgs (#16374)", () => {
           },
         })
       ).toEqual(["contributes.agents.0.resume.resumeLatestArgs"]);
+      expect(
+        issuePaths({
+          permissionBypassArgs: ["--yolo"],
+          resume: { kind: "session-id", args: ["--resume", "{sessionId}", "--yolo"] },
+        })
+      ).toEqual(["contributes.agents.0.resume.args"]);
     });
 
     it("allows the same option with another value, and a shared option prefix", () => {

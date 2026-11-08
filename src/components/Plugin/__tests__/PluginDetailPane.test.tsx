@@ -430,30 +430,40 @@ describe("PluginDetailPane capabilities", () => {
     const agent = { command: "acme", color: "#3366ff", iconId: "claude" };
     const base = makePlugin().manifest;
     renderPane(
-      withCapabilities(["agent:register"], {
+      withCapabilities(["network:fetch", "agent:register"], {
         manifest: {
           ...base,
-          capabilities: ["agent:register"],
+          capabilities: ["network:fetch", "agent:register"],
           contributes: {
             ...base.contributes,
             agents: [
-              { ...agent, id: "hermes", name: "Hermes", permissionBypassArgs: ["--yolo"] },
+              { ...agent, id: "hermes", name: "Her\u202Emes", permissionBypassArgs: ["--yolo"] },
               { ...agent, id: "plain", name: "Plain" },
             ],
           },
         },
       })
     );
-    expect(
-      screen.getByText(
-        "Hermes can run without permission prompts when you turn on Skip permission prompts"
-      )
-    ).toBeTruthy();
+    const disclosures = screen.getAllByText(
+      "Hermes can run without permission prompts when you turn on Skip permission prompts"
+    );
+    expect(disclosures).toHaveLength(1);
+    expect(disclosures[0]!.closest("li")?.textContent).toContain("Register agent CLIs");
     expect(screen.queryByText(/Plain can run/)).toBeNull();
   });
 
   it("says nothing about permission prompts when no agent declares a bypass flag (#16374)", () => {
-    renderPane(withCapabilities(["agent:register"]));
+    const agent = { command: "acme", color: "#3366ff", iconId: "claude" };
+    const base = makePlugin().manifest;
+    renderPane(
+      withCapabilities(["agent:register"], {
+        manifest: {
+          ...base,
+          capabilities: ["agent:register"],
+          contributes: { ...base.contributes, agents: [{ ...agent, id: "plain", name: "Plain" }] },
+        },
+      })
+    );
     expect(screen.getByText("Register agent CLIs")).toBeTruthy();
     expect(screen.queryByText(/without permission prompts/)).toBeNull();
   });

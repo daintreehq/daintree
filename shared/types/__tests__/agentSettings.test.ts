@@ -26,6 +26,7 @@ import {
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
   getDefaultDangerousArgs,
+  getPluginBypassArgHistory,
   agentClipboardDirectory,
 } from "../agentSettings.js";
 import { setUserRegistry } from "../../config/agentRegistry.js";
@@ -2339,6 +2340,49 @@ describe("plugin-declared permission bypass (#16374)", () => {
     expect(getDefaultDangerousArgs("hermes")).toBe("");
     expect(generateAgentFlags({}, "hermes", { globalSkipPermissions: true })).toEqual([]);
     expect(reconcileBypassFlags(["--yes-to-all"], "hermes", true)).toEqual(["--yes-to-all"]);
+  });
+
+  it("strips a recorded declaration while the plugin's own is missing, and never adds it", () => {
+    // Cold restore runs before the plugin catalog loads, so the registry is empty.
+    const recorded = [["--yolo"], ["--approval", "never"]];
+    expect(
+      reconcileBypassFlags(
+        ["--tui", "--yolo", "--approval", "never"],
+        "hermes",
+        false,
+        undefined,
+        recorded
+      )
+    ).toEqual(["--tui"]);
+    expect(reconcileBypassFlags(["--tui"], "hermes", true, undefined, recorded)).toEqual(["--tui"]);
+    expect(
+      reconcileBypassFlags(["--approval", "ask"], "hermes", false, undefined, recorded)
+    ).toEqual(["--approval", "ask"]);
+  });
+
+  it("replaces a recorded older declaration with the current one when bypass is on", () => {
+    registerHermes(["--trust-all"]);
+    expect(
+      reconcileBypassFlags(["--yolo", "--fast"], "hermes", true, undefined, [["--yolo"]])
+    ).toEqual(["--trust-all", "--fast"]);
+  });
+
+  it("reads the recorded history defensively", () => {
+    const settings = {
+      pluginBypassArgHistory: {
+        hermes: [["--yolo"], [], ["--ok", 7], "--bad", ["--approval", "never"]],
+        broken: "nope",
+      },
+    };
+    expect(getPluginBypassArgHistory(settings, "hermes")).toEqual([
+      ["--yolo"],
+      ["--approval", "never"],
+    ]);
+    expect(getPluginBypassArgHistory(settings, "broken")).toEqual([]);
+    expect(getPluginBypassArgHistory(settings, "toString")).toEqual([]);
+    expect(getPluginBypassArgHistory(settings, "missing")).toEqual([]);
+    expect(getPluginBypassArgHistory({ pluginBypassArgHistory: null }, "hermes")).toEqual([]);
+    expect(getPluginBypassArgHistory(undefined, "hermes")).toEqual([]);
   });
 
   it("reconciles a resumed launch's flags against the declared args", () => {

@@ -142,6 +142,8 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     it("survives the structured clone the snapshot broadcast goes through", () => {
       registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, permissionBypassArgs: ["--yolo"] }]);
       const cloned = structuredClone(getPluginAgentRegistry());
+      setPluginAgentRegistry({});
+      expect(getEffectiveAgentConfig("acme-agent")).toBeUndefined();
       setPluginAgentRegistry(cloned);
       expect(getEffectiveAgentConfig("acme-agent")?.permissionBypassArgs).toEqual(["--yolo"]);
     });

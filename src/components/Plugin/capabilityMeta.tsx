@@ -1,5 +1,6 @@
 import { OctagonAlert, AlertTriangle } from "lucide-react";
 import type { BuiltInPluginCapability } from "@shared/types/plugin";
+import { displaySafeText } from "@shared/utils/displaySafeText";
 
 /**
  * Per-capability display tier — a renderer-only visual grouping. `danger` is
@@ -159,13 +160,17 @@ export const SEVERITY_TEXT_CLASS: Record<CapabilitySeverity, string> = {
   neutral: "text-text-secondary",
 };
 
-/** The agents in `agents` that declare their CLI's flag for skipping permission prompts (#16374). */
+/**
+ * The agents in `agents` that declare their CLI's flag for skipping permission
+ * prompts (#16374). Names are the plugin author's, so a bidi override can't
+ * reorder the sentence they sit in.
+ */
 export function permissionBypassAgentNames(
   agents: readonly { name: string; permissionBypassArgs?: readonly string[] }[] | undefined
 ): string[] {
   return (agents ?? [])
     .filter((agent) => (agent.permissionBypassArgs?.length ?? 0) > 0)
-    .map((agent) => agent.name);
+    .map((agent) => displaySafeText(agent.name));
 }
 
 /** "Hermes", "Hermes and Acme", "Hermes, Acme and Zed". */

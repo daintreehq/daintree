@@ -7,6 +7,7 @@ const mockGracefulKill = vi.fn().mockResolvedValue(null);
 const getMergedPresetMock = vi.hoisted(() => vi.fn().mockReturnValue(undefined));
 const buildAgentLaunchFlagsMock = vi.hoisted(() => vi.fn().mockReturnValue([]));
 const reconcileBypassFlagsMock = vi.hoisted(() => vi.fn((flags: readonly string[]) => [...flags]));
+const reconcileBypassHistoryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -109,7 +110,16 @@ vi.mock("@shared/types", async () => {
     // Identity reconcile keeps persisted flags verbatim so these dispatch-path
     // tests stay focused on restart wiring rather than bypass reconciliation
     // (#10432, covered by agentSettings.test.ts and statePatcher.test.ts).
-    reconcileBypassFlags: (flags: readonly string[]) => reconcileBypassFlagsMock(flags),
+    reconcileBypassFlags: (
+      flags: readonly string[],
+      _agentId: string,
+      _effectiveBypass: boolean,
+      _bypassArgs?: string,
+      pluginBypassArgHistory?: readonly (readonly string[])[]
+    ) => {
+      reconcileBypassHistoryMock(pluginBypassArgHistory);
+      return reconcileBypassFlagsMock(flags);
+    },
     resolveEffectiveBypass: () => false,
   };
 });
@@ -1975,6 +1985,21 @@ describe("restartTerminal keeps the caller's own launch flags", () => {
 
     expect(reconcileBypassFlagsMock).toHaveBeenCalledWith([]);
     expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual(["--bypass", ...caller]);
+  });
+
+  it("strips the bypass args plugins have declared for the agent (#16374)", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      agents: {},
+      pluginBypassArgHistory: { claude: [["--yolo"]], other: [["--nope"]] },
+    });
+    reconcileBypassHistoryMock.mockClear();
+    const active = { ...agentPanelBase, agentState: "working" as const };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(reconcileBypassHistoryMock).toHaveBeenCalledWith([["--yolo"]]);
   });
 
   it("clears caller ownership the stored flags no longer end with", async () => {

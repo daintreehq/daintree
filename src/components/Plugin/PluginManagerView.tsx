@@ -1219,7 +1219,11 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                     dialogs use. */}
                 <ul className="space-y-1.5">
                   {pm.pendingUpdate.result.capabilities.map((cap) => (
-                    <CapabilityRow key={cap} capability={cap} />
+                    <CapabilityRow
+                      key={cap}
+                      capability={cap}
+                      permissionBypassAgents={pm.pendingUpdate?.result.permissionBypassAgents}
+                    />
                   ))}
                 </ul>
               </div>

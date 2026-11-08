@@ -36,6 +36,7 @@ import { registerPluginDatabaseEndpoint } from "../pluginAgentMcp/databaseEndpoi
 import type { LoadedPlugin } from "./PluginServiceTypes.js";
 import type { ParsedPluginManifest } from "./pluginManifestLoad.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
+import { recordPluginAgentBypassArgs } from "./pluginAgentBypassHistory.js";
 import { makePluginTourId } from "../../../shared/utils/tourIds.js";
 import type { WorkspaceClient } from "../WorkspaceClient.js";
 import {
@@ -563,6 +564,11 @@ export class PluginContributionRegistrar {
 
     if (manifest.contributes.agents.length > 0) {
       registerPluginAgents(pluginId, manifest.contributes.agents, pluginDir);
+      // Only the agents this plugin won: a losing same-id declaration would
+      // strip its tokens from the winner's saved flags.
+      recordPluginAgentBypassArgs(
+        manifest.contributes.agents.filter((agent) => getPluginIdForAgent(agent.id) === pluginId)
+      );
       this.deps.broadcaster.scheduleAgentsBroadcast(false);
       // Mirror the updated registry into the pty-host so its activity monitor
       // resolves this agent's detection patterns at spawn time (#10587). The

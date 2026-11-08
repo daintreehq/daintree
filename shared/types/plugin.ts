@@ -4031,6 +4031,12 @@ export type PluginCheckUpdateResult =
       displayName?: string;
       capabilities: PluginCapability[];
       /**
+       * The new version's contributed agents, by name, that declare a flag for
+       * skipping permission prompts (#16374), so the update review can say so.
+       * Absent from a host that predates the field.
+       */
+      permissionBypassAgents?: string[];
+      /**
        * SHA-256 of the archive this preview was read from. A confirmed update
        * passes it back as {@link PluginInstallExpectation.archiveHash} so the
        * install refuses any bytes other than the ones the user reviewed (#12612).

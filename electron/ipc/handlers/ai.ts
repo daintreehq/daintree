@@ -238,7 +238,7 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
       // outside this slice, so a reset never touched it. Presence is kept too:
       // an unset default must stay unset, not become a clear.
       const current = store.get("agentSettings");
-      const reset: AgentSettings =
+      const defaults: AgentSettings =
         isPlainRecord(current) && Object.hasOwn(current, "defaultAgent")
           ? {
               ...DEFAULT_AGENT_SETTINGS,
@@ -247,6 +247,15 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
                 : null,
             }
           : DEFAULT_AGENT_SETTINGS;
+      // Cleanup data rather than a choice: a pane saved under a plugin's bypass
+      // declaration still needs it stripped after a reset (#16374).
+      const bypassHistory = isPlainRecord(current) ? current.pluginBypassArgHistory : undefined;
+      const reset: AgentSettings = isPlainRecord(bypassHistory)
+        ? {
+            ...defaults,
+            pluginBypassArgHistory: bypassHistory as AgentSettings["pluginBypassArgHistory"],
+          }
+        : defaults;
       store.set("agentSettings", reset);
       notifyAgentSettingsChanged();
       return reset;

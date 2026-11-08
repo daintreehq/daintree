@@ -227,18 +227,17 @@ describe("PluginArchiveInstallConfirmDialog", () => {
       intent({
         manifest: {
           ...base,
-          capabilities: ["agent:register"],
+          capabilities: ["network:fetch", "agent:register", "fs:project-read"],
           permissionBypassAgents: ["Hermes", "Atlas"],
         },
       })
     );
 
-    expect(screen.getByText("Register agent CLIs")).toBeTruthy();
-    expect(
-      screen.getByText(
-        "Hermes and Atlas can run without permission prompts when you turn on Skip permission prompts"
-      )
-    ).toBeTruthy();
+    const disclosures = screen.getAllByText(
+      "Hermes and Atlas can run without permission prompts when you turn on Skip permission prompts"
+    );
+    expect(disclosures).toHaveLength(1);
+    expect(disclosures[0]!.closest("li")?.textContent).toContain("Register agent CLIs");
   });
 
   it("says nothing about permission prompts for agents that declare no bypass flag (#16374)", () => {

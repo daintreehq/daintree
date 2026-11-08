@@ -1186,6 +1186,50 @@ describe("buildArgsForRespawn", () => {
     expect(result.agentLaunchFlags).toEqual(["--model", "opus"]);
   });
 
+  it("strips a plugin agent's recorded bypass flag before its catalog has loaded (#16374)", () => {
+    // Nothing registers "hermes" here: cold restore runs before the plugin
+    // catalog, so only the recorded history knows `--yolo` is its bypass.
+    const saved = {
+      id: "t1",
+      kind: "terminal" as const,
+      agentId: "hermes",
+      cwd: "/p",
+      location: "grid" as const,
+      agentLaunchFlags: ["--tui", "--yolo"],
+    };
+    const recorded = { pluginBypassArgHistory: { hermes: [["--yolo"]] } };
+
+    const off = buildArgsForRespawn(
+      saved,
+      "agent",
+      "/p",
+      { agents: {}, globalSkipPermissions: false, ...recorded },
+      false,
+      undefined
+    );
+    expect(off.agentLaunchFlags).toEqual(["--tui"]);
+
+    const vetoed = buildArgsForRespawn(
+      saved,
+      "agent",
+      "/p",
+      { agents: { hermes: { dangerousMode: "off" } }, globalSkipPermissions: true, ...recorded },
+      false,
+      undefined
+    );
+    expect(vetoed.agentLaunchFlags).toEqual(["--tui"]);
+
+    const unrecorded = buildArgsForRespawn(
+      saved,
+      "agent",
+      "/p",
+      { agents: {}, globalSkipPermissions: false },
+      false,
+      undefined
+    );
+    expect(unrecorded.agentLaunchFlags).toEqual(["--tui", "--yolo"]);
+  });
+
   it("re-adds the bypass flag for a supported agent when the global override is on (#10432)", () => {
     buildResumeCommandMock.mockClear();
     buildArgsForRespawn(

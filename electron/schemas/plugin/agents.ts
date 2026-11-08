@@ -470,6 +470,19 @@ export const AgentContributionSchema = z
       .object({ format: z.enum(LAUNCH_MCP_FORMATS) })
       .strict()
       .optional(),
-    permissionBypassArgs: z.array(PluginAgentBypassArgSchema).min(1).max(20).optional(),
+    // Options only, each with at most one value after it: a bare token can't be
+    // told from another option's value, so it would be stripped out of one.
+    permissionBypassArgs: z
+      .array(PluginAgentBypassArgSchema)
+      .min(1)
+      .max(20)
+      .refine(
+        (args) =>
+          args.every(
+            (arg, index) => arg.startsWith("-") || args[index - 1]?.startsWith("-") === true
+          ),
+        { message: "permissionBypassArgs must be options, each followed by at most one value" }
+      )
+      .optional(),
   })
   .strict();

@@ -550,6 +550,7 @@ describe("a plugin agent's declared permission-bypass args (#16374)", () => {
   it("honours an agent setting of 'off' over the global switch", async () => {
     const result = await plan({ dangerousMode: "off" }, true);
     expect(result.command).toBe("hermes");
+    expect(result.launchFlags).toEqual([]);
   });
 
   it("honours a preset of 'off' over the global switch", async () => {
@@ -559,6 +560,7 @@ describe("a plugin agent's declared permission-bypass args (#16374)", () => {
     );
     expect(result.preset?.id).toBe("veto");
     expect(result.command).toBe("hermes");
+    expect(result.launchFlags).toEqual([]);
   });
 });
 

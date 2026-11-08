@@ -356,11 +356,35 @@ describe("checkForUpdate — hash comparison", () => {
       version: "2.0.0",
       displayName: "Acme Diff Pro",
       capabilities: ["network:fetch", "git:read"],
+      permissionBypassAgents: [],
       // The digest of the bytes previewed, not the installed baseline — it is
       // what a confirmed update is later held to (#12612).
       archiveHash: createHash("sha256").update(bytes).digest("hex"),
     });
     expect(await leftoverTempDirs()).toHaveLength(0);
+    service.dispose();
+  });
+
+  it("names the new version's agents that can skip permission prompts (#16374)", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await installUrlPlugin(service, { name: "acme.agents", version: "1.0.0" });
+    const agent = { command: "hermes", color: "#3366ff", iconId: "claude" };
+    const bytes = await readArchiveBytes({
+      name: "acme.agents",
+      version: "2.0.0",
+      capabilities: ["agent:register"],
+      contributes: {
+        agents: [
+          { ...agent, id: "hermes", name: "Her\u202Emes", permissionBypassArgs: ["--yolo"] },
+          { ...agent, id: "plain", name: "Plain" },
+        ],
+      },
+    });
+    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(bytes)]));
+
+    const result = await service.checkForUpdate("acme.agents");
+
+    expect(result).toMatchObject({ status: "available", permissionBypassAgents: ["Hermes"] });
     service.dispose();
   });
 

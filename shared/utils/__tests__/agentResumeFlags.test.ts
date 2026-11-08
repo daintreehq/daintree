@@ -40,6 +40,19 @@ describe("reconcileResumeLaunchFlagsWith", () => {
     ).toEqual(["--model", "opus", BYPASS]);
   });
 
+  it("strips a plugin agent's recorded bypass flag with its declaration absent (#16374)", () => {
+    expect(
+      reconcileResumeLaunchFlagsWith(
+        { agentId: "hermes", agentLaunchFlags: ["--yolo", "--fast"] },
+        settings({
+          globalSkipPermissions: true,
+          agents: { hermes: { dangerousMode: "off" } },
+          pluginBypassArgHistory: { hermes: [["--yolo"]] },
+        })
+      )
+    ).toEqual(["--fast"]);
+  });
+
   it("reconciles with no settings at all, adding nothing", () => {
     expect(
       reconcileResumeLaunchFlagsWith(
