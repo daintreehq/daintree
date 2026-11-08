@@ -4316,9 +4316,16 @@ describe("GitHubResourceList — Mine and Needs my review (#16384)", () => {
       hasMore: false,
       timestamp: Date.now(),
     });
-    mockListPRs.mockImplementation(async (opts: ListOptions) =>
-      makeResponse([makeIssue(opts.search ? 41 : 40)])
-    );
+    // Only the first unscoped request answers: the one after clearing the scope
+    // stays open, so item 40 can only come back from the cached slot.
+    let unscopedCalls = 0;
+    mockListPRs.mockImplementation((opts: ListOptions) => {
+      if (opts.search) return Promise.resolve(makeResponse([makeIssue(41)]));
+      unscopedCalls += 1;
+      return unscopedCalls === 1
+        ? Promise.resolve(makeResponse([makeIssue(40)]))
+        : new Promise<Page<Issue>>(() => {});
+    });
     render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
     await waitFor(() => expect(screen.getByTestId("item-40")).toBeTruthy());
 
@@ -4360,6 +4367,25 @@ describe("GitHubResourceList — Mine and Needs my review (#16384)", () => {
       screen.getByRole("button", { name: "Clear filters" }).click();
     });
     expect(useGitHubFilterStore.getState().prScope).toBe("all");
+  });
+
+  it("leaves the scope off the browser query for an exact number lookup", async () => {
+    mockGetPRByNumber.mockResolvedValue(makeIssue(12));
+    dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+    useGitHubFilterStore.getState().setPrScope("mine");
+    useGitHubFilterStore.getState().setPrSearchQuery("#12");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByText(/Mine not applied/)).toBeTruthy());
+
+    act(() => {
+      screen.getByRole("button", { name: "View on GitHub" }).click();
+    });
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "forge.openPRs",
+      { projectPath: "/test/proj", query: "#12", state: "open" },
+      { source: "user" }
+    );
   });
 
   it("hands the scope to GitHub with Open on GitHub", async () => {

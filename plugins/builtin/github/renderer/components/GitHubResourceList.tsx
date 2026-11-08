@@ -449,8 +449,12 @@ export function GitHubResourceList({
   }, [onClose]);
 
   const handleOpenInGitHub = useCallback(() => {
+    // An exact number lookup ignores the scope in the list, so the browser
+    // page must too, or it would filter out the very PR the panel is showing.
+    const scopeApplies = numberQuery === null || numberQuery.kind === "open-ended";
     const query =
-      [prScopeQualifier(scope), searchQuery.trim()].filter(Boolean).join(" ") || undefined;
+      [scopeApplies ? prScopeQualifier(scope) : "", searchQuery.trim()].filter(Boolean).join(" ") ||
+      undefined;
     const state = filterState as string;
     // dispatch() never throws — failures come back as { ok: false }, so they
     // must be surfaced here or the click silently does nothing.
@@ -495,7 +499,7 @@ export function GitHubResourceList({
     };
     open();
     handleClose();
-  }, [searchQuery, filterState, scope, type, projectPath, handleClose]);
+  }, [searchQuery, filterState, scope, numberQuery, type, projectPath, handleClose]);
 
   /**
    * Open the forge's compose page. This used to call `handleOpenInGitHub()`,
