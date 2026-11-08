@@ -19,7 +19,8 @@ interface ReviewThreadsHandoffProps {
  *
  * Renders into the "Changed vs {base}" band's wrapping flex row: the button
  * takes the band's right side, and the hint, when there is one, wraps onto a
- * row of its own under the heading.
+ * single line of its own under the heading. One line, because the band is
+ * sticky and every row it grows hides a row revealed under it.
  *
  * Callers mount it only while `files` is non-empty and key it by worktree and
  * PR number, so a hint raised for one pull request never outlives it.
@@ -74,10 +75,10 @@ export function ReviewThreadsHandoff({
         <p
           id={hintId}
           data-testid="review-threads-send-hint"
-          className="basis-full flex items-start gap-2 text-xs text-text-secondary"
+          className="basis-full flex min-w-0 items-center gap-2 text-xs text-text-secondary"
         >
-          <Info className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
-          {hint}
+          <Info className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 truncate">{hint}</span>
         </p>
       )}
     </>

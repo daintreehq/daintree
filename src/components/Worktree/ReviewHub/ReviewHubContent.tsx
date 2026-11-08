@@ -1876,12 +1876,14 @@ export function ReviewHubContent({
               ) : sortedBaseBranchFiles !== null ? (
                 <div>
                   <div className={REVIEW_HUB_STICKY_BAND}>
-                    {/* Wraps so the review-threads hand-off drops under the
-                        heading on a narrow hub instead of crushing it. */}
+                    {/* One row, always: the heading truncates rather than
+                        pushing the review-threads hand-off onto a row of its
+                        own, which would outgrow the scroller's `scroll-pt-10`
+                        clearance. Only the hand-off's no-target hint wraps. */}
                     <div
                       className={cn(REVIEW_HUB_SECTION_BAND, "flex-wrap border-b border-divider")}
                     >
-                      <span className={SECTION_LABEL_CLASS}>
+                      <span className={cn(SECTION_LABEL_CLASS, "min-w-0 truncate")}>
                         Changed vs{" "}
                         <span className="font-mono font-medium normal-case tracking-normal">
                           {mainBranch}

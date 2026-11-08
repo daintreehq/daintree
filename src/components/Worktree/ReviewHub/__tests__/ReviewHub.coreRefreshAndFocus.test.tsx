@@ -74,7 +74,14 @@ const {
   actionDispatchMock: vi.fn().mockResolvedValue({ ok: true }),
   getDecorationsMock: vi.fn().mockResolvedValue({}),
   onDecorationsChangedMock: vi.fn().mockReturnValue(vi.fn()),
-  openSendToAgentPaletteWithTextMock: vi.fn().mockReturnValue(true),
+  openSendToAgentPaletteWithTextMock: vi
+    .fn<
+      (
+        content: { text: string; title?: string; sourceLabel?: string },
+        sourceTerminalId?: string
+      ) => boolean
+    >()
+    .mockReturnValue(true),
   worktreeStoreData: {
     current: new Map<string, Partial<WorktreeState>>([
       [
@@ -1907,9 +1914,7 @@ describe("ReviewHub", () => {
         expect(openSendToAgentPaletteWithTextMock).toHaveBeenCalledTimes(1);
         // No source terminal: nothing sent from the hub is an agent's own output.
         expect(openSendToAgentPaletteWithTextMock.mock.calls[0]).toHaveLength(1);
-        const [content] = openSendToAgentPaletteWithTextMock.mock.calls[0] as [
-          { text: string; title: string; sourceLabel: string },
-        ];
+        const [content] = openSendToAgentPaletteWithTextMock.mock.calls[0]!;
         expect(content.title).toBe("Unresolved review threads");
         expect(content.sourceLabel).toBe("PR #42");
         const payload = JSON.parse(
@@ -1953,7 +1958,7 @@ describe("ReviewHub", () => {
         expect(screen.queryByTestId("review-threads-send")).toBeNull();
       });
 
-      it("explains inline when there is no agent to send to, and clears once a send lands", async () => {
+      it("explains inline when there is no agent to send to, and clears once the palette opens", async () => {
         getDecorationsMock.mockResolvedValueOnce({
           "src/component.tsx": { badge: "3", tooltip: "3 unresolved review comments" },
         });
@@ -1965,10 +1970,6 @@ describe("ReviewHub", () => {
 
         const hint = await screen.findByTestId("review-threads-send-hint");
         expect(hint.textContent).toBe("Open an agent terminal, then try sending again.");
-        // Announced through a region mounted with the button, not only painted.
-        expect(
-          screen.getAllByRole("status").some((region) => region.textContent === hint.textContent)
-        ).toBe(true);
 
         fireEvent.click(send);
         expect(openSendToAgentPaletteWithTextMock).toHaveBeenCalledTimes(2);

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { FileDecoration } from "@shared/types/forge";
+import { AGENT_CONTEXT_MAX_TEXT_LENGTH } from "@shared/utils/agentContextDrag";
 import {
   collectReviewThreadFiles,
   composePrReviewThreadsAgentText,
@@ -15,6 +16,14 @@ const CSI_8BIT = String.fromCharCode(0x9b);
 const RLO = String.fromCharCode(0x202e);
 const ZWSP = String.fromCharCode(0x200b);
 const LINE_SEPARATOR = String.fromCharCode(0x2028);
+const SOFT_HYPHEN = String.fromCharCode(0x00ad);
+const ARABIC_LETTER_MARK = String.fromCharCode(0x061c);
+const VARIATION_SELECTOR_16 = String.fromCharCode(0xfe0f);
+/** "A" spelled in Unicode tag characters: invisible on screen, readable to a model. */
+const TAG_A = String.fromCodePoint(0xe0041);
+
+/** Anything that draws nothing, reorders text, or acts as a control. LF is the text's own line break. */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
 
 const decoration = (overrides: Partial<FileDecoration> = {}): FileDecoration => ({
   badge: "3",
@@ -26,6 +35,7 @@ const decoration = (overrides: Partial<FileDecoration> = {}): FileDecoration => 
 interface Payload {
   pullRequest: { number: number; url: string | null };
   files: { path: string; count: string; label: string | null }[];
+  omittedFiles?: number;
 }
 
 /** The payload the hand-off text carries, parsed back out of the prose around it. */
@@ -33,7 +43,8 @@ function parsePayload(text: string): Payload {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   expect(start, "composed text must contain a JSON object").toBeGreaterThan(-1);
-  return JSON.parse(text.slice(start, end + 1)) as Payload;
+  const parsed: Payload = JSON.parse(text.slice(start, end + 1));
+  return parsed;
 }
 
 function compose(
@@ -71,8 +82,8 @@ describe("collectReviewThreadFiles", () => {
   });
 
   it("carries the badge as the provider wrote it instead of parsing a number out of it", () => {
-    const [file] = collectReviewThreadFiles(["a.ts"], { "a.ts": decoration({ badge: "99+" }) });
-    expect(file.count).toBe("99+");
+    const files = collectReviewThreadFiles(["a.ts"], { "a.ts": decoration({ badge: "99+" }) });
+    expect(files.map((file) => file.count)).toEqual(["99+"]);
   });
 
   it("keeps the provider's partial-count qualifier, and reports a missing label as null", () => {
@@ -87,14 +98,13 @@ describe("collectReviewThreadFiles", () => {
   });
 
   it("strips escape sequences and line breaks from the provider's badge and label", () => {
-    const [file] = collectReviewThreadFiles(["a.ts"], {
+    const files = collectReviewThreadFiles(["a.ts"], {
       "a.ts": decoration({
         badge: `${ESC}[31m3${ESC}[0m`,
         tooltip: `3 unresolved${LF}${LF}review ${RLO}comments`,
       }),
     });
-    expect(file.count).toBe("3");
-    expect(file.label).toBe("3 unresolved review comments");
+    expect(files).toEqual([{ path: "a.ts", count: "3", label: "3 unresolved review comments" }]);
   });
 
   it("drops a file whose badge is nothing but control characters", () => {
@@ -153,6 +163,9 @@ describe("composePrReviewThreadsAgentText", () => {
       `src/${RLO}gpj.ts`,
       `src/zero${ZWSP}width${LINE_SEPARATOR}.ts`,
       `src/del${DEL}c1${CSI_8BIT}.ts`,
+      `src/soft${SOFT_HYPHEN}hyphen${ARABIC_LETTER_MARK}.ts`,
+      `src/emoji\u2764${VARIATION_SELECTOR_16}.ts`,
+      `src/a${TAG_A}.ts`,
     ];
     const text = compose(hostile.map((path) => file({ path })))!;
     expect(parsePayload(text).files.map((entry) => entry.path)).toEqual(hostile);
@@ -164,6 +177,9 @@ describe("composePrReviewThreadsAgentText", () => {
         file({ path: "routes/$(touch pwned)/`id`/!!.ts" }),
         file({ path: `src/${ESC}]0;title${String.fromCharCode(0x07)}.ts` }),
         file({ path: `src/${RLO}${ZWSP}${LINE_SEPARATOR}${DEL}${CSI_8BIT}.ts` }),
+        file({
+          path: `src/${SOFT_HYPHEN}${ARABIC_LETTER_MARK}${VARIATION_SELECTOR_16}a${TAG_A}.ts`,
+        }),
       ],
       {
         prUrl: "https://github.com/o/r/pull/42?ref=$(id)",
@@ -171,11 +187,28 @@ describe("composePrReviewThreadsAgentText", () => {
       }
     )!;
     expect(text).not.toMatch(/[$`!]/);
-    // eslint-disable-next-line no-control-regex, no-misleading-character-class
-    expect(text).not.toMatch(
-      /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/
-    );
+    expect([...text].filter((char) => char !== LF && INVISIBLE.test(char))).toEqual([]);
+    // A tag character goes out as its surrogate pair, so the draft shows it.
+    expect(text).toContain("a\\udb40\\udc41.ts");
     expect(text).toContain("routes/\\u0024(touch pwned)/\\u0060id\\u0060/\\u0021\\u0021.ts");
     expect(text).toContain('Worktree: "/tmp/wt-\\u0024USER/\\u0060hostname\\u0060\\u0021"');
+  });
+
+  it("holds a long list to what an agent's draft accepts, keeping the leading files and counting the rest", () => {
+    const many = Array.from({ length: 400 }, (_, index) =>
+      file({ path: `packages/app/src/components/feature-${index}/SomeLongComponentName.tsx` })
+    );
+    const text = compose(many)!;
+    expect(text.length).toBeLessThanOrEqual(AGENT_CONTEXT_MAX_TEXT_LENGTH);
+    // Filled to the limit, not cut to a token few: one more entry would not fit.
+    expect(text.length).toBeGreaterThan(AGENT_CONTEXT_MAX_TEXT_LENGTH - 200);
+
+    const payload = parsePayload(text);
+    const shown = payload.files.length;
+    expect(payload.files.map((entry) => entry.path)).toEqual(
+      many.slice(0, shown).map((entry) => entry.path)
+    );
+    expect(shown + (payload.omittedFiles ?? 0)).toBe(400);
+    expect(text).toContain(`${400 - shown} more files with unresolved threads are left out`);
   });
 });
