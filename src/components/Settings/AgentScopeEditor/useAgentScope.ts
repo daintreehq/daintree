@@ -4,7 +4,7 @@ import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { resolveScopeKind, stripCcrPrefix } from "./scopeUtils";
 import {
-  isAgentBypassSupported,
+  isAgentTerminalBypassSupported,
   resolveDangerousMode,
   combineDangerousModes,
   resolveInlineMode,
@@ -90,12 +90,14 @@ export function useAgentScope({
   const dangerousMode: DangerousMode =
     scopeKind === "custom" ? (presetMode ?? "inherit") : agentMode;
 
-  // True when the global skip-permissions override (#10432) is forcing bypass
-  // on for this bypass-supporting agent — the baseline an "inherit" resolves to.
+  // True when the global skip-permissions switch (#10432) turns bypass on for
+  // this agent — the baseline an "inherit" resolves to. Only agents with a
+  // terminal bypass flag follow it (#16414).
   const globalSkipPermissions = useAgentSettingsStore(
     (s) => s.settings?.globalSkipPermissions ?? false
   );
-  const globalBypassActive = globalSkipPermissions && isAgentBypassSupported(agentId);
+  const globalBypassReachesAgent = isAgentTerminalBypassSupported(agentId);
+  const globalBypassActive = globalSkipPermissions && globalBypassReachesAgent;
 
   const resolveMode = (mode: DangerousMode): boolean =>
     mode === "on" ? true : mode === "off" ? false : globalBypassActive;
@@ -104,7 +106,12 @@ export function useAgentScope({
   // — drives the explanatory hint under the control.
   const agentResolvedDangerous = resolveMode(agentMode);
   const inheritResolvesToOn = scopeKind === "custom" ? agentResolvedDangerous : globalBypassActive;
-  const inheritOriginLabel = scopeKind === "custom" ? "agent default" : "global setting";
+  const inheritHint =
+    scopeKind === "custom"
+      ? "Inherited from agent default"
+      : globalBypassReachesAgent
+        ? "Inherited from global setting"
+        : "The global setting doesn't apply to this agent";
 
   // Final resolved bypass for the active scope (incl. the global baseline) —
   // drives the "<flag> added to command" chip.
@@ -373,7 +380,7 @@ export function useAgentScope({
     effectiveSkipPerms,
     globalBypassActive,
     inheritResolvesToOn,
-    inheritOriginLabel,
+    inheritHint,
     inlineMode,
     effectiveInlineMode,
     inlineInheritResolvesToInline,

@@ -398,6 +398,7 @@ export {
   stripConversationSelectorFlags,
   buildLaunchCommandFromFlags,
   isAgentBypassSupported,
+  isAgentTerminalBypassSupported,
   resolveEffectiveBypass,
   resolveDangerousMode,
   combineDangerousModes,

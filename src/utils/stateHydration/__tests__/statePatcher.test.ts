@@ -1255,7 +1255,7 @@ describe("buildArgsForRespawn", () => {
     ]);
   });
 
-  it("does not inject a bypass flag for an unsupported agent even when the global override is on (#10432)", () => {
+  it("re-adds the bypass flag for an agent with no assistant bypass when the global override is on (#16414)", () => {
     buildResumeCommandMock.mockClear();
     buildArgsForRespawn(
       {
@@ -1273,7 +1273,61 @@ describe("buildArgsForRespawn", () => {
       false,
       undefined
     );
-    expect(buildResumeCommandMock).toHaveBeenCalledWith("gemini", "sess-1", ["--model", "flash"]);
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("gemini", "sess-1", [
+      "--model",
+      "flash",
+      "--yolo",
+    ]);
+  });
+
+  it("does not inject a bypass flag for an agent that has none even when the global override is on (#10432)", () => {
+    // A written flag makes the bypass token observable: it would be appended
+    // if the global switch wrongly reached OpenCode.
+    const written = "--dangerously-skip-permissions";
+    buildResumeCommandMock.mockClear();
+    buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "opencode",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--model", "x"],
+      },
+      "agent",
+      "/p",
+      { agents: { opencode: { dangerousArgs: written } }, globalSkipPermissions: true },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenCalledTimes(1);
+    const flags = buildResumeCommandMock.mock.calls[0]?.[2] as string[];
+    expect(flags.slice(0, 2)).toEqual(["--model", "x"]);
+    expect(flags).not.toContain(written);
+
+    // ...while the agent's own On still carries it.
+    buildResumeCommandMock.mockClear();
+    buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "opencode",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--model", "x"],
+      },
+      "agent",
+      "/p",
+      {
+        agents: { opencode: { dangerousArgs: written, dangerousMode: "on" } },
+        globalSkipPermissions: true,
+      },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock.mock.calls[0]?.[2]).toContain(written);
   });
 
   it("injects the bypass flag into an empty snapshot at resume when the global override is on (#10432)", () => {

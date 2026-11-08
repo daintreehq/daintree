@@ -168,7 +168,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
                 dangerousMode={scope.dangerousMode}
                 effectiveSkipPerms={scope.effectiveSkipPerms}
                 inheritResolvesToOn={scope.inheritResolvesToOn}
-                inheritOriginLabel={scope.inheritOriginLabel}
+                inheritHint={scope.inheritHint}
                 inlineMode={scope.inlineMode}
                 inlineInheritResolvesToInline={scope.inlineInheritResolvesToInline}
                 inlineInheritOriginLabel={scope.inlineInheritOriginLabel}

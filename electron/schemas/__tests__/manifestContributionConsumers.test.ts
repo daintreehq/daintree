@@ -1988,7 +1988,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [
         { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
         { file: "shared/types/agentSettings.ts", symbol: "getDefaultDangerousArgs" },
-        { file: "shared/types/agentSettings.ts", symbol: "isAgentBypassSupported" },
+        { file: "shared/types/agentSettings.ts", symbol: "isAgentTerminalBypassSupported" },
         { file: "electron/setup/archiveInstallIntent.ts", symbol: "permissionBypassAgents" },
         { file: "electron/services/plugin/PluginInstaller.ts", symbol: "permissionBypassAgents" },
         {
