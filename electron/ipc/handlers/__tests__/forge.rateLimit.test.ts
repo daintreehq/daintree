@@ -361,7 +361,10 @@ describe("forge handlers — rate limiting", () => {
     });
 
     it("carries the forge's word on every answer", async () => {
-      resolveWith({ buildNewPRUrl: () => "https://fake.test/new", pullRequestTerm: "merge-request" });
+      resolveWith({
+        buildNewPRUrl: () => "https://fake.test/new",
+        pullRequestTerm: "merge-request",
+      });
 
       await expect(ask()).resolves.toEqual({ state: "unpushed", term: "merge-request" });
       await expect(ask({ ...request, head: null })).resolves.toEqual({
@@ -396,7 +399,10 @@ describe("forge handlers — rate limiting", () => {
     });
 
     it("keeps the forge's word when git fails partway", async () => {
-      resolveWith({ buildNewPRUrl: () => "https://fake.test/new", pullRequestTerm: "merge-request" });
+      resolveWith({
+        buildNewPRUrl: () => "https://fake.test/new",
+        pullRequestTerm: "merge-request",
+      });
       deriveNewPRLinkMock.mockRejectedValue(new Error("not a git repository"));
 
       await expect(ask()).resolves.toEqual({ state: "unavailable", term: "merge-request" });

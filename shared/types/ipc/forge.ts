@@ -292,9 +292,7 @@ export interface ForgeNewPRLinkRequest {
  * branch; a remote that couldn't be asked is `unavailable`, never `unpushed`.
  */
 export type ForgeNewPRLinkState =
-  | { state: "ready"; url: string }
-  | { state: "unpushed" }
-  | { state: "unavailable" };
+  { state: "ready"; url: string } | { state: "unpushed" } | { state: "unavailable" };
 
 /** {@link ForgeNewPRLinkState} with the forge's word for what it would open. */
 export type ForgeNewPRLink = ForgeNewPRLinkState & { term: ForgePullRequestTerm };
