@@ -1633,9 +1633,9 @@ describe("TerminalProcess plugin agent typed into a plain terminal (#16469)", ()
   it("demotes without an exit when the plugin unloads, and stays demoted", async () => {
     setPluginAgentRegistry({ pi: PI });
     // The terminal record is mutated after the call, so read its agent then.
-    const agentAtUpdate: Array<string | undefined> = [];
-    const updateAgentState = vi.fn((terminal: { detectedAgentId?: string }) => {
-      agentAtUpdate.push(terminal.detectedAgentId);
+    const updates: Array<{ agent: string | undefined; event: unknown }> = [];
+    const updateAgentState = vi.fn((terminal: { detectedAgentId?: string }, event: unknown) => {
+      updates.push({ agent: terminal.detectedAgentId, event });
     });
     const handleActivityState = vi.fn();
     const terminal = createPlainTerminal("t-pi-unload", {
@@ -1651,7 +1651,7 @@ describe("TerminalProcess plugin agent typed into a plain terminal (#16469)", ()
       await typePi(terminal);
       expect(terminal.getInfo().detectedAgentId).toBe("pi");
       updateAgentState.mockClear();
-      agentAtUpdate.length = 0;
+      updates.length = 0;
       const stopMonitor = vi.spyOn(terminal, "stopActivityMonitor");
 
       setPluginAgentRegistry({});
@@ -1668,8 +1668,7 @@ describe("TerminalProcess plugin agent typed into a plain terminal (#16469)", ()
       // kill way to idle rather than reporting an exit that reads as a
       // completion — with the agent's id still on the terminal.
       expect(exited).toEqual([{ agentType: "pi", exitKind: "subcommand", agentEnd: undefined }]);
-      expect(updateAgentState.mock.calls.map(([, event]) => event)).toEqual([{ type: "kill" }]);
-      expect(agentAtUpdate).toEqual(["pi"]);
+      expect(updates).toEqual([{ agent: "pi", event: { type: "kill" } }]);
 
       // The CLI is still running and still printing, to a monitor that's gone.
       handleActivityState.mockClear();
