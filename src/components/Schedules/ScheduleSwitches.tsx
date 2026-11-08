@@ -16,8 +16,8 @@ import type { ScheduleOsJobStatus, SchedulesSnapshot } from "@shared/types/ipc/s
 import { scheduleOsJobUnavailable, type ScheduleOsJobKind } from "@shared/utils/scheduleOsJob";
 import { scheduleOsJobKindHere } from "./scheduleOsJobKind";
 
-const SCHEDULES_ON_LABEL = "Schedules on";
-const START_WHEN_CLOSED_LABEL = "Start Daintree for due schedules";
+export const SCHEDULES_ON_LABEL = "Schedules on";
+export const START_WHEN_CLOSED_LABEL = "Start Daintree for due schedules";
 
 const START_DESCRIPTION: Record<ScheduleOsJobKind, string> = {
   "launch-agent":

@@ -47,6 +47,7 @@ import { useScheduleLaunchOptions } from "./useScheduleLaunchOptions";
 import { CadencePicker } from "./CadencePicker";
 import { ScheduleBaseBranch } from "./ScheduleBaseBranch";
 import { scheduleOsJobKindHere } from "./scheduleOsJobKind";
+import { SCHEDULES_ON_LABEL, START_WHEN_CLOSED_LABEL } from "./ScheduleSwitches";
 import type { ScheduleStarter } from "./scheduleStarters";
 import { choiceFromCron, choiceIssue, type CadenceChoice } from "./cadenceChoice";
 import {
@@ -212,14 +213,12 @@ function runWhenClosedReason(
 function runWhenClosedGateReason(switches: ProjectScheduleSwitches | null): string | null {
   if (!switches) return null;
   const { schedulesOn, startWhenClosed } = switches;
-  if (!schedulesOn && !startWhenClosed) {
-    return "Turn on Schedules on and Start Daintree for due schedules for this project to use this";
-  }
-  if (!schedulesOn) return "Turn on Schedules on for this project to use this";
-  if (!startWhenClosed) {
-    return "Turn on Start Daintree for due schedules for this project to use this";
-  }
-  return null;
+  const off = [
+    ...(schedulesOn ? [] : [SCHEDULES_ON_LABEL]),
+    ...(startWhenClosed ? [] : [START_WHEN_CLOSED_LABEL]),
+  ].map((label) => `"${label}"`);
+  if (off.length === 0) return null;
+  return `Turn on the ${off.join(" and ")} ${off.length > 1 ? "switches" : "switch"} in the Schedules tab for this project to use this`;
 }
 
 /** The same reasons main gives, checked here so a field says what's wrong before Save. */
