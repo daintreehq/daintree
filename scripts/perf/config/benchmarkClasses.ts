@@ -270,7 +270,7 @@ const FAMILIES: readonly Family[] = [
     kind: "mechanism",
     fidelity: withFidelity({ processTopology: "partial" }),
     claim:
-      "Real forced status passes and real git subprocesses over a deterministic worktree holding ~54 MB of untracked binaries beside untracked text, with the status utility called directly, without a watcher, monitor, renderer or IPC. Bytes read are what reads on handles from `fs.promises.open` returned to the untracked line counter, not physical disk I/O, and the page cache is warm; CPU is this process's own (threadpool reads included, git children excluded); the longest stall is an event-loop observation gap read against an idle control, an upper bound on the longest synchronous block rather than its exact length. How often a real agent's writes force a pass is not modelled.",
+      "Real forced status passes and real git subprocesses over a deterministic worktree holding ~54 MB of untracked binaries beside untracked text, with the status utility called directly, without a watcher, monitor, renderer or IPC. Bytes read are what reads of the untracked files returned to the line counter (sniffs and whole-file reads, through a handle or a path), not physical disk I/O, and the page cache is warm; CPU is this process's own (threadpool reads included, git children excluded); the longest stall is an event-loop observation gap read against an idle control, an upper bound on the longest synchronous block rather than its exact length. How often a real agent's writes force a pass is not modelled.",
   },
   {
     label: "terminal reflow and resize",

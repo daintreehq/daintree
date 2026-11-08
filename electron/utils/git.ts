@@ -48,13 +48,11 @@ function realpathBounded(path: string): Promise<string> {
 
 // The signal reclaims the read's buffers once it times out; the race settles
 // the call even when the open itself never returns.
-async function readFileBounded(path: string): Promise<Buffer>;
-async function readFileBounded(path: string, encoding: "utf-8"): Promise<string>;
-async function readFileBounded(path: string, encoding?: "utf-8"): Promise<Buffer | string> {
+async function readFileBounded(path: string, encoding: "utf-8"): Promise<string> {
   const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS);
   try {
-    return await withTimeout<Buffer | string>(
-      encoding ? fs.readFile(path, { encoding, signal }) : fs.readFile(path, { signal }),
+    return await withTimeout(
+      fs.readFile(path, { encoding, signal }),
       FS_OP_TIMEOUT_MS,
       "readFile timed out"
     );
@@ -93,17 +91,21 @@ async function readUntrackedBounded(path: string): Promise<UntrackedRead> {
 
 // A sniff holding a NUL ends the read, so a binary costs one sniff-sized read
 // however large it is. The sniff is positional, which leaves the handle at
-// byte 0, so the whole-file read after it starts at the first byte. `open`,
-// `read` and `close` take no signal: a stalled one is abandoned by the bound,
-// and the handle is still closed once it returns.
+// byte 0, so the whole-file read after it starts at the first byte. A short
+// read is not EOF (network mounts return them), so the sniff fills until a
+// read returns nothing. `open`, `read` and `close` take no signal: a stalled
+// one is abandoned by the bound, and the handle is still closed once it
+// returns, without starting another read.
 async function readUntracked(path: string, signal: AbortSignal): Promise<UntrackedRead> {
   const handle = await fs.open(path, "r");
   try {
-    signal.throwIfAborted();
     const sniff = Buffer.alloc(BINARY_SNIFF_BYTES);
-    const { bytesRead } = await handle.read(sniff, 0, sniff.length, 0);
-    if (bytesRead < sniff.length) {
-      return { bytes: sniff.subarray(0, bytesRead), sniffOnly: false };
+    let filled = 0;
+    while (filled < sniff.length) {
+      signal.throwIfAborted();
+      const { bytesRead } = await handle.read(sniff, filled, sniff.length - filled, filled);
+      if (bytesRead === 0) return { bytes: sniff.subarray(0, filled), sniffOnly: false };
+      filled += bytesRead;
     }
     if (sniff.indexOf(0) !== -1) return { bytes: sniff, sniffOnly: true };
     return { bytes: await handle.readFile({ signal }), sniffOnly: false };
