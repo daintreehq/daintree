@@ -76,12 +76,29 @@ describe("contributes.canopyViews", () => {
     ]);
   });
 
-  it("refuses unknown fields and more entries than the cap", () => {
+  it("refuses unknown fields", () => {
     expect(parse([{ viewId: "triage", title: "Beads" }]).success).toBe(false);
-    const many = Array.from({ length: MANIFEST_CONTRIBUTION_CAPS.canopyViews + 1 }, () => ({
-      viewId: "triage",
-    }));
-    expect(parse(many).success).toBe(false);
+  });
+
+  it("takes as many distinct views as the cap, and refuses one more", () => {
+    const cap = MANIFEST_CONTRIBUTION_CAPS.canopyViews;
+    const ids = Array.from({ length: cap + 1 }, (_, index) => `view${index}`);
+    const parseIds = (viewIds: string[]) =>
+      getPluginManifestSchema("user").safeParse({
+        name: "acme.many",
+        version: "1.0.0",
+        contributes: {
+          panels: ids.map((id) => ({ id, name: id, iconId: "puzzle", color: "#ffffff" })),
+          views: ids.map((id) => ({ id, componentPath: `dist/${id}.js`, location: "panel" })),
+          canopyViews: viewIds.map((viewId) => ({ viewId })),
+        },
+      });
+    expect(parseIds(ids.slice(0, cap)).success).toBe(true);
+    const over = parseIds(ids);
+    expect(over.success).toBe(false);
+    if (!over.success) {
+      expect(over.error.issues.some((issue) => issue.code === "too_big")).toBe(true);
+    }
   });
 
   it("refuses a project plugin and a per-project package, which Canopy has no project for", () => {

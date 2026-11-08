@@ -663,16 +663,20 @@ describe("PluginService", () => {
       },
     ]);
 
+    const activate = vi.spyOn(service, "activatePlugin");
     await expect(
       service.activatePluginForView("plugin-view:acme.canopy-plugin/triage", true)
     ).resolves.toMatchObject({
       ok: true,
       recoveryComponentPath: expect.stringMatching(/dist\/triage\.js$/),
     });
+    expect(activate).toHaveBeenCalledWith("acme.canopy-plugin");
     // A panel view the plugin didn't offer to Canopy stays reachable only as a panel.
+    activate.mockClear();
     await expect(
       service.activatePluginForView("plugin-view:acme.canopy-plugin/board", true)
     ).resolves.toEqual({ ok: true });
+    expect(activate).not.toHaveBeenCalled();
 
     service.unloadPlugin("acme.canopy-plugin");
     expect(getPluginHostedViews().some((v) => v.pluginId === "acme.canopy-plugin")).toBe(false);

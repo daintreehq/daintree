@@ -1038,7 +1038,9 @@ function CanopyInbox({
   // A run put back from the Trash comes into the inbox selected, once it is
   // back in the fleet: the same run, or the pane resuming its session. Anything
   // the user selects from the press on, another host or the panel closing, wins.
-  const shownRunId = selectedAssistant?.id ?? focusedItem?.runId ?? null;
+  // What the pane shows: a plugin's view counts, so a restore settling after
+  // the person chose one doesn't take the pane from it.
+  const shownRunId = shownPluginView?.id ?? selectedAssistant?.id ?? focusedItem?.runId ?? null;
   const shownRunIdRef = useRef(shownRunId);
   useLayoutEffect(() => {
     shownRunIdRef.current = shownRunId;
@@ -1680,7 +1682,21 @@ function CanopyInbox({
       <div
         ref={bodyRef}
         className="canopy-frame flex min-h-0 flex-1 flex-col"
-        onKeyDownCapture={onAgentStepKeyDownCapture}
+        onKeyDownCapture={(event) => {
+          // While a plugin's view is in the pane, ⌘↑/⌘↓ step the agents only
+          // from the search and the list: anywhere else they are the view's,
+          // its dialogs and menus too, which sit outside this box.
+          if (
+            shownPluginView !== null &&
+            !(
+              event.target instanceof Element &&
+              event.target.closest("[data-canopy-list], [data-canopy-search]")
+            )
+          ) {
+            return;
+          }
+          onAgentStepKeyDownCapture(event);
+        }}
         onKeyDown={onNavigationKeyDown}
       >
         {hostTrouble && (

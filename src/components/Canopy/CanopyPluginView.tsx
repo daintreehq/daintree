@@ -21,9 +21,11 @@ export function installCanopyPluginKitHost(): void {
  * A plugin view in Canopy's pane, mounted as the toolbar popover mounts one:
  * the panel's module with no panel record, its state kept for the window.
  *
- * Escape is the view's: a dialog, a menu or an edit of its own may want it,
- * and none of those should close Canopy. One the view leaves alone takes the
- * keyboard back to its row, as Escape from an agent's pane does.
+ * Escape inside the view is the view's: an edit of its own may want it, and
+ * it never closes Canopy. One the view leaves alone takes the keyboard back to
+ * its row, as Escape from an agent's pane does. A dialog or menu the view
+ * opened sits in a portal outside this box, and its Escape passes on to its
+ * own handling untouched, though React bubbles it through here.
  */
 export function CanopyPluginView({
   view,
@@ -36,6 +38,7 @@ export function CanopyPluginView({
 }) {
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+    if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
     event.stopPropagation();
     if (event.defaultPrevented || radixLayerWasOpenWhenEscapePressed()) return;
     event.preventDefault();

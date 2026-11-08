@@ -382,6 +382,10 @@ export function useCanopyInboxFocus({
   useEffect(() => {
     if (focusedIndex !== -1) lastIndexRef.current = focusedIndex;
     if (!landedRef.current || focusedId === null) return;
+    // A plugin's view in the pane loses the keyboard on its own terms, a
+    // control of its own going away: that is no run leaving, and going to one
+    // would take the pane from the view.
+    if (shownPluginViewId !== null) return;
     // The keyboard is on its way into the new run's pane (⌘↑/⌘↓, or Send):
     // the old pane unmounting drops it on the page for a moment, which is not
     // a run leaving.
@@ -408,7 +412,16 @@ export function useCanopyInboxFocus({
         ? visible[focusedIndex]!
         : visible[Math.min(lastIndexRef.current, visible.length - 1)]!;
     focusCardNow(target.runId);
-  }, [focusedIndex, focusedId, visible, focusCardNow, paneFocus, replyFocus, items]);
+  }, [
+    focusedIndex,
+    focusedId,
+    visible,
+    focusCardNow,
+    paneFocus,
+    replyFocus,
+    items,
+    shownPluginViewId,
+  ]);
 
   // A new search selects its top match, as opening selects the top run; a
   // match leaving under the same search gives its place to the next.

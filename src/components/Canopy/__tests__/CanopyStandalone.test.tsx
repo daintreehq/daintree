@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render as rtlRender,
   screen,
@@ -133,23 +134,33 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 // The plugin's own module loads over `plugin://` and has its own suites: here
 // the pane records what Canopy mounted, with a control of the view's own.
 const pluginMounts = vi.hoisted(
-  () => [] as Array<{ host: string; mountId: string; viewId: string }>
+  () => [] as Array<{ host: string; mountId: string; viewId: string; kitHostInstalled: boolean }>
 );
 const installKitHost = vi.hoisted(() => vi.fn());
-vi.mock("@/components/Plugin/PluginHostedView", () => ({
-  PluginHostedView: (props: {
-    host: string;
-    mountId: string;
-    source: { view: { id: string } };
-  }) => {
-    pluginMounts.push({ host: props.host, mountId: props.mountId, viewId: props.source.view.id });
-    return (
-      <div data-testid="plugin-view">
-        <input aria-label="Plugin filter" />
-      </div>
-    );
-  },
-}));
+vi.mock("@/components/Plugin/PluginHostedView", async () => {
+  const { createPortal } = await import("react-dom");
+  return {
+    PluginHostedView: (props: {
+      host: string;
+      mountId: string;
+      source: { view: { id: string } };
+    }) => {
+      pluginMounts.push({
+        host: props.host,
+        mountId: props.mountId,
+        viewId: props.source.view.id,
+        kitHostInstalled: installKitHost.mock.calls.length > 0,
+      });
+      return (
+        <div data-testid="plugin-view">
+          <input aria-label="Plugin filter" />
+          {/* A dialog the view opened: drawn into the page, outside its box. */}
+          {createPortal(<input aria-label="Plugin dialog field" />, document.body)}
+        </div>
+      );
+    },
+  };
+});
 vi.mock("@/services/plugin/appPluginKitHost", () => ({
   installAppPluginKitHost: installKitHost,
 }));
@@ -176,6 +187,7 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUIStore } from "@/store/uiStore";
+import { isMac } from "@/lib/platform";
 import {
   _resetPluginHostedViewsStoreForTest,
   usePluginHostedViewsStore,
@@ -950,12 +962,13 @@ describe("app-wide plugin views in the Canopy window (#16344)", () => {
     expect(pluginMounts).toEqual([]);
 
     await showPlugin("Triage");
-    expect(pluginMounts.at(-1)).toEqual({
+    // The kit's host is in before the view first draws: a kit control reads it as it renders.
+    expect(pluginMounts[0]).toEqual({
       host: "canopy",
       mountId: `canopy:${TRIAGE.id}`,
       viewId: TRIAGE.id,
+      kitHostInstalled: true,
     });
-    expect(installKitHost).toHaveBeenCalled();
     expect(pluginRow("Triage").getAttribute("aria-selected")).toBe("true");
     // No run reads as the one in the pane while the plugin's view is.
     expect(selectedRun()).toBeUndefined();
@@ -977,10 +990,51 @@ describe("app-wide plugin views in the Canopy window (#16344)", () => {
 
     await showPlugin("Triage");
     const search = within(surface()!).getByRole("combobox", { name: "Search agents" });
+    // Even a search that matches no agent: it is the inbox the person went back to.
     await act(async () => {
-      fireEvent.change(search, { target: { value: "site" } });
+      fireEvent.change(search, { target: { value: "nothing matches this" } });
     });
     expect(screen.queryByTestId("plugin-view")).toBeNull();
+  });
+
+  it("keeps ⌘↑/⌘↓ inside the view, its dialogs included, the view's own", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    offer([TRIAGE]);
+    await showPlugin("Triage");
+    const step = { key: "ArrowDown", ...(isMac() ? { metaKey: true } : { altKey: true }) };
+
+    for (const name of ["Plugin filter", "Plugin dialog field"]) {
+      const field = screen.getByRole("textbox", { name });
+      const press = createEvent.keyDown(field, step);
+      await act(async () => {
+        fireEvent(field, press);
+      });
+      expect(press.defaultPrevented).toBe(false);
+      expect(screen.queryByTestId("plugin-view")).not.toBeNull();
+    }
+    // From the list beside it they still step through the agents.
+    const search = within(surface()!).getByRole("combobox", { name: "Search agents" });
+    await act(async () => {
+      fireEvent.keyDown(search, step);
+    });
+    expect(screen.queryByTestId("plugin-view")).toBeNull();
+    expect(selectedRun()).toBeDefined();
+  });
+
+  it("keeps the view up when the keyboard drops out of it", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    offer([TRIAGE]);
+    await showPlugin("Triage");
+
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(document.activeElement).toBe(document.body);
+    // The fleet moves while the keyboard is nowhere: no run is gone to.
+    act(() => useFleetSnapshotStore.setState({ snapshot: { ...FLEET, changedAt: NOW + 1 } }));
+    await settle();
+    expect(screen.queryByTestId("plugin-view")).not.toBeNull();
+    expect(selectedRun()).toBeUndefined();
   });
 
   it("gives the pane back when the plugin stops offering the view", async () => {
@@ -1010,6 +1064,17 @@ describe("app-wide plugin views in the Canopy window (#16344)", () => {
     expect(host.close).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(pluginRow("Triage"));
     expect(screen.queryByTestId("plugin-view")).not.toBeNull();
+    // A dialog of the view's own takes its Escape where it listens, past this box.
+    const seen = vi.fn();
+    document.addEventListener("keydown", seen);
+    const dialogField = screen.getByRole("textbox", { name: "Plugin dialog field" });
+    act(() => dialogField.focus());
+    await act(async () => {
+      fireEvent.keyDown(dialogField, { key: "Escape" });
+    });
+    document.removeEventListener("keydown", seen);
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(dialogField);
     // Z there is the view's letter, not Canopy's undo.
     const press = new KeyboardEvent("keydown", { key: "z", bubbles: true, cancelable: true });
     act(() => {

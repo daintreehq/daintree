@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { usePluginUnsavedPanelsReporter } from "@/hooks/app/usePluginUnsavedPanelsReporter";
 import { usePluginIcons } from "@/hooks/usePluginIcons";
 
@@ -10,5 +11,15 @@ import { usePluginIcons } from "@/hooks/usePluginIcons";
 export function CanopyPluginSupport() {
   usePluginIcons();
   usePluginUnsavedPanelsReporter();
+  // Gone with the last view offered, and the view with it: whatever the
+  // reporter last said, nothing of this window is unsaved now. A view clears
+  // its own flag a moment after it goes, when nothing is listening any more.
+  useEffect(
+    () => () => {
+      const report = window.electron?.plugin?.reportUnsavedPanels;
+      if (report) void report([]).catch(() => {});
+    },
+    []
+  );
   return null;
 }
