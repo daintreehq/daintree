@@ -164,6 +164,19 @@ export interface AgentCliDetail {
 /** Map of agent ID → detailed detection result. */
 export type AgentCliDetails = Partial<Record<AgentId, AgentCliDetail>>;
 
+/** One copy of an agent's CLI found on the machine the agent runs on. */
+export interface AgentCliCopy {
+  /** Where the copy was found, as found: a symlink is not followed for display. */
+  path: string;
+  /**
+   * What this copy said when asked for its version: the version number, or the
+   * first line it printed when that held none. `null` when it reported nothing.
+   */
+  version: string | null;
+  /** True for the copy agent launches start. */
+  launches: boolean;
+}
+
 /** Version information for an agent */
 export interface AgentVersionInfo {
   /** Agent ID */

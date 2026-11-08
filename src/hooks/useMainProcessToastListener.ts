@@ -106,6 +106,29 @@ function toPluginNotificationActions(
   }));
 }
 
+/**
+ * Several copies of an agent's CLI were found. Built here from the agent id alone
+ * because a remote view takes this toast from its host, which gets to name an
+ * agent and nothing else about what the button does. The action id keeps the
+ * button on the inbox row, where a toast raised during startup quiet ends up.
+ */
+function toAgentCliCopiesAction(agentId: string): NotificationAction {
+  const target = { tab: "agents", subtab: agentId, sectionId: "agents-cli-copies" };
+  return {
+    label: "View copies",
+    actionId: "app.settings.openTab",
+    actionArgs: target,
+    onClick: async () => {
+      const result = await actionService.dispatch("app.settings.openTab", target, {
+        source: "user",
+      });
+      if (!result.ok) {
+        console.warn("[MainProcessToast] Couldn't open agent settings:", result.error);
+      }
+    },
+  };
+}
+
 export function useMainProcessToastListener(): void {
   useEffect(() => {
     if (!window.electron?.notification?.onShowToast) return;
@@ -115,60 +138,62 @@ export function useMainProcessToastListener(): void {
         presentHostSwitchFailure(payload, payload.hostSwitchFailure);
         return;
       }
-      const action = payload.action
-        ? {
-            label: payload.action.label,
-            onClick: () => {
-              const { ipcChannel, data } = payload.action!;
-              if (ipcChannel === "update:check-for-updates") {
-                if (useDistributionStore.getState().isWindowsStore) return;
-                safeFireAndForget(window.electron.update.checkForUpdates(), {
-                  context: "Checking for updates from toast action",
-                });
-              } else if (ipcChannel === "system:open-external") {
-                // Main is the trusted sender, but this branch is the boundary
-                // that turns a toast payload into a browser navigation — keep it
-                // fail-closed and pinned to our own domain rather than trusting
-                // whatever string arrived.
-                const url = parseTrustedDaintreeUrl(data);
-                if (!url) {
-                  console.warn(
-                    `[MainProcessToast] system:open-external rejected untrusted URL: ${data ?? "(missing)"}`
+      const action = payload.agentCliCopies
+        ? toAgentCliCopiesAction(payload.agentCliCopies.agentId)
+        : payload.action
+          ? {
+              label: payload.action.label,
+              onClick: () => {
+                const { ipcChannel, data } = payload.action!;
+                if (ipcChannel === "update:check-for-updates") {
+                  if (useDistributionStore.getState().isWindowsStore) return;
+                  safeFireAndForget(window.electron.update.checkForUpdates(), {
+                    context: "Checking for updates from toast action",
+                  });
+                } else if (ipcChannel === "system:open-external") {
+                  // Main is the trusted sender, but this branch is the boundary
+                  // that turns a toast payload into a browser navigation — keep it
+                  // fail-closed and pinned to our own domain rather than trusting
+                  // whatever string arrived.
+                  const url = parseTrustedDaintreeUrl(data);
+                  if (!url) {
+                    console.warn(
+                      `[MainProcessToast] system:open-external rejected untrusted URL: ${data ?? "(missing)"}`
+                    );
+                    return;
+                  }
+                  safeFireAndForget(window.electron.system.openExternal(url), {
+                    context: "Opening external URL from toast action",
+                  });
+                } else if (ipcChannel === "clipboard:write-text") {
+                  // Guard against a main-process payload that forgot `data` —
+                  // silently clearing the clipboard would be a footgun.
+                  if (!data) {
+                    console.warn("[MainProcessToast] clipboard:write-text missing data payload");
+                    return;
+                  }
+                  safeFireAndForget(window.electron.clipboard.writeText(data), {
+                    context: "Writing clipboard text from toast action",
+                  });
+                } else if (ipcChannel === "remote-hosts:switch-window-host") {
+                  // Retry for a window main couldn't put back on its host at launch.
+                  const target = parseHostProjectTarget(data);
+                  if (!target) {
+                    console.warn("[MainProcessToast] remote-hosts:switch-window-host bad payload");
+                    return;
+                  }
+                  safeFireAndForget(
+                    import("@/components/Hosts/hostSwitching").then(({ switchToHost }) =>
+                      switchToHost(target.hostId, false, target.projectId)
+                    ),
+                    { context: "Reopening a window on its host from toast action" }
                   );
-                  return;
+                } else {
+                  console.warn(`[MainProcessToast] Unknown IPC channel for action: ${ipcChannel}`);
                 }
-                safeFireAndForget(window.electron.system.openExternal(url), {
-                  context: "Opening external URL from toast action",
-                });
-              } else if (ipcChannel === "clipboard:write-text") {
-                // Guard against a main-process payload that forgot `data` —
-                // silently clearing the clipboard would be a footgun.
-                if (!data) {
-                  console.warn("[MainProcessToast] clipboard:write-text missing data payload");
-                  return;
-                }
-                safeFireAndForget(window.electron.clipboard.writeText(data), {
-                  context: "Writing clipboard text from toast action",
-                });
-              } else if (ipcChannel === "remote-hosts:switch-window-host") {
-                // Retry for a window main couldn't put back on its host at launch.
-                const target = parseHostProjectTarget(data);
-                if (!target) {
-                  console.warn("[MainProcessToast] remote-hosts:switch-window-host bad payload");
-                  return;
-                }
-                safeFireAndForget(
-                  import("@/components/Hosts/hostSwitching").then(({ switchToHost }) =>
-                    switchToHost(target.hostId, false, target.projectId)
-                  ),
-                  { context: "Reopening a window on its host from toast action" }
-                );
-              } else {
-                console.warn(`[MainProcessToast] Unknown IPC channel for action: ${ipcChannel}`);
-              }
-            },
-          }
-        : undefined;
+              },
+            }
+          : undefined;
 
       const pluginActions =
         payload.pluginActions && payload.pluginActions.length > 0

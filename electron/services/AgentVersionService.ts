@@ -9,17 +9,23 @@ import {
   getEffectiveAgentConfig,
   getEffectiveAgentIds,
 } from "../../shared/config/agentRegistry.js";
-import type { AgentVersionInfo } from "../../shared/types/ipc/system.js";
+import type { AgentCliCopy, AgentVersionInfo } from "../../shared/types/ipc/system.js";
 import type { AgentId } from "../../shared/types/agent.js";
 import { CliAvailabilityService } from "./CliAvailabilityService.js";
 import { isAgentInstalled } from "../../shared/utils/agentAvailability.js";
 import { buildProbeEnv } from "../utils/spawnEnv.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
+import { stripAnsiAndOscCodes } from "../../shared/utils/urlUtils.js";
 
 interface CachedVersionInfo {
   info: AgentVersionInfo;
   timestamp: number;
 }
+
+/** How much of a line a copy printed instead of a version is worth showing. */
+const REPORTED_LINE_MAX_LENGTH = 80;
+/** Version probes running at once for copies, across every agent. */
+const MAX_CONCURRENT_COPY_PROBES = 2;
 
 export class AgentVersionService {
   private cache = new Map<AgentId, CachedVersionInfo>();
@@ -30,6 +36,8 @@ export class AgentVersionService {
   private readonly EXIT_DRAIN_MS = 200;
   private readonly MAX_BUFFER = 256 * 1024;
   private inFlightChecks = new Map<AgentId, Promise<AgentVersionInfo>>();
+  private runningCopyProbes = 0;
+  private readonly copyProbeWaiters: Array<() => void> = [];
 
   constructor(private cliAvailabilityService: CliAvailabilityService) {}
 
@@ -120,6 +128,69 @@ export class AgentVersionService {
       if (this.inFlightChecks.get(agentId) === checkPromise) {
         this.inFlightChecks.delete(agentId);
       }
+    }
+  }
+
+  /**
+   * Every copy of an agent's CLI on this machine, each asked for its own version
+   * by path. {@link getVersion} runs the registry command, so it can only ever
+   * describe whichever copy PATH reaches first.
+   *
+   * Never cached: this is read when someone goes looking for why an update didn't
+   * take, so an answer from before that update would hide what they came to see.
+   */
+  async getCopies(agentId: string): Promise<AgentCliCopy[]> {
+    const config = getEffectiveAgentConfig(agentId);
+    if (!config) return [];
+    const paths = await this.cliAvailabilityService.findCopies(agentId, config);
+    const versionArgs = config.version?.args;
+    return Promise.all(
+      paths.map(async (path, index) => ({
+        path,
+        version: versionArgs ? await this.readCopyVersion(path, versionArgs) : null,
+        launches: index === 0,
+      }))
+    );
+  }
+
+  private async readCopyVersion(path: string, args: string[]): Promise<string | null> {
+    try {
+      return this.reportedVersion(
+        await this.withCopyProbeSlot(() => this.runVersionProbe(path, args))
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * What a copy said it was. Coercion would turn "error 12" into 12.0.0, a version
+   * nothing reported, so output without a version shows as its first line instead.
+   */
+  private reportedVersion(output: string): string | null {
+    const text = stripAnsiAndOscCodes(output);
+    const matched = this.matchVersion(text);
+    if (matched) return matched;
+    const firstLine = text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+    return firstLine ? scrubSecrets(firstLine).slice(0, REPORTED_LINE_MAX_LENGTH) : null;
+  }
+
+  private async withCopyProbeSlot<T>(task: () => Promise<T>): Promise<T> {
+    if (this.runningCopyProbes < MAX_CONCURRENT_COPY_PROBES) {
+      this.runningCopyProbes++;
+    } else {
+      // A finishing probe hands its slot straight to the waiter it wakes.
+      await new Promise<void>((resolve) => this.copyProbeWaiters.push(resolve));
+    }
+    try {
+      return await task();
+    } finally {
+      const next = this.copyProbeWaiters.shift();
+      if (next) next();
+      else this.runningCopyProbes--;
     }
   }
 
@@ -559,6 +630,19 @@ export class AgentVersionService {
       return null;
     }
 
+    const matched = this.matchVersion(versionString);
+    if (matched) return matched;
+
+    const coerced = semver.coerce(versionString, { includePrerelease: true });
+    if (coerced) {
+      return coerced.version;
+    }
+
+    return null;
+  }
+
+  /** A version the text actually spells out, without coercing a lone number into one. */
+  private matchVersion(versionString: string): string | null {
     const cleanedDirect = semver.clean(versionString);
     if (cleanedDirect && semver.valid(cleanedDirect)) {
       return cleanedDirect;
@@ -578,11 +662,6 @@ export class AgentVersionService {
           return cleaned;
         }
       }
-    }
-
-    const coerced = semver.coerce(versionString, { includePrerelease: true });
-    if (coerced) {
-      return coerced.version;
     }
 
     return null;

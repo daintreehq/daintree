@@ -1468,6 +1468,9 @@ export const CHANNELS = {
   AGENT_ACCOUNTS_ADD: "agent-accounts:add",
   AGENT_ACCOUNTS_REMOVE: "agent-accounts:remove",
 
+  // Every copy of an agent's CLI, read when its settings page is open (#16409)
+  AGENT_CLI_COPIES_LIST: "agent-cli-copies:list",
+
   // Per-project presentation profile (#13771)
   PROJECT_PRESENTATION_GET: "project-presentation:get",
   PROJECT_PRESENTATION_SET_LEVEL: "project-presentation:set-level",
