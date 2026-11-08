@@ -17,21 +17,19 @@ const GLOBALS = [
   "getComputedStyle",
 ];
 
+const isClass = (value) => /^class\b/.test(Function.prototype.toString.call(value));
+
 /**
  * A code-split chunk exports Rolldown's private interface: aliased bindings,
  * module namespaces, and lazy module initializers that must run before a
- * namespace's getters return anything. Calling every argument-less export runs
- * those initializers; whatever else that calls either throws (a class) or is
- * harmless, and only an unambiguous `Terminal` is accepted.
+ * namespace's getters return anything. Every argument-less function export
+ * other than a class is called to run those initializers, and a throw fails
+ * the probe, as it would fail loading xterm in the app. Only an unambiguous
+ * `Terminal` is accepted.
  */
 function findTerminal(module) {
   for (const value of Object.values(module)) {
-    if (typeof value !== "function" || value.length !== 0) continue;
-    try {
-      value();
-    } catch {
-      // Not an initializer.
-    }
+    if (typeof value === "function" && value.length === 0 && !isClass(value)) value();
   }
   const candidates = new Set();
   for (const value of [module, ...Object.values(module)]) {

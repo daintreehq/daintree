@@ -62,19 +62,23 @@ async function writeWithGuard(
   }
 }
 
-/** Rewrites the xterm chunk after the minifier, the way a later post-processor would. */
+/** Rewrites the xterm chunk in a post-order generateBundle, as the ASCII re-print does. */
 function rewriteXtermChunk(pattern: RegExp, replace: (match: string) => string): RolldownPlugin {
   return {
     name: "rewrite-xterm-chunk",
-    generateBundle(_options, bundle) {
-      const chunk = Object.values(bundle).find(
-        (entry) => entry.type === "chunk" && entry.moduleIds.some((id) => id.endsWith("xterm.mjs"))
-      );
-      if (chunk?.type !== "chunk") throw new Error("no xterm chunk to rewrite");
-      const rewritten = chunk.code.replace(pattern, replace);
-      if (rewritten === chunk.code)
-        throw new Error(`${pattern} matched nothing in the xterm chunk`);
-      chunk.code = rewritten;
+    generateBundle: {
+      order: "post",
+      handler(_options, bundle) {
+        const chunk = Object.values(bundle).find(
+          (entry) =>
+            entry.type === "chunk" && entry.moduleIds.some((id) => id.endsWith("xterm.mjs"))
+        );
+        if (chunk?.type !== "chunk") throw new Error("no xterm chunk to rewrite");
+        const rewritten = chunk.code.replace(pattern, replace);
+        if (rewritten === chunk.code)
+          throw new Error(`${pattern} matched nothing in the xterm chunk`);
+        chunk.code = rewritten;
+      },
     },
   };
 }
@@ -170,6 +174,18 @@ describe("xterm's minifier guard", () => {
   it("fails when the shipped build exposes no Terminal", async () => {
     await expect(checkXtermBuild(XTERM_FILE, moduleUrl("export const value = 1;"))).rejects.toThrow(
       "probing it threw Error: expected one xterm Terminal export, found 0"
+    );
+  });
+
+  it("fails when a module initializer throws after exposing Terminal", async () => {
+    const shipped = [
+      `import { Terminal as Real } from "${moduleUrl(XTERM_SOURCE)}";`,
+      "let terminal;",
+      "export const n = { get Terminal() { return terminal; } };",
+      'export const t = () => { terminal = Real; throw new Error("initializer failed"); };',
+    ].join("\n");
+    await expect(checkXtermBuild(XTERM_FILE, moduleUrl(shipped))).rejects.toThrow(
+      "probing it threw Error: initializer failed"
     );
   });
 
