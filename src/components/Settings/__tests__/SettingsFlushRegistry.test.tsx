@@ -144,6 +144,76 @@ describe("SettingsFlushRegistry", () => {
     });
   });
 
+  it("keeps every flush a tab registers, and drops only the one that unregisters", async () => {
+    const editor = vi.fn();
+    const imageViewer = vi.fn();
+
+    const { result, rerender } = renderHook(
+      ({ editorPending }: { editorPending: boolean }) => {
+        useSettingsTabFlush("integrations", editor, editorPending);
+        useSettingsTabFlush("integrations", imageViewer, true);
+        return useContext(SettingsFlushContext);
+      },
+      { wrapper: wrap, initialProps: { editorPending: true } }
+    );
+
+    await act(async () => {
+      await result.current!.flushAll();
+    });
+    expect(editor).toHaveBeenCalledTimes(1);
+    expect(imageViewer).toHaveBeenCalledTimes(1);
+
+    rerender({ editorPending: false });
+    await act(async () => {
+      await result.current!.flushAll();
+    });
+    expect(editor).toHaveBeenCalledTimes(1);
+    expect(imageViewer).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports both failures when one tab's two flushes each keep a draft", async () => {
+    const { result } = renderHook(
+      () => {
+        useSettingsTabFlush("integrations", () => ({ landOn: "editor-external" }), true);
+        useSettingsTabFlush("integrations", () => ({ landOn: "image-viewer" }), true);
+        return useContext(SettingsFlushContext);
+      },
+      { wrapper: wrap }
+    );
+
+    await act(async () => {
+      await expect(result.current!.flushAll()).resolves.toEqual([
+        { tab: "integrations", landOn: "editor-external" },
+        { tab: "integrations", landOn: "image-viewer" },
+      ]);
+    });
+  });
+
+  it("starts each flush only after the one before it has settled", async () => {
+    let finishFirst: () => void = () => {};
+    const first = vi.fn(() => new Promise<void>((resolve) => (finishFirst = resolve)));
+    const second = vi.fn();
+
+    const { result } = renderHook(
+      () => {
+        useSettingsTabFlush("integrations", first, true);
+        useSettingsTabFlush("environment", second, true);
+        return useContext(SettingsFlushContext);
+      },
+      { wrapper: wrap }
+    );
+
+    await act(async () => {
+      const pending = result.current!.flushAll();
+      await Promise.resolve();
+      expect(first).toHaveBeenCalledTimes(1);
+      expect(second).not.toHaveBeenCalled();
+      finishFirst();
+      await pending;
+    });
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
   it("invokes the latest callback after rerender", async () => {
     const first = vi.fn();
     const second = vi.fn();

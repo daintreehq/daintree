@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
+import { useContext, type ContextType } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ImageViewerTab } from "../ImageViewerTab";
+import { SettingsFlushContext, SettingsFlushProvider } from "../SettingsFlushRegistry";
 import { useProjectStore } from "@/store/projectStore";
 import { cleanupProjectSettingsStore, useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { projectClient } from "@/clients";
@@ -88,6 +90,168 @@ async function renderLoadedTab() {
   });
   return screen.getByRole("button", { name: /save/i }) as HTMLButtonElement;
 }
+
+async function renderFlushable(saved: unknown = {}) {
+  installElectron(async () => saved);
+  setProject(TEST_PROJECT);
+  let registry: ContextType<typeof SettingsFlushContext> = null;
+  const Capture = () => {
+    registry = useContext(SettingsFlushContext);
+    return null;
+  };
+  render(
+    <SettingsFlushProvider>
+      <Capture />
+      <ImageViewerTab />
+    </SettingsFlushProvider>
+  );
+  const osRadio = screen.getByRole("radio", { name: /Use OS default/i }) as HTMLInputElement;
+  await waitFor(() => expect(osRadio.disabled).toBe(false));
+  return async () => {
+    let failed: Array<{ tab: string; landOn: string }> = [];
+    await act(async () => {
+      failed = await registry!.flushAll();
+    });
+    return failed;
+  };
+}
+
+const CUSTOM_GIMP = { preferredImageViewer: { mode: "custom", customCommand: "gimp" } };
+
+function chooseCustom(command: string) {
+  fireEvent.click(screen.getByRole("radio", { name: /Custom command/i }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Command" }), {
+    target: { value: command },
+  });
+}
+
+describe("ImageViewerTab flushed by a close", () => {
+  it("writes nothing over the suggestion a project with no preference shows, while Save still pins it", async () => {
+    const flush = await renderFlushable();
+
+    await expect(flush()).resolves.toEqual([]);
+    expect(projectClient.saveSettings).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    await waitFor(() => expect(projectClient.saveSettings).toHaveBeenCalledTimes(1));
+  });
+
+  it("writes nothing when a draft comes back to what is saved", async () => {
+    const flush = await renderFlushable(CUSTOM_GIMP);
+    fireEvent.click(screen.getByRole("radio", { name: /Use OS default/i }));
+    chooseCustom(" gimp ");
+
+    await expect(flush()).resolves.toEqual([]);
+    expect(projectClient.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("ignores a command left behind by the option no longer chosen", async () => {
+    const flush = await renderFlushable();
+    chooseCustom("gimp");
+    fireEvent.click(screen.getByRole("radio", { name: /Use OS default/i }));
+
+    await expect(flush()).resolves.toEqual([]);
+    expect(projectClient.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("saves a valid draft for the project", async () => {
+    const flush = await renderFlushable();
+    chooseCustom("gimp");
+
+    await expect(flush()).resolves.toEqual([]);
+
+    expect(projectClient.saveSettings).toHaveBeenCalledWith(
+      "proj-1",
+      expect.objectContaining({
+        preferredImageViewer: { mode: "custom", customCommand: "gimp" },
+      })
+    );
+    await expect(flush()).resolves.toEqual([]);
+    expect(projectClient.saveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("lands on the command field when it is empty", async () => {
+    const flush = await renderFlushable();
+    chooseCustom("  ");
+
+    const [failure] = await flush();
+
+    expect(projectClient.saveSettings).not.toHaveBeenCalled();
+    expect(screen.getByText("Enter the command that opens images")).toBeTruthy();
+    const target = document.getElementById(failure!.landOn)!;
+    expect(target.contains(screen.getByRole("textbox", { name: "Command" }))).toBe(true);
+  });
+
+  it("keeps the draft and its error when the save fails", async () => {
+    vi.mocked(projectClient.saveSettings).mockRejectedValueOnce(new Error("disk full"));
+    const flush = await renderFlushable();
+    chooseCustom("gimp");
+
+    const [failure] = await flush();
+
+    expect(failure?.landOn).toBe("image-viewer");
+    expect(await screen.findByText(/disk full/)).toBeTruthy();
+    expect((screen.getByRole("textbox", { name: "Command" }) as HTMLInputElement).value).toBe(
+      "gimp"
+    );
+  });
+
+  it("reports the outcome of a Save still running rather than saving again", async () => {
+    let failSave!: (reason: Error) => void;
+    vi.mocked(projectClient.saveSettings).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (failSave = reject))
+    );
+    const flush = await renderFlushable();
+    chooseCustom("gimp");
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    await waitFor(() => expect(projectClient.saveSettings).toHaveBeenCalledTimes(1));
+
+    const flushing = flush();
+    await act(async () => failSave(new Error("disk full")));
+    const [failure] = await flushing;
+
+    expect(failure?.landOn).toBe("image-viewer");
+    expect(projectClient.saveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a Save of the shown suggestion still running, though nothing is pending", async () => {
+    let failSave!: (reason: Error) => void;
+    vi.mocked(projectClient.saveSettings).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (failSave = reject))
+    );
+    const flush = await renderFlushable();
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    await waitFor(() => expect(projectClient.saveSettings).toHaveBeenCalledTimes(1));
+
+    const flushing = flush();
+    await act(async () => failSave(new Error("disk full")));
+
+    expect((await flushing)[0]?.landOn).toBe("image-viewer");
+  });
+
+  it("offers Discard only for a pending draft, and discarding clears the error", async () => {
+    vi.mocked(projectClient.saveSettings).mockRejectedValue(new Error("disk full"));
+    const flush = await renderFlushable(CUSTOM_GIMP);
+    expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Command" }), {
+      target: { value: "krita" },
+    });
+    await flush();
+    expect(await screen.findByText(/disk full/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+
+    expect((screen.getByRole("textbox", { name: "Command" }) as HTMLInputElement).value).toBe(
+      "gimp"
+    );
+    expect(screen.queryByText(/disk full/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+    vi.mocked(projectClient.saveSettings).mockClear();
+    await expect(flush()).resolves.toEqual([]);
+    expect(projectClient.saveSettings).not.toHaveBeenCalled();
+  });
+});
 
 describe("ImageViewerTab", () => {
   it("renders section chrome and disabled controls while settings are loading", async () => {

@@ -24,12 +24,21 @@ export interface FailedSettingsFlush extends SettingsFlushFailure {
   tab: SettingsTab;
 }
 
-type FlushFn = () => void | SettingsFlushFailure | Promise<void | SettingsFlushFailure>;
+/**
+ * A close is the user leaving. A hide (minimized, or the view cached by a project
+ * switch) leaves Settings open, so a page whose write disrupts other things waits
+ * for the close rather than doing it behind the user's back.
+ */
+export type SettingsFlushReason = "close" | "hide";
+
+type FlushFn = (
+  reason: SettingsFlushReason
+) => void | SettingsFlushFailure | Promise<void | SettingsFlushFailure>;
 
 interface FlushRegistryApi {
   register: (tab: SettingsTab, fn: FlushFn) => () => void;
   /** Runs every registered flush and resolves with the ones that kept their draft. */
-  flushAll: () => Promise<FailedSettingsFlush[]>;
+  flushAll: (reason?: SettingsFlushReason) => Promise<FailedSettingsFlush[]>;
 }
 
 const FlushContext = createContext<FlushRegistryApi | null>(null);
@@ -46,37 +55,33 @@ interface ProviderProps {
  * function while dirty and unregister when clean or unmounted.
  */
 export function SettingsFlushProvider({ children }: ProviderProps) {
-  const flushersRef = useRef<Map<SettingsTab, FlushFn>>(new Map());
+  // A page can hold several drafts of its own: Integrations has the editor and the
+  // image viewer, each registering while it is pending.
+  const flushersRef = useRef<Set<{ tab: SettingsTab; fn: FlushFn }>>(new Set());
 
   const register = useCallback((tab: SettingsTab, fn: FlushFn) => {
-    flushersRef.current.set(tab, fn);
+    const flusher = { tab, fn };
+    flushersRef.current.add(flusher);
     return () => {
-      const current = flushersRef.current.get(tab);
-      // Only delete if we still own the slot — a re-register from the same tab
-      // would have replaced fn, and we shouldn't blow away the new one.
-      if (current === fn) {
-        flushersRef.current.delete(tab);
-      }
+      flushersRef.current.delete(flusher);
     };
   }, []);
 
-  const flushAll = useCallback(async () => {
-    const flushers = Array.from(flushersRef.current.entries());
-    const outcomes = await Promise.all(
-      flushers.map(async ([tab, fn]): Promise<FailedSettingsFlush | null> => {
-        let failure: SettingsFlushFailure | void;
-        try {
-          failure = await fn();
-        } catch (err) {
-          // A flush that throws has no message on its page, so holding the dialog
-          // open on it would leave Settings unclosable with nothing saying why.
-          logError("Settings flush failed", err);
-          return null;
-        }
-        return failure ? { tab, landOn: failure.landOn } : null;
-      })
-    );
-    return outcomes.filter((outcome): outcome is FailedSettingsFlush => outcome !== null);
+  const flushAll = useCallback(async (reason: SettingsFlushReason = "close") => {
+    const failed: FailedSettingsFlush[] = [];
+    // One at a time: several of these rewrite the whole project settings file from a
+    // copy they read first, so two running together can undo each other's write.
+    for (const { tab, fn } of Array.from(flushersRef.current)) {
+      try {
+        const failure = await fn(reason);
+        if (failure) failed.push({ tab, landOn: failure.landOn });
+      } catch (err) {
+        // A flush that throws has no message on its page, so holding the dialog
+        // open on it would leave Settings unclosable with nothing saying why.
+        logError("Settings flush failed", err);
+      }
+    }
+    return failed;
   }, []);
 
   const value = useMemo(() => ({ register, flushAll }), [register, flushAll]);
@@ -101,6 +106,6 @@ export function useSettingsTabFlush(tab: SettingsTab, fn: FlushFn, enabled: bool
 
   useEffect(() => {
     if (!enabled || !register) return;
-    return register(tab, () => fnRef.current());
+    return register(tab, (reason) => fnRef.current(reason));
   }, [enabled, register, tab]);
 }
