@@ -33,7 +33,11 @@ vi.mock("@/hooks/useWorktrees", () => ({
 }));
 
 vi.mock("@/components/ui/popover", () => ({
-  Popover: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  Popover: ({ children, open }: { children: React.ReactNode; open?: boolean }) => (
+    <div data-testid="popover-root" data-open={String(open)}>
+      {children}
+    </div>
+  ),
   PopoverTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   PopoverContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
@@ -606,6 +610,20 @@ describe("TrashContainer", () => {
         getByTestId("confirm-dialog-cancel").click();
       });
       expect(confirmDialogProps?.isOpen).toBe(false);
+    });
+
+    it("reopens the popover on cancel", () => {
+      const { getByTestId } = render(<TrashContainer trashedTerminals={[makeTrashedItem("1")]} />);
+
+      act(() => {
+        getByTestId("empty-trash-button").click();
+      });
+      expect(getByTestId("popover-root").dataset.open).toBe("false");
+
+      act(() => {
+        getByTestId("confirm-dialog-cancel").click();
+      });
+      expect(getByTestId("popover-root").dataset.open).toBe("true");
     });
 
     it("closes dialog on confirm", () => {
