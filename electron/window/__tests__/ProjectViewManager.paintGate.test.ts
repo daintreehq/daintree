@@ -304,9 +304,11 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
   let manager: ProjectViewManager;
   let win: ReturnType<typeof createMockWindow>;
   let initialWc: MockWc;
+  let onViewWarmActivated: ReturnType<typeof vi.fn<(wc: Electron.WebContents) => void>>;
 
   beforeEach(() => {
     nextWebContentsId = 500;
+    onViewWarmActivated = vi.fn<(wc: Electron.WebContents) => void>();
     wcQueue = [];
     vi.mocked(logInfo).mockClear();
     vi.mocked(logWarn).mockClear();
@@ -327,6 +329,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       // below are written against the 150 ms bound.
       viewLoadTimeoutMs: 100,
       cachedProjectViews: 3,
+      onViewWarmActivated: (wc) => onViewWarmActivated(wc),
     });
 
     initialWc = createMockWebContents();
@@ -1312,10 +1315,9 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     const incomingWc = createMockWebContents();
     wcQueue.push(incomingWc);
     const order: string[] = [];
-    const onViewWarmActivated = vi.fn((wc: Electron.WebContents) => {
+    onViewWarmActivated.mockImplementation((wc) => {
       order.push(`hook:${wc.id}`);
     });
-    manager.onViewWarmActivated = onViewWarmActivated;
 
     const firstSwitch = manager.switchTo("proj-b", "/path/b");
     await Promise.resolve();
@@ -1338,6 +1340,35 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     manager.signalWarmViewPainted(initialWc.id);
     await switchBack;
     expect(onViewWarmActivated).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the warm-activation hook when a cached view is revealed with nothing to bridge", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+    const firstSwitch = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await firstSwitch;
+
+    // With the active view gone there is no outgoing view to bridge through,
+    // so the cached view is revealed on top straight away.
+    expect(manager.destroyView("proj-b")).toBe(true);
+    win.contentView.addChildView.mockClear();
+    initialWc.send.mockClear();
+
+    const result = await manager.switchTo("proj-a", "/path/a");
+
+    expect(result.isNew).toBe(false);
+    const reattach = win.contentView.addChildView.mock.calls.find(
+      ([view]) => (view as { webContents?: MockWc }).webContents === initialWc
+    );
+    expect(reattach).toBeDefined();
+    expect(reattach?.[1]).toBeUndefined();
+    expect(
+      initialWc.send.mock.calls.filter(([c]) => c === CHANNELS.APP_VIEW_WARM_ACTIVATED)
+    ).toHaveLength(1);
+    expect(onViewWarmActivated.mock.calls).toEqual([[initialWc]]);
   });
 
   it("hands a revived cached view the memory publish it missed while hidden (#13529)", async () => {
