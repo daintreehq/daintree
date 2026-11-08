@@ -33,6 +33,11 @@ export class IpcQueueManager {
   private readonly queuedBytes = new Map<string, number>();
   private readonly pausedTerminals = new Map<string, ReturnType<typeof setInterval>>();
   private readonly pauseStartTimes = new Map<string, number>();
+  // Bytes in flight to views that are all cached (#16497). Kept apart from
+  // queuedBytes and out of totalQueuedBytes: these copies never pause the PTY
+  // and a frozen view may never ack them, so counting them toward the
+  // aggregate gate would hold unrelated primary consumers.
+  private readonly hiddenQueuedBytes = new Map<string, number>();
   // Terminals whose cached views were already told they missed output, so a
   // sustained skip sends one notice rather than one per chunk.
   private readonly hiddenSkipNotified = new Set<string>();
@@ -53,7 +58,27 @@ export class IpcQueueManager {
     return next;
   }
 
+  addHiddenBytes(id: string, bytes: number): void {
+    this.hiddenQueuedBytes.set(id, (this.hiddenQueuedBytes.get(id) ?? 0) + bytes);
+  }
+
+  getHiddenQueuedBytes(id: string): number {
+    return this.hiddenQueuedBytes.get(id) ?? 0;
+  }
+
   removeBytes(id: string, bytes: number): void {
+    // Acks carry no transport, so the hidden balance is settled first: a stale
+    // primary balance (an IPC copy nobody received) must not keep absorbing
+    // acks for bytes the cached view did parse, or its budget never recovers.
+    // Showing the project clears whatever primary debt is left behind.
+    const hidden = this.hiddenQueuedBytes.get(id) ?? 0;
+    if (hidden > 0) {
+      const settled = Math.min(bytes, hidden);
+      if (settled === hidden) this.hiddenQueuedBytes.delete(id);
+      else this.hiddenQueuedBytes.set(id, hidden - settled);
+      bytes -= settled;
+      if (bytes === 0) return;
+    }
     const current = this.queuedBytes.get(id) ?? 0;
     // Clamp the aggregate delta to the per-terminal balance to prevent
     // underflow when callers over-remove (the per-terminal value is
@@ -104,9 +129,17 @@ export class IpcQueueManager {
   } {
     const perTerminal: Array<{ terminalId: string; pendingBytes: number }> = [];
     for (const [terminalId, pendingBytes] of this.queuedBytes) {
-      perTerminal.push({ terminalId, pendingBytes });
+      perTerminal.push({
+        terminalId,
+        pendingBytes: pendingBytes + (this.hiddenQueuedBytes.get(terminalId) ?? 0),
+      });
     }
-    return { totalPendingBytes: this.totalQueuedBytes, perTerminal };
+    let totalPendingBytes = this.totalQueuedBytes;
+    for (const [terminalId, pendingBytes] of this.hiddenQueuedBytes) {
+      totalPendingBytes += pendingBytes;
+      if (!this.queuedBytes.has(terminalId)) perTerminal.push({ terminalId, pendingBytes });
+    }
+    return { totalPendingBytes, perTerminal };
   }
 
   isAtCapacity(id: string, additionalBytes: number): boolean {
@@ -294,6 +327,7 @@ export class IpcQueueManager {
     this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - removed);
     this.pausedTerminals.delete(id);
     this.pauseStartTimes.delete(id);
+    this.hiddenQueuedBytes.delete(id);
     this.hiddenSkipNotified.delete(id);
     // A cleared terminal (exit, force-resume) can be the one holding most of
     // the aggregate — sweep so aggregate-paused siblings resume now instead of
@@ -312,6 +346,7 @@ export class IpcQueueManager {
     this.pausedTerminals.clear();
     this.pauseStartTimes.clear();
     this.queuedBytes.clear();
+    this.hiddenQueuedBytes.clear();
     this.hiddenSkipNotified.clear();
     this.totalQueuedBytes = 0;
   }

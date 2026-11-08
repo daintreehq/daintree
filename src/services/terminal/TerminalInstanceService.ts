@@ -133,6 +133,11 @@ function canAutoInitializeTerminalIngest(): boolean {
  * reason.
  */
 const SUPPRESSED_VIEW_WEBGL_RELEASE_DELAY_MS = 20_000;
+// A repaint after a hidden-view skip that fails (null snapshot, a timeout, a
+// competing restore taking the pane) is retried on a timer this many times;
+// past that it waits for the next reactivation or skip notice.
+const HIDDEN_SKIP_REPAINT_TIMED_ATTEMPTS = 3;
+const HIDDEN_SKIP_REPAINT_RETRY_MS = 1000;
 
 // Cached (#12514) or in a hidden window (#12798): either way nobody can see
 // these terminals, so no foreground tier, burst or WebGL context is earned.
@@ -250,9 +255,13 @@ class TerminalInstanceService {
   /** Held, but the PTY's grid is still unknown; retried on the next lease event. */
   private watchUnseeded = new Set<string>();
   private watchEpoch = 0;
-  /** Panes the host skipped output for while no window showed this project. */
-  private hiddenSkipRepaints = new Set<string>();
+  /**
+   * Panes owed a repaint because the host skipped their output while no
+   * window showed this project, with how many attempts have failed.
+   */
+  private hiddenSkipRepaints = new Map<string, number>();
   private hiddenSkipRepaintRunning = false;
+  private hiddenSkipRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private exitHandlers = new Map<string, (exitCode: number) => void>();
   private offViewLifecycle: () => void;
   private offViewObservability: () => void;
@@ -1490,38 +1499,61 @@ class TerminalInstanceService {
    */
   noteHiddenOutputSkipped(id: string): void {
     if (!this.instances.has(id)) return;
-    this.hiddenSkipRepaints.add(id);
+    this.hiddenSkipRepaints.set(id, 0);
     if (!isProjectViewCached()) this.repaintHiddenSkips();
   }
 
   /**
    * One repaint at a time: a reveal can find every busy pane of the project
-   * marked, and each restore writes a whole snapshot into its xterm.
+   * marked, and each restore writes a whole snapshot into its xterm. A pane
+   * whose repaint fails keeps its obligation.
    */
   private repaintHiddenSkips(): void {
     if (this.hiddenSkipRepaintRunning) return;
     this.hiddenSkipRepaintRunning = true;
+    const failed = new Map<string, number>();
     void (async () => {
       try {
-        // Set iteration also visits ids marked while an earlier one restores.
-        for (const id of this.hiddenSkipRepaints) {
+        // Map iteration also visits ids marked while an earlier one restores.
+        for (const [id, failures] of this.hiddenSkipRepaints) {
           if (isProjectViewCached()) break;
           this.hiddenSkipRepaints.delete(id);
           if (!this.instances.has(id)) continue;
+          // The worker mirror paints its own snapshots, which a host repaint
+          // would race; history release stays out of worker mode for the same
+          // reason.
+          if (this.workerIngestController.getIngest(id)?.shouldDivert()) continue;
+          let restored = false;
           try {
-            if (!(await this.fetchAndRestore(id))) {
-              logWarn(`[TerminalInstanceService] ${id}: repaint after hidden-view skip failed`);
-            }
+            restored = await this.restoreController.fetchAndRestore(id, { authoritative: true });
           } catch (error) {
             logWarn(`[TerminalInstanceService] ${id}: repaint after hidden-view skip threw`, {
               error,
             });
           }
+          if (!restored) failed.set(id, failures + 1);
         }
       } finally {
         this.hiddenSkipRepaintRunning = false;
+        let retry = false;
+        for (const [id, failures] of failed) {
+          // A fresh notice meanwhile already re-marked it with a clean count.
+          if (this.hiddenSkipRepaints.has(id) || !this.instances.has(id)) continue;
+          logWarn(`[TerminalInstanceService] ${id}: repaint after hidden-view skip failed`);
+          this.hiddenSkipRepaints.set(id, failures);
+          if (failures < HIDDEN_SKIP_REPAINT_TIMED_ATTEMPTS) retry = true;
+        }
+        if (retry) this.scheduleHiddenSkipRetry();
       }
     })();
+  }
+
+  private scheduleHiddenSkipRetry(): void {
+    if (this.hiddenSkipRetryTimer !== null) return;
+    this.hiddenSkipRetryTimer = setTimeout(() => {
+      this.hiddenSkipRetryTimer = null;
+      if (!isProjectViewCached()) this.repaintHiddenSkips();
+    }, HIDDEN_SKIP_REPAINT_RETRY_MS);
   }
 
   /**
@@ -3833,6 +3865,10 @@ class TerminalInstanceService {
     this.projectSwitchRedrawQueue.clear();
     this.offViewLifecycle();
     this.offViewObservability();
+    if (this.hiddenSkipRetryTimer !== null) {
+      clearTimeout(this.hiddenSkipRetryTimer);
+      this.hiddenSkipRetryTimer = null;
+    }
     this.offBufferSampleRequest?.();
     this.offBufferSampleRequest = null;
     TerminalInstanceService.liveServices.delete(this);

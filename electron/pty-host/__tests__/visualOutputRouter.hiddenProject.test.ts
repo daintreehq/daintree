@@ -23,6 +23,7 @@ type Terminal = {
 
 interface Harness {
   router: VisualOutputRouter;
+  rendererConnections: Map<number, RendererConnection>;
   ipcQueue: IpcQueueManager;
   connection: HandlerMap;
   queries: HandlerMap;
@@ -35,13 +36,17 @@ interface Harness {
   ipcDataMirrorTerminals: Set<string>;
 }
 
-function createHarness(terminalIds: string[], projectId: string): Harness {
+function createHarness(terminalIds: string[], projectId: string, extra: string[] = []): Harness {
+  // `extra` terminals belong to proj-b, the project the window usually shows.
   const terminals = new Map<string, Terminal>(
-    terminalIds.map((id) => [
-      id,
-      { id, projectId, contentEpoch: 0, lastInputTime: 0, analysisEnabled: false },
-    ])
+    [...terminalIds.map((id) => [id, projectId]), ...extra.map((id) => [id, "proj-b"])].map(
+      ([id, pid]) => [
+        id!,
+        { id: id!, projectId: pid!, contentEpoch: 0, lastInputTime: 0, analysisEnabled: false },
+      ]
+    )
   );
+  terminalIds = [...terminalIds, ...extra];
   const events: PtyHostEvent[] = [];
   const sendEvent = (event: PtyHostEvent) => events.push(event);
   const rawPauses = new Map<string, number>();
@@ -81,8 +86,7 @@ function createHarness(terminalIds: string[], projectId: string): Harness {
     ],
   ]);
   const windowProjectMap = new Map<number, string | null>();
-  // The cached view of the project holds no port, so Main keeps it eligible.
-  const fallbackEligibleProjects = new Set<string>([projectId]);
+  const fallbackEligibleProjects = new Set<string>();
   const ipcDataMirrorTerminals = new Set<string>();
 
   const ptyManager = {
@@ -133,6 +137,7 @@ function createHarness(terminalIds: string[], projectId: string): Harness {
 
   return {
     router,
+    rendererConnections,
     ipcQueue,
     connection: createConnectionHandlers(ctx),
     queries: createTerminalQueryHandlers(ctx),
@@ -152,8 +157,8 @@ const PROJECTS = ["proj-a", "proj-b"];
  * Show `projectId` in the window as Main does: tell the host, then hand the
  * port to its view, which leaves every other project's cached view portless.
  */
-function show(h: Harness, projectId: string): void {
-  h.connection["project-switch"]!({ type: "project-switch", windowId: 1, projectId } as never);
+function show(h: Harness, projectId: string, windowId = 1): void {
+  h.connection["project-switch"]!({ type: "project-switch", windowId, projectId } as never);
   h.fallbackEligibleProjects.clear();
   for (const pid of PROJECTS) if (pid !== projectId) h.fallbackEligibleProjects.add(pid);
 }
@@ -211,8 +216,12 @@ describe("visual routing for a project no window shows (#16497)", () => {
       // Never held: every tick's redraw left the PTY.
       expect(h.rawPauses.get(id)).toBe(0);
       expect(written.get(id)).toBe(durationMs / TICK_MS);
-      // The cached view was fed until its budget filled, and no further.
-      expect(h.ipcQueue.getQueuedBytes(id)).toBeLessThanOrEqual(IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES);
+      // The cached view was fed until its budget filled, and no further, all
+      // of it outside the primary ledger.
+      expect(h.ipcQueue.getHiddenQueuedBytes(id)).toBeLessThanOrEqual(
+        IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES
+      );
+      expect(h.ipcQueue.getQueuedBytes(id)).toBe(0);
       expect(ipcDataFor(h, id).length).toBe(
         Math.floor(IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES / REDRAW_BYTES)
       );
@@ -232,8 +241,8 @@ describe("visual routing for a project no window shows (#16497)", () => {
 
     // Back on screen: the ledger holds nothing, and output rides the port.
     show(h, "proj-a");
-    for (const id of AGENTS) expect(h.ipcQueue.getQueuedBytes(id)).toBe(0);
-    expect(h.ipcQueue.getTotalQueuedBytes()).toBe(0);
+    for (const id of AGENTS) expect(h.ipcQueue.getHiddenQueuedBytes(id)).toBe(0);
+    expect(h.ipcQueue.getQueueSnapshot().totalPendingBytes).toBe(0);
     h.events.length = 0;
     runAgents(h, AGENTS, 200);
     expect(h.batcherWrite).toHaveBeenCalled();
@@ -255,7 +264,7 @@ describe("visual routing for a project no window shows (#16497)", () => {
     );
   });
 
-  it("reports a skip after a snapshot request again, so a view that repainted early catches up", () => {
+  it("reports a skip after a snapshot request again", () => {
     const h = createHarness(["a1"], "proj-a");
     show(h, "proj-b");
     runAgents(h, ["a1"], IPC_MAX_PAUSE_MS);
@@ -293,5 +302,82 @@ describe("visual routing for a project no window shows (#16497)", () => {
     vi.advanceTimersByTime(IPC_MAX_PAUSE_MS);
     expect(h.coordinators.get("a1")!.isReadPaused).toBe(false);
     expect(h.ipcQueue.getQueuedBytes("a1")).toBe(0);
+  });
+
+  it("keeps hidden debt out of the aggregate gate that paces the project on screen", () => {
+    const hidden = Array.from({ length: 20 }, (_, i) => `h${i}`);
+    const h = createHarness(hidden, "proj-a", ["s1"]);
+    show(h, "proj-b");
+    // Twenty frozen cached panes fill their budgets: far past the aggregate
+    // high watermark if they counted toward it.
+    for (let t = 0; t < 2000; t += TICK_MS) {
+      for (const id of hidden) h.router.routeOutput(id, REDRAW, undefined);
+    }
+
+    // The shown terminal's port is saturated, so its copy goes over IPC as the
+    // only delivery and is paced by the IPC ledger.
+    h.batcherWrite.mockReturnValue(false);
+    h.router.routeOutput("s1", REDRAW, undefined);
+
+    expect(h.ipcQueue.getQueuedBytes("s1")).toBe(REDRAW_BYTES);
+    expect(h.coordinators.get("s1")!.isReadPaused).toBe(false);
+  });
+
+  it("treats a project shown in a window whose port failed as on screen", () => {
+    const h = createHarness(["a1"], "proj-a");
+    // Window 1 shows proj-a but its port is gone; window 2 shows proj-b.
+    const conn = h.rendererConnections.get(1)!;
+    h.rendererConnections.delete(1);
+    h.rendererConnections.set(2, conn);
+    show(h, "proj-a", 1);
+    show(h, "proj-b", 2);
+    h.fallbackEligibleProjects.add("proj-a");
+
+    // Long enough to pass the high watermark, not long enough for the timer.
+    const durationMs = IPC_MAX_PAUSE_MS * 1.5;
+    const written = runAgents(h, ["a1"], durationMs);
+
+    // The view on screen is a primary IPC consumer: its ledger paces the PTY.
+    expect(h.ipcQueue.getHiddenQueuedBytes("a1")).toBe(0);
+    expect(h.coordinators.get("a1")!.isReadPaused).toBe(true);
+    expect(written.get("a1")).toBeLessThan(durationMs / TICK_MS);
+    expect(statusEvents(h).filter((e) => e.reason === HIDDEN_VIEW_SKIP_REASON)).toHaveLength(0);
+  });
+
+  it("clears a project's IPC debt only when it comes back from being shown nowhere", () => {
+    const h = createHarness(["a1"], "proj-a");
+    show(h, "proj-a", 1);
+    show(h, "proj-b", 2);
+    h.ipcQueue.addBytes("a1", 4096);
+
+    // Already on screen in window 1: a second window showing it changes nothing.
+    show(h, "proj-a", 2);
+    expect(h.ipcQueue.getQueuedBytes("a1")).toBe(4096);
+
+    show(h, "proj-b", 1);
+    show(h, "proj-b", 2);
+    expect(h.ipcQueue.getQueuedBytes("a1")).toBe(4096);
+
+    show(h, "proj-a", 1);
+    expect(h.ipcQueue.getQueuedBytes("a1")).toBe(0);
+  });
+
+  it("leaves a paused terminal's debt to its safety timer when its project comes back", () => {
+    const h = createHarness(["a1"], "proj-a");
+    show(h, "proj-a");
+    h.batcherWrite.mockReturnValue(false);
+    // Primary IPC with no acks: the ledger pauses the PTY.
+    runAgents(h, ["a1"], IPC_MAX_PAUSE_MS * 1.5);
+    expect(h.coordinators.get("a1")!.isReadPaused).toBe(true);
+    const debt = h.ipcQueue.getQueuedBytes("a1");
+
+    show(h, "proj-b");
+    show(h, "proj-a");
+    expect(h.ipcQueue.getQueuedBytes("a1")).toBe(debt);
+    expect(h.coordinators.get("a1")!.isReadPaused).toBe(true);
+
+    vi.advanceTimersByTime(IPC_MAX_PAUSE_MS);
+    expect(h.ipcQueue.getQueuedBytes("a1")).toBe(0);
+    expect(h.coordinators.get("a1")!.isReadPaused).toBe(false);
   });
 });

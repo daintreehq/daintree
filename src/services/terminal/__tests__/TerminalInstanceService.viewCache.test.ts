@@ -106,7 +106,9 @@ type ViewCacheTestService = {
     pinFocus: (id: string, managed: ManagedTerminal) => void;
   };
   noteHiddenOutputSkipped: (id: string) => void;
-  fetchAndRestore: (id: string) => Promise<boolean>;
+  restoreController: {
+    fetchAndRestore: (id: string, options?: { authoritative?: boolean }) => Promise<boolean>;
+  };
   dispose: () => void;
 };
 
@@ -606,7 +608,7 @@ describe("TerminalInstanceService repaint after a hidden-view skip (#16497)", ()
     restores = [];
     // Each restore stays open until the test settles it, so the order and
     // overlap of restores is observable.
-    vi.spyOn(service, "fetchAndRestore").mockImplementation(
+    vi.spyOn(service.restoreController, "fetchAndRestore").mockImplementation(
       (id: string) =>
         new Promise<boolean>((resolve) => {
           restores.push({ id, settle: resolve });
@@ -617,7 +619,45 @@ describe("TerminalInstanceService repaint after a hidden-view skip (#16497)", ()
   afterEach(() => {
     service.instances.clear();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     service.dispose();
+  });
+
+  it("asks for an authoritative restore", async () => {
+    service.instances.set("a", makeManaged());
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+
+    expect(service.restoreController.fetchAndRestore).toHaveBeenCalledWith("a", {
+      authoritative: true,
+    });
+  });
+
+  it("keeps a failed repaint's obligation and retries it a bounded number of times", async () => {
+    vi.useFakeTimers();
+    service.instances.set("a", makeManaged());
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      expect(restores).toHaveLength(attempt);
+      restores.at(-1)!.settle(false);
+      await settleMicrotasks();
+      vi.advanceTimersByTime(1000);
+      await settleMicrotasks();
+    }
+    // Out of timed retries: the next reactivation tries again.
+    expect(restores).toHaveLength(3);
+    emit("revealed");
+    await settleMicrotasks();
+    expect(restores).toHaveLength(4);
+
+    restores.at(-1)!.settle(true);
+    await settleMicrotasks();
+    vi.advanceTimersByTime(5000);
+    emit("revealed");
+    await settleMicrotasks();
+    expect(restores).toHaveLength(4);
   });
 
   it("waits for the view to come back, then repaints each skipped pane once, one at a time", async () => {

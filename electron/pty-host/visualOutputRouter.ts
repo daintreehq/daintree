@@ -92,6 +92,13 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
   // iterator invalidation during Map iteration.
   let throughputAccumulator = new Map<string, { totalBytes: number; packetCount: number }>();
 
+  function isProjectOnScreen(projectId: string): boolean {
+    for (const shown of windowProjectMap.values()) {
+      if (shown === projectId) return true;
+    }
+    return false;
+  }
+
   // Helper to convert data to string for IPC fallback (IPC events expect string)
   function toStringForIpc(data: string | Uint8Array): string {
     return typeof data === "string" ? data : textDecoder.decode(data);
@@ -148,8 +155,8 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
     const needsEligibleFallback =
       termProjectId !== null && fallbackEligibleProjects.has(termProjectId);
     const portDeliveredWebContentsIds: number[] = [];
-    // Every connected window shows some other project, so the IPC fallback
-    // below can only reach cached views of this one.
+    // No window shows this project and no port can take its output, so the
+    // IPC fallback below can only reach cached views of it.
     let projectShownNowhere = false;
 
     if (
@@ -165,7 +172,11 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
         if (filtered) continue;
         targets.push({ windowId, conn });
       }
-      projectShownNowhere = termProjectId !== null && targets.length === 0;
+      // Visibility comes from the window map, not the connected ports: a
+      // window keeps its project through a failed port, and its view is then
+      // a shown, primary IPC consumer.
+      projectShownNowhere =
+        termProjectId !== null && targets.length === 0 && !isProjectOnScreen(termProjectId);
 
       // Encode only when a target window remains after project filtering — a
       // fully-filtered chunk falls through to the IPC fallback's original string.
@@ -479,7 +490,10 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
       const dataBytes = Buffer.byteLength(dataString, "utf8");
 
       if (isHiddenFallback) {
-        if (ipcQueueManager.getQueuedBytes(id) + dataBytes > IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES) {
+        if (
+          ipcQueueManager.getHiddenQueuedBytes(id) + dataBytes >
+          IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES
+        ) {
           // Nothing is lost: the host mirror holds every byte. The cached views
           // only need to know they must repaint, once per run of skips.
           if (ipcQueueManager.noteHiddenSkip(id)) {
@@ -492,7 +506,7 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
             });
           }
         } else {
-          ipcQueueManager.addBytes(id, dataBytes);
+          ipcQueueManager.addHiddenBytes(id, dataBytes);
           sendEvent({ type: "data", id, data: dataString, streamEnd });
           ipcDataEmitted = true;
         }

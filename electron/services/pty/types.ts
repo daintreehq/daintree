@@ -554,9 +554,9 @@ export const IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES = 8 * 1024 * 1024;
 // hidden renderer drains on throttled timers or not at all, so pausing would
 // hold the agent in back-to-back IPC_MAX_PAUSE_MS cycles (#16497). Past this
 // budget the host skips the copy and the pane repaints from the host snapshot
-// when its view returns. Held at the low watermark so hidden debt alone can't
-// trip the aggregate gate on the primary path, and so a revealed view has at
-// most ~1MB per terminal left to parse.
+// when its view returns. Tracked apart from the primary ledger and the
+// aggregate gate (IpcQueueManager.addHiddenBytes), and held at the low
+// watermark so a revealed view has at most ~1MB per terminal left to parse.
 export const IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES = Math.floor(
   (IPC_MAX_QUEUE_BYTES * IPC_LOW_WATERMARK_PERCENT) / 100
 );

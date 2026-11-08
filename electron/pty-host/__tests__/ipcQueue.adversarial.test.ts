@@ -362,3 +362,58 @@ describe("IpcQueueManager adversarial", () => {
     });
   });
 });
+
+describe("IpcQueueManager hidden-view balance (#16497)", () => {
+  let mgr: IpcQueueManager;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mgr = new IpcQueueManager(makeDeps(makeCoordinator()));
+  });
+
+  afterEach(() => {
+    mgr.dispose();
+    vi.useRealTimers();
+  });
+
+  it("settles acks against the hidden balance before the primary ledger", () => {
+    mgr.addBytes("t1", 500);
+    mgr.addHiddenBytes("t1", 300);
+
+    mgr.removeBytes("t1", 200);
+    expect(mgr.getHiddenQueuedBytes("t1")).toBe(100);
+    expect(mgr.getQueuedBytes("t1")).toBe(500);
+
+    mgr.removeBytes("t1", 1000);
+    expect(mgr.getHiddenQueuedBytes("t1")).toBe(0);
+    expect(mgr.getQueuedBytes("t1")).toBe(0);
+    expect(mgr.getTotalQueuedBytes()).toBe(0);
+  });
+
+  it("keeps hidden bytes out of the aggregate but in the diagnostics snapshot", () => {
+    mgr.addBytes("t1", 500);
+    mgr.addHiddenBytes("t1", 300);
+    mgr.addHiddenBytes("t2", 700);
+
+    expect(mgr.getTotalQueuedBytes()).toBe(500);
+    const snapshot = mgr.getQueueSnapshot();
+    expect(snapshot.totalPendingBytes).toBe(1500);
+    expect(
+      Object.fromEntries(snapshot.perTerminal.map((e) => [e.terminalId, e.pendingBytes]))
+    ).toEqual({
+      t1: 800,
+      t2: 700,
+    });
+  });
+
+  it("clears the hidden balance and the skip notice with the queue", () => {
+    mgr.addHiddenBytes("t1", 300);
+    expect(mgr.noteHiddenSkip("t1")).toBe(true);
+    expect(mgr.noteHiddenSkip("t1")).toBe(false);
+
+    mgr.clearQueue("t1");
+
+    expect(mgr.getHiddenQueuedBytes("t1")).toBe(0);
+    expect(mgr.noteHiddenSkip("t1")).toBe(true);
+  });
+});

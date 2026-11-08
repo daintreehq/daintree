@@ -139,6 +139,9 @@ interface InspectableIpcQueueManager {
   getUtilization: TestMock;
   applyBackpressure: TestMock;
   getQueuedBytes: TestMock;
+  hiddenQueuedBytes: Map<string, number>;
+  addHiddenBytes: TestMock;
+  getHiddenQueuedBytes: TestMock;
   isPaused: TestMock;
   noteHiddenSkip: TestMock;
   clearHiddenSkip: TestMock;
@@ -588,8 +591,11 @@ vi.mock("../pty-host/index.js", async () => {
 
   class MockIpcQueueManager implements InspectableIpcQueueManager {
     queuedBytes = new Map<string, number>();
+    hiddenQueuedBytes = new Map<string, number>();
     clearQueue = vi.fn((id: string) => {
       this.queuedBytes.delete(id);
+      this.hiddenQueuedBytes.delete(id);
+      this.hiddenSkipNotified.delete(id);
     });
     removeBytes = vi.fn((id: string, bytes: number) => {
       const current = this.queuedBytes.get(id) ?? 0;
@@ -608,6 +614,10 @@ vi.mock("../pty-host/index.js", async () => {
     getUtilization = vi.fn(() => 0);
     applyBackpressure = vi.fn();
     getQueuedBytes = vi.fn((id: string) => this.queuedBytes.get(id) ?? 0);
+    addHiddenBytes = vi.fn((id: string, bytes: number) => {
+      this.hiddenQueuedBytes.set(id, (this.hiddenQueuedBytes.get(id) ?? 0) + bytes);
+    });
+    getHiddenQueuedBytes = vi.fn((id: string) => this.hiddenQueuedBytes.get(id) ?? 0);
     isPaused = vi.fn(() => false);
     hiddenSkipNotified = new Set<string>();
     noteHiddenSkip = vi.fn((id: string) => {
@@ -1655,7 +1665,8 @@ describe("pty-host adversarial", () => {
     await flushMicrotasks();
 
     expect(dataPayloads(parentPort)).toHaveLength(1);
-    expect(ipcQueue.addBytes).toHaveBeenCalledWith("t1", "step\r\n".length);
+    expect(ipcQueue.addHiddenBytes).toHaveBeenCalledWith("t1", "step\r\n".length);
+    expect(ipcQueue.addBytes).not.toHaveBeenCalled();
     expect(ipcQueue.applyBackpressure).not.toHaveBeenCalled();
   });
 
@@ -1672,7 +1683,7 @@ describe("pty-host adversarial", () => {
     await flushMicrotasks();
 
     const ipcQueue = hostState.ipcQueueManagers[0];
-    ipcQueue.queuedBytes.set("t1", IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES);
+    ipcQueue.hiddenQueuedBytes.set("t1", IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES);
     parentPort.postMessage.mockClear();
 
     for (let i = 0; i < 3; i++) {
@@ -1694,7 +1705,7 @@ describe("pty-host adversarial", () => {
     parentPort.emit("message", { type: "project-switch", windowId: 1, projectId: "project-1" });
     await flushMicrotasks();
     expect(ipcQueue.clearQueue).toHaveBeenCalledWith("t1");
-    expect(ipcQueue.queuedBytes.get("t1")).toBeUndefined();
+    expect(ipcQueue.hiddenQueuedBytes.get("t1")).toBeUndefined();
   });
 
   it("SUPPLEMENTARY_FALLBACK_AT_CAPACITY_KEEPS_THE_TERMINAL_LIVE (#12557)", async () => {
