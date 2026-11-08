@@ -255,7 +255,9 @@ describe("useAgentAltScreenBanner", () => {
 describe("dismissAltScreenNotice", () => {
   const flagOf = (id: string) => {
     const found = usePanelStore.getState().panelsById[id];
-    return found && "altScreenNoticeDismissed" in found ? found.altScreenNoticeDismissed : undefined;
+    return found && "altScreenNoticeDismissed" in found
+      ? found.altScreenNoticeDismissed
+      : undefined;
   };
 
   it("marks only the named panel and leaves the others untouched", () => {

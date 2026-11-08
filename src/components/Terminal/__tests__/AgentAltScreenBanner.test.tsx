@@ -51,7 +51,9 @@ describe("AgentAltScreenBanner", () => {
   it("names the agent and says what full-screen means for this pane", () => {
     const { container } = renderBanner("crush");
 
-    expect(screen.getByText(`${getAgentConfig("crush")?.name} is running full-screen`)).not.toBeNull();
+    expect(
+      screen.getByText(`${getAgentConfig("crush")?.name} is running full-screen`)
+    ).not.toBeNull();
     expect(container.textContent).toContain(MEANING);
   });
 
