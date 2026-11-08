@@ -143,6 +143,25 @@ describe("ProjectSchedulesTab — the list", () => {
     expect(screen.getAllByRole("button", { name: "Add schedule" })).toHaveLength(1);
   });
 
+  it("offers starters in the empty tab, and one opens the editor filled in without saving", async () => {
+    client.list.mockResolvedValue(snapshot([]));
+    renderTab();
+    await screen.findByText(/Add a schedule to run an agent/);
+    const starters = screen.getByRole("group", { name: "Starter schedules" });
+    expect(starters.querySelectorAll("[data-schedule-starter]").length).toBeGreaterThan(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /Nightly bug hunt/ }));
+
+    await waitFor(() => expect(editor()).not.toBeNull());
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Nightly bug hunt");
+    expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toContain(
+      "say so in one line"
+    );
+    expect(document.body.textContent).toContain("Every day at 2:00");
+    expect(client.create).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+
   it("asks before deleting a schedule, naming it, and removes it on confirm", async () => {
     client.remove.mockResolvedValue({ snapshot: snapshot([WEEKLY], 2) });
     renderTab();

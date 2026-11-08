@@ -21,6 +21,7 @@ import type { LastRunsState } from "./useLastRuns";
 import { lastRunWords } from "./lastRunWords";
 import { RunGlyph } from "./RunGlyph";
 import { scheduleAgentName } from "./scheduleAgent";
+import { SCHEDULE_STARTERS, type ScheduleStarter } from "./scheduleStarters";
 import { cadenceWords, formatNextRunRelative, formatRunInstant, nextRunAt } from "./scheduleWords";
 
 /** The controls a row offers, each findable by schedule for handing focus back to it. */
@@ -54,6 +55,8 @@ interface ScheduleListProps {
   addButtonRef: Ref<HTMLButtonElement>;
   onRetryLastRuns: () => void;
   onCreate: () => void;
+  /** Opens the editor for a new schedule filled in from a starter; nothing is saved until Save. */
+  onCreateFromStarter: (starter: ScheduleStarter) => void;
   onSetEnabled: (schedule: Schedule, enabled: boolean) => void;
   onRunNow: (schedule: Schedule) => void;
   /** `viaKeyboard`: opened from the keyboard, so focus lands visibly on the history. */
@@ -303,6 +306,7 @@ export function ScheduleList({
   addButtonRef,
   onRetryLastRuns,
   onCreate,
+  onCreateFromStarter,
   onSetEnabled,
   onRunNow,
   onOpenHistory,
@@ -420,6 +424,27 @@ export function ScheduleList({
             >
               Add a schedule to run an agent with your prompt, such as every night at 2:00&nbsp;AM
             </SettingsEmptyRow>
+            <div
+              role="group"
+              aria-label="Starter schedules"
+              className="space-y-1 border-t border-border-subtle p-3"
+            >
+              <p className="pb-1 text-xs text-text-secondary">Or start from one of these</p>
+              {SCHEDULE_STARTERS.map((starter) => (
+                <button
+                  key={starter.id}
+                  type="button"
+                  onClick={() => onCreateFromStarter(starter)}
+                  data-schedule-starter={starter.id}
+                  className="flex w-full items-baseline justify-between gap-4 rounded-md px-2 py-1.5 text-left text-sm text-text-primary hover:bg-overlay-subtle"
+                >
+                  <span className="truncate">{starter.name}</span>
+                  <span className="shrink-0 text-xs text-text-secondary">
+                    {starter.description}
+                  </span>
+                </button>
+              ))}
+            </div>
           </SettingsGroup>
         ) : (
           <SettingsGroup>

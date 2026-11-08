@@ -418,6 +418,7 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
           addButtonRef={addButtonRef}
           onRetryLastRuns={retryLastRuns}
           onCreate={() => openEditor(null)}
+          onCreateFromStarter={(starter) => openEditor(null, starter)}
           onSetEnabled={(schedule, enabled) => void setEnabled(schedule, enabled)}
           onRunNow={(schedule) => void runNow(schedule)}
           onOpenHistory={openHistory}
