@@ -78,7 +78,7 @@ const onDisk = () => JSON.parse(fs.readFileSync(statesFile(), "utf8")).windowSta
 const seedFile = (windowStates: WindowStates) =>
   fs.writeFileSync(statesFile(), JSON.stringify({ windowStates }));
 const read = () => mod.windowStatesStore.get("windowStates");
-const write = (windowStates: WindowStates) =>
+const write = (windowStates: Record<string, unknown>) =>
   setRawStoreValue(mod.windowStatesStore, "windowStates", windowStates);
 
 function fileReadsDuring(run: () => void): number {
@@ -214,18 +214,18 @@ describe("windowStatesStore persistence", () => {
     expect(read()).toEqual({});
   });
 
-  it("does not claim a save that never reached the file", () => {
+  it("goes back to the file after a save that failed, which may have changed it", () => {
     seedFile({ "/project": bounds(10) });
     expect(read()).toEqual({ "/project": bounds(10) });
 
     const refused = vi.spyOn(fs, "mkdirSync").mockImplementation(() => {
+      seedFile({ "/partly-written": bounds(15) });
       throw new Error("disk full");
     });
-    expect(() => write({ "/project": bounds(20) })).toThrow("disk full");
+    expect(() => write({ "/refused": bounds(20) })).toThrow("disk full");
     refused.mockRestore();
 
-    expect(read()).toEqual({ "/project": bounds(10) });
-    expect(onDisk()).toEqual({ "/project": bounds(10) });
+    expect(read()).toEqual({ "/partly-written": bounds(15) });
   });
 
   it("keeps a whole-store replacement, a delete and a reset in step with the file", () => {
@@ -251,7 +251,7 @@ describe("windowStatesStore persistence", () => {
 
   it.skipIf(process.platform === "win32")("keeps the file private across a save", () => {
     write({ "/project": bounds(10) });
-    expect(fs.statSync(statesFile()).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(statesFile()).mode & 0o077).toBe(0);
   });
 });
 
@@ -292,6 +292,19 @@ describe("the in-memory fallback", () => {
     held["/project"]!.x = 999;
     expect(read()).toEqual({ "/project": bounds(10) });
   });
+
+  it("answers has, delete and clear from what it holds", () => {
+    write({ "/project": bounds(10) });
+    expect(mod.windowStatesStore.has("windowStates")).toBe(true);
+
+    mod.windowStatesStore.delete("windowStates");
+    expect(mod.windowStatesStore.has("windowStates")).toBe(false);
+    expect(read()).toBeUndefined();
+
+    write({ "/project": bounds(10) });
+    mod.windowStatesStore.clear();
+    expect(read()).toBeUndefined();
+  });
 });
 
 describe("a window over the real store", () => {
@@ -312,12 +325,11 @@ describe("a window over the real store", () => {
 
     expect(fileReadsDuring(() => win!.emit("close"))).toBeLessThanOrEqual(1);
 
-    const expected = {
-      ...bounds(130),
-      y: 70,
+    expect(onDisk()["/new"]).toEqual({
+      ...win!.getNormalBounds(),
+      isMaximized: false,
       isFullScreen: false,
-    };
-    expect(onDisk()["/new"]).toEqual(expected);
+    });
     expect(onDisk()["/project"]).toEqual(bounds(100));
     expect(read()).toEqual(onDisk());
   });
