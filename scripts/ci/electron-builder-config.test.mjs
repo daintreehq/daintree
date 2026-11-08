@@ -537,3 +537,22 @@ describe("electron-builder config — AppImage runtime", () => {
     expect(Object.keys(appimageChecksums[version] ?? {})).not.toHaveLength(0);
   });
 });
+
+describe("electron-builder config — Canopy reader model (#16415)", () => {
+  const canopyReaderModel = require("../lib/canopyReaderModel.cjs");
+
+  it("copies exactly the manifest's files from where the build fetches them, as a top-level resource", async () => {
+    const config = await buildConfig();
+    const entry = config.extraResources.find((r) => r.to === canopyReaderModel.RESOURCES_NAME);
+    expect(entry).toBeDefined();
+    expect(
+      path.resolve(path.join(path.dirname(fileURLToPath(import.meta.url)), "../.."), entry.from)
+    ).toBe(canopyReaderModel.MODEL_DIR);
+    expect([...entry.filter].sort()).toEqual(
+      canopyReaderModel
+        .readManifest()
+        .files.map((file) => file.name)
+        .sort()
+    );
+  });
+});

@@ -42,6 +42,7 @@
     "dev:electron": "cross-env NODE_ENV=development node scripts/dev-electron.mjs",
     "build:main": "cross-env NODE_ENV=production node scripts/build-main.mjs",
     "watch:main": "node scripts/build-main.mjs --watch",
+    "fetch:canopy-model": "node scripts/fetch-canopy-model.mjs",
     "build": "cross-env NODE_OPTIONS=--max-old-space-size=8192 npm run build:app",
     "build:app": "node scripts/typecheck.mjs --only root && vite build && npm run build:main",
     "build:e2e": "node scripts/typecheck.mjs --only root && cross-env NODE_OPTIONS=--max-old-space-size=8192 vite build && cross-env NODE_OPTIONS=--max-old-space-size=8192 NODE_ENV=test node scripts/build-main.mjs",

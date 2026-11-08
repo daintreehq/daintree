@@ -5,7 +5,8 @@
  * The grid is built from real agent states: the fake Claude CLI's heartbeat
  * makes `working`, a question line settles a `question` wait, an approval
  * dialog's rows settle an `approval` wait and a cost line settles a hand-back.
- * Canopy starts off in a fresh profile, so the offer is the app's own. The
+ * Canopy is on by default (#16415), so the run turns it off first, as a user
+ * who turned it off would have, and the offer is the app's own. The
  * remote copy names a host through the E2E backdoor's `setHostName`, the
  * field a remote window's hydrate sets. Turning Canopy on is pressed for real
  * and runs last, since nothing in the run turns it off again.
@@ -635,8 +636,8 @@ async function daintreeStates(run: Run): Promise<void> {
       })
       .first()
       .click();
-    // What it says next follows the model as main reports it: on its way,
-    // already here, or refused by the network the capture runs on.
+    // What it says next follows the model as main reports it: still being
+    // checked, ready, or failing its check.
     await expectOffer(page, grid.approval, "turned-on", /Canopy is on|Canopy's model/);
     await parkPointer(page);
     await snapPane(page, "pane-turned-on", theme, grid.approval);
@@ -681,6 +682,8 @@ test("capture the Canopy pane offer across states and themes", async () => {
     const page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, PROJECT);
     await dismissBlockingPalette(page);
     await page.locator(SEL.worktree.mainCard).waitFor({ state: "visible", timeout: T_LONG });
+    // The offer is for a user who turned Canopy off: on by default, nothing offers it.
+    await page.evaluate(() => window.electron.canopy.setMode("unset"));
     await setWindowSize(ctx.app, page, QUAD);
     await polish(page);
 

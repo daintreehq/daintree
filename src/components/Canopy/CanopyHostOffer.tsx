@@ -127,8 +127,8 @@ export function CanopyHostOutdated({
         </h2>
         <p className="text-sm leading-6 text-text-secondary">
           {hostName} runs an older Daintree, whose Canopy reads screens with a service that has been
-          retired. Once it is updated, Canopy reads its agents on {hostName} itself, with a model it
-          downloads there.
+          retired. Once it is updated, Canopy reads its agents on {hostName} itself, with a small
+          local model.
         </p>
         {onTurnOff && (
           <div className="flex items-center gap-3 pt-2">

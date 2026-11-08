@@ -1083,7 +1083,7 @@ const storeOptions = {
     projectEnv: {},
     globalEnvironmentVariables: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
-    canopyMode: "unset" as const,
+    canopyMode: "on" as const,
     worktreeIssueMap: {},
     wslGitByWorktree: {},
     rosettaWarningDismissed: false,

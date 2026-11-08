@@ -4,7 +4,6 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useHostPlatform } from "@/hooks/useHostPlatform";
 import { actionService } from "@/services/ActionService";
 import { useCanopyStore } from "@/store/canopyStore";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_LOCAL, CANOPY_STOP, canopyLocalOn, canopyStopOn } from "./canopyTerms";
 
 /** How long the pane says Canopy is on before the note goes by itself. */
@@ -17,8 +16,7 @@ type CanopyState = ReturnType<typeof useCanopyStore.getState>;
 
 /**
  * This view's host could be offered Canopy: main has answered, Canopy is off
- * there rather than hidden or on, no model is on its way, and the offer
- * wasn't put away.
+ * there rather than hidden or on, and the offer wasn't put away.
  */
 function offerable(state: CanopyState): boolean {
   const snapshot = state.snapshot;
@@ -26,7 +24,6 @@ function offerable(state: CanopyState): boolean {
     snapshot !== null &&
     state.mode === "unset" &&
     !snapshot.activated &&
-    snapshot.model?.status !== "downloading" &&
     !state.outdatedHost &&
     !state.paneOfferDismissed
   );
@@ -103,38 +100,31 @@ export function CanopyPaneOffer({
       return (
         <InlineStatusBanner
           severity="error"
-          title="Couldn't download Canopy's model"
+          title="Canopy's model isn't available"
           description={keepWhole(
+            // Another host may be on a Daintree from before the model shipped
+            // with it, whose download failed: updating it there helps either way.
             hostName
-              ? `Canopy is on, but ${hostName} couldn't fetch the model it reads with. Check its connection, then retry.`
-              : "Canopy is on, but couldn't fetch the model it reads with. Check your connection, then retry.",
+              ? `Canopy is on, but the model it reads with on ${hostName} isn't available. Updating or reinstalling Daintree there puts it back.`
+              : "Canopy is on, but the model it reads with is missing or damaged. Reinstalling Daintree puts it back.",
             hostName
           )}
-          action={{
-            id: "retry-canopy-model",
-            label: "Retry",
-            onClick: () =>
-              safeFireAndForget(
-                window.electron.canopy
-                  .retryModel()
-                  .then((snapshot) => useCanopyStore.getState().applySnapshot(snapshot)),
-                { context: "Retrying Canopy's model download" }
-              ),
-          }}
           onClose={close}
           className={PROSE}
           rootAttributes={{ "data-canopy-pane-offer": "turned-on" }}
         />
       );
     }
+    // Reading only once the model is ready: until then it is being checked,
+    // or a host from before the model shipped with Daintree is fetching it.
     const now =
       model === "ready"
         ? hostName
           ? `It's reading agents' screens on ${hostName}.`
           : "It's reading your agents' screens."
         : hostName
-          ? `${hostName} is downloading its model. Canopy starts reading screens there when that's done.`
-          : "Its model is downloading. It starts reading your agents' screens when that's done.";
+          ? `It starts reading agents' screens on ${hostName} once its model is ready.`
+          : "It starts reading your agents' screens once its model is ready.";
     return (
       <InlineStatusBanner
         severity="success"

@@ -18,7 +18,7 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["./**/*.ts"],
+  "include": ["./**/*.ts", "./services/canopy/canopy-reader-manifest.json"],
   "exclude": ["node_modules", "preload.cts", "**/__fixtures__/**"],
   "references": [{ "path": "../shared/tsconfig.json" }]
 }

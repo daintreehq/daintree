@@ -391,8 +391,8 @@ export function isCanopyUnread(mark: CanopyReadMark | null | undefined): boolean
 }
 
 /**
- * Where the user stands on Canopy. `unset`: never turned on, or turned off —
- * its ways in offer it, and nothing is read. `on`: screens are read. `hidden`:
+ * Where the user stands on Canopy. `on`, the default: screens are read.
+ * `unset`: turned off — its ways in offer it, and nothing is read. `hidden`:
  * the user doesn't want it — no way in but Settings, and nothing is read.
  */
 export type CanopyMode = "unset" | "on" | "hidden";
@@ -427,8 +427,9 @@ const CANOPY_MODEL_ID = new RegExp(
 );
 
 /**
- * One of the publisher's reader repos. Only `CANOPY_MODEL` is fetched; an
- * earlier Daintree could choose among them, and a host on one still names its pick.
+ * One of the publisher's reader repos. Only `CANOPY_MODEL` ships with
+ * Daintree; an earlier Daintree could choose among them, and a host on one
+ * still names its pick.
  */
 export function isCanopyModelId(value: unknown): value is string {
   return typeof value === "string" && value.length <= 120 && CANOPY_MODEL_ID.test(value);
@@ -448,13 +449,17 @@ export interface CanopyModelInfo {
   /** Its Hugging Face repo. */
   id: string;
   name: string;
-  /** What it takes on this machine once installed, else what a download fetches. */
+  /** What its files take on this machine. */
   bytes: number;
   /** On this machine and checked. */
   installed: boolean;
 }
 
-/** Where the model stands on this machine. */
+/**
+ * Where the model stands on this machine. A host that ships it (#16415) says
+ * only `ready` or `failed`; `missing` and `downloading` come from a host from
+ * before, which still fetches it.
+ */
 export type CanopyModelState =
   | { id: string; status: "missing" }
   | { id: string; status: "downloading"; received: number; total: number }
@@ -520,9 +525,9 @@ export interface CanopySnapshot {
   modeRevision?: number;
   /** The plan's host epoch: see `CanopyPlan.hostEpoch`. */
   hostEpoch?: string;
-  /** The user turned Canopy on; nothing is read until they do. */
+  /** Canopy is on, as it is by default; nothing is read while it isn't. */
   activated: boolean;
-  /** The model and whether it is here; absent while Canopy is off. */
+  /** The model and whether it is ready; absent while Canopy is off, or while it is checked. */
   model?: CanopyModelState;
   /** Runs the user archived or replied to and that have said nothing new since. */
   dispositions: CanopyDisposition[];

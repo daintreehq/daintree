@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { fireEvent, render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import { CanopyStatusBar, formatLinkMs, formatModelBytes } from "../CanopyStatusBar";
+import { render } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { CanopyStatusBar, formatLinkMs } from "../CanopyStatusBar";
 
 const READER = { model: "Light", inFlight: 2, readMs: 24 };
 const READY = { id: "daintreehq/canopy-reader-17m", status: "ready" as const };
@@ -39,7 +39,7 @@ describe("CanopyStatusBar", () => {
     expect(container.querySelector("[data-working]")?.getAttribute("data-working")).toBe("false");
   });
 
-  it("puts the download in the readings' place, and announces only that", () => {
+  it("puts an older host's model still on its way in the readings' place, without its progress, and announces only that", () => {
     const downloading = {
       id: READY.id,
       status: "downloading" as const,
@@ -47,10 +47,11 @@ describe("CanopyStatusBar", () => {
       total: 20_900_000,
     };
     const { container, rerender } = render(
-      <CanopyStatusBar reader={READER} model={downloading} waiting={undefined} />
+      <CanopyStatusBar host="studio-01" reader={READER} model={downloading} waiting={undefined} />
     );
-    const said = "Downloading the model… 8.2 MB of 21 MB";
+    const said = "Waiting for the model…";
     expect(bar(container).textContent).toContain(said);
+    expect(bar(container).textContent).not.toMatch(/MB|download/i);
     expect(bar(container).textContent).not.toContain("a screen");
     expect(container.querySelector("[role=status]")?.textContent).toBe(said);
     // Read out by the status line alone, not once more as the bar's text.
@@ -58,25 +59,30 @@ describe("CanopyStatusBar", () => {
       (span) => span.textContent === said && span.role !== "status"
     );
     expect(shown?.getAttribute("aria-hidden")).toBe("true");
+    rerender(
+      <CanopyStatusBar
+        host="studio-01"
+        reader={READER}
+        model={{ id: READY.id, status: "missing" }}
+        waiting={undefined}
+      />
+    );
+    expect(container.querySelector("[role=status]")?.textContent).toBe(said);
     rerender(<CanopyStatusBar reader={READER} model={READY} waiting={undefined} />);
     expect(container.querySelector("[role=status]")?.textContent).toBe("");
   });
 
-  it("offers to retry a failed download where it failed, and says a retry still to come", () => {
-    const retry = vi.fn();
-    const { container, rerender, getByRole } = render(
+  it("says a model that isn't available without offering a download, and a retry still to come", () => {
+    const { container, rerender, queryByRole } = render(
       <CanopyStatusBar
-        host="studio-01"
-        onRetryModel={retry}
         reader={READER}
-        model={{ id: READY.id, status: "failed", error: "HTTP 503" }}
+        model={{ id: READY.id, status: "failed", error: "The model is missing" }}
         waiting={undefined}
       />
     );
-    expect(bar(container).textContent).toContain("Couldn't download the model");
-    expect(bar(container).textContent).not.toContain("HTTP");
-    fireEvent.click(getByRole("button", { name: "Retry" }));
-    expect(retry).toHaveBeenCalledTimes(1);
+    expect(bar(container).textContent).toContain("The model isn't available");
+    expect(bar(container).textContent).not.toMatch(/download/i);
+    expect(queryByRole("button")).toBeNull();
     rerender(<CanopyStatusBar reader={READER} model={READY} waiting="retrying" />);
     expect(bar(container).textContent).toContain("Waiting to retry…");
   });
@@ -96,13 +102,5 @@ describe("CanopyStatusBar", () => {
       formatLinkMs(1_000),
       formatLinkMs(12_345),
     ]).toEqual(["48 ms", "999 ms", "1.0 s", "12.3 s"]);
-  });
-
-  it("writes sizes to a tenth of a megabyte under ten, and whole ones above", () => {
-    expect([
-      formatModelBytes(368),
-      formatModelBytes(3_583_228),
-      formatModelBytes(69_749_457),
-    ]).toEqual(["0.0 MB", "3.6 MB", "70 MB"]);
   });
 });

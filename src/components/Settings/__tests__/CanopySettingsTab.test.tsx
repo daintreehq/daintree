@@ -1,41 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CANOPY_LOCAL } from "@/components/Canopy/canopyTerms";
-import { fireEvent, render, waitFor, within } from "@testing-library/react";
-import type { CanopyMode, CanopyModelInfo, CanopySnapshot } from "@shared/types/ipc/canopy";
+import { fireEvent, render, waitFor } from "@testing-library/react";
+import type { CanopyMode, CanopySnapshot } from "@shared/types/ipc/canopy";
 import { useCanopyStore } from "@/store/canopyStore";
 import { CanopySettingsTab } from "../CanopySettingsTab";
 import { getSettingsTabEntry } from "../settingsTabRegistry";
 import { SETTINGS_SEARCH_INDEX } from "../settingsSearchIndex";
 import { filterSettings } from "../settingsSearchUtils";
 
-// The real dialog pulls in the app's icons and portals; what matters here is what it is given.
-vi.mock("@/components/ui/ConfirmDialog", () => ({
-  ConfirmDialog: (props: {
-    isOpen: boolean;
-    variant: string;
-    title: string;
-    description: string;
-    confirmLabel: string;
-    cancelLabel: string;
-    onClose: () => void;
-    onConfirm: () => void;
-  }) =>
-    props.isOpen ? (
-      <div role="dialog" data-variant={props.variant}>
-        <h2>{props.title}</h2>
-        <p>{props.description}</p>
-        <button onClick={props.onClose}>{props.cancelLabel}</button>
-        <button onClick={props.onConfirm}>{props.confirmLabel}</button>
-      </div>
-    ) : null,
-}));
-const LIGHT: CanopyModelInfo = {
-  id: "daintreehq/canopy-reader-17m",
-  name: "Light",
-  bytes: 21_000_000,
-  installed: true,
-};
+const MODEL_ID = "daintreehq/canopy-reader-17m";
 
 function snapshot(overrides: Partial<CanopySnapshot> = {}): CanopySnapshot {
   return {
@@ -57,16 +31,11 @@ function snapshot(overrides: Partial<CanopySnapshot> = {}): CanopySnapshot {
 }
 
 function install(mode: CanopyMode = "unset", overrides: Partial<CanopySnapshot> = {}) {
-  let info: CanopyModelInfo = LIGHT;
   const api = {
     setMode: vi.fn(async (next: CanopyMode) => snapshot({ mode: next, activated: next === "on" })),
-    getModel: vi.fn(async () => info),
-    retryModel: vi.fn(async () => snapshot({ mode, activated: mode === "on" })),
-    // Deleting while on turns Canopy off, as the real handler does.
-    removeModels: vi.fn(async () => {
-      info = { ...info, installed: false };
-      return mode === "on" ? snapshot({ mode: "unset", activated: false }) : snapshot({ mode });
-    }),
+    getModel: vi.fn(),
+    retryModel: vi.fn(),
+    removeModels: vi.fn(),
   };
   Object.defineProperty(window, "electron", {
     value: { canopy: api, system: { openExternal: vi.fn() } },
@@ -166,61 +135,51 @@ describe("CanopySettingsTab", () => {
     );
   });
 
-  it("offers no choice of model: there is one", async () => {
-    install("on");
-    const { findByRole, queryByRole } = render(<CanopySettingsTab />);
-    await findByRole("button", { name: "Delete model" });
-    expect(queryByRole("radio")).toBeNull();
-    expect(queryByRole("radiogroup")).toBeNull();
+  it("offers no choice of model and nothing to download or delete: the model ships with Daintree", () => {
+    const models: CanopySnapshot["model"][] = [
+      undefined,
+      { id: MODEL_ID, status: "ready" },
+      // Only a host from before the model shipped with Daintree says these.
+      { id: MODEL_ID, status: "missing" },
+      { id: MODEL_ID, status: "downloading", received: 8_200_000, total: 20_900_000 },
+    ];
+    for (const mode of ["unset", "on", "hidden"] as const) {
+      for (const model of models) {
+        const api = install(mode, { model });
+        const { container, queryByRole, unmount } = render(<CanopySettingsTab />);
+        expect(switchFor(container, "Show Canopy").getAttribute("aria-checked")).toBe(
+          String(mode !== "hidden")
+        );
+        expect(switchFor(container, "Read agent terminals").getAttribute("aria-checked")).toBe(
+          String(mode === "on")
+        );
+        expect(queryByRole("radio")).toBeNull();
+        expect(queryByRole("radiogroup")).toBeNull();
+        // The two switches, and no other control.
+        expect(queryByRole("button")).toBeNull();
+        expect(container.textContent).not.toMatch(/download|delete model|\bMB\b/i);
+        expect(api.getModel).not.toHaveBeenCalled();
+        unmount();
+      }
+    }
   });
 
-  it("shows a download's progress, and a failed one with a way to retry it", async () => {
-    const api = install("on", {
-      model: { id: LIGHT.id, status: "downloading", received: 8_200_000, total: 20_900_000 },
-    });
-    const { container, getByRole, rerender } = render(<CanopySettingsTab />);
-    expect(container.textContent).toContain("8.2 MB of 21 MB");
+  it("says when the model that ships with Daintree fails its check, offering no download", () => {
+    const error = "The model that comes with Daintree is missing or damaged.";
+    const api = install("on", { model: { id: MODEL_ID, status: "failed", error } });
+    const { container, queryByRole, rerender } = render(<CanopySettingsTab />);
+    expect(container.textContent).toContain("Model unavailable");
+    expect(container.textContent).toContain(error);
+    expect(queryByRole("button")).toBeNull();
+    expect(api.retryModel).not.toHaveBeenCalled();
+
+    // Off, there is nothing it would read with, so nothing to say.
     useCanopyStore.setState({
-      snapshot: snapshot({
-        mode: "on",
-        activated: true,
-        model: { id: LIGHT.id, status: "failed", error: "The download failed." },
-      }),
+      mode: "unset",
+      snapshot: snapshot({ model: { id: MODEL_ID, status: "failed", error } }),
     });
     rerender(<CanopySettingsTab />);
-    await waitFor(() => expect(container.textContent).toContain("Download failed"));
-    fireEvent.click(getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(api.retryModel).toHaveBeenCalled());
-  });
-
-  it("deletes a downloaded model only after a confirm that names it, whether Canopy is on or off", async () => {
-    for (const mode of ["unset", "on"] as const) {
-      const api = install(mode);
-      const { findByRole, getByRole, queryByRole, unmount } = render(<CanopySettingsTab />);
-      fireEvent.click(await findByRole("button", { name: "Delete model" }));
-      // Nothing is deleted by the first press: the dialog says what goes, and what happens to Canopy.
-      expect(api.removeModels).not.toHaveBeenCalled();
-      const dialog = await findByRole("dialog");
-      // Destructive, so the action is named and styled as one.
-      expect(dialog.getAttribute("data-variant")).toBe("destructive");
-      expect(dialog.textContent).toContain("Delete 'Light'?");
-      expect(dialog.textContent).toContain("Frees 21 MB");
-      expect(dialog.textContent).toContain(
-        mode === "on" ? "Canopy turns off" : "Turning Canopy on again downloads the model"
-      );
-      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-      expect(api.removeModels).not.toHaveBeenCalled();
-      await waitFor(() => expect(queryByRole("dialog")).toBeNull());
-      fireEvent.click(getByRole("button", { name: "Delete model" }));
-      fireEvent.click(
-        within(await findByRole("dialog")).getByRole("button", { name: "Delete model" })
-      );
-      await waitFor(() => expect(api.removeModels).toHaveBeenCalledTimes(1));
-      await waitFor(() => expect(queryByRole("button", { name: "Delete model" })).toBeNull());
-      // Deleting while it was on is the one thing that turns it off, and the page shows it.
-      expect(useCanopyStore.getState().mode).toBe("unset");
-      unmount();
-    }
+    expect(container.textContent).not.toContain("Model unavailable");
   });
 
   it("is searched for by what the page says and shows, not by the hosted reader it replaced", () => {
@@ -233,14 +192,14 @@ describe("CanopySettingsTab", () => {
       );
     }
 
-    // Search lands in a layout effect, before the model's info has loaded, and with
-    // Canopy off: each result's row has to be there on that first render.
+    // Search lands in a layout effect, on the first render, with Canopy off: each
+    // result's row has to be there then.
     install("unset");
     const { container } = render(<CanopySettingsTab />);
     const rendered = new Set([...container.querySelectorAll("[id]")].map((el) => el.id));
     expect(sections.map((s) => s.id).filter((id) => !rendered.has(id))).toEqual([]);
 
-    for (const query of ["model", "download model", "delete model"]) {
+    for (const query of ["model", "local model"]) {
       expect(
         filterSettings(SETTINGS_SEARCH_INDEX, query).some((r) => r.tab === "canopy"),
         query

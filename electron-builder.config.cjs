@@ -1,6 +1,7 @@
 const PACKAGE_VERSION = require("./package.json").version;
 const path = require("path");
 const fs = require("fs");
+const canopyReaderModel = require("./scripts/lib/canopyReaderModel.cjs");
 
 // Packages require()d from node_modules at runtime. Two sources:
 // 1. The esbuild `external` list in scripts/build-main.mjs (minus "electron").
@@ -177,6 +178,14 @@ module.exports = async function () {
     extraResources: [
       { from: "assistant", to: "assistant" },
       { from: "electron/resources/sounds", to: "sounds" },
+      // Canopy's reader model (#16415), fetched and verified by the build
+      // (scripts/build-main.mjs). Only the pinned files: afterPack.cjs checks
+      // each one's hash in the packaged output.
+      {
+        from: path.relative(__dirname, canopyReaderModel.MODEL_DIR),
+        to: canopyReaderModel.RESOURCES_NAME,
+        filter: canopyReaderModel.readManifest().files.map((file) => file.name),
+      },
     ],
     // node-pty and better-sqlite3 contain native .node binaries that need
     // real filesystem access for `require()` — they cannot live inside the

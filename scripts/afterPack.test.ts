@@ -23,6 +23,7 @@ const mockUnlinkSync = vi.fn();
 const mockRmSync = vi.fn();
 const mockSpawnSync = vi.fn();
 const mockGetRawHeader = vi.fn();
+const mockInvalidModelFiles = vi.fn();
 const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -71,6 +72,9 @@ describe("afterPack", () => {
     // below drive mockExistsSync with stay aligned.
     mockStatSync.mockReturnValue({ size: 40 * 1024 * 1024 });
     mockGetRawHeader.mockReturnValue(asarHeader());
+    // Default: the packaged Canopy reader model matches its pins.
+    mockInvalidModelFiles.mockReset();
+    mockInvalidModelFiles.mockReturnValue([]);
 
     // clearAllMocks only clears call history — implementations and queued
     // `once` values survive it, so a test that makes unlinkSync throw would
@@ -110,6 +114,9 @@ describe("afterPack", () => {
       }
       if (id === "@electron/asar") {
         return { getRawHeader: mockGetRawHeader };
+      }
+      if (id === "./lib/canopyReaderModel.cjs") {
+        return { RESOURCES_NAME: "canopy-reader", invalidFiles: mockInvalidModelFiles };
       }
       return originalRequire.apply(this, [id]);
     };
@@ -373,6 +380,29 @@ describe("afterPack", () => {
       await afterPack(context);
 
       expect(electronFuses).toEqual({ runAsNode: false, enableCookieEncryption: false });
+    });
+  });
+
+  describe("Canopy reader model (#16415)", () => {
+    it.each([
+      ["darwin", "/build/mac", "/build/mac/Daintree.app/Contents/Resources/canopy-reader"],
+      ["win32", "/build/win", path.join("/build/win", "resources", "canopy-reader")],
+      ["linux", "/build/linux", path.join("/build/linux", "resources", "canopy-reader")],
+    ])("hashes the model where a %s package holds it", async (platform, outDir, modelDir) => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext(platform, outDir));
+
+      expect(mockInvalidModelFiles).toHaveBeenCalledWith(path.normalize(modelDir));
+    });
+
+    it("fails the build when a pinned file is missing or wrong", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockInvalidModelFiles.mockReturnValue([{ name: "model.int8.onnx" }]);
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /Canopy's reader model .* \(model\.int8\.onnx\)/
+      );
     });
   });
 

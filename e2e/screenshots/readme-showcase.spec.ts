@@ -20,8 +20,8 @@
  *
  * Output: hero-<themeId>.png for every built-in theme, pilot-fiordland.png,
  * worktree-overview-arashiyama.png, canopy-redwoods.png, review-hub-hokkaido.png
- * and manifest.json. The Canopy still turns Canopy on, which downloads its
- * small reader model from Hugging Face, so a full run needs the network.
+ * and manifest.json. The Canopy still reads with the small reader model that
+ * ships with Daintree, which the build fetches (`npm run fetch:canopy-model`).
  * The run fails if any expected PNG is missing or the wrong size, if a hero was
  * captured with an agent in a state other than the one it was staged for, or
  * if a feature still never reached its surface.
@@ -1622,7 +1622,7 @@ test("readme showcase — hero per theme and review hub", async () => {
         );
       },
       "canopy-redwoods": async () => {
-        // Turned on the way its own offer does; the first time downloads the model.
+        // On by default; set anyway, in case the profile turned it off.
         await page.evaluate(() => window.electron.canopy.setMode("on"));
         await backToFleet("redwoods", false);
         await act(page, "canopy.toggle");

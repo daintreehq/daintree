@@ -164,7 +164,7 @@ export class CanopyLocalReader {
   async read(input: CanopyScreenInput, signal: AbortSignal): Promise<CanopyReading> {
     const generation = this.generation;
     const dir = await this.modelDir();
-    if (dir === null) throw new CanopyProviderError("classifier", "model not downloaded", true);
+    if (dir === null) throw new CanopyProviderError("classifier", "model not available");
     if (signal.aborted || generation !== this.generation) {
       throw new CanopyProviderError("classifier", "request cancelled");
     }

@@ -13,8 +13,7 @@
  * pane shows a live terminal for them. Everything Canopy and the fleet say about
  * the runs is pushed as snapshots on the real broadcast channels, and main's own
  * broadcasts on those two channels are held back for the length of the run, so
- * a reading cannot land between the check and the shutter. The reader model is
- * never downloaded.
+ * a reading cannot land between the check and the shutter.
  *
  * Opt-in only, like its siblings:
  *

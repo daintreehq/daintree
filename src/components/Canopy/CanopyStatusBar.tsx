@@ -7,21 +7,14 @@ export function formatLinkMs(ms: number): string {
   return ms < 1_000 ? `${ms} ms` : `${(ms / 1_000).toFixed(1)} s`;
 }
 
-/** Bytes as a download shows them: whole megabytes past ten, else one decimal. */
-export function formatModelBytes(bytes: number): string {
-  const mb = bytes / 1_000_000;
-  return mb >= 10 ? `${Math.round(mb)} MB` : `${mb.toFixed(1)} MB`;
-}
-
-/** What the inbox says of its model while it can't read yet; null once it can. */
+/**
+ * What the inbox says of its model while it can't read; null once it can. A
+ * host from before the model shipped with Daintree may still be fetching it.
+ */
 export function canopyModelHoldUp(model: CanopySnapshot["model"]): string | null {
-  if (!model) return null;
-  if (model.status === "downloading") {
-    return `Downloading the model… ${formatModelBytes(model.received)} of ${formatModelBytes(model.total)}`;
-  }
-  if (model.status === "failed") return "Couldn't download the model";
-  if (model.status === "missing") return "Waiting for the model to download…";
-  return null;
+  if (!model || model.status === "ready") return null;
+  if (model.status === "failed") return "The model isn't available";
+  return "Waiting for the model…";
 }
 
 /**
@@ -31,13 +24,12 @@ export function canopyModelHoldUp(model: CanopySnapshot["model"]): string | null
  * above it. The mark is filled and pulses gently while screens are being
  * read, and goes hollow once they are all done, as the app sidebar's readout does.
  *
- * A hold-up — the model still downloading, a read waiting to be tried again —
+ * A hold-up — the model not available, a read waiting to be tried again —
  * takes the readings' place, said where the rest of the reader's state is,
  * not over the inbox's own controls.
  */
 export function CanopyStatusBar({
   host = null,
-  onRetryModel,
   reader,
   model,
   waiting,
@@ -45,8 +37,6 @@ export function CanopyStatusBar({
 }: {
   /** The other host whose reader this is; null for this computer's own. */
   host?: string | null;
-  /** Tries the model's download again, on the host it failed on. */
-  onRetryModel?: () => void;
   reader: CanopySnapshot["reader"];
   model: CanopySnapshot["model"];
   waiting: CanopySnapshot["waiting"];
@@ -95,11 +85,6 @@ export function CanopyStatusBar({
         >
           {holdUp ?? (reader?.readMs != null ? `${formatLinkMs(reader.readMs)} a screen` : null)}
         </span>
-      )}
-      {model?.status === "failed" && onRetryModel && (
-        <Button variant="link" size="xs" className="h-auto shrink-0 p-0" onClick={onRetryModel}>
-          Retry
-        </Button>
       )}
       {/* Only a hold-up is announced: the readings change with every screen. */}
       <span role="status" className="sr-only">

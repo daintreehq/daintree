@@ -342,17 +342,6 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
     refresh: async () => {
       answered(await Promise.allSettled(hostIds.map((hostId) => apiFor(hostId).refresh())));
     },
-    // Each host's own download, tried again wherever it failed; the rest ignore it.
-    retryModel: async () => {
-      const settled = await Promise.allSettled(
-        hostIds.map((hostId) => apiFor(hostId).retryModel())
-      );
-      const first = settled.find(
-        (r): r is PromiseFulfilledResult<CanopySnapshot> => r.status === "fulfilled"
-      );
-      if (!first) throw new Error("No host answered");
-      return first.value;
-    },
     searchScreens: async (targets: CanopyScreenSearchTarget[]) => {
       const groups = groupByHost(targets, (target) => target.runId);
       const settled = await mapLimited(
