@@ -119,9 +119,7 @@ export function BehavioralControls({
           <>
             Auto-approve all file, command and network actions. Off overrides the global setting for
             this scope.
-            {dangerousMode === "inherit" && (
-              <span className="block mt-1">{inheritHint}</span>
-            )}
+            {dangerousMode === "inherit" && <span className="block mt-1">{inheritHint}</span>}
             {effectiveSkipPerms && defaultDangerousArg && (
               <span className="flex items-center gap-1.5 mt-1.5">
                 <ShieldOff className="h-3.5 w-3.5 shrink-0 text-status-error" aria-hidden="true" />
