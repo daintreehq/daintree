@@ -99,7 +99,7 @@ function getGateCopy(agentName: string, detail: AgentCliDetail, hostName: string
               ) : (
                 "The CLI is installed but can't be launched directly."
               ))}{" "}
-            Point Daintree at the executable in agent settings.
+            Fix the install and check again, or run it anyway if you use a wrapper.
           </span>
         ),
       };
@@ -248,15 +248,12 @@ export function MissingCliGate({
   const showTroubleshooting = state === "missing" && !!troubleshooting?.length;
   // Install docs answer a CLI that isn't usable yet; once it is, they're noise.
   const showDocs = !!docsUrl && !launchable;
-  // A wrapper is repaired by pointing settings at the real executable; every
-  // other state is repaired outside Daintree and confirmed by checking again.
-  const settingsIsPrimary = state === "installed" && !isWsl;
 
   const checkLabel = launchable ? "Continue launch" : "Check again";
   const checkButton = (
     <Button
       size="sm"
-      variant={settingsIsPrimary ? "ghost" : "contrast"}
+      variant="contrast"
       className={cn(isRefreshing && "cursor-default")}
       onClick={() => {
         if (!isRefreshing) void handleRefresh();
@@ -335,23 +332,11 @@ export function MissingCliGate({
               Run anyway
             </Button>
           )}
-          {settingsIsPrimary ? (
-            <>
-              {checkButton}
-              <Button size="sm" variant="contrast" onClick={onOpenAgentSettings}>
-                <Settings2 aria-hidden="true" />
-                Agent settings
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button size="sm" variant="ghost" onClick={onOpenAgentSettings}>
-                <Settings2 aria-hidden="true" />
-                Agent settings
-              </Button>
-              {checkButton}
-            </>
-          )}
+          <Button size="sm" variant="ghost" onClick={onOpenAgentSettings}>
+            <Settings2 aria-hidden="true" />
+            Agent settings
+          </Button>
+          {checkButton}
         </PaneStateActions>
 
         {/* Its line is reserved even while empty, so a check starting or settling

@@ -217,6 +217,15 @@ describe("MissingCliGate", () => {
     expect(screen.queryByText("Still not found?")).toBeNull();
   });
 
+  it("only offers recovery the person can act on when the CLI can't be launched directly", () => {
+    const { container } = renderGate({ detail: detail({ state: "installed", via: "npm-global" }) });
+    expect(container.textContent).not.toMatch(/point daintree|executable in (agent )?settings/i);
+    expect(container.textContent).toMatch(/check again/i);
+    expect(container.textContent).toMatch(/run it anyway/i);
+    expect(screen.getByText("Run anyway")).toBeTruthy();
+    expect(screen.getByText("Check again")).toBeTruthy();
+  });
+
   it("does not show install commands for blocked state", () => {
     renderGate({ detail: detail({ state: "blocked" }) });
     expect(screen.queryByText("Install on macOS")).toBeNull();
