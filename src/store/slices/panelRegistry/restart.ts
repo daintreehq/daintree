@@ -738,6 +738,10 @@ export const createRestartActions = (
       // tokens into an empty snapshot so a session launched before either
       // feature honours the current resolution.
       resumeFlags = nextAgentLaunchFlags;
+      // The screen-mode token needs no settings, so it is reconciled even when
+      // they couldn't be read; bypass and decorations then keep what was captured.
+      let reconcileFlags = (base: string[]): string[] =>
+        reconcileInlineModeFlag(base, effectiveAgentId);
       if (runtimeForEnv) {
         const effectiveBypass = resolveEffectiveBypass(
           runtimeForEnv.settings.effectiveEntry,
@@ -745,7 +749,7 @@ export const createRestartActions = (
           runtimeForEnv.globalSkipPermissions
         );
         const dangerousArgs = runtimeForEnv.settings.effectiveEntry.dangerousArgs;
-        const reconcileFlags = (base: string[]): string[] =>
+        reconcileFlags = (base: string[]): string[] =>
           reconcileDecorationFlags(
             reconcileInlineModeFlag(
               reconcileBypassFlags(
@@ -760,15 +764,15 @@ export const createRestartActions = (
             effectiveAgentId,
             resolveKeepDecorations(runtimeForEnv.settings.effectiveEntry)
           );
-        // A caller-only snapshot is still a captured configuration: its empty
-        // settings-derived part gets the tokens the fresh command replays too.
-        if ((nextAgentLaunchFlags?.length ?? 0) > 0 || callerLaunchFlags.length > 0) {
-          nextAgentLaunchFlags = reconcileFlags(nextAgentLaunchFlags ?? []);
-          resumeFlags = nextAgentLaunchFlags;
-        } else {
-          const injectedFromEmpty = reconcileFlags([]);
-          if (injectedFromEmpty.length > 0) resumeFlags = injectedFromEmpty;
-        }
+      }
+      // A caller-only snapshot is still a captured configuration: its empty
+      // settings-derived part gets the tokens the fresh command replays too.
+      if ((nextAgentLaunchFlags?.length ?? 0) > 0 || callerLaunchFlags.length > 0) {
+        nextAgentLaunchFlags = reconcileFlags(nextAgentLaunchFlags ?? []);
+        resumeFlags = nextAgentLaunchFlags;
+      } else {
+        const injectedFromEmpty = reconcileFlags([]);
+        if (injectedFromEmpty.length > 0) resumeFlags = injectedFromEmpty;
       }
       if (callerLaunchFlags.length > 0) {
         nextAgentLaunchFlags = [...(nextAgentLaunchFlags ?? []), ...callerLaunchFlags];

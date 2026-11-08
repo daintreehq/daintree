@@ -118,8 +118,8 @@ export function presetLaunchContent(preset: AgentPreset): string {
     preset.dangerousEnabled ?? null,
     preset.dangerousMode ?? null,
     preset.customFlags ?? null,
-    // The retired alt-screen choice's slot (#16356), held so a grant made
-    // before it went still matches.
+    // The retired alt-screen choice's slot (#16356), held so a grant for a
+    // preset that never set one still matches; one that did is asked again.
     null,
     preset.color ?? null,
     preset.displayTitle ?? null,

@@ -556,7 +556,11 @@ describe("agentSettingsStore adversarial", () => {
     clientMock.get.mockResolvedValue({
       agents: {
         codex: { inlineMode: "off", customFlags: "--search" },
-        claude: { customPresets: [{ id: "user-a", name: "A", inlineMode: false }] },
+        claude: {
+          customPresets: [
+            { id: "user-a", name: "A", inlineMode: false, args: ["--model", "opus"] },
+          ],
+        },
       },
       globalUseAltScreen: true,
     });
@@ -567,6 +571,10 @@ describe("agentSettingsStore adversarial", () => {
     expect(state.isInitialized).toBe(true);
     expect(state.error).toBeNull();
     expect(state.settings?.agents.codex?.customFlags).toBe("--search");
+    // A preset that carries one still loads with everything else it sets.
+    expect(state.settings?.agents.claude?.customPresets).toEqual([
+      expect.objectContaining({ id: "user-a", name: "A", args: ["--model", "opus"] }),
+    ]);
   });
 
   it("setResumeOnRestart writes the root field and rolls back when the IPC write rejects (#13509)", async () => {

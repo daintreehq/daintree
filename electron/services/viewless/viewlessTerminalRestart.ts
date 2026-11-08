@@ -5,9 +5,11 @@ import {
   buildResumeCommand,
   dropRetiredAgentModel,
   dropUnselectedAgentModel,
+  reconcileInlineModeFlag,
   stripAssignedSessionIdArgs,
   supportsSessionIdAssignment,
 } from "../../../shared/types/agentSettings.js";
+import { splitCallerLaunchFlags } from "../../../shared/utils/callerLaunchFlags.js";
 import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { mergeTerminalLaunchEnv } from "../../../shared/utils/terminalLaunchOptions.js";
@@ -96,7 +98,18 @@ export async function restartTerminalWithoutView(
   let command = snapshot.command;
   let sessionId: string | undefined;
   let resumedSessionId: string | undefined;
+  let launchFlags = snapshot.agentLaunchFlags;
   if (agentId !== undefined) {
+    // A snapshot saved while alt screen was a choice can hold the agent's
+    // full-screen flag, or no inline flag: the relaunch is inline (#16356). An
+    // empty snapshot is kept empty, as a view's restart keeps it, so a later
+    // restart still rebuilds it from settings.
+    const { base, caller } = splitCallerLaunchFlags(
+      snapshot.agentLaunchFlags,
+      snapshot.callerLaunchFlags
+    );
+    const resumeFlags = [...reconcileInlineModeFlag(base, agentId), ...caller];
+    if (base.length > 0 || caller.length > 0) launchFlags = resumeFlags;
     // The graceful shutdown quits whichever agent is live, so its capture only
     // names this pane's conversation while the detected agent is the launched one.
     const captureTrusted = info.detectedAgentId === undefined || info.detectedAgentId === agentId;
@@ -114,7 +127,7 @@ export async function restartTerminalWithoutView(
           )
         : undefined;
     const resume = sessionId
-      ? buildResumeCommand(agentId, sessionId, snapshot.agentLaunchFlags, baseCommand)
+      ? buildResumeCommand(agentId, sessionId, resumeFlags, baseCommand)
       : undefined;
     if (resume && sessionId) {
       command = resume;
@@ -172,7 +185,7 @@ export async function restartTerminalWithoutView(
         ...(agentId !== undefined
           ? {
               launchAgentId: agentId,
-              agentLaunchFlags: snapshot.agentLaunchFlags,
+              agentLaunchFlags: launchFlags,
               agentModelId: snapshot.agentModelId,
               agentSessionId:
                 resumedSessionId !== undefined && supportsSessionIdAssignment(agentId)

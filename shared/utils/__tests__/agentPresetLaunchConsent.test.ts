@@ -49,9 +49,10 @@ describe("presetLaunchContent", () => {
     expect(presetLaunchContent(withStray)).toBe(presetLaunchContent(preset));
   });
 
-  it("keeps the encoding a grant made while presets had a screen mode still matches (#16356)", () => {
+  it("keeps the encoding, so a grant for a preset that never set a screen mode still matches (#16356)", () => {
     // What version 1 wrote for this preset, the retired inline mode's slot
-    // included: a grant stored then must still match it.
+    // included: a grant stored then must still match it. One for a preset that
+    // did set a mode no longer matches, so that preset is asked about again.
     expect(presetLaunchContent(preset)).toBe(
       JSON.stringify([
         1,

@@ -172,6 +172,39 @@ describe("restartTerminalWithoutView", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("resumes inline from a snapshot saved with alt screen chosen (#16356)", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "grok",
+        command: "grok --fullscreen",
+        agentLaunchFlags: ["--fullscreen", "--model", "grok-build"],
+      },
+      { agentState: "working", launchAgentId: "grok" },
+      "sess-123"
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    const spawn = spawned(invoke);
+    const tokens = String(spawn.command).split(" ");
+    expect(tokens).toContain("--no-alt-screen");
+    expect(tokens).not.toContain("--fullscreen");
+    expect(spawn.agentLaunchFlags).toEqual(["--no-alt-screen", "--model", "grok-build"]);
+  });
+
+  it("keeps an empty snapshot empty, while the resume still launches inline (#16356)", async () => {
+    const { deps, invoke } = setup(
+      { id: "t1", launchAgentId: "codex", command: "codex", agentLaunchFlags: [] },
+      { agentState: "working", launchAgentId: "codex" },
+      "sess-123"
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    const spawn = spawned(invoke);
+    expect(String(spawn.command).split(" ")).toContain("--no-alt-screen");
+    expect(spawn.agentLaunchFlags).toEqual([]);
+  });
+
   it("relaunches a Vibe pane that holds no model", async () => {
     const { deps, invoke } = setup(
       {

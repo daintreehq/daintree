@@ -1651,8 +1651,10 @@ describe("paired screen-mode tokens (#11423, #16356)", () => {
         expect(screenTokens, `${agentId} ${JSON.stringify(entry)}`).toEqual(
           expected ? [expected] : []
         );
-        const command = generateAgentCommand(agentId, entry, agentId);
-        expect(command).not.toContain(ALT);
+        const commandTokens = generateAgentCommand(agentId, entry, agentId)
+          .split(" ")
+          .filter((f) => f === INLINE || f === ALT);
+        expect(commandTokens, `${agentId} command`).toEqual(expected ? [expected] : []);
       }
     }
   });
