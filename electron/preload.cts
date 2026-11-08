@@ -1391,9 +1391,6 @@ function buildElectronApi(): ElectronAPI {
         lastAutoCheck: number | null;
       }) => _unwrappingInvoke(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS, settings),
 
-      startAgentUpdate: (payload: { agentId: string; method?: string }) =>
-        _unwrappingInvoke(CHANNELS.SYSTEM_START_AGENT_UPDATE, payload),
-
       healthCheck: (options?: import("../shared/types/ipc/system.js").SystemHealthCheckOptions) =>
         _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK, options),
 
@@ -1833,12 +1830,6 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.PROJECT_GET_INREPO_PRESETS, projectId),
 
       ...buildTerminalLayoutPreloadBindings(_unwrappingInvoke),
-
-      readClaudeMd: (projectId: string): Promise<string | null> =>
-        _unwrappingInvoke(CHANNELS.PROJECT_READ_CLAUDE_MD, projectId),
-
-      writeClaudeMd: (projectId: string, content: string): Promise<void> =>
-        _unwrappingInvoke(CHANNELS.PROJECT_WRITE_CLAUDE_MD, { projectId, content }),
 
       enableInRepoSettings: (projectId: string): Promise<Project> =>
         _unwrappingInvoke(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, projectId),

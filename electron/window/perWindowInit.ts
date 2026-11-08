@@ -19,7 +19,6 @@ import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogC
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
 import { AgentModelCatalogService } from "../services/AgentModelCatalogService.js";
-import { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -47,8 +46,6 @@ import {
   setAgentVersionService,
   getAgentModelCatalogService,
   setAgentModelCatalogService,
-  getAgentUpdateHandler,
-  setAgentUpdateHandler,
   getWorkspaceClientRef,
 } from "./serviceRefs.js";
 
@@ -267,7 +264,6 @@ export async function initPerWindowServices(
     portalManager: ctx.services.portalManager,
     cliAvailabilityService,
     agentVersionService: getAgentVersionService() ?? undefined,
-    agentUpdateHandler: getAgentUpdateHandler() ?? undefined,
     isDemoMode,
     windowRegistry,
   } as HandlerDependencies);
@@ -342,7 +338,6 @@ export async function initPerWindowServices(
     portalManager: ctx.services.portalManager,
     cliAvailabilityService,
     agentVersionService: getAgentVersionService() ?? undefined,
-    agentUpdateHandler: getAgentUpdateHandler() ?? undefined,
     isDemoMode,
     windowRegistry,
   };
@@ -428,7 +423,6 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
 
   const versionSvc = new AgentVersionService(cliAvailabilityService);
   setAgentVersionService(versionSvc);
-  setAgentUpdateHandler(new AgentUpdateHandler(ptyClient, versionSvc, cliAvailabilityService));
 
   if (!getAgentModelCatalogService()) {
     const modelCatalogSvc = new AgentModelCatalogService();

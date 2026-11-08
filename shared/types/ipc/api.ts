@@ -137,8 +137,6 @@ import type {
   AgentCliDetails,
   AgentVersionInfo,
   AgentUpdateSettings,
-  StartAgentUpdatePayload,
-  StartAgentUpdateResult,
   SystemHealthCheckResult,
   PrerequisiteSpec,
   PrerequisiteCheckResult,
@@ -596,7 +594,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     refreshAgentVersions(): Promise<AgentVersionInfo[]>;
     getAgentUpdateSettings(): Promise<AgentUpdateSettings>;
     setAgentUpdateSettings(settings: AgentUpdateSettings): Promise<void>;
-    startAgentUpdate(payload: StartAgentUpdatePayload): Promise<StartAgentUpdateResult>;
     healthCheck(
       options?: import("./system.js").SystemHealthCheckOptions
     ): Promise<SystemHealthCheckResult>;
@@ -967,8 +964,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       focusMode: boolean,
       focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
     ): Promise<void>;
-    readClaudeMd(projectId: string): Promise<string | null>;
-    writeClaudeMd(projectId: string, content: string): Promise<void>;
     /**
      * Enable in-repo settings mode: writes current identity and settings to .daintree/,
      * then sets project.inRepoSettings = true.

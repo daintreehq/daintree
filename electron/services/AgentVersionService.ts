@@ -19,7 +19,6 @@ import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 interface CachedVersionInfo {
   info: AgentVersionInfo;
   timestamp: number;
-  generation: number;
 }
 
 export class AgentVersionService {
@@ -31,7 +30,6 @@ export class AgentVersionService {
   private readonly EXIT_DRAIN_MS = 200;
   private readonly MAX_BUFFER = 256 * 1024;
   private inFlightChecks = new Map<AgentId, Promise<AgentVersionInfo>>();
-  private generation = 0;
 
   constructor(private cliAvailabilityService: CliAvailabilityService) {}
 
@@ -105,19 +103,12 @@ export class AgentVersionService {
       }
     }
 
-    const currentGeneration = this.generation;
     const checkPromise = this.checkVersion(agentId);
     this.inFlightChecks.set(agentId, checkPromise);
 
     try {
       const result = await checkPromise;
-      if (this.generation === currentGeneration) {
-        this.cache.set(agentId, {
-          info: result,
-          timestamp: Date.now(),
-          generation: currentGeneration,
-        });
-      }
+      this.cache.set(agentId, { info: result, timestamp: Date.now() });
       return result;
     } catch (error) {
       return this.createErrorInfo(agentId, error);
@@ -613,17 +604,6 @@ export class AgentVersionService {
       return semver.gt(latestVersion, installedVersion);
     } catch {
       return false;
-    }
-  }
-
-  clearCache(agentId?: AgentId): void {
-    this.generation++;
-    if (agentId) {
-      this.cache.delete(agentId);
-      this.inFlightChecks.delete(agentId);
-    } else {
-      this.cache.clear();
-      this.inFlightChecks.clear();
     }
   }
 }

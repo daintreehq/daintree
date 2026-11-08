@@ -142,7 +142,6 @@ export const CHANNELS = {
   SYSTEM_REFRESH_AGENT_VERSIONS: "system:refresh-agent-versions",
   SYSTEM_GET_AGENT_UPDATE_SETTINGS: "system:get-agent-update-settings",
   SYSTEM_SET_AGENT_UPDATE_SETTINGS: "system:set-agent-update-settings",
-  SYSTEM_START_AGENT_UPDATE: "system:start-agent-update",
   SETUP_AGENT_INSTALL: "setup:agent-install",
   SETUP_AGENT_INSTALL_PROGRESS: "setup:agent-install-progress",
 
@@ -359,8 +358,6 @@ export const CHANNELS = {
   PROJECT_SET_TAB_GROUPS: "project:set-tab-groups",
   PROJECT_GET_FOCUS_MODE: "project:get-focus-mode",
   PROJECT_SET_FOCUS_MODE: "project:set-focus-mode",
-  PROJECT_READ_CLAUDE_MD: "project:read-claude-md",
-  PROJECT_WRITE_CLAUDE_MD: "project:write-claude-md",
   PROJECT_ENABLE_IN_REPO_SETTINGS: "project:enable-in-repo-settings",
   PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
   PROJECT_CHECK_MISSING: "project:check-missing",

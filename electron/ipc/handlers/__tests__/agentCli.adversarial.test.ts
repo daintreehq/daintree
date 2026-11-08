@@ -101,7 +101,6 @@ describe("agentCli IPC adversarial", () => {
         refresh: vi.fn().mockResolvedValue({}),
       },
       agentVersionService: { getVersions: vi.fn().mockResolvedValue([]) },
-      agentUpdateHandler: { startUpdate: vi.fn().mockResolvedValue({ jobId: "u1" }) },
       ...overrides,
     } as unknown as HandlerDependencies;
     cleanup = registerAgentCliHandlers(deps);
@@ -235,32 +234,6 @@ describe("agentCli IPC adversarial", () => {
     await getHandler(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS)(fakeEvent(), settings);
 
     expect(storeMock.set).toHaveBeenCalledWith("agentUpdateSettings", settings);
-  });
-
-  it("SYSTEM_START_AGENT_UPDATE rejects malformed payloads before calling the handler", async () => {
-    const startUpdate = vi.fn();
-    register({
-      agentUpdateHandler: { startUpdate } as unknown as HandlerDependencies["agentUpdateHandler"],
-    });
-
-    const handler = getHandler(CHANNELS.SYSTEM_START_AGENT_UPDATE);
-
-    await expect(handler(fakeEvent(), null)).rejects.toThrow(/Invalid StartAgentUpdatePayload/);
-    await expect(handler(fakeEvent(), { agentId: "" })).rejects.toThrow(
-      /Invalid StartAgentUpdatePayload/
-    );
-    await expect(handler(fakeEvent(), { agentId: "claude", method: 123 })).rejects.toThrow(
-      /Invalid StartAgentUpdatePayload/
-    );
-
-    expect(startUpdate).not.toHaveBeenCalled();
-  });
-
-  it("SYSTEM_START_AGENT_UPDATE rejects when the handler is absent", async () => {
-    register({ agentUpdateHandler: undefined });
-    await expect(
-      getHandler(CHANNELS.SYSTEM_START_AGENT_UPDATE)(fakeEvent(), { agentId: "claude" })
-    ).rejects.toThrow(/AgentUpdateHandler not available/);
   });
 
   it("SETUP_AGENT_INSTALL forwards progress to sender window only", async () => {

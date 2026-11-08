@@ -11,7 +11,7 @@ import { runAgentInstall } from "../../services/AgentInstallService.js";
 import type { HandlerDependencies } from "../types.js";
 
 export function registerAgentCliHandlers(deps: HandlerDependencies): () => void {
-  const { cliAvailabilityService, agentVersionService, agentUpdateHandler } = deps;
+  const { cliAvailabilityService, agentVersionService } = deps;
   const handlers: Array<() => void> = [];
 
   const handleSystemGetCliAvailability = async () => {
@@ -142,26 +142,6 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
   handlers.push(
     typedHandle(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS, handleSystemSetAgentUpdateSettings)
   );
-
-  const handleSystemStartAgentUpdate = async (
-    payload: import("../../types/index.js").StartAgentUpdatePayload
-  ) => {
-    if (!agentUpdateHandler) {
-      throw new Error("AgentUpdateHandler not available");
-    }
-
-    if (
-      !payload ||
-      !payload.agentId ||
-      typeof payload.agentId !== "string" ||
-      (payload.method !== undefined && typeof payload.method !== "string")
-    ) {
-      throw new Error("Invalid StartAgentUpdatePayload");
-    }
-
-    return await agentUpdateHandler.startUpdate(payload);
-  };
-  handlers.push(typedHandle(CHANNELS.SYSTEM_START_AGENT_UPDATE, handleSystemStartAgentUpdate));
 
   const handleSystemHealthCheck = async (
     options?: import("../../../shared/types/ipc/system.js").SystemHealthCheckOptions

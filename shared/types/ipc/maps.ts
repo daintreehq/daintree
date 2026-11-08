@@ -77,8 +77,6 @@ import type {
   AgentCliDetails,
   AgentVersionInfo,
   AgentUpdateSettings,
-  StartAgentUpdatePayload,
-  StartAgentUpdateResult,
   SystemHealthCheckOptions,
   SystemHealthCheckResult,
   AppMetricsSummary,
@@ -477,10 +475,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [settings: AgentUpdateSettings];
     result: void;
   };
-  "system:start-agent-update": {
-    args: [payload: StartAgentUpdatePayload];
-    result: StartAgentUpdateResult;
-  };
   "setup:agent-install": {
     args: [payload: AgentInstallPayload];
     result: AgentInstallResult;
@@ -842,14 +836,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "project:delete-recipe": {
     args: [payload: { projectId: string; recipeId: string }];
-    result: void;
-  };
-  "project:read-claude-md": {
-    args: [projectId: string];
-    result: string | null;
-  };
-  "project:write-claude-md": {
-    args: [payload: { projectId: string; content: string }];
     result: void;
   };
   "project:enable-in-repo-settings": {
