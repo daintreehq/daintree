@@ -459,9 +459,7 @@ jobs:
   # skip_notarization run, whose DMGs Gatekeeper would refuse.
   publish-homebrew-tap:
     if: >-
-      startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true &&
-      inputs.skip_notarization != true &&
-      !contains(github.ref_name, '-') && !contains(github.ref_name, '+')
+      startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true && inputs.skip_notarization != true && !contains(github.ref_name, '-') && !contains(github.ref_name, '+')
     needs: [publish-daintree]
     name: Update Homebrew tap
     # brew audit loads the cask the way a Mac does: both arches, the live feed.
