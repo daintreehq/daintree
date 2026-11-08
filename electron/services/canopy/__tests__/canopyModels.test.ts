@@ -18,6 +18,7 @@ import {
   CanopyModels,
   removeDownloadedModels,
   type CanopyModelFileSpec,
+  type CanopyModelRevision,
 } from "../canopyModels.js";
 import manifest from "../canopy-reader-manifest.json" with { type: "json" };
 
@@ -32,6 +33,12 @@ const FILES: CanopyModelFileSpec[] = [
   { name: "tokenizer.json", size: TOKENIZER.length, blobId: gitBlobId(TOKENIZER) },
   { name: "model.int8.onnx", size: WEIGHTS.length, sha256: sha256(WEIGHTS) },
 ];
+
+const SHIPPED: CanopyModelRevision = {
+  revision: "e".repeat(40),
+  published: Date.parse("2026-10-25T19:08:24.000Z"),
+  files: FILES,
+};
 
 let dir: string;
 
@@ -54,10 +61,15 @@ describe("CanopyModels, the model that ships with Daintree", () => {
   it("reads from the shipped folder once every file matches its pin", async () => {
     ship();
     const changes = vi.fn();
-    const models = new CanopyModels(dir, changes, FILES);
+    const models = new CanopyModels(dir, changes, { shipped: SHIPPED });
 
     expect(await models.installedDir()).toBe(dir);
-    expect(models.state()).toEqual({ id: CANOPY_MODEL, status: "ready" });
+    expect(models.state()).toEqual({
+      id: CANOPY_MODEL,
+      status: "ready",
+      revision: SHIPPED.revision,
+      source: "bundled",
+    });
     expect(await models.info()).toMatchObject({
       id: CANOPY_MODEL,
       bytes: WEIGHTS.length + TOKENIZER.length,
@@ -68,7 +80,7 @@ describe("CanopyModels, the model that ships with Daintree", () => {
 
   it("says nothing of the model until it has been checked", async () => {
     ship();
-    const models = new CanopyModels(dir, () => {}, FILES);
+    const models = new CanopyModels(dir, () => {}, { shipped: SHIPPED });
 
     // Made without a look at the disk: a user who never turns Canopy on pays nothing.
     expect(models.state()).toBeUndefined();
@@ -88,7 +100,7 @@ describe("CanopyModels, the model that ships with Daintree", () => {
     ship();
     damage();
     const changes = vi.fn();
-    const models = new CanopyModels(dir, changes, FILES);
+    const models = new CanopyModels(dir, changes, { shipped: SHIPPED });
 
     expect(await models.installedDir()).toBeNull();
     const state = models.state();
@@ -101,7 +113,7 @@ describe("CanopyModels, the model that ships with Daintree", () => {
   it("checks once a launch, however many ask at once or later", async () => {
     ship();
     const changes = vi.fn();
-    const models = new CanopyModels(dir, changes, FILES);
+    const models = new CanopyModels(dir, changes, { shipped: SHIPPED });
 
     await Promise.all([models.ensure(), models.installedDir(), models.info(), models.ensure()]);
     // Damaged since: the launch's one check stands, nothing is hashed again.
@@ -113,7 +125,7 @@ describe("CanopyModels, the model that ships with Daintree", () => {
   it("tells no one of a check that finishes after it is let go", async () => {
     ship();
     const changes = vi.fn();
-    const models = new CanopyModels(dir, changes, FILES);
+    const models = new CanopyModels(dir, changes, { shipped: SHIPPED });
 
     const checked = models.ensure();
     models.dispose();

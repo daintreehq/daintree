@@ -464,13 +464,30 @@ export interface CanopyModelInfo {
 /**
  * Where the model stands on this machine. A host that ships it (#16415) says
  * only `ready` or `failed`; `missing` and `downloading` come from a host from
- * before, which still fetches it.
+ * before, which still fetches it. A newer revision on its way leaves it
+ * `ready`: the copy in use reads meanwhile, and only Settings shows the update.
  */
 export type CanopyModelState =
   | { id: string; status: "missing" }
   | { id: string; status: "downloading"; received: number; total: number }
-  | { id: string; status: "ready" }
+  | {
+      id: string;
+      status: "ready";
+      /** The revision read with; absent from a host from before updates (#16416). */
+      revision?: string;
+      /** The copy that ships with Daintree, or a newer one fetched from Hugging Face since. */
+      source?: "bundled" | "update";
+      /** A newer revision being fetched, read with once it is all here and checked. */
+      update?: CanopyModelUpdate;
+    }
   | { id: string; status: "failed"; error: string };
+
+/** A newer revision of the model on its way. */
+export interface CanopyModelUpdate {
+  revision: string;
+  received: number;
+  total: number;
+}
 
 /** What a run's screen says at a glance, for a run the readers have not carded yet. */
 export interface CanopyRunGlance {

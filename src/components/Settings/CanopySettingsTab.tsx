@@ -1,5 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { CANOPY_LOCAL } from "@/components/Canopy/canopyTerms";
+import { ProgressBar } from "@/components/ui/ProgressBar";
+import { formatBytes } from "@/lib/formatBytes";
 import { useCanopyStore } from "@/store/canopyStore";
 import type { CanopyMode } from "@shared/types/ipc/canopy";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -7,6 +9,11 @@ import { SettingsSection } from "./SettingsSection";
 import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
+
+/** A revision as Settings names it: the first seven characters of its commit, as Git shows it. */
+function shortRevision(revision: string): string {
+  return revision.slice(0, 7);
+}
 
 export function CanopySettingsTab() {
   const snapshot = useCanopyStore((s) => s.snapshot);
@@ -47,6 +54,8 @@ export function CanopySettingsTab() {
   const hidden = mode === "hidden";
   const activated = mode === "on";
   const model = snapshot?.model;
+  const ready = model?.status === "ready" && model.revision ? model : null;
+  const update = ready?.update ?? null;
 
   return (
     <div className="space-y-8">
@@ -84,7 +93,45 @@ export function CanopySettingsTab() {
         </SettingsGroup>
       </SettingsSection>
 
-      {/* The model ships with Daintree: only one that fails its check has anything to say here. */}
+      {/* Which copy reads, and an update on its way: shown here and nowhere more prominent. */}
+      {activated && ready && (
+        <SettingsSection title="Model" id="canopy-model">
+          <SettingsGroup>
+            <SettingsRow
+              id="canopy-model-revision"
+              label={`Revision ${shortRevision(ready.revision!)}`}
+              description={
+                ready.source === "update"
+                  ? "An update from Hugging Face, newer than the copy that comes with Daintree"
+                  : "The copy that comes with Daintree"
+              }
+            />
+            {update && (
+              <SettingsRow
+                id="canopy-model-update"
+                label={`Downloading revision ${shortRevision(update.revision)}`}
+                description={
+                  <>
+                    <span className="block">
+                      {`${formatBytes(update.received)} of ${formatBytes(update.total)}. Canopy reads with revision ${shortRevision(ready.revision!)} until it's in place.`}
+                    </span>
+                    <ProgressBar
+                      className="mt-2"
+                      size="thin"
+                      value={update.received}
+                      max={update.total}
+                      label="Model update"
+                      valueText={`${formatBytes(update.received)} of ${formatBytes(update.total)}`}
+                    />
+                  </>
+                }
+              />
+            )}
+          </SettingsGroup>
+        </SettingsSection>
+      )}
+
+      {/* The model ships with Daintree: one that fails its check says so here. */}
       {activated && model?.status === "failed" && (
         <SettingsSection title="Model" id="canopy-model">
           <SettingsGroup>

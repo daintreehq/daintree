@@ -72,6 +72,7 @@ import {
   removeDownloadedModels,
 } from "../../services/canopy/canopyModels.js";
 import { store } from "../../store.js";
+import { isE2EMode, isSmokeTest } from "../../setup/runtimeFlags.js";
 import { hostInstanceId } from "../../services/hostInstance.js";
 import { traced } from "../../services/canopy/canopyTrace.js";
 import {
@@ -180,8 +181,8 @@ function currentPlan(): CanopyPlan {
 
 let models: CanopyModels | null = null;
 let reader: CanopyLocalReader | null = null;
-/** Whether the model was ready when last told, so only a change wakes the service. */
-let modelWasReady = false;
+/** The folder the model was read from when last told, so only a change wakes the service. */
+let modelDirWas: string | null = null;
 
 /**
  * Where the app ships the reader model (#16415): its resources once packaged,
@@ -193,9 +194,20 @@ function bundledModelDir(): string {
     : path.join(app.getAppPath(), "electron", "resources", "canopy-reader");
 }
 
+/**
+ * Where newer revisions fetched from Hugging Face live (#16416), or null where
+ * none are looked for: test runs read the shipped copy and nothing else.
+ */
+function modelUpdatesDir(): string | null {
+  if (isE2EMode || isSmokeTest) return null;
+  return path.join(app.getPath("userData"), "canopy", "reader-updates");
+}
+
 /** Made on first use: a user who never turns Canopy on never checks the model. */
 function getModels(): CanopyModels {
-  models ??= new CanopyModels(bundledModelDir(), onModelsChanged);
+  models ??= new CanopyModels(bundledModelDir(), onModelsChanged, {
+    updates: modelUpdatesDir(),
+  });
   return models;
 }
 
@@ -208,10 +220,16 @@ function modelReady(): boolean {
   return models?.state()?.status === "ready";
 }
 
+/**
+ * A model that arrives, goes, or is replaced by an update has every screen
+ * read again by the one now in use; progress alone only tells the views.
+ */
 function onModelsChanged(): void {
-  const ready = modelReady();
-  if (ready !== modelWasReady) {
-    modelWasReady = ready;
+  const dir = models?.currentDir() ?? null;
+  if (dir !== modelDirWas) {
+    // The last copy's reader lets go of its files, so they can be deleted.
+    if (modelDirWas !== null) reader?.release();
+    modelDirWas = dir;
     service?.readerChanged();
   } else {
     service?.modelChanged();
@@ -219,9 +237,10 @@ function onModelsChanged(): void {
 }
 
 /**
- * With Canopy on, checks the shipped model, once a launch and never on the
- * launch's own path: nothing waits for it, and screens are read once it checks
- * out (`onModelsChanged`).
+ * With Canopy on, checks the model to read with, once a launch and never on
+ * the launch's own path, then looks for a newer revision on Hugging Face:
+ * nothing waits for either, screens are read once a copy checks out, and again
+ * once an update is in place (`onModelsChanged`).
  */
 function ensureModel(): void {
   if (readCanopyMode() !== "on") return;
@@ -347,7 +366,9 @@ export function changeCanopyMode(
   if (mode === "on") {
     ensureModel();
   } else {
+    // Off lets the model go; an update under way stops, keeping what it fetched.
     reader?.release();
+    models?.cancel();
   }
   return canopy.getSnapshot();
 }
@@ -2816,6 +2837,6 @@ export function registerCanopyHandlers(): () => void {
     reader = null;
     models?.dispose();
     models = null;
-    modelWasReady = false;
+    modelDirWas = null;
   };
 }
