@@ -5,6 +5,7 @@ import type { Compartment } from "@codemirror/state";
 import type { AutocompleteItem } from "../AutocompleteMenu";
 import type { ActiveCompletionContext } from "../hybridInputParsing";
 import { currentContextReferenceProvidersEffects } from "../inputEditorExtensions/contextReferenceChip";
+import { currentDiffNotesChipEffects } from "../inputEditorExtensions/notesChip";
 import { clearComposerHistory } from "../inputEditorExtensions/composerHistory";
 import { advanceComposerDraft } from "../inputEditorExtensions/composerDraftGeneration";
 import { isComposerSendHeld } from "../uploads/pendingUploads";
@@ -384,6 +385,7 @@ export function useEditorKeymap({
         effects: [
           editableCompartmentRef.current.reconfigure(EditorView.editable.of(!latest.disabled)),
           ...currentContextReferenceProvidersEffects(view),
+          ...currentDiffNotesChipEffects(view),
           ...currentVoiceCaretEffects(view),
         ],
       });

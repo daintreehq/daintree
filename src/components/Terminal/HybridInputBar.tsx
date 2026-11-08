@@ -43,6 +43,9 @@ import {
   contextReferenceChipProviders,
   type ContextReferenceChipProvider,
 } from "./inputEditorExtensions/contextReferenceChip";
+import { applyDiffNotesChipSource } from "./inputEditorExtensions/notesChip";
+import { useComposerDiffNotes } from "./hooks/useComposerDiffNotes";
+import { hasPendingDiffNotes } from "@/components/Worktree/diffNotes";
 import { PromptTemplateForm } from "@/components/Commands/PromptTemplateForm";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCanopyStore } from "@/store/canopyStore";
@@ -163,6 +166,7 @@ import { useContextDetection } from "./hooks/useContextDetection";
 import {
   draftUnchangedSince,
   useTokenResolution,
+  type ComposerSubmitOutcome,
   type SendTextOptions,
 } from "./hooks/useTokenResolution";
 import { useEditorKeymap, type ComposerSendRoute } from "./hooks/useEditorKeymap";
@@ -256,7 +260,7 @@ export interface HybridInputBarHandle {
    */
   submitWithInstruction: (
     instruction: string,
-    submit: (text: string) => Promise<boolean>
+    submit: (text: string) => Promise<ComposerSubmitOutcome>
   ) => Promise<boolean>;
 }
 
@@ -309,8 +313,16 @@ export interface HybridInputBarProps {
    * Sends the composer's text and says whether the terminal took it, in place
    * of the fire-and-forget `onSend`: the draft is cleared and kept in history
    * only once it resolves `true`, so a refused send leaves the text in place.
+   *
+   * `submissionToken` comes with a send carrying `@notes`, whose notes clear
+   * once the terminal reports it written. Only a composer that isn't `isolated`
+   * has the token asked of it.
    */
-  submitText?: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+  submitText?: (
+    text: string,
+    imagePaths: readonly string[],
+    submissionToken?: string
+  ) => Promise<boolean>;
   /**
    * Whether this composer's surface is the selected one, for a host whose
    * selection is not the grid's (the Assistant sidebar). Grid panes leave it
@@ -660,6 +672,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       (s) => (panelWorktreeId ? s.worktrees.get(panelWorktreeId)?.path : undefined),
       undefined
     );
+    // An isolated composer stands apart from its agent's worktree and submits
+    // over its own stream; a host without `submitText` can't report delivery.
+    const takesDiffNotes = !thisMachineOff && !isolated && submitText !== undefined;
+    const pendingDiffNotes = useComposerDiffNotes(terminalId, panelWorktreePath, takesDiffNotes);
     const isVoiceRecording = activeVoicePanelId === voiceId && voiceStatus === "recording";
     const isVoiceConnecting = activeVoicePanelId === voiceId && voiceStatus === "connecting";
     const isVoiceReconnecting = activeVoicePanelId === voiceId && voiceStatus === "reconnecting";
@@ -706,6 +722,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
       contextChipTooltipCompartmentRef,
+      notesChipTooltipCompartmentRef,
       forgeReferenceTooltipCompartmentRef,
       autoSizeCompartmentRef,
       themeCompartmentRef,
@@ -969,7 +986,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         : null;
     }, [triggerChar, completionQuery, contextProviderEntries]);
     const atClaim =
-      triggerChar === "@" && contextClaim === null ? getDaintreeAtClaim(completionQuery) : null;
+      triggerChar === "@" && contextClaim === null
+        ? getDaintreeAtClaim(completionQuery, hasPendingDiffNotes(pendingDiffNotes))
+        : null;
     const isFileMode = triggerChar === "@" && atClaim === null && contextClaim === null;
     // A token is being completed. Whether its menu shows is decided once its
     // rows are known: the `#` menu opens only on rows (`isAutocompleteOpen`).
@@ -1101,6 +1120,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       contextItems,
       isContextLoading,
       forgeReferences,
+      pendingDiffNotes,
     });
     // `#` is ordinary text far more often than a reference, so with nothing to
     // offer — no forge, no credential, nothing matching — it stays just a
@@ -1295,6 +1315,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       cwd,
       agentId,
       expandContext: !thisMachineOff,
+      takesDiffNotes,
     });
 
     // The outside-write revision the effect below last brought into the editor.
@@ -1480,13 +1501,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       );
     const submitAttemptRef = useRef(0);
     const notingRefusal = useCallback(
-      (submit: (outgoing: string) => Promise<boolean>, dictated: boolean) =>
-        async (outgoing: string): Promise<boolean> => {
+      (submit: (outgoing: string, submissionToken?: string) => Promise<boolean>, dictated: boolean) =>
+        async (outgoing: string, submissionToken?: string): Promise<boolean> => {
           const attempt = ++submitAttemptRef.current;
           setSendNote(dictated ? null : { terminalId, refused: false });
           let accepted: boolean;
           try {
-            accepted = await submit(outgoing);
+            accepted = await submit(outgoing, submissionToken);
           } catch {
             accepted = false;
           }
@@ -1533,7 +1554,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // The host's as it stands when the text goes, not at the press: an
           // expansion awaited in between can outlast a lock or a restart.
           submit: notingRefusal(
-            (outgoing) => submitTextRef.current?.(outgoing, imagePaths) ?? Promise.resolve(false),
+            (outgoing, submissionToken) =>
+              submitTextRef.current?.(outgoing, imagePaths, submissionToken) ??
+              Promise.resolve(false),
             dictated
           ),
         });
@@ -2419,9 +2442,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
       contextChipTooltipCompartmentRef,
+      notesChipTooltipCompartmentRef,
       forgeReferenceTooltipCompartmentRef,
       isAutocompleteOpen,
     });
+    // After the factory, so a composer opening on a draft that names `@notes`
+    // draws its count on the first paint.
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (view) applyDiffNotesChipSource(view, pendingDiffNotes);
+    }, [pendingDiffNotes, editorViewRef, terminalId]);
 
     const { expanded: isListboxExpanded, activeOptionId } = getComboboxState({
       isOpen: isAutocompleteOpen,
@@ -2716,9 +2746,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         ? "Terminal output"
                         : atClaim === "selection"
                           ? "Terminal selection"
-                          : atClaim === "diff"
-                            ? "Diffs"
-                            : "Files"
+                          : atClaim === "notes"
+                            ? "Diff notes"
+                            : atClaim === "diff"
+                              ? "Diffs"
+                              : "Files"
               }
               ariaLabel={
                 triggerChar === "/"
@@ -2731,9 +2763,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         ? "Terminal autocomplete"
                         : atClaim === "selection"
                           ? "Selection autocomplete"
-                          : atClaim === "diff"
-                            ? "Diff autocomplete"
-                            : "File autocomplete"
+                          : atClaim === "notes"
+                            ? "Diff note autocomplete"
+                            : atClaim === "diff"
+                              ? "Diff autocomplete"
+                              : "File autocomplete"
               }
               emptyMessage={
                 triggerChar === "/"

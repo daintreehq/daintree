@@ -10,12 +10,15 @@ import {
   getAllAtTerminalTokens,
   getAllAtSelectionTokens,
   getAllAtDiffTokens,
+  getAllAtNotesTokens,
   fenceTokenExpansion,
   resolveTokenExpansions,
   type DiffContextType,
   type TokenExpansion,
 } from "./hybridInputParsing";
 import { expandContextReferences } from "./contextReferenceExpansion";
+import { expandDiffNotesTokens } from "./diffNotesReference";
+import type { DiffNote } from "@/components/Worktree/diffNotes";
 
 /** The plugin this view believes holds `prefix`, for a placeholder when main can't be asked. */
 function activeProviderName(prefix: string): string | undefined {
@@ -66,7 +69,7 @@ export function shareContextReferenceResolutions(
   };
 }
 
-export type DraftContextKind = "terminal" | "selection" | "diff" | "plugin";
+export type DraftContextKind = "terminal" | "selection" | "diff" | "notes" | "plugin";
 
 export interface DraftContextToken {
   /** The token as typed, e.g. `@diff:staged`. */
@@ -80,6 +83,7 @@ export function listDraftContextTokens(text: string): DraftContextToken[] {
     ...getAllAtTerminalTokens(text).map((t) => ({ ...t, kind: "terminal" as const })),
     ...getAllAtSelectionTokens(text).map((t) => ({ ...t, kind: "selection" as const })),
     ...getAllAtDiffTokens(text).map((t) => ({ ...t, kind: "diff" as const })),
+    ...getAllAtNotesTokens(text).map((t) => ({ ...t, kind: "notes" as const })),
     ...getAllAtContextReferences(text).map((t) => ({ ...t, kind: "plugin" as const })),
   ].sort((a, b) => a.start - b.start);
   const tokens: DraftContextToken[] = [];
@@ -99,22 +103,39 @@ export interface DraftContextSource {
   /** Where `@diff` is taken. */
   cwd: string;
   resolveReferences?: ContextReferenceResolver;
+  /**
+   * Handed the notes `@notes` took, for the caller to clear once the text is
+   * delivered. Without it the caller can't report delivery, and notes stay out
+   * of the text.
+   */
+  onDiffNotesTaken?: (notes: readonly DiffNote[]) => void;
 }
 
 /**
- * `@terminal`, `@selection`, `@diff` and plugin context references replaced by
- * what they name for `source`, read now. Every failure is a visible
+ * `@terminal`, `@selection`, `@diff`, `@notes` and plugin context references
+ * replaced by what they name for `source`, read now. Every failure is a visible
  * placeholder in the token's place, so nothing returns as a bare token except
  * a reference no provider holds.
  */
 export async function expandDraftContext(
   text: string,
-  { terminalId, cwd, resolveReferences = resolveContextReferences }: DraftContextSource
+  {
+    terminalId,
+    cwd,
+    resolveReferences = resolveContextReferences,
+    onDiffNotesTaken,
+  }: DraftContextSource
 ): Promise<string> {
   const terminalTokens = getAllAtTerminalTokens(text);
   const selectionTokens = getAllAtSelectionTokens(text);
   const diffTokens = getAllAtDiffTokens(text);
   const contextReferences = getAllAtContextReferences(text);
+  // Ahead of every await: the notes as they read when the send began.
+  const notesExpansions = expandDiffNotesTokens(
+    getAllAtNotesTokens(text),
+    terminalId,
+    onDiffNotesTaken
+  );
   // Started first so the plugins answer while the diff is fetched; every
   // reference resolves in parallel under main's deadline.
   const contextExpansions =
@@ -122,7 +143,7 @@ export async function expandDraftContext(
       ? expandContextReferences(contextReferences, resolveReferences, activeProviderName)
       : null;
 
-  const replacements: TokenExpansion[] = [];
+  const replacements: TokenExpansion[] = [...notesExpansions];
 
   for (const token of terminalTokens) {
     const managed = peekTerminalService()?.get(terminalId);

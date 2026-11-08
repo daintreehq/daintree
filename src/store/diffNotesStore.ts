@@ -50,8 +50,9 @@ interface DiffNotesState {
   restoreNotes: (notes: readonly DiffNote[]) => number;
   /**
    * Removes notes that were delivered, but only where the stored note still
-   * matches what was sent — one edited after the prompt was built stays.
-   * Returns the revisions it removed, which is what an Undo puts back.
+   * matches what was sent — one edited after the prompt was built, or open in
+   * an editor by the time the send landed, stays. Returns the revisions it
+   * removed, which is what an Undo puts back.
    */
   clearSent: (sent: readonly DiffNote[]) => DiffNote[];
 }
@@ -179,6 +180,7 @@ export const useDiffNotesStore = create<DiffNotesState>()(
             const current = next[note.id];
             if (!current) continue;
             if (current.updatedAt !== note.updatedAt || current.body !== note.body) continue;
+            if (state.editingIds[note.id]) continue;
             delete next[note.id];
             cleared.push(current);
           }

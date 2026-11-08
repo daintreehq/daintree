@@ -8,8 +8,11 @@ import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
 import { mapSpanKeepingEdits, minimalDocChange } from "@/lib/textRangeMapping";
+import type { DiffNote } from "@/components/Worktree/diffNotes";
 import { resolveTokenExpansions, type ActiveCompletionContext } from "../hybridInputParsing";
 import { expandDraftContext } from "../draftContextExpansion";
+import { isDiffNotesTarget } from "../diffNotesReference";
+import { clearDiffNotesOnceWritten } from "../diffNotesDelivery";
 
 /** A dictated passage as it settled, and the same passage as the user is sending it. */
 interface CorrectionSnapshot {
@@ -163,6 +166,12 @@ interface LatestRefShape {
   clearDraftInput: (terminalId: string, projectId?: string) => void;
 }
 
+/**
+ * What a `submit` says of its text: whether the terminal accepted it, or, for
+ * an adapter that mints its own submission token, that token.
+ */
+export type ComposerSubmitOutcome = boolean | { submissionToken: string };
+
 export interface SendTextOptions {
   /**
    * Turn the resolved draft into the exact text to submit. Applied *after*
@@ -177,8 +186,13 @@ export interface SendTextOptions {
    * and the history are committed only when it resolves `true`, so a caller
    * that surfaces failure can retry without the draft having been eaten
    * (#11867).
+   *
+   * `submissionToken` is given for a send carrying `@notes`, whose notes clear
+   * only once the terminal reports that token written. An adapter that holds
+   * text back for later submits it under the token when it delivers it, so a
+   * hold that is withdrawn or dropped leaves the notes pending.
    */
-  submit?: (text: string) => Promise<boolean>;
+  submit?: (text: string, submissionToken?: string) => Promise<ComposerSubmitOutcome>;
   /**
    * Absolute paths of the draft's image chips, in document order (#12792).
    * Each is also in the text; the pty-host decides whether the agent takes it
@@ -269,6 +283,12 @@ interface UseTokenResolutionParams {
    * tokens go as typed.
    */
   expandContext?: boolean;
+  /**
+   * Whether `@notes` can take this agent's pending notes. Only for a composer
+   * whose `submit` passes the submission token on: without it, delivery can't
+   * be seen and the notes could never be cleared.
+   */
+  takesDiffNotes?: boolean;
 }
 
 export function useTokenResolution({
@@ -281,6 +301,7 @@ export function useTokenResolution({
   cwd,
   agentId,
   expandContext = true,
+  takesDiffNotes = false,
 }: UseTokenResolutionParams) {
   const ownVoice = voice !== undefined;
   const voiceId = voice?.panelId ?? terminalId;
@@ -310,22 +331,40 @@ export function useTokenResolution({
           text,
           options?.dictationSessions
         );
+        const diffNotes: DiffNote[] = [];
         // With nothing to expand, a fence left open above a handoff block is
         // still closed.
         const resolvedText = expandContext
-          ? await expandDraftContext(text, { terminalId, cwd })
+          ? await expandDraftContext(text, {
+              terminalId,
+              cwd,
+              ...(takesDiffNotes && {
+                onDiffNotesTaken: (taken: readonly DiffNote[]) => diffNotes.push(...taken),
+              }),
+            })
           : resolveTokenExpansions(text, []);
 
         const outgoing = options?.compose ? options.compose(resolvedText) : resolvedText;
         // Checked on the composed result rather than the raw draft: an empty
         // draft is a perfectly good send once an instruction has been appended.
         if (outgoing.trim().length === 0) return false;
+        // The expansion's awaits can outlast the agent: a shell is behind the
+        // pane now, and each line of a note would run as a command.
+        if (diffNotes.length > 0 && !isDiffNotesTarget(terminalId)) return false;
 
         let accepted: Promise<boolean> | void = undefined;
         if (options?.submit) {
+          // Tracked only when notes depend on it: every token is a record the
+          // terminal keeps, and an ordinary send costs nothing.
+          const submissionToken = diffNotes.length > 0 ? crypto.randomUUID() : undefined;
+          const outcome = await options.submit(outgoing, submissionToken);
           // Nothing below this line runs on a refused submission — the draft the
           // user can still see is the draft they still have.
-          if (!(await options.submit(outgoing))) return false;
+          if (!outcome) return false;
+          const written = typeof outcome === "object" ? outcome.submissionToken : submissionToken;
+          if (written !== undefined && diffNotes.length > 0) {
+            clearDiffNotesOnceWritten(terminalId, written, diffNotes);
+          }
         } else {
           const payload = buildTerminalSendPayload(outgoing);
           accepted = latest.onSend({
@@ -396,6 +435,7 @@ export function useTokenResolution({
       agentId,
       cwd,
       expandContext,
+      takesDiffNotes,
       terminalId,
       voiceId,
       voiceProjectId,

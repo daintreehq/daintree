@@ -204,16 +204,18 @@ export function getAllAtContextReferences(text: string): ContextReferenceToken[]
 }
 
 /** Daintree's own `@` providers; each claims its prefix ahead of `@file`. */
-export type DaintreeAtClaim = "terminal" | "selection" | "diff";
+export type DaintreeAtClaim = "terminal" | "selection" | "notes" | "diff";
 
 /**
  * Which Daintree `@` provider (if any) claims a query, in priority order
- * terminal > selection > diff. `@file` fuzzy search is the fallback when no
- * provider claims. Mirrors the old per-parser prefix gates exactly.
+ * terminal > selection > notes > diff. `@file` fuzzy search is the fallback
+ * when no provider claims. `@notes` claims only while `notesOffered`: with
+ * nothing pending, the same letters are looking for a file.
  */
-export function getDaintreeAtClaim(query: string): DaintreeAtClaim | null {
+export function getDaintreeAtClaim(query: string, notesOffered = false): DaintreeAtClaim | null {
   if (matchesTerminalPrefix(query)) return "terminal";
   if (matchesSelectionPrefix(query)) return "selection";
+  if (notesOffered && matchesNotesPrefix(query)) return "notes";
   if (matchesDiffPrefix(query)) return "diff";
   return null;
 }
@@ -384,6 +386,99 @@ export function getAllAtSelectionTokens(text: string): AtSelectionToken[] {
   return outsideHandoffBlocks(text, tokens);
 }
 
+// --- @notes context ---
+
+const NOTES_FILE_PREFIX = "notes:";
+
+/**
+ * `@notes` claims from four chars in, same as `@terminal`, and its per-file
+ * form whatever follows the colon.
+ */
+export function matchesNotesPrefix(query: string): boolean {
+  if (query.startsWith(NOTES_FILE_PREFIX)) return true;
+  return query.length >= 4 && "notes".startsWith(query);
+}
+
+export interface AtNotesToken {
+  start: number;
+  end: number;
+  /** The worktree-relative file of the per-file form; `null` for every pending note. */
+  filePath: string | null;
+}
+
+// A file named with one of these at its end, or with a space or a quote
+// anywhere, has to be spelled quoted to read back whole.
+const NOTES_PATH_TRAILING_PUNCTUATION = /[.,;:!?)\]}'"]+$/;
+const NEEDS_QUOTED_NOTES_PATH = /\s|"|[.,;:!?)\]}']$/;
+
+export function formatAtNotesToken(filePath: string | null): string {
+  if (filePath === null) return "@notes";
+  if (!NEEDS_QUOTED_NOTES_PATH.test(filePath)) return `@${NOTES_FILE_PREFIX}${filePath}`;
+  return `@${NOTES_FILE_PREFIX}"${filePath.replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * `@notes`, and `@notes:src/a.ts` or `@notes:"src/my file.ts"` for one file's.
+ * The quoted form is what the whitespace-delimited readers above can't take: a
+ * path in a worktree can hold a space.
+ */
+export function getAllAtNotesTokens(text: string): AtNotesToken[] {
+  const tokens: AtNotesToken[] = [];
+  let i = 0;
+
+  while (i < text.length) {
+    if (text[i] !== "@") {
+      i++;
+      continue;
+    }
+
+    if (i > 0 && !/\s/.test(text[i - 1]!)) {
+      i++;
+      continue;
+    }
+
+    const atStart = i;
+    i++;
+
+    if (text.startsWith(`${NOTES_FILE_PREFIX}"`, i)) {
+      const pathStart = i + NOTES_FILE_PREFIX.length + 1;
+      let close = pathStart;
+      while (close < text.length && text[close] !== '"' && !/[\n\r]/.test(text[close]!)) {
+        close += text[close] === "\\" && text[close + 1] === '"' ? 2 : 1;
+      }
+      if (text[close] === '"') {
+        const filePath = text.slice(pathStart, close).replace(/\\"/g, '"');
+        if (filePath.length > 0) tokens.push({ start: atStart, end: close + 1, filePath });
+        i = close + 1;
+        continue;
+      }
+    }
+
+    const tokenStart = i;
+    while (i < text.length && !/\s/.test(text[i]!)) {
+      i++;
+    }
+
+    const token = text.slice(tokenStart, i);
+    if (token === "notes") {
+      tokens.push({ start: atStart, end: i, filePath: null });
+    } else if (token.startsWith(NOTES_FILE_PREFIX) && token[NOTES_FILE_PREFIX.length] !== '"') {
+      const filePath = token
+        .slice(NOTES_FILE_PREFIX.length)
+        .replace(NOTES_PATH_TRAILING_PUNCTUATION, "");
+      if (filePath.length > 0) {
+        tokens.push({
+          start: atStart,
+          end: tokenStart + NOTES_FILE_PREFIX.length + filePath.length,
+          filePath,
+        });
+      }
+    }
+  }
+
+  return outsideHandoffBlocks(text, tokens);
+}
+
 // --- @file token ---
 
 /**
@@ -397,6 +492,7 @@ export const RESERVED_AT_TOKEN_PATHS = new Set([
   "diff:head",
   "terminal",
   "selection",
+  "notes",
 ]);
 
 /**

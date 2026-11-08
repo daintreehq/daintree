@@ -1,4 +1,5 @@
 import type { ChangeData, HunkData } from "react-diff-view";
+import { join, normalize } from "@shared/utils/path";
 
 export type DiffNoteSide = "old" | "new";
 
@@ -194,6 +195,21 @@ export function formatDiffNotesPrompt(
     .join("\n\n");
 }
 
+/**
+ * Paths stay worktree-relative only for an agent sitting at that worktree's
+ * root. One in a subdirectory, or another checkout, would resolve them against
+ * the wrong base, so it gets them absolute.
+ */
+export function formatDiffNotesPromptForCwd(
+  notes: readonly DiffNote[],
+  cwd: string | undefined
+): string {
+  const base = cwd ? normalize(cwd) : "";
+  return formatDiffNotesPrompt(notes, (note) =>
+    base === normalize(note.worktreePath) ? note.filePath : join(note.worktreePath, note.filePath)
+  );
+}
+
 function anchorOrder(anchor: DiffNoteAnchor): number {
   return anchor.kind === "file" ? 0 : anchor.startLine;
 }
@@ -205,5 +221,45 @@ export function sortDiffNotes(notes: readonly DiffNote[]): DiffNote[] {
     const byLine = anchorOrder(a.anchor) - anchorOrder(b.anchor);
     if (byLine !== 0) return byLine;
     return a.createdAt - b.createdAt;
+  });
+}
+
+/** A worktree's pending notes as a send would treat them right now. */
+export interface PendingDiffNotes {
+  /** What a send takes, in the order it sends them. */
+  sendable: readonly DiffNote[];
+  /** Open in an editor: sending the old text and clearing it would throw the rewrite away. */
+  editing: readonly DiffNote[];
+}
+
+export function hasPendingDiffNotes(pending: PendingDiffNotes | null): boolean {
+  return pending !== null && pending.sendable.length + pending.editing.length > 0;
+}
+
+export function partitionPendingDiffNotes(
+  notes: readonly DiffNote[],
+  editingIds: Readonly<Record<string, number>>
+): PendingDiffNotes {
+  return {
+    sendable: sortDiffNotes(notes.filter((note) => !editingIds[note.id])),
+    editing: notes.filter((note) => editingIds[note.id]),
+  };
+}
+
+/**
+ * What each `@notes` token in a draft takes, in order. A note goes once however
+ * many tokens name it, so a later token only gets what is left.
+ */
+export function allocateDiffNotes(
+  tokens: readonly { filePath: string | null }[],
+  sendable: readonly DiffNote[]
+): DiffNote[][] {
+  const taken = new Set<string>();
+  return tokens.map(({ filePath }) => {
+    const notes = sendable.filter(
+      (note) => !taken.has(note.id) && (filePath === null || note.filePath === filePath)
+    );
+    for (const note of notes) taken.add(note.id);
+    return notes;
   });
 }

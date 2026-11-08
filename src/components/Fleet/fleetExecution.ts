@@ -31,6 +31,9 @@ import {
   listDraftContextTokens,
   shareContextReferenceResolutions,
 } from "@/components/Terminal/draftContextExpansion";
+import { isDiffNotesTarget } from "@/components/Terminal/diffNotesReference";
+import { clearDiffNotesOnceWritten } from "@/components/Terminal/diffNotesDelivery";
+import type { DiffNote } from "@/components/Worktree/diffNotes";
 
 export interface FleetTargetPreview {
   terminalId: string;
@@ -188,12 +191,17 @@ export function filterEligibleIds(ids: string[]): string[] {
  * never confirmed. An image path never goes there: the send is refused first.
  */
 function submitTarget(submission: ResolvedSubmission, retry: boolean): Promise<void> {
-  const { terminalId, payload, imagePaths } = submission;
+  const { terminalId, payload, imagePaths, sentNotes } = submission;
   if (isHostQualifiedTargetId(terminalId)) {
     if (imagePaths.length > 0) {
       return Promise.reject(new Error("An image can't reach an agent on another host"));
     }
     return submitCrossHostTarget(terminalId, payload, { retry });
+  }
+  if (sentNotes) {
+    return imagePaths.length > 0
+      ? terminalClient.submitWithImages(terminalId, payload, [...imagePaths], sentNotes.token)
+      : terminalClient.submit(terminalId, payload, sentNotes.token);
   }
   return imagePaths.length > 0
     ? terminalClient.submitWithImages(terminalId, payload, [...imagePaths])
@@ -225,6 +233,8 @@ interface ResolvedSubmission {
   authored: string;
   /** The draft's image chips this target's own text still names, in order. */
   imagePaths: readonly string[];
+  /** The pending notes its `@notes` took, and the token that says when they went. */
+  sentNotes?: { notes: readonly DiffNote[]; token: string };
 }
 
 function resolveSubmissions(
@@ -269,9 +279,9 @@ function imagesNamedBy(
 
 /**
  * Each agent here gets the context its own text names, from itself: `@diff`
- * from its own working directory, `@terminal` and `@selection` from its own
- * screen, as a send from its own composer would. Plugin context is asked for
- * once and handed to every agent alike.
+ * from its own working directory, `@notes` from its own worktree, `@terminal`
+ * and `@selection` from its own screen, as a send from its own composer would.
+ * Plugin context is asked for once and handed to every agent alike.
  */
 async function expandSubmissionContext(
   submissions: ResolvedSubmission[]
@@ -283,12 +293,16 @@ async function expandSubmissionContext(
       if (!carriesLocalContext(submission)) return submission;
       const panel = getNarrowPanel(panelsById, submission.terminalId);
       const cwd = panel && isPtyPanel(panel) ? panel.cwd : "";
+      const notes: DiffNote[] = [];
       const payload = await expandDraftContext(submission.payload, {
         terminalId: submission.terminalId,
         cwd,
         resolveReferences,
+        onDiffNotesTaken: (taken) => notes.push(...taken),
       });
-      return { ...submission, payload };
+      return notes.length > 0
+        ? { ...submission, payload, sentNotes: { notes, token: crypto.randomUUID() } }
+        : { ...submission, payload };
     })
   );
 }
@@ -307,6 +321,12 @@ function submitAndNote(submission: ResolvedSubmission, retry: boolean): Promise<
   const sentAt = Date.now();
   return submitTarget(submission, retry).then(() => {
     if (isHostQualifiedTargetId(submission.terminalId)) return;
+    // Only this target's own send answers for the notes it carried: a sibling
+    // failing, or the broadcast being cancelled after this went, changes nothing.
+    if (submission.sentNotes) {
+      const { token, notes } = submission.sentNotes;
+      clearDiffNotesOnceWritten(submission.terminalId, token, notes);
+    }
     useTerminalInputStore
       .getState()
       .recordSentPrompt(submission.terminalId, submission.authored, sentAt);
@@ -384,7 +404,10 @@ export async function executeFleetBroadcast(
   let resolved = resolveSubmissions(draft, targetIds, perTargetOverrides, options.imagePaths ?? []);
   // Checked right before each submit, so a target that stops being a recipient
   // while its context is read or between batches is skipped, never sent.
-  const canDispatch = (r: ResolvedSubmission) => isStillRecipient(r.terminalId);
+  // A pane whose agent quit while its context was read has a shell behind it,
+  // and a fleet keeps sending to shells: notes must not follow.
+  const canDispatch = (r: ResolvedSubmission) =>
+    isStillRecipient(r.terminalId) && (!r.sentNotes || isDiffNotesTarget(r.terminalId));
   const results: PromiseSettledResult<void>[] = [];
   // Parallel to `results`: what was actually sent, since a target that stops
   // being a recipient mid-broadcast drops out of its batch.

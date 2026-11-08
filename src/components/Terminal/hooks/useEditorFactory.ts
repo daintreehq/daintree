@@ -20,6 +20,8 @@ import {
   createFileDropChipTooltip,
   diffChipField,
   createDiffChipTooltip,
+  notesChipField,
+  createNotesChipTooltip,
   terminalChipField,
   createTerminalChipTooltip,
   selectionChipField,
@@ -78,6 +80,7 @@ interface UseEditorFactoryParams {
     terminalChipTooltipCompartmentRef: React.RefObject<Compartment>;
     selectionChipTooltipCompartmentRef: React.RefObject<Compartment>;
     contextChipTooltipCompartmentRef: React.RefObject<Compartment>;
+    notesChipTooltipCompartmentRef: React.RefObject<Compartment>;
     forgeReferenceTooltipCompartmentRef: React.RefObject<Compartment>;
     autoSizeCompartmentRef: React.RefObject<Compartment>;
     keymapCompartmentRef: React.RefObject<Compartment>;
@@ -150,6 +153,7 @@ export function useEditorFactory({
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
       contextChipTooltipCompartmentRef,
+      notesChipTooltipCompartmentRef,
       forgeReferenceTooltipCompartmentRef,
       autoSizeCompartmentRef,
       keymapCompartmentRef,
@@ -191,6 +195,8 @@ export function useEditorFactory({
         contextChipTooltipCompartmentRef.current.of(
           !disabled ? createContextReferenceChipTooltip() : []
         ),
+        notesChipField,
+        notesChipTooltipCompartmentRef.current.of(!disabled ? createNotesChipTooltip() : []),
         forgeReferenceField,
         forgeReferenceTooltipCompartmentRef.current.of(
           !disabled ? createForgeReferenceTooltip() : []
