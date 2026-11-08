@@ -3424,6 +3424,16 @@ export class WorkspaceService {
    * than trusting this field.
    */
   private async inventorySubmoduleRisk(worktreePath: string): Promise<SubmoduleDeleteRisk> {
+    const incomplete: SubmoduleDeleteRisk = {
+      entries: [],
+      dirtyFiles: [],
+      untrackedFiles: [],
+      atRiskCommits: [],
+      requiresMechanicalForce: false,
+      incomplete: true,
+    };
+    // The inventory runs its own `git status`, in the parent and in every module.
+    if (this.statusDownloadGate !== "open") return incomplete;
     try {
       return await withTimeout(
         buildSubmoduleDeleteRisk(worktreePath, { signal: this._shutdownController.signal }),
@@ -3434,14 +3444,7 @@ export class WorkspaceService {
       logWarn(
         `[WorkspaceHost] submodule delete risk inventory failed for ${worktreePath}: ${formatErrorMessage(error, "unknown failure")}`
       );
-      return {
-        entries: [],
-        dirtyFiles: [],
-        untrackedFiles: [],
-        atRiskCommits: [],
-        requiresMechanicalForce: false,
-        incomplete: true,
-      };
+      return incomplete;
     }
   }
 

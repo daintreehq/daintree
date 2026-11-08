@@ -847,6 +847,31 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     );
   }
 
+  // A load that failed on `.git` placeholders retries itself once they're down,
+  // so neither its Retry nor the nudge to open a repository is the next step.
+  if (worktrees.length === 0 && gitWaitsForDownload) {
+    return (
+      <>
+        <div className="flex flex-col h-full">
+          <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
+            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
+              Worktrees
+            </SidebarViewHeading>
+          </div>
+          {errorBanner}
+          <EmptyState
+            variant="zero-data"
+            scale="sidebar"
+            icon={<CloudDownload />}
+            title={WAITING_FOR_DOWNLOAD_LABEL}
+            className="flex-1"
+          />
+        </div>
+        {restartConfirmDialog}
+      </>
+    );
+  }
+
   if (showSkeleton && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
@@ -909,31 +934,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           <SkeletonHint className="absolute bottom-4 inset-x-4 flex justify-center pointer-events-auto" />
         </div>
       </div>
-    );
-  }
-
-  // A load that failed on `.git` placeholders retries itself once they're down,
-  // so neither its Retry nor the nudge to open a repository is the next step.
-  if (worktrees.length === 0 && gitWaitsForDownload) {
-    return (
-      <>
-        <div className="flex flex-col h-full">
-          <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
-            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
-              Worktrees
-            </SidebarViewHeading>
-          </div>
-          {errorBanner}
-          <EmptyState
-            variant="zero-data"
-            scale="sidebar"
-            icon={<CloudDownload />}
-            title={WAITING_FOR_DOWNLOAD_LABEL}
-            className="flex-1"
-          />
-        </div>
-        {restartConfirmDialog}
-      </>
     );
   }
 

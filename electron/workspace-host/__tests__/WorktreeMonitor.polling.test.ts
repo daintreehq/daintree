@@ -2710,21 +2710,66 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
-    it("clears a tripped circuit breaker on release", async () => {
+    it("clears a tripped circuit breaker on release, so polling carries on", async () => {
+      const actual = await vi.importActual<
+        typeof import("../../services/worktree/AdaptivePollingStrategy.js")
+      >("../../services/worktree/AdaptivePollingStrategy.js");
+      const { AdaptivePollingStrategy } = await import("../../services/worktree/index.js");
+      vi.mocked(AdaptivePollingStrategy).mockImplementationOnce(function (
+        config?: ConstructorParameters<typeof actual.AdaptivePollingStrategy>[0]
+      ) {
+        return new actual.AdaptivePollingStrategy(config);
+      } as never);
+
       const { monitor } = startedMonitor();
       const strategy = (
         monitor as unknown as {
-          pollingStrategy: { isCircuitBreakerTripped(): boolean; reset(): void };
+          pollingStrategy: InstanceType<typeof actual.AdaptivePollingStrategy>;
         }
       ).pollingStrategy;
       monitor.setStatusDownloadGate("held");
       monitor.startWithoutGitStatus();
-      vi.spyOn(strategy, "isCircuitBreakerTripped").mockReturnValueOnce(true);
-      const reset = vi.spyOn(strategy, "reset");
+      for (let i = 0; i < TEST_CONFIG.circuitBreakerThreshold; i++) strategy.recordFailure(1, 0);
+      expect(strategy.isCircuitBreakerTripped()).toBe(true);
 
       monitor.setStatusDownloadGate("open");
+      expect(strategy.isCircuitBreakerTripped()).toBe(false);
 
-      expect(reset).toHaveBeenCalledTimes(1);
+      // The catch-up lands, and the timed poll runs after it rather than the
+      // tripped path, which only probes the folder.
+      await vi.advanceTimersByTimeAsync(0);
+      const afterRelease = mockGetWorktreeChangesWithStats.mock.calls.length;
+      expect(afterRelease).toBeGreaterThan(0);
+      monitor.triggerRefreshIfUpdating();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockGetWorktreeChangesWithStats.mock.calls.length).toBeGreaterThan(afterRelease);
+      monitor.stop();
+    });
+
+    it("doesn't let a pass stopped by the gate mark a newer status unanswered", async () => {
+      const { monitor } = startedMonitor();
+      (monitor as unknown as { _isRunning: boolean })._isRunning = true;
+      vi.spyOn(
+        monitor as unknown as { scheduleNextPoll: () => void },
+        "scheduleNextPoll"
+      ).mockImplementation(() => {});
+      // Stays blocked through its abort, as a read of a placeholder does.
+      mockGetWorktreeChangesWithStats.mockReset().mockReturnValueOnce(new Promise(() => {}));
+      const stopped = monitor.updateGitStatus(true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      monitor.setStatusDownloadGate("held");
+      mockGetWorktreeChangesWithStats.mockResolvedValue(changes("newer"));
+      monitor.setStatusDownloadGate("open");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(monitor.getSnapshot().worktreeChanges?.lastCommitMessage).toBe("newer");
+
+      // Past the old pass's watchdog, with no rejection to catch either.
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      await expect(stopped).resolves.toBe("skipped");
+      expect(monitor.getSnapshot().gitStatusUnanswered).toBeUndefined();
+      expect(monitor.getSnapshot().worktreeChanges?.lastCommitMessage).toBe("newer");
       monitor.stop();
     });
 
@@ -2745,20 +2790,49 @@ describe("WorktreeMonitor", () => {
     });
 
     it("starts nothing for a monitor that has already stopped", async () => {
-      const { monitor } = startedMonitor();
+      const { monitor, callbacks } = startedMonitor();
       monitor.setStatusDownloadGate("held");
+      monitor.startWithoutGitStatus();
+      monitor.stop();
+      vi.mocked(callbacks.onUpdate).mockClear();
+
       monitor.setStatusDownloadGate("open");
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(10_000);
 
       expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+      expect(callbacks.onUpdate).not.toHaveBeenCalled();
     });
 
-    it("refuses a fresh read while held, so a delete preview fails closed", async () => {
+    it.each(["held", "pending"] as const)(
+      "refuses a fresh read while %s, so a delete preview fails closed",
+      async (gate) => {
+        const { monitor } = startedMonitor();
+        monitor.setStatusDownloadGate(gate);
+
+        await expect(monitor.getFreshChanges()).rejects.toThrow("waiting for downloads");
+        expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+      }
+    );
+
+    it("stops a fresh read already running when the gate closes", async () => {
       const { monitor } = startedMonitor();
+      mockGetWorktreeChangesWithStats.mockReset().mockImplementation(
+        (_path: string, options: { abandonSignal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            options.abandonSignal?.addEventListener("abort", () => reject(new Error("killed")));
+          })
+      );
+      const read = monitor.getFreshChanges();
+
       monitor.setStatusDownloadGate("held");
 
-      await expect(monitor.getFreshChanges()).rejects.toThrow("waiting for downloads");
-      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+      await expect(read).rejects.toThrow("killed");
+    });
+
+    it("forgets a finished fresh read, so closing the gate later aborts nothing", async () => {
+      const { monitor } = startedMonitor();
+      await monitor.getFreshChanges();
+      expect((monitor as unknown as { passAbandons: Set<unknown> }).passAbandons.size).toBe(0);
     });
   });
 });

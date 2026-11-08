@@ -1707,6 +1707,20 @@ describe("WorkspaceService.deleteWorktree", () => {
       expect(risk?.incomplete).toBe(false);
     });
 
+    it.each(["held", "pending"] as const)(
+      "runs no inventory while the download gate is %s, and fails closed",
+      async (gate) => {
+        createAndRegisterMonitor();
+        service.setStatusDownloadGate(gate);
+
+        await expect(service.getSubmoduleDeleteRisk("/test/worktree")).resolves.toMatchObject({
+          incomplete: true,
+          requiresMechanicalForce: false,
+        });
+        expect(submoduleInventoryMocks.buildSubmoduleDeleteRisk).not.toHaveBeenCalled();
+      }
+    );
+
     it("surfaces a watchdog expiry as incomplete rather than rejecting", async () => {
       // A rejection here would reach the delete gate as "no risk data", which a
       // D2 preview renders as "nothing at stake". `incomplete` is the vocabulary

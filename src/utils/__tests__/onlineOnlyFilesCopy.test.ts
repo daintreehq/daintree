@@ -26,9 +26,17 @@ describe("getOnlineOnlyFilesCopy", () => {
   });
 
   it("reports .git alone", () => {
-    expect(describeOf(side(1), side(0))).toContain(
-      "Dropbox hasn't downloaded 1 file in .git yet. Git status is waiting for them."
+    expect(describeOf(side(3), side(0))).toContain(
+      "Dropbox hasn't downloaded 3 files in .git yet. Git status is waiting for them."
     );
+  });
+
+  it("says it for a single outstanding entry", () => {
+    expect(describeOf(side(1), side(0))).toContain(
+      "Dropbox hasn't downloaded 1 file in .git yet. Git status is waiting for it."
+    );
+    expect(describeOf(side(0, 1), null)).toContain("Git status is waiting for it.");
+    expect(describeOf(side(1), side(1))).toContain("Git status is waiting for them.");
   });
 
   it("never claims git status is waiting when only project files are outstanding", () => {

@@ -606,6 +606,83 @@ describe("ProjectOnlineOnlyService", () => {
       expect(view.closeListeners.size).toBe(0);
     });
   });
+  describe("a find that won't die", () => {
+    it("stops standing behind the last count, so a hold can't outlive the files", async () => {
+      const view = fakeEndpoint();
+      service.watch(project(), view.endpoint);
+      await tick();
+      scanner.pass<OnlineOnlyRootShape>("probe").answer("git-directory");
+      await tick();
+      scanner.pass<OnlineOnlyFilesSide>("workingTree").answer(side(0));
+      await tick();
+      scanner.pass<OnlineOnlyFilesSide>("git").answerButStayAlive(side(479));
+      await tick();
+      expect(view.pushes.at(-1)?.git).toEqual(side(479));
+
+      // The next walk is due at 5s and can't start beside the stuck child.
+      await vi.advanceTimersByTimeAsync(34_000);
+      expect(view.pushes.at(-1)?.git).toEqual(side(479));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(view.pushes.at(-1)?.git).toEqual(side(0, 0, false));
+    });
+
+    it("looks again, with real counts, once the child finally goes", async () => {
+      const view = fakeEndpoint();
+      service.watch(project(), view.endpoint);
+      await tick();
+      scanner.pass<OnlineOnlyRootShape>("probe").answer("git-directory");
+      await tick();
+      scanner.pass<OnlineOnlyFilesSide>("workingTree").answer(side(0));
+      await tick();
+      const stuck = scanner.pass<OnlineOnlyFilesSide>("git");
+      stuck.answerButStayAlive(side(479));
+      await vi.advanceTimersByTimeAsync(40_000);
+      const probes = scanner.count("probe");
+
+      stuck.exit();
+      await tick();
+      expect(scanner.count("probe")).toBe(probes + 1);
+      scanner.pass<OnlineOnlyRootShape>("probe").answer("git-directory");
+      await tick();
+      scanner.pass<OnlineOnlyFilesSide>("git").answer(side(3));
+      await tick();
+
+      expect(view.pushes.at(-1)?.git).toEqual(side(3));
+    });
+
+    it("answers a re-watched project's first walk, so nothing waits on it for good", async () => {
+      scanner.cancelLeavesChildAlive = true;
+      const first = fakeEndpoint("first");
+      service.watch(project(), first.endpoint);
+      await tick();
+      service.release(first.endpoint);
+      await tick();
+
+      const second = fakeEndpoint("second");
+      expect(service.watch(project(), second.endpoint).git).toBeNull();
+      await vi.advanceTimersByTimeAsync(31_000);
+
+      expect(second.pushes.at(-1)?.git).toEqual(side(0, 0, false));
+    });
+
+    it("says nothing for a project stopped while its child was stuck", async () => {
+      scanner.cancelLeavesChildAlive = true;
+      const first = fakeEndpoint("first");
+      service.watch(project(), first.endpoint);
+      await tick();
+      service.release(first.endpoint);
+      await tick();
+      const second = fakeEndpoint("second");
+      service.watch(project(), second.endpoint);
+      await tick();
+      service.release(second.endpoint);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(second.pushes).toEqual([]);
+    });
+  });
+
   describe("observe", () => {
     it("shares a view's walk rather than starting a second", async () => {
       const view = fakeEndpoint();

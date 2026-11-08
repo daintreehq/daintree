@@ -2082,8 +2082,13 @@ describe("WorkspaceHostProcess status download gate", () => {
   });
 
   async function createHost() {
-    const { WorkspaceHostProcess } = await loadModule();
-    return new WorkspaceHostProcess("/test/project", { maxRestartAttempts: 3 });
+    const { WorkspaceHostProcess } = await import("../WorkspaceHostProcess.js");
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+    return host;
   }
 
   it("sends nothing for a gate that's always been open", async () => {

@@ -27,6 +27,8 @@ const SETTLED_REST_MS = 60_000;
 // A walk rests four times as long as it took, so a slow tree spends at most a fifth of its time walking.
 const REST_PER_WALK_MS = 4;
 const NOBODY_LOOKING_FACTOR = 5;
+// Past every walk's budget, so only a find the kernel won't let die gets here.
+const STUCK_CHILD_REPORT_MS = 30_000;
 
 const SIDES: readonly OnlineOnlyScanSide[] = ["git", "workingTree"];
 
@@ -274,6 +276,10 @@ export class ProjectOnlineOnlyService {
    * walk slot frees at the pass's budget while its side waits for the child to
    * really exit. A stuck find then costs its own side, with no pile-up, and
    * never another project.
+   *
+   * That side can't look again until the child goes, so its last report stops
+   * being something to stand behind: a hold on git status and a notice both rest
+   * on it, and neither may outlive the files. It says it can't tell instead.
    */
   private async runPass<T>(
     project: WatchedProject,
@@ -281,7 +287,16 @@ export class ProjectOnlineOnlyService {
     start: () => OnlineOnlyPass<T>
   ): Promise<T | null> {
     const childKey = `${side}\0${project.root}`;
-    await this.childGone.get(childKey);
+    const previousChild = this.childGone.get(childKey);
+    if (previousChild) {
+      const stuck = setTimeout(() => {
+        if (!project.stopped)
+          this.record(project, side, { files: 0, directories: 0, complete: false });
+      }, STUCK_CHILD_REPORT_MS);
+      stuck.unref?.();
+      await previousChild;
+      clearTimeout(stuck);
+    }
     if (project.stopped) return null;
     const slot = this.walkSlots[side];
     await this.takeWalkSlot(slot);

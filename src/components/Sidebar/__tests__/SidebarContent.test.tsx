@@ -861,7 +861,8 @@ describe("SidebarContent disconnected project — issue #12576", () => {
 
   it("says it's waiting, without Retry or the nudge, when .git hasn't downloaded", () => {
     const start = source.indexOf("if (worktrees.length === 0 && gitWaitsForDownload) {");
-    const end = source.indexOf("if (worktrees.length === 0) {");
+    // Ahead of the skeleton too, which would otherwise hide what's already known.
+    const end = source.indexOf("if (showSkeleton && worktrees.length === 0)");
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     const branch = source.slice(start, end);

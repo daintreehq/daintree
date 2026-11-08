@@ -10,6 +10,29 @@ vi.mock("@/lib/notify", () => ({ notify }));
 const dispatch = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
+const lifecycle = vi.hoisted(() => {
+  const listeners = new Set<(phase: string) => void>();
+  return {
+    cached: false,
+    listeners,
+    emit: (phase: string) => listeners.forEach((listener) => listener(phase)),
+  };
+});
+vi.mock("@/lib/viewCacheState", () => ({
+  isProjectViewCached: () => lifecycle.cached,
+  subscribeProjectViewLifecycle: (listener: (phase: string) => void) => {
+    lifecycle.listeners.add(listener);
+    return () => lifecycle.listeners.delete(listener);
+  },
+}));
+
+const viewStore = vi.hoisted(() => ({
+  current: null as { getState: () => { isInitialized: boolean } } | null,
+}));
+vi.mock("@/store/createWorktreeStore", () => ({
+  getCurrentViewStoreOrNull: () => viewStore.current,
+}));
+
 const viewWorkspaceId = vi.hoisted(() => ({ current: "p1" as string | null }));
 vi.mock("@/store/viewWorkspaceId", () => ({ getViewWorkspaceId: () => viewWorkspaceId.current }));
 
@@ -54,6 +77,9 @@ describe("useOnlineOnlyFilesSync", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     viewWorkspaceId.current = "p1";
+    lifecycle.cached = false;
+    lifecycle.listeners.clear();
+    viewStore.current = null;
     store().reset();
     useProjectStore.setState({
       projects: [
@@ -61,6 +87,7 @@ describe("useOnlineOnlyFilesSync", () => {
         { id: "p2", path: "/cloud/p2" },
       ] as never,
       currentProject: null,
+      worktreeLoadError: null,
     });
   });
 
@@ -195,13 +222,23 @@ describe("useOnlineOnlyFilesSync", () => {
     expect(api.unwatch).not.toHaveBeenCalled();
   });
 
-  it("ends a Strict Mode double-mount still watching, with the one subscription", async () => {
+  it("ends a Strict Mode double-mount still holding, with the one subscription", async () => {
     const api = installApi();
+    // What the endpoint is left with depends on the order these reach Main.
+    let holding = false;
+    api.watch.mockImplementation(async () => {
+      holding = true;
+      return snapshot();
+    });
+    api.unwatch.mockImplementation(async () => {
+      holding = false;
+    });
     renderHook(() => useOnlineOnlyFilesSync(), { wrapper: StrictMode });
     await waitFor(() => expect(store().phase).toBe("answered"));
 
+    expect(api.unwatch).toHaveBeenCalled();
+    expect(holding).toBe(true);
     expect(api.listeners.size).toBe(1);
-    expect(api.watch.mock.calls.length).toBe(api.unwatch.mock.calls.length + 1);
   });
 
   describe("inbox", () => {
@@ -232,10 +269,19 @@ describe("useOnlineOnlyFilesSync", () => {
   });
 
   describe("a load that failed on placeholders", () => {
-    it("tries the load again once .git has downloaded, with no user action", async () => {
+    const failLoad = (message: string | null = "Couldn't load worktrees") =>
+      act(() => useProjectStore.setState({ worktreeLoadError: message }));
+
+    async function waitingOnGit() {
       const api = installApi(outstanding(1));
       renderHook(() => useOnlineOnlyFilesSync());
       await waitFor(() => expect(store().files?.git?.files).toBe(3));
+      return api;
+    }
+
+    it("tries the load again once .git has downloaded, with no user action", async () => {
+      const api = await waitingOnGit();
+      failLoad();
       expect(dispatch).not.toHaveBeenCalled();
 
       api.push(outstanding(2, 1));
@@ -246,6 +292,54 @@ describe("useOnlineOnlyFilesSync", () => {
       expect(dispatch).toHaveBeenCalledTimes(1);
     });
 
+    it("still retries when the download finishes before the failure arrives", async () => {
+      const api = await waitingOnGit();
+      api.push(snapshot({ revision: 2 }));
+      expect(dispatch).not.toHaveBeenCalled();
+
+      failLoad();
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits until a cached view is on screen, or it would take the window's host", async () => {
+      const api = await waitingOnGit();
+      failLoad();
+      lifecycle.cached = true;
+
+      api.push(snapshot({ revision: 2 }));
+      expect(dispatch).not.toHaveBeenCalled();
+
+      lifecycle.cached = false;
+      act(() => lifecycle.emit("active"));
+      expect(dispatch).not.toHaveBeenCalled();
+
+      act(() => lifecycle.emit("revealed"));
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries only once, leaving a second failure to the banner's Retry", async () => {
+      const api = await waitingOnGit();
+      failLoad();
+      api.push(snapshot({ revision: 2 }));
+      expect(dispatch).toHaveBeenCalledTimes(1);
+
+      failLoad(null);
+      failLoad("Still no good");
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("owes nothing once the load has come good", async () => {
+      const api = await waitingOnGit();
+      viewStore.current = { getState: () => ({ isInitialized: true }) };
+      api.push(snapshot({ revision: 2 }));
+
+      failLoad();
+
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
     it("doesn't retry for a project that was never waiting", async () => {
       const api = installApi(snapshot());
       renderHook(() => useOnlineOnlyFilesSync());
@@ -253,13 +347,13 @@ describe("useOnlineOnlyFilesSync", () => {
 
       api.push(snapshot({ revision: 2, workingTree: { ...zero, files: 2 } }));
       api.push(snapshot({ revision: 3 }));
+      failLoad();
       expect(dispatch).not.toHaveBeenCalled();
     });
 
-    it("doesn't retry when the project closes mid-wait", async () => {
-      installApi(outstanding(1));
-      renderHook(() => useOnlineOnlyFilesSync());
-      await waitFor(() => expect(store().files?.git?.files).toBe(3));
+    it("doesn't read a project closing mid-wait as the download finishing", async () => {
+      await waitingOnGit();
+      failLoad();
 
       act(() =>
         useProjectStore.setState({
@@ -268,6 +362,20 @@ describe("useOnlineOnlyFilesSync", () => {
       );
 
       expect(store().files).toBeNull();
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("stops listening when the hook goes", async () => {
+      installApi(outstanding(1));
+      const { unmount } = renderHook(() => useOnlineOnlyFilesSync());
+      await waitFor(() => expect(store().files?.git?.files).toBe(3));
+
+      unmount();
+      act(() => {
+        store().answer(snapshot({ revision: 9 }));
+      });
+      failLoad();
+
       expect(dispatch).not.toHaveBeenCalled();
     });
   });

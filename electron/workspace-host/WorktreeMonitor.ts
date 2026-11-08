@@ -236,8 +236,8 @@ export class WorktreeMonitor {
   // earliest an automatic pass may start again. Both clear on an answer.
   private _gitStatusUnanswered: GitStatusUnanswered | null = null;
   private statusDownloadGate: StatusDownloadGate = "open";
-  // One per running updateGitStatus call, so closing the gate can stop the git
-  // of whichever one holds the pass.
+  // One per running status read, so closing the gate can stop the git of
+  // whichever one holds the pass, and of any fresh read beside it.
   private readonly passAbandons = new Set<AbortController>();
   private statusUnansweredStreak = 0;
   private statusRetryNotBefore = 0;
@@ -2175,14 +2175,17 @@ export class WorktreeMonitor {
    * closed.
    */
   getFreshChanges(): Promise<WorktreeChanges> {
-    if (this.statusDownloadGate === "held") {
+    if (this.statusDownloadGate !== "open") {
       return Promise.reject(new Error(`Git status is waiting for downloads: ${this.path}`));
     }
+    const abandon = new AbortController();
+    this.passAbandons.add(abandon);
     return getWorktreeChangesWithStats(this.path, {
       forceRefresh: true,
       wsl: this.wslInvocation,
       signal: this._pollAbortController.signal,
-    });
+      abandonSignal: abandon.signal,
+    }).finally(() => this.passAbandons.delete(abandon));
   }
 
   triggerRefreshIfUpdating(): void {
@@ -2561,12 +2564,12 @@ export class WorktreeMonitor {
       this.passAbandons.delete(abandon);
     }
     if (result === "expired") {
+      // Stopped on purpose when the gate closed, so nothing went unanswered, and
+      // a newer pass may have answered since. Nothing here is this pass's to mark.
+      if (abandon.signal.aborted) return "skipped";
       abandon.abort();
       // A stop already dropped the pass, and a restart's card isn't its to mark.
-      // A closed gate dropped it too, and says why the read never answered.
-      if (!lifecycle.aborted && this.statusDownloadGate === "open") {
-        this.handleStatusPassExpired();
-      }
+      if (!lifecycle.aborted) this.handleStatusPassExpired();
       throw new TimeoutError(`status pass watchdog: ${this.path}`);
     }
     return result;

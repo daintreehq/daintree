@@ -25,7 +25,7 @@ export interface OnlineOnlyFilesCopy {
 
 function providerControlSentence(service: CloudSyncService, isRemote: boolean): string {
   const where = isRemote ? "Finder on the host" : "Finder";
-  return `To download them now, right-click the project folder in ${where} and choose "${PROVIDER_DOWNLOAD_CONTROL[service]}".`;
+  return `To download everything now, right-click the project folder in ${where} and choose "${PROVIDER_DOWNLOAD_CONTROL[service]}".`;
 }
 
 /** "479 files and 3 folders", with "at least" when the walk couldn't see everything. */
@@ -63,7 +63,13 @@ export function getOnlineOnlyFilesCopy(
   ].filter((part) => part !== null);
   if (seen.length === 0) return null;
 
-  const waiting = gitStatusWaitsForDownload(files) ? " Git status is waiting for them." : "";
+  const total = [git, workingTree].reduce(
+    (sum, side) => sum + (side ? side.files + side.directories : 0),
+    0
+  );
+  const waiting = gitStatusWaitsForDownload(files)
+    ? ` Git status is waiting for ${total === 1 ? "it" : "them"}.`
+    : "";
   // Each side can already hold an "and", so a second one would blur where they split.
   const joined = seen.join(seen.some((part) => part.includes(" and ")) ? ", and " : " and ");
   return {

@@ -461,6 +461,39 @@ describe("GlobalBannerCoordinator", () => {
       expect(screen.queryByText(cloudSyncTitle)).toBeNull();
     });
 
+    it("takes the slot for project files alone, and for folders alone", () => {
+      report(0, 5);
+      const { unmount } = render(<GlobalBannerCoordinator />);
+      expect(screen.getByText(onlineOnlyTitle)).toBeTruthy();
+      expect(screen.queryByText(cloudSyncTitle)).toBeNull();
+      unmount();
+
+      useOnlineOnlyFilesStore.setState({
+        files: {
+          projectId: "p1",
+          service: "Dropbox",
+          revision: 2,
+          git: counts(0),
+          workingTree: { files: 0, directories: 2, complete: true },
+        },
+      });
+      render(<GlobalBannerCoordinator />);
+      expect(screen.getByText(onlineOnlyTitle)).toBeTruthy();
+    });
+
+    it("clears project files by itself too, and keeps a dismissal until then", () => {
+      report(0, 5);
+      render(<GlobalBannerCoordinator />);
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss online-only files notice" }));
+      expect(screen.queryByText(cloudSyncTitle)).toBeNull();
+
+      act(() => report(0, 0, 2));
+      expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
+
+      act(() => report(0, 3, 3));
+      expect(screen.getByText(onlineOnlyTitle)).toBeTruthy();
+    });
+
     it("shows even after the cloud warning was turned off for the project", () => {
       useCloudSyncBannerStore.setState({ service: null, projectId: null });
       report(5, 0);

@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
 import { notify } from "@/lib/notify";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { actionService } from "@/services/ActionService";
+import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { onHostResync } from "@/store/hostResyncSignal";
 import { selectOnlineOnlyOutstanding, useOnlineOnlyFilesStore } from "@/store/onlineOnlyFilesStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -28,12 +30,59 @@ function selectWatchedWorkspaceId(state: {
 }
 
 /**
+ * A load that failed on `.git` placeholders has no monitor left to resume, and the
+ * promise is that nobody has to reopen the project. So the retry stays owed from
+ * the first sign of a wait until it runs, because the download can finish before
+ * the failure arrives, and until this view is on screen, because a retry loads
+ * the project into the sender's window and a cached view would take that window
+ * from the project it is showing.
+ */
+function retryFailedLoadOnceDownloaded(): () => void {
+  let owed = false;
+
+  const settle = () => {
+    if (!owed) return;
+    if (gitStatusWaitsForDownload(useOnlineOnlyFilesStore.getState().files)) return;
+    if (useProjectStore.getState().worktreeLoadError === null) {
+      // The load came good, so there's nothing left to owe.
+      if (getCurrentViewStoreOrNull()?.getState().isInitialized) owed = false;
+      return;
+    }
+    if (isProjectViewCached()) return;
+    owed = false;
+    void actionService.dispatch("worktree.retryProjectLoad");
+  };
+
+  const offFiles = useOnlineOnlyFilesStore.subscribe((state) => {
+    if (gitStatusWaitsForDownload(state.files)) owed = true;
+    settle();
+  });
+  const offProject = useProjectStore.subscribe(settle);
+  const offLifecycle = subscribeProjectViewLifecycle((phase) => {
+    if (phase === "revealed") settle();
+  });
+
+  return () => {
+    offFiles();
+    offProject();
+    offLifecycle();
+  };
+}
+
+/**
  * Holds this view's project under watch and keeps the store current. Main decides
  * whether any of this applies, so a project it doesn't apply to costs one `watch`
  * answering null.
  */
 export function useOnlineOnlyFilesSync(): void {
   const projectId = useProjectStore(selectWatchedWorkspaceId);
+
+  // Ahead of the watch below so its cleanup runs first: dropping the counts on
+  // the way out mustn't read as `.git` having finished downloading.
+  useEffect(() => {
+    if (projectId === null) return;
+    return retryFailedLoadOnceDownloaded();
+  }, [projectId]);
 
   useEffect(() => {
     const store = useOnlineOnlyFilesStore.getState();
@@ -96,15 +145,4 @@ export function useOnlineOnlyFilesSync(): void {
       context: { eventKind: "host" },
     });
   }, [outstanding, service, projectId]);
-
-  // A load that failed on `.git` placeholders has no monitor left to resume, and
-  // the promise is that nobody has to reopen the project.
-  const gitWaits = useOnlineOnlyFilesStore((s) => gitStatusWaitsForDownload(s.files));
-  const gitWaited = useRef(false);
-  useEffect(() => {
-    const released = gitWaited.current && !gitWaits;
-    gitWaited.current = gitWaits;
-    // Disabled unless a load really did fail, so this is a no-op otherwise.
-    if (released && projectId !== null) void actionService.dispatch("worktree.retryProjectLoad");
-  }, [gitWaits, projectId]);
 }
