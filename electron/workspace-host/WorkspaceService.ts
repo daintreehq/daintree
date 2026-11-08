@@ -633,6 +633,11 @@ export class WorkspaceService {
   // Replaced by every reprobe that finds the config moved, so a read the slot
   // no longer holds is stale and must not be applied.
   private forgeRemoteRead: ForgeRemoteRead | null = null;
+  // The main worktree as this host's own load listed it — never taken from a
+  // monitor, which may belong to a project being switched away from. Reads
+  // prefer it to the project root, which can be a linked worktree that is
+  // later removed.
+  private forgeMainWorktreePath: string | null = null;
   // The project's selected forge remote *name* (#11408). Kept on the service
   // (not just handed to `pullRequestService`) because `readForgeRemotes` needs
   // it to pick the same remote the toolbar routes through — otherwise the
@@ -1305,6 +1310,7 @@ export class WorkspaceService {
       const rawWorktrees = await this.listService.list();
       const worktrees = await this.listService.mapToWorktrees(rawWorktrees);
       this.statusTiming.markEnumerated();
+      this.forgeMainWorktreePath = worktrees.find((wt) => wt.isMainWorktree)?.path ?? null;
 
       // Before the sync, so the holders it reconciles against are this
       // project's and every monitor it creates starts with its attachments.
@@ -2762,15 +2768,19 @@ export class WorkspaceService {
   }
 
   /**
-   * The shared remote table, starting a read only when none is held. Every
-   * read of it runs at the project root, never a monitor's path: an install
-   * that straddled a project switch can leave the old project's monitor
-   * running, and a read from its path would hand that repo's remotes to every
-   * incoming monitor.
+   * Where remote reads run: never a monitor's path. An install that straddled
+   * a project switch can leave the old project's monitor running, and a read
+   * from its path would hand that repo's remotes to every incoming monitor.
    */
+  private forgeRemoteCwd(): string | null {
+    if (!this.projectRootPath) return null;
+    return this.forgeMainWorktreePath ?? this.projectRootPath;
+  }
+
+  /** The shared remote table, starting a read only when none is held. */
   private sharedForgeRemoteRead(): ForgeRemoteRead | null {
     if (this.forgeRemoteRead) return this.forgeRemoteRead;
-    const cwd = this.projectRootPath;
+    const cwd = this.forgeRemoteCwd();
     if (!cwd) return null;
     return this.beginForgeRemoteRead(() => this.readForgeRemotes(cwd));
   }
@@ -2867,8 +2877,7 @@ export class WorkspaceService {
   }
 
   private async runForgeRemoteReprobe(): Promise<void> {
-    // The project root, like the fingerprint below: see `sharedForgeRemoteRead`.
-    const cwd = this.projectRootPath;
+    const cwd = this.forgeRemoteCwd();
     if (!cwd) return;
     const seq = ++this.forgeRemoteProbeSeq;
 
@@ -3025,6 +3034,7 @@ export class WorkspaceService {
     this.forgeRemoteSignature = null;
     this.forgeConfigFingerprint = null;
     this.forgeRemoteRead = null;
+    this.forgeMainWorktreePath = null;
     // Ends an in-flight reselect outright: its bounded retry would otherwise
     // re-arm against whatever project loads next.
     this.forgeReselectSeq++;
@@ -6128,7 +6138,7 @@ export class WorkspaceService {
    */
   private scheduleForgeReselect(): void {
     // A folder with no repository has no remotes to reselect from, and the
-    // shared read runs at the project root — so without this the matcher relay would spawn `git remote -v` there and, on its bounded
+    // shared read falls back to the project root — so without this the matcher relay would spawn `git remote -v` there and, on its bounded
     // re-arm, up to three more times per registry change (#11405 × #11408).
     // Left at `=== false` where the monitor-minting guards moved to `!== true`:
     // a matcher push reaching a host whose probe failed can still spawn one

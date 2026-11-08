@@ -891,6 +891,28 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       ]);
     });
 
+    it("reads at the listed main worktree once the load knows it", async () => {
+      // The project root may be a linked worktree that is later removed; the
+      // main worktree outlives it.
+      const { createHardenedGit } = await import("../../utils/hardenedGit.js");
+      service["forgeMainWorktreePath"] = "/test/main";
+      registerMonitor("/old/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      vi.mocked(createHardenedGit).mockClear();
+
+      await fireConfigChange();
+      service["forgeRemoteRead"] = null;
+      await runStartProbe(registerMonitor("/test/late"));
+
+      expect(vi.mocked(createHardenedGit).mock.calls.map((call) => call[0])).toEqual([
+        "/test/main",
+        "/test/main",
+      ]);
+      service["stopForgeRemoteDetection"]();
+      expect(service["forgeMainWorktreePath"]).toBeNull();
+    });
+
     it("a start read in flight across a project switch leaves no table behind", async () => {
       const main = registerMonitor("/test/main", { isMainWorktree: true });
       const releaseStart = holdNextRead();
