@@ -446,6 +446,8 @@ export class CliAvailabilityService {
     };
 
     const command = config.command;
+    // Waiting behind a hung lookup can use up the deadline before any layer starts.
+    if (signal.aborted) return;
     // An absolute plugin command names its one file and has no layers to search.
     if (isAbsolute(command) || !CliAvailabilityService.VALID_COMMAND_RE.test(command)) return;
 

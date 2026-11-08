@@ -61,6 +61,9 @@ const { defaultExecFileImpl, pathFixtureLookup } = vi.hoisted(() => ({
   },
 }));
 
+// Stands in for a lookup hung in the copy-listing slot: new tasks wait until aborted.
+const copySlotHeld = vi.hoisted(() => ({ current: false }));
+
 vi.mock("child_process", () => ({
   execFileSync: vi.fn(),
   execFile: vi.fn(defaultExecFileImpl),
@@ -70,8 +73,13 @@ vi.mock("../../utils/findOnPath.js", () => ({
   findAllOnPath: vi.fn(pathFixtureLookup),
   // Unlimited: a case that hangs a lookup must not hold the slot for the next case.
   createProbeLimiter: () => ({
-    withSlot: (task: () => Promise<unknown>, signal?: AbortSignal) =>
-      signal?.aborted ? Promise.reject(signal.reason) : task(),
+    withSlot: (task: () => Promise<unknown>, signal?: AbortSignal) => {
+      if (signal?.aborted) return Promise.reject(signal.reason);
+      if (!copySlotHeld.current) return task();
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    },
     queueDepth: () => 0,
   }),
 }));
@@ -2697,6 +2705,24 @@ describe("CliAvailabilityService", () => {
         await vi.advanceTimersByTimeAsync(10_000);
         await expect(copies).resolves.toEqual(["/opt/homebrew/bin/claude"]);
       } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("starts no PATH scan for a listing that spent its deadline waiting for the slot", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      mockedFindAllOnPath.mockClear();
+      copySlotHeld.current = true;
+
+      vi.useFakeTimers();
+      try {
+        const copies = service.findCopies("claude", claudeConfig());
+        await vi.advanceTimersByTimeAsync(10_000);
+        await expect(copies).resolves.toEqual(["/opt/homebrew/bin/claude"]);
+        expect(mockedFindAllOnPath).not.toHaveBeenCalled();
+      } finally {
+        copySlotHeld.current = false;
         vi.useRealTimers();
       }
     });
