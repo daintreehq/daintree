@@ -3,18 +3,6 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "fs/promi
 import { tmpdir } from "os";
 import path from "path";
 
-const host = vi.hoisted(() => ({
-  resolveClaudeTerminal: vi.fn(),
-  getClaudePaneProjectsRoot: vi.fn(),
-}));
-
-vi.mock("../ClaudeSubagentService.js", () => ({
-  resolveClaudeTerminal: host.resolveClaudeTerminal,
-}));
-vi.mock("../ClaudeSessionStore.js", () => ({
-  getClaudePaneProjectsRoot: host.getClaudePaneProjectsRoot,
-}));
-
 import { readClaudePaneContextUsage } from "../ClaudeContextUsage.js";
 import { deriveProjectSlug } from "../ClaudeSubagentReader.js";
 
@@ -25,6 +13,38 @@ const STAMP = "2026-09-18T10:00:00.000Z";
 let root: string;
 let projectsRoot: string;
 let transcript: string;
+
+type PaneRecord = {
+  cwd?: string;
+  spawnedAt: number;
+  launchGeneration?: number;
+  agentIncarnation?: number;
+  agentSessionId?: string;
+  detectedAgentId?: string;
+  launchAgentId?: string;
+  hasPty?: boolean;
+  isExited?: boolean;
+};
+
+const LIVE: PaneRecord = {
+  cwd: CWD,
+  spawnedAt: 1_000,
+  launchGeneration: 1,
+  agentIncarnation: 0,
+  agentSessionId: SESSION,
+  detectedAgentId: "claude",
+  hasPty: true,
+};
+
+const getTerminalAsync = vi.fn<(id: string) => Promise<PaneRecord | null>>();
+const getClaudeProjectsRoot = vi.fn<(id: string) => string | null>();
+
+function deps() {
+  return {
+    ptyClient: { getTerminalAsync } as never,
+    getClaudeProjectsRoot,
+  };
+}
 
 beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), "claude-context-usage-"));
@@ -50,13 +70,13 @@ beforeEach(async () => {
     },
   };
   await writeFile(transcript, `${JSON.stringify(record)}\n`, "utf8");
-  host.resolveClaudeTerminal.mockResolvedValue({ cwd: CWD, parentSessionId: SESSION });
-  host.getClaudePaneProjectsRoot.mockReturnValue(projectsRoot);
+  getTerminalAsync.mockResolvedValue(LIVE);
+  getClaudeProjectsRoot.mockReturnValue(projectsRoot);
 });
 
 afterEach(async () => {
-  host.resolveClaudeTerminal.mockReset();
-  host.getClaudePaneProjectsRoot.mockReset();
+  getTerminalAsync.mockReset();
+  getClaudeProjectsRoot.mockReset();
   await rm(root, { recursive: true, force: true });
 });
 
@@ -67,7 +87,7 @@ describe("readClaudePaneContextUsage", () => {
     const before = await stat(transcript);
     const content = await readFile(transcript, "utf8");
 
-    const result = await readClaudePaneContextUsage("t-1", live());
+    const result = await readClaudePaneContextUsage("t-1", live(), deps());
 
     expect(result).toEqual({
       status: "ok",
@@ -75,33 +95,55 @@ describe("readClaudePaneContextUsage", () => {
       contextTokens: 126_717,
       recordedAt: Date.parse(STAMP),
     });
-    expect(host.resolveClaudeTerminal).toHaveBeenCalledWith("t-1");
-    expect(host.getClaudePaneProjectsRoot).toHaveBeenCalledWith("t-1");
+    expect(getTerminalAsync).toHaveBeenCalledWith("t-1");
+    expect(getClaudeProjectsRoot).toHaveBeenCalledWith("t-1");
     const after = await stat(transcript);
     expect(after.mtimeMs).toBe(before.mtimeMs);
     expect(await readFile(transcript, "utf8")).toBe(content);
     expect(await readdir(path.dirname(transcript))).toEqual([`${SESSION}.jsonl`]);
   });
 
-  it("passes on why the pane can't be read", async () => {
-    host.resolveClaudeTerminal.mockResolvedValue({
-      status: "unavailable",
-      reason: "provider-mismatch",
-    });
+  it.each<[string, PaneRecord | null, string]>([
+    ["no such terminal", null, "terminal-unknown"],
+    ["another agent", { ...LIVE, detectedAgentId: "codex" }, "provider-mismatch"],
+    ["an agent that exited", { ...LIVE, isExited: true }, "provider-mismatch"],
+    ["a relative folder", { ...LIVE, cwd: "demo" }, "terminal-unknown"],
+    ["no recorded session", { ...LIVE, agentSessionId: undefined }, "no-session"],
+    ["a later run in the same pane", { ...LIVE, agentIncarnation: 1 }, "no-session"],
+    ["a run it couldn't count", { ...LIVE, agentIncarnation: undefined }, "no-session"],
+  ])("reads nothing for %s", async (_label, record, reason) => {
+    getTerminalAsync.mockResolvedValue(record);
 
-    expect(await readClaudePaneContextUsage("t-1", live())).toEqual({
+    expect(await readClaudePaneContextUsage("t-1", live(), deps())).toEqual({
       status: "unavailable",
-      reason: "provider-mismatch",
+      reason,
     });
-    expect(host.getClaudePaneProjectsRoot).not.toHaveBeenCalled();
+    expect(getClaudeProjectsRoot).not.toHaveBeenCalled();
   });
 
   it("reads nothing when the pane's store was never pinned down", async () => {
-    host.getClaudePaneProjectsRoot.mockReturnValue(null);
+    getClaudeProjectsRoot.mockReturnValue(null);
 
-    expect(await readClaudePaneContextUsage("t-1", live())).toEqual({
+    expect(await readClaudePaneContextUsage("t-1", live(), deps())).toEqual({
       status: "unavailable",
       reason: "store-unknown",
+    });
+  });
+
+  it.each<[string, Partial<PaneRecord> | null]>([
+    ["the terminal went away", null],
+    ["the PTY was replaced", { spawnedAt: 2_000 }],
+    ["Claude Code was started again", { agentIncarnation: 1 }],
+    ["the pane moved to another session", { agentSessionId: "2bd2578c-b710-4302-90c1-b222c4c29aa2" }],
+    ["the agent exited", { isExited: true }],
+  ])("drops a reading taken while %s", async (_label, change) => {
+    getTerminalAsync
+      .mockResolvedValueOnce(LIVE)
+      .mockResolvedValueOnce(change === null ? null : { ...LIVE, ...change });
+
+    expect(await readClaudePaneContextUsage("t-1", live(), deps())).toEqual({
+      status: "unavailable",
+      reason: "pane-changed",
     });
   });
 
@@ -109,7 +151,7 @@ describe("readClaudePaneContextUsage", () => {
     const controller = new AbortController();
     controller.abort();
 
-    await expect(readClaudePaneContextUsage("t-1", controller.signal)).rejects.toThrow();
-    expect(host.resolveClaudeTerminal).not.toHaveBeenCalled();
+    await expect(readClaudePaneContextUsage("t-1", controller.signal, deps())).rejects.toThrow();
+    expect(getTerminalAsync).not.toHaveBeenCalled();
   });
 });

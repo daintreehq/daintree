@@ -23,7 +23,9 @@ export type AgentContextUsageUnavailableReason =
   | "unrecognized"
   /** The read's ceiling came before any request. */
   | "search-cap-reached"
-  | "store-unreadable";
+  | "store-unreadable"
+  /** The pane restarted or moved to another session while it was read. */
+  | "pane-changed";
 
 export type AgentContextUsageResult =
   | {
@@ -31,7 +33,7 @@ export type AgentContextUsageResult =
       provider: "claude";
       /** Input, cache-write and cache-read tokens of the request, summed. */
       contextTokens: number;
-      /** When the transcript says the request's reply was written, epoch ms; null when it doesn't. */
-      recordedAt: number | null;
+      /** When the transcript says the request's reply was written, epoch ms. */
+      recordedAt: number;
     }
   | { status: "unavailable"; reason: AgentContextUsageUnavailableReason };

@@ -894,13 +894,11 @@ export interface ClaudeContextUsageOptions {
 }
 
 type UsageRecord =
-  | { kind: "request"; contextTokens: number; recordedAt: number | null }
+  | { kind: "request"; contextTokens: number; recordedAt: number }
   | { kind: "unrecognized" }
   | { kind: "compaction" };
 
-/** A token count, 0 for an optional one that is absent, or undefined when it isn't a count. */
-function tokenCount(value: unknown, optional: boolean): number | undefined {
-  if (optional && (value === undefined || value === null)) return 0;
+function tokenCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
@@ -937,10 +935,12 @@ function parseUsageRecord(line: string): UsageRecord | null {
   const { model, usage } = message as Record<string, unknown>;
   if (model === SYNTHETIC_MODEL) return null;
   if (!usage || typeof usage !== "object" || Array.isArray(usage)) return { kind: "unrecognized" };
+  // All three or nothing: with caching on, most of a request is cache reads,
+  // so a sum missing one is a small, confident and wrong number.
   const counts = usage as Record<string, unknown>;
-  const input = tokenCount(counts.input_tokens, false);
-  const cacheWrite = tokenCount(counts.cache_creation_input_tokens, true);
-  const cacheRead = tokenCount(counts.cache_read_input_tokens, true);
+  const input = tokenCount(counts.input_tokens);
+  const cacheWrite = tokenCount(counts.cache_creation_input_tokens);
+  const cacheRead = tokenCount(counts.cache_read_input_tokens);
   if (input === undefined || cacheWrite === undefined || cacheRead === undefined) {
     return { kind: "unrecognized" };
   }
@@ -948,11 +948,10 @@ function parseUsageRecord(line: string): UsageRecord | null {
   // Nothing was sent: a record Claude Code wrote without a request behind it.
   if (contextTokens === 0) return null;
   const timestamp = typeof record.timestamp === "string" ? Date.parse(record.timestamp) : NaN;
-  return {
-    kind: "request",
-    contextTokens,
-    recordedAt: Number.isFinite(timestamp) ? timestamp : null,
-  };
+  if (!Number.isSafeInteger(contextTokens) || !Number.isFinite(timestamp)) {
+    return { kind: "unrecognized" };
+  }
+  return { kind: "request", contextTokens, recordedAt: timestamp };
 }
 
 function usageUnavailable(reason: AgentContextUsageUnavailableReason): AgentContextUsageResult {

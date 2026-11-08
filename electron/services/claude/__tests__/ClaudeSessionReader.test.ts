@@ -1348,10 +1348,21 @@ describe("readClaudeContextUsage (#16371)", () => {
     expect(result).toMatchObject({ status: "ok", contextTokens: 43_002 });
   });
 
-  it("counts absent cache fields as zero", async () => {
-    await seed([request("msg_1", { input_tokens: 1_234, output_tokens: 5 })]);
+  // With caching on, input_tokens alone is a handful: reading a missing cache
+  // count as zero would show a tiny, wrong context.
+  it("answers unrecognized rather than reading a missing count as zero", async () => {
+    await seed([
+      request("msg_1", usage(2, 3_000, 40_000)),
+      request("msg_2", { input_tokens: 4, cache_creation_input_tokens: 1_098, output_tokens: 5 }),
+    ]);
 
-    expect(await readUsage()).toMatchObject({ status: "ok", contextTokens: 1_234 });
+    expect(await readUsage()).toEqual({ status: "unavailable", reason: "unrecognized" });
+  });
+
+  it("answers unrecognized for a request with no time on it", async () => {
+    await seed([request("msg_1", usage(2, 3_000, 40_000), { timestamp: undefined })]);
+
+    expect(await readUsage()).toEqual({ status: "unavailable", reason: "unrecognized" });
   });
 
   // An older request standing in for a newer one whose shape changed would be
