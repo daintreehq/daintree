@@ -21,7 +21,8 @@ import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer, hasBroadcastAudience } from "../ipc/utils.js";
 import { getDefaultWslDistro } from "../utils/wsl.js";
-import { createProbeLimiter, findAllOnPath } from "../utils/findOnPath.js";
+import { findAllOnPath } from "../utils/findOnPath.js";
+import { createProbeLimiter } from "../utils/probeLimiter.js";
 import {
   findWindowsCommand,
   scanWindowsPath,

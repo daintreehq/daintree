@@ -71,7 +71,10 @@ vi.mock("child_process", () => ({
 
 vi.mock("../../utils/findOnPath.js", () => ({
   findAllOnPath: vi.fn(pathFixtureLookup),
-  // Unlimited: a case that hangs a lookup must not hold the slot for the next case.
+}));
+
+// Unlimited: a case that hangs a lookup must not hold the slot for the next case.
+vi.mock("../../utils/probeLimiter.js", () => ({
   createProbeLimiter: () => ({
     withSlot: (task: () => Promise<unknown>, signal?: AbortSignal) => {
       if (signal?.aborted) return Promise.reject(signal.reason);
