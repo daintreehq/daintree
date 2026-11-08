@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
 import {
   AlertTriangle,
+  ArrowDownWideNarrow,
   ChevronRight,
   CircleDot,
   ExternalLink,
@@ -19,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
 import {
   LIST_ROW_HOVER_CLASS,
+  PALETTE_ROW_FOCUS_CLASS,
   PALETTE_SECTION_LABEL_CLASS,
   ROW_MENU_TARGET_CLASS,
 } from "@/components/ui/paletteRowStyles";
@@ -76,6 +78,9 @@ import { CollapsedSessionIndicators } from "./WorktreeCard/CollapsedSessionIndic
 import { Badge } from "@/components/ui/badge";
 import { pluralize } from "@/lib/pluralize";
 import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
+import type { WorktreeDiskUsage } from "@/hooks/useWorktreeDiskUsage";
+import { formatBytes } from "@/lib/formatBytes";
+import { SkeletonBone } from "@/components/ui/Skeleton";
 
 /**
  * Column tracks shared by the header and every row, so each section sits on
@@ -83,19 +88,32 @@ import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
  * ones leave — at the workspace tier a little wider than the sidebar card
  * itself, which is what keeps a row's left half reading as that card.
  */
-export const OVERVIEW_ROW_COLUMNS = "grid-cols-[minmax(0,1fr)_232px_104px_48px]";
+export const OVERVIEW_ROW_COLUMNS = "grid-cols-[minmax(0,1fr)_216px_104px_72px_48px]";
 const OVERVIEW_ROW_GAP = "gap-x-5";
 const OVERVIEW_ROW_INSET = "px-4";
+
+const APPROXIMATE_SIZE_NOTE =
+  "Sizes are approximate. Hard links or copy-on-write clones shared with other folders, and compressed files, can mean deleting a worktree frees less. Nested worktrees and symlinked folders aren't counted.";
 
 /**
  * Names the sections once, above the list, in the palette's section-label
  * type — so the columns read as labelled zones rather than a spreadsheet, and
  * nobody has to decode a column from its contents.
+ *
+ * The labels are decorative (each row says what it holds); the Size heading is
+ * the one control, ordering the list largest first while pressed. Its tooltip
+ * carries the approximation caveat, where a keyboard reaches it — the rows'
+ * own size tooltips are hover-only, like the rest of a row's detail.
  */
-export function WorktreeOverviewColumnHeaders() {
+export function WorktreeOverviewColumnHeaders({
+  sortBySize,
+  onSortBySizeChange,
+}: {
+  sortBySize: boolean;
+  onSortBySizeChange: (sortBySize: boolean) => void;
+}) {
   return (
     <div
-      aria-hidden="true"
       className={cn(
         "grid shrink-0 items-end py-1.5 border-b border-divider",
         OVERVIEW_ROW_COLUMNS,
@@ -104,11 +122,88 @@ export function WorktreeOverviewColumnHeaders() {
         PALETTE_SECTION_LABEL_CLASS
       )}
     >
-      <span className="pl-6">Worktree</span>
-      <span>Sessions</span>
-      <span className="text-right">Changes</span>
-      <span className="text-right">Active</span>
+      <span aria-hidden="true" className="pl-6">
+        Worktree
+      </span>
+      <span aria-hidden="true">Sessions</span>
+      <span aria-hidden="true" className="text-right">
+        Changes
+      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-pressed={sortBySize}
+            aria-label="Order by size, largest first"
+            data-testid="worktree-overview-sort-size"
+            onClick={() => onSortBySizeChange(!sortBySize)}
+            className={cn(
+              "-my-0.5 inline-flex items-center justify-self-end gap-1 rounded-[var(--radius-sm)] px-1 py-0.5",
+              "uppercase tracking-wider transition-colors duration-150 ease-out",
+              "hover:text-text-primary aria-pressed:text-text-primary",
+              PALETTE_ROW_FOCUS_CLASS
+            )}
+          >
+            {sortBySize && <ArrowDownWideNarrow className="h-3 w-3" aria-hidden="true" />}
+            Size
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="text-xs">
+          <span className="flex flex-col gap-1">
+            <span>Order by size, largest first</span>
+            <span className="text-text-secondary">{APPROXIMATE_SIZE_NOTE}</span>
+          </span>
+        </TooltipContent>
+      </Tooltip>
+      <span aria-hidden="true" className="text-right">
+        Active
+      </span>
     </div>
+  );
+}
+
+/**
+ * The worktree's size on disk. Every figure is marked approximate: no cheap
+ * scan can tell a hard link or clone shared outside the worktree from space
+ * only it holds. Pending and unknown are distinct, and neither reads as zero.
+ */
+function WorktreeSizeCell({ usage }: { usage: WorktreeDiskUsage | undefined }) {
+  if (!usage || usage.status === "pending") {
+    return (
+      <div className="flex h-5 items-center justify-end">
+        <span className="sr-only">Measuring size</span>
+        <SkeletonBone heightPx={12} className="w-10 rounded-[var(--radius-sm)]" />
+      </div>
+    );
+  }
+  if (usage.status === "unknown") {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="text-right text-xs leading-5 text-text-secondary">
+            <span aria-hidden="true">Unknown</span>
+            <span className="sr-only">Size unknown</span>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="text-xs">
+          Couldn&apos;t measure this worktree&apos;s size
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+  const size = formatBytes(usage.bytes);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="text-right text-xs leading-5 tabular-nums text-text-secondary">
+          <span aria-hidden="true">≈ {size}</span>
+          <span className="sr-only">About {size} on disk</span>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        {APPROXIMATE_SIZE_NOTE}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -264,6 +359,8 @@ export interface WorktreeOverviewRowProps {
   /** True while any row is selected: every row shows its checkbox, not its type glyph. */
   isSelecting: boolean;
   isLast: boolean;
+  /** Size on disk while the overview is measuring; absent reads as pending. */
+  diskUsage?: WorktreeDiskUsage;
   onActivate: (worktreeId: string) => void;
   onToggleSelect: (worktreeId: string, event: React.MouseEvent) => void;
   /** Called as a context-menu action starts, so the overview gets out of its way. */
@@ -281,6 +378,7 @@ export function WorktreeOverviewRow({
   isCursor,
   isSelecting,
   isLast,
+  diskUsage,
   onActivate,
   onToggleSelect,
   onBeforeMenuAction,
@@ -709,6 +807,8 @@ export function WorktreeOverviewRow({
                 </div>
               )}
             </div>
+
+            <WorktreeSizeCell usage={diskUsage} />
 
             {/* Age of the last activity, with the sidebar's recency light. */}
             <div className="flex h-5 items-center justify-end gap-1.5 text-xs tabular-nums text-text-secondary">

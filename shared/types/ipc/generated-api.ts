@@ -2147,6 +2147,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["workspace-residency:set"]["args"]
     ): Promise<IpcInvokeMap["workspace-residency:set"]["result"]>;
   };
+  worktreeDiskUsage: {
+    cancel(
+      ...args: IpcInvokeMap["worktree-disk-usage:cancel"]["args"]
+    ): Promise<IpcInvokeMap["worktree-disk-usage:cancel"]["result"]>;
+    measure(
+      ...args: IpcInvokeMap["worktree-disk-usage:measure"]["args"]
+    ): Promise<IpcInvokeMap["worktree-disk-usage:measure"]["result"]>;
+  };
   worktreeTitles: {
     hydrate(
       ...args: IpcInvokeMap["worktree-titles:hydrate"]["args"]

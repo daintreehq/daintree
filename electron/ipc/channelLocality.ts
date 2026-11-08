@@ -1377,6 +1377,8 @@ export const CHANNEL_LOCALITY = {
   "worktree-config:reprobe-wsl": "host",
   "worktree-config:set-pattern": "host",
   "worktree-config:set-wsl-git": "host",
+  "worktree-disk-usage:cancel": "host",
+  "worktree-disk-usage:measure": "host",
   "worktree-titles:changed": "host",
   "worktree-titles:hydrate": "host",
   "worktree-titles:prune": "host",

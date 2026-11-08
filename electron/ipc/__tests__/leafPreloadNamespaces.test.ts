@@ -24,6 +24,7 @@ import { buildProjectPresentationPreloadBindings } from "../handlers/projectPres
 import { buildPrivacyPreloadBindings } from "../handlers/privacy.preload.js";
 import { buildOnboardingPreloadBindings } from "../handlers/onboarding.preload.js";
 import { buildSchedulesPreloadBindings } from "../handlers/schedules.preload.js";
+import { buildWorktreeDiskUsagePreloadBindings } from "../handlers/worktreeDiskUsage.preload.js";
 
 describe("leaf preload namespace bindings", () => {
   describe("slashCommands", () => {
@@ -128,6 +129,21 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("dev-preview:ensure", request);
+    });
+  });
+
+  describe("worktreeDiskUsage", () => {
+    it("routes measure and cancel to their channels with the request forwarded", async () => {
+      const invoke = vi.fn().mockResolvedValue({ status: "unknown" });
+      const bindings = buildWorktreeDiskUsagePreloadBindings(invoke);
+
+      await bindings.measure({ sessionId: "s1", worktreeId: "wt1" });
+      await bindings.cancel({ sessionId: "s1" });
+
+      expect(invoke.mock.calls).toEqual([
+        ["worktree-disk-usage:measure", { sessionId: "s1", worktreeId: "wt1" }],
+        ["worktree-disk-usage:cancel", { sessionId: "s1" }],
+      ]);
     });
   });
 

@@ -73,6 +73,7 @@ import { installCachedViewFlushListeners } from "../services/cachedViewFlush.js"
 import { registerProjectGroupsHandlers } from "./handlers/projectGroups.js";
 import { registerRunHistoryHandlers } from "./handlers/runHistory.js";
 import { registerCopyTreeHistoryHandlers } from "./handlers/copyTreeHistory.js";
+import { registerWorktreeDiskUsageHandlers } from "./handlers/worktreeDiskUsage.js";
 import { registerScheduledRunsHandlers } from "./handlers/scheduledRuns.js";
 import { registerFleetHandlers } from "./handlers/fleet.js";
 import { registerCanopyHandlers } from "./handlers/canopy.js";
@@ -263,6 +264,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerProjectGroupsHandlers());
     register(() => registerRunHistoryHandlers());
     register(() => registerCopyTreeHistoryHandlers(deps));
+    register(() => registerWorktreeDiskUsageHandlers(deps));
     register(() => registerScheduledRunsHandlers());
     register(() => registerFleetHandlers());
     register(() => registerCanopyHandlers());
