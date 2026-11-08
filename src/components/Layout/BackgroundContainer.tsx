@@ -517,10 +517,7 @@ function BackgroundSingleItem({
   const lastStateChange = terminal?.lastStateChange;
   const removeLabel = terminal ? `Kill ${name}` : `Remove ${name}`;
   const hasMeta =
-    !!worktreeName ||
-    !!(StateIcon && stateLabel) ||
-    !!activityHeadline ||
-    lastStateChange != null;
+    !!worktreeName || !!(StateIcon && stateLabel) || !!activityHeadline || lastStateChange != null;
 
   return (
     // The row's state is its glyph and label, not a coloured rail: a row in a

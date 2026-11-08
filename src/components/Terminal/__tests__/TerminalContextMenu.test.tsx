@@ -325,7 +325,13 @@ describe("TerminalContextMenu — a backgrounded panel", () => {
   it.each(["file", "file-browser", "diff", "acme.dashboard"])(
     "gives a backgrounded %s panel the same way back and no moves",
     (kind) => {
-      renderMenu({ id: "panel-1", title: "Panel", kind, worktreeId: "wt-1", location: "background" });
+      renderMenu({
+        id: "panel-1",
+        title: "Panel",
+        kind,
+        worktreeId: "wt-1",
+        location: "background",
+      });
 
       expect(screen.queryByText("Send to background")).toBeNull();
       expect(screen.queryByText("Move to grid")).toBeNull();
@@ -342,7 +348,13 @@ describe("TerminalContextMenu — a backgrounded panel", () => {
   );
 
   it("keeps the generic list's moves for a panel that is not backgrounded", () => {
-    renderMenu({ id: "panel-1", title: "Panel", kind: "file", worktreeId: "wt-1", location: "grid" });
+    renderMenu({
+      id: "panel-1",
+      title: "Panel",
+      kind: "file",
+      worktreeId: "wt-1",
+      location: "grid",
+    });
     expect(screen.queryByText("Restore from background")).toBeNull();
     expect(screen.getByText("Send to background")).toBeTruthy();
     expect(screen.getByText("Move to worktree…")).toBeTruthy();

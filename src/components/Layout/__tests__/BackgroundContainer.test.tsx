@@ -741,9 +741,9 @@ describe("BackgroundContainer", () => {
       mockTerminals = [makeFilePanel()];
       deliverAsks(["f1"]);
       render(<BackgroundContainer />);
-      expect(screen.getByRole("button", { name: /^Background: 1 panel/ }).textContent).not.toContain(
-        "waiting"
-      );
+      expect(
+        screen.getByRole("button", { name: /^Background: 1 panel/ }).textContent
+      ).not.toContain("waiting");
     });
 
     it("falls back to its kind's name, not 'Terminal', when it has no title", () => {
