@@ -23,6 +23,11 @@ function setup(
 ) {
   const pty = makePty({ [terminal.id]: { projectId: PROJECT.id, cwd: "/repo", ...record } });
   const made = makeDeps({ getPtyReader: () => pty }, { state: stateWith(terminal) });
+  // Detection found Claude on PATH, and nothing for the other agents here.
+  made.deps.agents.getCliDetail = async (agentId) =>
+    agentId === "claude"
+      ? { state: "ready", resolvedPath: "/usr/local/bin/claude", via: "which" }
+      : undefined;
   made.invoke.mockImplementation(async (_projectId, channel, args) => {
     if (channel === CHANNELS.TERMINAL_GRACEFUL_KILL) return killAnswer;
     if (channel === CHANNELS.TERMINAL_SPAWN) return (args[0] as { id: string }).id;
@@ -90,7 +95,30 @@ describe("restartTerminalWithoutView", () => {
     );
 
     await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
-    expect(spawned(invoke).command).toBe("claude --model opus");
+    // The stored arguments, started with the copy a launch starts now.
+    expect(spawned(invoke).command).toBe("/usr/local/bin/claude --model opus");
+  });
+
+  // A pane launched before another copy was chosen starts over with the chosen
+  // one, prompt and arguments intact (#16399).
+  it("starts over with the copy chosen since the pane launched", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "claude",
+        command: "'/old copy/claude' --model opus 'Fix the login bug'",
+      },
+      { agentState: "working" }
+    );
+    deps.agents.getCliDetail = async () => ({
+      state: "missing",
+      resolvedPath: null,
+      via: null,
+      chosenPath: "/opt/chosen/claude",
+    });
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    expect(spawned(invoke).command).toBe("/opt/chosen/claude --model opus 'Fix the login bug'");
   });
 
   // #15977: the pane is still the scheduled run's, so the host's record keeps

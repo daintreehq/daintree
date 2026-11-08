@@ -2,6 +2,8 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const AGENT_CLI_COPIES_METHOD_CHANNELS = {
   list: "agent-cli-copies:list",
+  choose: "agent-cli-copies:choose",
+  reset: "agent-cli-copies:reset",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof AGENT_CLI_COPIES_METHOD_CHANNELS;

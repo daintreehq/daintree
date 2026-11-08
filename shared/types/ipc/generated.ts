@@ -40,9 +40,17 @@ export interface GeneratedIpcInvokeMap {
     args: [agentId: string];
     result: boolean;
   };
+  "agent-cli-copies:choose": {
+    args: [agentId: string, path: string];
+    result: void;
+  };
   "agent-cli-copies:list": {
     args: [agentId: string];
     result: import("./system.js").AgentCliCopy[];
+  };
+  "agent-cli-copies:reset": {
+    args: [agentId: string];
+    result: void;
   };
   "agent-defaults:get": {
     args: [];

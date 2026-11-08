@@ -6,6 +6,7 @@ import {
   isAgentInstalled,
   isAgentBlocked,
   isAgentLaunchable,
+  isAgentMissing,
   isAgentUnauthenticated,
 } from "@shared/utils/agentAvailability";
 import type { AgentAvailabilityState, AgentCliDetail } from "@shared/types";
@@ -208,6 +209,8 @@ export function AgentInstallSection({
   }
 
   const blocked = isAgentBlocked(availability);
+  // A chosen copy that's gone is fixed by choosing again, not by installing.
+  const chosenMissing = isAgentMissing(availability) && detail?.chosenPath !== undefined;
   // WSL-capped `installed` is a distinct case from `ready + authConfirmed:
   // false` — the binary exists in WSL but direct launch from the PTY host
   // isn't wired yet, so sign-in copy would mislead. Keep them separate.
@@ -218,28 +221,32 @@ export function AgentInstallSection({
   // from its heading down — the same words the agent picker and inventory use.
   const headerLabel = blocked
     ? "Blocked"
-    : showWslNotice
-      ? "Needs setup"
-      : showAuthNudge
-        ? "No credentials detected"
-        : "Not installed";
+    : chosenMissing
+      ? "Chosen copy not found"
+      : showWslNotice
+        ? "Needs setup"
+        : showAuthNudge
+          ? "No credentials detected"
+          : "Not installed";
 
   const installCommandCount =
     installBlocks?.reduce((n, block) => n + (block.commands?.length ?? 0), 0) ?? 0;
 
   const headerDescription = blocked
     ? `${agentName} CLI was found but couldn't run — check your security software or file permissions`
-    : showWslNotice
-      ? `${agentName} CLI was detected in WSL, but WSL binaries can't be launched directly yet — install a native Windows binary if available`
-      : showAuthNudge
-        ? // Two claims the probe cannot support: that the user is not signed in, and that
-          // launching will prompt. `unauthenticated` only means no credentials were found
-          // where we looked, and the state is launchable — the CLI resolves auth at run
-          // time and may well just work.
-          `${agentName} CLI found, but no credentials were detected — it may still launch, or ask you to sign in`
-        : installCommandCount > 0
-          ? `Install the ${agentName} CLI with ${installCommandCount === 1 ? "the command" : "one of the commands"} below, then re-check`
-          : `The ${agentName} CLI isn't on your PATH. Install it, then re-check.`;
+    : chosenMissing
+      ? `${agentName} launches only the copy chosen for it. Choose another copy below or use the default.`
+      : showWslNotice
+        ? `${agentName} CLI was detected in WSL, but WSL binaries can't be launched directly yet — install a native Windows binary if available`
+        : showAuthNudge
+          ? // Two claims the probe cannot support: that the user is not signed in, and that
+            // launching will prompt. `unauthenticated` only means no credentials were found
+            // where we looked, and the state is launchable — the CLI resolves auth at run
+            // time and may well just work.
+            `${agentName} CLI found, but no credentials were detected — it may still launch, or ask you to sign in`
+          : installCommandCount > 0
+            ? `Install the ${agentName} CLI with ${installCommandCount === 1 ? "the command" : "one of the commands"} below, then re-check`
+            : `The ${agentName} CLI isn't on your PATH. Install it, then re-check.`;
 
   const openDocs = () => {
     const url = agentConfig?.install?.docsUrl;
@@ -262,17 +269,19 @@ export function AgentInstallSection({
   // commands stay for a missing CLI only; everything else keeps the diagnosis, the
   // troubleshooting and the docs.
   const binaryFound = isAgentInstalled(availability);
-  const hasBlocks = !binaryFound && !!installBlocks && installBlocks.length > 0;
+  const hasBlocks = !binaryFound && !chosenMissing && !!installBlocks && installBlocks.length > 0;
   const troubleshooting = agentConfig?.install?.troubleshooting ?? [];
   // A launchable agent's path is on the page already, in its Detected CLI section.
   const location =
-    detail?.resolvedPath && !isAgentLaunchable(availability)
-      ? detail.via === "wsl"
-        ? `Available via WSL (${detail.wslDistro ?? "distro"})`
-        : detail.via === "npm-global"
-          ? `npm global: ${detail.resolvedPath}`
-          : `Resolved path: ${detail.resolvedPath}`
-      : null;
+    detail?.chosenPath !== undefined && !isAgentLaunchable(availability)
+      ? `Chosen copy: ${detail.chosenPath}`
+      : detail?.resolvedPath && !isAgentLaunchable(availability)
+        ? detail.via === "wsl"
+          ? `Available via WSL (${detail.wslDistro ?? "distro"})`
+          : detail.via === "npm-global"
+            ? `npm global: ${detail.resolvedPath}`
+            : `Resolved path: ${detail.resolvedPath}`
+        : null;
 
   return (
     <SettingsSection

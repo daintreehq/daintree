@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import * as semver from "semver";
 import { logError } from "@/utils/logger";
 import { getAgentConfig } from "@/config/agents";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 
 export function useAssistantVersionWarning(preferredAgentId: string | null) {
   // Version gate at the configuration point: the launch path already blocks an
@@ -13,6 +14,12 @@ export function useAssistantVersionWarning(preferredAgentId: string | null) {
     installed: string;
     required: string;
   } | null>(null);
+  // The copy that launches, so choosing another one (#16399) probes again: the
+  // host has dropped the version it read from the copy before.
+  const launchTarget = useCliAvailabilityStore((state) => {
+    const detail = preferredAgentId ? state.details[preferredAgentId] : undefined;
+    return detail?.resolvedPath ?? detail?.chosenPath;
+  });
 
   // Isolated version-probe effect (kept separate from the settings-init effect
   // per past lesson #4958). Mirrors HelpSessionController.probeAssistantVersion:
@@ -61,7 +68,7 @@ export function useAssistantVersionWarning(preferredAgentId: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [preferredAgentId]);
+  }, [preferredAgentId, launchTarget]);
 
   return versionWarning;
 }

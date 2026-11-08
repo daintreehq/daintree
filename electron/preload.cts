@@ -1976,7 +1976,12 @@ function buildElectronApi(): ElectronAPI {
 
     // An agent's accounts (#16040)
     agentAccounts: buildAgentAccountsPreloadBindings(_unwrappingInvoke),
-    agentCliCopies: buildAgentCliCopiesPreloadBindings(_unwrappingInvoke),
+    agentCliCopies: {
+      ...buildAgentCliCopiesPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (change: { agentId: string }) => void) =>
+        _typedOn(CHANNELS.AGENT_CLI_COPIES_CHANGED, callback),
+    },
 
     // A clone that runs in the background as its own project (#16352)
     projectClone: {

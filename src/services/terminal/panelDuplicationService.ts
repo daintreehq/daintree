@@ -32,6 +32,10 @@ import {
 } from "@/utils/agentRuntimeSettings";
 import { isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
+import {
+  rebaseToCurrentAgentLaunch,
+  resolveCurrentAgentLaunchBaseCommand,
+} from "@/utils/agentLaunchCommand";
 
 /**
  * Ownership rung for a duplicated panel's title. A duplicate keeps an
@@ -128,7 +132,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         );
         const systemPromptArgs = extractSystemPromptArgs(base, panel.launchAgentId);
         const generatedCommand = generateAgentCommand(
-          agentConfig.command,
+          (await resolveCurrentAgentLaunchBaseCommand(panel.launchAgentId)) ?? agentConfig.command,
           effectiveEntry,
           panel.launchAgentId,
           {
@@ -177,14 +181,17 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         // Reusing the source's command verbatim would open its conversation
         // too, through an assigned id (#11782) or the resume command a restore
         // stored (#16470), so strip that back off and let this copy launch as
-        // the fresh conversation it is. One that can't be stripped is refused.
+        // the fresh conversation it is, with the copy a launch starts now
+        // (#16399). One that can't be stripped is refused.
         const copied = stripConversationSelectorArgs(
           panel.command ?? agentConfig.command,
           panel.launchAgentId
         );
         return {
           agentAccountId: accountEnv ? panel.agentAccountId : undefined,
-          command: commandNamesSession(copied, panel.agentSessionId) ? undefined : copied,
+          command: commandNamesSession(copied, panel.agentSessionId)
+            ? undefined
+            : await rebaseToCurrentAgentLaunch(copied, panel.launchAgentId),
           env: accountEnv,
           agentLaunchFlags: panel.agentLaunchFlags,
           callerLaunchFlags: panel.callerLaunchFlags,

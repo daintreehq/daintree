@@ -96,6 +96,14 @@ const {
   },
 }));
 
+// The launch executable comes from this view's CLI detection, which these tests
+// don't load: the registry command stands.
+vi.mock("@/utils/agentLaunchCommand", () => ({
+  resolveCurrentAgentLaunchBaseCommand: vi.fn(async () => undefined),
+  getCurrentLaunchCliDetail: vi.fn(async () => undefined),
+  resolveAgentLaunchBaseCommand: vi.fn((registryCommand: string) => registryCommand),
+}));
+
 vi.mock("@/config/agents", () => ({
   getAgentConfig: (id: string) =>
     ({

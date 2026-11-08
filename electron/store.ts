@@ -305,6 +305,12 @@ export interface StoreSchema {
   };
   userAgentRegistry: UserAgentRegistry;
   agentUpdateSettings: AgentUpdateSettings;
+  /**
+   * The copy of each agent's CLI the user chose to launch on this machine, by
+   * agent id: a path Daintree detected when it was chosen. An agent without an
+   * entry launches whichever copy detection finds first.
+   */
+  agentCliChoices?: Record<string, string>;
   keybindingOverrides: {
     overrides: Record<string, string[]>;
   };

@@ -2305,6 +2305,8 @@ export interface IpcEventMap {
 
   // This machine's toolbar agent pins changed (#14702)
   "agent-toolbar-pins:changed": AgentToolbarPinsSnapshot;
+  /** Which copy of an agent's CLI launches changed on the machine the agents run on. */
+  "agent-cli-copies:changed": { agentId: string };
   "help:global-assistant-changed": import("./help.js").GlobalAssistantView;
 
   // Plugin action registry events

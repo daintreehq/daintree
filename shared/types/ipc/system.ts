@@ -110,7 +110,7 @@ export type CliAvailability = Record<AgentId, AgentAvailabilityState>;
  * Which probe layer located the CLI binary. Populated alongside
  * {@link AgentCliDetail.resolvedPath} for the Settings diagnostics surface.
  */
-export type AgentCliProbeSource = "which" | "native" | "npm-global" | "wsl";
+export type AgentCliProbeSource = "which" | "native" | "npm-global" | "wsl" | "chosen";
 
 /**
  * Reason a binary exists but cannot be executed. Only set when
@@ -139,11 +139,18 @@ export interface AgentCliDetail {
   /** WSL distribution used when `via === "wsl"`. */
   wslDistro?: string;
   /**
+   * The copy the user chose to launch, when they chose one. Launches start this
+   * path and nothing else: while it is `missing` or `blocked` they fail rather than
+   * start whichever copy PATH reaches first.
+   */
+  chosenPath?: string;
+  /**
    * All distinct paths the PATH probe found (an in-process walk on POSIX, an
    * in-process PATH search on Windows), in PATH order. Populated only when the
-   * probe succeeded via the PATH layer (`via: "which"`). The first
-   * entry equals {@link AgentCliDetail.resolvedPath}; additional entries are
-   * the duplicate installs that drove the duplicate-detection notification.
+   * probe succeeded via the PATH layer (`via: "which"`), so never with a
+   * {@link AgentCliDetail.chosenPath}. The first entry equals
+   * {@link AgentCliDetail.resolvedPath}; additional entries are the duplicate
+   * installs that drove the duplicate-detection notification.
    */
   allResolvedPaths?: string[];
   /**

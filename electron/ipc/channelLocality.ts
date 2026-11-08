@@ -43,7 +43,10 @@ export const CHANNEL_LOCALITY = {
   "agent-capabilities:get-resolved-model-list": "host",
   // Answers from this machine's toolbar pins (#14702).
   "agent-capabilities:is-agent-enabled": "shell",
+  "agent-cli-copies:changed": "host",
+  "agent-cli-copies:choose": "host",
   "agent-cli-copies:list": "host",
+  "agent-cli-copies:reset": "host",
   "agent-help:get": "host",
   "agent-defaults:changed": "host",
   "agent-defaults:get": "host",

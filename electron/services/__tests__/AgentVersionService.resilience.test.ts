@@ -105,10 +105,16 @@ describe("AgentVersionService resilience", () => {
   });
 
   describe("getCopies (#16409)", () => {
-    function createCopiesService(paths: string[]) {
+    /** Every agent launches the first path, as the last check found. */
+    function createCopiesService(paths: string[], detail?: Record<string, unknown>) {
       const findCopies = vi.fn(async () => paths);
+      const launching = detail ?? { state: "ready", resolvedPath: paths[0] ?? null, via: "which" };
+      const getDetails = vi.fn(() => new Proxy({}, { get: () => launching }));
       return {
-        service: new AgentVersionService({ findCopies } as unknown as CliAvailabilityService),
+        service: new AgentVersionService({
+          findCopies,
+          getDetails,
+        } as unknown as CliAvailabilityService),
         findCopies,
       };
     }
@@ -314,6 +320,7 @@ describe("AgentVersionService resilience", () => {
   function createService(checkAvailabilityImpl: () => Promise<Record<string, unknown>>) {
     const cliAvailabilityService = {
       checkAvailability: vi.fn(checkAvailabilityImpl),
+      getSettledDetails: vi.fn(async () => null),
     } as unknown as CliAvailabilityService;
 
     return {
@@ -1206,6 +1213,118 @@ describe("AgentVersionService resilience", () => {
       expect(result.error).toContain("Failed to get latest version");
       expect(result.error).toContain(";");
       fetchSpy.mockRestore();
+    });
+  });
+
+  describe("chosen copy (#16399)", () => {
+    const claudeConfig = {
+      id: "claude",
+      name: "Claude",
+      command: "claude",
+      version: { args: ["--version"] },
+    };
+
+    function createChosenService(detail: Record<string, unknown>) {
+      const state = detail.state as string;
+      return new AgentVersionService({
+        checkAvailability: vi.fn(async () => ({ claude: state })),
+        getSettledDetails: vi.fn(async () => ({ claude: detail })),
+      } as unknown as CliAvailabilityService);
+    }
+
+    /** Each command prints its own version. */
+    function setVersions(outputs: Record<string, string>): void {
+      spawnMock.mockImplementation(((command: string) => {
+        const child = makeFakeChild();
+        queueMicrotask(() => {
+          child.stdout.emit("data", Buffer.from(outputs[command] ?? ""));
+          child.emit("exit", 0, null);
+          child.emit("close", 0, null);
+        });
+        return child;
+      }) as never);
+    }
+
+    beforeEach(() => {
+      registryMock.getEffectiveAgentConfig.mockReturnValue(claudeConfig);
+    });
+
+    it("asks the chosen copy by its path, not the registry command PATH resolves", async () => {
+      setVersions({ claude: "1.0.0\n", "/b/claude": "2.0.0\n" });
+      const service = createChosenService({
+        state: "ready",
+        resolvedPath: "/b/claude",
+        via: "chosen",
+        chosenPath: "/b/claude",
+      });
+
+      await expect(service.getVersion("claude" as AgentId)).resolves.toMatchObject({
+        installedVersion: "2.0.0",
+      });
+      expect(spawnMock.mock.calls.map((call) => call[0])).toEqual(["/b/claude"]);
+    });
+
+    // Blocked counts as installed, so only the chosen copy's own check keeps the
+    // registry command, and the copy PATH finds, from answering for it.
+    it("reports no version for a chosen copy that can't run, rather than another copy's", async () => {
+      setVersions({ claude: "1.0.0\n" });
+      const service = createChosenService({
+        state: "blocked",
+        resolvedPath: "/locked/claude",
+        via: "chosen",
+        chosenPath: "/locked/claude",
+      });
+
+      const info = await service.getVersion("claude" as AgentId);
+
+      expect(info.installedVersion).toBeNull();
+      expect(info.updateAvailable).toBe(false);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps a version read before the choice changed out of the cache", async () => {
+      let release!: () => void;
+      spawnMock.mockImplementation((() => {
+        const child = makeFakeChild();
+        release = () => {
+          child.stdout.emit("data", Buffer.from("1.0.0\n"));
+          child.emit("exit", 0, null);
+          child.emit("close", 0, null);
+        };
+        return child;
+      }) as never);
+      const service = createChosenService({
+        state: "ready",
+        resolvedPath: "/a/claude",
+        via: "which",
+      });
+
+      const before = service.getVersion("claude" as AgentId);
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+      service.invalidate("claude");
+      release();
+      // Whoever asked before the change still gets an answer.
+      await expect(before).resolves.toMatchObject({ installedVersion: "1.0.0" });
+
+      setVersions({ claude: "2.0.0\n" });
+      await expect(service.getVersion("claude" as AgentId)).resolves.toMatchObject({
+        installedVersion: "2.0.0",
+      });
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("marks no copy as launching while the chosen one can't launch", async () => {
+      setVersions({ "/a/claude": "1.0.0\n" });
+      const service = new AgentVersionService({
+        findCopies: vi.fn(async () => ["/a/claude"]),
+        getDetails: vi.fn(() => ({
+          claude: { state: "missing", resolvedPath: null, via: null, chosenPath: "/gone/claude" },
+        })),
+      } as unknown as CliAvailabilityService);
+
+      await expect(service.getCopies("claude")).resolves.toEqual([
+        { path: "/a/claude", version: "1.0.0", launches: false },
+      ]);
     });
   });
 });

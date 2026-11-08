@@ -21,6 +21,7 @@ import { getLogLevelOverrides, setLogLevelOverrides } from "../../utils/logger.j
 import { findAllOnPath } from "../../utils/findOnPath.js";
 import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
 import { resetWindowsExecutableCache } from "../../utils/windowsExecutable.js";
+import { isAgentLaunchable } from "../../../shared/utils/agentAvailability.js";
 
 // Mock child_process. The service's subprocess probes (npm-global, WSL) run
 // through async `execFile` — mock it or the probes will call `undefined(...)`
@@ -2784,6 +2785,278 @@ describe("CliAvailabilityService", () => {
         "/moved-prefix/bin/claude",
       ]);
       expect(npmCalls()).toHaveLength(2);
+    });
+  });
+
+  describe("chosen copy (#16399)", () => {
+    const claudeConfig = () => getAgentConfig("claude")!;
+
+    /** Claude on PATH at `onPath`, these files executable, and `chosen` chosen to launch. */
+    async function arrange(options: {
+      onPath?: string[];
+      files?: string[];
+      blocked?: string[];
+      hung?: string[];
+      chosen?: string;
+    }): Promise<void> {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "claude" && options.onPath) {
+          return Buffer.from(`${options.onPath.join("\n")}\n`);
+        }
+        throw new Error("not found");
+      });
+      const { access } = await import("fs/promises");
+      vi.mocked(access).mockImplementation(async (path) => {
+        if (options.hung?.includes(String(path))) return new Promise<void>(() => {});
+        if (options.files?.includes(String(path))) return;
+        if (options.blocked?.includes(String(path))) {
+          throw Object.assign(new Error("denied"), { code: "EPERM" });
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+      if (options.chosen !== undefined) {
+        storeBackingMap.set("agentCliChoices", { claude: options.chosen });
+      }
+    }
+
+    it("launches the chosen copy where it is, though another copy wins PATH", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/usr/local/bin/claude"],
+        chosen: "/usr/local/bin/claude",
+      });
+
+      const availability = await service.checkAvailability();
+
+      const detail = service.getDetails()!.claude!;
+      expect(isAgentLaunchable(availability.claude)).toBe(true);
+      expect(detail).toMatchObject({
+        resolvedPath: "/usr/local/bin/claude",
+        via: "chosen",
+        chosenPath: "/usr/local/bin/claude",
+      });
+      // Nothing was searched, so there are no PATH duplicates to warn about either.
+      expect(detail.allResolvedPaths).toBeUndefined();
+      expect(mockedFindAllOnPath).not.toHaveBeenCalledWith("claude", expect.anything());
+      expect(resolveAgentLaunchBaseCommandFor("claude", detail, "posix", undefined)).toBe(
+        "/usr/local/bin/claude"
+      );
+    });
+
+    it("reports a chosen copy that's gone as missing, never the PATH winner", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"], chosen: "/old/bin/claude" });
+
+      const availability = await service.checkAvailability();
+
+      const detail = service.getDetails()!.claude!;
+      expect(availability.claude).toBe("missing");
+      expect(detail).toMatchObject({
+        state: "missing",
+        resolvedPath: null,
+        chosenPath: "/old/bin/claude",
+      });
+      expect(detail.message).toMatch(/isn't there any more/);
+      expect(resolveAgentLaunchBaseCommandFor("claude", detail, "posix", undefined)).toBe(
+        "/old/bin/claude"
+      );
+    });
+
+    it("reports a chosen copy that can't run as blocked, keeping the choice", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude"],
+        blocked: ["/locked/claude"],
+        chosen: "/locked/claude",
+      });
+
+      const availability = await service.checkAvailability();
+
+      expect(availability.claude).toBe("blocked");
+      expect(service.getDetails()!.claude).toMatchObject({
+        state: "blocked",
+        resolvedPath: "/locked/claude",
+        via: "chosen",
+        chosenPath: "/locked/claude",
+        blockReason: "security",
+      });
+    });
+
+    it("keeps the choice on an agent whose check ran out of time", async () => {
+      // Published before the choice: PATH's copy launched then.
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      expect(service.getDetails()!.claude?.resolvedPath).toBe("/opt/homebrew/bin/claude");
+
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude"],
+        hung: ["/slow-mount/claude"],
+        chosen: "/slow-mount/claude",
+      });
+      vi.useFakeTimers();
+      try {
+        const checked = service.refresh();
+        await vi.advanceTimersByTimeAsync(60_000);
+        await checked;
+      } finally {
+        vi.useRealTimers();
+      }
+
+      // The earlier result named another copy, so it can't stand in for this one.
+      const detail = service.getDetails()!.claude!;
+      expect(detail).toMatchObject({
+        state: "missing",
+        resolvedPath: null,
+        chosenPath: "/slow-mount/claude",
+      });
+      expect(resolveAgentLaunchBaseCommandFor("claude", detail, "posix", undefined)).toBe(
+        "/slow-mount/claude"
+      );
+    });
+
+    it("lists the other copies to choose from while the chosen one can't launch", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        chosen: "/old/bin/claude",
+      });
+      await service.checkAvailability();
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+      ]);
+    });
+
+    it("lists the chosen copy first, then the others it found", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/usr/local/bin/claude"],
+        chosen: "/usr/local/bin/claude",
+      });
+      await service.checkAvailability();
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "/usr/local/bin/claude",
+        "/opt/homebrew/bin/claude",
+      ]);
+    });
+
+    it("goes back to the first copy found once the choice is cleared", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/usr/local/bin/claude"],
+        chosen: "/usr/local/bin/claude",
+      });
+      await service.checkAvailability();
+
+      service.setChosenCopy("claude", null);
+      await service.refresh();
+
+      expect(storeBackingMap.get("agentCliChoices")).toEqual({});
+      const detail = service.getDetails()!.claude!;
+      expect(detail.resolvedPath).toBe("/opt/homebrew/bin/claude");
+      expect(detail.chosenPath).toBeUndefined();
+    });
+
+    it("makes a read right after a choice wait for a check that has seen it", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/usr/local/bin/claude"],
+      });
+      await service.checkAvailability();
+
+      service.setChosenCopy("claude", "/usr/local/bin/claude");
+
+      // Published before the choice, so it still names the copy that launched then.
+      expect(service.getDetails()!.claude?.resolvedPath).toBe("/opt/homebrew/bin/claude");
+      const settled = await service.getSettledDetails();
+      expect(settled!.claude).toMatchObject({
+        resolvedPath: "/usr/local/bin/claude",
+        chosenPath: "/usr/local/bin/claude",
+      });
+    });
+
+    it("never lets a check begun before a choice publish the copy it replaced", async () => {
+      await arrange({ onPath: ["/a/claude"], files: ["/chosen/claude"] });
+      await service.checkAvailability();
+      // The next check would find a different copy on PATH, if it were allowed to say so.
+      await arrange({ onPath: ["/b/claude"], files: ["/chosen/claude"] });
+      let releasePath!: () => void;
+      const heldPath = new Promise<void>((resolve) => {
+        releasePath = resolve;
+      });
+      mockedFindAllOnPath.mockImplementation(async (command) => {
+        if (command === "claude") await heldPath;
+        return pathFixtureLookup(command);
+      });
+      const before = service.checkAvailability();
+
+      service.setChosenCopy("claude", "/chosen/claude");
+      releasePath();
+      await before;
+
+      expect(service.getDetails()!.claude?.resolvedPath).toBe("/a/claude");
+      expect((await service.getSettledDetails())!.claude).toMatchObject({
+        resolvedPath: "/chosen/claude",
+        chosenPath: "/chosen/claude",
+      });
+    });
+
+    it("never names the replaced copy when no check that saw the choice could publish", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/usr/local/bin/claude"],
+      });
+      await service.checkAvailability();
+      service.setChosenCopy("claude", "/usr/local/bin/claude");
+      // Every check is superseded before it publishes (a poller re-checking faster than checks finish).
+      const checks = vi.spyOn(service, "checkAvailability").mockResolvedValue({});
+
+      const settled = await service.getSettledDetails();
+
+      expect(checks).toHaveBeenCalledTimes(3);
+      expect(settled!.claude).toMatchObject({
+        state: "missing",
+        resolvedPath: null,
+        chosenPath: "/usr/local/bin/claude",
+      });
+      expect(resolveAgentLaunchBaseCommandFor("claude", settled!.claude, "posix", undefined)).toBe(
+        "/usr/local/bin/claude"
+      );
+      // Agents whose choice didn't change keep what was published.
+      expect(settled!.gemini).toEqual(service.getDetails()!.gemini);
+    });
+
+    it("settles at once when no choice is waiting on a check", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      mockedFindAllOnPath.mockClear();
+
+      await service.getSettledDetails();
+
+      expect(mockedFindAllOnPath).not.toHaveBeenCalled();
+    });
+
+    it("records a choice per agent, leaving the others alone", () => {
+      storeBackingMap.set("agentCliChoices", { codex: "/opt/codex" });
+
+      service.setChosenCopy("claude", "/usr/local/bin/claude");
+
+      expect(storeBackingMap.get("agentCliChoices")).toEqual({
+        codex: "/opt/codex",
+        claude: "/usr/local/bin/claude",
+      });
+    });
+
+    it("ignores a stored entry that names no path", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      storeBackingMap.set("agentCliChoices", { claude: 42 });
+
+      await service.checkAvailability();
+
+      expect(service.getDetails()!.claude).toMatchObject({
+        resolvedPath: "/opt/homebrew/bin/claude",
+        via: "which",
+      });
+      expect(service.getDetails()!.claude?.chosenPath).toBeUndefined();
     });
   });
 
