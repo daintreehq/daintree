@@ -4,9 +4,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const fsMock = vi.hoisted(() => ({
-  lstat: vi.fn(async () => ({ isDirectory: () => true, blocks: 0 })),
-  readdir: vi.fn(async () => []),
+  lstat: vi.fn(),
+  readdir: vi.fn(),
 }));
+
+/** A root that is an empty directory: `du` does the rest. */
+function stubEmptyRoot(): void {
+  fsMock.lstat.mockReset().mockImplementation(async () => ({ isDirectory: () => true, blocks: 0 }));
+  fsMock.readdir.mockReset().mockImplementation(async () => []);
+}
 
 vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 vi.mock("node:fs/promises", () => ({ default: fsMock, ...fsMock }));
@@ -41,9 +47,48 @@ function script(...runs: Array<{ code: number; stdout?: string }>): FakeChild[] 
   return children;
 }
 
+describe("measureDirectorySize — the walk", () => {
+  beforeEach(() => {
+    stubEmptyRoot();
+  });
+
+  it("waits for every read in a batch before giving up, so none outlive the measurement", async () => {
+    let releaseSlow: (() => void) | null = null;
+    fsMock.readdir.mockImplementation(async () => [{ name: "denied" }, { name: "slow" }] as never);
+    fsMock.lstat.mockImplementation(async (target: unknown, options?: unknown) => {
+      if (target === "/repo" && options === undefined) return { isDirectory: () => true };
+      if (String(target).endsWith("denied")) {
+        throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+      }
+      await new Promise<void>((resolve) => {
+        releaseSlow = resolve;
+      });
+      return { isDirectory: () => false, nlink: 1n, ino: 1n, dev: 1n, size: 10n };
+    });
+
+    let settled = false;
+    const pending = measureDirectorySize("/repo", { platform: "win32" }).then((value) => {
+      settled = true;
+      return value;
+    });
+    await vi.waitFor(() => expect(releaseSlow).not.toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    // Each attempt waits on its own slow read: root, denied, slow — twice.
+    releaseSlow!();
+    await vi.waitFor(() => expect(fsMock.lstat.mock.calls.length).toBe(6));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    releaseSlow!();
+    expect(await pending).toBeNull();
+  });
+});
+
 describe("measureDirectorySize — du outcomes", () => {
   beforeEach(() => {
     spawnMock.mockReset();
+    stubEmptyRoot();
   });
 
   it("runs one du over the root with a grand total, in the C locale, without following symlinks", async () => {

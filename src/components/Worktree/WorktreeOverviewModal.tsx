@@ -476,7 +476,16 @@ export function WorktreeOverviewModal({
 
   /** ArrowDown out of the search field hands keyboard control to the list. */
   const handleArrowIntoResults = useCallback(() => {
-    gridRef.current?.focus({ preventScroll: true });
+    const grid = gridRef.current;
+    if (!grid) return;
+    grid.focus({ preventScroll: true });
+    // A cursor kept from before may have been carried offscreen while the field
+    // held focus — sizes arriving reorder the rows under it — so bring it back
+    // as the list takes the keys.
+    const cursorId = grid.getAttribute("aria-activedescendant");
+    if (cursorId) {
+      document.getElementById(cursorId)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
   }, []);
 
   /**

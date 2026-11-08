@@ -289,12 +289,19 @@ async function walkDirectorySize(
       for (let i = 0; i < targets.length; i += WALK_STAT_BATCH) {
         if (signal?.aborted) return null;
         const batch = targets.slice(i, i + WALK_STAT_BATCH);
-        const stats = await Promise.all(
+        // Settled, not raced: a failure must not leave sibling reads running
+        // past the end of the measurement that started them.
+        const settled = await Promise.allSettled(
           batch.map(async (full) => ({
             full,
             stat: await fsPromises.lstat(full, { bigint: true }),
           }))
         );
+        const stats = [];
+        for (const outcome of settled) {
+          if (outcome.status === "rejected") return null;
+          stats.push(outcome.value);
+        }
         for (const { full, stat } of stats) {
           if (stat.isDirectory()) {
             stack.push(full);

@@ -158,6 +158,48 @@ describe("WorktreeDiskUsageService", () => {
     expect(await next).toEqual({ status: "measured", bytes: 5 });
   });
 
+  it("answers a request stuck behind hung scans once its wait bound passes, without freeing their slots", async () => {
+    vi.useFakeTimers();
+    const { calls, measure } = controllableMeasurer();
+    const service = new WorktreeDiskUsageService({
+      measure,
+      concurrency: 1,
+      timeoutMs: 1_000,
+      queueTimeoutMs: 5_000,
+    });
+    const signal = service.begin("view-1", "s1");
+    void service.measure(signal, "/hung", []);
+    const waiting = service.measure(signal, "/waiting", []);
+    await flush();
+
+    vi.advanceTimersByTime(5_000);
+    expect(await waiting).toEqual({ status: "unknown" });
+    // It was dropped from the queue, not started on a slot the hung scan holds.
+    calls[0].settle(1);
+    await flush();
+    expect(calls.map((c) => c.root)).toEqual(["/hung"]);
+  });
+
+  it("a request that gets its slot in time isn't cut off by the wait bound", async () => {
+    vi.useFakeTimers();
+    const { calls, measure } = controllableMeasurer();
+    const service = new WorktreeDiskUsageService({
+      measure,
+      concurrency: 1,
+      queueTimeoutMs: 5_000,
+    });
+    const signal = service.begin("view-1", "s1");
+    void service.measure(signal, "/1", []);
+    const second = service.measure(signal, "/2", []);
+    await flush();
+    calls[0].settle(1);
+    await flush();
+
+    vi.advanceTimersByTime(10_000);
+    calls[1].settle(2);
+    expect(await second).toEqual({ status: "measured", bytes: 2 });
+  });
+
   it("answers unknown without scanning for an already-cancelled session", async () => {
     const measure = vi.fn<DirectoryMeasurer>();
     const service = new WorktreeDiskUsageService({ measure });

@@ -7,6 +7,13 @@ export const DISK_USAGE_CONCURRENCY = 2;
 /** A measurement still running after this is abandoned and reported unknown. */
 export const DISK_USAGE_TIMEOUT_MS = 120_000;
 
+/**
+ * A request still waiting for a slot after this is answered unknown. Far past
+ * any real queue; it bounds the wait behind scans that hang on a dead mount and
+ * so never give their slots back.
+ */
+export const DISK_USAGE_QUEUE_TIMEOUT_MS = 600_000;
+
 const UNKNOWN: WorktreeDiskUsageResult = { status: "unknown" };
 
 export type DirectoryMeasurer = (
@@ -48,6 +55,7 @@ export class WorktreeDiskUsageService {
       measure?: DirectoryMeasurer;
       concurrency?: number;
       timeoutMs?: number;
+      queueTimeoutMs?: number;
     } = {}
   ) {}
 
@@ -81,19 +89,27 @@ export class WorktreeDiskUsageService {
   ): Promise<WorktreeDiskUsageResult> {
     if (this.disposed || signal.aborted) return Promise.resolve(UNKNOWN);
     return new Promise((resolve) => {
-      const onAbort = () => {
+      const giveUp = () => {
+        job.detach();
         const index = this.queue.indexOf(job);
         if (index !== -1) this.queue.splice(index, 1);
         resolve(UNKNOWN);
       };
+      const waitTimer = setTimeout(
+        giveUp,
+        this.options.queueTimeoutMs ?? DISK_USAGE_QUEUE_TIMEOUT_MS
+      );
       const job: Job = {
         root,
         exclude,
         signal,
         resolve,
-        detach: () => signal.removeEventListener("abort", onAbort),
+        detach: () => {
+          clearTimeout(waitTimer);
+          signal.removeEventListener("abort", giveUp);
+        },
       };
-      signal.addEventListener("abort", onAbort, { once: true });
+      signal.addEventListener("abort", giveUp, { once: true });
       this.queue.push(job);
       this.pump();
     });

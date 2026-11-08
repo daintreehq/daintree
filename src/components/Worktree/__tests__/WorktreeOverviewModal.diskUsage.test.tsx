@@ -138,4 +138,26 @@ describe("WorktreeOverviewModal ordered by size (#16393)", () => {
     await settle();
     expect(renderedOrder()).toEqual(sharedOrder);
   });
+
+  it("brings a kept cursor back into view when ArrowDown hands the keys back to the list", async () => {
+    await settle();
+    const grid = screen.getByRole("grid");
+    grid.focus();
+    fireEvent.keyDown(grid, { key: "End" });
+    await settle();
+    const cursorId = grid.getAttribute("aria-activedescendant");
+    const cursorRow = cursorId ? document.getElementById(cursorId) : null;
+    expect(cursorRow).not.toBeNull();
+
+    const search = screen.getByRole("textbox", { name: "Search worktrees" });
+    search.focus();
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    await settle();
+
+    expect(document.activeElement).toBe(grid);
+    expect(grid.getAttribute("aria-activedescendant")).toBe(cursorId);
+    expect(scrolled.mock.contexts).toContain(cursorRow);
+    scrolled.mockRestore();
+  });
 });
