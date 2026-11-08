@@ -569,6 +569,32 @@ describe("LinkSession liveness", () => {
     b.destroy();
   });
 
+  it("reads what the peer sent before giving up on a probe whose deadline passed while this loop was stalled", async () => {
+    const { a, b } = await socketPair(dir);
+    const session = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 0 });
+    sessions.push(session);
+    session.open();
+    session.probe(20, "no answer after network change");
+    // The answer is on the socket, unread, when this loop comes back long past the deadline.
+    b.write(
+      Buffer.from(
+        encodeFrame(
+          messageToFrame({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: 1 } }),
+          1024
+        )
+      )
+    );
+    const stalledUntil = Date.now() + 80;
+    while (Date.now() < stalledUntil) {
+      // Busy: the event loop runs nothing meanwhile.
+    }
+    // Settled either way: the answer read, or the session given up before it was.
+    await waitFor(() => !session.probing);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(session.isOpen).toBe(true);
+    b.destroy();
+  });
+
   it("keeps a link whose peer answers the probe", async () => {
     const { host, client } = await pair({}, { pingIntervalMs: 0, idleTimeoutMs: 0 });
     client.probe(250, "no answer after wake");

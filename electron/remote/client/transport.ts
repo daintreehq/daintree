@@ -37,6 +37,12 @@ export interface LinkOpenOptions {
   mayStart?: boolean;
   /** Forget what earlier connections learned and ask the host for all of it again. */
   fresh?: boolean;
+  /**
+   * The last connection stopped answering after the network changed or the
+   * machine woke, so anything still standing from before it (an ssh master)
+   * may be riding a dead connection: don't reuse it.
+   */
+  routeSuspect?: boolean;
 }
 
 export interface LinkTransport {

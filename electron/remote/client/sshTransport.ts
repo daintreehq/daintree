@@ -765,6 +765,17 @@ export class SshTransport implements LinkTransport {
   }
 
   async open(signal: AbortSignal, options?: LinkOpenOptions): Promise<LinkTransportConnection> {
+    // Only a link that rode the master (`known` is kept from an open through
+    // it or the bridge) says anything about it; before `fresh` forgets that.
+    if (options?.routeSuspect && this.known) {
+      // The link through this master just stopped answering, and a master
+      // whose connection died stays up until its keepalives give out, taking
+      // every command and forward with it: retire it so this dial starts one
+      // on the network as it is now. What else runs through it reaches the
+      // same host over the same connection.
+      this.known = null;
+      await this.exitMaster(controlPathFor(this.options.clientDir, this.options.target), 1_500);
+    }
     if (options?.fresh) {
       this.known = null;
       this.streamLocal = "unverified";

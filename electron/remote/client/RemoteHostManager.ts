@@ -387,6 +387,16 @@ export class HostConnection {
     this.link.noteSystemResumed();
   }
 
+  /** {@link LinkClient.noteNetworkChanged}. */
+  noteNetworkChanged(): void {
+    this.link.noteNetworkChanged();
+  }
+
+  /** {@link LinkClient.noteForegrounded}. */
+  noteForegrounded(): void {
+    this.link.noteForegrounded();
+  }
+
   /**
    * Agents the host reports working while it refuses this build, asked
    * afresh (another handshake) unless the last refusal is recent enough. Null
@@ -1123,6 +1133,12 @@ export interface RemoteHostManagerOptions {
   idleReleaseMs?: number;
   /** How long this machine was awake since a moment `now` gave; time asleep isn't time unused. */
   awakeSince?: (since: number) => number;
+  /**
+   * Watches this machine's network, calling `onChange` when it changes, until
+   * the returned stop is called. Run only while an ssh host's connection is
+   * wanted; without one, network changes go unnoticed.
+   */
+  watchNetwork?: (onChange: () => void) => () => void;
 }
 
 /** Long enough to cover a quick switch away and back, or a pause in the overview. */
@@ -1155,6 +1171,7 @@ export class RemoteHostManager {
   /** Work in flight on a host that needs its connection kept (a transfer), by count. */
   private readonly holds = new Map<HostId, number>();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  private stopNetworkWatch: (() => void) | null = null;
 
   constructor(private readonly options: RemoteHostManagerOptions) {
     this.now = options.now ?? Date.now;
@@ -1262,6 +1279,36 @@ export class RemoteHostManager {
   /** The machine just woke: every link checks itself now rather than at its next timer. */
   systemResumed(): void {
     for (const connection of this.connections.values()) connection.noteSystemResumed();
+  }
+
+  /**
+   * This machine's network changed: every ssh link checks itself now. A WSL
+   * link runs over a local process, which no network change reaches.
+   */
+  networkChanged(): void {
+    for (const [hostId, connection] of this.connections) {
+      if (this.isSsh(hostId)) connection.noteNetworkChanged();
+    }
+  }
+
+  /** A window showing this host came to the front. Never dials a host nothing asked for. */
+  hostForegrounded(hostId: HostId): void {
+    this.connections.get(hostId)?.noteForegrounded();
+  }
+
+  private isSsh(hostId: HostId): boolean {
+    return this.options.registry.get(hostId)?.connection.kind === "ssh";
+  }
+
+  /** Watch the network while any ssh host's connection is wanted, and only then. */
+  private syncNetworkWatch(): void {
+    const wanted = [...this.connections.keys()].some((hostId) => this.isSsh(hostId));
+    if (wanted && !this.stopNetworkWatch && this.options.watchNetwork) {
+      this.stopNetworkWatch = this.options.watchNetwork(() => this.networkChanged());
+    } else if (!wanted && this.stopNetworkWatch) {
+      this.stopNetworkWatch();
+      this.stopNetworkWatch = null;
+    }
   }
 
   connectionState(hostId: HostId): HostConnectionState {
@@ -1403,6 +1450,7 @@ export class RemoteHostManager {
     }
     this.lastUsed.set(hostId, this.now());
     this.ensureSweep();
+    this.syncNetworkWatch();
     if (connection.isStarted) connection.retryNow(options);
     else connection.start();
     return connection;
@@ -1417,6 +1465,7 @@ export class RemoteHostManager {
       clearInterval(this.sweepTimer);
       this.sweepTimer = null;
     }
+    this.syncNetworkWatch();
     if (connection.linkState.status === "connected") {
       this.options.registry.recordObservation(hostId, { lastSeenAt: this.now() });
     }

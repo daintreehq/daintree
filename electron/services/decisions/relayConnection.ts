@@ -37,10 +37,10 @@ import {
   isRelaySocketUrl,
   retireable,
   socketBridgeStore,
-  watchNetwork,
   watchResume,
 } from "./relayTransport.js";
 import type { QuestionAttachments } from "./attachmentSpool.js";
+import { watchNetwork } from "../../utils/networkWatch.js";
 
 /** The relay identity a connection is for, as the setting records it. */
 export interface RelayBinding {

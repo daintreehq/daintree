@@ -311,6 +311,8 @@ export class LinkSession {
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
   private probeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** {@link reads} when the pending probe pinged. */
+  private probeReads = 0;
   private closeInfo: LinkCloseInfo | null = null;
 
   private _rttMs: number | null = null;
@@ -377,6 +379,11 @@ export class LinkSession {
 
   get isOpen(): boolean {
     return this.state === "open";
+  }
+
+  /** A {@link probe} is waiting on the peer, which has sent nothing since it pinged. */
+  get probing(): boolean {
+    return this.probeTimer !== null && this.reads === this.probeReads;
   }
 
   get isClosed(): boolean {
@@ -494,13 +501,23 @@ export class LinkSession {
   probe(withinMs: number, reason: string): void {
     if (this.state !== "open") return;
     const reads = this.reads;
+    this.probeReads = reads;
     this.ping();
     if (this.probeTimer) clearTimeout(this.probeTimer);
-    this.probeTimer = setTimeout(() => {
-      this.probeTimer = null;
-      if (this.state === "open" && this.reads === reads) this.drop(reason);
-    }, withinMs);
-    this.probeTimer.unref?.();
+    const timer = setTimeout(
+      () =>
+        // Judged after the loop's next poll for input, as the idle check is:
+        // a stalled loop runs its overdue timers before it reads what arrived.
+        setImmediate(() => {
+          // A later probe took over.
+          if (this.probeTimer !== timer) return;
+          this.probeTimer = null;
+          if (this.state === "open" && this.reads === reads) this.drop(reason);
+        }),
+      withinMs
+    );
+    this.probeTimer = timer;
+    timer.unref?.();
   }
 
   onRtt(listener: (rttMs: number) => void): () => void {
