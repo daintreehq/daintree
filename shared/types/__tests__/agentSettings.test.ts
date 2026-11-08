@@ -2519,6 +2519,12 @@ describe("a plugin agent's assigned session id (#16470)", () => {
     it("doesn't find a short id inside a longer word, or in the binary", () => {
       expect(commandNamesSession("pi --no-banner", "a")).toBe(false);
       expect(commandNamesSession("a --no-banner", "a")).toBe(false);
+      expect(commandNamesSession("pi aa", "a")).toBe(false);
+    });
+
+    it("finds a token of its own past an occurrence that isn't one", () => {
+      expect(commandNamesSession("pi a:a", "a")).toBe(true);
+      expect(commandNamesSession("pi xa:a", "a")).toBe(true);
     });
 
     it("doesn't take a prompt that mentions the id for a selector", () => {

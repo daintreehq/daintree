@@ -1411,11 +1411,19 @@ export function stripConversationSelectorArgs(
   return kept.length === args.length ? command : [binary, ...kept].join(" ");
 }
 
+/** Whether `word` holds `id` with no id character on either side of it. */
+function holdsSessionIdToken(word: string, id: string): boolean {
+  for (let at = word.indexOf(id); at !== -1; at = word.indexOf(id, at + 1)) {
+    if (!/[\w-]/.test(word[at - 1] ?? "") && !/[\w-]/.test(word[at + id.length] ?? "")) return true;
+  }
+  return false;
+}
+
 /**
  * Whether a stored command's arguments name `sessionId`, in any form a selector
  * can take when nothing could recognise it to strip (#16470). A captured id can
- * be short, so it only counts with no id character beside it, and a prompt that
- * mentions it is prose rather than a selector.
+ * be short, so it only counts as a token of its own, and a prompt that mentions
+ * it is prose rather than a selector.
  */
 export function commandNamesSession(command: string, sessionId: string | undefined): boolean {
   if (!sessionId) return false;
@@ -1423,15 +1431,7 @@ export function commandNamesSession(command: string, sessionId: string | undefin
   return args.some((word) => {
     const bare = unquoteShellWord(word);
     if (bare === sessionId || bare.endsWith(`=${sessionId}`)) return true;
-    return (
-      !/\s/.test(bare) &&
-      bare
-        .split(sessionId)
-        .some(
-          (before, i, parts) =>
-            i < parts.length - 1 && !/[\w-]$/.test(before) && !/^[\w-]/.test(parts[i + 1] ?? "")
-        )
-    );
+    return !/\s/.test(bare) && holdsSessionIdToken(bare, sessionId);
   });
 }
 
