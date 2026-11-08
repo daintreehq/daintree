@@ -139,8 +139,6 @@ export default defineConfig(({ command, mode }) => {
           lazyBarrel: true,
         },
         output: {
-          // Preserve the xterm parser workaround in Oxc, the active Vite 8 minifier.
-          minify: process.env.DAINTREE_RENDER_PROBE === "1" ? "dce-only" : { mangle: false },
           // The `boot` codeSplitting group merges cross-chunk module sets,
           // which can reorder module evaluation relative to the automatic
           // chunking the app's latent import cycles happened to tolerate.
