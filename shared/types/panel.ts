@@ -719,6 +719,12 @@ export interface PtyPanelData extends BasePanelData {
    */
   worktreeMoveNotice?: PanelWorktreeMoveNotice;
   /**
+   * Hold the "running full-screen" notice back for this pane's lifetime once
+   * the user closes it (#16357). Never serialized, so a restart starts the
+   * pane with the notice available again.
+   */
+  altScreenNoticeDismissed?: boolean;
+  /**
    * Held duration gauge for currently-paused terminals, sampled by the
    * `pause-duration-gauge` reliability metric (2s tick). Distinct from
    * `flowStatus` (a transition) and from `pauseDuration` on the
@@ -1425,6 +1431,7 @@ export interface TerminalInstance {
   flowStatusTimestamp?: number;
   isInputLocked?: boolean;
   worktreeMoveNotice?: PanelWorktreeMoveNotice;
+  altScreenNoticeDismissed?: boolean;
   browserUrl?: string;
   browserHistory?: BrowserHistory;
   browserZoom?: number;

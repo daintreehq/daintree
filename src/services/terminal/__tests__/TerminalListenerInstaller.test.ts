@@ -2148,3 +2148,42 @@ describe("wheelEventToLineCount", () => {
     expect(wheelEventToLineCount(ev(-20, 0), 24, carry)).toBe(-1);
   });
 });
+
+describe("installTerminalBoundListeners buffer mode announcements", () => {
+  function install(initialType: "normal" | "alternate", previouslyAlt?: boolean) {
+    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+    const terminal = makeMockTerminal(captured);
+    terminal.buffer.active.type = initialType;
+    const managed = makeMockManaged({ isAltBuffer: previouslyAlt });
+    const deps = makeDeps();
+    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+    installTerminalBoundListeners(
+      terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+      managed,
+      "t1",
+      deps
+    );
+    return { managed, deps };
+  }
+
+  it("announces a terminal that is created on the alternate screen", () => {
+    const { managed, deps } = install("alternate", undefined);
+
+    expect(managed.isAltBuffer).toBe(true);
+    expect(deps.onBufferModeChange).toHaveBeenCalledExactlyOnceWith("t1", true);
+  });
+
+  it("stays quiet for a fresh terminal on the main screen", () => {
+    const { managed, deps } = install("normal", undefined);
+
+    expect(managed.isAltBuffer).toBe(false);
+    expect(deps.onBufferModeChange).not.toHaveBeenCalled();
+  });
+
+  it("tells subscribers when a rebuilt terminal comes back on the main screen", () => {
+    const { managed, deps } = install("normal", true);
+
+    expect(managed.isAltBuffer).toBe(false);
+    expect(deps.onBufferModeChange).toHaveBeenCalledExactlyOnceWith("t1", false);
+  });
+});

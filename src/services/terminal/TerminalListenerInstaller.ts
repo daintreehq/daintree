@@ -346,6 +346,7 @@ export function installTerminalBoundListeners(
 ): void {
   const hostElement = managed.hostElement;
   const initialIsAltBuffer = terminal.buffer.active.type === "alternate";
+  const wasAltBuffer = managed.isAltBuffer === true;
   managed.isAltBuffer = initialIsAltBuffer;
 
   const bufferDisposable = terminal.buffer.onBufferChange(() => {
@@ -357,8 +358,10 @@ export function installTerminalBoundListeners(
   });
   managed.listeners.push(() => bufferDisposable.dispose());
 
-  if (initialIsAltBuffer) {
-    deps.onBufferModeChange(id, true);
+  // A rebuilt terminal can start on the main screen under subscribers that last
+  // heard "alternate"; without this they keep reporting a screen it left.
+  if (initialIsAltBuffer || wasAltBuffer) {
+    deps.onBufferModeChange(id, initialIsAltBuffer);
   }
 
   // Padding extension (#13160): re-sample the grid's edge backgrounds after a

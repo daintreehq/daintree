@@ -145,6 +145,7 @@ export const config: AgentConfig = {
     // DECSET 1049 instead would leave that renderer drawing absolute frames
     // onto the main buffer, the garbling OpenCode hit.
     inlineModeEnv: { CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN: "1" },
+    inlineModeCommand: "/tui default",
     supportsBracketedPaste: true,
     // Composer shows `[Image #N]` for a lone bracketed-pasted image path (#12792).
     imageInput: "bracketed-path",

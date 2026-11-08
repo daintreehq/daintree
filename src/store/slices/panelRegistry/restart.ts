@@ -341,6 +341,7 @@ export const createRestartActions = (
   | "restartTerminalOnAccount"
   | "dismissSessionLost"
   | "dismissAllSessionLost"
+  | "dismissAltScreenNotice"
 > => ({
   // Dismissing the banner acknowledges the lost session, which is exactly what
   // `sessionLostOnRestore` tracks — so consume the signal rather than shadowing
@@ -360,6 +361,16 @@ export const createRestartActions = (
           ...state.panelsById,
           [id]: { ...terminal, sessionLostOnRestore: undefined },
         },
+      };
+    });
+  },
+
+  dismissAltScreenNotice: (id) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal || !isPtyPanel(terminal) || terminal.altScreenNoticeDismissed) return state;
+      return {
+        panelsById: { ...state.panelsById, [id]: { ...terminal, altScreenNoticeDismissed: true } },
       };
     });
   },
