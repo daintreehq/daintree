@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
-import { render } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { act, render } from "@testing-library/react";
 import { TerminalIcon } from "../TerminalIcon";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { setPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
+import { setUserRegistry } from "@shared/config/agentRegistry";
+import { setPluginCustomIcons } from "@/components/icons/pluginCustomIconStore";
 import {
   PLUGIN_ICON_COMPONENTS,
   PLUGIN_ICON_IDS,
@@ -318,6 +320,173 @@ describe("TerminalIcon", () => {
       for (const id of ["toString", "constructor", "hasOwnProperty", "__proto__"]) {
         expect(glyph(id), `"${id}" leaked an inherited value`).toBe(fallback);
       }
+    });
+
+    describe("a plugin's own SVG (#16467)", () => {
+      const KEY = "plugin-icon:acme.agents:./icons/pi.svg";
+      const SVG =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>';
+      const agent = {
+        name: "Pi",
+        command: "pi",
+        color: "#3366ff",
+        supportsContextInjection: false,
+      };
+
+      beforeEach(() => {
+        setPluginCustomIcons([{ key: KEY, pluginId: "acme.agents", pluginName: "Acme", svg: SVG }]);
+        setPluginAgentRegistry({
+          pi: { ...agent, id: "pi", iconId: KEY },
+          broken: { ...agent, id: "broken", iconId: "./icons/missing.svg" },
+        });
+      });
+
+      afterEach(() => {
+        setPluginCustomIcons([]);
+        setPluginAgentRegistry({});
+      });
+
+      it("draws an agent's mark in the agent's colour", () => {
+        const { container } = render(
+          <TerminalIcon kind="agent" chrome={deriveTerminalChrome({ launchAgentId: "pi" })} />
+        );
+        const svg = container.querySelector("svg")!;
+        expect(svg.getAttribute("data-plugin-icon")).toBe(KEY);
+        expect(svg.getAttribute("class")).toContain("brand-mark");
+        expect(svg.style.getPropertyValue("--brand-mark-rest")).toMatch(/^#[0-9a-f]{6}$/i);
+      });
+
+      it("takes a preset's colour over the agent's", () => {
+        const inks = (presetColor?: string) =>
+          render(
+            <TerminalIcon
+              kind="agent"
+              chrome={deriveTerminalChrome({ launchAgentId: "pi", presetColor })}
+            />
+          )
+            .container.querySelector("svg")!
+            .style.getPropertyValue("--brand-mark-rest");
+        expect(inks("#ff3366")).not.toBe(inks());
+      });
+
+      it("keeps a process tool's custom icon neutral", () => {
+        const { container } = render(
+          <TerminalIcon kind="terminal" chrome={deriveTerminalChrome({ detectedProcessId: KEY })} />
+        );
+        const svg = container.querySelector("svg")!;
+        expect(svg.getAttribute("data-plugin-icon")).toBe(KEY);
+        expect(svg.getAttribute("class")).not.toContain("brand-mark");
+      });
+
+      it("draws an agent's mark when the registry arrives after its chrome was derived", () => {
+        // A pane restored at startup: nothing re-derives this memoised chrome.
+        setPluginAgentRegistry({});
+        const chrome = deriveTerminalChrome({ launchAgentId: "pi" });
+        const { container } = render(<TerminalIcon kind="agent" chrome={chrome} />);
+        const marker = () => container.querySelector("[data-terminal-icon-id]")!;
+        expect(container.querySelector("svg")!.innerHTML).toBe(registryGlyph("terminal"));
+
+        act(() => setPluginAgentRegistry({ pi: { ...agent, id: "pi", iconId: KEY } }));
+
+        const svg = container.querySelector("svg")!;
+        expect(svg.getAttribute("data-plugin-icon")).toBe(KEY);
+        expect(svg.getAttribute("class")).toContain("brand-mark");
+        expect(marker().getAttribute("data-terminal-icon-color")).toBe(agent.color);
+
+        act(() => setPluginAgentRegistry({}));
+
+        expect(container.querySelector("[data-plugin-icon]")).toBeNull();
+      });
+
+      it("keeps a preset's colour when the registry arrives after its chrome was derived", () => {
+        setPluginAgentRegistry({});
+        const chrome = deriveTerminalChrome({ launchAgentId: "pi", presetColor: "#ff3366" });
+        const { container } = render(<TerminalIcon kind="agent" chrome={chrome} />);
+
+        act(() => setPluginAgentRegistry({ pi: { ...agent, id: "pi", iconId: KEY } }));
+
+        expect(container.querySelector("svg")!.getAttribute("data-plugin-icon")).toBe(KEY);
+        expect(
+          container
+            .querySelector("[data-terminal-icon-color]")!
+            .getAttribute("data-terminal-icon-color")
+        ).toBe("#ff3366");
+      });
+
+      it("doesn't take the dock's computed fallback for a preset", () => {
+        setPluginAgentRegistry({});
+        const input = { kind: "terminal" as const, launchAgentId: "pi" };
+        const chrome = deriveTerminalChrome({
+          ...input,
+          presetColor: deriveTerminalChrome(input).color,
+        });
+        const { container } = render(<TerminalIcon kind="terminal" chrome={chrome} />);
+
+        act(() => setPluginAgentRegistry({ pi: { ...agent, id: "pi", iconId: KEY } }));
+
+        const marker = container.querySelector("[data-terminal-icon-color]")!;
+        expect(marker.getAttribute("data-terminal-icon-color")).toBe(agent.color);
+      });
+
+      it("lets the agent's colour replace a stale one the caller echoes back", () => {
+        setPluginAgentRegistry({});
+        const chrome = deriveTerminalChrome({ kind: "terminal", launchAgentId: "pi" });
+        const color = (brandColor: string) => {
+          const { container } = render(
+            <TerminalIcon kind="terminal" chrome={chrome} brandColor={brandColor} />
+          );
+          return container
+            .querySelector("[data-terminal-icon-color]")!
+            .getAttribute("data-terminal-icon-color");
+        };
+
+        act(() => setPluginAgentRegistry({ pi: { ...agent, id: "pi", iconId: KEY } }));
+
+        expect(color(chrome.color!)).toBe(agent.color);
+        expect(color("#ff3366")).toBe("#ff3366");
+      });
+
+      it("keeps a user agent's mark when a plugin agent shares its id", () => {
+        const userAgent = { ...agent, id: "pi", iconId: "codex", color: "#ff3366" };
+        setUserRegistry({ pi: userAgent });
+        setPluginAgentRegistry({ pi: { ...agent, id: "pi", iconId: KEY } });
+        try {
+          const { container } = render(
+            <TerminalIcon kind="agent" chrome={deriveTerminalChrome({ launchAgentId: "pi" })} />
+          );
+          const marker = container.querySelector("[data-terminal-icon-id]")!;
+          expect(container.querySelector("[data-plugin-icon]")).toBeNull();
+          expect(marker.getAttribute("data-terminal-icon-id")).toBe("codex");
+          expect(marker.getAttribute("data-terminal-icon-color")).toBe(userAgent.color);
+        } finally {
+          setUserRegistry({});
+        }
+      });
+
+      it("keeps a panel or process tool on its own glyph when an agent shares its id", () => {
+        setPluginAgentRegistry({ puzzle: { ...agent, id: "puzzle", iconId: KEY } });
+
+        expect(glyph("puzzle")).toBe(registryGlyph("puzzle"));
+
+        const { container } = render(
+          <TerminalIcon
+            kind="terminal"
+            chrome={deriveTerminalChrome({ detectedProcessId: "puzzle" })}
+          />
+        );
+        expect(container.querySelector("[data-plugin-icon]")).toBeNull();
+        expect(container.querySelector("svg")!.innerHTML).toBe(registryGlyph("puzzle"));
+      });
+
+      it("keeps an agent on the terminal glyph when its SVG failed to load", () => {
+        const { container } = render(
+          <TerminalIcon kind="agent" chrome={deriveTerminalChrome({ launchAgentId: "broken" })} />
+        );
+        expect(
+          container.querySelector("[data-terminal-icon-id]")?.getAttribute("data-terminal-icon-id")
+        ).toBe("terminal");
+        expect(container.querySelector("svg")!.innerHTML).toBe(registryGlyph("terminal"));
+      });
     });
 
     it("marks an unknown id as the terminal fallback", () => {

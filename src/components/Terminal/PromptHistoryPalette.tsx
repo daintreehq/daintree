@@ -95,11 +95,7 @@ export function PromptHistoryRow({
     >
       {/* The terminal glyph for a prompt whose agent was never recorded: it was
           sent to a pane, and that is all the history knows. */}
-      <PanelKindIcon
-        iconId={agentConfig?.iconId ?? item.agentId ?? "terminal"}
-        color={agentConfig?.color}
-        size={16}
-      />
+      <PanelKindIcon iconId={item.agentId ?? "terminal"} color={agentConfig?.color} size={16} />
       <span className="flex-1 min-w-0 truncate text-sm font-medium text-text-primary">
         <HighlightedText text={excerpt.text} indices={excerpt.indices} />
       </span>

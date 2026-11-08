@@ -1959,9 +1959,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Copied into the runtime agent config color.",
     },
     iconId: {
-      mode: "verbatim",
-      consumers: [{ file: AGENT_REGISTRY, symbol: "toPluginAgentConfig" }],
-      note: "Copied into the runtime agent config icon.",
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_ICON_ASSETS, symbol: "loadPluginCustomIcons" },
+        { file: PLUGIN_CONTRIBUTION_REGISTRAR, symbol: "registerPluginAgents" },
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "src/config/agentIcons.ts", symbol: "resolveAgentIcon" },
+      ],
+      note: "A loaded `./…svg` reference is rewritten to the plugin's custom-icon key before the agent registers. The renderer draws that key or a bundled brand mark, and a generic glyph for anything else, never another agent's mark.",
     },
     supportsContextInjection: {
       mode: "verbatim",

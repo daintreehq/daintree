@@ -192,9 +192,10 @@ export function getPluginAgentRegistry(): Record<string, AgentConfig> {
  */
 export function setPluginAgentRegistry(record: Record<string, AgentConfig>): void {
   const next = record ?? {};
-  // Reference-identity guard: a no-op replace must not churn snapshot identity
-  // or wake subscribers.
-  if (next === snapshot) return;
+  // A no-op replace must not churn snapshot identity or wake subscribers. Empty
+  // to empty counts: a plugin-free renderer's mount-time pull is a fresh `{}`.
+  const bothEmpty = Object.keys(next).length === 0 && Object.keys(snapshot).length === 0;
+  if (next === snapshot || bothEmpty) return;
   snapshot = next;
   notifyRegistryListeners();
 }

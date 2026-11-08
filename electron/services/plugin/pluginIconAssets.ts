@@ -22,6 +22,7 @@ interface IconBearingContributions {
   searchProviders?: ReadonlyArray<{ iconId?: string }>;
   processTools: ReadonlyArray<{ iconId: string }>;
   views?: ReadonlyArray<{ location: string; iconId?: string }>;
+  agents?: ReadonlyArray<{ iconId: string }>;
 }
 
 export interface PluginIconIssue {
@@ -73,6 +74,9 @@ export function collectPluginCustomIconRefs(
   // view's is ever rendered — and only that one is worth reading off disk.
   for (const [index, view] of (contributes.views ?? []).entries()) {
     if (view.location === "sidebar") note(view.iconId, `contributes.views.${index}.iconId`);
+  }
+  for (const [index, agent] of (contributes.agents ?? []).entries()) {
+    note(agent.iconId, `contributes.agents.${index}.iconId`);
   }
   return refs;
 }

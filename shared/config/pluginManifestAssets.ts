@@ -162,6 +162,7 @@ export function collectPluginManifestAssets(manifest: unknown): PluginManifestAs
     "launchEntries",
     "searchProviders",
     "processTools",
+    "agents",
   ]) {
     for (const [index, entry] of entries(contributes[group])) {
       addIcon(`${group}[${index}].iconId`, entry.iconId);

@@ -872,6 +872,44 @@ describe("PluginService integration — custom SVG icons (#13143)", () => {
     clearPluginCustomIconsForTests();
   });
 
+  it("rewrites an agent's icon path to its runtime key, without a panel in the plugin", async () => {
+    const dir = await writePlugin("acme.agent-icons", {
+      name: "acme.agent-icons",
+      version: "1.0.0",
+      capabilities: ["agent:register"],
+      contributes: {
+        agents: [
+          { id: "pi", name: "Pi", command: "pi", color: "#3366ff", iconId: "./icons/pi.svg" },
+          {
+            id: "broken",
+            name: "Broken",
+            command: "broken",
+            color: "#3366ff",
+            iconId: "./icons/missing.svg",
+          },
+          { id: "brand", name: "Brand", command: "brand", color: "#3366ff", iconId: "codex" },
+        ],
+      },
+    });
+    await fs.mkdir(path.join(dir, "icons"));
+    await fs.writeFile(path.join(dir, "icons", "pi.svg"), SVG);
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const key = "plugin-icon:acme.agent-icons:./icons/pi.svg";
+    expect(getPluginCustomIcons().map((icon) => icon.key)).toEqual([key]);
+    expect(getPluginAgentRegistry()["pi"]?.iconId).toBe(key);
+    // A broken file keeps its authored value, which renders the neutral glyph.
+    expect(getPluginAgentRegistry()["broken"]?.iconId).toBe("./icons/missing.svg");
+    expect(getPluginAgentRegistry()["brand"]?.iconId).toBe("codex");
+
+    service.unloadPlugin("acme.agent-icons");
+
+    expect(getPluginCustomIcons()).toEqual([]);
+    expect(getPluginAgentRegistry()["pi"]).toBeUndefined();
+  });
+
   it("rewrites loaded icon paths to runtime keys everywhere and drops them on unload", async () => {
     const dir = await writePlugin("acme.icon-plugin", {
       name: "acme.icon-plugin",

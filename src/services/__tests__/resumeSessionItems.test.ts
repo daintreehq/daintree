@@ -8,6 +8,7 @@ import {
   type ResumeWorktreeLike,
 } from "../resumeSessionItems";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
+import { setPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
 
 function rec(over: Partial<AgentSessionRecord> = {}): AgentSessionRecord {
   return {
@@ -56,6 +57,32 @@ describe("buildResumeSessionItems", () => {
       { currentProjectId: "p1", worktrees }
     );
     expect(items.map((i) => i.session.sessionId)).toEqual(["keep"]);
+  });
+
+  it("names the agent for its icon, and the terminal when the agent is gone (#16467)", () => {
+    setPluginAgentRegistry({
+      pi: {
+        id: "pi",
+        name: "Pi",
+        command: "pi",
+        color: "#3366ff",
+        iconId: "plugin-icon:acme.agents:./icons/pi.svg",
+        supportsContextInjection: false,
+      },
+    });
+    try {
+      const [known, gone] = buildResumeSessionItems(
+        [
+          rec({ sessionId: "known", agentId: "pi" }),
+          rec({ sessionId: "gone", agentId: "uninstalled-agent" }),
+        ],
+        { currentProjectId: "p1", worktrees }
+      );
+      expect(known?.iconId).toBe("pi");
+      expect(gone?.iconId).toBe("terminal");
+    } finally {
+      setPluginAgentRegistry({});
+    }
   });
 
   it("flags a same-project record whose worktree no longer resolves as stale", () => {

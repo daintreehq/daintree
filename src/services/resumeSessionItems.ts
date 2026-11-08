@@ -227,7 +227,9 @@ export function buildResumeSessionItems(
         hasTitle: hasTitle || !!bookmarkLabel,
         name,
         agentName,
-        iconId: agentConfig?.iconId ?? "terminal",
+        // The agent id rather than its icon id: `PanelKindIcon` only gives a
+        // mark the agent treatment when it can tell the row is an agent.
+        iconId: agentConfig ? session.agentId : "terminal",
         color: agentConfig?.color ?? "var(--color-text-primary)",
         modelName,
         location: location || null,
