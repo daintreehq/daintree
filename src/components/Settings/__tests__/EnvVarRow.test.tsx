@@ -75,9 +75,13 @@ describe("EnvVarRow", () => {
 
   it("describes nothing and claims nothing invalid when there is no error", () => {
     renderRow();
-    const input = screen.getByLabelText(/^Name of variable \d+$/);
-    expect(input.getAttribute("aria-invalid")).not.toBe("true");
-    expect(input.getAttribute("aria-describedby")).toBeNull();
+    for (const input of [
+      screen.getByLabelText(/^Name of variable \d+$/),
+      screen.getByLabelText(/^Value of /),
+    ]) {
+      expect(input.getAttribute("aria-invalid")).not.toBe("true");
+      expect(input.getAttribute("aria-describedby")).toBeNull();
+    }
   });
 
   it("names its delete action after the variable it deletes", () => {
