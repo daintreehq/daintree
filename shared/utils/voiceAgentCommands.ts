@@ -121,19 +121,17 @@ export function buildVoiceCommandVocabulary(
 
   const seen = new Set<string>();
   const entries: VoiceCommandEntry[] = [];
-  for (const command of commands) {
-    const token = (command.insertText ?? command.label).trim();
-    if (!token || /\s/u.test(token) || seen.has(token)) continue;
+  const entryFor = (command: SlashCommand, token: string): VoiceCommandEntry | null => {
+    if (!token || /\s/u.test(token) || seen.has(token)) return null;
     const candidates = prefixesByTrigger.get(command.trigger ?? "/") ?? [];
     const match = candidates.find(
       (candidate) => token.startsWith(candidate.prefix) && token.length > candidate.prefix.length
     );
-    if (!match) continue;
+    if (!match) return null;
     const name = token.slice(match.prefix.length);
     const key = toKey(name);
-    if (!key) continue;
-    seen.add(token);
-    entries.push({
+    if (!key) return null;
+    return {
       token,
       prefix: match.prefix,
       spokenName: spokenName(name),
@@ -142,7 +140,29 @@ export function buildVoiceCommandVocabulary(
       ...(command.kind ? { kind: command.kind } : {}),
       description: command.description,
       ...(command.sourcePath ? { sourcePath: command.sourcePath } : {}),
-    });
+    };
+  };
+  const add = (entry: VoiceCommandEntry): void => {
+    seen.add(entry.token);
+    entries.push(entry);
+  };
+  for (const command of commands) {
+    const entry = entryFor(command, (command.insertText ?? command.label).trim());
+    if (entry) add(entry);
+  }
+  // An agent runs an alias as its command (Claude's `/new` is `/clear`), so one
+  // said aloud is written as said. A second pass, and only where no name sounds
+  // the same: `matchName` won't guess between two, and a real command mustn't
+  // stop being sayable because of an alias.
+  for (const command of commands) {
+    if ((command.trigger ?? "/") !== "/") continue;
+    for (const alias of command.aliases ?? []) {
+      const entry = entryFor(command, `/${alias}`);
+      const taken = entries.some(
+        (known) => known.prefix === entry?.prefix && known.key === entry.key
+      );
+      if (entry && !taken) add(entry);
+    }
   }
   // Array.prototype.sort is stable, so discovery's own order holds within a scope.
   entries.sort((a, b) => SCOPE_LIKELIHOOD[a.scope] - SCOPE_LIKELIHOOD[b.scope]);

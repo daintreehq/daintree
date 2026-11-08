@@ -209,6 +209,73 @@ describe("rewriteSpokenCommand", () => {
   });
 });
 
+describe("a spoken alias", () => {
+  const vocabularyFor = (commands: readonly SlashCommand[]) =>
+    buildVoiceCommandVocabulary(commands, sourcesOf("claude"));
+  const builtins = getBuiltinSlashCommands("claude");
+
+  it.each([
+    ["Slash new", "/new"],
+    ["slash reset", "/reset"],
+    ["Forward slash new", "/new"],
+    ["slash new and call it auth", "/new and call it auth"],
+  ])("writes %j as said", (spoken, written) => {
+    expect(rewriteSpokenCommand(spoken, claude)).toBe(written);
+  });
+
+  it("describes the alias as the command it runs, for the correction that reads it", () => {
+    const clear = builtins.find((command) => command.id === "clear");
+    const alias = claude.entries.find((entry) => entry.token === "/new");
+    expect(alias?.description).toBe(clear?.description);
+    expect(alias?.scope).toBe("built-in");
+  });
+
+  it("stays with the agent that declares it", () => {
+    expect(rewriteSpokenCommand("slash reset", codex)).toBeNull();
+  });
+
+  it("leaves Codex's own /new as a command with its own description", () => {
+    const own = getBuiltinSlashCommands("codex").find((command) => command.id === "new");
+    expect(codex.entries.find((entry) => entry.token === "/new")?.description).toBe(
+      own?.description
+    );
+  });
+
+  it("gives way to a real command of the same token, whatever the order", () => {
+    const own = custom("claude", "/new");
+    for (const commands of [
+      [...builtins, own],
+      [own, ...builtins],
+    ]) {
+      const entries = vocabularyFor(commands).entries.filter((entry) => entry.token === "/new");
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.description).toBe(own.description);
+    }
+  });
+
+  it("never makes a real command unsayable by sounding like it", () => {
+    const own = custom("claude", "/re-set");
+    for (const commands of [
+      [...builtins, own],
+      [own, ...builtins],
+    ]) {
+      expect(rewriteSpokenCommand("slash reset", vocabularyFor(commands))).toBe("/re-set");
+    }
+  });
+
+  it("is not read from a command another trigger opens", () => {
+    const skill = custom("codex", "$github", { kind: "plugin", aliases: ["gh"] });
+    const vocabulary = buildVoiceCommandVocabulary([skill], sourcesOf("codex"));
+    expect(vocabulary.entries.map((entry) => entry.token)).toEqual(["$github"]);
+  });
+
+  it("comes after the agent's real commands when biasing recognition", () => {
+    const terms = voiceCommandKeyterms(vocabularyFor(builtins), Number.MAX_SAFE_INTEGER);
+    const realCount = builtins.filter((command) => command.id.length >= 3).length;
+    expect(terms.indexOf("new")).toBeGreaterThanOrEqual(realCount);
+  });
+});
+
 describe("classifySpokenCommandOpening", () => {
   it.each([
     ["Slash.", "pending"],

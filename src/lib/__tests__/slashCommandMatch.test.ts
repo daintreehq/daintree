@@ -138,8 +138,45 @@ describe("rankSlashCommands over the Antigravity catalog", () => {
   });
 
   it("does not lend agy's aliases to another agent's menu", () => {
-    // Claude has a real /new; agy's `new` alias of /clear must not outrank it.
-    expect(rankSlashCommands(getBuiltinSlashCommands("claude"), "/new")[0]?.label).toBe("/new");
+    // Codex has a real /new; agy's `new` alias of /clear must not outrank it.
+    expect(rankSlashCommands(getBuiltinSlashCommands("codex"), "/new")[0]?.label).toBe("/new");
     expect(rankSlashCommands(getBuiltinSlashCommands("claude"), "/quota")).toEqual([]);
+  });
+});
+
+describe("rankSlashCommands for /new and /reset", () => {
+  it.each(["claude", "gemini"] as const)(
+    "takes /new to %s's /clear, the command it runs there",
+    (agentId) => {
+      const labels = rankSlashCommands(getBuiltinSlashCommands(agentId), "/new").map(
+        (command) => command.label
+      );
+      expect(labels[0]).toBe("/clear");
+      expect(labels).not.toContain("/new");
+    }
+  );
+
+  it("takes /reset to Claude's /clear", () => {
+    expect(rankSlashCommands(getBuiltinSlashCommands("claude"), "/reset")[0]?.label).toBe("/clear");
+  });
+
+  it("puts someone's own /new above a /clear that only answers to it, whatever the order", () => {
+    const builtins = getBuiltinSlashCommands("claude");
+    const own = {
+      id: "project:new",
+      label: "/new",
+      description: "Scaffold a new page",
+      scope: "project" as const,
+      agentId: "claude" as const,
+    };
+    for (const commands of [
+      [...builtins, own],
+      [own, ...builtins],
+    ]) {
+      expect(rankSlashCommands(commands, "/new").map((command) => command.label)).toEqual([
+        "/new",
+        "/clear",
+      ]);
+    }
   });
 });

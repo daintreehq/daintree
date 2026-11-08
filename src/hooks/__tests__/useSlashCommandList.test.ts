@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SlashCommand } from "@shared/types";
+import { getBuiltinSlashCommands, type SlashCommand } from "@shared/types";
 import { buildSlashCommandMap } from "../useSlashCommandList";
 
 function make(partial: Partial<SlashCommand> & { label: string }): SlashCommand {
@@ -29,6 +29,16 @@ describe("buildSlashCommandMap", () => {
     ]) {
       expect(buildSlashCommandMap(commands).get("/new")).toBe(realNew);
     }
+  });
+
+  it.each(["claude", "gemini"] as const)("accepts a typed /new as %s's /clear", (agentId) => {
+    expect(buildSlashCommandMap(getBuiltinSlashCommands(agentId)).get("/new")?.label).toBe(
+      "/clear"
+    );
+  });
+
+  it("keeps a typed /new as Codex's own command", () => {
+    expect(buildSlashCommandMap(getBuiltinSlashCommands("codex")).get("/new")?.label).toBe("/new");
   });
 
   it("keys by insert text and leaves non-slash triggers out, aliases included", () => {
