@@ -106,6 +106,7 @@ import { buildHostSettingsPreloadBindings } from "./ipc/handlers/hostSettings.pr
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
 import { buildProjectPresencePreloadBindings } from "./ipc/handlers/projectPresence.preload.js";
+import { buildOnlineOnlyFilesPreloadBindings } from "./ipc/handlers/onlineOnlyFiles.preload.js";
 import { buildProjectPresentationPreloadBindings } from "./ipc/handlers/projectPresentation.preload.js";
 import { buildProjectThemePreloadBindings } from "./ipc/handlers/projectTheme.preload.js";
 import { buildWorktreeTitlesPreloadBindings } from "./ipc/handlers/worktreeTitles.preload.js";
@@ -1990,6 +1991,15 @@ function buildElectronApi(): ElectronAPI {
       ...buildProjectPresencePreloadBindings(_unwrappingInvoke),
 
       onChanged: (callback: () => void) => _typedOn(CHANNELS.PROJECT_PRESENCE_CHANGED, callback),
+    },
+
+    // The sender project's online-only files, while it watches them (#16363)
+    onlineOnlyFiles: {
+      ...buildOnlineOnlyFilesPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (
+        callback: (files: import("../shared/types/onlineOnlyFiles.js").ProjectOnlineOnlyFiles) => void
+      ) => _typedOn(CHANNELS.ONLINE_ONLY_FILES_CHANGED, callback),
     },
 
     // The sender project's presentation profile (#13771)

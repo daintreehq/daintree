@@ -1725,6 +1725,8 @@ export interface IpcEventMap {
   // Where projects are open may have changed — re-read with
   // `project-presence:get-snapshot`, which answers per window (#12597).
   "project-presence:changed": void;
+  // A watched project's online-only files changed (#16363); main sends it to the views watching.
+  "online-only-files:changed": import("../onlineOnlyFiles.js").ProjectOnlineOnlyFiles;
   "recent-dictations:changed": void;
   // The sender project's presentation profile changed (#13771); main sends it to every view of that project.
   "project-presentation:changed": import("./projectPresentation.js").ProjectPresentationSnapshot;

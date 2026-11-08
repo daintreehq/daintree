@@ -2656,6 +2656,14 @@ export interface GeneratedIpcInvokeMap {
     args: [tourId: string, update: import("./maps.js").TourProgressUpdate];
     result: import("./maps.js").TourOnboardingState;
   };
+  "online-only-files:unwatch": {
+    args: [];
+    result: void;
+  };
+  "online-only-files:watch": {
+    args: [];
+    result: import("../onlineOnlyFiles.js").ProjectOnlineOnlyFiles | null;
+  };
   "operations:cancel": {
     args: [payload: import("./operations.js").OperationIdPayload];
     result: boolean;

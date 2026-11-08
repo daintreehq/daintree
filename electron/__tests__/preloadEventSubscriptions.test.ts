@@ -87,6 +87,7 @@ let terminal: TerminalBridge;
 let plugin: PluginBridge;
 let projectPresentation: ProjectPresentationBridge;
 let schedules: ProjectPresentationBridge;
+let onlineOnlyFiles: ProjectPresentationBridge;
 let app: AppBridge;
 let terminalConfig: TerminalConfigBridge;
 let agentSettings: { onChanged: (cb: (settings: unknown) => void) => () => void };
@@ -136,6 +137,7 @@ beforeAll(async () => {
         plugin?: PluginBridge;
         projectPresentation?: ProjectPresentationBridge;
         schedules?: ProjectPresentationBridge;
+        onlineOnlyFiles?: ProjectPresentationBridge;
         terminalConfig?: TerminalConfigBridge;
         agentSettings?: typeof agentSettings;
         keybinding?: typeof keybinding;
@@ -147,6 +149,7 @@ beforeAll(async () => {
   plugin = api!.plugin!;
   projectPresentation = api!.projectPresentation!;
   schedules = api!.schedules!;
+  onlineOnlyFiles = api!.onlineOnlyFiles!;
   app = api!.app!;
   terminalConfig = api!.terminalConfig!;
   agentSettings = api!.agentSettings!;
@@ -376,6 +379,18 @@ describe("preload event subscriptions", () => {
     ipcRenderer.emit("project-presentation:changed", {}, { projectId: "p2" });
     expect(received).toEqual([{ projectId: "p1" }]);
     expect(ipcRenderer.listenerCount("project-presentation:changed")).toBe(0);
+  });
+
+  it("delivers each online-only-files:changed push once and detaches on dispose", () => {
+    const received: unknown[] = [];
+    const dispose = onlineOnlyFiles.onChanged((payload) => received.push(payload));
+    ipcRenderer.emit("online-only-files:changed", {}, { projectId: "p1", revision: 1 });
+    expect(received).toEqual([{ projectId: "p1", revision: 1 }]);
+
+    dispose();
+    ipcRenderer.emit("online-only-files:changed", {}, { projectId: "p1", revision: 2 });
+    expect(received).toHaveLength(1);
+    expect(ipcRenderer.listenerCount("online-only-files:changed")).toBe(0);
   });
 
   it("delivers each schedules:changed push once and detaches on dispose", () => {

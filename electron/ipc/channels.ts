@@ -1613,6 +1613,11 @@ export const CHANNELS = {
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
   CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",
 
+  // A project's online-only files, for the views watching it (#16363)
+  ONLINE_ONLY_FILES_WATCH: "online-only-files:watch",
+  ONLINE_ONLY_FILES_UNWATCH: "online-only-files:unwatch",
+  ONLINE_ONLY_FILES_CHANGED: "online-only-files:changed",
+
   // Which windows hold a live view of which projects (#12597)
   PROJECT_PRESENCE_GET_SNAPSHOT: "project-presence:get-snapshot",
   PROJECT_PRESENCE_CHANGED: "project-presence:changed",
