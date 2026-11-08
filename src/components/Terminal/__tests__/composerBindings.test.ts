@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { history, undo, undoDepth } from "@codemirror/commands";
 import { Compartment, EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -7,6 +7,19 @@ import {
   rebindToComposer,
   recordComposerBindings,
 } from "../inputEditorExtensions/composerBindings";
+
+// Destroyed with each test, or the measure each schedules fires after it ends,
+// in a jsdom that can't measure.
+const views: EditorView[] = [];
+
+function editor(view: EditorView): EditorView {
+  views.push(view);
+  return view;
+}
+
+afterEach(() => {
+  for (const view of views.splice(0)) view.destroy();
+});
 
 function composer(doc = "", editableAtBuild = true) {
   const onUpdate = vi.fn();
@@ -16,10 +29,12 @@ function composer(doc = "", editableAtBuild = true) {
     compartment.of(EditorView.editable.of(editableAtBuild)),
     EditorView.updateListener.of(onUpdate),
   ];
-  const view = new EditorView({
-    parent: document.createElement("div"),
-    state: EditorState.create({ doc, extensions }),
-  });
+  const view = editor(
+    new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({ doc, extensions }),
+    })
+  );
   recordComposerBindings(view, { extensions, compartments: [compartment] });
   return { view, onUpdate, compartment };
 }
@@ -68,7 +83,7 @@ describe("rebindToComposer", () => {
 
   it("leaves a state alone in an editor no composer built", () => {
     const kept = EditorState.create({ doc: "text" });
-    const view = new EditorView({ parent: document.createElement("div") });
+    const view = editor(new EditorView({ parent: document.createElement("div") }));
 
     expect(rebindToComposer(view, kept)).toBe(kept);
   });
