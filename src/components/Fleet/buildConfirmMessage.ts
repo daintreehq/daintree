@@ -1,5 +1,5 @@
 import type { FleetPendingActionKind } from "@/store/fleetPendingActionStore";
-import { pluralize } from "@/lib/pluralize";
+import { pluralize, pluralNoun } from "@/lib/pluralize";
 
 export type FleetConfirmActionId =
   "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash";
@@ -27,4 +27,41 @@ export function buildConfirmMessage(
     case "trash":
       return `Trash ${pluralize(count, "terminal")}?`;
   }
+}
+
+interface FleetConfirmCopy {
+  actionId: FleetConfirmActionId;
+  verb: string;
+  target: string;
+  /** What is called off, as a noun: "Cancel restart". */
+  noun: string;
+}
+
+const CONFIRM_COPY: Record<FleetPendingActionKind, FleetConfirmCopy> = {
+  reject: { actionId: "fleet.reject", verb: "Reject", target: "prompt", noun: "rejection" },
+  interrupt: { actionId: "fleet.interrupt", verb: "Interrupt", target: "agent", noun: "interrupt" },
+  restart: { actionId: "fleet.restart", verb: "Restart", target: "agent", noun: "restart" },
+  kill: { actionId: "fleet.kill", verb: "Kill", target: "terminal", noun: "kill" },
+  trash: { actionId: "fleet.trash", verb: "Trash", target: "terminal", noun: "trash" },
+};
+
+export function confirmActionId(kind: FleetPendingActionKind): FleetConfirmActionId {
+  return CONFIRM_COPY[kind].actionId;
+}
+
+export interface FleetConfirmLabels {
+  confirm: string;
+  cancel: string;
+  /** Announced when the confirmation lapses unanswered. */
+  expired: string;
+}
+
+export function buildConfirmLabels(kind: FleetPendingActionKind, count: number): FleetConfirmLabels {
+  const { verb, target, noun } = CONFIRM_COPY[kind];
+  const capitalized = noun.charAt(0).toUpperCase() + noun.slice(1);
+  return {
+    confirm: `${verb} ${pluralNoun(count, target)}`,
+    cancel: `Cancel ${noun}`,
+    expired: `${capitalized} confirmation expired`,
+  };
 }

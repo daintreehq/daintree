@@ -34,7 +34,8 @@ import {
 import "./fleetRawInputBroadcast";
 import { useFleetEscapeChords } from "./useFleetEscapeChords";
 import { useFleetRibbonFlashes } from "./useFleetRibbonFlashes";
-import { buildConfirmMessage, type FleetConfirmActionId } from "./buildConfirmMessage";
+import { buildConfirmLabels, buildConfirmMessage } from "./buildConfirmMessage";
+import { useFleetPendingConfirm } from "./useFleetPendingConfirm";
 import { FleetCountChip } from "./FleetCountChip";
 import { FleetHostComposer } from "./FleetHostComposer";
 import { FLEET_EXIT_COMBO } from "./fleetKeys";
@@ -44,7 +45,6 @@ import { SaveFleetDialog } from "./SaveFleetDialog";
 import { SavedFleetsDialog } from "./SavedFleetsDialog";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "./fleetBroadcast";
 import { cancelActiveBroadcast } from "./fleetEnterBroadcast";
-import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
 import {
   useFleetArmingStore,
   selectFleetMemberCount,
@@ -85,8 +85,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { pluralize } from "@/lib/pluralize";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { isInPaneDialog } from "@/lib/paneDialog";
-import { hasAppModal } from "@/lib/appModal";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 
 interface RunCountSegment {
@@ -340,15 +338,16 @@ export function FleetArmingRibbon(): ReactElement | null {
     }
   }, [ribbonVisible, popoverOpen]);
 
-  // Escape stack: confirmation cancel is owned here so a pending confirm
-  // absorbs bare Escape before it reaches the targets. The armed-list
+  // Escape stack: a pending confirmation registers first (inside the hook),
+  // so it absorbs bare Escape before it reaches the targets. The armed-list
   // popover gets its own entry so bare Escape closes the list without
   // disarming the fleet.
   // Bare Escape with focus inside the ribbon (Exit button, count chip,
   // selection-menu trigger) exits the fleet — see handleRibbonKeyDown
   // below. Bare Escape from anywhere else (xterm, hybrid input) still
   // belongs to the agents (#5750) — only the ⌘Esc chord exits globally.
-  useEscapeStack(pending !== null, clearPending);
+  const pendingBannerRef = useRef<HTMLDivElement>(null);
+  const pendingConfirm = useFleetPendingConfirm(pending, pendingBannerRef);
   useEscapeStack(popoverOpen, () => setPopoverOpen(false));
 
   const exitFleet = useCallback(() => {
@@ -385,60 +384,6 @@ export function FleetArmingRibbon(): ReactElement | null {
     }
     lastAnnouncedCount.current = armedCount;
   }, [armedCount]);
-
-  // Enter confirms a pending destructive action. Bound locally so that
-  // `fleet.*` actions can be re-dispatched with `{ confirmed: true }` to
-  // bypass the threshold check on the second pass.
-  useEffect(() => {
-    if (pending === null) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Enter") return;
-      // A dictated send waiting on its cleanup takes the Enter meant for it.
-      if (routeVoiceWaitKey(e)) return;
-      // A modal owns the keyboard while it is open. This listener is capture-
-      // phase, so without the guard it beat a focused Cancel button to the Enter
-      // and confirmed the fleet action instead of activating that button
-      // (issue #11106). Tested by existence rather than ancestry because modal
-      // content can be portaled outside the dialog's subtree (Radix menus and
-      // selects mount under <body>). The fleet's own confirmation is an inline
-      // role="status" banner, not a modal, so its Enter stays reachable. A
-      // destructive AppDialog without a preview is an alertdialog. A page's
-      // dialog blocks only its own pane, so it holds Enter only while focus is
-      // inside it (#15037).
-      if (hasAppModal() || isInPaneDialog(e.target)) {
-        return;
-      }
-      const rawTarget = e.target;
-      const target =
-        rawTarget && typeof (rawTarget as HTMLElement).closest === "function"
-          ? (rawTarget as HTMLElement)
-          : null;
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable ||
-          target.closest(".xterm") !== null)
-      ) {
-        return;
-      }
-      e.preventDefault();
-      e.stopPropagation();
-      const actionId: FleetConfirmActionId =
-        pending.kind === "reject"
-          ? "fleet.reject"
-          : pending.kind === "interrupt"
-            ? "fleet.interrupt"
-            : pending.kind === "restart"
-              ? "fleet.restart"
-              : pending.kind === "kill"
-                ? "fleet.kill"
-                : "fleet.trash";
-      void actionService.dispatch(actionId, { confirmed: true }, { source: "keybinding" });
-    };
-    window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
-  }, [pending]);
 
   // The fleet dialogs count as overlays too: Esc closes the dialog, and a
   // second quick Esc must not land as a double-tap that interrupts every agent.
@@ -602,22 +547,29 @@ export function FleetArmingRibbon(): ReactElement | null {
       pending.targetCount,
       pending.sessionLossCount
     );
+    const labels = buildConfirmLabels(pending.kind, pending.targetCount);
     return (
       <>
         {fleetDialogs}
         <div data-testid="fleet-arming-ribbon-group">
           <FleetFailureBanner />
           <div
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
+            ref={pendingBannerRef}
             // Same shell as the armed bar so the mode chrome doesn't visually
             // exit and re-enter during a confirm — only the content swaps.
             className={FLEET_RIBBON_SHELL_CLASS}
             data-testid="fleet-arming-ribbon"
             data-pending-action={pending.kind}
           >
-            <div className="flex min-w-0 flex-1 items-center gap-2">
+            {/* The question alone is announced; the buttons sit outside the
+             * live region so their labels aren't read into it. */}
+            <div
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="flex min-w-0 flex-1 items-center gap-2"
+              data-testid="fleet-confirm-status"
+            >
               <AlertTriangle
                 className="h-3.5 w-3.5 shrink-0 text-[var(--fleet-ribbon-ink)]"
                 aria-hidden="true"
@@ -625,13 +577,27 @@ export function FleetArmingRibbon(): ReactElement | null {
               />
               <span className="truncate font-semibold">{message}</span>
             </div>
-            <div className="ml-auto flex shrink-0 items-center gap-3 text-2xs text-text-secondary">
-              <span className="inline-flex items-center gap-1">
-                <KbdChord shortcut="Enter" density="compact" /> to confirm
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <KbdChord shortcut="Escape" density="compact" /> to cancel
-              </span>
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={pendingConfirm.cancel}
+                aria-keyshortcuts="Escape"
+                data-testid="fleet-confirm-cancel"
+                className={FLEET_RIBBON_TEXT_BUTTON_CLASS}
+              >
+                <span>{labels.cancel}</span>
+                <KbdChord shortcut="Escape" density="compact" />
+              </button>
+              <button
+                type="button"
+                onClick={pendingConfirm.confirm}
+                aria-keyshortcuts="Enter"
+                data-testid="fleet-confirm-action"
+                className={FLEET_RIBBON_TEXT_BUTTON_CLASS}
+              >
+                <span>{labels.confirm}</span>
+                <KbdChord shortcut="Enter" density="compact" />
+              </button>
             </div>
           </div>
         </div>
