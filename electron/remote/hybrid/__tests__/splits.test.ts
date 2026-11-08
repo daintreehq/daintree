@@ -1104,6 +1104,9 @@ describe("opening host files", () => {
       expect(zed("user+tag@dev+prod", "/a")).toBe("zed://ssh/user+tag@dev+prod/a");
       expect(zed("user@domain.tld@host", "/a")).toBe("zed://ssh/user@domain.tld@host/a");
       expect(zed("under_score.host", "/a")).toBe("zed://ssh/under_score.host/a");
+      expect(zed(".studio", "/a")).toBe("zed://ssh/.studio/a");
+      expect(zed("+studio", "/a")).toBe("zed://ssh/+studio/a");
+      expect(zed("user-name@studio", "/a")).toBe("zed://ssh/user-name@studio/a");
     });
 
     it("encodes the path once, by segment, as Zed decodes it once", () => {
@@ -1115,6 +1118,7 @@ describe("opening host files", () => {
       expect(zed("studio", "/srv/a\tb.ts")).toBe("zed://ssh/studio/srv/a%09b.ts");
       expect(zed("studio", "/srv/x ")).toBe("zed://ssh/studio/srv/x%20");
       expect(zed("studio", "/srv/日本.ts", 2)).toBe("zed://ssh/studio/srv/%E6%97%A5%E6%9C%AC.ts:2");
+      expect(zed("studio", "/srv/😀.ts")).toBe("zed://ssh/studio/srv/%F0%9F%98%80.ts");
     });
 
     it("opens names that only look like a position when they can't be read as one", () => {
@@ -1124,11 +1128,22 @@ describe("opening host files", () => {
         "zed://ssh/studio/srv/(marketing)/page.tsx:9"
       );
       expect(zed("studio", "/srv/~x.ts")).toBe("zed://ssh/studio/srv/~x.ts");
+      // Zed's parser needs a file name before the bracket.
+      expect(zed("studio", "/srv/app/(2026)")).toBe("zed://ssh/studio/srv/app/(2026)");
+      expect(zed("studio", "/srv/app/(2026)", 4)).toBe("zed://ssh/studio/srv/app/(2026):4");
+      expect(zed("studio", "/srv/((1)")).toBe("zed://ssh/studio/srv/((1)");
     });
 
     it("refuses a file name Zed would read a position out of", () => {
       // Zed reads `a%3A5:12` as `/srv/a` at 5:12, and `foo%3A:4` as `/srv/foo` at 4.
-      for (const path of ["/srv/a:5", "/srv/foo:", "/srv/foo:(1,2)", "/srv/a:5/", "/srv/a:b.ts"]) {
+      for (const path of [
+        "/srv/a:5",
+        "/srv/foo:",
+        "/srv/foo:(1,2)",
+        "/srv/a:5/",
+        "/srv/a:b.ts",
+        "/srv/a:5/ ", // Zed trims this back to `/srv/a:5/`.
+      ]) {
         expect(zed("studio", path)).toBeNull();
         expect(zed("studio", path, 4)).toBeNull();
       }
@@ -1136,7 +1151,14 @@ describe("opening host files", () => {
 
     it("refuses a file name that is only safe while the file exists", () => {
       // Zed prefers the literal path, but reads `foo(1)` as `foo` at line 1 once it has gone.
-      for (const path of ["/srv/foo(1)", "/srv/foo(1,2)", "/srv/foo(1) ", "/srv/project (2)/"]) {
+      for (const path of [
+        "/srv/foo(1)",
+        "/srv/foo(1,2)",
+        "/srv/foo(1) ",
+        "/srv/project (2)/",
+        "/srv/foo(1)// ",
+        "/srv/foo(1)\u0085", // Rust trims this and JavaScript's `\s` doesn't match it.
+      ]) {
         expect(zed("studio", path)).toBeNull();
         expect(zed("studio", path, 4)).toBeNull();
       }
@@ -1169,9 +1191,11 @@ describe("opening host files", () => {
         "..",
         // What the transport refuses, Zed never sees either.
         "-oProxyCommand=x",
+        "-user@studio",
         "host:22",
         "a b",
         "",
+        "a".repeat(256),
       ]) {
         expect(zed(sshTarget, "/a")).toBeNull();
       }
@@ -1185,6 +1209,7 @@ describe("opening host files", () => {
       expect(zed("studio", "/a", 1.5)).toBeNull();
       expect(zed("studio", "/a", Number.NaN)).toBeNull();
       expect(zed("studio", "/a", Number.POSITIVE_INFINITY)).toBeNull();
+      expect(zed("studio", "/a", 1, 1)).toBe("zed://ssh/studio/a:1:1");
     });
 
     it("stays within the u32 Zed parses a position as", () => {
@@ -1195,11 +1220,32 @@ describe("opening host files", () => {
       expect(zed("studio", "/a", 1, 4294967296)).toBeNull();
     });
 
+    it("leaves the VS Code family's URLs alone", () => {
+      const vscode = { editorId: "vscode", sshTarget: "studio" } as const;
+      expect(buildRemoteEditorUrl({ ...vscode, path: "/srv/a:5", line: 4 })).toBe(
+        "vscode://vscode-remote/ssh-remote+studio/srv/a%3A5:4"
+      );
+      expect(buildRemoteEditorUrl({ ...vscode, path: "/~foo/a(1)" })).toBe(
+        "vscode://vscode-remote/ssh-remote+studio/~foo/a(1)"
+      );
+      expect(buildRemoteEditorUrl({ ...vscode, path: "/a", line: 4294967296 })).toBe(
+        "vscode://vscode-remote/ssh-remote+studio/a:4294967296"
+      );
+    });
+
     it("has no WSL link, so a WSL host keeps the copy-path fallback", () => {
       expect(
         buildRemoteEditorUrl({ editorId: "zed", wslDistro: "Debian", path: "/srv/x.ts" })
       ).toBeNull();
     });
+  });
+
+  it("refuses a path holding a lone surrogate for every editor, rather than throw on encoding it", () => {
+    for (const editorId of ["vscode", "cursor", "zed"] as const) {
+      for (const path of ["/srv/\uD800.ts", "/srv/\uDC00.ts"]) {
+        expect(buildRemoteEditorUrl({ editorId, sshTarget: "studio", path })).toBeNull();
+      }
+    }
   });
 
   it("builds a WSL editor URL with the distro encoded and refuses one that isn't a distro name", () => {

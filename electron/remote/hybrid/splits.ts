@@ -357,20 +357,31 @@ function remoteSshAuthority(sshTarget: string): string {
  */
 const ZED_SSH_TARGET = /^(?!\.\.?$)(?:[\w.+-]+@)*[\w.+][\w.+-]*$/;
 
-/** Host paths Zed wouldn't open as spelled. Encoding can't save them: it decodes before reading. */
+/**
+ * Host paths Zed wouldn't open as spelled. Encoding can't save them: it decodes
+ * before reading, then trims by Rust's whitespace, which includes U+0085.
+ */
 const ZED_MISREAD_PATHS = [
   // Expanded on the host, as `~/x` or `~user/x`.
   /^\/~/,
   // Resolved in the link before Zed sees it, where `/../x` would replace the target.
   /\/\.\.?(?:\/|$)/,
   // Zed reads a position out of a file name: `a:5` at line 12 opens `a` at 5:12.
-  /:[^/]*\/*$/,
-  // Likewise `a(1)`, if it has gone from the host by the time Zed looks.
-  /\(\d+(?:,\d+)?\)\s*\/*$/,
+  /:[^/]*[\s\u0085/]*$/,
+  // Likewise `a(1)`, if it has gone from the host by the time Zed looks. `(1)` alone is safe.
+  /[^/(]\(\d+(?:,\d+)?\)[\s\u0085/]*$/,
 ];
 
 /** Zed parses a line or column as a u32; a larger one would be taken as part of the file name. */
-const MAX_EDITOR_POSITION = 0xffffffff;
+const ZED_MAX_POSITION = 0xffffffff;
+
+function zedWouldMisread(path: string, line = 0, col = 0): boolean {
+  return (
+    line > ZED_MAX_POSITION ||
+    col > ZED_MAX_POSITION ||
+    ZED_MISREAD_PATHS.some((misread) => misread.test(path))
+  );
+}
 
 type RemoteEditorHost = { sshTarget: string } | { wslDistro: string };
 
@@ -405,13 +416,11 @@ export function buildRemoteEditorUrl(
   const editorId = options.editorId ?? "vscode";
   const root = remoteEditorRoot(editorId, options);
   if (!root) return null;
-  if (!options.path.startsWith("/") || /[\0\r\n]/.test(options.path)) return null;
-  if (editorId === "zed" && ZED_MISREAD_PATHS.some((misread) => misread.test(options.path))) {
-    return null;
-  }
-  const isPosition = (n: number | undefined) =>
-    n === undefined || (Number.isInteger(n) && n > 0 && n <= MAX_EDITOR_POSITION);
+  // A lone surrogate has no encoding, so `encodeURIComponent` would throw on it below.
+  if (!options.path.startsWith("/") || /[\0\r\n\p{Cs}]/u.test(options.path)) return null;
+  const isPosition = (n: number | undefined) => n === undefined || (Number.isInteger(n) && n > 0);
   if (!isPosition(options.line) || !isPosition(options.col)) return null;
+  if (editorId === "zed" && zedWouldMisread(options.path, options.line, options.col)) return null;
   // Per segment, so `?` and `#` in a file name stay part of the path.
   const encodedPath = options.path.split("/").map(encodeURIComponent).join("/");
   const position =
