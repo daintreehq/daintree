@@ -381,14 +381,15 @@ function failReadyPluginTools(
 }
 
 /**
- * Layer the launch's MCP env over the spawn env. Windows env keys are
- * case-insensitive, so a differently-cased copy of an injected key (a project's
+ * Layer env the launch itself owns (MCP wiring, an agent's `inlineModeEnv`)
+ * over the spawn env. Windows env keys are case-insensitive, so a
+ * differently-cased copy of an injected key (a project's
  * `opencode_config_content`) is dropped first, or the PTY would see both and
  * pick one arbitrarily.
  */
 function mergeLaunchEnv(
   base: Record<string, string>,
-  injected: Record<string, string>
+  injected: Readonly<Record<string, string>>
 ): Record<string, string> {
   if (process.platform !== "win32") return { ...base, ...injected };
   const upper = new Set(Object.keys(injected).map((key) => key.toUpperCase()));
@@ -1322,6 +1323,17 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         );
       }
     }
+
+    // Last of the env enrichments, so nothing a preset, project or user env set
+    // outranks it: alt-screen is not a choice for an agent that can stay on the
+    // main screen (#16355). Applied by agent id rather than to commands alone,
+    // and here rather than in the PTY host, so it also rides the PTY pool's key
+    // and every pending-spawn replay.
+    const inlineModeEnv =
+      typeof launchAgentId === "string"
+        ? getEffectiveAgentConfig(launchAgentId)?.capabilities?.inlineModeEnv
+        : undefined;
+    if (inlineModeEnv) spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, inlineModeEnv);
 
     // Resolved again only if what it depends on moved since: a settings
     // template that named the executable itself, or a PATH adopted mid-spawn.

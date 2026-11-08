@@ -1053,6 +1053,37 @@ describe("screen-mode flag capabilities (#11423)", () => {
   });
 });
 
+describe("main-screen launch env (#16355)", () => {
+  const declaring = getAgentIds()
+    .map((id) => ({ id, capabilities: getAgentConfig(id)?.capabilities }))
+    .filter((a) => a.capabilities?.inlineModeEnv !== undefined);
+
+  it("is declared by at least one agent", () => {
+    expect(declaring.length).toBeGreaterThan(0);
+  });
+
+  it("declares plain variables a spawn env can carry", () => {
+    for (const { id, capabilities } of declaring) {
+      const entries = Object.entries(capabilities?.inlineModeEnv ?? {});
+      expect(entries.length, `${id} declares an empty inlineModeEnv`).toBeGreaterThan(0);
+      for (const [key, value] of entries) {
+        expect(key, `${id} declares an invalid env name`).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
+        expect(typeof value).toBe("string");
+        expect(value.length, `${id} declares an empty ${key}`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("is never paired with a flag that forces the alternate screen", () => {
+    for (const { id, capabilities } of declaring) {
+      expect(
+        capabilities?.altScreenFlag,
+        `${id} both forces and forbids alt screen`
+      ).toBeUndefined();
+    }
+  });
+});
+
 describe("Option/Alt chord capabilities (#14887)", () => {
   const chordAgents = getAgentIds()
     .map((id) => ({ id, chords: getAgentConfig(id)?.capabilities?.altChords }))

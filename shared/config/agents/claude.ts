@@ -111,6 +111,12 @@ export const config: AgentConfig = {
     scrollback: 10000,
     launchMcp: { format: "claude-mcp-config" },
     resizeStrategy: "default",
+    // Claude Code picks its fullscreen (alternate-screen) renderer from the
+    // user's `tui` setting, `CLAUDE_CODE_NO_FLICKER=1` or its own rollout gates.
+    // This variable outranks all three (verified against 2.1.319). Stripping
+    // DECSET 1049 instead would leave that renderer drawing absolute frames
+    // onto the main buffer, the garbling OpenCode hit.
+    inlineModeEnv: { CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN: "1" },
     supportsBracketedPaste: true,
     // Composer shows `[Image #N]` for a lone bracketed-pasted image path (#12792).
     imageInput: "bracketed-path",

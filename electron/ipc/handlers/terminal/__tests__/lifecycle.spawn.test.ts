@@ -342,7 +342,7 @@ import {
   registerPluginAgents,
   clearPluginAgentRegistryForTests,
 } from "../../../../../shared/config/pluginAgentRegistry.js";
-import { setUserRegistry } from "../../../../../shared/config/agentRegistry.js";
+import { AGENT_REGISTRY, setUserRegistry } from "../../../../../shared/config/agentRegistry.js";
 import { CHANNELS } from "../../../channels.js";
 import { TRASH_TTL_MS } from "../../../../../shared/config/trash.js";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
@@ -3970,5 +3970,185 @@ describe("terminal spawn handler - a recipe step's When done (#16172)", () => {
   it("refuses a value other than background or close", async () => {
     await expect(recipeSpawn({ whenDone: "keep" })).rejects.toThrow(/validation/i);
     expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe("terminal spawn handler - main-screen launch env (#16355)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+  let tmpDir: string;
+
+  const claudeInlineEnv = () => AGENT_REGISTRY.claude.capabilities?.inlineModeEnv ?? {};
+  const undeclaredAgentId = () => {
+    const agentId = (Object.keys(AGENT_REGISTRY) as Array<keyof typeof AGENT_REGISTRY>).find(
+      (id) =>
+        AGENT_REGISTRY[id].capabilities !== undefined &&
+        AGENT_REGISTRY[id].capabilities.inlineModeEnv === undefined
+    );
+    expect(agentId).toBeDefined();
+    return agentId!;
+  };
+
+  async function spawnWith(options: Record<string, unknown>): Promise<Record<string, string>> {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const handler = getSpawnHandler();
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      cwd: tmpDir,
+      ...options,
+    });
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    return (ptyClient.spawn.mock.calls[0][1].env ?? {}) as Record<string, string>;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const os = await import("os");
+    tmpDir = os.tmpdir();
+    ptyClient = { spawn: vi.fn(), hasTerminal: vi.fn(() => false), write: vi.fn() };
+    mockGetCurrentProject.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+    mockValidateToken.mockReturnValue(false);
+    mockIsRunning.mockReturnValue(false);
+    mockCurrentPort.mockReturnValue(null);
+    mockGetClaudeLaunchArgs.mockReturnValue([]);
+    mockGetBypassPermissions.mockReturnValue(false);
+    mockMarkTerminalForToken.mockReturnValue(true);
+    mockIsHelpTerminal.mockReturnValue(false);
+    mockGetAssistantScratchEnv.mockReturnValue(null);
+  });
+
+  it("keeps a Claude launch on the main screen whatever the user's Claude config picks", async () => {
+    expect(Object.keys(claudeInlineEnv()).length).toBeGreaterThan(0);
+
+    const env = await spawnWith({ command: "claude", launchAgentId: "claude" });
+
+    expect(env).toMatchObject(claudeInlineEnv());
+  });
+
+  it.each([
+    ["a restart's", false],
+    ["a restore's", true],
+  ])("carries it on %s resume of the pane", async (_label, restore) => {
+    const sessionId = "0b6a1c2e-6f4b-4f43-9d55-1b7b2f1f8a10";
+    const env = await spawnWith({
+      command: `claude --resume ${sessionId}`,
+      launchAgentId: "claude",
+      agentSessionId: sessionId,
+      restore,
+    });
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs).toMatchObject({ restore, agentSessionId: sessionId });
+    expect(spawnArgs.command).toContain(sessionId);
+    expect(env).toMatchObject(claudeInlineEnv());
+  });
+
+  it("carries it on a Claude pane spawned before its command is known", async () => {
+    const env = await spawnWith({ launchAgentId: "claude" });
+
+    expect(env).toMatchObject(claudeInlineEnv());
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "carries it into a shell that types the command in, which the PTY pool can serve",
+    async () => {
+      getDefaultShellMock.mockReturnValue("/usr/local/bin/fish");
+      try {
+        const env = await spawnWith({ command: "claude", launchAgentId: "claude" });
+
+        const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+        expect(spawnArgs.shell).toBeUndefined();
+        expect(spawnArgs.args).toBeUndefined();
+        expect(spawnArgs.postSpawnInput).toBe("claude\r");
+        expect(env).toMatchObject(claudeInlineEnv());
+      } finally {
+        getDefaultShellMock.mockReturnValue("/bin/zsh");
+      }
+    }
+  );
+
+  it("replaces a differently-cased copy of the variable on Windows", async () => {
+    const realPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const lowered = Object.fromEntries(
+        Object.keys(claudeInlineEnv()).map((key) => [key.toLowerCase(), "0"])
+      );
+
+      const env = await spawnWith({ command: "claude", launchAgentId: "claude", env: lowered });
+
+      for (const [key, value] of Object.entries(claudeInlineEnv())) {
+        const copies = Object.entries(env).filter(([k]) => k.toUpperCase() === key.toUpperCase());
+        expect(copies).toEqual([[key, value]]);
+      }
+    } finally {
+      Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+    }
+  });
+
+  it("wins over a value the user's preset or project env sets", async () => {
+    const overridden = Object.fromEntries(Object.keys(claudeInlineEnv()).map((key) => [key, "0"]));
+
+    const env = await spawnWith({
+      command: "claude",
+      launchAgentId: "claude",
+      env: { ...overridden, ANTHROPIC_BASE_URL: "https://example.test" },
+    });
+
+    expect(env).toMatchObject({ ...claudeInlineEnv(), ANTHROPIC_BASE_URL: "https://example.test" });
+  });
+
+  it("applies to the Assistant's Claude session too", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+
+    const env = await spawnWith({
+      command: "claude",
+      launchAgentId: "claude",
+      env: { DAINTREE_MCP_TOKEN: "help-token" },
+    });
+
+    expect(ptyClient.spawn.mock.calls[0][1].isAssistantTerminal).toBe(true);
+    expect(env).toMatchObject({ ...claudeInlineEnv(), DAINTREE_MCP_TOKEN: "help-token" });
+  });
+
+  it("adds nothing to a plain shell", async () => {
+    const env = await spawnWith({});
+
+    for (const key of Object.keys(claudeInlineEnv())) expect(env[key]).toBeUndefined();
+  });
+
+  it("adds nothing for an agent that declares no main-screen env", async () => {
+    const agentId = undeclaredAgentId();
+
+    const env = await spawnWith({
+      command: AGENT_REGISTRY[agentId].command,
+      launchAgentId: agentId,
+    });
+
+    for (const key of Object.keys(claudeInlineEnv())) expect(env[key]).toBeUndefined();
+  });
+
+  it("follows each agent's own declaration rather than Claude's", async () => {
+    const agentId = undeclaredAgentId();
+    const capabilities = AGENT_REGISTRY[agentId].capabilities!;
+    capabilities.inlineModeEnv = { EXAMPLE_MAIN_SCREEN: "1" };
+    try {
+      const env = await spawnWith({
+        command: AGENT_REGISTRY[agentId].command,
+        launchAgentId: agentId,
+        env: { EXAMPLE_MAIN_SCREEN: "0", EXAMPLE_KEPT: "yes" },
+      });
+
+      expect(env).toMatchObject({ EXAMPLE_MAIN_SCREEN: "1", EXAMPLE_KEPT: "yes" });
+      for (const key of Object.keys(claudeInlineEnv())) expect(env[key]).toBeUndefined();
+    } finally {
+      delete capabilities.inlineModeEnv;
+    }
   });
 });
