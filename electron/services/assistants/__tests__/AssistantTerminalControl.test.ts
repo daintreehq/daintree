@@ -8,7 +8,10 @@ import {
   liveAssistantTerminalControl,
 } from "../AssistantTerminalControl.js";
 import { MAX_ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
-import { GLOBAL_ASSISTANT_ID, GLOBAL_ASSISTANT_SLOT } from "../../../../shared/config/globalAssistant.js";
+import {
+  GLOBAL_ASSISTANT_ID,
+  GLOBAL_ASSISTANT_SLOT,
+} from "../../../../shared/config/globalAssistant.js";
 import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
 import type { RunningLane, RunningLaneSession } from "../../HelpSessionService.js";
@@ -944,7 +947,11 @@ describe("AssistantTerminalControl (#13496)", () => {
       addLane(1, "t-one");
 
       const listed = await control.list(LOCAL);
-      expect(listed.global).toEqual({ terminalId: "t-global", generation: 7, agentState: "working" });
+      expect(listed.global).toEqual({
+        terminalId: "t-global",
+        generation: 7,
+        agentState: "working",
+      });
       expect(listed.assistants.map((entry) => entry.terminalId)).toEqual(["t-one"]);
       expect(listed.vacantSlots).toContain(GLOBAL_ASSISTANT_SLOT);
       expect((await control.list(RELAY)).global).toBeNull();

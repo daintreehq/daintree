@@ -358,7 +358,10 @@ const ASSISTANT_WATCH_TOOLS: ReadonlySet<string> = new Set([
  * last-message read, and no `notify` or `waitForReply` on a send, which both
  * quote the screen they settle on. Null when the call may go ahead.
  */
-function globalTargetRefusal(actionId: string, args: unknown): { code: string; message: string } | null {
+function globalTargetRefusal(
+  actionId: string,
+  args: unknown
+): { code: string; message: string } | null {
   const record =
     typeof args === "object" && args !== null && !Array.isArray(args)
       ? (args as Record<string, unknown>)
@@ -1602,7 +1605,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               kind: "result",
               value: {
                 ok: false,
-                error: { code: auditCodeForAssistantRefusal(refusal.code), message: refusal.message },
+                error: {
+                  code: auditCodeForAssistantRefusal(refusal.code),
+                  message: refusal.message,
+                },
               },
             };
             return buildToolError(refusal);

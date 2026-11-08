@@ -305,7 +305,12 @@ describe("buildViewlessTerminalStatus results", () => {
         projectId: GLOBAL_ASSISTANT_ID,
         isAssistantTerminal: true,
         agentState: "waiting",
-        lastHandback: { message: "Use studio-02", observedAt: 5, submissionToken: "mine", truncated: false },
+        lastHandback: {
+          message: "Use studio-02",
+          observedAt: 5,
+          submissionToken: "mine",
+          truncated: false,
+        },
         ...overrides,
       });
 
