@@ -11,6 +11,7 @@ import { bandForRun } from "@shared/utils/fleetBands";
 import { usePanelStore } from "@/store/panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
+import { CanopyFrameContext, standaloneCanopyFrame } from "../canopyFrame";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { DICTATION_OWNER_ATTR, canopyReplyVoiceId } from "@/services/canopyReplyDictation";
 import {
@@ -39,6 +40,8 @@ interface ComposerProps {
 interface TerminalProps {
   runId: string;
   spawnedAt: number;
+  sizesOnUse?: boolean;
+  uses?: number;
   onStreamChange: (state: {
     watchId: number | null;
     ended: boolean;
@@ -1065,6 +1068,69 @@ describe("CanopyCard", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("in a window where only use takes the size (#16339)", () => {
+    const WINDOW_FRAME = standaloneCanopyFrame({
+      close: () => {},
+      goToRun: null,
+      restoreElsewhere: () => {},
+      openAssistant: async () => null,
+      takesTerminalSize: "on-use",
+    });
+    const RISKY = {
+      options: ["Yes", "Yes, allow all edits during this session"],
+      risk: "caution" as const,
+      riskReason: "Rewrites every saved profile",
+    };
+    const uses = () => terminalProps.current!.uses;
+
+    function renderInWindow() {
+      const h = handlers();
+      const ref = createRef<CanopyCardHandle>();
+      render(
+        <CanopyFrameContext value={WINDOW_FRAME}>
+          <CanopyCard ref={ref} item={itemFor("approval", RISKY)} {...PROPS} {...h} />
+        </CanopyFrameContext>
+      );
+      return { h, ref };
+    }
+
+    it("leaves the dialog's terminal taking the size as its row is selected", () => {
+      renderCard(itemFor("question"));
+      expect(terminalProps.current!.sizesOnUse).toBe(false);
+    });
+
+    it("counts each reply and key sent from beside the terminal as a use of it, never Escape", async () => {
+      renderInWindow();
+      expect(terminalProps.current).toMatchObject({ sizesOnUse: true, uses: 0 });
+      await streamOpens({ watchId: 7 });
+
+      await act(async () => (await composer()).onSendKey("escape"));
+      expect(uses()).toBe(0);
+      await act(async () => (await composer()).onSendKey("up"));
+      expect(uses()).toBe(1);
+      await act(async () => (await composer()).onSend({ text: "Keep it read-only" }));
+      expect(uses()).toBe(2);
+    });
+
+    it("counts an answer once it goes, not the press that only arms it", () => {
+      vi.useFakeTimers();
+      try {
+        const { h, ref } = renderInWindow();
+        act(() => {
+          ref.current!.handleKey(keyPress("2"));
+        });
+        expect(uses()).toBe(0);
+        act(() => {
+          ref.current!.handleKey(keyPress("2"));
+        });
+        expect(h.onAnswer).toHaveBeenCalledTimes(1);
+        expect(uses()).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("answers by clicking a choice, through the same guarded path as its number", () => {
