@@ -984,6 +984,63 @@ describe("VoiceRecordingService — background recording", () => {
       expect(ctx.close).toHaveBeenCalledTimes(1);
     });
 
+    it("names every step still unfinished", async () => {
+      const { ctx, service, timeouts } = await loadHarness();
+      ctx.resume.mockImplementationOnce(NEVER);
+      ctx.audioWorklet.addModule.mockImplementationOnce(NEVER);
+
+      void service.start(TARGET);
+      await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+
+      expect(timeouts().map((t) => [...(t.pending ?? [])].sort())).toEqual([
+        ["audio_context_resume", "worklet_load"],
+      ]);
+    });
+
+    it("leaves no deadline behind a graph that fails early", async () => {
+      const { ctx, notify, service, timeouts } = await loadHarness();
+      ctx.audioWorklet.addModule.mockRejectedValueOnce(new Error("module failed"));
+
+      await service.start(TARGET);
+      expect(notify).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+      expect(timeouts()).toEqual([]);
+      expect(notify).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves a newer context alone when an older start's deadline lapses", async () => {
+      const { ctx, service, timeouts } = await loadHarness();
+      const __state = await voiceStoreState();
+      const newer = buildAudioContextMock().ctx;
+      const contexts = [ctx, newer];
+      const audioContextCtor = vi.fn(function () {
+        return contexts.shift();
+      });
+      vi.stubGlobal("AudioContext", audioContextCtor);
+      ctx.audioWorklet.addModule.mockImplementationOnce(NEVER);
+
+      void service.start(TARGET);
+      await vi.advanceTimersByTimeAsync(1_000);
+      void service.start({ panelId: "panel-2", panelTitle: "Other" });
+      // The first deadline retires the stuck context; the second, on the start
+      // sharing it, is still to come when a healthy start builds a new one.
+      while (timeouts().length === 0) await vi.advanceTimersByTimeAsync(100);
+      __state.activeTarget = { panelId: TARGET.panelId };
+      await service.start(TARGET);
+      expect(audioContextCtor).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+      expect(timeouts()).toHaveLength(2);
+      await service.stop("Dictation stopped.", { skipRemoteStop: true });
+      await vi.advanceTimersByTimeAsync(0);
+      __state.activeTarget = null;
+
+      // Parked for the next dictation, not closed as a retired context would be.
+      expect(newer.suspend).toHaveBeenCalledTimes(1);
+      expect(newer.close).not.toHaveBeenCalled();
+    });
+
     it("names a resume never issued because the last stop's suspend is stuck", async () => {
       const { ctx, audioContextCtor, notify, service, timeouts } = await loadHarness();
       const __state = await voiceStoreState();

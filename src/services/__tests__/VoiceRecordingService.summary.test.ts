@@ -724,8 +724,14 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     try {
       const { service, summaries } = await load();
 
-      void service.toggle(TARGET);
+      const toggling = service.toggle(TARGET);
+      await vi.advanceTimersByTimeAsync(1_000);
+      harness.paintFrames();
+      // Still waiting on the graph, so this isn't an ordinary failed start.
+      expect(summaries()).toEqual([]);
+
       await vi.advanceTimersByTimeAsync(60_000);
+      await toggling;
       harness.paintFrames();
 
       expect(summaries()).toMatchObject([
