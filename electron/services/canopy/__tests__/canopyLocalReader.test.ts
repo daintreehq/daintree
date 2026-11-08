@@ -477,20 +477,16 @@ describe("tryReaderModel", () => {
   });
 
   it.each([
-    ["can't load", { load: new Error("This model needs a newer version of Daintree") }],
-    ["can't read a screen", { read: new Error("Tokenizer has no [SEP]") }],
-  ])(
+    ["can't load", "load", "This model needs a newer version of Daintree"],
+    ["can't read a screen", "read", "Tokenizer has no [SEP]"],
+  ] as const)(
     "says a model that the reader reports %s can never run here, letting its reader go",
-    async (_label, outcome) => {
+    async (_label, stage, message) => {
       const { tryReaderModel } = await import("../canopyLocalReader.js");
       const { CanopyReaderError } = await import("../canopyReaderProcess.js");
       const { CanopyModelUnrunnable } = await import("../canopyModels.js");
-      const reported = new CanopyReaderError(
-        (outcome.load ?? outcome.read)!.message,
-        outcome.load !== undefined,
-        true
-      );
-      const p = trialProcess(outcome.load ? { load: reported } : { read: reported });
+      const reported = new CanopyReaderError(message, stage === "load", true);
+      const p = trialProcess(stage === "load" ? { load: reported } : { read: reported });
       await expect(
         tryReaderModel("/updates/abc.download", undefined, () => p as never)
       ).rejects.toBeInstanceOf(CanopyModelUnrunnable);
