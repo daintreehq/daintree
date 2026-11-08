@@ -181,11 +181,7 @@ export function JiraSettingsTab() {
   };
 
   const openTokensPage = () => {
-    void actionService.dispatch(
-      "system.openExternal",
-      { url: API_TOKENS_URL },
-      { source: "user" }
-    );
+    void actionService.dispatch("system.openExternal", { url: API_TOKENS_URL }, { source: "user" });
   };
 
   const busy = isSaving || isClearing;

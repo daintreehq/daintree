@@ -188,7 +188,10 @@ describe("adfToText", () => {
         doc(
           { type: "panel", attrs: { panelType: "info" }, content: [para(text("note"))] },
           { type: "expand", attrs: { title: "More" }, content: [para(text("hidden"))] },
-          { type: "mediaSingle", content: [{ type: "media", attrs: { id: "1", alt: "shot.png" } }] },
+          {
+            type: "mediaSingle",
+            content: [{ type: "media", attrs: { id: "1", alt: "shot.png" } }],
+          },
           { type: "mediaGroup", content: [{ type: "media", attrs: { id: "2" } }] }
         )
       )

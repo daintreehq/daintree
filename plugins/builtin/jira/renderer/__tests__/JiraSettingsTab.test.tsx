@@ -30,16 +30,14 @@ const getCredentialStatus = vi.fn(async () => ({ hasCredential: tokenStored }));
 const clearCredential = vi.fn(async () => {
   tokenStored = false;
 });
-const setCredential = vi.fn(
-  async (_providerId: string, _credentials: Record<string, string>) => {
-    order.push("credential");
-    return { valid: true, account: "Ada Lovelace" } as {
-      valid: boolean;
-      account?: string;
-      error?: string;
-    };
-  }
-);
+const setCredential = vi.fn(async (_providerId: string, _credentials: Record<string, string>) => {
+  order.push("credential");
+  return { valid: true, account: "Ada Lovelace" } as {
+    valid: boolean;
+    account?: string;
+    error?: string;
+  };
+});
 
 beforeAll(() => whenPluginUiReady(), 30_000);
 
@@ -178,9 +176,9 @@ describe("JiraSettingsTab", () => {
     fill({ site: "new.atlassian.net", email: "new@example.com", token: "t" });
     fireEvent.click(saveButton());
 
-    expect((await screen.findAllByText("Couldn't save the Jira connection")).length).toBeGreaterThan(
-      0
-    );
+    expect(
+      (await screen.findAllByText("Couldn't save the Jira connection")).length
+    ).toBeGreaterThan(0);
     await waitFor(() => expect(stored.siteUrl).toBe("https://old.atlassian.net"));
   });
 

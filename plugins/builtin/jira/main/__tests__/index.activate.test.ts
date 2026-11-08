@@ -119,9 +119,7 @@ describe("activate", () => {
       valid: true,
       account: "Ada",
     });
-    expect(vi.mocked(fetch).mock.calls[0][0]).toBe(
-      "https://acme.atlassian.net/rest/api/3/myself"
-    );
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe("https://acme.atlassian.net/rest/api/3/myself");
     dispose();
   });
 

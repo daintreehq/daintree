@@ -102,7 +102,9 @@ describe("buildIssueJql", () => {
   });
 
   it("refuses a sort it can't serve by name", () => {
-    expect(() => buildIssueJql("ENG", { sort: "comments" })).toThrow(/can't sort issues by "comments"/);
+    expect(() => buildIssueJql("ENG", { sort: "comments" })).toThrow(
+      /can't sort issues by "comments"/
+    );
   });
 
   it("adds the search inside the project and state", () => {

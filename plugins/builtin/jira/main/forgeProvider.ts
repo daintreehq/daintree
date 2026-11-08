@@ -293,8 +293,7 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
     const jql = buildIssueJql(repo.repo, opts);
     if (jql === null) return { items: [], nextCursor: null, hasMore: false };
     const op = await beginOp();
-    const namedKey =
-      opts.search && !opts.cursor ? issueKeyInSearch(opts.search, repo.repo) : null;
+    const namedKey = opts.search && !opts.cursor ? issueKeyInSearch(opts.search, repo.repo) : null;
     const [named, page] = await Promise.all([
       namedKey ? fetchIssue(namedKey, op) : null,
       searchIssues(jql, opts, op),
