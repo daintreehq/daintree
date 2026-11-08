@@ -240,10 +240,7 @@ describe("buildFleetBroadcastRecipeContext", () => {
     );
     worktrees.set("wt-g", makeWorktree("wt-g", { issueNumber: 42, issueKey: "ENG-42" }));
     installViewStore(worktrees);
-    seedPanels([
-      makeAgent("tl", { worktreeId: "wt-l" }),
-      makeAgent("tg", { worktreeId: "wt-g" }),
-    ]);
+    seedPanels([makeAgent("tl", { worktreeId: "wt-l" }), makeAgent("tg", { worktreeId: "wt-g" })]);
     expect(buildFleetBroadcastRecipeContext("tl")).toMatchObject({
       issueKey: "ENG-42",
       issueTitle: "Fix the login race",
