@@ -96,6 +96,24 @@ export function runDetail(run: ScheduledRun): RunDetail | null {
   }
 }
 
+/**
+ * The worktree a new-worktree schedule made for this run (#16369), for its row
+ * to name. Null when none was made. `removed` is true only once the project's
+ * worktrees are known (`worktreeIds` non-null) and this one isn't among them,
+ * whatever the run did or didn't capture.
+ */
+export function runWorktreeNote(
+  run: ScheduledRun,
+  worktreeIds: ReadonlySet<string> | null
+): { branch: string; removed: boolean } | null {
+  const made = run.newWorktree;
+  if (!made || made.worktreeId === null) return null;
+  return {
+    branch: made.branch,
+    removed: worktreeIds !== null && !worktreeIds.has(made.worktreeId),
+  };
+}
+
 /** A worker an Assistant run launched, in words: the agent, the machine and the project. */
 export function workerWords(worker: ScheduledRunWorker): string {
   const agent = worker.agentId
@@ -120,7 +138,7 @@ export type RunAction =
  */
 export function runAction(
   run: ScheduledRun,
-  context: { terminalExists: boolean; worktreeIds: ReadonlySet<string> }
+  context: { terminalExists: boolean; worktreeIds: ReadonlySet<string> | null }
 ): RunAction {
   // A pane whose terminal was never seen to start holds only its launch error,
   // which the row already says; Open would show nothing more.
@@ -165,13 +183,24 @@ export function runAction(
           explanation: `${agentName} didn't report a session for this run, so there's no conversation to reopen`,
         };
   }
-  if (resume.worktreeId !== null && !context.worktreeIds.has(resume.worktreeId)) {
-    return {
-      kind: "none",
-      label: "Worktree removed",
-      explanation:
-        "The worktree this run worked in has been removed, so its conversation can't be reopened there",
-    };
+  if (resume.worktreeId !== null) {
+    // Resume lands in the run's worktree and does nothing when it's gone, so it's
+    // offered only once the worktrees say it's there.
+    if (context.worktreeIds === null) {
+      return {
+        kind: "none",
+        label: null,
+        explanation: "Reopening waits until the project's worktrees have loaded",
+      };
+    }
+    if (!context.worktreeIds.has(resume.worktreeId)) {
+      return {
+        kind: "none",
+        label: "Worktree removed",
+        explanation:
+          "The worktree this run worked in has been removed, so its conversation can't be reopened there",
+      };
+    }
   }
   const resumable =
     buildResumeCommand(resume.agentId, resume.agentSessionId, resume.agentLaunchFlags) ??

@@ -128,7 +128,7 @@ describe("ScheduleEditor: a new worktree each run (#16369)", () => {
 
   it("won't save the mode without a base branch, and says which field", async () => {
     renderEditor(existing());
-    await chooseWorktree("New worktree each run");
+    await chooseWorktree("New worktree for each run");
     await save();
 
     expect(clientMock.update).not.toHaveBeenCalled();
@@ -137,7 +137,7 @@ describe("ScheduleEditor: a new worktree each run (#16369)", () => {
 
   it("saves the chosen remote base, clearing any fixed worktree", async () => {
     renderEditor(existing({ worktreeId: "/wt" }));
-    await chooseWorktree("New worktree each run");
+    await chooseWorktree("New worktree for each run");
     await waitFor(() => expect(listBranches).toHaveBeenCalledWith("/repo"));
 
     await act(async () => fireEvent.click(screen.getByRole("combobox", { name: "Base branch" })));
@@ -190,12 +190,44 @@ describe("ScheduleEditor: a new worktree each run (#16369)", () => {
     expect(screen.queryByText("No changes to save")).toBeNull();
   });
 
+  it("opens a saved schedule on the mode and the base it was saved with", async () => {
+    renderEditor(existing({ newWorktree: { baseBranch: "origin/develop", fromRemote: true } }));
+
+    expect(screen.getByRole("combobox", { name: "Worktree" }).textContent).toContain(
+      "New worktree for each run"
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Base branch" }).textContent).toContain(
+        "origin/develop"
+      )
+    );
+  });
+
+  it.each([
+    ["a fixed worktree", "feature", "/wt"],
+    ["the main checkout", "Main checkout", null],
+  ])("saves %s once the mode is switched off, with no base", async (_name, label, worktreeId) => {
+    renderEditor(existing({ newWorktree: { baseBranch: "main", fromRemote: false } }));
+
+    await chooseWorktree(label);
+    expect(screen.queryByText("Base branch")).toBeNull();
+    await save();
+
+    expect(clientMock.update).toHaveBeenCalledWith(
+      "s1",
+      expect.anything(),
+      expect.objectContaining({
+        launch: expect.objectContaining({ worktreeId, newWorktree: null }),
+      })
+    );
+  });
+
   it("keeps the base when the choice moves away and back", async () => {
     renderEditor(existing({ newWorktree: { baseBranch: "main", fromRemote: false } }));
 
     await chooseWorktree("feature");
     expect(screen.queryByText("Base branch")).toBeNull();
-    await chooseWorktree("New worktree each run");
+    await chooseWorktree("New worktree for each run");
     await save();
 
     expect(clientMock.update).not.toHaveBeenCalled();
@@ -205,7 +237,7 @@ describe("ScheduleEditor: a new worktree each run (#16369)", () => {
 
   it("takes keyboard focus to the base when saving without one", async () => {
     renderEditor(existing());
-    await chooseWorktree("New worktree each run");
+    await chooseWorktree("New worktree for each run");
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Base branch" })).toBeTruthy());
 
     await save();

@@ -449,7 +449,7 @@ export function ScheduleEditor({
       value: choice.id ?? MAIN_CHECKOUT_VALUE,
       label: choice.label,
     })),
-    { value: NEW_WORKTREE_VALUE, label: "New worktree each run" },
+    { value: NEW_WORKTREE_VALUE, label: "New worktree for each run" },
   ];
   if (draft.worktreeId !== null && !worktrees.some((choice) => choice.id === draft.worktreeId)) {
     worktreeOptions.push({ value: draft.worktreeId, label: "Missing worktree" });

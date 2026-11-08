@@ -8,7 +8,7 @@ import type { WorktreeChoice } from "./ScheduleEditor";
  * and each other worktree's label by id, as the list and history name it.
  */
 export function useWorktreeChoices() {
-  const { worktrees } = useWorktrees();
+  const { worktrees, isInitialized, isLoading, isReconnecting, error } = useWorktrees();
   const choices = useMemo<WorktreeChoice[]>(() => {
     const main = worktrees.find((worktree) => worktree.isMainWorktree);
     const others = worktrees.filter((worktree) => !worktree.isMainWorktree);
@@ -26,6 +26,15 @@ export function useWorktreeChoices() {
       new Map(choices.flatMap((choice) => (choice.id ? [[choice.id, choice.label] as const] : []))),
     [choices]
   );
-  const ids = useMemo(() => new Set(worktrees.map((worktree) => worktree.id)), [worktrees]);
+  // Null until the project's worktrees are known, as a landing judges it
+  // (`knowsWorktrees`): a git project always lists its main checkout, so an empty
+  // list only says the host hasn't reported (a folder that isn't one has no
+  // worktree for a run to name), and a reconnecting one may be out of date.
+  const known = isInitialized && !isLoading && !isReconnecting && error === null;
+  const ids = useMemo(
+    () =>
+      known && worktrees.length > 0 ? new Set(worktrees.map((worktree) => worktree.id)) : null,
+    [worktrees, known]
+  );
   return { choices, labels, ids };
 }
