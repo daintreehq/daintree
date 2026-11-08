@@ -230,6 +230,13 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   // it wasn't applied, and the store keeps the value in effect.
   const [thresholdDraft, setThresholdDraft] = useState<string | null>(null);
   const [thresholdRejected, setThresholdRejected] = useState(false);
+  const [seenThreshold, setSeenThreshold] = useState(autoRestartThresholdMb);
+  // A change from elsewhere wins over a half-typed entry, as in useCommittedNumberDraft.
+  if (seenThreshold !== autoRestartThresholdMb) {
+    setSeenThreshold(autoRestartThresholdMb);
+    setThresholdDraft(null);
+    setThresholdRejected(false);
+  }
 
   useEffect(() => {
     void initializeFromHardware();

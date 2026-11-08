@@ -566,10 +566,24 @@ describe("TerminalSettingsTab auto-restart threshold", () => {
 
   it("saves once on blur", () => {
     const input = setup();
+    const persist = vi.mocked(window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb);
+    persist.mockClear();
     fireEvent.change(input, { target: { value: "16384" } });
+    fireEvent.blur(input);
     fireEvent.blur(input);
     expect(saved()).toBe(16384);
     expect(input.value).toBe("16384");
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(persist).toHaveBeenCalledWith(16384);
+  });
+
+  it("drops a half-typed entry when the stored value changes elsewhere", () => {
+    const input = setup();
+    fireEvent.change(input, { target: { value: "16384" } });
+    act(() => useMemoryLeakConfigStore.getState().setAutoRestartThresholdMb(4096));
+    expect(input.value).toBe("4096");
+    fireEvent.blur(input);
+    expect(saved()).toBe(4096);
   });
 
   it("saves on Enter", () => {
