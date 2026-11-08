@@ -13,6 +13,10 @@ import type {
 const blocks = vi.hoisted(() => ({ current: [] as AgentInstallBlock[] }));
 const installOS = vi.hoisted(() => ({ current: "linux" as AgentInstallOS }));
 
+// No grid to open a terminal in: install commands stay copy-only here.
+vi.mock("@/hooks/terminal/useInstallCommandRunner", () => ({
+  useInstallCommandRunner: () => null,
+}));
 vi.mock("@/clients", () => ({
   systemClient: { openExternal: vi.fn(() => Promise.resolve()) },
 }));

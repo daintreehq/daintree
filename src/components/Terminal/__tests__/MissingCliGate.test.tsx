@@ -27,6 +27,10 @@ const cliStore = vi.hoisted(() => {
   return { state, useStore };
 });
 
+// No grid to open a terminal in: install commands stay copy-only here.
+vi.mock("@/hooks/terminal/useInstallCommandRunner", () => ({
+  useInstallCommandRunner: () => null,
+}));
 vi.mock("@/store/cliAvailabilityStore", () => ({
   useCliAvailabilityStore: cliStore.useStore,
 }));

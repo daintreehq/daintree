@@ -8,7 +8,7 @@ import { detectOS, isBlockExecutable } from "@/lib/agentInstall";
 import { systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { useInstallCommandRunner } from "@/hooks/terminal/useInstallCommandRunner";
-import { installLineForCommands } from "@/services/terminal/installCommandHandoff";
+import { installLineForCommands } from "@/services/terminal/installCommandLine";
 import { recheckMissingPrerequisites } from "@/lib/recheckMissingPrerequisites";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";

@@ -1,4 +1,3 @@
-import type { AgentInstallOS } from "@shared/config/agentRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { isShellPromptLine } from "@shared/utils/shellPrompt";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
@@ -11,10 +10,9 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { usePanelStore } from "@/store/panelStore";
 import { logError, logWarn } from "@/utils/logger";
 import { load as loadTerminalService } from "./terminalInstanceServiceAccessor";
+import { isStageableInstallLine, type InstallTarget } from "./installCommandLine";
 
-/** What a staged install command is meant to make available, so it can be re-checked. */
-export type InstallTarget =
-  { kind: "prerequisite"; tool: string } | { kind: "agent"; agentId: string };
+export type { InstallTarget };
 
 export interface InstallCommandRequest {
   line: string;
@@ -41,32 +39,6 @@ const WATCH_MAX_MS = 60 * 60_000;
 // A double click opens one terminal per line, not two.
 const opening = new Set<string>();
 const watches = new Map<string, () => void>();
-
-/**
- * The one line a block's commands are typed as, or null when they can't be
- * one. A POSIX shell runs them in order with `&&`, the same line the banner
- * shows. Windows has no join that holds in every shell a terminal there may
- * run (Windows PowerShell has no `&&`, and `;` would run the next step after a
- * failed one), so a Windows block of several commands offers each on its own.
- */
-export function installLineForCommands(
-  commands: readonly string[] | undefined,
-  os: AgentInstallOS
-): string | null {
-  if (!commands || commands.length === 0) return null;
-  if (commands.length > 1 && os === "windows") return null;
-  const line = commands.map((command) => command.trim()).join(" && ");
-  return isStageableInstallLine(line) ? line : null;
-}
-
-/**
- * Whether a command can be typed at a prompt without running anything: one
- * line, and no control character (a newline or carriage return would submit
- * it, a tab would complete it).
- */
-export function isStageableInstallLine(line: string): boolean {
-  return line.trim().length > 0 && !/\p{Cc}/u.test(line);
-}
 
 function isPanelGone(id: string): boolean {
   const panel = usePanelStore.getState().panelsById[id];

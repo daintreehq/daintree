@@ -15,6 +15,10 @@ const installBlocks = vi.hoisted(() => ({
   current: null as null | { label: string; commands: string[] }[],
 }));
 
+// No grid to open a terminal in: install commands stay copy-only here.
+vi.mock("@/hooks/terminal/useInstallCommandRunner", () => ({
+  useInstallCommandRunner: () => null,
+}));
 vi.mock("@/lib/agentInstall", () => ({
   getInstallBlocksForCurrentOS: () => installBlocks.current,
   extractInspectUrl: () => undefined,

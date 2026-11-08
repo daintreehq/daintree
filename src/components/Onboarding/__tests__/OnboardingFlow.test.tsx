@@ -105,14 +105,17 @@ type MockWizardStep = { type: "appearance" | "agents" | "privacy" | "cli" | "com
 vi.mock("@/components/Setup/AgentSetupWizard", () => ({
   AgentSetupWizard: vi.fn(
     (props: {
-      onClose: () => void;
+      onClose: (reason?: "handoff") => void;
       isFirstRun?: boolean;
       onStepChange?: (step: MockWizardStep) => void;
     }) => {
       return (
         <div data-testid="agent-setup-wizard" data-first-run={props.isFirstRun ? "true" : "false"}>
-          <button data-testid="close-wizard" onClick={props.onClose}>
+          <button data-testid="close-wizard" onClick={() => props.onClose()}>
             Close
+          </button>
+          <button data-testid="handoff-wizard" onClick={() => props.onClose("handoff")}>
+            Handoff
           </button>
           <button
             data-testid="emit-step-appearance"
@@ -140,6 +143,13 @@ const { dismissSetupBannerHookMock } = vi.hoisted(() => ({
 }));
 vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
   dismissSetupBanner: dismissSetupBannerHookMock,
+}));
+
+const { actionDispatchMock } = vi.hoisted(() => ({
+  actionDispatchMock: vi.fn(() => Promise.resolve({ ok: true })),
+}));
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: actionDispatchMock },
 }));
 
 import { OnboardingFlow } from "../OnboardingFlow";
@@ -579,5 +589,54 @@ describe("OnboardingFlow E2E skip", () => {
       isDaintreeEnvEnabledMock.mockReturnValue(false);
       vi.resetModules();
     }
+  });
+});
+
+describe("OnboardingFlow wizard opened from the panel palette", () => {
+  const defaultProps = {
+    availability: {} as import("@shared/types").CliAvailability,
+    onRefreshSettings: vi.fn(() => Promise.resolve()),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    openWizardListeners.clear();
+    onboardingMock.get.mockResolvedValue({ ...defaultOnboardingState, completed: true });
+  });
+
+  async function openFromPalette() {
+    const view = await act(async () => render(<OnboardingFlow {...defaultProps} />));
+    await act(async () => {
+      await flushHydration();
+    });
+    await act(async () => {
+      fireOpenWizard({ returnToPanelPalette: true });
+    });
+    return view.baseElement.ownerDocument;
+  }
+
+  it("returns to the palette when it closes", async () => {
+    const doc = await openFromPalette();
+    await act(async () => {
+      (doc.querySelector('[data-testid="close-wizard"]') as HTMLButtonElement).click();
+    });
+
+    expect(actionDispatchMock).toHaveBeenCalledWith("panel.palette", undefined, {
+      source: "user",
+    });
+  });
+
+  it("leaves the palette closed when it closed to show a terminal", async () => {
+    const doc = await openFromPalette();
+    await act(async () => {
+      (doc.querySelector('[data-testid="handoff-wizard"]') as HTMLButtonElement).click();
+    });
+
+    expect(doc.querySelector('[data-testid="agent-setup-wizard"]')).toBeNull();
+    expect(actionDispatchMock).not.toHaveBeenCalledWith(
+      "panel.palette",
+      expect.anything(),
+      expect.anything()
+    );
   });
 });

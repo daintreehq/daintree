@@ -1,28 +1,17 @@
-import { createContext, useContext } from "react";
-import {
-  openInstallCommandInTerminal,
-  type InstallTarget,
-} from "@/services/terminal/installCommandHandoff";
+import { useContext } from "react";
+import type { InstallTarget } from "@/services/terminal/installCommandLine";
+import { logError } from "@/utils/logger";
+import { InstallCommandHandoffContext } from "./installCommandHandoffContext";
 import { useHomeTerminalPlacement } from "./useHomeTerminalPlacement";
 
 export type InstallCommandRunner = (line: string, target: InstallTarget) => void;
-
-/** Gets a dialog out of the way, then opens the terminal. */
-export type InstallCommandHandoff = (open: () => void) => void;
-
-/**
- * Set by a dialog that shows install commands, since a terminal opened behind
- * a modal can't be typed into. Unset where nothing covers the grid; null while
- * the dialog can't close (an install it runs is still going).
- */
-export const InstallCommandHandoffContext = createContext<InstallCommandHandoff | null | undefined>(
-  undefined
-);
 
 /**
  * Opens an install command in a new terminal of this window's grid, typed but
  * not run. Null while there is no grid to open one in (no project or scratch)
  * or a dialog over it can't close, so a surface shows the command as copy-only.
+ * The opener, with the panel store and terminal service it needs, loads on the
+ * first click rather than with every surface that shows a command.
  */
 export function useInstallCommandRunner(): InstallCommandRunner | null {
   const handoff = useContext(InstallCommandHandoffContext);
@@ -30,7 +19,13 @@ export function useInstallCommandRunner(): InstallCommandRunner | null {
   if (!placement.ready || handoff === null) return null;
   const { cwd, worktreeId } = placement;
   return (line, target) => {
-    const open = () => void openInstallCommandInTerminal({ line, target, cwd, worktreeId });
+    const open = () => {
+      import("@/services/terminal/installCommandHandoff")
+        .then(({ openInstallCommandInTerminal }) =>
+          openInstallCommandInTerminal({ line, target, cwd, worktreeId })
+        )
+        .catch((error: unknown) => logError("Failed to open an install command", error));
+    };
     if (handoff) handoff(open);
     else open();
   };

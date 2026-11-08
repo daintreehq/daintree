@@ -1,5 +1,5 @@
 import type { AgentInstallBlock } from "@shared/config/agentRegistry";
-import type { InstallTarget } from "@/services/terminal/installCommandHandoff";
+import type { InstallTarget } from "@/services/terminal/installCommandLine";
 import { CopyableCommand } from "./CopyableCommand";
 import { InstallCommandRows } from "./InstallCommandRows";
 

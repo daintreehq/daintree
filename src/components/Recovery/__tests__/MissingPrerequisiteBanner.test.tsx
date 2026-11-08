@@ -8,6 +8,12 @@ const checkCommandMock = vi.hoisted(() => vi.fn());
 const healthCheckMock = vi.hoisted(() => vi.fn());
 const notifyMock = vi.hoisted(() => vi.fn());
 const dispatchMock = vi.hoisted(() => vi.fn());
+// The window's grid, if it has one: null leaves install commands copy-only.
+const runner = vi.hoisted(() => ({ current: null as null | ((...args: unknown[]) => void) }));
+
+vi.mock("@/hooks/terminal/useInstallCommandRunner", () => ({
+  useInstallCommandRunner: () => runner.current,
+}));
 
 vi.mock("@/clients", () => ({
   systemClient: { checkCommand: checkCommandMock, healthCheck: healthCheckMock },
@@ -127,6 +133,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  runner.current = null;
   progressListeners = [];
   removeListener = vi.fn();
   installAgentMock = vi.fn();
@@ -221,6 +228,75 @@ describe("MissingPrerequisiteBanner", () => {
       // to see what to paste.
       expect(await screen.findByText("sudo apt-get install git")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Install Git" })).toBeNull();
+    });
+
+    describe("in a window with a grid", () => {
+      it("opens a command it won't run itself in a terminal", async () => {
+        const run = vi.fn();
+        runner.current = run;
+        useMissingPrerequisiteStore.setState({
+          missing: [
+            missingGit({ installBlocks: { macos: [{ commands: ["sudo port install git"] }] } }),
+          ],
+        });
+
+        render(<MissingPrerequisiteBanner />);
+
+        await click(await screen.findByRole("button", { name: "Open in terminal" }));
+
+        expect(run).toHaveBeenCalledWith("sudo port install git", {
+          kind: "prerequisite",
+          tool: "git",
+        });
+        // The guide stays the way out, and Re-check beside it.
+        expect(screen.getByRole("button", { name: "View install guide" })).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Re-check" })).toBeTruthy();
+        expect(installAgentMock).not.toHaveBeenCalled();
+      });
+
+      it("opens a block of several steps as the one line it shows", async () => {
+        const run = vi.fn();
+        runner.current = run;
+        useMissingPrerequisiteStore.setState({
+          missing: [
+            missingGit({
+              installBlocks: {
+                macos: [{ commands: ["curl -fsSL https://example.com/i.sh | bash", "git -v"] }],
+              },
+            }),
+          ],
+        });
+
+        render(<MissingPrerequisiteBanner />);
+
+        await click(await screen.findByRole("button", { name: "Open in terminal" }));
+
+        const shown = "curl -fsSL https://example.com/i.sh | bash && git -v";
+        expect(screen.getByText(shown)).toBeTruthy();
+        expect(run).toHaveBeenCalledWith(shown, { kind: "prerequisite", tool: "git" });
+      });
+
+      it("keeps the one-click install for a command it can run", async () => {
+        runner.current = vi.fn();
+        useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+
+        render(<MissingPrerequisiteBanner />);
+
+        expect(await screen.findByRole("button", { name: "Install Git" })).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "Open in terminal" })).toBeNull();
+      });
+
+      it("sends no command whose package manager is missing to a terminal", async () => {
+        runner.current = vi.fn();
+        checkCommandMock.mockResolvedValue(false);
+        useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+
+        render(<MissingPrerequisiteBanner />);
+
+        // `brew install git` would only fail there too.
+        expect(await screen.findByRole("button", { name: "View install guide" })).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "Open in terminal" })).toBeNull();
+      });
     });
 
     it("offers the install guide when there is no block at all", async () => {

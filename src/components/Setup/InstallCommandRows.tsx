@@ -6,7 +6,7 @@ import {
   installLineForCommands,
   isStageableInstallLine,
   type InstallTarget,
-} from "@/services/terminal/installCommandHandoff";
+} from "@/services/terminal/installCommandLine";
 import { CopyableCommand } from "./CopyableCommand";
 
 /**

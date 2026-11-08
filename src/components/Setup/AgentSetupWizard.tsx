@@ -7,7 +7,7 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { AgentCliStep } from "./AgentCliStep";
 import { AgentInputStep } from "./AgentInputStep";
 import { SystemRequirementsSection } from "./SystemRequirementsSection";
-import { InstallCommandHandoffContext } from "@/hooks/terminal/useInstallCommandRunner";
+import { InstallCommandHandoffContext } from "@/hooks/terminal/installCommandHandoffContext";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { AgentCard } from "@/components/agents/AgentCard";

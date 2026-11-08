@@ -40,7 +40,7 @@ import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentInstallSection } from "@/components/agents/AgentCard";
-import { InstallCommandHandoffContext } from "@/hooks/terminal/useInstallCommandRunner";
+import { InstallCommandHandoffContext } from "@/hooks/terminal/installCommandHandoffContext";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AgentInputSettings } from "./AgentInputSettings";
 import { AgentInventorySection } from "./AgentInventorySection";
