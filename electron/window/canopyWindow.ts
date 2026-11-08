@@ -22,6 +22,8 @@ let canopyWindow: BrowserWindow | null = null;
 let canopyViewWebContents: WebContents | null = null;
 /** Bumped as the view starts each new document: a pop-out is answered for by the one that took it up. */
 let canopyViewDocument = 0;
+/** Between a new document's start and its commit or failure: only the page leaving can ask then. */
+let canopyViewNavigating = false;
 /** A Canopy window has stood this session, whether or not it still does. */
 let openedThisSession = false;
 
@@ -140,9 +142,25 @@ export function openCanopyWindow(
   // A window replaced since speaks for nothing that is waiting now.
   const owns = () => canopyWindow === win;
   // A reload takes a waiting pop-out up again as it boots; the page it
-  // replaces can no longer answer for it, nor can a renderer that is gone.
+  // replaces can neither take it up nor answer for it while it leaves, nor
+  // can a renderer that is gone.
+  canopyViewNavigating = false;
   appView.webContents.on("did-start-navigation", (details) => {
-    if (owns() && details.isMainFrame && !details.isSameDocument) canopyViewDocument += 1;
+    if (!owns() || !details.isMainFrame || details.isSameDocument) return;
+    canopyViewDocument += 1;
+    canopyViewNavigating = true;
+  });
+  // Committed, failed or stopped: whichever page stands now is told again, so
+  // one an aborted reload left in place still takes it up.
+  const navigationEnded = (): void => {
+    if (!owns() || !canopyViewNavigating) return;
+    canopyViewNavigating = false;
+    if (pendingPopOut) tellPopOutWaiting();
+  };
+  appView.webContents.on("did-navigate", navigationEnded);
+  appView.webContents.on("did-stop-loading", navigationEnded);
+  appView.webContents.on("did-fail-load", (_event, _code, _description, _url, isMainFrame) => {
+    if (isMainFrame) navigationEnded();
   });
   appView.webContents.on("render-process-gone", () => {
     if (owns()) failPendingPopOut("Its window stopped before Canopy moved.");
@@ -235,20 +253,23 @@ export function popOutToCanopyWindow(
       );
       return;
     }
-    const view = canopyViewWebContents;
-    if (standing && view && !view.isDestroyed()) {
-      try {
-        view.send(CHANNELS.CANOPY_WINDOW_POP_OUT_WAITING);
-      } catch {
-        // A view torn down mid-send closes its window, which fails the pop-out.
-      }
-    }
+    if (standing) tellPopOutWaiting();
   });
+}
+
+function tellPopOutWaiting(): void {
+  const view = canopyViewWebContents;
+  if (!view || view.isDestroyed()) return;
+  try {
+    view.send(CHANNELS.CANOPY_WINDOW_POP_OUT_WAITING);
+  } catch {
+    // A view torn down mid-send closes its window, which fails the pop-out.
+  }
 }
 
 /** The pop-out waiting for the window, kept until the window says it has it. */
 export function peekPendingPopOut(): CanopyPendingPopOut | null {
-  if (!pendingPopOut) return null;
+  if (!pendingPopOut || canopyViewNavigating) return null;
   pendingPopOut.askedBy = canopyViewDocument;
   return { id: pendingPopOut.id, popOut: pendingPopOut.popOut };
 }
@@ -259,7 +280,13 @@ export function peekPendingPopOut(): CanopyPendingPopOut | null {
  * for it again.
  */
 export function acknowledgePopOut(id: number): boolean {
-  if (pendingPopOut?.id !== id || pendingPopOut.askedBy !== canopyViewDocument) return false;
+  if (
+    pendingPopOut?.id !== id ||
+    canopyViewNavigating ||
+    pendingPopOut.askedBy !== canopyViewDocument
+  ) {
+    return false;
+  }
   pendingPopOut.settle(null);
   return true;
 }

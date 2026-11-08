@@ -723,11 +723,10 @@ export function useCanopyInboxFocus({
   // pass. A host picked here first ends it; the user acting here first leaves
   // the row to them, though the host stays held until the host list names it.
   const landingSearchedRef = useRef<number | null>(null);
-  // The restored search is the landing's alone: one given up never blocks a
-  // later search from selecting its top match.
-  const dropLandingSearch = useCallback((landingQuery: string) => {
-    if (restoredQueryRef.current === landingQuery) restoredQueryRef.current = null;
-  }, []);
+  // The search a landing put back, until its arrival is seen. Its own: once
+  // the landing is gone, settled, timed out, replaced or cancelled from
+  // elsewhere, it never blocks a later search from selecting its top match.
+  const landingRestoredRef = useRef<{ id: number; query: string } | null>(null);
   useEffect(() => {
     if (!isOpen || popOutLanding === null || landingSearchedRef.current === popOutLanding.id) {
       return;
@@ -736,16 +735,23 @@ export function useCanopyInboxFocus({
     landingTouchedRef.current = false;
     restoreRef.current = null;
     // Its arrival is the search being put back, not a new one to select the top of.
-    restoredQueryRef.current = popOutLanding.query !== appliedQuery ? popOutLanding.query : null;
+    const restored = popOutLanding.query !== appliedQuery ? popOutLanding.query : null;
+    restoredQueryRef.current = restored;
+    landingRestoredRef.current =
+      restored === null ? null : { id: popOutLanding.id, query: restored };
     if (popOutLanding.query !== query) setQuery(popOutLanding.query);
   }, [isOpen, popOutLanding, query, appliedQuery, setQuery]);
+  const popOutLandingId = popOutLanding?.id ?? null;
+  useEffect(() => {
+    const owned = landingRestoredRef.current;
+    if (owned === null || owned.id === popOutLandingId) return;
+    landingRestoredRef.current = null;
+    if (restoredQueryRef.current === owned.query) restoredQueryRef.current = null;
+  }, [popOutLandingId]);
   const shownStoreHostId = useCanopyStore((s) => s.hostId);
   useEffect(() => {
     if (!isOpen || popOutLanding === null) return;
-    const settle = () => {
-      dropLandingSearch(popOutLanding.query);
-      useCanopyStore.getState().settlePopOutLanding(popOutLanding.id);
-    };
+    const settle = () => useCanopyStore.getState().settlePopOutLanding(popOutLanding.id);
     if (shownStoreHostId !== popOutLanding.hostId) {
       settle();
       return;
@@ -798,18 +804,17 @@ export function useCanopyInboxFocus({
     inWork,
     shownAssistants,
     assistantsLoaded,
-    dropLandingSearch,
   ]);
   // A host that never lists its rows here doesn't hold the landing forever.
   useEffect(() => {
     if (!isOpen || popOutLanding === null) return;
-    const { id, query: landingQuery } = popOutLanding;
-    const timer = setTimeout(() => {
-      dropLandingSearch(landingQuery);
-      useCanopyStore.getState().settlePopOutLanding(id);
-    }, POP_OUT_LANDING_WAIT_MS);
+    const id = popOutLanding.id;
+    const timer = setTimeout(
+      () => useCanopyStore.getState().settlePopOutLanding(id),
+      POP_OUT_LANDING_WAIT_MS
+    );
     return () => clearTimeout(timer);
-  }, [isOpen, popOutLanding, dropLandingSearch]);
+  }, [isOpen, popOutLanding]);
 
   return {
     searchRef,

@@ -521,22 +521,53 @@ describe("a popped-out place across the window's own changes (#16338)", () => {
     expect(peekPendingPopOut()).not.toBeNull();
   });
 
+  /** A main-frame navigation to a new document: a reload. */
+  const reload = (view: EventEmitter) =>
+    view.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+
   it("takes no answer from a page reloaded since it took the place up: the new page asks again", async () => {
     let taken = false;
     void popOutToCanopyWindow(place, noWatch).then(() => (taken = true));
     const view = made[0]!.view.webContents;
-    view.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    // The window's own first load commits before its page asks.
+    reload(view);
+    view.emit("did-navigate");
     const { id } = peekPendingPopOut()!;
 
-    // The page that took it up is replaced before its answer lands.
-    view.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    // The page that took it up is replaced before its answer lands, and while
+    // it leaves it can't take the place up again either.
+    reload(view);
+    expect(acknowledgePopOut(id)).toBe(false);
+    expect(peekPendingPopOut()).toBeNull();
     expect(acknowledgePopOut(id)).toBe(false);
     await Promise.resolve();
     expect(taken).toBe(false);
 
-    // A navigation within the page changes nothing.
+    // The new page is told once it stands, and its answer counts.
+    view.send.mockClear();
+    view.emit("did-navigate");
+    expect(view.send).toHaveBeenCalledWith("canopy-window:pop-out-waiting");
     expect(peekPendingPopOut()?.id).toBe(id);
+    // A navigation within the page changes nothing.
     view.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+    expect(acknowledgePopOut(id)).toBe(true);
+    await Promise.resolve();
+    expect(taken).toBe(true);
+  });
+
+  it("lets the page an aborted reload left in place take the place up again", async () => {
+    let taken = false;
+    void popOutToCanopyWindow(place, noWatch).then(() => (taken = true));
+    const view = made[0]!.view.webContents;
+    const { id } = peekPendingPopOut()!;
+
+    reload(view);
+    expect(acknowledgePopOut(id)).toBe(false);
+    view.send.mockClear();
+    view.emit("did-fail-load", {}, -3, "ERR_ABORTED", "app://", true);
+
+    expect(view.send).toHaveBeenCalledWith("canopy-window:pop-out-waiting");
+    expect(peekPendingPopOut()?.id).toBe(id);
     expect(acknowledgePopOut(id)).toBe(true);
     await Promise.resolve();
     expect(taken).toBe(true);
