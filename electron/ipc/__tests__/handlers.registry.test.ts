@@ -85,6 +85,7 @@ const registerMocks = vi.hoisted(() => ({
   registerConnectivityHandlers: vi.fn(),
   registerAgentDefaultsHandlers: vi.fn(),
   registerProjectPresenceHandlers: vi.fn(),
+  registerOnlineOnlyFilesHandlers: vi.fn(),
   registerProjectPresentationHandlers: vi.fn(),
   registerScratchHandlers: vi.fn(),
   registerWatchdogHandlers: vi.fn(),
@@ -287,6 +288,9 @@ vi.mock("../handlers/agentDefaults.js", () => ({
 }));
 vi.mock("../handlers/projectPresence.js", () => ({
   registerProjectPresenceHandlers: registerMocks.registerProjectPresenceHandlers,
+}));
+vi.mock("../handlers/onlineOnlyFiles.js", () => ({
+  registerOnlineOnlyFilesHandlers: registerMocks.registerOnlineOnlyFilesHandlers,
 }));
 vi.mock("../handlers/projectPresentation.js", () => ({
   registerProjectPresentationHandlers: registerMocks.registerProjectPresentationHandlers,

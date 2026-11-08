@@ -1,4 +1,4 @@
-import type { CloudSyncService } from "@/utils/cloudSyncDetection";
+import type { CloudSyncService } from "@shared/utils/cloudSyncDetection";
 
 export interface CloudSyncWarningCopy {
   title: string;

@@ -3,7 +3,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { notify } from "@/lib/notify";
-import { detectCloudSyncService, type Platform } from "@/utils/cloudSyncDetection";
+import { detectCloudSyncService, type Platform } from "@shared/utils/cloudSyncDetection";
 import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
 import { isHostLinux, isHostMac } from "@/hooks/useHostPlatform";
 

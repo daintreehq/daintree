@@ -1066,6 +1066,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["onboarding:tour-set-progress"]["args"]
     ): Promise<IpcInvokeMap["onboarding:tour-set-progress"]["result"]>;
   };
+  onlineOnlyFiles: {
+    unwatch(
+      ...args: IpcInvokeMap["online-only-files:unwatch"]["args"]
+    ): Promise<IpcInvokeMap["online-only-files:unwatch"]["result"]>;
+    watch(
+      ...args: IpcInvokeMap["online-only-files:watch"]["args"]
+    ): Promise<IpcInvokeMap["online-only-files:watch"]["result"]>;
+  };
   operations: {
     cancel(
       ...args: IpcInvokeMap["operations:cancel"]["args"]
