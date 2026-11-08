@@ -465,6 +465,33 @@ describe("ProjectHostsGroup", () => {
     });
   });
 
+  it("counts a host's agents while its link is up only for the assistant's agents there, with nobody opening it (#16492)", async () => {
+    // The assistant launched agents on a host no one in this window opened:
+    // main keeps its link up for them, and that is all this row hears of it.
+    hostList.hosts = [host("linux", false)];
+    presence = [has("linux")];
+    lists.linux = [worktree("remote-p", "feature/a", [working("t1"), waiting("t2")])];
+    const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
+    expect(hasRow("linux")).toBe(false);
+    expect(locate).not.toHaveBeenCalled();
+    expect(listWorktrees).not.toHaveBeenCalledWith({ hostId: "linux" });
+
+    hostList.hosts = [host("linux")];
+    rerender(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("1"));
+    expect(count(rowFor("linux"), "asking")).toBe("1");
+    expect(switchToHost).not.toHaveBeenCalled();
+    expect(openProjectOnHost).not.toHaveBeenCalled();
+
+    // An agent there finishing reads through as the host says it.
+    lists.linux = [worktree("remote-p", "feature/a", [waiting("t2")])];
+    await act(async () => {
+      emit({ type: "worktrees", hostId: "linux" });
+    });
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBeUndefined());
+    expect(count(rowFor("linux"), "asking")).toBe("1");
+  });
+
   it("shows a matched host whose copy closed as having no worktrees, without asking again", async () => {
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));

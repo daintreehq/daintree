@@ -74,6 +74,7 @@ const m = vi.hoisted(() => {
         return () => sessionAttachedListeners.delete(l);
       }),
       touch: vi.fn((_hostId: string) => {}),
+      connectionState: vi.fn((_hostId: string) => ({ status: "disconnected" }) as unknown),
       hold: vi.fn((_hostId: string) => () => {}),
       addUseCheck: vi.fn((_check: unknown) => () => {}),
       onStateChange: vi.fn((_l: unknown) => () => {}),
@@ -731,6 +732,33 @@ describe("startRemoteHosts", () => {
     expect(offs.registry).toHaveBeenCalledTimes(1);
     expect(offs.manager).toHaveBeenCalledTimes(1);
     expect(offs.metrics).toHaveBeenCalledTimes(1);
+    offMetrics();
+    await stopRemoteHosts();
+  });
+
+  it("lists a host's agents for its assistant's launches only over a link already up (#16492)", async () => {
+    const listed = { targets: [{ terminalId: "t-1" }], complete: true };
+    const listFleetTargets = vi.fn(async (_payload: unknown) => listed);
+    await startRemoteHosts({ hostMode: false });
+    const offMetrics = registerRemoteService("hostMetrics", { listFleetTargets } as never);
+    const [deps] = control.installHostControl.mock.calls[0] as [
+      { listAgentTargets(hostId: string): Promise<unknown> },
+    ];
+    m.client.client.connect.mockClear();
+    m.client.manager.touch.mockClear();
+    m.client.manager.connectionState.mockReturnValue({ status: "disconnected" });
+    await expect(deps.listAgentTargets("control-on")).resolves.toEqual({
+      targets: [],
+      complete: false,
+    });
+    expect(listFleetTargets).not.toHaveBeenCalled();
+    expect(m.client.client.connect).not.toHaveBeenCalled();
+    expect(m.client.manager.touch).not.toHaveBeenCalled();
+
+    m.client.manager.connectionState.mockReturnValue({ status: "connected" });
+    await expect(deps.listAgentTargets("control-on")).resolves.toBe(listed);
+    expect(listFleetTargets).toHaveBeenCalledWith({ hostId: "control-on" });
+    m.client.manager.connectionState.mockReturnValue({ status: "disconnected" });
     offMetrics();
     await stopRemoteHosts();
   });
