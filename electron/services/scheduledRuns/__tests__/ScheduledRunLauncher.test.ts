@@ -1241,6 +1241,107 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
   });
 });
 
+const ALREADY_LAUNCHING: ActionDispatchResult = {
+  ok: true,
+  result: { launched: false, terminalId: null, spawnStatus: "already-launching" },
+};
+
+describe("launchScheduledRun with schedules of one agent due together (#16395)", () => {
+  /**
+   * A view's agent launcher: one launch of an agent at a time, a second
+   * declined while the first is still starting, as `useAgentLauncher` does.
+   */
+  function guardedLauncher(startMs = 10) {
+    const starting = new Set<string>();
+    return vi.fn(async (_target: unknown, request: ScheduledLaunchRequest) => {
+      const { agentId } = request.args;
+      if (starting.has(agentId)) return ALREADY_LAUNCHING;
+      starting.add(agentId);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, startMs));
+        spawnFor(request);
+        return launched(request.args.requestedId);
+      } finally {
+        starting.delete(agentId);
+      }
+    });
+  }
+
+  function withSecondSchedule(agentId = schedule.launch.agentId): Schedule {
+    const other: Schedule = {
+      ...schedule,
+      id: "schedule-2",
+      name: "Nightly review",
+      launch: { ...schedule.launch, agentId },
+    };
+    deps.getSchedule = async (_projectId, scheduleId) => ({
+      schedule: scheduleId === other.id ? other : schedule,
+      switches,
+    });
+    return other;
+  }
+
+  const launchSchedule = (scheduleId: string) =>
+    launchScheduledRun({ projectId: "project-1", scheduleId, origin: SCHEDULED }, deps);
+
+  it("launches both in the view, one after the other, recording no refusal", async () => {
+    withSecondSchedule();
+    deps.launchInView = guardedLauncher();
+
+    const outcomes = await Promise.all([launchSchedule("schedule-1"), launchSchedule("schedule-2")]);
+
+    expect(outcomes).toEqual([
+      expect.objectContaining({ status: "started" }),
+      expect.objectContaining({ status: "started" }),
+    ]);
+    expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+    expect(recorder.registerLaunch).toHaveBeenCalledTimes(2);
+  });
+
+  it("launches both in main when no view shows the project", async () => {
+    withSecondSchedule();
+    deps.findView = () => null;
+    deps.launchWithoutView = guardedLauncher();
+
+    const outcomes = await Promise.all([launchSchedule("schedule-1"), launchSchedule("schedule-2")]);
+
+    expect(outcomes).toEqual([
+      expect.objectContaining({ status: "started" }),
+      expect.objectContaining({ status: "started" }),
+    ]);
+    expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+  });
+
+  it("still records a real refusal of the second launch", async () => {
+    withSecondSchedule();
+    const guarded = guardedLauncher();
+    deps.launchInView = vi.fn(async (view: FakeView, request: ScheduledLaunchRequest) =>
+      request.scheduledRun.scheduleId === "schedule-2"
+        ? {
+            ok: true as const,
+            result: { launched: false, terminalId: null, spawnStatus: "panel-limit" },
+          }
+        : guarded(view, request)
+    );
+
+    const [first, second] = await Promise.all([
+      launchSchedule("schedule-1"),
+      launchSchedule("schedule-2"),
+    ]);
+
+    expect(first).toMatchObject({ status: "started" });
+    expect(second).toEqual({
+      status: "failed",
+      runId: expect.any(String),
+      message: "The project already has as many panels as it can hold.",
+    });
+    expect(recorder.registerRefusedLaunch).toHaveBeenCalledTimes(1);
+    expect(recorder.registerRefusedLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduleId: "schedule-2" })
+    );
+  });
+});
+
 describe("launchScheduledRun with the Daintree Assistant", () => {
   beforeEach(() => {
     schedule = {
