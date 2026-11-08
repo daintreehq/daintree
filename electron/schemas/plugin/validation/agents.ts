@@ -178,6 +178,66 @@ export function validateAgentPermissionBypass(
   });
 }
 
+// The launchers the probe appends to an extensionless native path on Windows.
+const APPENDED_LAUNCHER_SUFFIX = /\.(?:cmd|exe|bat|com)$/i;
+// What a command can already end in and be probed as written, so nothing is added.
+const COMMAND_LAUNCHER_SUFFIX = /\.(?:cmd|exe|bat|com|ps1)$/i;
+
+// A manifest declares where its own CLI lives, so a native path can't name some
+// other file (#16468). A `./` command is probed directly and never reaches
+// these layers, so declaring them beside one would read as accepted and do
+// nothing. A command already carrying a launcher suffix would have the package
+// layers look for `acme.cmd.cmd`, so it fails here rather than as a quiet miss.
+export function validateAgentDiscovery(manifest: ParsedPluginManifest, ctx: z.RefinementCtx): void {
+  manifest.contributes.agents.forEach((agent, index) => {
+    const { command, nativePaths, packages } = agent;
+    const issue = (path: readonly (string | number)[], message: string, errorCode: string) =>
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contributes", "agents", index, ...path],
+        message,
+        params: { errorCode },
+      });
+
+    if (command.startsWith("./")) {
+      for (const [field, declared] of [
+        ["nativePaths", nativePaths],
+        ["packages", packages],
+      ] as const) {
+        if (declared === undefined) continue;
+        issue(
+          [field],
+          `Agent "${agent.id}" has a bundled command, which is probed directly, so ${field} would never be read.`,
+          "agent_discovery_bundled_command"
+        );
+      }
+      return;
+    }
+
+    const hasLauncherSuffix = COMMAND_LAUNCHER_SUFFIX.test(command);
+    if (packages && hasLauncherSuffix) {
+      issue(
+        ["packages"],
+        `Agent "${agent.id}" declares packages, which need a command with no launcher suffix: write "${command.replace(COMMAND_LAUNCHER_SUFFIX, "")}", not "${command}".`,
+        "agent_discovery_suffixed_command"
+      );
+    }
+
+    nativePaths?.forEach((entry, pathIndex) => {
+      const fileName = entry.split(/[\\/]/).at(-1) as string;
+      const namesCommand =
+        fileName === command ||
+        (!hasLauncherSuffix && fileName.replace(APPENDED_LAUNCHER_SUFFIX, "") === command);
+      if (namesCommand) return;
+      issue(
+        ["nativePaths", pathIndex],
+        `Native path "${entry}" must end in the agent's own command "${command}"${hasLauncherSuffix ? "" : ", optionally with .cmd, .exe, .bat or .com"}.`,
+        "agent_native_path_not_command"
+      );
+    });
+  });
+}
+
 /** Pairs each option with the non-option value after it, as a launch reads bypass args. */
 function optionGroups(tokens: readonly string[]): string[][] {
   const groups: string[][] = [];

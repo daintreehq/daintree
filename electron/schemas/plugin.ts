@@ -93,6 +93,7 @@ export {
   ProcessToolContributionSchema,
   AgentDetectionConfigSchema,
   AgentResumeConfigSchema,
+  AgentPackagesContributionSchema,
   AgentContributionSchema,
 } from "./plugin/agents.js";
 export {

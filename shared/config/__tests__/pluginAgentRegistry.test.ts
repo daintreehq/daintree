@@ -149,6 +149,73 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     });
   });
 
+  describe("declared discovery metadata (#16468)", () => {
+    const DISCOVERABLE: PluginAgentContribution = {
+      ...ACME_AGENT,
+      nativePaths: ["~/.acme/bin/acme", "%LOCALAPPDATA%\\Programs\\acme\\acme.exe"],
+      packages: { npm: "@acme/agent", pypi: "acme-agent" },
+    };
+
+    it("reaches the resolved config and survives the snapshot broadcast", () => {
+      registerPluginAgents("acme.plugin", [DISCOVERABLE]);
+      const config = getEffectiveAgentConfig("acme-agent");
+      expect(config?.nativePaths).toEqual(DISCOVERABLE.nativePaths);
+      expect(config?.packages).toEqual(DISCOVERABLE.packages);
+      const cloned = structuredClone(getPluginAgentRegistry());
+      expect(cloned["acme-agent"]?.nativePaths).toEqual(DISCOVERABLE.nativePaths);
+      expect(cloned["acme-agent"]?.packages).toEqual(DISCOVERABLE.packages);
+    });
+
+    it("shares nothing with the contribution it came from", () => {
+      registerPluginAgents("acme.plugin", [DISCOVERABLE]);
+      const config = getEffectiveAgentConfig("acme-agent");
+      expect(config?.nativePaths).not.toBe(DISCOVERABLE.nativePaths);
+      expect(config?.packages).not.toBe(DISCOVERABLE.packages);
+    });
+
+    it("carries one package ecosystem without inventing the other", () => {
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, packages: { pypi: "acme-agent" } }]);
+      expect(Object.keys(getEffectiveAgentConfig("acme-agent")?.packages ?? {})).toEqual(["pypi"]);
+    });
+
+    it("leaves the fields absent when nothing is declared", () => {
+      registerPluginAgents("acme.plugin", [ACME_AGENT]);
+      const config = getEffectiveAgentConfig("acme-agent");
+      expect(config).not.toHaveProperty("nativePaths");
+      expect(config).not.toHaveProperty("packages");
+    });
+
+    it("carries nothing that would run the agent or install anything", () => {
+      // Each of these switches on a probe that runs a command, an update or an
+      // install in a built-in's config, and none is part of the contribution.
+      const contribution = {
+        ...DISCOVERABLE,
+        packages: { ...DISCOVERABLE.packages, brew: "acme", cargo: "acme" },
+        supportsWsl: true,
+        npmGlobalPackage: "@acme/agent",
+        version: { args: ["--version"] },
+        update: { npm: "npm i -g @acme/agent" },
+        install: { byOs: {} },
+      } as PluginAgentContribution;
+      registerPluginAgents("acme.plugin", [contribution]);
+      const config = getEffectiveAgentConfig("acme-agent");
+      expect(config?.packages).toEqual(DISCOVERABLE.packages);
+      for (const field of ["supportsWsl", "npmGlobalPackage", "version", "update", "install"]) {
+        expect(config).not.toHaveProperty(field);
+      }
+    });
+
+    it("is replaced on reload and gone on unload", () => {
+      registerPluginAgents("acme.plugin", [DISCOVERABLE]);
+      registerPluginAgents("acme.plugin", [ACME_AGENT]);
+      expect(getEffectiveAgentConfig("acme-agent")).not.toHaveProperty("nativePaths");
+      expect(getEffectiveAgentConfig("acme-agent")).not.toHaveProperty("packages");
+      registerPluginAgents("acme.plugin", [DISCOVERABLE]);
+      unregisterPluginAgents("acme.plugin");
+      expect(getEffectiveAgentConfig("acme-agent")).toBeUndefined();
+    });
+  });
+
   describe("declared resume (#13687)", () => {
     const HERMES: PluginAgentContribution = {
       ...ACME_AGENT,

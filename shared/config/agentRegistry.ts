@@ -1138,8 +1138,9 @@ export interface AgentConfig {
    * (see `expandWindowsEnvVars()` in electron/setup/environment.ts). On Windows
    * an entry without a launchable extension is probed with `.cmd`, `.exe`,
    * `.bat` and `.com` appended instead of as written, so a POSIX-style entry
-   * also covers a Windows install that shares its layout. Paths are tried in
-   * listed order; first accessible file wins.
+   * also covers a Windows install that shares its layout, while a `/` entry is
+   * skipped there because it names no drive. Paths are tried in listed order;
+   * first accessible file wins.
    */
   nativePaths?: string[];
   /**

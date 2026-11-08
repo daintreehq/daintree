@@ -11,6 +11,7 @@ import {
   AgentDetectionConfigSchema,
   AgentMcpContributionSchema,
   AgentMcpToolGroupSchema,
+  AgentPackagesContributionSchema,
   CommandContributionSchema,
   ContextMenuContributionSchema,
   CredentialFieldSchema,
@@ -245,6 +246,7 @@ const SWEPT_SCHEMAS = {
   "panels.menu": PanelMenuItemSchema,
   "panels.toolbar": PanelToolbarItemSchema,
   "agents.detection": AgentDetectionConfigSchema,
+  "agents.packages": AgentPackagesContributionSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
   "surfaces.projectHome": SurfaceViewSlotSchema,
   "surfaces.worktreeCreate": SurfaceViewSlotSchema,
@@ -436,6 +438,10 @@ type FieldConsumerCoverage = {
   "panels.menu": Record<keyof z.infer<typeof PanelMenuItemSchema>, ConsumerDescriptor>;
   "panels.toolbar": Record<keyof z.infer<typeof PanelToolbarItemSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
+  "agents.packages": Record<
+    keyof z.infer<typeof AgentPackagesContributionSchema>,
+    ConsumerDescriptor
+  >;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "surfaces.projectHome": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "surfaces.worktreeCreate": Record<
@@ -1962,6 +1968,23 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: AGENT_REGISTRY, symbol: "toPluginAgentConfig" }],
       note: "Copied into the runtime agent config context-injection flag.",
     },
+    nativePaths: {
+      mode: "verbatim",
+      consumers: [
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "probedNativePaths" },
+      ],
+      note: "Copied onto the agent config, where discovery checks each path for an executable file and launch starts from a hit; nothing is run to find it.",
+    },
+    packages: {
+      mode: "verbatim",
+      consumers: [
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "probeCommand" },
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "collectCopies" },
+      ],
+      note: "Copied onto the agent config, key by key (see agents.packages).",
+    },
     detection: {
       mode: "verbatim",
       consumers: [{ file: AGENT_REGISTRY, symbol: "toPluginAgentConfig" }],
@@ -2577,6 +2600,23 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: RECIPE_SANITIZER, symbol: "copyPanelArgs" }],
       note: "Handed to the opened panel as initialArgs, or as openRequest to a panel it reuses.",
+    },
+  },
+  "agents.packages": {
+    npm: {
+      mode: "derived-input",
+      consumers: [
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "probeCommand" },
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "collectCopies" },
+      ],
+      note: "Only switches the npm-global shim check on: the name reaches no path and no command.",
+    },
+    pypi: {
+      mode: "derived-input",
+      consumers: [
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "synthesisePypiProbePaths" },
+      ],
+      note: "Names the uv and pipx tool directories discovery checks for the agent's command.",
     },
   },
   "agents.detection": {

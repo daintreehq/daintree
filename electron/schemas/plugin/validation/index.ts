@@ -6,6 +6,7 @@ import { validateAccountConnections, validateServiceNames } from "./accounts.js"
 import {
   validateAgentIds,
   validateAgentMcp,
+  validateAgentDiscovery,
   validateAgentPermissionBypass,
   validateAgentRegistration,
   validateMcpServerSettingsTokens,
@@ -69,6 +70,7 @@ export function validatePluginManifest(
   validateAssistantKnowledge(manifest, ctx);
   validateAgentIds(manifest, ctx);
   validateAgentPermissionBypass(manifest, ctx);
+  validateAgentDiscovery(manifest, ctx);
   validateProcessTools(manifest, ctx);
   validateContributedActionIds(manifest, ctx, context);
   validatePanelActionSurfaces(manifest, ctx, context);
