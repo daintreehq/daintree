@@ -75,6 +75,8 @@ let pushSnapshot: (snapshot: CanopySnapshot) => void = () => {};
 const offSnapshot = vi.fn();
 const closeWindow = vi.fn(async () => {});
 const goToRun = vi.fn(async (_target: { workspaceId: string; runId: string }) => {});
+const offPopOutWaiting = vi.fn();
+const peekPopOut = vi.fn(async () => null);
 
 function snapshot(mode: CanopySnapshot["mode"]): CanopySnapshot {
   return {
@@ -109,7 +111,12 @@ beforeEach(() => {
         getSnapshot: vi.fn(async () => snapshot("on")),
       },
       window: { close: closeWindow },
-      canopyWindow: { goToRun },
+      canopyWindow: {
+        goToRun,
+        peekPopOut,
+        acknowledgePopOut: vi.fn(async () => true),
+        onPopOutWaiting: () => offPopOutWaiting,
+      },
     },
     configurable: true,
     writable: true,
@@ -141,6 +148,13 @@ describe("CanopyWindowRoot", () => {
     const next = { ...snapshot("on"), busy: true };
     act(() => pushSnapshot(next));
     expect(useCanopyStore.getState().snapshot?.busy).toBe(true);
+  });
+
+  it("asks for a dialog popped out before it booted", async () => {
+    render(<CanopyWindowRoot />);
+    await act(async () => {});
+
+    expect(peekPopOut).toHaveBeenCalledTimes(1);
   });
 
   it("reads what labels the rows and the shortcuts it shows", async () => {
@@ -207,6 +221,7 @@ describe("CanopyWindowRoot", () => {
     view.unmount();
 
     expect(offSnapshot).toHaveBeenCalledTimes(1);
+    expect(offPopOutWaiting).toHaveBeenCalledTimes(1);
     for (const stop of Object.values(stops)) expect(stop).toHaveBeenCalledTimes(1);
   });
 });

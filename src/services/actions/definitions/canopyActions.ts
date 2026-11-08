@@ -102,7 +102,7 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     id: "canopy.openWindow",
     title: "Open Canopy in new window",
     description:
-      "Open Canopy in a window of its own, showing every agent on every project and host, or bring that window forward if it is already open. Canopy open here moves into it, keeping its host, search, filters and selected row",
+      "Open Canopy in its own window, with every agent of every project and host, or bring it forward. A panel open here moves into it as it stands",
     category: "project",
     kind: "command",
     danger: "safe",
