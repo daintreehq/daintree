@@ -2382,6 +2382,8 @@ describe("plugin-declared permission bypass (#16374)", () => {
     expect(getPluginBypassArgHistory(settings, "toString")).toEqual([]);
     expect(getPluginBypassArgHistory(settings, "missing")).toEqual([]);
     expect(getPluginBypassArgHistory({ pluginBypassArgHistory: null }, "hermes")).toEqual([]);
+    const inherited = Object.create({ hermes: [["--yolo"]] }) as Record<string, string[][]>;
+    expect(getPluginBypassArgHistory({ pluginBypassArgHistory: inherited }, "hermes")).toEqual([]);
     expect(getPluginBypassArgHistory(undefined, "hermes")).toEqual([]);
   });
 

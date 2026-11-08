@@ -20,10 +20,13 @@ vi.mock("../../../store.js", () => ({ store: storeMock }));
 vi.mock("../../../ipc/utils.js", () => ({ broadcastToRenderer: broadcastMock }));
 
 import { CHANNELS } from "../../../ipc/channels.js";
+import { recordPluginAgentBypassArgs } from "../pluginAgentBypassHistory.js";
 import {
-  MAX_BYPASS_DECLARATIONS_PER_AGENT,
-  recordPluginAgentBypassArgs,
-} from "../pluginAgentBypassHistory.js";
+  clearPluginAgentRegistryForTests,
+  getPluginAgentRegistry,
+  registerPluginAgents,
+  unregisterPluginAgents,
+} from "../../../../shared/config/pluginAgentRegistry.js";
 
 const history = () =>
   (storeMock.get("agentSettings") as { pluginBypassArgHistory?: unknown } | undefined)
@@ -84,22 +87,34 @@ describe("recordPluginAgentBypassArgs (#16374)", () => {
     expect(history()).toEqual({ hermes: [["--approval", "never"], ["--approval never"]] });
   });
 
-  it("drops malformed stored entries and the oldest past the cap", () => {
+  it("drops malformed stored entries and keeps every earlier declaration", () => {
+    const earlier = Array.from({ length: 40 }, (_, i) => [`--v${i}`]);
     storeMock.reset({
-      pluginBypassArgHistory: {
-        hermes: Array.from({ length: MAX_BYPASS_DECLARATIONS_PER_AGENT }, (_, i) => [`--v${i}`]),
-        broken: "not a list",
-        mixed: [["--ok"], [7], []],
-      },
+      pluginBypassArgHistory: { hermes: earlier, broken: "not a list", mixed: [["--ok"], [7], []] },
     });
 
     recordPluginAgentBypassArgs([{ id: "hermes", permissionBypassArgs: ["--newest"] }]);
 
     const stored = history() as Record<string, string[][]>;
-    expect(stored.hermes).toHaveLength(MAX_BYPASS_DECLARATIONS_PER_AGENT);
-    expect(stored.hermes?.[0]).toEqual(["--v1"]);
-    expect(stored.hermes?.at(-1)).toEqual(["--newest"]);
+    expect(stored.hermes).toEqual([...earlier, ["--newest"]]);
     expect(stored.mixed).toEqual([["--ok"]]);
     expect(Object.hasOwn(stored, "broken")).toBe(false);
+  });
+
+  it("records an agent promoted when the plugin that shadowed it unloads", () => {
+    clearPluginAgentRegistryForTests();
+    const agent = { name: "Hermes", command: "hermes", color: "#3366ff", iconId: "claude" };
+    registerPluginAgents("a.first", [{ ...agent, id: "hermes", permissionBypassArgs: ["--yolo"] }]);
+    registerPluginAgents("b.second", [
+      { ...agent, id: "hermes", permissionBypassArgs: ["--trust-all"] },
+    ]);
+    recordPluginAgentBypassArgs(Object.values(getPluginAgentRegistry()));
+    expect(history()).toEqual({ hermes: [["--yolo"]] });
+
+    unregisterPluginAgents("a.first");
+    recordPluginAgentBypassArgs(Object.values(getPluginAgentRegistry()));
+
+    expect(history()).toEqual({ hermes: [["--yolo"], ["--trust-all"]] });
+    clearPluginAgentRegistryForTests();
   });
 });

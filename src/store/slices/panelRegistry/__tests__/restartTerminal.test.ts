@@ -1987,7 +1987,7 @@ describe("restartTerminal keeps the caller's own launch flags", () => {
     expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual(["--bypass", ...caller]);
   });
 
-  it("strips the bypass args plugins have declared for the agent (#16374)", async () => {
+  it("hands the reconcile the bypass args plugins have declared for this agent (#16374)", async () => {
     const { agentSettingsClient } = await import("@/clients");
     (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       agents: {},

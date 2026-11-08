@@ -103,6 +103,7 @@ import {
   unregisterContextProviders,
 } from "../contextProviderRegistry.js";
 import {
+  getPluginAgentRegistry,
   getPluginIdForAgent,
   registerPluginAgents,
   unregisterPluginAgents,
@@ -564,11 +565,7 @@ export class PluginContributionRegistrar {
 
     if (manifest.contributes.agents.length > 0) {
       registerPluginAgents(pluginId, manifest.contributes.agents, pluginDir);
-      // Only the agents this plugin won: a losing same-id declaration would
-      // strip its tokens from the winner's saved flags.
-      recordPluginAgentBypassArgs(
-        manifest.contributes.agents.filter((agent) => getPluginIdForAgent(agent.id) === pluginId)
-      );
+      recordPluginAgentBypassArgs(Object.values(getPluginAgentRegistry()));
       this.deps.broadcaster.scheduleAgentsBroadcast(false);
       // Mirror the updated registry into the pty-host so its activity monitor
       // resolves this agent's detection patterns at spawn time (#10587). The
@@ -1296,7 +1293,12 @@ export class PluginContributionRegistrar {
       if (unregisterPluginHostedViews(pluginId))
         this.deps.broadcaster.scheduleHostedViewsBroadcast();
     });
-    runUnloadStep(pluginId, "unregisterPluginAgents", () => unregisterPluginAgents(pluginId));
+    runUnloadStep(pluginId, "unregisterPluginAgents", () => {
+      unregisterPluginAgents(pluginId);
+      // An unload can promote another plugin's same-id agent, whose declaration
+      // a launch can now carry.
+      recordPluginAgentBypassArgs(Object.values(getPluginAgentRegistry()));
+    });
     runUnloadStep(pluginId, "scheduleAgentsBroadcast", () =>
       this.deps.broadcaster.scheduleAgentsBroadcast(true)
     );
