@@ -4284,6 +4284,68 @@ describe("GitHubResourceList — Mine and Needs my review (#16384)", () => {
     expect(onCountUpdate).not.toHaveBeenCalled();
   });
 
+  it("never paints the unscoped cached page for a scoped view, nor writes the scoped page into it", async () => {
+    const prKey = buildCacheKey("/test/proj", "pr", "open", "created");
+    setCache(prKey, {
+      items: [makeIssue(40)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+    });
+    useGitHubFilterStore.getState().setPrScope("mine");
+    let release: (page: Page<Issue>) => void = () => {};
+    mockListPRs.mockReturnValue(new Promise<Page<Issue>>((resolve) => (release = resolve)));
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(lastPRSearch()).toBe("author:@me"));
+    expect(screen.queryByTestId("item-40")).toBeNull();
+
+    await act(async () => {
+      release(makeResponse([makeIssue(41)]));
+    });
+    await waitFor(() => expect(screen.getByTestId("item-41")).toBeTruthy());
+    expect(getCache(prKey)?.items.map((i) => i.number)).toEqual([40]);
+  });
+
+  it("restores the unscoped cached page when the scope is cleared", async () => {
+    const prKey = buildCacheKey("/test/proj", "pr", "open", "created");
+    setCache(prKey, {
+      items: [makeIssue(40)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+    });
+    mockListPRs.mockImplementation(async (opts: ListOptions) =>
+      makeResponse([makeIssue(opts.search ? 41 : 40)])
+    );
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByTestId("item-40")).toBeTruthy());
+
+    act(() => {
+      chip("Mine").click();
+    });
+    await waitFor(() => expect(screen.getByTestId("item-41")).toBeTruthy());
+    expect(screen.queryByTestId("item-40")).toBeNull();
+
+    act(() => {
+      chip("Mine").click();
+    });
+    await waitFor(() => expect(screen.getByTestId("item-40")).toBeTruthy());
+  });
+
+  it("says an exact number lookup is not narrowed by the scope", async () => {
+    mockGetPRByNumber.mockResolvedValue(makeIssue(12));
+    useGitHubFilterStore.getState().setPrScope("mine");
+    useGitHubFilterStore.getState().setPrSearchQuery("#12");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing PR #12 · Mine not applied")).toBeTruthy();
+    });
+  });
+
   it("names the scope in the empty state and clears it with the action", async () => {
     mockListPRs.mockResolvedValue(makeResponse([]));
     useGitHubFilterStore.getState().setPrScope("needs-review");

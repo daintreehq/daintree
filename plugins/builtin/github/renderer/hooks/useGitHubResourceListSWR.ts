@@ -183,7 +183,12 @@ export function useGitHubResourceListSWR({
     () => buildCacheKey(projectPath, type, filterState as string, sortOrder),
     [projectPath, type, filterState, sortOrder]
   );
-  const cachedEntry = useMemo(() => getCache(cacheKey), [cacheKey]);
+  // The shared slot holds the unscoped first page, which a scoped view must
+  // never paint, even for the instant before its own fetch lands.
+  const cachedEntry = useMemo(
+    () => (scopeQualifier ? undefined : getCache(cacheKey)),
+    [cacheKey, scopeQualifier]
+  );
 
   const [data, setData] = useState<(Issue | PR)[]>(() => cachedEntry?.items ?? []);
   const [cursor, setCursor] = useState<string | null>(() => cachedEntry?.nextCursor ?? null);
@@ -597,7 +602,7 @@ export function useGitHubResourceListSWR({
       // When that happens, hydrate state from cache here so the SWR path
       // runs silently instead of the cache-miss path showing a skeleton
       // flash for data that's already available.
-      const cached = getCache(cacheKey);
+      const cached = scopeQualifier ? undefined : getCache(cacheKey);
       if (cached) {
         // Apply unconditionally — when the broadcast writes a legitimate
         // empty page (the repo currently has zero matches for this filter),

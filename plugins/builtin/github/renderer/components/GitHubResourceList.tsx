@@ -1396,7 +1396,11 @@ export function GitHubResourceList({
         />
 
         {type === "pr" && (
-          <div role="group" aria-label="Filter by involvement" className="flex items-center gap-1.5">
+          <div
+            role="group"
+            aria-label="Filter by involvement"
+            className="flex items-center gap-1.5"
+          >
             <FilterChip
               selected={scope === "mine"}
               onSelectedChange={(on) => setPrScope(on ? "mine" : "all")}
@@ -1440,6 +1444,11 @@ export function GitHubResourceList({
                 : `Showing range #${numberQuery.from}..#${numberQuery.to}`;
             } else {
               label = `Showing #${numberQuery.from} and above`;
+            }
+            // Exact lookups go by number, and a PR's requested reviewers are not
+            // in the lookup, so only the open-ended search can honor the scope.
+            if (scopeActive && numberQuery.kind !== "open-ended") {
+              label += ` · ${scope === "mine" ? "Mine" : "Needs my review"} not applied`;
             }
             return (
               <p className="bg-overlay-soft border border-[var(--border-divider)] rounded-[var(--radius-sm)] px-2 py-1 text-xs text-text-secondary">
