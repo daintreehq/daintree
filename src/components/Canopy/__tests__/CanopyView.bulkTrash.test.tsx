@@ -55,11 +55,14 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { isolatedComposerScope } from "@/lib/draftKey";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
+import { bandLabel } from "@/lib/fleetAttention";
 
 const NOW = Date.now();
 const SPAWNED = NOW - 3_600_000;
 /** Past the panel's wait on the typing before a search applies. */
 const SEARCH_SETTLE_MS = 250;
+/** Past a dialog's exit, when it gives the keyboard back. */
+const DIALOG_CLOSED_MS = 400;
 
 type Run = FleetSnapshot["runs"][number];
 
@@ -252,14 +255,24 @@ describe("CanopyView bulk trash of search results", () => {
   });
 
   it("lists exactly the search's results, with project and observed state", async () => {
-    await open([run("a"), run("b", { workspaceId: "p2" }), run("c", { title: "Ship docs" })]);
+    await open([
+      run("a"),
+      run("b", { workspaceId: "p2", agentState: "working", waitingReason: undefined }),
+      run("c", { title: "Ship docs" }),
+    ]);
     await search("review");
     await openReview();
     const rows = reviewRows();
     expect(rows.map((row) => row.getAttribute("data-run-id")).sort()).toEqual(["a", "b"]);
+    const a = rows.find((row) => row.getAttribute("data-run-id") === "a")!;
     const b = rows.find((row) => row.getAttribute("data-run-id") === "b")!;
     expect(b.textContent).toContain("Review b");
     expect(b.textContent).toContain("api");
+    expect(a.textContent).toContain("app");
+    // Each in the words the inbox uses for what Daintree observed of it.
+    const working = bandLabel("running", { agentState: "working" });
+    expect(b.textContent).toContain(working);
+    expect(a.textContent).not.toContain(working);
     expect(document.body.textContent).toContain("Trash results for 'review'?");
   });
 
@@ -320,20 +333,37 @@ describe("CanopyView bulk trash of search results", () => {
     ]);
   });
 
-  it("closes once every run went, and one Z takes them all back", async () => {
-    const canopy = await open([run("a"), run("b")]);
+  it("closes once every run went, and one Z, wherever the keyboard lands, takes them all back", async () => {
+    const canopy = await open([run("a"), run("b"), run("other", { title: "Ship docs" })]);
     await search("review");
     await openReview();
     await act(async () => {
       fireEvent.click(dialogButton("Trash 2 agents"));
     });
-    await frames();
+    // Past the dialog's close, where it hands the keyboard back.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, DIALOG_CLOSED_MS));
+    });
     expect(reviewRows()).toHaveLength(0);
     expect(document.body.textContent).toContain("Trashed 2 agents");
-    const row =
-      document.getElementById("canopy-card-a") ?? document.getElementById("canopy-card-b");
+    expect(document.activeElement).not.toBe(searchInput());
+    // The trashed runs leave the fleet, and every result with them.
     await act(async () => {
-      fireEvent.keyDown(row!, { key: "z" });
+      useFleetSnapshotStore.setState({
+        snapshot: {
+          runs: [run("other", { title: "Ship docs" })],
+          changedAt: NOW + 1,
+          degraded: false,
+          lastSuccessfulAt: NOW + 1,
+        },
+      });
+    });
+    await frames();
+    const active = document.activeElement;
+    expect(active).not.toBe(searchInput());
+    expect(active).not.toBe(document.body);
+    await act(async () => {
+      fireEvent.keyDown(active!, { key: "z" });
     });
     expect(canopy.untrashBatch).toHaveBeenCalledTimes(1);
     expect([...canopy.untrashBatch.mock.calls[0]![0]].sort()).toEqual([1, 2]);

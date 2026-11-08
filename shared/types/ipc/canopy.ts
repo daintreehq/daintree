@@ -620,12 +620,9 @@ export interface CanopyInputLineReading {
   state: TerminalInputLineState;
 }
 
-/**
- * One run of a bulk trash: the receipt Undo takes back (null when the run had
- * already left the fleet), or why that run alone was not trashed.
- */
+/** One run of a bulk trash: the receipt Undo takes back, or why that run alone was not trashed. */
 export type CanopyTrashOutcome =
-  { runId: string; receipt: number | null } | { runId: string; error: string };
+  { runId: string; receipt: number } | { runId: string; error: string };
 
 /** One receipt of a bulk Undo: put back, or why that one was not. */
 export interface CanopyUntrashOutcome {

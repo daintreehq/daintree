@@ -373,7 +373,7 @@ describe("createAllHostsRoute", () => {
         return (arg as Array<{ runId: string }>).map((target) =>
           target.runId === "r2"
             ? { runId: "r2", error: "That agent isn't there any more." }
-            : { runId: target.runId, receipt: 21 }
+            : { runId: target.runId, receipt: 11 }
         );
       }
       if (channel === "canopy:untrash-batch") {
@@ -406,8 +406,9 @@ describe("createAllHostsRoute", () => {
     expect(own.receipt).not.toBe(remote.receipt);
 
     const undone = await api.untrashBatch([own.receipt!, remote.receipt!]);
+    // Each host gets back the receipt it gave, though both gave 11.
     expect(ownCalls.untrashBatch).toHaveBeenCalledWith([11]);
-    expect(invoke).toHaveBeenCalledWith("remote", "canopy:untrash-batch", [21]);
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:untrash-batch", [11]);
     expect(undone.map((outcome) => outcome.receipt).sort()).toEqual(
       [own.receipt, remote.receipt].sort()
     );

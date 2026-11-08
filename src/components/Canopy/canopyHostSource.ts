@@ -115,10 +115,12 @@ export function unlessHostDisconnected<T>(call: Promise<T>): Promise<T | undefin
 /** What a host's refusal of a whole bulk call says, in words for the person. */
 export function hostRefusal(error: unknown): string {
   const text = clientErrorText(error, "It couldn't be reached.");
-  // A host on a Daintree from before bulk trash refuses the call by name.
+  // A host on a Daintree from before bulk trash refuses the call it doesn't
+  // know: at its link's payload check, or by name past it.
   if (
     clientErrorCode(error) === "VALIDATION" &&
-    text.includes("can't be called on another host's Canopy")
+    (text.includes("Invalid payload for canopy.invoke") ||
+      text.includes("can't be called on another host's Canopy"))
   ) {
     return "Its Daintree is too old to trash agents together. Update it, or trash them one at a time.";
   }

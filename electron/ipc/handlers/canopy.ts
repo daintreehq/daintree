@@ -632,20 +632,25 @@ async function assertSameTerminal(runId: string, target: CanopyTarget): Promise<
  * The run the list showed is still this incarnation, alive or exited — for
  * acts on the pane rather than on its process.
  */
-async function assertSameIncarnation(runId: string, target: CanopyTarget): Promise<void> {
+async function assertSameIncarnation(
+  runId: string,
+  target: CanopyTarget
+): Promise<{ run: FleetRunRow; projectId: string | null }> {
   const snapshot = getFleetSnapshotService()?.getLastBroadcast();
   if (!snapshot || snapshot.degraded) {
     throw new Error("Agent state is unavailable right now — try again in a moment.");
   }
-  if (!snapshot.runs.some((run) => run.runId === runId && run.spawnedAt === target.spawnedAt)) {
-    throw new Error("That agent isn't there any more.");
-  }
+  const run = snapshot.runs.find(
+    (candidate) => candidate.runId === runId && candidate.spawnedAt === target.spawnedAt
+  );
+  if (!run) throw new Error("That agent isn't there any more.");
   const record = await requirePtyClient()
     .getTerminalAsync(runId)
     .catch(() => null);
   if (!record || record.spawnedAt !== target.spawnedAt) {
     throw new Error("That agent isn't there any more.");
   }
+  return { run, projectId: record.projectId || null };
 }
 
 /** The terminal a view's current stream is for, or a refusal naming nothing on screen. */
@@ -729,6 +734,20 @@ function trashThroughOwningViews(runId: string, spawnedAt: number): number | nul
     ?.getLastBroadcast()
     ?.runs.find((candidate) => candidate.runId === runId);
   if (!run) return null;
+  return moveTrashedPane(run, spawnedAt);
+}
+
+/**
+ * The same trash for a run already looked up in the fleet: one that leaves the
+ * fleet while it is trashed still gets its receipt and its views told.
+ */
+function trashListedRun(run: FleetRunRow, spawnedAt: number): number {
+  requirePtyClient().trash(run.runId);
+  return moveTrashedPane(run, spawnedAt);
+}
+
+function moveTrashedPane(run: FleetRunRow, spawnedAt: number): number {
+  const runId = run.runId;
   const receipt = ++trashReceipts;
   pruneTrashReceipts();
   const trashed: TrashedRun = {
@@ -2121,14 +2140,14 @@ export const canopyNamespace = defineIpcNamespace({
           if (seen.has(target.runId)) continue;
           seen.add(target.runId);
           try {
-            if (!drivesRun(ctx, target.runId)) {
-              throw drivenElsewhere(requirePtyClient().getTerminalProjectId(target.runId));
+            const { run, projectId } = await assertSameIncarnation(target.runId, target);
+            // As the lease gate finds a terminal's project, and checked with
+            // nothing awaited after it: control can move while the host is asked.
+            if (peekDriveLeaseService()) {
+              const owner = requirePtyClient().getTerminalProjectId(target.runId) ?? projectId;
+              if (owner === null || !drivesProject(ctx, owner)) throw drivenElsewhere(owner);
             }
-            await assertSameIncarnation(target.runId, target);
-            outcomes.push({
-              runId: target.runId,
-              receipt: trashThroughOwningViews(target.runId, target.spawnedAt),
-            });
+            outcomes.push({ runId: target.runId, receipt: trashListedRun(run, target.spawnedAt) });
           } catch (error) {
             outcomes.push({ runId: target.runId, error: refusalOf(error, "It wasn't trashed.") });
           }

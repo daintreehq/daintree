@@ -66,6 +66,8 @@ const ptyClient = vi.hoisted(() => ({
 /** Who drives every project: this screen, another one, or nobody (no lease service at all). */
 const lease = vi.hoisted(() => ({
   holder: null as "self" | "other" | null,
+  /** Projects this screen drives even while another screen holds the rest. */
+  driven: new Set<string>(),
   /** The handle of the endpoint holding the lease, when one is attached. */
   holderHandle: undefined as number | undefined,
   listeners: new Set<() => void>(),
@@ -76,7 +78,8 @@ vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
     lease.holder === null
       ? null
       : {
-          isDriving: () => lease.holder === "self",
+          isDriving: (projectId?: string) =>
+            lease.holder === "self" || (projectId !== undefined && lease.driven.has(projectId)),
           getHolderEndpoint: () =>
             lease.holderHandle === undefined ? null : { handle: lease.holderHandle },
           onChange: (listener: () => void) => {
@@ -351,6 +354,7 @@ describe("canopy IPC", () => {
     state.packaged = false;
     state.generation = 1;
     lease.holder = null;
+    lease.driven.clear();
     state.terminalProject = "project-1";
     saved.state = null;
     // setMode is rate-limited across the file; each case starts with the window clear.
@@ -1335,28 +1339,85 @@ describe("canopy IPC", () => {
       expect(ptyClient.restore).toHaveBeenCalledTimes(25);
     });
 
-    it("refuses alone a run respawned since, or in a project another screen drives", async () => {
-      const targets = fleetOf(3);
-      ptyClient.getTerminalAsync.mockImplementation(async (id?: string) =>
-        id === "run-1" ? { spawnedAt: 200 } : { spawnedAt: 100 }
-      );
-      ptyClient.getTerminalProjectId.mockImplementation((id: string) =>
-        id === "run-2" ? "project-2" : null
-      );
-      lease.holder = "other";
-      let outcomes: Array<{ runId: string; receipt?: number | null; error?: string }>;
+    /** Each run's own terminal record, by id, for the length of `body`. */
+    async function withRecords<T>(
+      records: Record<string, { spawnedAt: number; projectId?: string; isExited?: boolean }>,
+      body: () => Promise<T>,
+      onLookup: (id: string) => void = () => {}
+    ): Promise<T> {
+      ptyClient.getTerminalAsync.mockImplementation(async (id?: string) => {
+        onLookup(id ?? "");
+        return (records[id ?? ""] ?? null) as typeof state.record;
+      });
+      ptyClient.getTerminalProjectId.mockImplementation(() => null);
       try {
-        outcomes = answer(await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets));
+        return await body();
       } finally {
         ptyClient.getTerminalAsync.mockImplementation(async () => state.record);
         ptyClient.getTerminalProjectId.mockImplementation(() => state.terminalProject);
+        lease.driven.clear();
       }
+    }
+
+    type Outcome = { runId: string; receipt?: number; error?: string };
+
+    it("refuses alone a run respawned since, or whose project another screen drives, exited or not", async () => {
+      const targets = fleetOf(4);
+      lease.holder = "other";
+      lease.driven.add("project-1");
+      const outcomes = await withRecords(
+        {
+          "run-0": { spawnedAt: 100, projectId: "project-1" },
+          "run-1": { spawnedAt: 200, projectId: "project-1" },
+          "run-2": { spawnedAt: 100, projectId: "project-2" },
+          // Exited: its spawn is no longer tracked, so only its record names the project.
+          "run-3": { spawnedAt: 100, projectId: "project-2", isExited: true },
+        },
+        async () =>
+          answer<Outcome[]>(await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets))
+      );
       const byRun = new Map(outcomes.map((outcome) => [outcome.runId, outcome]));
       expect(typeof byRun.get("run-0")!.receipt).toBe("number");
       expect(byRun.get("run-1")!.error).toBeTruthy();
       expect(byRun.get("run-2")!.error).toBe("This project is being driven from another screen.");
+      expect(byRun.get("run-3")!.error).toBe("This project is being driven from another screen.");
       expect(ptyClient.trash).toHaveBeenCalledTimes(1);
       expect(ptyClient.trash).toHaveBeenCalledWith("run-0");
+    });
+
+    it("refuses a run whose project another screen took while its record was read", async () => {
+      const targets = fleetOf(1);
+      lease.holder = "self";
+      const outcomes = await withRecords(
+        { "run-0": { spawnedAt: 100, projectId: "project-1" } },
+        async () =>
+          answer<Outcome[]>(
+            await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets)
+          ),
+        () => {
+          lease.holder = "other";
+        }
+      );
+      expect(outcomes[0]!.error).toBe("This project is being driven from another screen.");
+      expect(ptyClient.trash).not.toHaveBeenCalled();
+    });
+
+    it("keeps the receipt and the views' move for a run that leaves the fleet while it is trashed", async () => {
+      const targets = fleetOf(1);
+      const view = { send: vi.fn() };
+      state.views = [view];
+      const outcomes = await withRecords(
+        { "run-0": { spawnedAt: 100, projectId: "project-1" } },
+        async () =>
+          answer<Outcome[]>(
+            await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets)
+          ),
+        () => {
+          state.runs = [];
+        }
+      );
+      expect(typeof outcomes[0]!.receipt).toBe("number");
+      expect(view.send).toHaveBeenCalledWith("canopy:trash-requested", { runId: "run-0" });
     });
 
     it("refuses a set larger than the Trash lists, before trashing any of it", async () => {

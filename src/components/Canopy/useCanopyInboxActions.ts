@@ -406,9 +406,8 @@ export function useCanopyInboxActions({
       .trashBatch(targets)
       .catch((error: unknown) => refusedOutcomes(targets, error))
       .then((outcomes) => {
-        const trashed = outcomes.filter((outcome) => "receipt" in outcome);
-        const receipts = trashed.flatMap((outcome) =>
-          "receipt" in outcome && outcome.receipt !== null ? [outcome.receipt] : []
+        const receipts = outcomes.flatMap((outcome) =>
+          "receipt" in outcome ? [outcome.receipt] : []
         );
         if (receipts.length === 0) {
           undo.forget();
@@ -439,7 +438,7 @@ export function useCanopyInboxActions({
                   });
                 })
             ),
-          { line: `Trashed ${pluralize(trashed.length, "agent")}` }
+          { line: `Trashed ${pluralize(receipts.length, "agent")}` }
         );
         return outcomes;
       });

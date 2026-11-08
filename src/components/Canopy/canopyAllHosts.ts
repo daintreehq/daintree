@@ -392,7 +392,6 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
             return outcomes.map((outcome): CanopyTrashOutcome => {
               const runId = allHostsKey(hostId, outcome.runId);
               if ("error" in outcome) return { runId, error: outcome.error };
-              if (outcome.receipt === null) return { runId, receipt: null };
               const mine = ++receipt;
               trashed.set(mine, { hostId, receipt: outcome.receipt });
               return { runId, receipt: mine };

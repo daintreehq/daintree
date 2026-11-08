@@ -65,10 +65,15 @@ describe("hasReplyDraft", () => {
 
 describe("hostRefusal", () => {
   it("says a host too old for bulk trash plainly, rather than the call's name", () => {
-    const refused = new Error(
+    // Its link refuses a channel it doesn't know before its Canopy hears of it.
+    const atLink = new Error("[AppError|VALIDATION] Invalid payload for canopy.invoke");
+    const byName = new Error(
       "[AppError|VALIDATION] canopy:trash-batch can't be called on another host's Canopy"
     );
-    expect(hostRefusal(refused)).toMatch(/too old to trash agents together/);
+    expect(hostRefusal(atLink)).toMatch(/too old to trash agents together/);
+    expect(hostRefusal(byName)).toMatch(/too old to trash agents together/);
+    // Any other refusal is said as it is.
+    expect(hostRefusal(new Error("[AppError|VALIDATION] Invalid runs"))).toBe("Invalid runs");
   });
 
   it("gives a host's own words for a refusal, and plain errors as they are", () => {

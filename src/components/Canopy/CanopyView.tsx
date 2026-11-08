@@ -2426,8 +2426,13 @@ function CanopyInbox({
         more={bulkTrash?.more ?? 0}
         readInputLines={api.readInputLines}
         onTrash={trashMany}
-        // The row it was opened from may be among those trashed.
-        restoreFocusTo={() => searchRef.current}
+        // The selected row, where Z takes the trash back; once it leaves with
+        // the trash, the panel moves the keyboard on as for any row that goes.
+        // Never the search: Z there is a letter.
+        restoreFocusTo={() =>
+          (focusedItem ? document.getElementById(canopyCardDomId(focusedItem.runId)) : null) ??
+          refreshRef.current
+        }
       />
     </CanopySurface>
   );

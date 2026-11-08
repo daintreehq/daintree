@@ -156,6 +156,9 @@ export function CanopyBulkTrashDialog({
       zIndex="nested"
       hasPreview
       restoreFocusTo={restoreFocusTo}
+      // The rows it was opened from may be among those trashed, so the
+      // caller's choice comes first, not the trigger.
+      preferRestoreFocusTo={restoreFocusTo !== undefined}
     >
       <AppDialog.Header>
         <AppDialog.Title>{`Trash results for '${query}'?`}</AppDialog.Title>
