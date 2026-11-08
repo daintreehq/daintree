@@ -402,8 +402,14 @@ export function MissingPrerequisiteBanner() {
         onClose={dismiss}
         closeAriaLabel="Dismiss missing tool warning"
         trailingSlot={
-          guidance?.result.installUrl || canInstall ? (
+          guidance?.result.installUrl || canInstall || openInTerminal ? (
             <>
+              {/* A failed re-check leaves the command as unrun as before. */}
+              {openInTerminal && (
+                <Button variant="ghost" size="sm" onClick={openInTerminal}>
+                  Open in terminal
+                </Button>
+              )}
               {guidance?.result.installUrl && (
                 <Button variant="ghost" size="sm" onClick={openInstallUrl}>
                   View install guide

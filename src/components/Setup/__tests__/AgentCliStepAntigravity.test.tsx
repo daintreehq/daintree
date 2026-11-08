@@ -1,15 +1,16 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AgentConfig, AgentInstallOS } from "@shared/config/agentRegistry";
 import { config as antigravity } from "@shared/config/agents/antigravity";
 
 const installOS = vi.hoisted(() => ({ current: "linux" as AgentInstallOS }));
+// The window's grid, if it has one: null leaves install commands copy-only.
+const runner = vi.hoisted(() => ({ current: null as null | ReturnType<typeof vi.fn> }));
 
-// No grid to open a terminal in: install commands stay copy-only here.
 vi.mock("@/hooks/terminal/useInstallCommandRunner", () => ({
-  useInstallCommandRunner: () => null,
+  useInstallCommandRunner: () => runner.current,
 }));
 vi.mock("@/clients", () => ({
   systemClient: { openExternal: vi.fn(() => Promise.resolve()) },
@@ -52,6 +53,25 @@ function expectCopyOnly(commands: readonly string[]) {
 // The agy installers all need a shell, so Agent Setup shows them to copy and
 // never offers to run them (#15622).
 describe("Agent Setup for Antigravity", () => {
+  beforeEach(() => {
+    runner.current = null;
+  });
+
+  it("opens the install script in a terminal where the window has a grid", () => {
+    installOS.current = "linux";
+    runner.current = vi.fn();
+    renderStep();
+
+    fireEvent.click(screen.getByLabelText("Open command in a new terminal"));
+
+    expect(runner.current).toHaveBeenCalledWith(
+      antigravity.install?.byOs?.linux?.[0]?.commands?.[0],
+      { kind: "agent", agentId: "antigravity" }
+    );
+    // Still never the shell-less installer.
+    expect(screen.queryByRole("button", { name: /^Install/ })).toBeNull();
+  });
+
   it.each(["macos", "linux"] as const)("shows the %s install script to copy", (os) => {
     installOS.current = os;
     renderStep();

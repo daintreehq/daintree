@@ -276,6 +276,28 @@ describe("MissingPrerequisiteBanner", () => {
         expect(run).toHaveBeenCalledWith(shown, { kind: "prerequisite", tool: "git" });
       });
 
+      it("keeps the terminal on offer when a re-check fails", async () => {
+        const run = vi.fn();
+        runner.current = run;
+        healthCheckMock.mockRejectedValue(new Error("probe failed"));
+        useMissingPrerequisiteStore.setState({
+          missing: [
+            missingGit({ installBlocks: { macos: [{ commands: ["sudo port install git"] }] } }),
+          ],
+        });
+
+        render(<MissingPrerequisiteBanner />);
+        await click(await screen.findByRole("button", { name: "Re-check" }));
+
+        // The error layout, with Retry for the failed probe.
+        expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
+        await click(screen.getByRole("button", { name: "Open in terminal" }));
+        expect(run).toHaveBeenCalledWith("sudo port install git", {
+          kind: "prerequisite",
+          tool: "git",
+        });
+      });
+
       it("keeps the one-click install for a command it can run", async () => {
         runner.current = vi.fn();
         useMissingPrerequisiteStore.setState({ missing: [missingGit()] });

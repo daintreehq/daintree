@@ -32,7 +32,7 @@ const service = vi.hoisted(() => ({
 }));
 const load = vi.hoisted(() => vi.fn());
 const notifyMock = vi.hoisted(() => vi.fn());
-const recheckPrerequisites = vi.hoisted(() => vi.fn());
+const recheckPrerequisite = vi.hoisted(() => vi.fn());
 const cli = vi.hoisted(() => ({
   refresh: vi.fn(),
   availability: {} as Record<string, string>,
@@ -62,9 +62,7 @@ vi.mock("@/clients", () => ({
 }));
 vi.mock("../terminalInstanceServiceAccessor", () => ({ load }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
-vi.mock("@/lib/recheckMissingPrerequisites", () => ({
-  recheckMissingPrerequisites: recheckPrerequisites,
-}));
+vi.mock("@/lib/recheckMissingPrerequisites", () => ({ recheckPrerequisite }));
 vi.mock("@/store/cliAvailabilityStore", () => ({
   useCliAvailabilityStore: {
     getState: () => ({ refresh: cli.refresh, availability: cli.availability }),
@@ -75,41 +73,55 @@ vi.mock("@/utils/logger", () => ({ logError: vi.fn(), logWarn: vi.fn() }));
 import {
   __testing,
   openInstallCommandInTerminal,
-  type InstallTarget,
+  type InstallCommandRequest,
 } from "../installCommandHandoff";
 import { installLineForCommands } from "../installCommandLine";
 
-/** Just enough of an xterm for the prompt wait: its cursor line, its modes, its writes. */
+/** Rows above the viewport, and the cursor's row within it: the prompt is at 5. */
+const BASE_Y = 3;
+const CURSOR_Y = 2;
+
+/** Just enough of an xterm for the prompt wait: its rows, its modes, its writes. */
 function fakeTerminal() {
   const parsed = new Set<() => void>();
+  const lines: string[] = [];
+  // Scrollback from before: a prompt on a row the cursor is not on.
+  lines[CURSOR_Y] = "old@host:~$";
   const terminal = {
-    line: "",
     modes: { bracketedPasteMode: false },
     buffer: {
       active: {
         type: "normal" as "normal" | "alternate",
-        baseY: 0,
-        cursorY: 0,
-        cursorX: 0,
-        getLine: () => ({ translateToString: () => terminal.line }),
+        baseY: BASE_Y,
+        cursorY: CURSOR_Y,
+        getLine: (y: number) => ({ translateToString: () => lines[y] ?? "" }),
       },
     },
     onWriteParsed: (cb: () => void) => {
       parsed.add(cb);
       return { dispose: () => parsed.delete(cb) };
     },
-    /** The shell drew something: the cursor line becomes `line`. */
+    /** The shell drew something on the cursor's row. */
     print(line: string) {
-      terminal.line = line;
-      terminal.buffer.active.cursorX = line.length;
+      lines[BASE_Y + CURSOR_Y] = line;
       for (const cb of [...parsed]) cb();
     },
+    listenerCount: () => parsed.size,
   };
   return terminal;
 }
 
-const GIT: InstallTarget = { kind: "prerequisite", tool: "git" };
-const REQUEST = { line: "sudo apt-get install git", target: GIT, cwd: "/home/u", worktreeId: "wt" };
+const REQUEST: InstallCommandRequest = {
+  line: "sudo apt-get install git",
+  target: { kind: "prerequisite", tool: "git" },
+  cwd: "/home/u",
+  worktreeId: "wt",
+};
+const AGENT_REQUEST: InstallCommandRequest = {
+  ...REQUEST,
+  line: "curl -fsSL https://claude.ai/install.sh | bash",
+  target: { kind: "agent", agentId: "claude" },
+};
 
 let terminal: ReturnType<typeof fakeTerminal>;
 
@@ -117,14 +129,25 @@ function emitActivity(status: string, terminalId = "t1") {
   for (const cb of [...client.activity]) cb({ terminalId, status });
 }
 
+/** A command ran in the terminal and finished. */
+async function runCommand() {
+  emitActivity("working");
+  emitActivity("success");
+  await vi.advanceTimersByTimeAsync(0);
+}
+
 /** Opens the line and lets the shell come up at a bash 5 prompt. */
-async function openAtPrompt(request = REQUEST) {
+async function openAtPrompt(request: InstallCommandRequest = REQUEST) {
   const opened = openInstallCommandInTerminal(request);
   await vi.advanceTimersByTimeAsync(50);
   terminal.modes.bracketedPasteMode = true;
   terminal.print("u@host:~$");
   await vi.advanceTimersByTimeAsync(300);
   return opened;
+}
+
+function seedTerminal(status: "ready" | "failed" = "ready") {
+  panels.set({ t1: { id: "t1", kind: "terminal", location: "grid", spawnStatus: status } });
 }
 
 beforeEach(() => {
@@ -135,17 +158,16 @@ beforeEach(() => {
   client.activity.clear();
   client.exit.clear();
   terminal = fakeTerminal();
+  const managed = { terminal };
   panels.state.panelsById = {};
   panels.state.addPanel.mockImplementation(async () => {
-    panels.state.panelsById = {
-      t1: { id: "t1", kind: "terminal", location: "grid", spawnStatus: "ready" },
-    };
+    seedTerminal();
     return "t1";
   });
   service.waitForInstance.mockResolvedValue(undefined);
-  service.get.mockImplementation((id: string) => (id === "t1" ? { terminal } : undefined));
+  service.get.mockImplementation((id: string) => (id === "t1" ? managed : undefined));
   load.mockResolvedValue(service);
-  recheckPrerequisites.mockResolvedValue([{ tool: "git" }]);
+  recheckPrerequisite.mockResolvedValue(false);
   cli.refresh.mockResolvedValue(undefined);
   cli.availability = {};
 });
@@ -174,10 +196,11 @@ describe("installLineForCommands", () => {
   it("refuses a command that would submit or complete itself when typed", () => {
     expect(installLineForCommands(["echo a\nrm -rf b"], "linux")).toBe(null);
     expect(installLineForCommands(["echo a\rrm -rf b"], "macos")).toBe(null);
+    expect(installLineForCommands(["git\tclone"], "macos")).toBe(null);
+    expect(installLineForCommands(["echo a", "b\nc"], "linux")).toBe(null);
+    expect(installLineForCommands([], "macos")).toBe(null);
     // Trailing whitespace is trimmed, never typed.
     expect(installLineForCommands(["echo a\r\n"], "macos")).toBe("echo a");
-    expect(installLineForCommands(["git\tclone"], "macos")).toBe(null);
-    expect(installLineForCommands([], "macos")).toBe(null);
   });
 });
 
@@ -202,11 +225,14 @@ describe("openInstallCommandInTerminal", () => {
     expect(data).toBe(formatForTerminalPaste(REQUEST.line, { bracketedPasteMode: true }));
     expect(data).not.toMatch(/[\r\n]/);
     expect(service.focus).toHaveBeenCalledWith("t1");
+    // The output listener went with the wait.
+    expect(terminal.listenerCount()).toBe(0);
   });
 
   it("waits for the shell to start before typing", async () => {
     const opened = openInstallCommandInTerminal(REQUEST);
-    // A login shell still starting: nothing on screen, no line editor yet.
+    // A login shell still starting: the cursor row is blank, no line editor
+    // yet, and the prompt in the scrollback is not where the cursor is.
     await vi.advanceTimersByTimeAsync(5_000);
     expect(client.write).not.toHaveBeenCalled();
 
@@ -232,26 +258,17 @@ describe("openInstallCommandInTerminal", () => {
     expect(client.write).toHaveBeenCalledTimes(1);
   });
 
-  it("takes an unfamiliar prompt once the shell's output has stopped", async () => {
+  it("never types at a startup password prompt, however long it waits", async () => {
     const opened = openInstallCommandInTerminal(REQUEST);
     await vi.advanceTimersByTimeAsync(50);
-    terminal.print("custom-theme ::");
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(client.write).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1_500);
-    await opened;
-    expect(client.write).toHaveBeenCalledWith("t1", REQUEST.line);
-  });
-
-  it("types nothing when no prompt comes, and says so", async () => {
-    const opened = openInstallCommandInTerminal(REQUEST);
+    terminal.print("Enter passphrase for /home/u/.ssh/id_ed25519:");
     await vi.advanceTimersByTimeAsync(25_000);
 
     expect(await opened).toBe("t1");
     expect(client.write).not.toHaveBeenCalled();
     expect(notifyMock).toHaveBeenCalledTimes(1);
     expect(notifyMock.mock.calls[0]![0]).toMatchObject({ type: "warning" });
+    expect(terminal.listenerCount()).toBe(0);
   });
 
   it("types nothing into an alternate screen", async () => {
@@ -269,7 +286,7 @@ describe("openInstallCommandInTerminal", () => {
     expect(client.write).toHaveBeenCalledTimes(1);
   });
 
-  it("opens one terminal for a double click", async () => {
+  it("opens one terminal for a double click, and another for a later click", async () => {
     const first = openInstallCommandInTerminal(REQUEST);
     const second = openInstallCommandInTerminal(REQUEST);
     expect(await second).toBe(null);
@@ -277,9 +294,11 @@ describe("openInstallCommandInTerminal", () => {
     terminal.print("$");
     await vi.advanceTimersByTimeAsync(300);
     await first;
-
     expect(panels.state.addPanel).toHaveBeenCalledTimes(1);
     expect(client.write).toHaveBeenCalledTimes(1);
+
+    await openAtPrompt();
+    expect(panels.state.addPanel).toHaveBeenCalledTimes(2);
   });
 
   it("opens nothing for a line that would submit itself", async () => {
@@ -287,12 +306,14 @@ describe("openInstallCommandInTerminal", () => {
     expect(panels.state.addPanel).not.toHaveBeenCalled();
   });
 
-  it("stops when the panel limit refuses the terminal", async () => {
-    panels.state.addPanel.mockResolvedValue(null);
+  it("stops when the panel limit refuses the terminal, and can be asked again", async () => {
+    panels.state.addPanel.mockResolvedValueOnce(null);
 
     expect(await openInstallCommandInTerminal(REQUEST)).toBe(null);
     expect(load).not.toHaveBeenCalled();
     expect(__testing.watchCount()).toBe(0);
+
+    expect(await openAtPrompt()).toBe("t1");
   });
 
   it("types nothing into a terminal closed before its prompt came", async () => {
@@ -314,31 +335,77 @@ describe("re-checking after the command runs", () => {
     await openAtPrompt();
     // Idle with nothing having run (the shell settling) asks nothing.
     emitActivity("success");
-    expect(recheckPrerequisites).not.toHaveBeenCalled();
-
-    emitActivity("working");
-    emitActivity("success");
     await vi.advanceTimersByTimeAsync(0);
-    expect(recheckPrerequisites).toHaveBeenCalledTimes(1);
+    expect(recheckPrerequisite).not.toHaveBeenCalled();
+
+    await runCommand();
+    expect(recheckPrerequisite).toHaveBeenCalledTimes(1);
+    expect(recheckPrerequisite).toHaveBeenCalledWith("git");
     expect(__testing.watchCount()).toBe(1);
 
-    recheckPrerequisites.mockResolvedValue([]);
-    emitActivity("working");
-    emitActivity("success");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(recheckPrerequisites).toHaveBeenCalledTimes(2);
+    recheckPrerequisite.mockResolvedValue(true);
+    await runCommand();
+    expect(recheckPrerequisite).toHaveBeenCalledTimes(2);
     expect(__testing.watchCount()).toBe(0);
     expect(client.activity.size).toBe(0);
     expect(client.exit.size).toBe(0);
     expect(panels.listeners.size).toBe(0);
+
+    // Nothing is left to fire.
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(recheckPrerequisite).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs one check at a time, and checks again for a command that finished meanwhile", async () => {
+    await openAtPrompt();
+    let settle!: (resolved: boolean) => void;
+    recheckPrerequisite.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (settle = resolve))
+    );
+
+    await runCommand();
+    await runCommand();
+    await runCommand();
+    expect(recheckPrerequisite).toHaveBeenCalledTimes(1);
+
+    settle(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(recheckPrerequisite).toHaveBeenCalledTimes(2);
   });
 
   it("ignores other terminals' activity", async () => {
     await openAtPrompt();
+    await runCommand();
+    recheckPrerequisite.mockClear();
     emitActivity("working", "t2");
     emitActivity("success", "t2");
     await vi.advanceTimersByTimeAsync(0);
-    expect(recheckPrerequisites).not.toHaveBeenCalled();
+    expect(recheckPrerequisite).not.toHaveBeenCalled();
+  });
+
+  it("also re-checks on its own for a while, for an install busy and idle missed", async () => {
+    await openAtPrompt();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(recheckPrerequisite).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    const polled = recheckPrerequisite.mock.calls.length;
+    expect(polled).toBeGreaterThan(1);
+    expect(polled).toBeLessThanOrEqual(30);
+    // Past the window only a finished command asks again; the watch lives on.
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(recheckPrerequisite).toHaveBeenCalledTimes(polled);
+    expect(__testing.watchCount()).toBe(1);
+  });
+
+  it("stops re-checking on its own once the tool is there", async () => {
+    await openAtPrompt();
+    recheckPrerequisite.mockResolvedValue(true);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(__testing.watchCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(recheckPrerequisite).toHaveBeenCalledTimes(1);
   });
 
   it("checks once more and stops when the terminal closes", async () => {
@@ -346,10 +413,21 @@ describe("re-checking after the command runs", () => {
     panels.set({});
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(recheckPrerequisites).toHaveBeenCalledTimes(1);
+    expect(recheckPrerequisite).toHaveBeenCalledTimes(1);
     expect(__testing.watchCount()).toBe(0);
     panels.set({});
-    expect(recheckPrerequisites).toHaveBeenCalledTimes(1);
+    expect(recheckPrerequisite).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops when the terminal's spawn fails", async () => {
+    const opened = openInstallCommandInTerminal(REQUEST);
+    await vi.advanceTimersByTimeAsync(50);
+    seedTerminal("failed");
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(await opened).toBe(null);
+    expect(__testing.watchCount()).toBe(0);
+    expect(client.activity.size).toBe(0);
   });
 
   it("checks once more and stops when the shell exits", async () => {
@@ -357,7 +435,7 @@ describe("re-checking after the command runs", () => {
     for (const cb of [...client.exit]) cb("t1", 0);
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(recheckPrerequisites).toHaveBeenCalledTimes(1);
+    expect(recheckPrerequisite).toHaveBeenCalledTimes(1);
     expect(__testing.watchCount()).toBe(0);
   });
 
@@ -365,35 +443,40 @@ describe("re-checking after the command runs", () => {
     const opened = openInstallCommandInTerminal(REQUEST);
     await vi.advanceTimersByTimeAsync(25_000);
     await opened;
+    expect(client.write).not.toHaveBeenCalled();
+    recheckPrerequisite.mockClear();
 
-    emitActivity("working");
-    emitActivity("success");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(recheckPrerequisites).toHaveBeenCalledTimes(1);
+    await runCommand();
+    expect(recheckPrerequisite).toHaveBeenCalledTimes(1);
   });
 
-  it("refreshes CLI availability for an agent and stops once it's installed", async () => {
-    await openAtPrompt({
-      ...REQUEST,
-      line: "curl -fsSL x | bash",
-      target: { kind: "agent", agentId: "claude" },
-    });
+  it("refreshes CLI availability for an agent until it is installed", async () => {
+    await openAtPrompt(AGENT_REQUEST);
     cli.refresh.mockImplementation(async () => {
-      cli.availability = { claude: "ready" };
+      cli.availability = { claude: "missing" };
     });
 
-    emitActivity("working");
-    emitActivity("success");
-    await vi.advanceTimersByTimeAsync(0);
-
+    await runCommand();
     expect(cli.refresh).toHaveBeenCalledWith(true);
-    expect(recheckPrerequisites).not.toHaveBeenCalled();
+    expect(__testing.watchCount()).toBe(1);
+
+    cli.refresh.mockImplementation(async () => {
+      cli.availability = { claude: "unauthenticated" };
+    });
+    await runCommand();
+    expect(cli.refresh).toHaveBeenCalledTimes(2);
+    expect(recheckPrerequisite).not.toHaveBeenCalled();
     expect(__testing.watchCount()).toBe(0);
   });
 
   it("lets a watch lapse after an hour", async () => {
     await openAtPrompt();
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.advanceTimersByTimeAsync(60 * 60_000 - 1_000);
+    expect(__testing.watchCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(__testing.watchCount()).toBe(0);
+    expect(client.activity.size).toBe(0);
+    expect(panels.listeners.size).toBe(0);
   });
 });

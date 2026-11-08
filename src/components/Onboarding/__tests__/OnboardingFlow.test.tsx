@@ -633,10 +633,6 @@ describe("OnboardingFlow wizard opened from the panel palette", () => {
     });
 
     expect(doc.querySelector('[data-testid="agent-setup-wizard"]')).toBeNull();
-    expect(actionDispatchMock).not.toHaveBeenCalledWith(
-      "panel.palette",
-      expect.anything(),
-      expect.anything()
-    );
+    expect(actionDispatchMock).not.toHaveBeenCalled();
   });
 });

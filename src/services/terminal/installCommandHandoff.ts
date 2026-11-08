@@ -5,7 +5,7 @@ import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { terminalClient } from "@/clients";
 import { notify } from "@/lib/notify";
 import { sanitizeForClipboard } from "@/lib/clipboardSanitize";
-import { recheckMissingPrerequisites } from "@/lib/recheckMissingPrerequisites";
+import { recheckPrerequisite } from "@/lib/recheckMissingPrerequisites";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { usePanelStore } from "@/store/panelStore";
 import { logError, logWarn } from "@/utils/logger";
@@ -27,12 +27,13 @@ const PROMPT_POLL_MS = 100;
 /** A prompt still being drawn (a two-line theme, a late right prompt) isn't one to type into yet. */
 const PROMPT_QUIET_MS = 150;
 /**
- * A shell with neither bracketed paste nor a prompt shape we know (a custom
- * Windows prompt, an old bash) is taken as ready once its startup output has
- * stopped for this long. The line is never submitted, so typing it a little
- * early can only show it twice, never run it.
+ * Busy and idle miss an install that finishes between two process-tree polls,
+ * and a shell with a resident child (a prompt theme's git daemon) never looks
+ * idle, so the target is also probed this often while an install is likely
+ * still in hand.
  */
-const UNRECOGNIZED_PROMPT_QUIET_MS = 2_000;
+const RECHECK_EVERY_MS = 20_000;
+const RECHECK_FOR_MS = 10 * 60_000;
 /** A watch outlives the install only this long; the banner's Re-check is there after. */
 const WATCH_MAX_MS = 60 * 60_000;
 
@@ -60,7 +61,9 @@ function cursorLine(terminal: NonNullable<ReturnType<TerminalService["get"]>>["t
  * strongest sign (zsh, bash 5.1+ and fish turn it on as their line editor
  * starts); a prompt shape on the cursor line covers PowerShell, cmd and older
  * bash. Either one counts once output has paused, so a prompt still being
- * drawn isn't typed into.
+ * drawn isn't typed into. Silence alone never counts: a startup script asking
+ * for an ssh passphrase or a sudo password is silent too, and the line would
+ * land in that prompt instead.
  */
 async function waitForShellPrompt(service: TerminalService, id: string): Promise<PromptWait> {
   const deadline = Date.now() + PROMPT_WAIT_MS;
@@ -73,7 +76,6 @@ async function waitForShellPrompt(service: TerminalService, id: string): Promise
   let tracked: ReturnType<TerminalService["get"]> | undefined;
   let subscription: { dispose(): void } | null = null;
   let lastOutputAt = Date.now();
-  let sawOutput = false;
 
   try {
     while (Date.now() < deadline) {
@@ -86,19 +88,15 @@ async function waitForShellPrompt(service: TerminalService, id: string): Promise
         tracked = managed;
         subscription = terminal.onWriteParsed(() => {
           lastOutputAt = Date.now();
-          sawOutput = true;
         });
-        // Output parsed before this subscription (a replay, a pooled shell) moved the cursor.
-        const buffer = terminal.buffer.active;
-        sawOutput ||= buffer.baseY > 0 || buffer.cursorY > 0 || buffer.cursorX > 0;
       }
 
-      if (terminal.buffer.active.type === "normal") {
-        const quietFor = Date.now() - lastOutputAt;
-        const atPrompt =
-          terminal.modes.bracketedPasteMode || isShellPromptLine(cursorLine(terminal));
-        if (atPrompt && quietFor >= PROMPT_QUIET_MS) return "ready";
-        if (sawOutput && quietFor >= UNRECOGNIZED_PROMPT_QUIET_MS) return "ready";
+      if (
+        terminal.buffer.active.type === "normal" &&
+        Date.now() - lastOutputAt >= PROMPT_QUIET_MS &&
+        (terminal.modes.bracketedPasteMode || isShellPromptLine(cursorLine(terminal)))
+      ) {
+        return "ready";
       }
       await new Promise((resolve) => window.setTimeout(resolve, PROMPT_POLL_MS));
     }
@@ -110,20 +108,18 @@ async function waitForShellPrompt(service: TerminalService, id: string): Promise
 
 /** Probes the target afresh; true once it is there. */
 export async function recheckInstallTarget(target: InstallTarget): Promise<boolean> {
-  if (target.kind === "prerequisite") {
-    const stillMissing = await recheckMissingPrerequisites();
-    return !stillMissing.some((p) => p.tool === target.tool);
-  }
+  if (target.kind === "prerequisite") return recheckPrerequisite(target.tool);
   await useCliAvailabilityStore.getState().refresh(true);
   return isAgentInstalled(useCliAvailabilityStore.getState().availability[target.agentId]);
 }
 
 /**
  * Re-checks the target each time the terminal goes from running something to
- * idle, which is when a command the user ran there has finished. Busy and idle
- * are what main observes of the shell's children; nothing reads the terminal's
- * output or its input. A watch ends when the target is there, when the
- * terminal closes or exits (with one last check), or after an hour.
+ * idle, which is when a command the user ran there has finished, and every so
+ * often for the first minutes besides. Busy and idle are what main observes of
+ * the shell's children; nothing reads the terminal's output or its input. A
+ * watch ends when the target is there, when the terminal closes, exits or fails
+ * to spawn (with one last check), or after an hour.
  */
 function watchInstallTerminal(id: string, target: InstallTarget): void {
   watches.get(id)?.();
@@ -182,13 +178,21 @@ function watchInstallTerminal(id: string, target: InstallTarget): void {
     terminalClient.onExit((exitedId) => {
       if (exitedId === id) finish();
     }),
-    usePanelStore.subscribe((state) => {
-      const panel = state.panelsById[id];
-      if (!panel || panel.location === "trash") finish();
+    usePanelStore.subscribe(() => {
+      if (isPanelGone(id)) finish();
     })
   );
   const timer = window.setTimeout(dispose, WATCH_MAX_MS);
   cleanups.push(() => window.clearTimeout(timer));
+
+  const startedAt = Date.now();
+  let recheckTimer = 0;
+  const scheduleRecheck = (): void => {
+    if (disposed || Date.now() - startedAt >= RECHECK_FOR_MS) return;
+    recheckTimer = window.setTimeout(() => void check().finally(scheduleRecheck), RECHECK_EVERY_MS);
+  };
+  cleanups.push(() => window.clearTimeout(recheckTimer));
+  scheduleRecheck();
 
   watches.set(id, dispose);
 }
