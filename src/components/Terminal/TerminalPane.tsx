@@ -148,7 +148,7 @@ import {
 } from "./TerminalInputBlockBanner";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import { AgentAltScreenBanner } from "./AgentAltScreenBanner";
-import { useAgentAltScreenBanner } from "./useAgentAltScreenBanner";
+import { altScreenNoticeAgentId, useAgentAltScreenBanner } from "./useAgentAltScreenBanner";
 import { CanopyPaneOffer, useCanopyPaneOffer } from "@/components/Canopy/CanopyPaneOffer";
 import { RelayDeployBanner } from "./RelayDeployBanner";
 import { RelayUpdateBanner } from "./RelayUpdateBanner";
@@ -888,12 +888,8 @@ function TerminalPaneComponent({
 
   // The pane's current agent identity, built-in or contributed: a plain shell
   // that runs `vim` or `htop` has none and is never told it is full-screen.
-  const altScreenAgentId = chrome.isAgent && !chrome.hasExited ? chrome.agentId : null;
-  const agentAltScreenBanner = useAgentAltScreenBanner(
-    id,
-    altScreenAgentId ?? undefined,
-    attachEpoch
-  );
+  const altScreenAgentId = altScreenNoticeAgentId(chrome);
+  const agentAltScreenBanner = useAgentAltScreenBanner(id, altScreenAgentId, attachEpoch);
 
   // This mount is also what discharges the worktree-switch reveal obligation
   // (#11640): the switch's policy pass ran before React re-rendered, so its wake

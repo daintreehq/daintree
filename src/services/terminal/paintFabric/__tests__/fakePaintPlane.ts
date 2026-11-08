@@ -47,7 +47,11 @@ export function makeFakePlane() {
     addAgentStateListener: vi.fn(() => vi.fn()),
     addExitListener: vi.fn(() => vi.fn()),
     reportLost: vi.fn(),
-    addAltBufferListener: vi.fn(() => vi.fn()),
+    addAltBufferListener: vi.fn(
+      (_id: string, _callback: (isAltBuffer: boolean) => void): (() => void) => vi.fn()
+    ),
+    getAltBufferState: vi.fn((_id: string) => false),
+    addInstanceDestroyedListener: vi.fn((_callback: (id: string) => void): (() => void) => vi.fn()),
     addPaddingPaintListener: vi.fn(() => vi.fn()),
     registerPostCompleteHook: vi.fn(() => vi.fn()),
     unregisterPostCompleteHook: vi.fn(),

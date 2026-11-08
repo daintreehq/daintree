@@ -587,6 +587,64 @@ describe("addPanel — the run's first prompt on an existing record (#14592)", (
   );
 });
 
+describe("addPanel — a closed full-screen notice on an existing record (#16357)", () => {
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    spawn.mockReset();
+    spawn.mockImplementation(async ({ id }) => id ?? "spawn-id");
+    usePanelLimitStore.setState({ softWarningLimit: 100, confirmationLimit: 200, hardLimit: 300 });
+  });
+
+  async function openAndDismiss(id: string) {
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: id,
+      existingId: id,
+      cwd: "/repo",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+    usePanelStore.getState().dismissAltScreenNotice(id);
+    expect(ptyPanel(id)?.altScreenNoticeDismissed).toBe(true);
+  }
+
+  it("keeps it closed when a reconnect replaces the record", async () => {
+    await openAndDismiss("p1");
+
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "p1",
+      existingId: "p1",
+      cwd: "/repo",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+
+    expect(ptyPanel("p1")?.altScreenNoticeDismissed).toBe(true);
+  });
+
+  it("offers it on a pane that never closed it", async () => {
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "p2",
+      existingId: "p2",
+      cwd: "/repo",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "p2",
+      existingId: "p2",
+      cwd: "/repo",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+
+    expect(ptyPanel("p2")?.altScreenNoticeDismissed).toBeUndefined();
+  });
+});
+
 /**
  * Tests for spawn-time PTY geometry (#10863).
  *

@@ -720,8 +720,8 @@ export interface PtyPanelData extends BasePanelData {
   worktreeMoveNotice?: PanelWorktreeMoveNotice;
   /**
    * Hold the "running full-screen" notice back for this pane's lifetime once
-   * the user closes it (#16357). Never serialized, so a restart starts the
-   * pane with the notice available again.
+   * the user closes it (#16357). Never serialized, so the next app start offers
+   * the notice again.
    */
   altScreenNoticeDismissed?: boolean;
   /**

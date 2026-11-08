@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import React from "react";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { AgentAltScreenBanner } from "../AgentAltScreenBanner";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
 import { getAgentConfig } from "@/config/agents";
+import { getAgentInlineSupport } from "@/lib/agentInlineMode";
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -12,6 +13,12 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
+
+// The copy variants are driven by what an agent declares, so those tests state
+// it themselves; one test below keeps the real registry for Claude Code.
+vi.mock("@/lib/agentInlineMode", () => ({ getAgentInlineSupport: vi.fn() }));
+const realInlineMode =
+  await vi.importActual<typeof import("@/lib/agentInlineMode")>("@/lib/agentInlineMode");
 
 // jsdom ships no `matchMedia`, and `InlineStatusBanner` reads it while rendering.
 beforeAll(() => {
@@ -28,6 +35,12 @@ beforeAll(() => {
       dispatchEvent: vi.fn(),
     })),
   });
+});
+
+const UNKNOWN_AGENT = "acme-agent";
+
+beforeEach(() => {
+  vi.mocked(getAgentInlineSupport).mockReset();
 });
 
 function renderBanner(agentId: string) {
@@ -49,16 +62,25 @@ const DISMISS = "Dismiss full-screen notice";
 
 describe("AgentAltScreenBanner", () => {
   it("names the agent and says what full-screen means for this pane", () => {
-    const { container } = renderBanner("crush");
+    vi.mocked(getAgentInlineSupport).mockReturnValue({ supported: false });
+    const { container } = renderBanner(UNKNOWN_AGENT);
 
-    expect(
-      screen.getByText(`${getAgentConfig("crush")?.name} is running full-screen`)
-    ).not.toBeNull();
+    expect(screen.getByText(`${UNKNOWN_AGENT} is running full-screen`)).not.toBeNull();
     expect(container.textContent).toContain(MEANING);
   });
 
+  it("uses the agent's display name when the registry has one", () => {
+    vi.mocked(getAgentInlineSupport).mockReturnValue({ supported: false });
+    renderBanner("claude");
+
+    expect(
+      screen.getByText(`${getAgentConfig("claude")?.name} is running full-screen`)
+    ).not.toBeNull();
+  });
+
   it("is an informational status, not an alert", () => {
-    const { container } = renderBanner("crush");
+    vi.mocked(getAgentInlineSupport).mockReturnValue({ supported: false });
+    const { container } = renderBanner(UNKNOWN_AGENT);
 
     const root = container.querySelector("[data-inline-status-banner]");
     expect(root?.getAttribute("role")).toBe("status");
@@ -66,38 +88,42 @@ describe("AgentAltScreenBanner", () => {
   });
 
   it("gives a full-screen-only agent no inline-mode recommendation", () => {
-    const { container } = renderBanner("crush");
+    vi.mocked(getAgentInlineSupport).mockReturnValue({ supported: false });
+    const { container } = renderBanner(UNKNOWN_AGENT);
 
     expect(container.textContent).not.toMatch(/inline/i);
     expect(container.querySelector("code")).toBeNull();
   });
 
   it("says inline mode is supported for an agent that has one", () => {
-    const { container } = renderBanner("codex");
+    vi.mocked(getAgentInlineSupport).mockReturnValue({ supported: true });
+    const { container } = renderBanner(UNKNOWN_AGENT);
 
-    expect(container.textContent).toContain(
-      `${MEANING}. ${getAgentConfig("codex")?.name} supports inline mode.`
-    );
+    expect(container.textContent).toContain(`${MEANING}. ${UNKNOWN_AGENT} supports inline mode.`);
     expect(container.querySelector("code")).toBeNull();
   });
 
-  it("names the command that switches Claude Code back to the main screen", () => {
-    const { container } = renderBanner("claude");
+  it("names the command that switches the CLI back when the agent has one", () => {
+    vi.mocked(getAgentInlineSupport).mockReturnValue({ supported: true, command: "/inline now" });
+    const { container } = renderBanner(UNKNOWN_AGENT);
 
     expect(container.textContent).toContain(
-      `${getAgentConfig("claude")?.name} supports inline mode with /tui default.`
+      `${UNKNOWN_AGENT} supports inline mode with /inline now.`
     );
-    expect(container.querySelector("code")?.textContent).toBe("/tui default");
+    expect(container.querySelector("code")?.textContent).toBe("/inline now");
   });
 
-  it("falls back to the id for an agent the registry does not know", () => {
-    renderBanner("mystery-agent");
+  it("names /tui default for Claude Code from the real registry", () => {
+    vi.mocked(getAgentInlineSupport).mockImplementation(realInlineMode.getAgentInlineSupport);
+    const { container } = renderBanner("claude");
 
-    expect(screen.getByText("mystery-agent is running full-screen")).not.toBeNull();
+    expect(container.querySelector("code")?.textContent).toBe("/tui default");
+    expect(container.textContent).toContain("supports inline mode with /tui default.");
   });
 
   it("dismisses without activating the pane", () => {
-    const { onDismiss, onPaneClick } = renderBanner("crush");
+    vi.mocked(getAgentInlineSupport).mockReturnValue({ supported: false });
+    const { onDismiss, onPaneClick } = renderBanner(UNKNOWN_AGENT);
 
     fireEvent.click(screen.getByRole("button", { name: DISMISS }));
 

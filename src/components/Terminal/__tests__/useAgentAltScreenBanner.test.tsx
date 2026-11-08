@@ -51,28 +51,39 @@ vi.mock("../../../store/slices/panelRegistry/persistence", async () => {
 
 const { usePanelStore } = await import("@/store/panelStore");
 const accessor = await import("@/services/terminal/terminalInstanceServiceAccessor");
-const { useAgentAltScreenBanner } = await import("../useAgentAltScreenBanner");
-
-type AltListener = (isAltBuffer: boolean) => void;
+const { altScreenNoticeAgentId, useAgentAltScreenBanner } =
+  await import("../useAgentAltScreenBanner");
+const { deriveTerminalChrome } = await import("@/utils/terminalChrome");
+const { makeSurface } = await import("@/services/terminal/paintFabric/__tests__/fakePaintPlane");
 
 /** The slice of the terminal service the notice reads, with real listener semantics. */
 function makeService() {
+  const { surface, plane } = makeSurface("alt-screen-notice");
   const created = new Set<string>();
   const screen = new Map<string, boolean>();
-  const listeners = new Map<string, Set<AltListener>>();
+  const listeners = new Map<string, Set<(isAltBuffer: boolean) => void>>();
+  plane.addAltBufferListener.mockImplementation((id, callback) => {
+    // Like the real service: no instance, nothing to attach to.
+    if (!created.has(id)) return () => {};
+    const set = listeners.get(id) ?? new Set<(isAltBuffer: boolean) => void>();
+    listeners.set(id, set);
+    set.add(callback);
+    callback(screen.get(id) ?? false);
+    return () => {
+      set.delete(callback);
+    };
+  });
+  plane.getAltBufferState.mockImplementation((id) => screen.get(id) ?? false);
+  const destroyedCallbacks = new Set<(id: string) => void>();
+  plane.addInstanceDestroyedListener.mockImplementation((callback) => {
+    destroyedCallbacks.add(callback);
+    return () => {
+      destroyedCallbacks.delete(callback);
+    };
+  });
   return {
-    addAltBufferListener: vi.fn((id: string, callback: AltListener) => {
-      // Like the real service: no instance, nothing to attach to.
-      if (!created.has(id)) return () => {};
-      const set = listeners.get(id) ?? new Set<AltListener>();
-      listeners.set(id, set);
-      set.add(callback);
-      callback(screen.get(id) ?? false);
-      return () => {
-        set.delete(callback);
-      };
-    }),
-    getAltBufferState: vi.fn((id: string) => screen.get(id) ?? false),
+    paintPlane: surface.plane,
+    addAltBufferListener: plane.addAltBufferListener,
     create(id: string) {
       created.add(id);
     },
@@ -80,8 +91,18 @@ function makeService() {
       screen.set(id, isAltBuffer);
       for (const callback of [...(listeners.get(id) ?? [])]) callback(isAltBuffer);
     },
+    /** Teardown as the service does it: listeners dropped without a last report. */
+    destroy(id: string) {
+      created.delete(id);
+      screen.delete(id);
+      listeners.delete(id);
+      for (const callback of [...destroyedCallbacks]) callback(id);
+    },
     listenerCount(id: string) {
       return listeners.get(id)?.size ?? 0;
+    },
+    destroyListenerCount() {
+      return destroyedCallbacks.size;
     },
   };
 }
@@ -112,7 +133,7 @@ function installService(...ids: string[]) {
   service = makeService();
   for (const id of ids) service.create(id);
   act(() => {
-    accessor.register(service as unknown as Parameters<typeof accessor.register>[0]);
+    accessor.register(service.paintPlane);
   });
 }
 
@@ -245,10 +266,41 @@ describe("useAgentAltScreenBanner", () => {
     installService("t-1");
     const { unmount } = renderHook(() => useAgentAltScreenBanner("t-1", "claude", 0));
     expect(service.listenerCount("t-1")).toBe(1);
+    expect(service.destroyListenerCount()).toBe(1);
 
     unmount();
 
     expect(service.listenerCount("t-1")).toBe(0);
+    expect(service.destroyListenerCount()).toBe(0);
+  });
+
+  it("stops claiming full-screen when its terminal is torn down, until a new one attaches", () => {
+    installService("t-1");
+    const { result, rerender } = renderHook(
+      ({ epoch }: { epoch: number }) => useAgentAltScreenBanner("t-1", "claude", epoch),
+      { initialProps: { epoch: 0 } }
+    );
+    act(() => service.setScreen("t-1", true));
+    expect(result.current.visible).toBe(true);
+
+    // A restart destroys the old terminal before the new one exists.
+    act(() => service.destroy("t-1"));
+    expect(result.current.visible).toBe(false);
+
+    service.create("t-1");
+    service.setScreen("t-1", true);
+    rerender({ epoch: 1 });
+    expect(result.current.visible).toBe(true);
+  });
+
+  it("ignores the teardown of another pane's terminal", () => {
+    installService("t-1", "t-2");
+    service.setScreen("t-1", true);
+    const { result } = renderHook(() => useAgentAltScreenBanner("t-1", "claude", 0));
+
+    act(() => service.destroy("t-2"));
+
+    expect(result.current.visible).toBe(true);
   });
 });
 
@@ -293,5 +345,40 @@ describe("dismissAltScreenNotice", () => {
     usePanelStore.getState().dismissAltScreenNotice("t-1");
 
     expect(saveNormalized).not.toHaveBeenCalled();
+  });
+});
+
+describe("altScreenNoticeAgentId", () => {
+  it("names the agent of a pane running one", () => {
+    expect(altScreenNoticeAgentId(deriveTerminalChrome({ launchAgentId: "claude" }))).toBe(
+      "claude"
+    );
+  });
+
+  it("names an agent detected in a shell the user started it from", () => {
+    expect(altScreenNoticeAgentId(deriveTerminalChrome({ detectedAgentId: "codex" }))).toBe(
+      "codex"
+    );
+  });
+
+  it("names nothing for a plain shell", () => {
+    expect(altScreenNoticeAgentId(deriveTerminalChrome({ kind: "terminal" }))).toBeUndefined();
+  });
+
+  it("names nothing for a shell running a full-screen program", () => {
+    expect(
+      altScreenNoticeAgentId(deriveTerminalChrome({ detectedProcessId: "vim" }))
+    ).toBeUndefined();
+  });
+
+  it("names nothing once the agent has exited, whether launched or detected", () => {
+    expect(
+      altScreenNoticeAgentId(
+        deriveTerminalChrome({ launchAgentId: "claude", runtimeStatus: "exited" })
+      )
+    ).toBeUndefined();
+    expect(
+      altScreenNoticeAgentId(deriveTerminalChrome({ detectedAgentId: "claude", exitCode: 0 }))
+    ).toBeUndefined();
   });
 });

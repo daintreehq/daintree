@@ -1,10 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
 import { isPtyPanel } from "@shared/types/panel";
 import { usePanelStore } from "@/store/panelStore";
+import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import {
   peek as peekTerminalService,
   subscribeWhenReady,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+/**
+ * The agent a pane's full-screen notice would name, or `undefined` for a pane
+ * that owes none: a plain shell, a shell running `vim`, an agent that has exited.
+ */
+export function altScreenNoticeAgentId(
+  chrome: Pick<TerminalChromeDescriptor, "isAgent" | "hasExited" | "agentId">
+): string | undefined {
+  return chrome.isAgent && !chrome.hasExited ? (chrome.agentId ?? undefined) : undefined;
+}
 
 export interface AgentAltScreenBanner {
   visible: boolean;
@@ -49,9 +60,18 @@ export function useAgentAltScreenBanner(
 
   useEffect(() => {
     if (!watching) return;
-    const unsubscribe = subscribeWhenReady((service) =>
-      service.addAltBufferListener(panelId, setIsAltBuffer)
-    );
+    const unsubscribe = subscribeWhenReady((service) => {
+      const stopBufferWatch = service.addAltBufferListener(panelId, setIsAltBuffer);
+      // A restart or close tears the terminal down without a last word on its
+      // screen; until the next one attaches, the old reading would stand.
+      const stopDestroyWatch = service.addInstanceDestroyedListener((destroyedId) => {
+        if (destroyedId === panelId) setIsAltBuffer(false);
+      });
+      return () => {
+        stopBufferWatch();
+        stopDestroyWatch();
+      };
+    });
     return () => {
       unsubscribe();
       setIsAltBuffer(false);

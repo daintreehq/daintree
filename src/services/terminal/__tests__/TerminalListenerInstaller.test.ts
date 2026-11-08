@@ -197,9 +197,10 @@ function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTermi
 
 function installOnMock(
   terminal: ReturnType<typeof makeMockTerminal>,
-  deps: TerminalListenerInstallDeps
+  deps: TerminalListenerInstallDeps,
+  managedOverrides: Partial<ManagedTerminal> = {}
 ): ManagedTerminal {
-  const managed = makeMockManaged();
+  const managed = makeMockManaged(managedOverrides);
   const asXterm = terminal as unknown as ManagedTerminal["terminal"];
   managed.terminal = asXterm;
   installTerminalBoundListeners(asXterm, managed, "t1", deps);
@@ -2150,19 +2151,11 @@ describe("wheelEventToLineCount", () => {
 });
 
 describe("installTerminalBoundListeners buffer mode announcements", () => {
-  function install(initialType: "normal" | "alternate", previouslyAlt?: boolean) {
-    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
-    const terminal = makeMockTerminal(captured);
+  function install(initialType: "normal" | "alternate", previouslyAlt: boolean | undefined) {
+    const terminal = makeMockTerminal({ onTitleChangeHandlers: [] });
     terminal.buffer.active.type = initialType;
-    const managed = makeMockManaged({ isAltBuffer: previouslyAlt });
     const deps = makeDeps();
-    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
-    installTerminalBoundListeners(
-      terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
-      managed,
-      "t1",
-      deps
-    );
+    const managed = installOnMock(terminal, deps, { isAltBuffer: previouslyAlt });
     return { managed, deps };
   }
 
@@ -2185,5 +2178,11 @@ describe("installTerminalBoundListeners buffer mode announcements", () => {
 
     expect(managed.isAltBuffer).toBe(false);
     expect(deps.onBufferModeChange).toHaveBeenCalledExactlyOnceWith("t1", false);
+  });
+
+  it("announces again when a rebuilt terminal is still on the alternate screen", () => {
+    const { deps } = install("alternate", true);
+
+    expect(deps.onBufferModeChange).toHaveBeenCalledExactlyOnceWith("t1", true);
   });
 });
