@@ -575,3 +575,109 @@ describe("the docked global assistant (#16214)", () => {
     expect(store.getState().globalDocked).toBe(false);
   });
 });
+
+describe("taking up a dialog popped out into the Canopy window (#16338)", () => {
+  const place = {
+    hostId: "local",
+    query: "deploy failed",
+    selection: { kind: "worker" as const, runId: "run-2" },
+    roleFilter: "workers" as const,
+    unreadOnly: true,
+    keptUnread: ["run-2"],
+    archivedExpanded: true,
+    trashExpanded: true,
+    workOf: { assistantId: "assistant-1", name: "Planner" },
+  };
+
+  afterEach(() => {
+    useCanopyStore.setState({
+      isOpen: false,
+      hostId: null,
+      mode: "unset",
+      roleFilter: "all",
+      unreadOnly: false,
+      archivedExpanded: false,
+      trashExpanded: false,
+      workOf: null,
+      resume: null,
+      replyReveal: null,
+      popOutLanding: null,
+    });
+    delete window.__DAINTREE_HOST_ID__;
+    window.localStorage.clear();
+  });
+
+  it("carries each filter over at once, and asks to land on the dialog's search and row", () => {
+    useCanopyStore.setState({ isOpen: true, mode: "on" });
+
+    useCanopyStore.getState().receivePopOut(place);
+
+    const state = useCanopyStore.getState();
+    expect(state.roleFilter).toBe("workers");
+    expect(state.unreadOnly).toBe(true);
+    expect(state.archivedExpanded).toBe(true);
+    expect(state.trashExpanded).toBe(true);
+    expect(state.workOf).toEqual(place.workOf);
+    expect(state.popOutLanding).toMatchObject({
+      query: "deploy failed",
+      selection: { kind: "worker", runId: "run-2" },
+      keptUnread: ["run-2"],
+    });
+  });
+
+  it("names the window's own host as its own, and any other host or All hosts as given", () => {
+    useCanopyStore.getState().receivePopOut(place);
+    expect(useCanopyStore.getState().hostId).toBeNull();
+    expect(useCanopyStore.getState().popOutLanding?.hostId).toBeNull();
+
+    useCanopyStore.getState().receivePopOut({ ...place, hostId: "studio" });
+    expect(useCanopyStore.getState().hostId).toBe("studio");
+    expect(useCanopyStore.getState().popOutLanding?.hostId).toBe("studio");
+
+    useCanopyStore.getState().receivePopOut({ ...place, hostId: ALL_HOSTS_ID });
+    expect(useCanopyStore.getState().hostId).toBe(ALL_HOSTS_ID);
+  });
+
+  it("saves none of it for the next view to open with", () => {
+    window.localStorage.clear();
+
+    useCanopyStore.getState().receivePopOut({ ...place, hostId: "studio" });
+
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it("keeps no read rows when Unread wasn't on", () => {
+    useCanopyStore.getState().receivePopOut({ ...place, unreadOnly: false });
+    expect(useCanopyStore.getState().popOutLanding?.keptUnread).toEqual([]);
+  });
+
+  it("replaces a landing still waiting, and settles only the one asked", () => {
+    useCanopyStore.setState({
+      replyReveal: { id: 1, runId: "run-9", hostScope: null },
+      resume: { at: Date.now(), hostId: null, query: "old", runId: "run-9", order: [] },
+    });
+    useCanopyStore.getState().receivePopOut(place);
+    const first = useCanopyStore.getState().popOutLanding!.id;
+    expect(useCanopyStore.getState().replyReveal).toBeNull();
+    expect(useCanopyStore.getState().resume).toBeNull();
+
+    useCanopyStore.getState().receivePopOut({ ...place, query: "newer" });
+    const second = useCanopyStore.getState().popOutLanding!.id;
+    expect(second).not.toBe(first);
+
+    useCanopyStore.getState().settlePopOutLanding(first);
+    expect(useCanopyStore.getState().popOutLanding?.id).toBe(second);
+    useCanopyStore.getState().settlePopOutLanding(second);
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
+  it("opens on the landing's host, and forgets the landing once put away", () => {
+    useCanopyStore.setState({ mode: "on" });
+    useCanopyStore.getState().receivePopOut({ ...place, hostId: "studio" });
+    useCanopyStore.getState().open();
+    expect(useCanopyStore.getState().hostId).toBe("studio");
+
+    useCanopyStore.getState().close();
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+});

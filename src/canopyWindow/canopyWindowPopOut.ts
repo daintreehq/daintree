@@ -13,7 +13,7 @@ async function takePopOut(): Promise<void> {
     useCanopyStore.getState().receivePopOut(pending.popOut);
   }
   // The dialog it came from closes on this answer, and only on it.
-  await api.acknowledgePopOut(pending.id);
+  await api.acknowledgePopOut({ id: pending.id });
 }
 
 /**
