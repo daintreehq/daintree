@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { Schedule } from "@shared/types/scheduledRuns";
 import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
+import type { ScheduleStarter } from "@/components/Schedules/scheduleStarters";
 
 /** Where an opening of the Schedules tab lands: the list, or one schedule's history. */
 export interface SchedulesViewRequest {
@@ -17,6 +18,8 @@ export interface SchedulesViewRequest {
 export interface ScheduleEditorOpening {
   /** Null for a new schedule; otherwise the schedule as it was when the editor opened. */
   schedule: Schedule | null;
+  /** The starter a new schedule was opened from; always null when `schedule` is set. */
+  starter: ScheduleStarter | null;
   /** Rises with each opening, so the next one starts from the saved schedule. */
   key: number;
   /** False while the editor animates out; the opening is cleared once it has gone. */
@@ -39,7 +42,7 @@ interface SchedulesViewState {
   open: (scheduleId?: string | null) => void;
   markLanded: (seq: number) => void;
   setShowing: (showing: boolean) => void;
-  openEditor: (schedule: Schedule | null) => void;
+  openEditor: (schedule: Schedule | null, starter?: ScheduleStarter | null) => void;
   closeEditor: () => void;
   clearEditor: () => void;
   answerEditor: (snapshot: SchedulesSnapshot) => void;
@@ -59,8 +62,19 @@ export const useSchedulesViewStore = create<SchedulesViewState>()((set) => ({
   setShowing: (showing) => set({ showing }),
   // One editor at a time: an opening never replaces a draft. Only an outside
   // close of Settings, reopened over the editor, could ask while one is up.
-  openEditor: (schedule) =>
-    set((state) => (state.editor ? state : { editor: { schedule, key: ++openings, open: true } })),
+  openEditor: (schedule, starter = null) =>
+    set((state) =>
+      state.editor
+        ? state
+        : {
+            editor: {
+              schedule,
+              starter: schedule ? null : starter,
+              key: ++openings,
+              open: true,
+            },
+          }
+    ),
   closeEditor: () =>
     set((state) => (state.editor?.open ? { editor: { ...state.editor, open: false } } : state)),
   clearEditor: () => set({ editor: null }),

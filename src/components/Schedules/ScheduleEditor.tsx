@@ -46,6 +46,7 @@ import { useFirstAgentOptions } from "@/components/Worktree/hooks/useFirstAgentO
 import { useScheduleLaunchOptions } from "./useScheduleLaunchOptions";
 import { CadencePicker } from "./CadencePicker";
 import { scheduleOsJobKindHere } from "./scheduleOsJobKind";
+import type { ScheduleStarter } from "./scheduleStarters";
 import { choiceFromCron, choiceIssue, type CadenceChoice } from "./cadenceChoice";
 import {
   DONE_CONSEQUENCE,
@@ -105,10 +106,18 @@ function draftFrom(schedule: Schedule): Draft {
 }
 
 /** A new schedule's draft carries #15974's defaults, read from the one place they live. */
-function blankDraft(agentId: string): Draft {
-  return draftFrom(
+function blankDraft(agentId: string, starter: ScheduleStarter | null): Draft {
+  const blank = draftFrom(
     createSchedule({ id: "", projectId: "", name: "", launch: { agentId, prompt: "" } })
   );
+  if (!starter) return blank;
+  // The agent stays the user's to pick; everything else a starter names is filled in.
+  return {
+    ...blank,
+    name: starter.name,
+    prompt: starter.prompt,
+    cadence: choiceFromCron(starter.cron),
+  };
 }
 
 const DRAFT_KEYS: readonly (keyof Draft)[] = [
@@ -232,6 +241,8 @@ interface ScheduleEditorProps {
   /** Null for a new schedule. */
   schedule: Schedule | null;
   defaultAgentId: string;
+  /** A new schedule opened from a starter: its name, cadence and prompt fill the draft. */
+  starter?: ScheduleStarter | null;
   worktrees: readonly WorktreeChoice[];
   now: number;
   /** What main judges "Run when Daintree isn't running" by; null until it has answered. */
@@ -279,6 +290,7 @@ const ASSISTANT_DONE_CONSEQUENCE: Record<ScheduleDonePolicy, string> = {
 export function ScheduleEditor({
   schedule,
   defaultAgentId,
+  starter = null,
   worktrees,
   now,
   osJobContext,
@@ -293,8 +305,8 @@ export function ScheduleEditor({
 }: ScheduleEditorProps) {
   const [base, setBase] = useState<Schedule | null>(schedule);
   const initial = useMemo(
-    () => (base ? draftFrom(base) : blankDraft(defaultAgentId)),
-    [base, defaultAgentId]
+    () => (base ? draftFrom(base) : blankDraft(defaultAgentId, starter)),
+    [base, defaultAgentId, starter]
   );
   const [draft, setDraft] = useState<Draft>(initial);
   const [attempted, setAttempted] = useState(false);

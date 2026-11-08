@@ -4,6 +4,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { ProjectScheduleSwitches, Schedule } from "@shared/types/scheduledRuns";
 import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
 import type { ScheduleOsJobContext } from "@shared/utils/scheduleOsJob";
+import type { ScheduleStarter } from "./scheduleStarters";
 import { ScheduleEditor, type EditorLeaveState, type WorktreeChoice } from "./ScheduleEditor";
 
 /** A leave that waits on "Discard changes?", with what the question names. */
@@ -23,6 +24,8 @@ interface ScheduleEditorDialogProps {
   /** Rises with each opening, so the next one starts from the saved schedule. */
   openingKey: number;
   defaultAgentId: string;
+  /** The starter a new schedule was opened from, or null. */
+  starter?: ScheduleStarter | null;
   worktrees: readonly WorktreeChoice[];
   now: number;
   osJobContext: ScheduleOsJobContext | null;
@@ -52,6 +55,7 @@ export function ScheduleEditorDialog({
   schedule,
   openingKey,
   defaultAgentId,
+  starter = null,
   worktrees,
   now,
   osJobContext,
@@ -120,6 +124,7 @@ export function ScheduleEditorDialog({
           key={openingKey}
           schedule={schedule}
           defaultAgentId={defaultAgentId}
+          starter={starter}
           worktrees={worktrees}
           now={now}
           osJobContext={osJobContext}
