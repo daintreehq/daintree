@@ -2374,8 +2374,19 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
     mockListPendingHibernationSlots.mockResolvedValue([1, 2, 3]);
     mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) =>
       slot === 2
-        ? { agentId: "claude", agentSessionId: "", cwd: "/tmp/help", panelWasOpen: false, live: true }
-        : { agentId: "claude", agentSessionId: `conv-${slot}`, cwd: "/tmp/help", panelWasOpen: false }
+        ? {
+            agentId: "claude",
+            agentSessionId: "",
+            cwd: "/tmp/help",
+            panelWasOpen: false,
+            live: true,
+          }
+        : {
+            agentId: "claude",
+            agentSessionId: `conv-${slot}`,
+            cwd: "/tmp/help",
+            panelWasOpen: false,
+          }
     );
 
     await act(async () => {
@@ -2403,7 +2414,13 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
     mockListPendingHibernationSlots.mockResolvedValue([1, 2]);
     mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) =>
       slot === 2
-        ? { agentId: "claude", agentSessionId: "", cwd: "/tmp/help", panelWasOpen: false, live: true }
+        ? {
+            agentId: "claude",
+            agentSessionId: "",
+            cwd: "/tmp/help",
+            panelWasOpen: false,
+            live: true,
+          }
         : { agentId: "claude", agentSessionId: "conv-1", cwd: "/tmp/help", panelWasOpen: false }
     );
 
@@ -2435,8 +2452,7 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
       helpPanelState.terminalId = "term-live";
       helpPanelState.agentId = "claude";
       projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
-      const listeners: Array<(payload: { projectId: string; scheduleIds: string[] }) => void> =
-        [];
+      const listeners: Array<(payload: { projectId: string; scheduleIds: string[] }) => void> = [];
       const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
       const help = electron.help as Record<string, unknown>;
       const discard = vi.fn().mockResolvedValue(undefined);
@@ -2534,7 +2550,13 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
     mockListPendingHibernationSlots.mockResolvedValue([1]);
     mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) =>
       slot === 1
-        ? { agentId: "claude", agentSessionId: "", cwd: "/tmp/help", panelWasOpen: false, live: true }
+        ? {
+            agentId: "claude",
+            agentSessionId: "",
+            cwd: "/tmp/help",
+            panelWasOpen: false,
+            live: true,
+          }
         : null
     );
 

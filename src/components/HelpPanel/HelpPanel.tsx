@@ -1047,7 +1047,9 @@ export function HelpPanel({
     void reading.then((mainKept) => {
       const { sessions, hibernateSessions } = useHelpPanelStore.getState();
       const kept =
-        mainKept && workspaceId ? withMirroredLanes(mainKept, workspaceId, hibernateSessions) : null;
+        mainKept && workspaceId
+          ? withMirroredLanes(mainKept, workspaceId, hibernateSessions)
+          : null;
       const pick = kept ? pickNewSessionSlot(kept, (slot) => slot in sessions) : null;
       const slot = handleOpenParallelSession(pick?.slot);
       if (slot === null || !launchableAgentId) return;

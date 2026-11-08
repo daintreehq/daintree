@@ -75,7 +75,10 @@ describe("isReplaceableKeptLane", () => {
 });
 
 describe("pickNewSessionSlot", () => {
-  const tabs = (...open: number[]) => (slot: number) => open.includes(slot);
+  const tabs =
+    (...open: number[]) =>
+    (slot: number) =>
+      open.includes(slot);
 
   it("takes the lowest slot with no tab that nothing is kept for", () => {
     expect(pickNewSessionSlot([lane(1), lane(2)], tabs(0))).toEqual({
