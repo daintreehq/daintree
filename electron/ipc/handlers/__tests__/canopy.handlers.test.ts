@@ -858,7 +858,8 @@ describe("canopy IPC", () => {
     // A check that hasn't finished: nothing waits on it.
     models.ensure.mockReturnValueOnce(new Promise(() => {}));
     models.state.mockReturnValue(undefined as never);
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // The background watch's interval too, so no real poll broadcasts meanwhile.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     try {
       state.mode = "on";
       const result = (await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, fakeSender(9))) as {
