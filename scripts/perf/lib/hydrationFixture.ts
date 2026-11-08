@@ -122,7 +122,6 @@ interface BuiltArgs {
 interface AgentSettingsShape {
   agents?: Record<string, Record<string, unknown>>;
   globalSkipPermissions?: boolean;
-  globalUseAltScreen?: boolean;
 }
 
 export interface StatePatcherModule {
@@ -376,7 +375,6 @@ export function buildHydrationPlan(
         gemini: { useAltScreen: false },
       },
       globalSkipPermissions: false,
-      globalUseAltScreen: false,
     },
     clipboardDirectory: "/tmp/daintree-clipboard",
   };

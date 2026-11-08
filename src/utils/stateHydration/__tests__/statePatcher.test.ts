@@ -1357,12 +1357,16 @@ describe("buildArgsForRespawn", () => {
     expect(result.agentLaunchFlags).toEqual([]);
   });
 
-  it("injects the force-alt-screen flag into an empty snapshot at resume (#11423)", () => {
+  // Settings an older build saved while alt screen was a choice (#16356).
+  const legacyAltScreenSettings = {
+    agents: { grok: { inlineMode: "off" } },
+    globalUseAltScreen: true,
+  };
+
+  it("injects the inline flag into an empty snapshot at resume, whatever was saved (#16356)", () => {
     // The live crash-recovery boundary: this file runs the REAL reconciler, so
-    // it proves the chokepoint actually threads the resolved decision through
-    // rather than merely that the reconciler works in isolation. A session
-    // captured before #11423 has no screen-mode token at all, and alt-screen
-    // used to mean "inject nothing" — which left grok on its own inline default.
+    // it proves the chokepoint threads the inline flag through rather than
+    // merely that the reconciler works in isolation.
     buildResumeCommandMock.mockClear();
     const result = buildArgsForRespawn(
       {
@@ -1376,17 +1380,17 @@ describe("buildArgsForRespawn", () => {
       },
       "agent",
       "/p",
-      { agents: { grok: {} }, globalUseAltScreen: true },
+      legacyAltScreenSettings,
       false,
       undefined
     );
-    expect(buildResumeCommandMock).toHaveBeenCalledWith("grok", "sess-1", ["--fullscreen"]);
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("grok", "sess-1", ["--no-alt-screen"]);
     expect(result.agentLaunchFlags).toEqual([]);
   });
 
-  it("flips a stale inline token to force-alt-screen on resume (#11423)", () => {
+  it("rewrites a saved --fullscreen to the inline flag on restore and resume (#16356)", () => {
     buildResumeCommandMock.mockClear();
-    buildArgsForRespawn(
+    const result = buildArgsForRespawn(
       {
         id: "t1",
         kind: "terminal" as const,
@@ -1394,20 +1398,19 @@ describe("buildArgsForRespawn", () => {
         cwd: "/p",
         location: "grid",
         agentSessionId: "sess-1",
-        // Captured while the global switch said inline.
-        agentLaunchFlags: ["--no-alt-screen", "--model", "grok-build"],
+        // Captured while alt screen was chosen.
+        agentLaunchFlags: ["--fullscreen", "--model", "grok-build"],
       },
       "agent",
       "/p",
-      { agents: { grok: {} }, globalUseAltScreen: true },
+      legacyAltScreenSettings,
       false,
       undefined
     );
-    expect(buildResumeCommandMock).toHaveBeenCalledWith("grok", "sess-1", [
-      "--fullscreen",
-      "--model",
-      "grok-build",
-    ]);
+    const inline = ["--no-alt-screen", "--model", "grok-build"];
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("grok", "sess-1", inline);
+    // The snapshot stored for the next restart is inline too.
+    expect(result.agentLaunchFlags).toEqual(inline);
   });
 
   it("prefers primary buildResumeCommand over resume-latest when session ID is present", () => {
@@ -3256,7 +3259,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
 
 // ── adversarial: behavioral overrides must reach generateAgentCommand ─────────
 // These tests spy on generateAgentCommand arguments to prove that preset
-// dangerousEnabled / customFlags / inlineMode / args overrides are actually
+// dangerousEnabled / customFlags / args overrides are actually
 // merged into the effectiveEntry passed to the command builder.  Previously the
 // mock ignored the settings arg entirely, so a bug in the merge would be silent.
 
@@ -3311,20 +3314,18 @@ describe("adversarial: behavioral overrides flow through to generateAgentCommand
     expect(entry.customFlags).toBe("--my-flag");
   });
 
-  it("inlineMode=false from preset overrides base true in effectiveEntry", () => {
-    getMergedPresetMock.mockReturnValue({ id: "user-x", name: "NoInline", inlineMode: false });
-    buildArgsForRespawn(
-      BASE,
-      "agent",
-      "/p",
-      { agents: { claude: { inlineMode: true } } },
-      false,
-      undefined
-    );
+  it("never layers a preset's stored alt-screen choice onto effectiveEntry (#16356)", () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "user-x",
+      name: "OldAltScreen",
+      inlineMode: false,
+      customFlags: "--kept",
+    });
+    buildArgsForRespawn(BASE, "agent", "/p", { agents: { claude: {} } }, false, undefined);
     const entry = generateAgentCommandMock.mock.calls[0]![1] as Record<string, unknown>;
-    // Baked as the tri-state "off" (alt-screen) now (#10876): the preset's
-    // alt-screen choice still vetoes the base's inline (true → "on").
-    expect(entry.inlineMode).toBe("off");
+    expect(entry.inlineMode).toBeUndefined();
+    // Everything else the preset sets still applies.
+    expect(entry.customFlags).toBe("--kept");
   });
 
   it("preset.dangerousEnabled=undefined does NOT clobber base true (undefined guard)", () => {

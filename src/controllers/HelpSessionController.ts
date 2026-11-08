@@ -20,13 +20,9 @@ import {
   buildResumeCommand,
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
-  resolveEffectiveInlineMode,
   resolveKeepDecorations,
 } from "@shared/types/agentSettings";
-import {
-  getAgentSettingsEntrySnapshot,
-  getGlobalUseAltScreenSnapshot,
-} from "@/store/storeAccessors";
+import { getAgentSettingsEntrySnapshot } from "@/store/storeAccessors";
 import { loadCustomLaunchFlags } from "@/lib/assistantLaunchFlags";
 import {
   type HelpSessionRef,
@@ -333,19 +329,14 @@ export interface HelpLaunchOptions {
 
 // Help sessions keep their own bypass and model settings, but a CLI's
 // decorative effects are the same pane-repaint cost whoever launched it, so
-// the per-agent "keep decorations" choice applies here too, and so does the
-// inline-mode choice: a resumed conversation must keep its scrollback in the
-// terminal buffer exactly like a fresh launch (#14186). Bypass is deliberately
+// the per-agent "keep decorations" choice applies here too. A resumed
+// conversation also launches inline, keeping its scrollback in the terminal
+// buffer exactly like a fresh launch (#14186, #16356). Bypass is deliberately
 // not reconciled. A backend that declares neither capability is a no-op.
 export function withResumeDisplayChoices(flags: string[], agentId: string): string[] {
   const entry = getAgentSettingsEntrySnapshot(agentId) ?? {};
-  const effectiveInline = resolveEffectiveInlineMode(
-    entry,
-    agentId,
-    getGlobalUseAltScreenSnapshot()
-  );
   return reconcileDecorationFlags(
-    reconcileInlineModeFlag(flags, agentId, effectiveInline),
+    reconcileInlineModeFlag(flags, agentId),
     agentId,
     resolveKeepDecorations(entry)
   );

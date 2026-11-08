@@ -6,7 +6,6 @@ const buildResumeLatestCommandMock = vi.hoisted(() => vi.fn());
 const reconcileBypassFlagsMock = vi.hoisted(() => vi.fn());
 const resolveEffectiveBypassMock = vi.hoisted(() => vi.fn());
 const reconcileInlineModeFlagMock = vi.hoisted(() => vi.fn());
-const resolveEffectiveInlineModeMock = vi.hoisted(() => vi.fn());
 // Outermost reconcile in the chain; a pass-through keeps every assertion on
 // the inline-mode mock's return value intact.
 const reconcileDecorationFlagsMock = vi.hoisted(() => vi.fn((flags: string[]) => flags));
@@ -33,7 +32,6 @@ vi.mock("@shared/types/agentSettings", () => ({
   getPluginBypassArgHistory: () => [],
   resolveEffectiveBypass: resolveEffectiveBypassMock,
   reconcileInlineModeFlag: reconcileInlineModeFlagMock,
-  resolveEffectiveInlineMode: resolveEffectiveInlineModeMock,
   reconcileDecorationFlags: reconcileDecorationFlagsMock,
   resolveKeepDecorations: resolveKeepDecorationsMock,
 }));
@@ -73,7 +71,6 @@ beforeEach(() => {
   reconcileBypassFlagsMock.mockReturnValue(["--dangerously-skip-permissions"]);
   // Inline reconciliation is layered after bypass; pass the flags through so the
   // existing resume-command assertions (bypass token) still hold (#10876).
-  resolveEffectiveInlineModeMock.mockReturnValue(false);
   reconcileInlineModeFlagMock.mockImplementation((flags: string[]) => flags);
   getEffectiveAgentConfigMock.mockReturnValue({ name: "Claude", command: "claude" });
   buildResumeCommandMock.mockReturnValue("claude --resume s-1");

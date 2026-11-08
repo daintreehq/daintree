@@ -378,13 +378,13 @@ export const agentRosterScenarios: PerfScenario[] = [
     name: "Agent Roster - Launch Command Assembly",
     description:
       "generateAgentCommand and buildAgentLaunchFlags across every launchable agent under the five " +
-      "shapes a spawn actually takes: interactive inline, interactive alt-screen, headless one-shot, " +
-      "dangerous mode, and a pre-assigned session id. This is what the roster is asked for at the " +
+      "shapes a spawn actually takes: interactive, interactive with a retired alt-screen choice " +
+      "stored, headless one-shot, dangerous mode, and a pre-assigned session id. This is what the roster is asked for at the " +
       "moment a terminal starts. launchCommandMisses grades each command against the agent's own " +
       "declared args, capabilities and resume block, in both directions — a builder that emits the " +
       "bare command misses on every agent that declares anything, and one that appends everything " +
-      "it knows misses on the rows that FORBID a token: the headless row where neither screen-mode " +
-      "polarity is legal, the opposite polarity on every other row, and the agents whose resume " +
+      "it knows misses on the rows that FORBID a token: the headless row where no screen-mode " +
+      "flag is legal, the alt-screen flag on every row, and the agents whose resume " +
       "kind means they must never be handed a session id.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
@@ -419,9 +419,7 @@ export const agentRosterScenarios: PerfScenario[] = [
             agentId,
             launchCase.options
           );
-          const flags = mods.buildAgentLaunchFlags(launchCase.entry, agentId, {
-            globalUseAltScreen: launchCase.options.globalUseAltScreen,
-          });
+          const flags = mods.buildAgentLaunchFlags(launchCase.entry, agentId);
           perBuild.push(performance.now() - t0);
           flagTokenCount += flags.length;
           round.push({ agentId, caseIndex, command, flagCount: flags.length });
@@ -445,7 +443,7 @@ export const agentRosterScenarios: PerfScenario[] = [
       ).length;
       const screenModeCapableCount = ids.filter((agentId) => {
         const capabilities = mods.getEffectiveAgentConfig(agentId)?.capabilities;
-        return Boolean(capabilities?.inlineModeFlag ?? capabilities?.altScreenFlag);
+        return Boolean(capabilities?.inlineModeFlag);
       }).length;
 
       return {

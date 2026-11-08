@@ -202,7 +202,6 @@ export function categoryOfSection(
  */
 export const AGENT_SETTINGS_PORTABLE_FIELDS = [
   "customFlags",
-  "inlineMode",
   "shareClipboardDirectory",
   "decorativeEffects",
   "presetId",
@@ -218,7 +217,6 @@ export const AGENT_PRESET_PORTABLE_FIELDS = [
   "env",
   "args",
   "customFlags",
-  "inlineMode",
   "color",
   "fallbacks",
   "fallbackOnRateLimit",

@@ -80,6 +80,7 @@ export interface AgentSettingsEntryLike {
   dangerousArgs?: string;
   dangerousEnabled?: boolean;
   dangerousMode?: "on" | "off" | "inherit";
+  /** A retired alt-screen choice an older Daintree stored; launches ignore it (#16356). */
   inlineMode?: boolean | "on" | "off" | "inherit";
   shareClipboardDirectory?: boolean;
 }
@@ -92,7 +93,6 @@ export interface GenerateAgentCommandOptionsLike {
   recipeArgs?: string;
   presetArgs?: readonly string[];
   globalSkipPermissions?: boolean;
-  globalUseAltScreen?: boolean;
   sessionId?: string;
 }
 
@@ -148,7 +148,6 @@ export interface RosterModules {
       modelId?: string;
       presetArgs?: string[];
       globalSkipPermissions?: boolean;
-      globalUseAltScreen?: boolean;
     }
   ) => string[];
   buildAssignedSessionIdArgs: (agentId: string, sessionId: string) => string[] | undefined;
@@ -399,8 +398,8 @@ export interface LaunchCase {
   name: string;
   entry: AgentSettingsEntryLike;
   options: GenerateAgentCommandOptionsLike;
-  /** Screen-mode polarity the row demands, or null when neither may appear. */
-  expectScreenMode: "inline" | "altScreen" | null;
+  /** Whether the row demands the inline flag, or null when no screen-mode flag may appear. */
+  expectScreenMode: "inline" | null;
   /** Whether the row must carry the agent's dangerous args. */
   expectDangerous: boolean;
   /** Whether the row must carry assigned-session-id args (when supported). */
@@ -417,29 +416,30 @@ export const LAUNCH_SESSION_ID = "perf-0000-1111-2222-3333";
  * and `resume` — so a builder that emits only the bare command misses on every
  * agent that declares anything, and a builder that appends everything it knows
  * misses on the rows that forbid a token: the headless row (where screen-mode
- * flags are illegal), the opposite polarity, and the agents whose `resume.kind`
- * is not `session-id` and must therefore never see an assigned id.
+ * flags are illegal), the alt-screen flag on every row (launches are always
+ * inline, #16356), and the agents whose `resume.kind` is not `session-id` and
+ * must therefore never see an assigned id.
  */
 export const LAUNCH_CASES: readonly LaunchCase[] = [
   {
-    name: "interactive, inline",
-    entry: { inlineMode: "on" },
+    name: "interactive",
+    entry: {},
     options: { interactive: true },
     expectScreenMode: "inline",
     expectDangerous: false,
     expectSessionId: false,
   },
   {
-    name: "interactive, alt-screen",
+    name: "interactive, a stored alt-screen choice stays inline",
     entry: { inlineMode: "off" },
     options: { interactive: true },
-    expectScreenMode: "altScreen",
+    expectScreenMode: "inline",
     expectDangerous: false,
     expectSessionId: false,
   },
   {
-    name: "headless one-shot carries neither screen-mode polarity",
-    entry: { inlineMode: "on" },
+    name: "headless one-shot carries no screen-mode flag",
+    entry: {},
     options: { interactive: false },
     expectScreenMode: null,
     expectDangerous: false,
@@ -447,17 +447,17 @@ export const LAUNCH_CASES: readonly LaunchCase[] = [
   },
   {
     name: "dangerous mode on",
-    entry: { inlineMode: "off", dangerousMode: "on" },
+    entry: { dangerousMode: "on" },
     options: { interactive: true },
-    expectScreenMode: "altScreen",
+    expectScreenMode: "inline",
     expectDangerous: true,
     expectSessionId: false,
   },
   {
     name: "assigned session id",
-    entry: { inlineMode: "off" },
+    entry: {},
     options: { interactive: true, sessionId: LAUNCH_SESSION_ID },
-    expectScreenMode: "altScreen",
+    expectScreenMode: "inline",
     expectDangerous: false,
     expectSessionId: true,
   },
@@ -508,12 +508,7 @@ export function gradeLaunchCommand(
 
   const inlineFlag = config.capabilities?.inlineModeFlag;
   const altFlag = config.capabilities?.altScreenFlag;
-  const wanted =
-    launchCase.expectScreenMode === "inline"
-      ? inlineFlag
-      : launchCase.expectScreenMode === "altScreen"
-        ? altFlag
-        : undefined;
+  const wanted = launchCase.expectScreenMode === "inline" ? inlineFlag : undefined;
   const forbidden = [inlineFlag, altFlag].filter(
     (flag): flag is string => typeof flag === "string" && flag !== wanted
   );

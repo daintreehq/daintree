@@ -198,7 +198,6 @@ export function AgentSettings({
     refresh,
     updateAgent,
     setGlobalSkipPermissions,
-    setGlobalUseAltScreen,
     reset,
   } = useAgentSettingsStore();
   // The toolbar is this screen's, so its pins are this machine's even on a
@@ -545,28 +544,6 @@ export function AgentSettings({
                   await setGlobalSkipPermissions(
                     DEFAULT_AGENT_SETTINGS.globalSkipPermissions ?? false
                   );
-                  onSettingsChange?.();
-                })();
-              }}
-            />
-            <SettingsSwitchCard
-              id="agents-alt-screen"
-              title="Use alt-screen mode"
-              subtitle="Render supported agents on the full-screen alternate buffer instead of inline. Inline is smoother (WebGL scrollback, clean resize); alt-screen matches the CLI's native full-screen TUI."
-              isEnabled={settings?.globalUseAltScreen ?? false}
-              onChange={() => {
-                void (async () => {
-                  await setGlobalUseAltScreen(!(settings?.globalUseAltScreen ?? false));
-                  onSettingsChange?.();
-                })();
-              }}
-              isModified={
-                (settings?.globalUseAltScreen ?? false) !==
-                DEFAULT_AGENT_SETTINGS.globalUseAltScreen
-              }
-              onReset={() => {
-                void (async () => {
-                  await setGlobalUseAltScreen(DEFAULT_AGENT_SETTINGS.globalUseAltScreen ?? false);
                   onSettingsChange?.();
                 })();
               }}

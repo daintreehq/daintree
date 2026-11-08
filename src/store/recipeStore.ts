@@ -1477,7 +1477,6 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
                 : extractSystemPromptArgs(terminal.agentLaunchFlags, agentId);
             const entry = agentSettings?.agents?.[agentId] ?? {};
             const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
-            const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
 
             // Resolve the selected preset to parity with manual launches
             // (useAgentLauncher): the worktree-scoped pick wins over the
@@ -1552,7 +1551,6 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               recipeArgs: terminal.args?.trim() || undefined,
               presetArgs: preset?.args,
               globalSkipPermissions,
-              globalUseAltScreen,
             });
             // Persist the process-level launch flags so restart/resume/continue
             // reproduce the same configuration. Without this the panel arrives
@@ -1569,7 +1567,6 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
                 presetArgs: preset?.args,
                 recipeArgs: terminal.args,
                 globalSkipPermissions,
-                globalUseAltScreen,
               }),
               // Last, where the launch command puts it, so restart replays it.
               ...step.systemPromptArgs,

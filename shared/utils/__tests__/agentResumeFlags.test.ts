@@ -9,6 +9,19 @@ function settings(overrides: Partial<AgentSettings> = {}): AgentSettings {
 }
 
 describe("reconcileResumeLaunchFlagsWith", () => {
+  it("resumes inline whatever alt-screen choice an older build saved (#16356)", () => {
+    const saved = { agents: { grok: { inlineMode: "off" } }, globalUseAltScreen: true };
+    expect(
+      reconcileResumeLaunchFlagsWith(
+        { agentId: "grok", agentLaunchFlags: ["--model", "grok-build", "--fullscreen"] },
+        settings(saved as Partial<AgentSettings>)
+      )
+    ).toEqual(["--model", "grok-build", "--no-alt-screen"]);
+    expect(
+      reconcileResumeLaunchFlagsWith({ agentId: "codex" }, settings(saved as Partial<AgentSettings>))
+    ).toContain("--no-alt-screen");
+  });
+
   it("drops a captured bypass flag the settings no longer resolve", () => {
     expect(
       reconcileResumeLaunchFlagsWith(

@@ -74,7 +74,6 @@ export function buildAgentLaunchFlagsForRuntimeSettings(
     modelId?: string;
     systemPromptArgs?: readonly string[];
     globalSkipPermissions?: boolean;
-    globalUseAltScreen?: boolean;
   }
 ): string[] {
   return buildAgentLaunchFlags(entry, agentId, {
@@ -82,6 +81,5 @@ export function buildAgentLaunchFlagsForRuntimeSettings(
     systemPromptArgs: options?.systemPromptArgs,
     presetArgs: preset?.args,
     globalSkipPermissions: options?.globalSkipPermissions,
-    globalUseAltScreen: options?.globalUseAltScreen,
   });
 }

@@ -1476,15 +1476,6 @@ export const SETTINGS_REGISTRY = [
         ],
       },
       {
-        id: "agents-inline-mode",
-        subtab: "claude",
-        subtabLabel: "Claude",
-        section: "Launch preset",
-        title: "Alt-screen mode",
-        description: "Choose inline rendering or the CLI's full-screen TUI per agent",
-        keywords: ["inline", "mode", "tui", "fullscreen", "alt screen", "resize", "tty"],
-      },
-      {
         id: "agents-clipboard",
         subtab: "gemini",
         subtabLabel: "Gemini",

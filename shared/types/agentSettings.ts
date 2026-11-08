@@ -66,21 +66,6 @@ const RECIPE_ARGS_SLOT = "\0recipe-args";
 export type DangerousMode = "inherit" | "on" | "off";
 
 /**
- * Tri-state alt-screen intent, stored on the `inlineMode` field. `"on"` =
- * inline rendering (inject the agent's `inlineModeFlag`, e.g. `--no-alt-screen`);
- * `"off"` = full-screen alternate buffer (inject the agent's `altScreenFlag`,
- * e.g. `--fullscreen`, or no flag when it declares none and rides its own CLI
- * default); `"inherit"` defers to the next level up (preset → agent registry
- * default → the global "Use alt-screen mode by default" switch). Value polarity
- * intentionally matches the legacy
- * `inlineMode` boolean (`true` was inline), so a persisted boolean maps
- * literally — `true → "on"`, `false → "off"` (see {@link resolveInlineMode}).
- * The UI labels are decoupled from these values (the Settings control presents
- * the choice in alt-screen terms).
- */
-export type InlineMode = "inherit" | "on" | "off";
-
-/**
  * One of an agent's accounts (#16040): a config folder its CLI keeps
  * everything in, login included, handed to a launch through the variable the
  * agent's registry `account` declaration names. Daintree never writes inside
@@ -116,15 +101,6 @@ export interface AgentSettingsEntry {
    * top via {@link combineDangerousModes}.
    */
   dangerousMode?: DangerousMode;
-  /**
-   * Alt-screen rendering intent for this agent's Default scope (#10876). Tri-state
-   * {@link InlineMode}: `"on"` = inline (inject `inlineModeFlag`), `"off"` =
-   * alt-screen, `"inherit"`/absent defers to the agent registry default and then
-   * the global `globalUseAltScreen` switch. A persisted legacy boolean is read
-   * literally by {@link resolveInlineMode} (`true → "on"`, `false → "off"`);
-   * preset overrides layer on top via {@link combineInlineModes}.
-   */
-  inlineMode?: boolean | InlineMode;
   /** When true, inject --include-directories for the clipboard temp directory (Gemini only) */
   shareClipboardDirectory?: boolean;
   /**
@@ -167,14 +143,6 @@ export interface AgentSettingsEntry {
      */
     dangerousMode?: DangerousMode;
     customFlags?: string;
-    /**
-     * Tri-state alt-screen override for this preset ({@link InlineMode}), layered
-     * on top of the agent's resolved mode via {@link combineInlineModes}. `"off"`
-     * (alt-screen) vetoes an agent/global `"on"`; `"inherit"`/absent defers to the
-     * agent's Default scope. Legacy boolean is read literally by
-     * {@link resolveInlineMode}.
-     */
-    inlineMode?: boolean | InlineMode;
     color?: string;
     /** Ordered preset IDs to fall over to when provider is unreachable. */
     fallbacks?: string[];
@@ -240,18 +208,6 @@ export interface AgentSettings {
    * kept through a settings reset, and never a source of flags to add.
    */
   pluginBypassArgHistory?: Record<string, string[][]>;
-  /**
-   * Global "use alt-screen mode by default" override (#10876). Controls what an
-   * agent's `"inherit"` inline-mode resolves to when no per-agent/preset choice
-   * and no curated registry default apply. Default off — so `inlineMode`
-   * resolves to inline (no alt-screen) globally unless something overrides it,
-   * mirroring how `globalSkipPermissions` defaults off. A curated per-agent
-   * registry `defaultInlineMode` (when an agent declares one) still wins over this
-   * switch; an explicit per-agent/preset `"on"`/`"off"` always vetoes it. Like
-   * the bypass override it is a *live* value OR-ed in at flag-generation time
-   * (see {@link resolveEffectiveInlineMode}), never mutating per-agent state.
-   */
-  globalUseAltScreen?: boolean;
   /**
    * What an agent pane does when Daintree restarts with no live process behind
    * it (#13509). Absent or unrecognised reads as `"always"`, today's behaviour —
@@ -378,17 +334,10 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
         customFlags: "",
         dangerousArgs: DEFAULT_DANGEROUS_ARGS[id] ?? "",
         dangerousEnabled: false,
-        // `inlineMode` is intentionally NOT seeded (#10876). Leaving it absent
-        // means an untouched agent resolves to `"inherit"`, so the agent's
-        // curated registry `defaultInlineMode` and then the global
-        // `globalUseAltScreen` switch decide — a concrete seed here would pin
-        // every agent and make the new global toggle a no-op for new users.
-        // Existing persisted booleans are still honoured via resolveInlineMode.
       },
     ])
   ),
   globalSkipPermissions: false,
-  globalUseAltScreen: false,
 };
 
 /**
@@ -449,126 +398,35 @@ export function combineDangerousModes(
 }
 
 /**
- * Reads the tri-state {@link InlineMode} from a settings entry or preset (#10876).
- * A persisted legacy boolean is mapped LITERALLY — `true → "on"` (inline),
- * `false → "off"` (alt-screen) — not `false → "inherit"` the way
- * {@link resolveDangerousMode} treats `dangerousEnabled`. The difference is
- * deliberate: `inlineMode` was historically seeded with a concrete per-agent
- * boolean (Grok `false`, Codex `true`), so a `false → "inherit"` mapping would
- * retroactively hand those established choices to the new global switch. Only a
- * genuinely-absent value resolves to `"inherit"`.
+ * Brings a persisted `agentLaunchFlags` snapshot to inline (#10876, #16356):
+ * one captured while alt-screen was still a choice can carry the agent's
+ * `altScreenFlag` (Grok's `--fullscreen`), or no inline flag at all. Exactly
+ * one token survives: the first of the agent's two screen-mode tokens found is
+ * rewritten in place to its `inlineModeFlag` (keeping its position, so an
+ * already-correct snapshot is untouched), later ones are dropped, and the
+ * inline flag is appended when the snapshot carried neither. Idempotent across
+ * every spawn/restart/restore/resume. An agent with no inline flag is left
+ * untouched: it rides its own CLI default, full-screen included (Crush, Goose).
  */
-export function resolveInlineMode(source: { inlineMode?: boolean | InlineMode }): InlineMode {
-  const value = source.inlineMode;
-  if (value === undefined) return "inherit";
-  if (typeof value === "boolean") return value ? "on" : "off";
-  return value;
-}
-
-/**
- * Layers a preset's inline mode on top of the agent's resolved mode: the preset
- * wins unless it defers (`"inherit"`). Mirrors {@link combineDangerousModes} —
- * a preset `"off"` (alt-screen) is a true veto over an agent `"on"` (inline).
- */
-export function combineInlineModes(agentMode: InlineMode, presetMode?: InlineMode): InlineMode {
-  return presetMode && presetMode !== "inherit" ? presetMode : agentMode;
-}
-
-/**
- * Resolves the effective alt-screen decision for a launch from the (already
- * preset-merged) entry's tri-state mode. Returns `true` when the agent should
- * render inline — i.e. when the agent's `inlineModeFlag` should be injected.
- *
- * - `"on"`  → inline (inject `inlineModeFlag`).
- * - `"off"` → alt-screen (inject `altScreenFlag` when the agent declares one,
- *   otherwise no flag); an explicit veto that beats the global switch.
- * - `"inherit"` → a curated per-agent registry `capabilities.defaultInlineMode`
- *   wins if declared (no shipped agent pins one today — they all follow the
- *   global switch so it stays user-overridable); otherwise defer to the global
- *   "Use alt-screen mode by default" switch (`globalUseAltScreen` on →
- *   alt-screen, off → inline).
- *
- * Callers that resolve a launch from a preset must bake the combined mode onto
- * the entry first (see `applyPresetBehaviorOverrides`) so this single chokepoint
- * sees the final intent.
- */
-export function resolveEffectiveInlineMode(
-  entry: AgentSettingsEntry,
-  agentId: string | undefined,
-  globalUseAltScreen?: boolean
-): boolean {
-  const mode = resolveInlineMode(entry);
-  if (mode === "on") return true;
-  if (mode === "off") return false;
-  const registryDefault = agentId
-    ? getEffectiveAgentConfig(agentId)?.capabilities?.defaultInlineMode
-    : undefined;
-  if (typeof registryDefault === "boolean") return registryDefault;
-  return !globalUseAltScreen;
-}
-
-/**
- * Picks the single screen-mode token a launch should carry, plus the full set
- * of tokens the launch path owns (and must therefore strip when they're stale).
- *
- * The two capabilities are opposite polarities of one decision: `inlineModeFlag`
- * (e.g. `--no-alt-screen`) forces inline, `altScreenFlag` (e.g. `--fullscreen`)
- * forces the alternate buffer. An agent may declare either, both, or neither.
- * `wanted` is `undefined` when the agent declares no flag for the resolved
- * direction — it then rides its own CLI default, which is exactly the
- * one-directional gap `altScreenFlag` exists to close (#11423).
- */
-function resolveScreenModeTokens(
-  capabilities: { inlineModeFlag?: string; altScreenFlag?: string } | undefined,
-  effectiveInline: boolean
-): { wanted: string | undefined; managed: string[] } {
+export function reconcileInlineModeFlag(flags: readonly string[], agentId: string): string[] {
+  const capabilities = getEffectiveAgentConfig(agentId)?.capabilities;
   const inlineFlag = capabilities?.inlineModeFlag;
-  const altFlag = capabilities?.altScreenFlag;
-  const managed = [...new Set([inlineFlag, altFlag].filter((f): f is string => !!f))];
-  return { wanted: effectiveInline ? inlineFlag : altFlag, managed };
-}
-
-/**
- * Reconciles a persisted `agentLaunchFlags` snapshot against the current
- * effective inline-mode decision (#10876) — the alt-screen analog of
- * {@link reconcileBypassFlags}'s "resume trap" fix.
- *
- * The agent's canonical single-token screen-mode flags (`inlineModeFlag` and,
- * since #11423, its opposite-polarity `altScreenFlag`) are baked into
- * `agentLaunchFlags` by the same `buildAgentLaunchFlags` that captures the
- * bypass flag, so a snapshot can carry a stale token forward after the user (or
- * the global switch) flips the decision. Exactly one token survives: the first
- * managed token found is rewritten in place to the wanted one (keeping its
- * position so an already-correct snapshot is untouched), later managed tokens
- * are dropped, and the wanted token is appended only when the snapshot carried
- * none — which is also how a pre-#11423 snapshot picks up its first
- * `--fullscreen`. Idempotent across every spawn/restart/restore/resume. Agents
- * declaring neither flag are left untouched.
- */
-export function reconcileInlineModeFlag(
-  flags: readonly string[],
-  agentId: string,
-  effectiveInline: boolean
-): string[] {
-  const { wanted, managed } = resolveScreenModeTokens(
-    getEffectiveAgentConfig(agentId)?.capabilities,
-    effectiveInline
-  );
-  if (managed.length === 0) return [...flags];
+  if (!inlineFlag) return [...flags];
+  const managed = new Set([inlineFlag, capabilities?.altScreenFlag].filter((f) => !!f));
 
   const reconciled: string[] = [];
   let placed = false;
   for (const flag of flags) {
-    if (!managed.includes(flag)) {
+    if (!managed.has(flag)) {
       reconciled.push(flag);
       continue;
     }
-    if (!placed && wanted) {
-      reconciled.push(wanted);
+    if (!placed) {
+      reconciled.push(inlineFlag);
       placed = true;
     }
   }
-  if (wanted && !placed) reconciled.push(wanted);
+  if (!placed) reconciled.push(inlineFlag);
   return reconciled;
 }
 
@@ -888,12 +746,6 @@ export interface GenerateAgentCommandOptions {
   /** Global skip-permissions override (#10432); forwarded to {@link generateAgentFlags}. */
   globalSkipPermissions?: boolean;
   /**
-   * Global "use alt-screen mode by default" override (#10876); resolves an
-   * agent's `"inherit"` inline mode when no per-agent/preset choice or curated
-   * registry default applies (see {@link resolveEffectiveInlineMode}).
-   */
-  globalUseAltScreen?: boolean;
-  /**
    * Session id to ASSIGN to this launch, for agents declaring
    * `resume.assignSessionIdArgs` (#11782). Mint it with
    * {@link mintAssignedSessionId} and persist the same value on the panel, so
@@ -952,20 +804,12 @@ export function generateAgentCommand(
       }
     }
 
-    // Add the screen-mode flag matching the resolved tri-state, when the agent
-    // declares one for that direction (#10876, #11423). resolveEffectiveInlineMode
-    // encodes the full chain: explicit on/off → preset (already baked onto the
-    // entry) → curated registry default → the global `globalUseAltScreen` switch.
-    // Screen mode only applies to the interactive TUI, so a headless one-shot
+    // Every agent with an inline flag launches inline (#16356). Screen mode
+    // only applies to the interactive TUI, so a headless one-shot
     // (`interactive: false` — e.g. opencode's `run` subcommand, which rejects
-    // `--mini`) must carry neither polarity.
-    if (options?.interactive ?? true) {
-      const { wanted: screenModeFlag } = resolveScreenModeTokens(
-        agentConfig?.capabilities,
-        resolveEffectiveInlineMode(entry, agentId, options?.globalUseAltScreen)
-      );
-      if (screenModeFlag) parts.push(screenModeFlag);
-    }
+    // `--mini`) carries none.
+    const inlineFlag = agentConfig?.capabilities?.inlineModeFlag;
+    if (inlineFlag && (options?.interactive ?? true)) parts.push(inlineFlag);
 
     // Pre-assigned session id (#11782). Emitted here — ahead of user flags and
     // well ahead of the positional prompt appended at the end — so the id can
@@ -1195,7 +1039,6 @@ export function buildAgentLaunchFlags(
     presetArgs?: string[];
     recipeArgs?: string;
     globalSkipPermissions?: boolean;
-    globalUseAltScreen?: boolean;
   }
 ): string[] {
   const agentConfig = getEffectiveAgentConfig(agentId);
@@ -1206,15 +1049,11 @@ export function buildAgentLaunchFlags(
     flags.push(...agentConfig.args);
   }
 
-  // Screen-mode flag matching the resolved tri-state, when the agent declares
-  // one for that direction (#10876, #11423) — same resolution chain as
-  // generateAgentCommand. No interactive gate: these flags are persisted for the
-  // interactive restart/resume paths that replay them.
-  const { wanted: screenModeFlag } = resolveScreenModeTokens(
-    agentConfig?.capabilities,
-    resolveEffectiveInlineMode(entry, agentId, options?.globalUseAltScreen)
-  );
-  if (screenModeFlag) flags.push(screenModeFlag);
+  // The inline flag, as in generateAgentCommand (#16356). No interactive gate:
+  // these flags are persisted for the interactive restart/resume paths that
+  // replay them.
+  const inlineFlag = agentConfig?.capabilities?.inlineModeFlag;
+  if (inlineFlag) flags.push(inlineFlag);
 
   // Model flag for per-panel model selection. These flags only ever replay a
   // restart or resume, so an agent whose flag is headless-only keeps none.

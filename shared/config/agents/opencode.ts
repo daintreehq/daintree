@@ -98,8 +98,7 @@ export const config: AgentConfig = {
     // Instead default it inline via OpenCode's own `--mini` (the minimal
     // scrollback-native interface): verified to emit no alt-screen enter and no
     // mouse-reporting, so output lands in Daintree's WebGL scrollback and stays
-    // selectable with our native selection layer. Inline follows the global
-    // alt-screen switch (off ⇒ inline); no per-agent `defaultInlineMode`.
+    // selectable with our native selection layer. Every launch is inline (#16356).
     blockAltScreen: false,
     inlineModeFlag: "--mini",
     resizeStrategy: "default",

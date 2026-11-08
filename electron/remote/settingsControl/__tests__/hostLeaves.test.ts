@@ -134,7 +134,7 @@ describe("the host's own setters for named settings (#14167)", () => {
     expect(leaves.read("globalEnvironmentVariables").value).toEqual({});
     // And what is stored, once set.
     stored.values.sessionRestore = { enabled: false };
-    stored.values.agentSettings = { resumeOnRestart: "never", globalUseAltScreen: true };
+    stored.values.agentSettings = { resumeOnRestart: "never" };
     stored.values.terminalConfig = {
       resourceMonitoringEnabled: true,
       memoryLeakDetectionEnabled: false,
@@ -142,7 +142,6 @@ describe("the host's own setters for named settings (#14167)", () => {
     };
     expect(leaves.read("sessionRestore.enabled").value).toBe(false);
     expect(leaves.read("agentSettings.resumeOnRestart").value).toBe("never");
-    expect(leaves.read("agentSettings.globalUseAltScreen").value).toBe(true);
     expect(leaves.read("terminalConfig.memoryLeakDetectionEnabled").value).toBe(false);
     expect(leaves.read("terminalConfig.memoryLeakAutoRestartThresholdMb").value).toBe(4096);
     sleep.config.thresholdMinutes = 90;

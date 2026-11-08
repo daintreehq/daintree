@@ -7,9 +7,7 @@ import { hasShellMetachar } from "./shellEscape.js";
 import { isAccountId } from "./agentAccountId.js";
 import {
   combineDangerousModes,
-  combineInlineModes,
   resolveDangerousMode,
-  resolveInlineMode,
   resolveEffectivePresetId,
   type AgentSettingsEntry,
 } from "../types/agentSettings.js";
@@ -137,13 +135,6 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
     customFlags:
       typeof preset.customFlags === "string" && !hasShellMetachar(preset.customFlags)
         ? preset.customFlags.slice(0, 10000)
-        : undefined,
-    inlineMode:
-      preset.inlineMode === "inherit" ||
-      preset.inlineMode === "on" ||
-      preset.inlineMode === "off" ||
-      typeof preset.inlineMode === "boolean"
-        ? preset.inlineMode
         : undefined,
     color:
       typeof preset.color === "string" &&
@@ -440,17 +431,10 @@ export function applyPresetBehaviorOverrides(
     resolveDangerousMode(entry),
     resolveDangerousMode(preset)
   );
-  // Layer the preset's tri-state inline mode on top of the agent's resolved mode
-  // and bake the combined result onto the effective entry, so the single
-  // resolveEffectiveInlineMode chokepoint sees the final intent (#10876) — a
-  // preset "off" (alt-screen) vetoes an agent/global "on" (inline), just like
-  // the bypass tri-state above.
-  const combinedInline = combineInlineModes(resolveInlineMode(entry), resolveInlineMode(preset));
   return {
     ...entry,
     dangerousMode: combinedMode,
     dangerousEnabled: combinedMode === "on",
-    inlineMode: combinedInline,
     ...(preset.customFlags !== undefined && { customFlags: preset.customFlags }),
   };
 }

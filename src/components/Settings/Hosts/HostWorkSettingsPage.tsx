@@ -82,7 +82,6 @@ const ROW_LABELS: Partial<Record<RowSlot, string>> = {
   canopyReading: "Read agent terminals",
   "agentDefaults.defaultAgent": "Default agent",
   "agentSettings.resumeOnRestart": "Resume agents after restart",
-  "agentSettings.globalUseAltScreen": "Use alt-screen mode",
   globalEnvironmentVariables: "Environment",
   "sessionRestore.enabled": "Restore live projects",
   "terminalConfig.resourceMonitoringEnabled": "Resource monitoring",
@@ -520,12 +519,6 @@ export function HostWorkSettingsPage({
               description: "What agent panes do when Daintree restarts",
               options: RESUME_OPTIONS,
               value: isResumeOnRestart(resume) ? resume : null,
-            })}
-            {switchRow({
-              key: "agentSettings.globalUseAltScreen",
-              label: "Use alt-screen mode",
-              description:
-                "Render supported agents on the full-screen alternate buffer instead of inline",
             })}
           </SettingsGroup>
         </SettingsSection>

@@ -1052,7 +1052,7 @@ describe("preferences action hardening", () => {
     });
   });
 
-  it("preserves custom preset color and runtime fields through agentSettings.set validation", async () => {
+  it("preserves custom preset color and runtime fields through agentSettings.set validation, dropping a retired screen mode (#16356)", async () => {
     mocks.agentSettingsClient.set.mockResolvedValueOnce({
       agents: {
         claude: {
@@ -1107,7 +1107,6 @@ describe("preferences action hardening", () => {
           args: ["--model", "sonnet"],
           dangerousEnabled: true,
           customFlags: "--verbose",
-          inlineMode: true,
           color: "#3366ff",
           displayTitle: "Claude [Blue]",
           fallbacks: ["fallback"],

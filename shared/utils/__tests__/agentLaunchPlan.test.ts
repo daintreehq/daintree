@@ -509,6 +509,31 @@ describe("buildAgentLaunchPlan", () => {
   });
 });
 
+describe("inline-only launches (#16356)", () => {
+  it("launches grok inline from settings an older build saved with alt screen chosen", async () => {
+    const settings = {
+      agents: {
+        grok: {
+          inlineMode: "off",
+          presetId: "old",
+          customPresets: [{ id: "old", name: "Old", inlineMode: false, env: { WHO: "old" } }],
+        },
+      },
+      globalUseAltScreen: true,
+    } as unknown as AgentSettings;
+    const plan = await buildAgentLaunchPlan(
+      input({ agentId: "grok", agentConfig: getEffectiveAgentConfig("grok"), settings })
+    );
+
+    expect(plan.command?.split(" ")).toContain("--no-alt-screen");
+    expect(plan.command).not.toContain("--fullscreen");
+    expect(plan.launchFlags).toContain("--no-alt-screen");
+    expect(plan.launchFlags).not.toContain("--fullscreen");
+    // The preset still applies everything else it sets.
+    expect(plan.env).toMatchObject({ WHO: "old" });
+  });
+});
+
 describe("a plugin agent's declared permission-bypass args (#16374)", () => {
   afterEach(() => clearPluginAgentRegistryForTests());
 

@@ -4,7 +4,6 @@ import {
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
   resolveEffectiveBypass,
-  resolveEffectiveInlineMode,
   resolveKeepDecorations,
   type AgentSettings,
 } from "../types/agentSettings.js";
@@ -12,10 +11,11 @@ import { splitCallerLaunchFlags } from "./callerLaunchFlags.js";
 
 /**
  * Reconciles a resumed session's persisted launch flags against the given
- * agent settings (#10432 skip-permissions, #10876 alt-screen — both "resume
- * traps"): the snapshot may have been captured while a global switch was in a
- * different state, so strip the agent's canonical bypass / inline flags and
- * re-add them only if they currently resolve.
+ * agent settings (#10432 skip-permissions, the "resume trap"): the snapshot may
+ * have been captured while the global switch was in a different state, so
+ * strip the agent's canonical bypass flag and re-add it only if it currently
+ * resolves. The screen-mode token is brought to inline whatever the snapshot
+ * held (#16356).
  *
  * Pure, so the renderer (from its settings store) and main (from the saved
  * settings) reconcile a resume the same way.
@@ -35,11 +35,6 @@ export function reconcileResumeLaunchFlagsWith(
     session.agentId,
     settings?.globalSkipPermissions
   );
-  const effectiveInline = resolveEffectiveInlineMode(
-    entry,
-    session.agentId,
-    settings?.globalUseAltScreen
-  );
   const { base, caller } = splitCallerLaunchFlags(
     session.agentLaunchFlags,
     session.callerLaunchFlags
@@ -55,8 +50,7 @@ export function reconcileResumeLaunchFlagsWith(
         entry.dangerousArgs as string | undefined,
         getPluginBypassArgHistory(settings, session.agentId)
       ),
-      session.agentId,
-      effectiveInline
+      session.agentId
     ),
     session.agentId,
     resolveKeepDecorations(entry)
