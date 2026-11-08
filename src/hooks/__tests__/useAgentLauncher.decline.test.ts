@@ -28,9 +28,13 @@ vi.mock("@/store/worktreeStore", () => ({
     selector({ activeWorktreeId: null, deletedWorktrees: new Set() }),
 }));
 
+const projectState = vi.hoisted(() => ({
+  currentProject: { path: "/repo" } as { path: string; cloneState?: string },
+}));
+
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: unknown) => unknown) =>
-    selector({ currentProject: { path: "/repo" } }),
+    selector({ currentProject: projectState.currentProject }),
 }));
 
 vi.mock("@/store/scratchStore", () => ({
@@ -113,6 +117,22 @@ describe("useAgentLauncher — declined launches name their reason (#13382)", ()
 
   afterEach(() => {
     setElectron(false);
+  });
+
+  it("starts nothing in a project still awaiting its clone (#16352)", async () => {
+    projectState.currentProject = { path: "/repo", cloneState: "cloning" };
+    const onDecline = vi.fn();
+    const { result } = renderHook(() => useAgentLauncher());
+
+    let launched: unknown;
+    await act(async () => {
+      launched = await result.current.launchAgent("claude", { onDecline });
+    });
+    projectState.currentProject = { path: "/repo" };
+
+    expect(launched).toBeNull();
+    expect(addPanel).not.toHaveBeenCalled();
+    expect(onDecline).toHaveBeenCalledExactlyOnceWith({ reason: "unavailable", panelLimit: null });
   });
 
   it("reports panel-limit with the snapshot addPanel refused on", async () => {

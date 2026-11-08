@@ -701,8 +701,8 @@ export class ProjectStore {
     // path (a new window, Recent Projects) finds the row the clone registered
     // (#16352).
     if (!options?.fresh) {
-      const pending = await this.getProjectByPath(projectPath);
-      if (pending?.cloneState !== undefined) return pending;
+      const pending = this.findProjectAwaitingCloneAt(projectPath);
+      if (pending) return pending;
     }
     const classification = await this.classifyGitBacking(projectPath);
     const creationIdentity = options?.identity;
@@ -978,6 +978,16 @@ export class ProjectStore {
     this.notifyRegistryListeners();
 
     return project;
+  }
+
+  private findProjectAwaitingCloneAt(projectPath: string): Project | null {
+    const normalizedPath = path.normalize(projectPath).normalize("NFC");
+    const row = getSharedDb()
+      .select()
+      .from(projectsTable)
+      .where(and(eq(projectsTable.path, normalizedPath), sql`${projectsTable.cloneState} IS NOT NULL`))
+      .get();
+    return row ? rowToProject(row) : null;
   }
 
   /** The persisted request behind a project still awaiting its clone. */

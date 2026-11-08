@@ -462,7 +462,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
       // No checkout to start in until the project's clone lands (#16352). Main
       // refuses the spawn too; this says why before a panel is made for it.
-      if (isAwaitingClone(useProjectStore.getState().currentProject)) {
+      if (isAwaitingClone(currentProject)) {
         notify({
           type: "info",
           title: "Project still cloning",
