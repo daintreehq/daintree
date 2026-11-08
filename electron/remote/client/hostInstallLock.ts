@@ -73,8 +73,13 @@ const IDENT = `ident() { ${processStartShell("1", "n")}; if [ -n "$n" ] && [ -r 
 /** `gone` succeeds when the lock's holder verifiably no longer runs, leaving the record it judged in `$r`. */
 const GONE = `gone() { r=$(readlink "$L" 2>/dev/null); [ -n "$r" ] || return 1; p=$(sed -n 1p "$d/$r" 2>/dev/null); s=$(sed -n 2p "$d/$r" 2>/dev/null); [ -n "$p" ] || return 0; case "$p" in *[!0-9]*) return 1 ;; esac; kill -0 "$p" 2>/dev/null || return 0; [ -n "$s" ] || return 1; ident "$p"; [ -n "$n" ] && [ "$n" != "$s" ]; }`;
 
-/** `take <record>` removes the lock only while it names that record, and puts back whatever else it moved. */
-const TAKE = `take() { mv "$L" "$d/moving.$t" 2>/dev/null || return 0; m=$(readlink "$d/moving.$t" 2>/dev/null); if [ "$m" = "$1" ]; then rm -f "$d/moving.$t" "$d/$m"; else ln -sn "$m" "$L" 2>/dev/null; rm -f "$d/moving.$t"; fi; }`;
+/**
+ * `take <record>` removes the lock only while it names that record, and puts
+ * back whatever else it moved: a newer lock is moved only when it was taken in
+ * the instant between the look and the move, and is back an instant later. A
+ * holder whose lock was lost all the same sees so at its next check and exits.
+ */
+const TAKE = `take() { [ "$(readlink "$L" 2>/dev/null)" = "$1" ] || return 0; mv "$L" "$d/moving.$t" 2>/dev/null || return 0; m=$(readlink "$d/moving.$t" 2>/dev/null); if [ "$m" = "$1" ]; then rm -f "$d/moving.$t" "$d/$m"; else ln -sn "$m" "$L" 2>/dev/null; rm -f "$d/moving.$t"; fi; }`;
 
 /**
  * Takes the lock and holds it until released, the channel goes or the hold's

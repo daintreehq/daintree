@@ -783,7 +783,6 @@ async function lockWhenSettled(
   hostId: HostId | null,
   whileWorking: NonNullable<InstallHostPayload["whileWorking"]>,
   confirmed: HostRestartImpact | null,
-  token: string,
   signal: AbortSignal,
   report: (p: InstallProgress) => void
 ): Promise<{ lock: InstallLock } | { impact: HostRestartImpact }> {
@@ -800,7 +799,13 @@ async function lockWhenSettled(
       if (impact) return { impact };
     }
     if (signal.aborted) throw cancelled();
-    const lock = await takeInstallLock(deps, token, signal, report);
+    // A token for each attempt: a late release meant for an earlier one never reaches this one.
+    const lock = await takeInstallLock(
+      deps,
+      (deps.installToken ?? newInstallToken)(),
+      signal,
+      report
+    );
     if (!confirmed) return { lock };
     let impact: HostRestartImpact;
     try {
@@ -927,7 +932,6 @@ export async function runHostInstall(
       hostId,
       whileWorking,
       plan.restartsHost ? confirmed : null,
-      (deps.installToken ?? newInstallToken)(),
       signal,
       report
     );
@@ -1109,7 +1113,9 @@ export async function runHostInstall(
         !wasHostMode ||
         live === null ||
         (live.version === probe.install?.version &&
-          (live.commit === null || live.commit === probe.install?.commit));
+          (live.commit === null ||
+            probe.install?.commit == null ||
+            live.commit === probe.install?.commit));
       if (!back.result.reachable || !running || !sameBuild || !sameRunning) return "not-restored";
       // Put back only when the rollback said so; otherwise what runs was never moved.
       return swapped && previous ? "restored" : "restarted";
@@ -1283,15 +1289,7 @@ async function applyStagedUpdate(
     confirmed = impact;
   }
   // One device at a time stops and starts the host.
-  const settled = await lockWhenSettled(
-    deps,
-    hostId,
-    whileWorking,
-    confirmed,
-    (deps.installToken ?? newInstallToken)(),
-    signal,
-    report
-  );
+  const settled = await lockWhenSettled(deps, hostId, whileWorking, confirmed, signal, report);
   if ("impact" in settled) return { status: "needs-confirmation", impact: settled.impact };
   const lock = settled.lock;
   try {
