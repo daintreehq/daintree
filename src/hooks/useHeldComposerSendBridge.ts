@@ -34,7 +34,13 @@ function reportDropsOutOfSight(
       priority: "low",
     });
   }
-  useHeldComposerSendStore.getState().forgetDroppedExcept(new Set(Object.keys(panels)));
+  const store = useHeldComposerSendStore.getState();
+  store.forgetDroppedExcept(new Set(Object.keys(panels)));
+  // A note gone with its pane can't be reported again, so its token goes too.
+  const live = new Set(
+    Object.values(useHeldComposerSendStore.getState().dropped).map((n) => n.token)
+  );
+  for (const token of reported) if (!live.has(token)) reported.delete(token);
 }
 
 /**
