@@ -38,7 +38,7 @@ const POINTS = [
 
 interface CanopyPitchProps {
   isOpen: boolean;
-  /** The user turned Canopy on: its model downloads and screens are read on this computer. */
+  /** The user turned Canopy on: screens are read on this computer, with the model that ships with Daintree. */
   onTurnOn: () => Promise<void>;
   /** The user doesn't want Canopy: its ways in go, all but Settings. */
   onHide: () => Promise<void>;
@@ -68,7 +68,7 @@ export function CanopyPitch({
   const [pending, setPending] = useState<"on" | "hide" | null>(null);
   const [failed, setFailed] = useState<"on" | "hide" | null>(null);
   // The keyboard lands on the offer's heading, not on Turn on: a reflexive
-  // Enter after the shortcut must not start a download. The dialog
+  // Enter after the shortcut must not turn reading on. The dialog
   // is told to place no focus of its own, so this is the only move.
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {

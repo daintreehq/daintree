@@ -31,4 +31,4 @@ Two sanctioned exceptions:
 
 ## Observed state
 
-Agent state comes from passive PTY output heuristics (`AgentStateService`, FSM in `shared/utils/agentFsm.ts`) and is frequently wrong. `running` is a runtime status, not an agent state. The one exception to "observations, not interpretations" is Canopy, the opt-in local-model reader, which may suggest an attention bucket beside the observed state but never replace it (`docs/architecture/agent-state-tracking-strategy.md`, "Canopy").
+Agent state comes from passive PTY output heuristics (`AgentStateService`, FSM in `shared/utils/agentFsm.ts`) and is frequently wrong. `running` is a runtime status, not an agent state. The one exception to "observations, not interpretations" is Canopy, the local-model reader (on by default, and turned off or hidden from Settings), which may suggest an attention bucket beside the observed state but never replace it (`docs/architecture/agent-state-tracking-strategy.md`, "Canopy").

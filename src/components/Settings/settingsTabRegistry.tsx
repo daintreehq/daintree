@@ -2029,10 +2029,9 @@ export const SETTINGS_REGISTRY = [
     importKind: "lazy",
     importer: LazyCanopySettingsTab.preload,
     LazyComponent: LazyCanopySettingsTab,
-    searchNavDescription:
-      "Show or hide Canopy, turn its reading on or off, and the model it reads with",
-    // The model's own rows only render while there is a download or a model on disk, so
-    // model searches land on rows that are always there and describe it.
+    searchNavDescription: "Show or hide Canopy, and turn its reading on or off",
+    // The model's own row only renders when the model that ships with Daintree fails its
+    // check, so model searches land on rows that are always there and describe it.
     searchNavKeywords: [
       "canopy",
       "inbox",
@@ -2042,9 +2041,6 @@ export const SETTINGS_REGISTRY = [
       "privacy",
       "local",
       "model",
-      "download",
-      "delete",
-      "disk",
     ],
     sections: [
       {
@@ -2069,7 +2065,6 @@ export const SETTINGS_REGISTRY = [
           "local",
           "offline",
           "model",
-          "download",
         ],
       },
     ],

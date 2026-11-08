@@ -49,7 +49,7 @@ import {
   type CanopyTrashSectionHandle,
 } from "./CanopyTrashSection";
 import { CanopyEmptyLine } from "./CanopyEmptyLine";
-import { CanopyStatusBar, formatModelBytes } from "./CanopyStatusBar";
+import { CanopyStatusBar } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
 import { CanopyListColumn } from "./CanopyListColumn";
@@ -92,12 +92,7 @@ import { CANOPY_ROLE_FILTERS, type CanopyRoleFilter } from "./canopyAssistants";
 import { isFullAgentDirectory } from "@shared/types/agentDirectory";
 import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
 import type { BulkTarget } from "@shared/utils/canopyBulkEnable";
-import {
-  canopyBulkTransport,
-  ownCanopyApi,
-  remoteCanopyApi,
-  unlessHostDisconnected,
-} from "./canopyHostSource";
+import { canopyBulkTransport, unlessHostDisconnected } from "./canopyHostSource";
 import { ALL_HOSTS_ID, canopyOwnHostId } from "@/store/canopyStore";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
@@ -1272,26 +1267,23 @@ function CanopyInbox({
           },
         ];
       }
-      // Its own model, downloaded on that host: until it is there, nothing there is read.
+      // Its own model, on that host: until it is ready there, nothing there is read.
+      // A host from before the model shipped with Daintree may still be fetching it.
       const model = reading.canopy.model;
       if (model && model.status !== "ready") {
         const where = remoteHost ? ` on ${name}` : "";
-        const hostApi = remoteHost ? remoteCanopyApi(reading.hostId) : ownCanopyApi;
         return [
           model.status === "failed"
             ? {
                 hostId: reading.hostId,
-                text: `Couldn't download Canopy's model${where}`,
-                action: "Retry",
-                act: () => void hostApi.retryModel().catch(() => {}),
+                text: `Canopy's model isn't available${where}`,
+                action: null,
+                act: null,
                 trouble: true,
               }
             : {
                 hostId: reading.hostId,
-                text:
-                  model.status === "downloading"
-                    ? `Downloading Canopy's model${where}… ${formatModelBytes(model.received)} of ${formatModelBytes(model.total)}`
-                    : `Waiting for Canopy's model${where}…`,
+                text: `Waiting for Canopy's model${where}…`,
                 action: null,
                 act: null,
                 trouble: false,
@@ -2143,7 +2135,6 @@ function CanopyInbox({
               )}
               <CanopyStatusBar
                 host={otherHost ? hostName : null}
-                onRetryModel={() => void api.retryModel().catch(() => {})}
                 reader={canopy?.reader}
                 model={canopy?.model}
                 waiting={canopy?.waiting}

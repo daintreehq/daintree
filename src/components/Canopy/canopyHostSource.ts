@@ -33,7 +33,6 @@ export type CanopyApi = Pick<
   | "runBranch"
   | "searchScreens"
   | "setMode"
-  | "retryModel"
   | "rename"
   | "trash"
   | "untrash"
@@ -56,7 +55,6 @@ export const ownCanopyApi: CanopyApi = {
   runBranch: (...args) => window.electron.canopy.runBranch(...args),
   searchScreens: (...args) => window.electron.canopy.searchScreens(...args),
   setMode: (...args) => window.electron.canopy.setMode(...args),
-  retryModel: (...args) => window.electron.canopy.retryModel(...args),
   rename: (...args) => window.electron.canopy.rename(...args),
   trash: (...args) => window.electron.canopy.trash(...args),
   untrash: (...args) => window.electron.canopy.untrash(...args),
@@ -84,7 +82,6 @@ export function remoteCanopyApi(hostId: HostId): CanopyApi {
     runBranch: on("canopy:run-branch"),
     searchScreens: on("canopy:search-screens"),
     setMode: on("canopy:set-mode"),
-    retryModel: on("canopy:retry-model"),
     rename: on("canopy:rename"),
     trash: on("canopy:trash"),
     untrash: on("canopy:untrash"),

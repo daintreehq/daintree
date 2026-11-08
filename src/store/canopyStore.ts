@@ -526,7 +526,8 @@ function opened(state: CanopyState): Partial<CanopyState> {
  */
 export const useCanopyStore = create<CanopyState>((set, get) => ({
   isOpen: false,
-  mode: "unset",
+  // Canopy's default: hydration says otherwise before the first paint for anyone who changed it.
+  mode: "on",
   seedMode: (mode) => set((state) => (state.snapshot === null ? { mode } : state)),
   snapshot: null,
   ...loadOrders(),

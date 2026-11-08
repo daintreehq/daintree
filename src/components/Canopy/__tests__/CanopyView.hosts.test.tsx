@@ -1419,7 +1419,7 @@ describe("All hosts", () => {
     "drops a host's agents once its link goes after they were read, and brings them back with it (%s)",
     async (_status, connection) => {
       calmEverywhere();
-      // Its model still downloading when it was read: progress, until the link drops.
+      // An older host, its model still downloading when it was read: said, until the link drops.
       remoteCanopy = canopySnapshot({
         cards: [calmCard("shared-run")],
         model: { id: "m", status: "downloading", received: 1, total: 2 },
@@ -1427,7 +1427,7 @@ describe("All hosts", () => {
       const { rerender } = render(<CanopyView />);
       await settle();
       expect(cardOf("studio", "shared-run")).not.toBeNull();
-      expect(document.body.textContent).toContain("Downloading Canopy's model on studio-01");
+      expect(document.body.textContent).toContain("Waiting for Canopy's model on studio-01");
 
       state.hosts = [host("studio", "studio-01", connection)];
       rerender(<CanopyView />);
@@ -1736,15 +1736,28 @@ describe("All hosts", () => {
       expect(spinner()).toBeNull();
     });
 
-    it("keeps a model download in the list, as a read in progress that is not a connection", async () => {
+    it("keeps an older host's model download in the list, without its progress, as a read in progress that is not a connection", async () => {
       remoteCanopy = canopySnapshot({
         model: { id: "m", status: "downloading", received: 1, total: 2 },
       });
       render(<CanopyView />);
       await settle();
       await gate(1_000);
-      expect(document.body.textContent).toContain("Downloading Canopy's model on studio-01");
+      expect(document.body.textContent).toContain("Waiting for Canopy's model on studio-01…");
+      expect(document.body.textContent).not.toMatch(/Downloading/);
       expect(spinner()).toBeNull();
+    });
+
+    it("says a host's model isn't available without offering to download it", async () => {
+      remoteCanopy = canopySnapshot({
+        model: { id: "m", status: "failed", error: "HTTP 503" },
+      });
+      render(<CanopyView />);
+      await settle();
+      await gate(1_000);
+      expect(document.body.textContent).toContain("Canopy's model isn't available on studio-01");
+      expect(document.body.textContent).not.toMatch(/download|HTTP/i);
+      expect(channelsCalled()).not.toContain("studio canopy:retry-model");
     });
   });
 
