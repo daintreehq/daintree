@@ -161,7 +161,7 @@ import { getPanelSlotReservations } from "../slices/panelRegistry/panelSlotReser
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { RecipeImportDropsTerminalsError } from "@/utils/recipeImport";
-import { buildLaunchCommandFromFlags } from "@shared/types/agentSettings";
+import { buildLaunchCommandFromFlags, stripAssignedSessionIdArgs } from "@shared/types/agentSettings";
 import { mergeRecipes } from "@shared/utils/recipeListing";
 
 /** A host approval that genuinely covers `recipe`, as the bridge would issue it. */
@@ -1245,6 +1245,68 @@ describe("recipeStore", () => {
       expect(addTerminalMock).toHaveBeenCalledWith(
         expect.objectContaining({ launchAgentId: "acme-agent" })
       );
+    });
+
+    it("gives each agent pane of a recipe its own session id (#16470)", async () => {
+      addTerminalMock.mockResolvedValue("terminal-1");
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-two-agents",
+            name: "Two Agents",
+            projectId: "project-1",
+            terminals: [
+              { type: "claude", title: "One", env: {} },
+              { type: "claude", title: "Two", env: {} },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-two-agents", "/tmp/worktree", "worktree-1");
+
+      const launched = addTerminalMock.mock.calls.map(
+        ([options]) => options as { agentSessionId?: string; command?: string }
+      );
+      expect(launched).toHaveLength(2);
+      const [first, second] = launched;
+      expect(first?.agentSessionId).toBeTruthy();
+      expect(first?.agentSessionId).not.toBe(second?.agentSessionId);
+      expect(first?.command).toContain(first?.agentSessionId);
+      expect(second?.command).toContain(second?.agentSessionId);
+    });
+
+    it("mints no id for a recipe whose own args pick the conversation (#16470)", async () => {
+      addTerminalMock.mockResolvedValue("terminal-1");
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-continue",
+            name: "Continue",
+            projectId: "project-1",
+            terminals: [{ type: "claude", title: "One", env: {}, args: "--continue" }],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-continue", "/tmp/worktree", "worktree-1");
+
+      const [options] = addTerminalMock.mock.calls[0] as [
+        { agentSessionId?: string; command?: string },
+      ];
+      expect(options.agentSessionId).toBeUndefined();
+      expect(options.command).toContain("--continue");
+      expect(options.command).not.toContain("--session-id");
     });
 
     it("reports partial failures with correct indices", async () => {
@@ -2354,7 +2416,7 @@ describe("recipeStore", () => {
         "--add-dir",
         "/Users/me/My Project",
       ]);
-      expect(call.command).toBe(
+      expect(stripAssignedSessionIdArgs(call.command ?? "", "claude")).toBe(
         buildLaunchCommandFromFlags("claude", "claude", call.agentLaunchFlags!)
       );
     });
@@ -2453,7 +2515,7 @@ describe("recipeStore", () => {
 
         expect(call.command).toContain("--system-prompt 'two words'");
         expect(call.agentLaunchFlags).toEqual(["--system-prompt", "two words"]);
-        expect(call.command).toBe(
+        expect(stripAssignedSessionIdArgs(call.command ?? "", "claude")).toBe(
           buildLaunchCommandFromFlags("claude", "claude", call.agentLaunchFlags!)
         );
       });

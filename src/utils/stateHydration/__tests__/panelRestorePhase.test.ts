@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Mock } from "vitest";
 import { createHash } from "crypto";
 import type { CodexRestoreMatchRequest } from "@shared/types/ipc/agentSubagents";
@@ -6,6 +6,7 @@ import { launchPromptMatchText } from "@shared/utils/launchPromptArg";
 import {
   registerPluginAgents,
   clearPluginAgentRegistryForTests,
+  getPluginAgentRegistry,
 } from "@shared/config/pluginAgentRegistry";
 import type {
   TerminalState,
@@ -1849,6 +1850,96 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
     } finally {
       clearPluginAgentRegistryForTests();
     }
+  });
+
+  describe("a plugin agent's assigned session ids (#16470)", () => {
+    const PI = {
+      id: "pi",
+      name: "Pi",
+      command: "pi",
+      color: "#3366ff",
+      iconId: "claude",
+      resume: {
+        kind: "session-id" as const,
+        args: ["--session-id", "{sessionId}"],
+        assignSessionIdArgs: ["--session-id", "{sessionId}"],
+        resumeLatestArgs: ["--continue"],
+      },
+    };
+    const piPanel = (id: string, overrides: Partial<TerminalState> = {}) =>
+      panel(id, { kind: "agent", launchAgentId: "pi", ...overrides });
+
+    afterEach(() => {
+      clearPluginAgentRegistryForTests();
+      vi.unstubAllGlobals();
+    });
+
+    function stubPluginAgents(getAgents: Mock): void {
+      vi.stubGlobal("window", { electron: { plugin: { getAgents } } });
+    }
+
+    it("lets two panes in one directory each resume their own id", async () => {
+      registerPluginAgents("digitalfrontier.agents", [PI]);
+      const ctx = makeContext();
+
+      await restorePanelsPhase(
+        [
+          piPanel("left", { agentSessionId: "id-left", lastActiveAt: 1 }),
+          piPanel("right", { agentSessionId: "id-right", lastActiveAt: 2 }),
+          piPanel("older", { lastActiveAt: 3 }),
+        ],
+        ctx
+      );
+
+      expect(sessionAllowanceById(ctx).get("left")).toBe(true);
+      expect(sessionAllowanceById(ctx).get("right")).toBe(true);
+      // A pane from before the plugin declared this must not take "latest" from
+      // them: that session may be one of theirs.
+      expect(allowanceById(ctx).get("older")).toBe(false);
+    });
+
+    it("gives one of two panes sharing an id the conversation, and starts the other over", async () => {
+      registerPluginAgents("digitalfrontier.agents", [PI]);
+      const ctx = makeContext();
+
+      await restorePanelsPhase(
+        [
+          piPanel("copy", { agentSessionId: "shared", lastActiveAt: 1 }),
+          piPanel("source", { agentSessionId: "shared", lastActiveAt: 2 }),
+        ],
+        ctx
+      );
+
+      expect(sessionAllowanceById(ctx).get("source")).toBe(true);
+      expect(sessionAllowanceById(ctx).get("copy")).toBe(false);
+    });
+
+    it("loads the plugin agents before deciding who resumes what, on a cold start", async () => {
+      const getAgents = vi.fn(async () => {
+        registerPluginAgents("digitalfrontier.agents", [PI]);
+        return getPluginAgentRegistry();
+      });
+      stubPluginAgents(getAgents);
+      const ctx = makeContext();
+
+      await restorePanelsPhase(
+        [piPanel("older", { lastActiveAt: 1 }), piPanel("newer", { lastActiveAt: 2 })],
+        ctx
+      );
+
+      expect(getAgents).toHaveBeenCalledWith({ forRestore: true });
+      // Only a known agent has a resume-latest slot to elect over.
+      expect(Object.fromEntries(allowanceById(ctx))).toEqual({ older: false, newer: true });
+    });
+
+    it("doesn't start the plugin host for a safe-mode restore", async () => {
+      const getAgents = vi.fn(async () => ({}));
+      stubPluginAgents(getAgents);
+
+      await restorePanelsPhase([piPanel("left")], makeContext({ safeMode: true }));
+
+      expect(getAgents).not.toHaveBeenCalled();
+    });
   });
 
   it("elects one pane per directory for a rolling-history agent and for Cursor (#13847)", async () => {

@@ -2934,7 +2934,7 @@ export interface GeneratedIpcInvokeMap {
     result: string | undefined;
   };
   "plugin:agents-get": {
-    args: [];
+    args: [options?: { forRestore?: boolean | undefined } | undefined];
     result: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
   };
   "plugin:artifact-source": {

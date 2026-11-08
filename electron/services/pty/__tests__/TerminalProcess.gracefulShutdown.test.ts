@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearPluginAgentRegistryForTests,
+  registerPluginAgents,
+} from "../../../../shared/config/pluginAgentRegistry.js";
 import type { IPty } from "node-pty";
 import { TerminalProcess, type TerminalProcessCallbacks } from "../TerminalProcess.js";
 import { gracefulShutdown as runGracefulShutdown } from "../TerminalGracefulShutdown.js";
@@ -1864,6 +1868,36 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
       const context = contextOf(shutdownEntries()[0]);
       expect(context?.outcome).toBe("preassigned");
       expect(context?.captured).toBe(true);
+    });
+
+    it("hands back a plugin agent's assigned id without sending its quit command (#16470)", async () => {
+      registerPluginAgents("digitalfrontier.agents", [
+        {
+          id: "pi",
+          name: "Pi",
+          command: "pi",
+          color: "#3366ff",
+          iconId: "terminal",
+          resume: {
+            kind: "session-id",
+            args: ["--session-id", "{sessionId}"],
+            assignSessionIdArgs: ["--session-id", "{sessionId}"],
+            quitCommand: "/quit",
+          },
+        },
+      ]);
+      try {
+        const handles = createMockPty();
+        const left = createAgentTerminalWithSession(handles, "pi", "pane-left");
+        const right = createAgentTerminalWithSession(createMockPty(), "pi", "pane-right");
+
+        await expect(left.gracefulShutdown()).resolves.toBe("pane-left");
+        await expect(right.gracefulShutdown()).resolves.toBe("pane-right");
+
+        expect(handles.writeMock).not.toHaveBeenCalled();
+      } finally {
+        clearPluginAgentRegistryForTests();
+      }
     });
 
     it("does not hand one agent's stored id to a different live agent", async () => {

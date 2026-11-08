@@ -449,6 +449,11 @@ interface AgentSessionIdResumeBase {
    * resume by id forever after, and mint a DISTINCT id for a duplicated
    * pane (see `buildAssignedSessionIdArgs`).
    *
+   * A plugin's CLI can differ (#16470): Pi's `--session-id` opens the id's
+   * conversation or creates it, and declares the same args for both, which
+   * {@link assignmentReopensSession} reads. A copy still gets its own id: a
+   * flag that won't refuse a shared id only makes sharing one quieter.
+   *
    * Omit for CLIs that only hand out their own ids — those keep the
    * `sessionIdPattern` teardown scrape as their sole capture path.
    */

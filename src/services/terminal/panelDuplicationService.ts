@@ -11,6 +11,7 @@ import {
   generateAgentCommand,
   mintAssignedSessionId,
   stripAssignedSessionIdArgs,
+  stripConversationSelectorArgs,
 } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { agentSettingsClient, systemClient } from "@/clients";
@@ -174,10 +175,11 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         const accountEnv = paneAccountEnv(panel.launchAgentId, panel);
         return {
           agentAccountId: accountEnv ? panel.agentAccountId : undefined,
-          // Reusing the source's command verbatim would clone its assigned
-          // session id along with it, so strip that back off (#11782) and let
-          // this copy launch as the fresh conversation it is.
-          command: stripAssignedSessionIdArgs(
+          // Reusing the source's command verbatim would open its conversation
+          // too, through an assigned id (#11782) or the resume command a restore
+          // stored (#16470), so strip that back off and let this copy launch as
+          // the fresh conversation it is.
+          command: stripConversationSelectorArgs(
             panel.command ?? agentConfig.command,
             panel.launchAgentId
           ),

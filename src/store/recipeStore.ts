@@ -35,6 +35,8 @@ import { getAgentConfig, getMergedPreset } from "@/config/agents";
 import { isRetiredAgentId } from "@shared/config/agentIds";
 import {
   generateAgentCommand,
+  mintAssignedSessionId,
+  stripConversationSelectorFlags,
   buildAgentLaunchFlags,
   resolveEffectivePresetId,
 } from "@shared/types";
@@ -1538,20 +1540,6 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
                 ? terminal.whenDone
                 : undefined;
             const handbackCode = whenDone !== undefined ? mintHandbackCode() : undefined;
-            const command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
-              initialPrompt:
-                handbackCode !== undefined && initialPrompt
-                  ? appendHandbackInstruction(initialPrompt, handbackCode, "run")
-                  : initialPrompt,
-              clipboardDirectory,
-              modelId: terminal.agentModelId,
-              // An in-memory recipe's captured flags can carry a standing
-              // instruction; apply it to this launch as well (#12431).
-              systemPromptArgs,
-              recipeArgs: terminal.args?.trim() || undefined,
-              presetArgs: preset?.args,
-              globalSkipPermissions,
-            });
             // Persist the process-level launch flags so restart/resume/continue
             // reproduce the same configuration. Without this the panel arrives
             // with `agentLaunchFlags: undefined` and the restart slice silently
@@ -1571,6 +1559,30 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               // Last, where the launch command puts it, so restart replays it.
               ...step.systemPromptArgs,
             ];
+            // One id per pane (#16470): a recipe often runs the same agent twice
+            // in one worktree, where "latest in this directory" can't tell them
+            // apart after an abrupt end. Not for a recipe whose own args pick the
+            // conversation: Claude refuses `--session-id` beside `--continue`.
+            const assignedSessionId =
+              stripConversationSelectorFlags(agentLaunchFlags, agentId).length ===
+              agentLaunchFlags.length
+                ? mintAssignedSessionId(agentId)
+                : undefined;
+            const command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
+              initialPrompt:
+                handbackCode !== undefined && initialPrompt
+                  ? appendHandbackInstruction(initialPrompt, handbackCode, "run")
+                  : initialPrompt,
+              clipboardDirectory,
+              modelId: terminal.agentModelId,
+              // An in-memory recipe's captured flags can carry a standing
+              // instruction; apply it to this launch as well (#12431).
+              systemPromptArgs,
+              recipeArgs: terminal.args?.trim() || undefined,
+              presetArgs: preset?.args,
+              globalSkipPermissions,
+              sessionId: assignedSessionId,
+            });
             // Only a first turn the command actually sends is recorded (#14592).
             const firstPrompt = initialPrompt
               ? buildFirstPrompt(step.promptAsWritten, "launch", Date.now())
@@ -1588,6 +1600,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               agentModelId: terminal.agentModelId,
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
+              ...(assignedSessionId && { agentSessionId: assignedSessionId }),
               env: finalEnv,
               exitBehavior: terminal.exitBehavior,
               ...(firstPrompt && { launchPrompt: firstPrompt }),

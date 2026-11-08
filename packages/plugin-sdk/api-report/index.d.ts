@@ -2023,6 +2023,8 @@ interface AgentDetectionConfig {
 type AgentResumeTemplate = {
     kind: "session-id";
     args: string[];
+    /** Expands into {@link AgentResume} `assignSessionIdArgs` (#16470). */
+    assignSessionIdArgs?: string[];
     sessionIdPattern?: string;
     quitCommand?: string;
     resumeLatestArgs?: string[];
@@ -4662,8 +4664,10 @@ interface PluginAgentContribution {
     detection?: AgentDetectionConfig;
     /**
      * Optional session resume (#13687): `session-id` with a `{sessionId}` args
-     * template, or `project-scoped` static args. Plain data, expanded where a
-     * resume command is built. Plugin agents never claim a `continuity` tier.
+     * template, or `project-scoped` static args. A `session-id` CLI that takes its
+     * id at launch also declares `assignSessionIdArgs` (#16470). Plain data,
+     * expanded where a resume command is built. Plugin agents never claim a
+     * `continuity` tier.
      */
     resume?: AgentResumeTemplate;
     /**

@@ -1214,6 +1214,25 @@ export function supportsSessionIdAssignment(agentId: string | undefined): boolea
 }
 
 /**
+ * Whether `agentId`'s assigning args are also its resume args (#16470): one flag
+ * that opens the id's conversation or creates it, like Pi's `--session-id`.
+ * Offering such an id again reopens the conversation instead of being refused,
+ * so a replay of the same pane has nothing to disarm. It says nothing about a
+ * copy, which is a new conversation whatever the CLI would accept.
+ */
+export function assignmentReopensSession(agentId: string | undefined): boolean {
+  if (!agentId) return false;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  if (resume?.kind !== "session-id" || !resume.assignSessionIdArgs) return false;
+  const assigning = resume.assignSessionIdArgs(SESSION_ID_SLOT);
+  const resuming = resume.args(SESSION_ID_SLOT);
+  return (
+    assigning.length === resuming.length &&
+    assigning.every((token, offset) => token === resuming[offset])
+  );
+}
+
+/**
  * Mints a session id for a fresh launch of `agentId`, or `undefined` when the
  * agent captures its id the old way (teardown scrape).
  *
@@ -1353,11 +1372,13 @@ export function stripConversationSelectorFlags(
 ): string[] {
   const resume = agentId ? getEffectiveAgentConfig(agentId)?.resume : undefined;
   if (!resume || resume.kind !== "session-id") return [...flags];
+  // A shape of nothing but the id (a plugin's `args: ["{sessionId}"]`) would
+  // match every word, so it can't pick anything out.
   const shapes = [
     resume.args(SESSION_ID_SLOT),
     resume.assignSessionIdArgs?.(SESSION_ID_SLOT) ?? [],
     resume.resumeLatestArgs ?? [],
-  ].filter((shape) => shape.length > 0);
+  ].filter((shape) => shape.some((token) => token !== SESSION_ID_SLOT));
   const kept: string[] = [];
   for (let i = 0; i < flags.length;) {
     const shape = shapes.find((candidate) =>
@@ -1371,6 +1392,20 @@ export function stripConversationSelectorFlags(
     i++;
   }
   return kept;
+}
+
+/**
+ * {@link stripConversationSelectorFlags} over a stored command, for a copy that
+ * can't be rebuilt (#16470). A restore stores its resume command, so the source
+ * can hold any selector, and each would open the source's conversation. The
+ * binary is never a candidate, and a quoted prompt stays one word that no
+ * selector matches.
+ */
+export function stripConversationSelectorArgs(command: string, agentId: string | undefined): string {
+  const [binary, ...args] = splitShellWords(command);
+  if (binary === undefined) return command;
+  const kept = stripConversationSelectorFlags(args, agentId);
+  return kept.length === args.length ? command : [binary, ...kept].join(" ");
 }
 
 const MODEL_FLAG = "--model";
