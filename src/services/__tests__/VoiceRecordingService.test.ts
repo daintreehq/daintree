@@ -340,7 +340,7 @@ function buildAudioContextMock() {
 // The store mock exposes its backing state for tests to prime.
 async function voiceStoreState() {
   const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
-    __state: { activeTarget: { panelId: string } | null };
+    __state: { activeTarget: { panelId: string } | null; status: string };
   };
   return __state;
 }
@@ -866,6 +866,320 @@ describe("VoiceRecordingService — background recording", () => {
     await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
     expect(audioContextCtor).toHaveBeenCalledTimes(2);
     expect(ctx.audioWorklet.addModule).toHaveBeenCalledTimes(2);
+  });
+
+  describe("an audio graph that never becomes ready (#16365)", () => {
+    const NEVER = () => new Promise<undefined>(() => {});
+    const PAST_ANY_DEADLINE_MS = 60_000;
+    const TARGET = { panelId: "panel-1", panelTitle: "Terminal" };
+    let harnessGlobals: ReturnType<typeof setupGlobals>;
+
+    function deferredLoad() {
+      let resolve!: () => void;
+      let reject!: (error: Error) => void;
+      const promise = new Promise<undefined>((res, rej) => {
+        resolve = () => res(undefined);
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    function trackedStream() {
+      const track = { stop: vi.fn(), readyState: "live" };
+      return { track, stream: fakeStream({ getTracks: () => [track], getAudioTracks: () => [track] }) };
+    }
+
+    async function loadHarness() {
+      const { ctx } = harnessGlobals;
+      const audioContextCtor = vi.fn(function () {
+        return ctx;
+      });
+      vi.stubGlobal("AudioContext", audioContextCtor);
+      const { notify } = (await import("@/lib/notify")) as unknown as {
+        notify: ReturnType<typeof vi.fn>;
+      };
+      const store = (await import("@/store/voiceRecordingStore")) as unknown as {
+        useVoiceRecordingStore: {
+          getState: () => {
+            finishSession: ReturnType<typeof vi.fn>;
+            setLastError: ReturnType<typeof vi.fn>;
+          };
+        };
+      };
+      const { logInfo } = (await import("@/utils/logger")) as unknown as {
+        logInfo: ReturnType<typeof vi.fn>;
+      };
+      notify.mockClear();
+      logInfo.mockClear();
+      const { finishSession, setLastError } = store.useVoiceRecordingStore.getState();
+      finishSession.mockClear();
+      setLastError.mockClear();
+      const { voiceRecordingService: service } = await import("../VoiceRecordingService");
+      const timeouts = () =>
+        logInfo.mock.calls
+          .filter(([message]) => String(message).includes("Start step"))
+          .map(([, details]) => details as { step: string; pending?: string[] })
+          .filter((details) => details.step === "graph_timeout");
+      return { ctx, audioContextCtor, notify, finishSession, setLastError, service, timeouts };
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      harnessGlobals = setupGlobals();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("fails a start whose worklet never loads, and its retry builds a fresh context", async () => {
+      const { ctx, audioContextCtor, notify, finishSession, setLastError, service, timeouts } =
+        await loadHarness();
+      ctx.audioWorklet.addModule.mockImplementationOnce(NEVER);
+      // A context that won't close either must not hold up the failure or the retry.
+      ctx.close.mockImplementationOnce(NEVER);
+      const { track, stream } = trackedStream();
+      vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValueOnce(stream);
+
+      let settled = false;
+      void service.start(TARGET).finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+
+      expect(settled).toBe(true);
+      expect(track.stop).toHaveBeenCalled();
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+      expect(timeouts().map((t) => t.pending)).toEqual([["worklet_load"]]);
+      expect(setLastError).toHaveBeenCalledWith(expect.objectContaining({ severity: "fatal" }));
+      expect(finishSession).toHaveBeenCalledWith({ nextStatus: "error" });
+      expect(window.electron.voiceInput.start).not.toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledTimes(1);
+      const failure = notify.mock.calls[0]![0] as {
+        title: string;
+        action: { label: string; onClick: () => void };
+      };
+      expect(failure.title).toBe("Dictation didn't start");
+      expect(failure.action.label).toBe("Retry");
+
+      failure.action.onClick();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(audioContextCtor).toHaveBeenCalledTimes(2);
+      expect(ctx.audioWorklet.addModule).toHaveBeenCalledTimes(2);
+      expect(window.electron.voiceInput.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("names a resume the context never answered", async () => {
+      const { ctx, notify, service, timeouts } = await loadHarness();
+      ctx.resume.mockImplementationOnce(NEVER);
+
+      void service.start(TARGET);
+      await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+
+      expect(timeouts().map((t) => t.pending)).toEqual([["audio_context_resume"]]);
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("names a resume never issued because the last stop's suspend is stuck", async () => {
+      const { ctx, audioContextCtor, notify, service, timeouts } = await loadHarness();
+      const __state = await voiceStoreState();
+      ctx.suspend.mockImplementationOnce(NEVER);
+      __state.activeTarget = { panelId: TARGET.panelId };
+      await service.start(TARGET);
+      await service.stop("Dictation stopped.", { skipRemoteStop: true });
+      __state.activeTarget = null;
+      expect(ctx.resume).toHaveBeenCalledTimes(1);
+
+      void service.start(TARGET);
+      await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+
+      expect(ctx.resume).toHaveBeenCalledTimes(1);
+      expect(timeouts().map((t) => t.pending)).toEqual([["audio_context_resume_queued"]]);
+      expect(notify).toHaveBeenCalledTimes(1);
+
+      await service.start(TARGET);
+      expect(audioContextCtor).toHaveBeenCalledTimes(2);
+    });
+
+    it("carries on when the graph is ready in time, and leaves no deadline behind", async () => {
+      const { ctx, notify, service, timeouts } = await loadHarness();
+      const load = deferredLoad();
+      ctx.audioWorklet.addModule.mockImplementationOnce(() => load.promise);
+
+      const starting = service.start(TARGET);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(window.electron.voiceInput.start).not.toHaveBeenCalled();
+      load.resolve();
+      await starting;
+      expect(window.electron.voiceInput.start).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+      expect(timeouts()).toEqual([]);
+      expect(ctx.close).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it("doesn't count a long permission prompt against the graph", async () => {
+      const { ctx, service, timeouts } = await loadHarness();
+      const load = deferredLoad();
+      ctx.audioWorklet.addModule.mockImplementationOnce(() => load.promise);
+      const { stream } = trackedStream();
+      let granted!: (stream: MediaStream) => void;
+      vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementationOnce(
+        () =>
+          new Promise<MediaStream>((resolve) => {
+            granted = resolve;
+          })
+      );
+
+      const starting = service.start(TARGET);
+      await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+      expect(timeouts()).toEqual([]);
+
+      granted(stream);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(timeouts()).toEqual([]);
+
+      load.resolve();
+      await starting;
+      expect(window.electron.voiceInput.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("retires the context of a start cancelled while it waits, without an error", async () => {
+      const { ctx, audioContextCtor, notify, setLastError, service, timeouts } =
+        await loadHarness();
+      const __state = await voiceStoreState();
+      ctx.audioWorklet.addModule.mockImplementationOnce(NEVER);
+      const { track, stream } = trackedStream();
+      vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValueOnce(stream);
+      __state.activeTarget = { panelId: TARGET.panelId };
+      __state.status = "arming";
+
+      let settled = false;
+      void service.start(TARGET).finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toBe(false);
+
+      const { dispatchEscapeFallback } = await import("@/lib/escapeStack");
+      expect(dispatchEscapeFallback()).toBe(true);
+      __state.activeTarget = null;
+      __state.status = "idle";
+      expect(track.stop).toHaveBeenCalled();
+      // Only the deadline gives up on it: a quick re-press still shares a load
+      // that is merely slow.
+      expect(ctx.close).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+      expect(settled).toBe(true);
+      expect(timeouts().map((t) => t.pending)).toEqual([["worklet_load"]]);
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+      expect(notify).not.toHaveBeenCalled();
+      expect(setLastError).not.toHaveBeenCalled();
+
+      await service.start(TARGET);
+      expect(audioContextCtor).toHaveBeenCalledTimes(2);
+      expect(window.electron.voiceInput.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("doesn't close a stuck context under a newer start sharing it", async () => {
+      const { ctx, audioContextCtor, notify, service, timeouts } = await loadHarness();
+      ctx.audioWorklet.addModule.mockImplementationOnce(NEVER);
+      const first = trackedStream();
+      const second = trackedStream();
+      vi.mocked(navigator.mediaDevices.getUserMedia)
+        .mockResolvedValueOnce(first.stream)
+        .mockResolvedValueOnce(second.stream);
+
+      void service.start(TARGET);
+      await vi.advanceTimersByTimeAsync(1_000);
+      void service.start({ panelId: "panel-2", panelTitle: "Other" });
+      await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+
+      // Each start's deadline lapsed. Closing under the second would close twice.
+      expect(timeouts()).toHaveLength(2);
+      expect(audioContextCtor).toHaveBeenCalledTimes(1);
+      expect(ctx.audioWorklet.addModule).toHaveBeenCalledTimes(1);
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+      expect(second.track.stop).toHaveBeenCalled();
+      expect(ctx.close.mock.invocationCallOrder[0]!).toBeGreaterThan(
+        second.track.stop.mock.invocationCallOrder[0]!
+      );
+      // Only the start still wanted reports the failure.
+      expect(notify).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["resolve", "reject"] as const)(
+      "ignores a load that manages to %s after the deadline",
+      async (outcome) => {
+        const { ctx, notify, finishSession, service } = await loadHarness();
+        const load = deferredLoad();
+        ctx.audioWorklet.addModule.mockImplementationOnce(() => load.promise);
+
+        void service.start(TARGET);
+        await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+        expect(notify).toHaveBeenCalledTimes(1);
+        const errorEndings = finishSession.mock.calls.length;
+
+        if (outcome === "resolve") load.resolve();
+        else load.reject(new Error("too late"));
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(ctx.createMediaStreamSource).not.toHaveBeenCalled();
+        expect(window.electron.voiceInput.start).not.toHaveBeenCalled();
+        expect(notify).toHaveBeenCalledTimes(1);
+        expect(finishSession).toHaveBeenCalledTimes(errorEndings);
+      }
+    );
+
+    it("reports a microphone lost during the wait as lost, not as a graph failure", async () => {
+      const { ctx, notify, setLastError, service, timeouts } = await loadHarness();
+      ctx.audioWorklet.addModule.mockImplementationOnce(NEVER);
+      const { track, stream } = trackedStream();
+      vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValueOnce(stream);
+
+      void service.start(TARGET);
+      await vi.advanceTimersByTimeAsync(1_000);
+      track.readyState = "ended";
+      await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+
+      expect(timeouts()).toHaveLength(1);
+      expect(setLastError).toHaveBeenCalledWith(expect.objectContaining({ code: "mic_lost" }));
+      expect(setLastError).not.toHaveBeenCalledWith(
+        expect.objectContaining({ code: "renderer_error" })
+      );
+      expect(notify).not.toHaveBeenCalled();
+      expect(track.stop).toHaveBeenCalled();
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the context open for a live session until a failed retarget ends it", async () => {
+      const { ctx, notify, service, timeouts } = await loadHarness();
+      const __state = await voiceStoreState();
+      const live = trackedStream();
+      const next = trackedStream();
+      vi.mocked(navigator.mediaDevices.getUserMedia)
+        .mockResolvedValueOnce(live.stream)
+        .mockResolvedValueOnce(next.stream);
+      __state.activeTarget = { panelId: TARGET.panelId };
+      await service.start(TARGET);
+      ctx.resume.mockImplementationOnce(NEVER);
+
+      void service.start({ panelId: "panel-2", panelTitle: "Other" });
+      await vi.advanceTimersByTimeAsync(PAST_ANY_DEADLINE_MS);
+      __state.activeTarget = null;
+
+      expect(timeouts()).toHaveLength(1);
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect(next.track.stop).toHaveBeenCalled();
+      expect(live.track.stop).toHaveBeenCalled();
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+      expect(ctx.close.mock.invocationCallOrder[0]!).toBeGreaterThan(
+        live.track.stop.mock.invocationCallOrder[0]!
+      );
+    });
   });
 
   it("stops recording when the active panel is moved to trash (panel-close regression)", async () => {

@@ -712,6 +712,30 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     expect(summaries()).toMatchObject([{ stopReason: "start_failed", backendEnd: "none" }]);
   });
 
+  it("logs a start whose audio graph never became ready as start_failed", async () => {
+    const harness = setupGlobals();
+    const HarnessContext = AudioContext;
+    vi.stubGlobal("AudioContext", function () {
+      const context = new HarnessContext();
+      vi.mocked(context.audioWorklet.addModule).mockImplementation(() => new Promise(() => {}));
+      return context;
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { service, summaries } = await load();
+
+      void service.toggle(TARGET);
+      await vi.advanceTimersByTimeAsync(60_000);
+      harness.paintFrames();
+
+      expect(summaries()).toMatchObject([
+        { stopReason: "start_failed", backendEnd: "none", socketReadyMs: null },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("closes a session a newer start made stale before its socket came up", async () => {
     const harness = setupGlobals();
     harness.voiceInput.checkMicPermission
