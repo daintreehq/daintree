@@ -29,6 +29,7 @@ export { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 export { useCanopySeenTracking } from "./useCanopySeenTracking";
 export { usePluginPanelActivitySeenTracking } from "./usePluginPanelActivitySeenTracking";
 export { useCanopySnapshotSync } from "./useCanopySnapshotSync";
+export { useCanopyPoppedOut } from "./useCanopyPoppedOut";
 export { useCanopyDoubleShift } from "./useCanopyDoubleShift";
 export { useWorktreeCustomTitlesSync } from "./useWorktreeCustomTitlesSync";
 export { useReviewMarksSync } from "./useReviewMarksSync";

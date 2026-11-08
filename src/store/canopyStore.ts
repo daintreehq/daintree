@@ -15,6 +15,8 @@ import type { CanopyReplyRow } from "./voiceRecordingStore";
 import {
   readsWithHostedService,
   type CanopyMode,
+  type CanopyPopOut,
+  type CanopyPopOutSelection,
   type CanopySnapshot,
 } from "@shared/types/ipc/canopy";
 
@@ -160,6 +162,25 @@ interface CanopyState {
   revealReply: (row: CanopyReplyRow) => boolean;
   /** The request was met or refused; a newer one stands. */
   settleReplyReveal: (id: number) => void;
+  /**
+   * Where a dialog popped out into this window stood (#16338), until the inbox
+   * has landed there: its search, and the row it had selected once its host's
+   * rows are in. Only the Canopy window ever holds one.
+   */
+  popOutLanding: CanopyPopOutLanding | null;
+  /** Takes up a dialog's place: its host and filters at once, its search and row by landing. */
+  receivePopOut: (popOut: CanopyPopOut) => void;
+  /** The landing was made or given up; a newer one stands. */
+  settlePopOutLanding: (id: number) => void;
+}
+
+export interface CanopyPopOutLanding {
+  id: number;
+  /** The host the selection was listed under, as this window names it. */
+  hostId: HostId | null;
+  query: string;
+  selection: CanopyPopOutSelection | null;
+  keptUnread: readonly string[];
 }
 
 export interface CanopyReplyReveal extends CanopyReplyRow {
@@ -504,8 +525,10 @@ function saveScope(scope: CanopyScope): void {
 }
 
 let replyRevealSeq = 0;
+let popOutLandingSeq = 0;
 
 function opened(state: CanopyState): Partial<CanopyState> {
+  if (state.popOutLanding !== null) return { isOpen: true, hostId: state.popOutLanding.hostId };
   if (canopyResumeFresh(state.resume, Date.now())) {
     return { isOpen: true, hostId: state.resume!.hostId };
   }
@@ -641,12 +664,14 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
   // Every opening starts on the window's own host, unless the user chose All
   // hosts or is coming back from "Go to terminal".
   open: () => set((state) => (state.mode === "hidden" || state.isOpen ? state : opened(state))),
-  close: () => set({ isOpen: false, workOf: null, resume: null, replyReveal: null }),
-  closeForTerminal: (resume) => set({ isOpen: false, workOf: null, resume, replyReveal: null }),
+  close: () =>
+    set({ isOpen: false, workOf: null, resume: null, replyReveal: null, popOutLanding: null }),
+  closeForTerminal: (resume) =>
+    set({ isOpen: false, workOf: null, resume, replyReveal: null, popOutLanding: null }),
   toggle: () =>
     set((state) =>
       state.isOpen
-        ? { isOpen: false, workOf: null, resume: null, replyReveal: null }
+        ? { isOpen: false, workOf: null, resume: null, replyReveal: null, popOutLanding: null }
         : state.mode === "hidden"
           ? state
           : opened(state)
@@ -663,11 +688,38 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
       workOf: state.isOpen ? state.workOf : null,
       hostId: row.hostScope,
       replyReveal: { ...row, id: ++replyRevealSeq },
+      popOutLanding: null,
     }));
     return true;
   },
   settleReplyReveal: (id) =>
     set((state) => (state.replyReveal?.id === id ? { replyReveal: null } : state)),
+  popOutLanding: null,
+  // Set as they are, not through their setters: the dialog already saved what
+  // it keeps across launches, and a host shown here is no reason to forget
+  // All hosts for the next project view that opens.
+  receivePopOut: (popOut) => {
+    const hostId = popOut.hostId === canopyOwnHostId() ? null : popOut.hostId;
+    set({
+      hostId,
+      roleFilter: isCanopyRoleFilter(popOut.roleFilter) ? popOut.roleFilter : "all",
+      unreadOnly: popOut.unreadOnly,
+      archivedExpanded: popOut.archivedExpanded,
+      trashExpanded: popOut.trashExpanded,
+      workOf: popOut.workOf,
+      resume: null,
+      replyReveal: null,
+      popOutLanding: {
+        id: ++popOutLandingSeq,
+        hostId,
+        query: popOut.query,
+        selection: popOut.selection,
+        keptUnread: popOut.unreadOnly ? popOut.keptUnread : [],
+      },
+    });
+  },
+  settlePopOutLanding: (id) =>
+    set((state) => (state.popOutLanding?.id === id ? { popOutLanding: null } : state)),
   outdatedHost: false,
   applySnapshot: (received) =>
     set((state) => {
@@ -698,6 +750,7 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
           workOf: null,
           resume: null,
           replyReveal: null,
+          popOutLanding: null,
         };
       }
       return { snapshot, mode, outdatedHost: outdated, paneOfferAttempt };

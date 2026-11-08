@@ -232,6 +232,16 @@ export function useCanopyInboxFilters({
       return added.length === 0 ? kept : new Set([...kept, ...added.map((item) => item.runId)]);
     });
   }, [unreadOnly, inbox]);
+  // A dialog popped out here (#16338) keeps listing what it had read, once
+  // this list shows its host: after the resets above, never merged with what
+  // this window kept for another list.
+  const popOutLanding = useCanopyStore((s) => s.popOutLanding);
+  const landingKept =
+    popOutLanding !== null && popOutLanding.hostId === hostId ? popOutLanding.keptUnread : null;
+  useEffect(() => {
+    if (landingKept === null || landingKept.length === 0) return;
+    setKeptUnread(new Set(landingKept));
+  }, [landingKept]);
   // The inbox as listed: every run in it, or with the filter on, the unread.
   const filtered = useMemo(
     () =>
@@ -379,6 +389,7 @@ export function useCanopyInboxFilters({
     shownInbox,
     unreadOnly,
     setUnreadOnly,
+    keptUnread,
     listed,
     bandSize,
     archivedExpanded,

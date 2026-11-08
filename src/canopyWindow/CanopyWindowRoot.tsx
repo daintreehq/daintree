@@ -19,6 +19,7 @@ import { useScratchStore } from "@/store/scratchStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_WINDOW_FRAME } from "./canopyWindowFrame";
 import { CanopyPluginSupport } from "./CanopyPluginSupport";
+import { receiveCanopyPopOuts } from "./canopyWindowPopOut";
 
 /**
  * The Canopy window's whole renderer: the inbox and only what it reads, with
@@ -38,6 +39,7 @@ export function CanopyWindowRoot() {
       initKeybindingOverridesSync(),
       setupFleetSnapshotListeners(),
       installHostProjectsLoader(),
+      receiveCanopyPopOuts(),
     ];
     // Project and scratch names label the rows; both stores follow their own pushes.
     safeFireAndForget(useProjectStore.getState().loadProjects(), {
