@@ -878,11 +878,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const wasFollowingDriverRef = useRef(followsDriver);
     const wasFleetFollowerRef = useRef(isFleetFollower);
+    const writtenDraftKeyRef = useRef(draftKey);
     useEffect(() => {
       const wasFollowing = wasFollowingDriverRef.current;
       wasFollowingDriverRef.current = followsDriver;
       const wasFleetFollower = wasFleetFollowerRef.current;
       wasFleetFollowerRef.current = isFleetFollower;
+      const movedToAnotherDraft = writtenDraftKeyRef.current !== draftKey;
+      writtenDraftKeyRef.current = draftKey;
+      // This pass's value is the previous draft's text, with the load above on
+      // its way. Written back, it would land in the draft just moved to, and
+      // the outside-write sync below would bring it into the editor (#16571).
+      if (movedToAnotherDraft) return;
       // Written back, the text a render behind would land over a newer draft
       // the host just sent. That holds for the pass that stops following too:
       // the store has the host's latest, and the outside-write effect below
@@ -908,7 +915,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       );
       setDraftInput(terminalId, value, projectId);
       syncedDraftRef.current = value;
-    }, [terminalId, value, projectId, setDraftInput, followsDriver, isFleetFollower]);
+    }, [terminalId, value, projectId, draftKey, setDraftInput, followsDriver, isFleetFollower]);
 
     const { isApplyingExternalValueRef } = useFleetMirror({
       editorViewRef,
@@ -2362,10 +2369,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // A popped stash replaces the editor's state outright, past the
       // document-change listener that drops the note.
       popStashedEditorState: (terminalId, projectId) => {
+        // A send waiting on this draft reads it when it goes: restored now, the
+        // stash would go in place of what Enter was pressed on. It stays stashed.
+        if (useTerminalInputStore.getState().isVoiceSubmitting(voiceId)) return undefined;
         const stashed = popStashedEditorState(terminalId, projectId);
         if (stashed) dropSendRefusal();
         return stashed;
       },
+      // The draft takes it now: left to the next keystroke, a switch of session
+      // first would lose it, the stash being spent.
+      onStashPopped: (text) => applyEditorValue(text),
       setActiveCompletionContext,
       setIsExpanded,
       setSelectedIndex,
@@ -2958,7 +2971,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     <button
                       type="button"
                       onClick={handlePopStash}
-                      disabled={disabled}
+                      disabled={disabled || isVoiceSubmitting}
                       // 24px to clear the WCAG 2.5.8 floor. The spacing
                       // exception cannot rescue a smaller one here — its circle
                       // overlaps the attach and mic targets either side.
