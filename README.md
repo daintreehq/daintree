@@ -207,7 +207,7 @@ npm run dev
 
 The `postinstall` step rebuilds `node-pty` for Electron. If you see PTY errors, run `npm run rebuild`.
 
-Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md).
+Daintree doesn't accept external pull requests: the code is written by AI coding agents through an in-house workflow. Issues are very welcome, and every one is read. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to write a useful one.
 
 <details>
 <summary>Package installers</summary>
