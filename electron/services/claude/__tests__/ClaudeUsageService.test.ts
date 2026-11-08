@@ -86,6 +86,32 @@ describe("readClaudeUsageAccounts (#16370)", () => {
     expect(new Set(accounts.map((account) => account.key)).size).toBe(4);
   });
 
+  it("names each login's accounts by id as well, so accounts sharing a name stay apart (#16407)", async () => {
+    recordClaudeUsageObservation(record({ terminalId: "t1", usedPercent: 80 }));
+    recordClaudeUsageObservation(record({ terminalId: "t2", usedPercent: 30, configDir: WORK }));
+    recordClaudeUsageObservation(record({ terminalId: "t4", usedPercent: 12, configDir: STRAY }));
+
+    const accounts = await readClaudeUsageAccounts(
+      deps({
+        readSettings: async () => ({
+          claude: {
+            accounts: [
+              workAccount,
+              { id: "acct-other", name: "Work", configDir: path.join(os.tmpdir(), "nowhere") },
+            ],
+          },
+          globalEnv: undefined,
+        }),
+      })
+    );
+
+    expect(accounts.map((account) => [account.kind, account.accountIds])).toEqual([
+      ["default", []],
+      ["account", ["acct-work"]],
+      ["other", []],
+    ]);
+  });
+
   it("names the pane and its project, and never hands out a folder", async () => {
     recordClaudeUsageObservation(record({ configDir: WORK }));
 
@@ -270,6 +296,7 @@ describe("readClaudeUsageAccounts (#16370)", () => {
     );
 
     expect(accounts[0]!.accountNames).toEqual(["Work", "Team"]);
+    expect(accounts[0]!.accountIds).toEqual(["acct-work", "acct-team"]);
   });
 });
 

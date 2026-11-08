@@ -305,10 +305,7 @@ function mergePresets(into: PresetLabels, from: PresetLabels): void {
 }
 
 /** Account names, or ids, joined in order without repeating one already held. */
-function mergeUnique(
-  into: string[] | undefined,
-  from: string[] | undefined
-): string[] | undefined {
+function mergeUnique(into: string[] | undefined, from: string[] | undefined): string[] | undefined {
   if (!from?.length) return into;
   return [...(into ?? []), ...from.filter((value) => !into?.includes(value))];
 }

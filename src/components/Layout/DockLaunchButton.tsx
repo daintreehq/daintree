@@ -568,7 +568,10 @@ export function DockLaunchButton({
         (row): row is Extract<DockLaunchRow, { kind: "account" }> => row.kind === "account"
       )?.item.agent.id
     : undefined;
-  const accountHeadroomFor = useAgentAccountHeadroom(accountRowAgentId, accountRowAgentId !== undefined);
+  const accountHeadroomFor = useAgentAccountHeadroom(
+    accountRowAgentId,
+    accountRowAgentId !== undefined
+  );
   // The default login still runs the preset a plain launch settles on, so a
   // folder that preset names is the login's.
   const defaultLoginNamesFolder = useMemo(() => {
@@ -587,7 +590,13 @@ export function DockLaunchButton({
         activeWorktreeId
       )
     );
-  }, [accountRowAgentId, activeWorktreeId, agentSettings, ccrPresetsByAgent, projectPresetsByAgent]);
+  }, [
+    accountRowAgentId,
+    activeWorktreeId,
+    agentSettings,
+    ccrPresetsByAgent,
+    projectPresetsByAgent,
+  ]);
 
   // The hook reconciles `selectedIndex` in an effect, so the render right after
   // the results change still holds the old index — which browsing can now leave

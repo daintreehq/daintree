@@ -16,8 +16,7 @@ import { windowLabel } from "./codexQuotaFormat";
  * preset it runs with names a folder of its own (#16407).
  */
 export type AccountHeadroomTarget =
-  | { kind: "account"; accountId: string }
-  | { kind: "default"; presetNamesFolder?: boolean };
+  { kind: "account"; accountId: string } | { kind: "default"; presetNamesFolder?: boolean };
 
 export interface AccountHeadroom {
   /** One line for a choice's row: the tightest known window and its reset. */
@@ -125,7 +124,9 @@ const CLAUDE_WINDOW_ORDER = new Map<string, number>(
  * up for "approaching": two messages that can't be compared stay unranked
  * against each other and the newer one stands.
  */
-function claudeSeverity(reading: ClaudeUsageReading): [tier: number, percent: number, over: number] {
+function claudeSeverity(
+  reading: ClaudeUsageReading
+): [tier: number, percent: number, over: number] {
   if (reading.statement === "reached") return [3, 0, 0];
   if (
     (reading.statement === "used" || reading.statement === "over") &&

@@ -19,8 +19,23 @@ vi.mock("@/components/Layout/AccountSwitchNotice", async (importOriginal) => ({
   readUsageLimitedPaneIds,
 }));
 
-// A native select in place of the Radix one, which jsdom can't open; the
-// reset button stays, as the real row draws it.
+// The reading itself is covered with the hook; here only what the row asks of it.
+const headroomHook = vi.hoisted(() => ({
+  calls: [] as Array<[string | undefined, boolean]>,
+  texts: new Map<string, string>(),
+}));
+vi.mock("@/hooks/useAgentAccountHeadroom", () => ({
+  useAgentAccountHeadroom: (agentId: string | undefined, open: boolean) => {
+    headroomHook.calls.push([agentId, open]);
+    return (target: { kind: string; accountId?: string }) => {
+      const text = headroomHook.texts.get(target.accountId ?? "default");
+      return text ? { text, stale: false } : undefined;
+    };
+  },
+}));
+
+// A native select in place of the Radix one, which jsdom can't open (focus
+// stands for opening it); the reset button stays, as the real row draws it.
 vi.mock("@/components/Settings/SettingsSelect", () => ({
   SettingsSelect: ({
     label,
@@ -31,25 +46,41 @@ vi.mock("@/components/Settings/SettingsSelect", () => ({
     isModified,
     onReset,
     resetAriaLabel,
+    onOpenChange,
   }: {
     label: string;
     description?: string;
     value: string;
     onValueChange: (value: string) => void;
-    options: { value: string; label: string }[];
+    options: { value: string; label: string; description?: string }[];
     isModified?: boolean;
     onReset?: () => void;
     resetAriaLabel?: string;
+    onOpenChange?: (open: boolean) => void;
   }) => (
     <div>
       <span>{label}</span>
-      <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(e) => onValueChange(e.target.value)}
+        onFocus={() => onOpenChange?.(true)}
+        onBlur={() => onOpenChange?.(false)}
+      >
         {options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
           </option>
         ))}
       </select>
+      {options.map(
+        (option) =>
+          option.description && (
+            <p key={option.value} data-testid={`option-description-${option.value}`}>
+              {option.description}
+            </p>
+          )
+      )}
       {description && <p>{description}</p>}
       {isModified && onReset && (
         <button type="button" aria-label={resetAriaLabel} onClick={onReset}>
@@ -86,6 +117,8 @@ function renderSection(
 }
 
 beforeEach(() => {
+  headroomHook.calls.length = 0;
+  headroomHook.texts.clear();
   dispatch.mockClear();
   readUsageLimitedPaneIds.mockReset();
   readUsageLimitedPaneIds.mockResolvedValue([]);
@@ -111,6 +144,26 @@ describe("AgentAccountsSection (#16040)", () => {
     expect(screen.getByText(/Add an account to run Codex on another login/)).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Add account" })).toHaveLength(1);
     expect(screen.queryByText("Default account")).toBeNull();
+  });
+
+  it("reads quota for the default account's list only while it is open, and shows each login's window (#16407)", () => {
+    headroomHook.texts.set("default", "5-hour limit 10% used");
+    headroomHook.texts.set("company", "Weekly limit 82% used");
+    renderSection({ accounts: [COMPANY] });
+    expect(headroomHook.calls.every(([, open]) => !open)).toBe(true);
+
+    const select = screen.getByRole("combobox", { name: "Default account" });
+    fireEvent.focus(select);
+    expect(headroomHook.calls.at(-1)).toEqual(["codex", true]);
+    expect(screen.getByTestId("option-description-default-login").textContent).toBe(
+      "5-hour limit 10% used"
+    );
+    expect(screen.getByTestId("option-description-company").textContent).toBe(
+      "Weekly limit 82% used"
+    );
+
+    fireEvent.blur(select);
+    expect(headroomHook.calls.at(-1)).toEqual(["codex", false]);
   });
 
   it("closes Settings before it opens the sign-in terminal on the account", async () => {

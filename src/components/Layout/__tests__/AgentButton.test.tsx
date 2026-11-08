@@ -461,6 +461,25 @@ vi.mock("lucide-react", () => ({
   MinusIcon: () => null,
 }));
 
+// The reading itself is covered with the hook; here only what the menu asks of it.
+const headroomHook = vi.hoisted(() => ({
+  calls: [] as Array<[string | undefined, boolean]>,
+  targets: [] as Array<{ kind: string; accountId?: string; presetNamesFolder?: boolean }>,
+  texts: new Map<string, string>(),
+}));
+vi.mock("@/hooks/useAgentAccountHeadroom", () => ({
+  useAgentAccountHeadroom: (agentId: string | undefined, open: boolean) => {
+    headroomHook.calls.push([agentId, open]);
+    return (target: { kind: string; accountId?: string; presetNamesFolder?: boolean }) => {
+      headroomHook.targets.push(target);
+      const text = headroomHook.texts.get(
+        target.accountId ?? `default:${!!target.presetNamesFolder}`
+      );
+      return text ? { text, stale: false } : undefined;
+    };
+  },
+}));
+
 import { AgentButton } from "../AgentButton";
 
 function settingsWith(agents: Record<string, unknown>): AgentSettings {
@@ -500,6 +519,50 @@ describe("AgentButton preset UX", () => {
       });
       return render(<AgentButton type="codex" availability="ready" />);
     }
+
+    describe("quota headroom (#16407)", () => {
+      beforeEach(() => {
+        headroomHook.calls.length = 0;
+        headroomHook.targets.length = 0;
+        headroomHook.texts.clear();
+        headroomHook.texts.set("company", "Weekly limit 82% used");
+        headroomHook.texts.set("default:false", "5-hour limit 10% used");
+      });
+
+      afterEach(() => headroomHook.texts.clear());
+
+      it("asks for quota only while the picker is open", () => {
+        renderCodex();
+        expect(headroomHook.calls.every(([agent, open]) => agent === "codex" && !open)).toBe(true);
+
+        headroomHook.calls.length = 0;
+        act(() => dropdownOnOpenChange!(true));
+        expect(headroomHook.calls.at(-1)).toEqual(["codex", true]);
+      });
+
+      it("shows each account's tightest window beneath its name, and nothing for one with none", () => {
+        const { getByText, queryByText } = renderCodex();
+        act(() => dropdownOnOpenChange!(true));
+        expect(getByText("Weekly limit 82% used")).toBeTruthy();
+        expect(getByText("5-hour limit 10% used")).toBeTruthy();
+        expect(getByText("Personal")).toBeTruthy();
+        expect(queryByText(/Personal.*% used/)).toBeNull();
+      });
+
+      it("takes the default login's window from the preset a launch settles on", () => {
+        mockActiveWorktreeId = "wt1";
+        mockMergedPresetsFn = () => [
+          { id: "work", name: "Work", env: { CODEX_HOME: "/Users/me/.codex-legacy" } },
+        ];
+        mockSettings = settingsWith({
+          codex: { accounts: [COMPANY, PERSONAL], presetId: "work" },
+        });
+        const { queryByText } = render(<AgentButton type="codex" availability="ready" />);
+        act(() => dropdownOnOpenChange!(true));
+        expect(headroomHook.targets).toContainEqual({ kind: "default", presetNamesFolder: true });
+        expect(queryByText("5-hour limit 10% used")).toBeNull();
+      });
+    });
 
     it("marks the saved preset's pinned account for a worktree that hasn't picked one", () => {
       mockActiveWorktreeId = "wt1";

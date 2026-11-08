@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { CodexQuotaProfile } from "@shared/types/ipc/agentQuota";
+
+const readQuota = vi.hoisted(() => vi.fn<() => Promise<CodexQuotaProfile[]>>());
+vi.mock("@/clients/codexClient", () => ({
+  codexClient: { readQuota: () => readQuota(), refreshQuota: () => readQuota() },
+}));
+
 import { PresetAccountRow } from "../PresetAccountRow";
 import { SettingsGroup } from "../../SettingsGroup";
 import type { AgentPreset } from "@/config/agents";
@@ -26,6 +33,7 @@ function renderRow(preset: AgentPreset, accounts: unknown, agentId = "codex") {
 
 afterEach(() => {
   cleanup();
+  readQuota.mockReset();
 });
 
 describe("PresetAccountRow (#16133)", () => {
@@ -39,6 +47,7 @@ describe("PresetAccountRow (#16133)", () => {
   });
 
   it("pins one of the agent's accounts", async () => {
+    readQuota.mockResolvedValue([]);
     const { onChange } = renderRow({ id: "work", name: "Work" }, [COMPANY, PERSONAL]);
     const select = screen.getByRole("combobox", { name: "Account" });
     expect(select.textContent).toContain("Not pinned");
@@ -49,6 +58,7 @@ describe("PresetAccountRow (#16133)", () => {
   });
 
   it("takes a pin away when Not pinned is picked", async () => {
+    readQuota.mockResolvedValue([]);
     const { onChange } = renderRow({ id: "work", name: "Work", accountId: "company" }, [
       COMPANY,
       PERSONAL,
@@ -74,5 +84,32 @@ describe("PresetAccountRow (#16133)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Unpin the account" }));
     expect(onChange).toHaveBeenCalledWith(undefined);
+  });
+
+  it("reads quota only once the list is opened, and shows each account's tightest window (#16407)", async () => {
+    readQuota.mockResolvedValue([
+      {
+        key: "company",
+        isDefault: false,
+        presetNames: [],
+        accountIds: ["company"],
+        result: {
+          status: "ok",
+          planType: null,
+          windows: [{ usedPercent: 82, windowDurationMins: 10080, resetsAt: null }],
+          fetchedAt: Date.now(),
+        },
+      },
+    ]);
+    renderRow({ id: "work", name: "Work" }, [COMPANY, PERSONAL]);
+    expect(readQuota).not.toHaveBeenCalled();
+
+    const select = screen.getByRole("combobox", { name: "Account" });
+    fireEvent.keyDown(select, { key: "ArrowDown" });
+    expect(await screen.findByText("Weekly limit 82% used")).toBeTruthy();
+    expect(readQuota).toHaveBeenCalled();
+    // Names stay the options' names, and an account with no reading says nothing more.
+    expect(screen.getByRole("option", { name: /Company/ })).toBeTruthy();
+    expect(screen.getAllByText(/% used/)).toHaveLength(1);
   });
 });

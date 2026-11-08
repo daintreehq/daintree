@@ -33,6 +33,25 @@ let popoverOpenChangeSpy: ((open: boolean) => void) | null = null;
 let popoverSide: string | undefined;
 let popoverModal: boolean | undefined = undefined;
 
+// The quota reading is covered with the hook; here only what the launcher asks of it.
+const headroomHook = vi.hoisted(() => ({
+  calls: [] as Array<[string | undefined, boolean]>,
+  targets: [] as Array<{ kind: string; accountId?: string; presetNamesFolder?: boolean }>,
+  texts: new Map<string, string>(),
+}));
+vi.mock("@/hooks/useAgentAccountHeadroom", () => ({
+  useAgentAccountHeadroom: (agentId: string | undefined, open: boolean) => {
+    headroomHook.calls.push([agentId, open]);
+    return (target: { kind: string; accountId?: string; presetNamesFolder?: boolean }) => {
+      headroomHook.targets.push(target);
+      const text = headroomHook.texts.get(
+        target.accountId ?? `default:${target.presetNamesFolder === true}`
+      );
+      return text ? { text, stale: false } : undefined;
+    };
+  },
+}));
+
 // See dockLaunchItems.test.ts — avoid the real registry's eager TerminalPane import.
 vi.mock("@/registry", () => ({
   getSpawnablePanelKinds: (): PanelKindConfig[] =>
@@ -3217,6 +3236,72 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       for (const row of accountRows(container)) {
         expect(row.getAttribute("aria-label")).toMatch(/^[^,]+, Claude account/);
       }
+    });
+
+    describe("quota headroom (#16407)", () => {
+      beforeEach(() => {
+        headroomHook.calls.length = 0;
+        headroomHook.targets.length = 0;
+        headroomHook.texts.clear();
+        headroomHook.texts.set("company", "Weekly limit 82% used · observed 3h ago");
+        headroomHook.texts.set("default:false", "5-hour limit 10% used");
+      });
+
+      afterEach(() => headroomHook.texts.clear());
+
+      // The mocked popover renders its rows unconditionally, so the launcher's
+      // own open state is set through the captured handler.
+      const openLauncher = () => act(() => popoverOpenChangeSpy?.(true));
+
+      it("reads nothing until an agent's accounts are expanded", () => {
+        const { container } = renderButton({ agents: READY });
+        openLauncher();
+        expect(headroomHook.calls.every(([agent]) => agent === undefined)).toBe(true);
+
+        fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+        expect(headroomHook.calls.at(-1)).toEqual(["claude", true]);
+      });
+
+      it("reads nothing once the launcher is closed again", () => {
+        const { container } = renderButton({ agents: READY });
+        openLauncher();
+        fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+        headroomHook.calls.length = 0;
+        act(() => popoverOpenChangeSpy?.(false));
+        expect(headroomHook.calls.every(([agent]) => agent === undefined)).toBe(true);
+      });
+
+      it("shows each account row's window and says it in the row's name, and nothing for an account without one", () => {
+        const { container } = renderButton({ agents: READY });
+        openLauncher();
+        fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+        const [login, company, personal] = accountRows(container);
+        expect(login!.textContent).toContain("5-hour limit 10% used");
+        expect(company!.textContent).toContain("Weekly limit 82% used · observed 3h ago");
+        expect(company!.getAttribute("aria-label")).toMatch(
+          /^Company, Claude account.*Weekly limit 82% used · observed 3h ago/
+        );
+        expect(personal!.textContent).not.toContain("% used");
+        expect(personal!.getAttribute("aria-label")).not.toContain("% used");
+      });
+
+      it("asks for the default login's window without the base folder when the preset names its own", () => {
+        mockMergedPresets = [
+          { id: "fast", name: "Fast", env: { CLAUDE_CONFIG_DIR: "/Users/me/.claude-fast" } },
+        ];
+        mockAgentSettings = {
+          agents: { claude: { accounts: [COMPANY, PERSONAL], presetId: "fast" } },
+        };
+        const { container } = renderButton({ agents: READY });
+        openLauncher();
+        fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+        expect(headroomHook.targets).toContainEqual({ kind: "default", presetNamesFolder: true });
+        expect(headroomHook.targets).not.toContainEqual({
+          kind: "default",
+          presetNamesFolder: false,
+        });
+      });
     });
 
     it("collapses the expansion from an account row back to its agent", () => {
