@@ -652,7 +652,7 @@ function backupPaths(target: string, token: string): { image: string; info: stri
  * are over) are removed first; a failure restores nothing itself, so the
  * rollback alone says what went back.
  */
-function swapScript(
+export function swapScript(
   plan: HostInstallPlan,
   staged: { dir: string; file: string },
   target: string,
@@ -679,7 +679,7 @@ function swapScript(
  * Put this install's backup (and its marker) back. Says what it did, so a
  * restore is never assumed: yes only when all of it went back.
  */
-function rollbackScript(plan: HostInstallPlan, target: string, token: string): string {
+export function rollbackScript(plan: HostInstallPlan, target: string, token: string): string {
   const backup = backupPaths(target, token);
   if (plan.packaging === "app-bundle") {
     const app = remotePath(target);

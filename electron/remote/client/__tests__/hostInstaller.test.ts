@@ -10,14 +10,19 @@ import { probeHost } from "../hostProbe.js";
 import {
   busyAgents,
   exceedsConfirmed,
+  rollbackScript,
   runHostInstall,
   stopScript,
+  swapScript,
   type InstallProgress,
   type InstallerDeps,
 } from "../hostInstaller.js";
 import { debInstallCommand, type ClientBuild } from "../installPlan.js";
 import type { HostCommandChannel } from "../remoteShell.js";
-import type { HostRestartImpact } from "../../../../shared/types/ipc/remoteHosts.js";
+import type {
+  HostInstallPlan,
+  HostRestartImpact,
+} from "../../../../shared/types/ipc/remoteHosts.js";
 
 /** `n` terminals in one project, each with an agent working; null for a host that can't say. */
 function impactOf(value: number | null | HostRestartImpact): HostRestartImpact {
@@ -1676,3 +1681,306 @@ describe("runHostInstall applying the host's own downloaded update", () => {
     expect(shell.scripts).toEqual([]);
   });
 });
+
+describe("runHostInstall: two Shells updating one host", () => {
+  const running = () => macProbe({ build: OLD_BUILD, hostMode: true });
+  const updated = () => macProbe({ build: NEW_BUILD, hostMode: true });
+  /** Lets the other install, and the staging's file reads and writes, run between polls. */
+  const yieldingSleep = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+  /** What changes the host: stopping, replacing, starting, and the backup's removal. */
+  const changesHost = (script: string) =>
+    script.includes("@@dt:stopped") ||
+    script.includes(".old-") ||
+    script.startsWith("open ") ||
+    script.includes("@@dt:rolledback");
+
+  it("takes turns: the second waits until the first has stopped, replaced, started and checked the host", async () => {
+    const lock = new FakeHostLock();
+    const log: string[] = [];
+    let bWaiting!: () => void;
+    const bIsWaiting = new Promise<void>((resolve) => (bWaiting = resolve));
+    let aStopping!: () => void;
+    const aIsStopping = new Promise<void>((resolve) => (aStopping = resolve));
+    const run = (name: "a" | "b") => {
+      const shell = fakeShell(undefined, lock);
+      const base = shell.exec;
+      shell.exec = async (script, options) => {
+        if (name === "a" && script.includes("@@dt:stopped")) {
+          // A holds the host stopped until B has reached the lock and is waiting on it.
+          aStopping();
+          await bIsWaiting;
+        }
+        const result = await base(script, options);
+        if (changesHost(script)) log.push(name);
+        return result;
+      };
+      const deps = makeDeps({ shell, probes: [running(), running(), updated()] });
+      deps.sleep = yieldingSleep;
+      deps.installToken = () => name;
+      const result = runHostInstall(
+        {
+          opId: `op-${name}`,
+          connection: { kind: "ssh", target: "studio" },
+          hostId: "studio",
+          whileWorking: "proceed",
+        },
+        deps,
+        new AbortController().signal,
+        (p) => {
+          deps.progress.push(p);
+          if (name === "b" && p.stage === "waiting-for-host") bWaiting();
+        }
+      );
+      return { deps, result };
+    };
+    const a = run("a");
+    await aIsStopping;
+    const b = run("b");
+    await expect(a.result).resolves.toMatchObject({ status: "installed" });
+    await expect(b.result).resolves.toMatchObject({ status: "installed" });
+
+    // Every change A made to the host came before any B made.
+    expect(log.indexOf("b")).toBe(log.lastIndexOf("a") + 1);
+    expect(log.filter((name) => name === "a").length).toBeGreaterThanOrEqual(4);
+    expect(b.deps.progress.find((p) => p.stage === "waiting-for-host")).toEqual({
+      stage: "waiting-for-host",
+      fraction: null,
+      message: "Another device is updating the host",
+    });
+    expect(a.deps.progress.some((p) => p.stage === "waiting-for-host")).toBe(false);
+    expect(lock.owner).toBeNull();
+  });
+
+  it("leaves a host the other device already updated as it is", async () => {
+    const shell = fakeShell();
+    void shell.lock.hold("other-device");
+    const deps = makeDeps({ shell, probes: [running(), updated()] });
+    deps.sleep = yieldingSleep;
+    const progress: string[] = [];
+    const result = await runHostInstall(
+      {
+        opId: "op-1",
+        connection: { kind: "ssh", target: "studio" },
+        hostId: "studio",
+        whileWorking: "proceed",
+      },
+      deps,
+      new AbortController().signal,
+      (p) => {
+        progress.push(p.stage);
+        if (p.stage === "waiting-for-host") shell.lock.drop("other-device");
+      }
+    );
+    expect(result.status).toBe("up-to-date");
+    expect(progress).toContain("waiting-for-host");
+    expect(shell.scripts.some((s) => s.includes("@@dt:stopped"))).toBe(false);
+    expect(shell.scripts).toContain("rm -rf '/tmp/daintree-stage.abc123'");
+    expect(shell.lock.owner).toBeNull();
+  });
+
+  it("asks again when the host has work running after the other device's restart", async () => {
+    const shell = fakeShell();
+    void shell.lock.hold("other-device");
+    const deps = makeDeps({
+      shell,
+      probes: [running()],
+      // What was confirmed, the check before the wait, and the one after it.
+      working: [0, 0, 2],
+    });
+    deps.sleep = yieldingSleep;
+    const result = await runHostInstall(
+      {
+        opId: "op-1",
+        connection: { kind: "ssh", target: "studio" },
+        hostId: "studio",
+        whileWorking: "proceed",
+      },
+      deps,
+      new AbortController().signal,
+      (p) => {
+        if (p.stage === "waiting-for-host") shell.lock.drop("other-device");
+      }
+    );
+    expect(result).toEqual({ status: "needs-confirmation", impact: impactOf(2) });
+    expect(shell.scripts.some((s) => s.includes("@@dt:stopped"))).toBe(false);
+    expect(shell.lock.owner).toBeNull();
+  });
+
+  it("can be stopped while it waits, changing nothing and leaving the other device's lock alone", async () => {
+    const shell = fakeShell();
+    void shell.lock.hold("other-device");
+    const deps = makeDeps({ shell, probes: [running()] });
+    deps.sleep = yieldingSleep;
+    const controller = new AbortController();
+    await expect(
+      runHostInstall(
+        { opId: "op-1", connection: { kind: "ssh", target: "studio" }, whileWorking: "proceed" },
+        deps,
+        controller.signal,
+        (p) => {
+          if (p.stage === "waiting-for-host") controller.abort();
+        }
+      )
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(shell.scripts.some((s) => s.includes("@@dt:stopped"))).toBe(false);
+    expect(shell.scripts).toContain("rm -rf '/tmp/daintree-stage.abc123'");
+    expect(shell.lock.owner).toBe("other-device");
+  });
+
+  it("goes no further once its turn is lost, rather than replace a host another device may be updating", async () => {
+    const shell = fakeShell();
+    const base = shell.exec;
+    shell.exec = async (script, options) => {
+      const result = await base(script, options);
+      if (script.includes("@@dt:stopped")) {
+        // The holder ends (its link dropped) while the host is stopped.
+        shell.lock.drop("t1");
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      return result;
+    };
+    const deps = makeDeps({ shell, probes: [running(), running()] });
+    await expect(install(deps, { whileWorking: "proceed" })).rejects.toThrow(
+      /lost its turn.*Another device may be updating the host/s
+    );
+    const stoppedAt = shell.scripts.findIndex((s) => s.includes("@@dt:stopped"));
+    expect(stoppedAt).toBeGreaterThan(-1);
+    const afterStop = shell.scripts.slice(stoppedAt + 1);
+    expect(afterStop.some((s) => s.includes(".old-") || s.startsWith("open "))).toBe(false);
+  });
+
+  it("lets go of the lock when the new build can't be confirmed", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({ shell, probes: [running(), running(), updated()] });
+    deps.reconnect.mockResolvedValue(null);
+    await expect(install(deps, { hostId: "studio", whileWorking: "proceed" })).rejects.toThrow(
+      /couldn't be confirmed/
+    );
+    expect(shell.lock.owner).toBeNull();
+  });
+
+  it("never says the previous build was put back when there was no backup to restore", async () => {
+    let opens = 0;
+    const shell = fakeShell((script) =>
+      script.startsWith("open ") && opens++ === 0
+        ? { ...ok(), code: 1, stderr: "LSOpenURLsWithRole() failed" }
+        : ok()
+    );
+    const base = shell.exec;
+    shell.exec = async (script, options) =>
+      script.includes("@@dt:rolledback")
+        ? (shell.scripts.push(script), ok("@@dt:rolledback none\n"))
+        : base(script, options);
+    const deps = makeDeps({ shell, probes: [running()] });
+    const failure = install(deps, { whileWorking: "proceed" });
+    await expect(failure).rejects.toThrow(/started again on the host/);
+    await expect(failure).rejects.not.toThrow(/put back/);
+  });
+
+  it("waits for the other device before restarting into the host's own downloaded update", async () => {
+    const shell = fakeShell();
+    void shell.lock.hold("other-device");
+    const staged = macProbe({
+      build: OLD_BUILD,
+      hostMode: true,
+      record: {
+        build: { version: "1.3.0", commit: "0123456789" },
+        stagedUpdate: { version: "1.4.0", installsOnQuit: true, ready: true },
+      },
+    });
+    const deps = makeDeps({ shell, probes: [staged] });
+    deps.sleep = yieldingSleep;
+    const controller = new AbortController();
+    await expect(
+      runHostInstall(
+        {
+          opId: "op-1",
+          connection: { kind: "ssh", target: "studio" },
+          whileWorking: "proceed",
+          applyStaged: { version: "1.4.0" },
+        },
+        deps,
+        controller.signal,
+        (p) => {
+          if (p.stage === "waiting-for-host") controller.abort();
+        }
+      )
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(shell.scripts.some((s) => s.includes("@@dt:stopped"))).toBe(false);
+    expect(shell.lock.owner).toBe("other-device");
+  });
+});
+
+describe.runIf(process.platform === "darwin" || process.platform === "linux")(
+  "an install's backup, under the real sh",
+  () => {
+    let root: string;
+    beforeEach(async () => {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "dt-backup-"));
+    });
+    afterEach(async () => {
+      await fs.rm(root, { recursive: true, force: true });
+    });
+    const sh = (script: string) => spawnSync("sh", ["-c", script], { encoding: "utf8" });
+    const read = (file: string) => fs.readFile(file, "utf8");
+    const APP = { packaging: "app-bundle" } as HostInstallPlan;
+    const IMAGE = { packaging: "appimage" } as HostInstallPlan;
+
+    async function stageApp(name: string, build: string) {
+      const dir = path.join(root, `stage-${name}`);
+      await fs.mkdir(path.join(dir, "x/Daintree.app"), { recursive: true });
+      await fs.writeFile(path.join(dir, "x/Daintree.app/build"), build);
+      return { dir, file: path.join(dir, "bundle.zip") };
+    }
+
+    it("is this install's alone: a later install's rollback never restores it, and its own says none once it's gone", async () => {
+      const target = path.join(root, "Daintree.app");
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "build"), "running");
+      expect(sh(swapScript(APP, await stageApp("a", "a"), target, null, "aaaa")).status).toBe(0);
+      expect(await read(path.join(target, "build"))).toBe("a");
+      // Another install after it: the finished one's backup is cleared, its own kept.
+      expect(sh(swapScript(APP, await stageApp("b", "b"), target, null, "bbbb")).status).toBe(0);
+
+      expect(sh(rollbackScript(APP, target, "aaaa")).stdout.trim()).toBe("@@dt:rolledback none");
+      expect(await read(path.join(target, "build"))).toBe("b");
+      expect(sh(rollbackScript(APP, target, "bbbb")).stdout.trim()).toBe("@@dt:rolledback yes");
+      expect(await read(path.join(target, "build"))).toBe("a");
+      expect(sh(rollbackScript(APP, target, "bbbb")).stdout.trim()).toBe("@@dt:rolledback none");
+    });
+
+    it("leaves a failed swap's backup for the rollback to put back", async () => {
+      const target = path.join(root, "Daintree.app");
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "build"), "running");
+      const missing = { dir: path.join(root, "stage-gone"), file: path.join(root, "stage-gone/z") };
+      expect(sh(swapScript(APP, missing, target, null, "aaaa")).status).not.toBe(0);
+      expect(sh(rollbackScript(APP, target, "aaaa")).stdout.trim()).toBe("@@dt:rolledback yes");
+      expect(await read(path.join(target, "build"))).toBe("running");
+    });
+
+    it("puts an AppImage and its marker back together, and never a partial copy", async () => {
+      const target = path.join(root, "Applications/Daintree.AppImage");
+      const info = `${target}.build-info.json`;
+      await fs.mkdir(path.dirname(target));
+      await fs.writeFile(target, "old image");
+      await fs.writeFile(info, OLD_BUILD);
+      // Left by an install that died copying: not a backup anyone restores.
+      await fs.writeFile(`${target}.old-dead.part`, "half");
+      const stage = path.join(root, "stage");
+      await fs.mkdir(stage);
+      await fs.writeFile(path.join(stage, "Daintree.AppImage"), "new image");
+      const staged = { dir: stage, file: path.join(stage, "Daintree.AppImage") };
+
+      expect(sh(rollbackScript(IMAGE, target, "dead")).stdout.trim()).toBe("@@dt:rolledback none");
+      expect(sh(swapScript(IMAGE, staged, target, NEW_BUILD, "aaaa")).status).toBe(0);
+      expect(await read(target)).toBe("new image");
+      expect(await read(info)).toBe(NEW_BUILD);
+      await expect(fs.access(`${target}.old-dead.part`)).rejects.toThrow();
+
+      expect(sh(rollbackScript(IMAGE, target, "aaaa")).stdout.trim()).toBe("@@dt:rolledback yes");
+      expect(await read(target)).toBe("old image");
+      expect(await read(info)).toBe(OLD_BUILD);
+    });
+  }
+);

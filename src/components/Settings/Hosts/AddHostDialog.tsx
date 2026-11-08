@@ -269,6 +269,8 @@ const STAGE_OF: Record<string, StageId> = {
   copying: "prepare",
   verifying: "prepare",
   "waiting-for-idle": "wait",
+  // Another Shell is updating the host: this one goes on once it has finished.
+  "waiting-for-host": "wait",
   stopping: "stop",
   installing: "install",
   restarting: "start",
@@ -1633,7 +1635,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           : plan?.delivery === "host-fetch"
             ? `Download ${version} on ${hostLabel}`
             : `Copy ${version} to ${hostLabel}`,
-        wait: `Wait for ${hostLabel}'s agents to go idle`,
+        wait:
+          progress?.stage === "waiting-for-host"
+            ? `Wait for another device to finish updating ${hostLabel}`
+            : `Wait for ${hostLabel}'s agents to go idle`,
         stop: `Stop Daintree on ${hostLabel}`,
         install: `Install ${version}`,
         start: `Start Daintree on ${hostLabel}`,

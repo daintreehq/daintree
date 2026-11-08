@@ -12,7 +12,9 @@ import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
  * held by a process there that this install keeps running for as long as it
  * needs the lock. That process writes a byte every few seconds, so it dies
  * soon after its ssh channel goes (a cancel, a crash or a dropped link here),
- * and its exit removes the lock.
+ * and its exit removes the lock. The byte comes from /bin/echo: a builtin echo
+ * that hits the closed pipe keeps the byte and spills it into the next
+ * `$(...)`, which then misreads the lock's owner.
  *
  * A lock is broken only when its holder is verifiably gone: its pid no longer
  * exists, or that pid now belongs to a process started at another time (on
@@ -92,10 +94,10 @@ export function installLockHoldScript(token: string): string {
     `trap rel EXIT`,
     `trap 'exit 1' HUP INT TERM PIPE`,
     `mkdir -p "$d" || exit 1`,
-    `until mkdir "$L" 2>/dev/null; do [ -d "$d" ] || exit 1; if gone; then brk; fi; sleep 1; echo . || exit 1; done`,
+    `until mkdir "$L" 2>/dev/null; do [ -d "$d" ] || exit 1; if gone; then brk; fi; sleep 1; /bin/echo . || exit 1; done`,
     `ident $$`,
     `printf '%s\\n%s\\n%s\\n' "$$" "$n" "$t" > "$L/owner.tmp" && mv "$L/owner.tmp" "$L/owner" || { rm -rf "$L"; exit 1; }`,
-    `i=0; while [ "$(${OWNER_TOKEN})" = "$t" ] && [ ! -f "$L/release" ] && [ $i -lt ${HOLD_CHECKS} ]; do sleep ${HOLD_CHECK_SECONDS}; echo . || exit 1; i=$((i+1)); done`,
+    `i=0; while [ "$(${OWNER_TOKEN})" = "$t" ] && [ ! -f "$L/release" ] && [ $i -lt ${HOLD_CHECKS} ]; do sleep ${HOLD_CHECK_SECONDS}; /bin/echo . || exit 1; i=$((i+1)); done`,
   ].join("; ");
 }
 
