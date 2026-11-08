@@ -854,6 +854,27 @@ describe("TerminalRestoreController", () => {
         expect(mockTerminal.reset).not.toHaveBeenCalled();
       });
 
+      it("drops a snapshot when the abort lands just after the fetch settles", async () => {
+        const { terminalClient } = await import("@/clients");
+        let resolveFetch!: (value: SerializedTerminalSnapshot | null) => void;
+        vi.mocked(terminalClient.getSerializedState).mockImplementation(
+          () => new Promise((resolve) => (resolveFetch = resolve))
+        );
+        const managed = makeManagedTerminal();
+        instances.set("t1", managed);
+        const controllerAbort = new AbortController();
+
+        const promise = controller.fetchAndRestore("t1", { signal: controllerAbort.signal });
+        await flushMicrotasks();
+        resolveFetch(snapshot("late-state"));
+        await Promise.resolve();
+        controllerAbort.abort();
+
+        await expect(promise).resolves.toBe(false);
+        expect(mockTerminal.reset).not.toHaveBeenCalled();
+        expect(managed.isSerializedRestoreInProgress).toBe(false);
+      });
+
       it("restores normally when the signal never aborts", async () => {
         const { terminalClient } = await import("@/clients");
         vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot("small-state"));

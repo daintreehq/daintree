@@ -684,6 +684,8 @@ export class TerminalRestoreController {
         releaseIfStillOwned();
         return false;
       }
+      // An abort can still land between the fetch settling and this resuming.
+      if (options.signal?.aborted) return abandon();
 
       // restoreFetchedState will take over the isSerializedRestoreInProgress flag
       const result = await this.restoreFetchedState(
