@@ -8,6 +8,7 @@ import type { HostHandshakeInfo } from "../../../shared/types/remoteHosts.js";
 import { REMOTE_PROTOCOL_VERSION } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { lookupArtifactChecksum } from "../client/clientBuild.js";
+import { LINUX_START_SCRIPT } from "../client/hostModeBootstrap.js";
 import { HostSetupService } from "../client/HostSetupService.js";
 import type { ClientBuild, ClientBundle } from "../client/installPlan.js";
 import { LinkClient } from "../client/LinkClient.js";
@@ -88,14 +89,30 @@ function clientBuild(bundle: ClientBundle, buildCommit = commit): ClientBuild {
   return { platform: "linux", arch, version, commit: buildCommit, channel: "stable", bundle };
 }
 
+/** What was there at the moment setup asked for Daintree to start. */
+interface SeenAtStart {
+  imageSha256: string;
+  running: string;
+}
+
 /** The product's setup service, as a client on `build` runs it against `host`. */
 function setupFor(
   host: ContainerHost,
   build: ClientBuild
-): { setup: HostSetupService; stages: string[] } {
+): { setup: HostSetupService; stages: string[]; starts: SeenAtStart[] } {
   const stages: string[] = [];
+  const starts: SeenAtStart[] = [];
   const setup = new HostSetupService({
-    run: host.runCommand,
+    run: async (command, args, options) => {
+      if (args.at(-1)?.includes(LINUX_START_SCRIPT)) {
+        const [imageSha256, running] = await Promise.all([
+          host.shell(`sha256sum "$HOME/${INSTALLED_PATH}" | cut -d' ' -f1`),
+          host.shell("pgrep -x daintree || true"),
+        ]);
+        starts.push({ imageSha256, running });
+      }
+      return host.runCommand(command, args, options);
+    },
     clientDir: host.clientDir,
     platform: process.platform,
     knownConnections: () => [host.connection],
@@ -107,10 +124,12 @@ function setupFor(
     },
     checksum: (url, signal) => lookupArtifactChecksum({ url, signal, fetchImpl: host.feedFetch }),
     emit: (event) => {
-      if (event.type === "install-progress") stages.push(event.progress.stage);
+      if (event.type === "install-progress" && event.progress.stage) {
+        stages.push(event.progress.stage);
+      }
     },
   });
-  return { setup, stages };
+  return { setup, stages, starts };
 }
 
 function install(setup: HostSetupService, host: ContainerHost) {
@@ -258,6 +277,8 @@ async function hostState(host: ContainerHost): Promise<{
   marker: string;
   stray: string;
   listeningPid: number | null;
+  /** The listener's executable. Its folder is named for the image it came from. */
+  listeningFrom: string;
 }> {
   const [imageSha256, marker, stray, record] = await Promise.all([
     host.shell(`sha256sum "$HOME/${INSTALLED_PATH}" | cut -d' ' -f1`),
@@ -268,8 +289,10 @@ async function hostState(host: ContainerHost): Promise<{
     ),
     host.shell(`cat "/run/user/$(id -u)/daintree/host.json" 2>/dev/null || true`),
   ]);
-  const parsed = record ? (JSON.parse(record) as { pid?: number }) : null;
-  return { imageSha256, marker, stray, listeningPid: parsed?.pid ?? null };
+  const listeningPid = record ? ((JSON.parse(record) as { pid?: number }).pid ?? null) : null;
+  const listeningFrom =
+    listeningPid === null ? "" : await host.shell(`readlink "/proc/${listeningPid}/exe"`);
+  return { imageSha256, marker, stray, listeningPid, listeningFrom };
 }
 
 /** Prints what the machine saw when a scenario fails: the failure alone rarely says why. */
@@ -479,7 +502,7 @@ describe.skipIf(!ENABLED)(
 
             // Staging reads the marker and passes; the running process, restarted
             // on the second build, reports the commit compiled into it, and doesn't.
-            const { setup, stages } = setupFor(
+            const { setup, stages, starts } = setupFor(
               host,
               clientBuild({ kind: "appimage", path: secondBuild }, secondCommit)
             );
@@ -495,6 +518,11 @@ describe.skipIf(!ENABLED)(
                 "restarting",
               ])
             );
+            // The second build really went in with nothing running, then came back out the same way.
+            expect(starts).toEqual([
+              { imageSha256: await sha256Of(secondBuild), running: "" },
+              { imageSha256: before.imageSha256, running: "" },
+            ]);
 
             const after = await hostState(host);
             expect(after.imageSha256).toBe(before.imageSha256);
@@ -502,6 +530,7 @@ describe.skipIf(!ENABLED)(
             expect(after.stray).toBe("");
             expect(after.listeningPid).not.toBeNull();
             expect(after.listeningPid).not.toBe(before.listeningPid);
+            expect(after.listeningFrom).toBe(before.listeningFrom);
 
             // The previous build reads as itself to a client on it, and serves.
             const original = setupFor(host, clientBuild({ kind: "none" }));

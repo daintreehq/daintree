@@ -249,7 +249,7 @@ These were open questions with defaults chosen; each matches the code today.
 
 Covered by unit tests with injected spawners, the direct-socket harness and the local real-ssh test, but not yet exercised for real:
 
-- A real remote machine. `ssh -L` socket forwarding through a ControlMaster and `ssh -O forward` port forwards are verified against a real OpenSSH `sshd` on macOS (a private user-mode `sshd` on 127.0.0.1, `electron/remote/__tests__/ssh.e2e.test.ts`), and a Linux host over ssh against a container on the same machine (`hostInstall.container.e2e.test.ts`), but neither across a network.
+- A real remote machine. `ssh -L` socket forwarding through a ControlMaster and `ssh -O forward` port forwards are verified against a real OpenSSH `sshd` on macOS (a private user-mode `sshd` on 127.0.0.1, `electron/remote/__tests__/ssh.e2e.test.ts`), and the socket link to a Linux host against a container on the same machine (`hostInstall.container.e2e.test.ts`), but neither across a network, and port forwards not to a Linux host.
 - `--attach-stdio` launched as the real Electron binary over ssh: the e2e runs the real bridge module as a Node script instead. A packaged AppImage extracting and starting headless over ssh is covered (`hostInstall.container.e2e.test.ts`); a Mac's Dock and window-server access and an AppImage's FUSE mount are untested.
 - A real LaunchAgent at login (including Background Items approval) and a `systemd --user` unit with linger on a headless box.
 - `dns-sd` and `avahi-publish-service` advertising on a LAN, and the Local Network prompt in a signed build.

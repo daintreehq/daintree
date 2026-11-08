@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { closeSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import path from "node:path";
+import process from "node:process";
 
 // Turns a packaged AppImage into a second build: the same bytes running, with a
 // build marker that names another commit. Staging reads only the marker, so it

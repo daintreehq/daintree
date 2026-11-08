@@ -2,7 +2,8 @@
 # `systemctl --user` for a machine with no systemd as PID 1, which is out of this
 # target's scope. It runs what the unit says as a user manager would: the real
 # ExecStart with the unit's Environment and a clean environment otherwise, the
-# real ExecStop with $MAINPID set, Restart=on-failure counted in NRestarts.
+# real ExecStop with $MAINPID set, TimeoutStopSec, KillMode=mixed over a process
+# group where systemd has a cgroup, and Restart=on-failure counted in NRestarts.
 set -u
 
 state="/run/user/$(id -u)/standin-systemd"
@@ -22,7 +23,7 @@ active() {
 supervise() {
   file="$units/$1"
   echo $$ >"$state/supervisor.pid"
-  rm -f "$state/stopping"
+  rm -f "$state/stopping" "$state/main.pid"
   while :; do
     uid=$(id -u)
     # Environment= lines: the values setup writes hold no spaces.
@@ -37,7 +38,8 @@ supervise() {
     code=$?
     rm -f "$state/main.pid"
     [ -f "$state/stopping" ] && break
-    [ "$code" -eq 0 ] && break
+    # Restart=on-failure's clean ends: exit 0, or SIGHUP, SIGINT, SIGPIPE or SIGTERM.
+    case "$code" in 0 | 129 | 130 | 141 | 143) break ;; esac
     grep -q '^Restart=on-failure' "$file" || break
     echo $(($(cat "$state/restarts" 2>/dev/null || echo 0) + 1)) >"$state/restarts"
     echo "Scheduled restart job, restart counter is at $(cat "$state/restarts")."
@@ -60,19 +62,25 @@ start() {
 stop() {
   active || return 0
   touch "$state/stopping"
+  file="$units/$1"
+  limit=$(sed -n 's/^TimeoutStopSec=//p' "$file" | head -n 1)
+  limit=${limit:-90}
+  # Its group too: setsid made the supervisor a leader, and the service stays in it.
+  group=$(cat "$state/supervisor.pid")
   main=$(cat "$state/main.pid" 2>/dev/null || true)
-  stop_words=$(words ExecStop "$units/$1")
+  stop_words=$(words ExecStop "$file")
   if [ -n "$main" ] && [ -n "$stop_words" ]; then
-    (MAINPID=$main; export MAINPID; eval "set -- $stop_words"; "$@") >>"$log" 2>&1
+    (MAINPID=$main; export MAINPID; eval "set -- $stop_words"; timeout --signal=KILL "$limit" "$@") >>"$log" 2>&1
   fi
-  [ -n "$main" ] && kill -TERM "$main" 2>/dev/null
-  i=0
-  while active && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
-  if active; then
-    [ -n "$main" ] && kill -KILL "$main" 2>/dev/null
-    kill -KILL "$(cat "$state/supervisor.pid")" 2>/dev/null
-    rm -f "$state/supervisor.pid" "$state/main.pid"
+  if [ -n "$main" ]; then
+    kill -TERM "$main" 2>/dev/null
+    i=0
+    while active && [ "$i" -lt $((limit * 10)) ]; do sleep 0.1; i=$((i + 1)); done
   fi
+  # Past its timeout, or between runs with no main process: nothing more to wait for.
+  # Either way what is left of the service goes, as KillMode=mixed has it.
+  kill -KILL "-$group" 2>/dev/null
+  rm -f "$state/supervisor.pid" "$state/main.pid"
 }
 
 if [ "${1:-}" = __supervise ]; then

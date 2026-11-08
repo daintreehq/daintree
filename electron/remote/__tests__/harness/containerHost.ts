@@ -153,7 +153,7 @@ export interface ContainerHost {
   feedRequests(): Promise<string[]>;
   /** What the service and sshd printed, for a failure's report. */
   diagnostics(): Promise<string>;
-  /** Remove both containers and this machine's files; safe to call twice. */
+  /** Remove both containers and this machine's files; a call after a failed one tries again. */
   dispose(): Promise<void>;
 }
 
@@ -219,43 +219,61 @@ function loopbackPort(line: string): number {
   return port;
 }
 
+/**
+ * Removes containers, keeping any that wouldn't go on the list for a later try:
+ * a container the daemon still holds is one this run left behind.
+ */
+async function removeContainers(ids: string[]): Promise<void> {
+  const failed: string[] = [];
+  for (const id of ids) {
+    const removed = await exec("docker", ["rm", "--force", id], 60_000);
+    if (removed.code === 0 || /no such container/i.test(removed.stderr)) live.delete(id);
+    else failed.push(`${id}: ${removed.stderr.trim()}`);
+  }
+  if (failed.length > 0) throw new Error(`Couldn't remove containers: ${failed.join("; ")}`);
+}
+
+/**
+ * A container that goes away on its own: started, so its time limit is already
+ * running and `--rm` applies, before anything else can fail or the worker die.
+ */
+async function startContainer(args: string[]): Promise<string> {
+  const id = await docker(["run", "--detach", "--rm", "--label", RUN_LABEL, ...args]);
+  live.add(id);
+  return id;
+}
+
 export async function startContainerHost(tls: FeedTls): Promise<ContainerHost> {
   installExitHook();
   const root = await makeShortTempRoot();
-  const userKey = path.join(root, "userkey");
-  const keygen = await exec(
-    "ssh-keygen",
-    ["-q", "-t", "ed25519", "-N", "", "-C", "daintree-e2e", "-f", userKey],
-    30_000
-  );
-  if (keygen.code !== 0) throw new Error(`ssh-keygen failed: ${keygen.stderr}`);
-  const seed = path.join(root, "seed");
-  await fs.mkdir(seed);
-  await fs.copyFile(`${userKey}.pub`, path.join(seed, "authorized_keys"));
-  await fs.copyFile(path.join(tls.dir, "ca.crt"), path.join(seed, "ca.crt"));
-  const clientDir = path.join(root, "c");
-  await fs.mkdir(clientDir, { mode: 0o700 });
-
   let hostId: string | null = null;
   let feedId: string | null = null;
   let disposed = false;
   let closeMaster: () => Promise<unknown> = async () => {};
   const dispose = async () => {
     if (disposed) return;
-    disposed = true;
     await closeMaster().catch(() => {});
-    const ids = [feedId, hostId].filter((id): id is string => id !== null);
-    if (ids.length > 0) await exec("docker", ["rm", "--force", ...ids], 60_000);
-    for (const id of ids) live.delete(id);
+    await removeContainers([feedId, hostId].filter((id): id is string => id !== null));
     await fs.rm(root, { recursive: true, force: true });
+    disposed = true;
   };
 
   try {
-    hostId = await docker([
-      "create",
-      "--label",
-      RUN_LABEL,
-      "--rm",
+    const userKey = path.join(root, "userkey");
+    const keygen = await exec(
+      "ssh-keygen",
+      ["-q", "-t", "ed25519", "-N", "", "-C", "daintree-e2e", "-f", userKey],
+      30_000
+    );
+    if (keygen.code !== 0) throw new Error(`ssh-keygen failed: ${keygen.stderr}`);
+    const seed = path.join(root, "seed");
+    await fs.mkdir(seed);
+    await fs.copyFile(`${userKey}.pub`, path.join(seed, "authorized_keys"));
+    await fs.copyFile(path.join(tls.dir, "ca.crt"), path.join(seed, "ca.crt"));
+    const clientDir = path.join(root, "c");
+    await fs.mkdir(clientDir, { mode: 0o700 });
+
+    hostId = await startContainer([
       "--init",
       "--add-host",
       `${FEED_HOSTNAME}:127.0.0.1`,
@@ -265,21 +283,11 @@ export async function startContainerHost(tls: FeedTls): Promise<ContainerHost> {
       "127.0.0.1:0:443",
       HOST_IMAGE,
     ]);
-    live.add(hostId);
     await docker(["cp", `${seed}/.`, `${hostId}:/e2e-seed/`]);
-    await docker(["start", hostId]);
+    await docker(["exec", hostId, "touch", "/e2e-seed/ready"]);
 
-    feedId = await docker([
-      "create",
-      "--label",
-      RUN_LABEL,
-      "--rm",
-      // Its 443 is the machine's own, so `updates.daintree.org` needs only a hosts line.
-      "--network",
-      `container:${hostId}`,
-      FEED_IMAGE,
-    ]);
-    live.add(feedId);
+    // Its 443 is the machine's own, so `updates.daintree.org` needs only a hosts line.
+    feedId = await startContainer(["--network", `container:${hostId}`, FEED_IMAGE]);
     const feedRoot = path.join(root, "feed");
     await fs.mkdir(path.join(feedRoot, "tls"), { recursive: true });
     await fs.mkdir(path.join(feedRoot, "www"), { recursive: true });
@@ -287,7 +295,7 @@ export async function startContainerHost(tls: FeedTls): Promise<ContainerHost> {
     await fs.copyFile(path.join(tls.dir, "feed.crt"), path.join(feedRoot, "tls", "feed.crt"));
     await fs.writeFile(path.join(feedRoot, "requests.log"), "");
     await docker(["cp", `${feedRoot}/.`, `${feedId}:/feed/`]);
-    await docker(["start", feedId]);
+    await docker(["exec", feedId, "touch", "/feed/ready"]);
 
     const sshPort = loopbackPort(await docker(["port", hostId, "22/tcp"]));
     const feedPort = loopbackPort(await docker(["port", hostId, "443/tcp"]));
@@ -393,7 +401,7 @@ export async function startContainerHost(tls: FeedTls): Promise<ContainerHost> {
       dispose,
     };
   } catch (err) {
-    await dispose();
+    await dispose().catch(() => {});
     throw err;
   }
 }
@@ -406,19 +414,8 @@ export async function remainingContainers(): Promise<string[]> {
 
 /** The build marker packed in an AppImage, read by its own runtime in a throwaway container. */
 export async function readAppImageMarker(appImage: string): Promise<string> {
-  const id = await docker([
-    "create",
-    "--label",
-    RUN_LABEL,
-    "--rm",
-    "--entrypoint",
-    "sleep",
-    FEED_IMAGE,
-    "600",
-  ]);
-  live.add(id);
+  const id = await startContainer(["--entrypoint", "sleep", FEED_IMAGE, "600"]);
   try {
-    await docker(["start", id]);
     await docker(["cp", appImage, `${id}:/tmp/in.AppImage`], 5 * 60_000);
     const script =
       'cd /tmp && chmod 755 in.AppImage && ./in.AppImage --appimage-extract resources/app.asar >/dev/null 2>&1; grep -a -o -m 1 -E \'[{]"daintreeBuildInfo":1,"version":"[^"]+","commit":"[0-9a-f]+"[}]\' squashfs-root/resources/app.asar | head -n 1';
@@ -426,8 +423,7 @@ export async function readAppImageMarker(appImage: string): Promise<string> {
     if (!marker) throw new Error(`${appImage} carries no build marker`);
     return marker;
   } finally {
-    await exec("docker", ["rm", "--force", id], 30_000);
-    live.delete(id);
+    await removeContainers([id]);
   }
 }
 
@@ -437,19 +433,8 @@ export async function repackAppImage(
   commit: string,
   output: string
 ): Promise<void> {
-  const id = await docker([
-    "create",
-    "--label",
-    RUN_LABEL,
-    "--rm",
-    "--entrypoint",
-    "sleep",
-    FEED_IMAGE,
-    "1800",
-  ]);
-  live.add(id);
+  const id = await startContainer(["--entrypoint", "sleep", FEED_IMAGE, "1800"]);
   try {
-    await docker(["start", id]);
     await docker(["exec", id, "mkdir", "-p", "/work"]);
     await docker(["cp", appImage, `${id}:/work/in.AppImage`], 5 * 60_000);
     await docker(
@@ -466,7 +451,6 @@ export async function repackAppImage(
     );
     await docker(["cp", `${id}:/work/out.AppImage`, output], 5 * 60_000);
   } finally {
-    await exec("docker", ["rm", "--force", id], 30_000);
-    live.delete(id);
+    await removeContainers([id]);
   }
 }

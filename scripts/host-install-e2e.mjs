@@ -4,9 +4,10 @@
 // packaged in a container. Native modules link against what they're built on, so
 // a Linux build can't come from another OS, and a worktree's node_modules is
 // shared with its main checkout, so nothing here installs in place.
-import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { closeSync, existsSync, mkdirSync, openSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,10 +22,14 @@ function appImageFileName(version, arch) {
   return arch === "x64" ? `Daintree-${version}.AppImage` : `Daintree-${version}-${arch}.AppImage`;
 }
 
-/** The script that builds a packaged AppImage from the tree on its stdin. */
-function packageScript(nodeArch) {
+/**
+ * Builds a packaged AppImage from the tree on stdin and writes it to stdout;
+ * everything the build prints goes to stderr.
+ */
+function packageScript(nodeArch, name) {
   return [
     "set -eux",
+    "exec 3>&1 1>&2",
     "mkdir /src",
     "tar -x -C /src",
     "cd /src",
@@ -34,12 +39,16 @@ function packageScript(nodeArch) {
     "npm ci",
     "npm run build",
     `npx electron-builder --config electron-builder.config.cjs --linux AppImage --${nodeArch} --publish never`,
+    `cat "release/${name}" >&3`,
   ].join("\n");
 }
 
-async function packageCurrentCommit() {
+function packageCurrentCommit() {
   const commit = text("git", ["rev-parse", "HEAD"]);
-  const { version } = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+  // From the commit that gets packaged, not the working tree.
+  const atCommit = (file) => text("git", ["show", `${commit}:${file}`]);
+  const { version } = JSON.parse(atCommit("package.json"));
+  const nodeVersion = atCommit(".nvmrc");
   const serverArch = text("docker", ["version", "--format", "{{.Server.Arch}}"]);
   const arch = serverArch === "arm64" || serverArch === "aarch64" ? "arm64" : "x64";
   const name = appImageFileName(version, arch);
@@ -53,47 +62,51 @@ async function packageCurrentCommit() {
     process.stdout.write(`Packaging commit ${commit}: uncommitted changes aren't in it.\n`);
   }
   mkdirSync(outDir, { recursive: true });
-  const nodeVersion = readFileSync(path.join(root, ".nvmrc"), "utf8").trim();
-  const container = `daintree-host-install-package-${process.pid}`;
-  const archive = spawn("git", ["archive", "--format=tar", "HEAD"], {
-    cwd: root,
-    stdio: ["ignore", "pipe", "inherit"],
-  });
-  const packaging = spawn(
-    "docker",
-    [
-      "run",
-      "--interactive",
-      "--name",
-      container,
-      // No .git in there, so build-main can't read the commit it stamps.
-      "--env",
-      `DAINTREE_BUILD_COMMIT=${commit}`,
-      "--env",
-      "NODE_OPTIONS=--max-old-space-size=6144",
-      `node:${nodeVersion}-bookworm`,
-      "bash",
-      "-c",
-      packageScript(arch),
-    ],
-    { stdio: ["pipe", "inherit", "inherit"] }
-  );
-  archive.stdout.pipe(packaging.stdin);
+  const tree = path.join(outDir, `tree-${process.pid}.tar`);
+  const partial = `${out}.${process.pid}.part`;
+  execFileSync("git", ["archive", "--format=tar", "--output", tree, commit], { cwd: root });
+  const input = openSync(tree, "r");
+  const output = openSync(partial, "w", 0o755);
   try {
-    const code = await new Promise((resolve, reject) => {
-      packaging.once("error", reject);
-      packaging.once("exit", resolve);
-    });
-    if (code !== 0) throw new Error(`Packaging in a container failed with exit code ${code}`);
-    execFileSync("docker", ["cp", `${container}:/src/release/${name}`, out], { stdio: "inherit" });
+    const packaging = spawnSync(
+      "docker",
+      [
+        "run",
+        "--interactive",
+        // Nothing to clean up after, whatever becomes of this process; the build
+        // comes back over stdout and lands under its real name only once whole.
+        "--rm",
+        // No .git in there, so build-main can't read the commit it stamps.
+        "--env",
+        `DAINTREE_BUILD_COMMIT=${commit}`,
+        "--env",
+        "NODE_OPTIONS=--max-old-space-size=6144",
+        `node:${nodeVersion}-bookworm`,
+        "timeout",
+        "--signal=KILL",
+        "7200",
+        "bash",
+        "-c",
+        packageScript(arch, name),
+      ],
+      { stdio: [input, output, "inherit"] }
+    );
+    if (packaging.error) throw packaging.error;
+    if (packaging.status !== 0) {
+      throw new Error(`Packaging in a container failed with exit code ${packaging.status}`);
+    }
+    renameSync(partial, out);
   } finally {
-    spawnSync("docker", ["rm", "--force", container], { stdio: "ignore" });
+    closeSync(input);
+    closeSync(output);
+    rmSync(tree, { force: true });
+    rmSync(partial, { force: true });
   }
   return out;
 }
 
 try {
-  const appImage = process.env.DAINTREE_CONTAINER_E2E_APPIMAGE || (await packageCurrentCommit());
+  const appImage = process.env.DAINTREE_CONTAINER_E2E_APPIMAGE || packageCurrentCommit();
   const run = spawnSync("npx", ["vitest", "run", SUITE], {
     cwd: root,
     stdio: "inherit",
