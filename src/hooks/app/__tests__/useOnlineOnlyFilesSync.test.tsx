@@ -27,7 +27,7 @@ vi.mock("@/lib/viewCacheState", () => ({
 }));
 
 const viewStore = vi.hoisted(() => ({
-  current: null as { getState: () => { isInitialized: boolean } } | null,
+  current: null as { getState: () => { worktrees: Map<string, unknown> } } | null,
 }));
 vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStoreOrNull: () => viewStore.current,
@@ -332,12 +332,22 @@ describe("useOnlineOnlyFilesSync", () => {
 
     it("owes nothing once the load has come good", async () => {
       const api = await waitingOnGit();
-      viewStore.current = { getState: () => ({ isInitialized: true }) };
+      viewStore.current = { getState: () => ({ worktrees: new Map([["wt-1", {}]]) }) };
       api.push(snapshot({ revision: 2 }));
 
       failLoad();
 
       expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("still owes it after an empty snapshot, which isn't a load coming good", async () => {
+      const api = await waitingOnGit();
+      viewStore.current = { getState: () => ({ worktrees: new Map() }) };
+      api.push(snapshot({ revision: 2 }));
+
+      failLoad();
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
     });
 
     it("doesn't retry for a project that was never waiting", async () => {

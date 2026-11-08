@@ -485,12 +485,16 @@ describe("GlobalBannerCoordinator", () => {
       report(0, 5);
       render(<GlobalBannerCoordinator />);
       fireEvent.click(screen.getByRole("button", { name: "Dismiss online-only files notice" }));
+      expect(screen.queryByText(onlineOnlyTitle)).toBeNull();
       expect(screen.queryByText(cloudSyncTitle)).toBeNull();
 
-      act(() => report(0, 0, 2));
+      act(() => report(0, 4, 2));
+      expect(screen.queryByText(onlineOnlyTitle)).toBeNull();
+
+      act(() => report(0, 0, 3));
       expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
 
-      act(() => report(0, 3, 3));
+      act(() => report(0, 3, 4));
       expect(screen.getByText(onlineOnlyTitle)).toBeTruthy();
     });
 

@@ -665,7 +665,31 @@ describe("ProjectOnlineOnlyService", () => {
       expect(second.pushes.at(-1)?.git).toEqual(side(0, 0, false));
     });
 
-    it("says nothing for a project stopped while its child was stuck", async () => {
+    it("keeps a real answer when the child goes before the deadline", async () => {
+      const view = fakeEndpoint();
+      service.watch(project(), view.endpoint);
+      await tick();
+      scanner.pass<OnlineOnlyRootShape>("probe").answer("git-directory");
+      await tick();
+      scanner.pass<OnlineOnlyFilesSide>("workingTree").answer(side(0));
+      await tick();
+      const stuck = scanner.pass<OnlineOnlyFilesSide>("git");
+      stuck.answerButStayAlive(side(479));
+      // Past the 5s rest, so the next walk is waiting on this child.
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      stuck.exit();
+      await tick();
+      scanner.pass<OnlineOnlyRootShape>("probe").answer("git-directory");
+      await tick();
+      scanner.pass<OnlineOnlyFilesSide>("git").answer(side(3));
+      await tick();
+      await vi.advanceTimersByTimeAsync(31_000);
+
+      expect(view.pushes.map((pushed) => pushed.git)).not.toContainEqual(side(0, 0, false));
+    });
+
+    it("records nothing for a project stopped while its child was stuck", async () => {
       scanner.cancelLeavesChildAlive = true;
       const first = fakeEndpoint("first");
       service.watch(project(), first.endpoint);
@@ -676,10 +700,11 @@ describe("ProjectOnlineOnlyService", () => {
       service.watch(project(), second.endpoint);
       await tick();
       service.release(second.endpoint);
+      const record = vi.spyOn(service as never, "record");
 
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(second.pushes).toEqual([]);
+      expect(record).not.toHaveBeenCalled();
     });
   });
 

@@ -2175,7 +2175,7 @@ export class WorktreeMonitor {
    * closed.
    */
   getFreshChanges(): Promise<WorktreeChanges> {
-    if (this.statusDownloadGate !== "open") {
+    if (this.statusDownloadGate === "held") {
       return Promise.reject(new Error(`Git status is waiting for downloads: ${this.path}`));
     }
     const abandon = new AbortController();

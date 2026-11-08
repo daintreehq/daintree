@@ -44,8 +44,9 @@ function retryFailedLoadOnceDownloaded(): () => void {
     if (!owed) return;
     if (gitStatusWaitsForDownload(useOnlineOnlyFilesStore.getState().files)) return;
     if (useProjectStore.getState().worktreeLoadError === null) {
-      // The load came good, so there's nothing left to owe.
-      if (getCurrentViewStoreOrNull()?.getState().isInitialized) owed = false;
+      // The load came good, so there's nothing left to owe. An empty snapshot
+      // initializes the store too, but a repository always has a worktree.
+      if (getCurrentViewStoreOrNull()?.getState().worktrees.size) owed = false;
       return;
     }
     if (isProjectViewCached()) return;

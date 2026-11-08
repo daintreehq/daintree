@@ -3433,7 +3433,9 @@ export class WorkspaceService {
       incomplete: true,
     };
     // The inventory runs its own `git status`, in the parent and in every module.
-    if (this.statusDownloadGate !== "open") return incomplete;
+    // Only once `.git` is known to need it: refusing during the first walk would
+    // turn away a delete of a repository with nothing outstanding.
+    if (this.statusDownloadGate === "held") return incomplete;
     try {
       return await withTimeout(
         buildSubmoduleDeleteRisk(worktreePath, { signal: this._shutdownController.signal }),

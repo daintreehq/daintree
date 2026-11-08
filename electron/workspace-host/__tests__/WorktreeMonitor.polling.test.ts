@@ -2735,13 +2735,12 @@ describe("WorktreeMonitor", () => {
       monitor.setStatusDownloadGate("open");
       expect(strategy.isCircuitBreakerTripped()).toBe(false);
 
-      // The catch-up lands, and the timed poll runs after it rather than the
-      // tripped path, which only probes the folder.
+      // The catch-up lands, and a timed poll reads status after it rather than
+      // taking the tripped path, which only probes the folder.
       await vi.advanceTimersByTimeAsync(0);
       const afterRelease = mockGetWorktreeChangesWithStats.mock.calls.length;
       expect(afterRelease).toBeGreaterThan(0);
-      monitor.triggerRefreshIfUpdating();
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(TEST_CONFIG.basePollingInterval * 3);
       expect(mockGetWorktreeChangesWithStats.mock.calls.length).toBeGreaterThan(afterRelease);
       monitor.stop();
     });
@@ -2803,16 +2802,20 @@ describe("WorktreeMonitor", () => {
       expect(callbacks.onUpdate).not.toHaveBeenCalled();
     });
 
-    it.each(["held", "pending"] as const)(
-      "refuses a fresh read while %s, so a delete preview fails closed",
-      async (gate) => {
-        const { monitor } = startedMonitor();
-        monitor.setStatusDownloadGate(gate);
+    it("refuses a fresh read while held, so a delete preview fails closed", async () => {
+      const { monitor } = startedMonitor();
+      monitor.setStatusDownloadGate("held");
 
-        await expect(monitor.getFreshChanges()).rejects.toThrow("waiting for downloads");
-        expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
-      }
-    );
+      await expect(monitor.getFreshChanges()).rejects.toThrow("waiting for downloads");
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+    });
+
+    it("lets a fresh read through the first walk, so a delete isn't turned away", async () => {
+      const { monitor } = startedMonitor();
+      monitor.setStatusDownloadGate("pending");
+
+      await expect(monitor.getFreshChanges()).resolves.toMatchObject({ lastCommitMessage: "real" });
+    });
 
     it("stops a fresh read already running when the gate closes", async () => {
       const { monitor } = startedMonitor();
