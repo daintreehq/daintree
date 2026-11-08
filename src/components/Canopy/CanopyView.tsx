@@ -38,6 +38,7 @@ import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
+import { searchPasteText } from "./canopySearch";
 import { isWorkerEntry } from "./canopyInboxProjection";
 import { CanopyCard, REPLY_GO_TO_TERMINAL, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
@@ -695,8 +696,17 @@ function CanopyInbox({
     nowMs,
     observedAt: readerOff ? (fleet?.changedAt ?? null) : null,
   });
-  const { query, setQuery, appliedQuery, terms, searching, searchKey, screenAsk, onScreen } =
-    useCanopyInboxSearch({ isOpen, hostId, items, api, refreshedAt });
+  const {
+    query,
+    setQuery,
+    appliedQuery,
+    alternatives,
+    searchNotes,
+    searching,
+    searchKey,
+    screenAsk,
+    onScreen,
+  } = useCanopyInboxSearch({ isOpen, hostId, items, api, refreshedAt });
   const {
     roleFilter,
     setRoleFilter,
@@ -752,7 +762,7 @@ function CanopyInbox({
     band,
     query,
     appliedQuery,
-    terms,
+    alternatives,
     searching,
     searchKey,
     screenAsk,
@@ -1748,11 +1758,38 @@ function CanopyInbox({
                   inputRef={searchRef}
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
+                  onPaste={(event) => {
+                    // A pasted column would lose its line breaks to the
+                    // single-line field and glue into one word: each line
+                    // comes in as an alternative of its own.
+                    const input = event.currentTarget;
+                    const start = input.selectionStart ?? input.value.length;
+                    const end = input.selectionEnd ?? start;
+                    const list = searchPasteText(
+                      event.clipboardData.getData("text"),
+                      input.value.slice(0, start),
+                      input.value.slice(end)
+                    );
+                    if (list === null) return;
+                    event.preventDefault();
+                    // Typed in as the user would, so the field's own undo takes it back.
+                    if (
+                      typeof document.execCommand === "function" &&
+                      document.execCommand("insertText", false, list)
+                    ) {
+                      return;
+                    }
+                    // Put in place with the caret after it, then said as an input so
+                    // React's own record of the value follows the field's.
+                    input.setRangeText(list, start, end, "end");
+                    input.dispatchEvent(new Event("input", { bubbles: true }));
+                  }}
                   onClear={() => setQuery("")}
                   onKeyDown={onSearchKeyDown}
                   data-canopy-search=""
                   placeholder="Search agents and their terminals"
                   aria-label="Search agents"
+                  aria-describedby={searchNotes.length > 0 ? "canopy-search-notes" : undefined}
                   role="combobox"
                   aria-expanded={visible.length > 0}
                   aria-controls={
@@ -1775,6 +1812,17 @@ function CanopyInbox({
                   autoComplete="off"
                   spellCheck={false}
                 />
+                {searchNotes.length > 0 && (
+                  <div
+                    id="canopy-search-notes"
+                    className="mt-1.5 space-y-0.5 text-xs text-text-secondary"
+                    data-testid="canopy-search-notes"
+                  >
+                    {searchNotes.map((note) => (
+                      <p key={note}>{note}</p>
+                    ))}
+                  </div>
+                )}
               </div>
               <div
                 className="canopy-inbox flex min-h-0 flex-1 flex-col overflow-y-auto select-none"
@@ -2101,7 +2149,7 @@ function CanopyInbox({
                   ref={trashRef}
                   entries={trashEntries}
                   workspaces={workspaces}
-                  terms={terms}
+                  alternatives={alternatives}
                   api={api}
                   scopeKey={hostId ?? ""}
                   onLeaveUp={leaveTrashUp}

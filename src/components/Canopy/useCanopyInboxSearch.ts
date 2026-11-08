@@ -1,20 +1,16 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import type { CanopyScreenSearchTarget } from "@shared/types/ipc/canopy";
-import { searchTerms, unmatchedTerms, type CanopyItem } from "./canopyModel";
+import type { CanopyItem } from "./canopyModel";
+import { canopyScreenSearchPlan, canopySearchNotes, parseCanopySearch } from "./canopySearch";
 import type { CanopyApi } from "./canopyHostSource";
 import type { HostId } from "@shared/types/remoteHosts";
 
 /** How long the search waits on the typing before reading terminals for it. */
 const SCREEN_SEARCH_DEBOUNCE_MS = 150;
-/** The most runs, words and word length one search asks of the terminals: main's own caps. */
-const SCREEN_SEARCH_MAX_RUNS = 500;
-const SCREEN_SEARCH_MAX_TERMS = 16;
-const SCREEN_SEARCH_MAX_TERM_LENGTH = 200;
 
 /**
- * The search over the inbox: the typed query, its words, and the runs whose
- * terminals hold the words their names and readings leave unfound, asked of
- * the host each run is on.
+ * The search over the inbox: the typed query, its alternatives, and the runs
+ * whose terminals hold the words their names and readings leave unfound of
+ * any one alternative, asked of the host each run is on.
  */
 export function useCanopyInboxSearch({
   isOpen,
@@ -31,32 +27,23 @@ export function useCanopyInboxSearch({
   refreshedAt: number | null;
 }) {
   // The search the panel opens on: the runs whose names, words or terminal
-  // hold every word of it. Typed straight into, it never reaches a row's keys.
+  // hold every word of any one of its alternatives. Typed straight into, it
+  // never reaches a row's keys.
   const [query, setQuery] = useState("");
   const appliedQuery = useDeferredValue(query);
-  const terms = useMemo(() => searchTerms(appliedQuery), [appliedQuery]);
-  const searching = terms.length > 0;
-  const searchKey = `${hostId ?? ""}|${terms.join(" ")}`;
-  // The words each run's names and words leave unfound, asked of its terminal
-  // on the host it runs on: only ids come back. A run with more words left
-  // than main takes is not asked, rather than the whole ask refused.
-  const screenTargets = useMemo(() => {
-    const targets: CanopyScreenSearchTarget[] = [];
-    if (terms.length === 0) return targets;
-    for (const item of items) {
-      const left = unmatchedTerms(item, terms);
-      if (
-        left.length === 0 ||
-        left.length > SCREEN_SEARCH_MAX_TERMS ||
-        left.some((term) => term.length > SCREEN_SEARCH_MAX_TERM_LENGTH)
-      ) {
-        continue;
-      }
-      targets.push({ runId: item.runId, spawnedAt: item.row.run.spawnedAt, terms: left });
-      if (targets.length === SCREEN_SEARCH_MAX_RUNS) break;
-    }
-    return targets;
-  }, [items, terms]);
+  const { alternatives, dropped } = useMemo(() => parseCanopySearch(appliedQuery), [appliedQuery]);
+  const searching = alternatives.length > 0;
+  // Neither a comma nor a space is ever inside a word, so no two searches share a key.
+  const searchKey = `${hostId ?? ""}|${alternatives.map((words) => words.join(" ")).join(",")}`;
+  // The words of each alternative a run's names and words leave unfound,
+  // asked of its terminal on the host it runs on: only ids come back. What
+  // the ask can't carry is said under the field rather than dropped unsaid.
+  const plan = useMemo(() => canopyScreenSearchPlan(items, alternatives), [items, alternatives]);
+  const screenTargets = plan.targets;
+  const searchNotes = useMemo(
+    () => canopySearchNotes(alternatives, dropped, plan),
+    [alternatives, dropped, plan]
+  );
   // The ask as a value: a terminal's matches stand only for the very runs,
   // incarnations and words they were found for, on the host that found them.
   const screenAsk = useMemo(
@@ -97,5 +84,15 @@ export function useCanopyInboxSearch({
   }, [isOpen, screenAsk, api, refreshedAt]);
   const onScreen = screenHits !== null && screenHits.ask === screenAsk ? screenHits.runIds : null;
 
-  return { query, setQuery, appliedQuery, terms, searching, searchKey, screenAsk, onScreen };
+  return {
+    query,
+    setQuery,
+    appliedQuery,
+    alternatives,
+    searchNotes,
+    searching,
+    searchKey,
+    screenAsk,
+    onScreen,
+  };
 }

@@ -25,6 +25,11 @@ import type {
   CanopyTrashRequest,
   CanopyTrashTarget,
 } from "../../../shared/types/ipc/canopy.js";
+import {
+  CANOPY_SEARCH_MAX_ALTERNATIVES,
+  CANOPY_SEARCH_MAX_TERM_LENGTH,
+  CANOPY_SEARCH_MAX_TERMS,
+} from "../../../shared/types/ipc/canopy.js";
 import { getAgentNotificationServiceRef, getPtyClient } from "../../window/serviceRefs.js";
 import type { TerminalInputNotice } from "../../services/PtyClient.js";
 import type { TerminalResizeResult } from "../../../shared/types/pty-host.js";
@@ -499,9 +504,6 @@ function assertRunId(value: unknown): asserts value is string {
 const MAX_READ_BATCH = 500;
 /** Every run a panel can list, the whole fleet across projects: far above any real one. */
 const MAX_SHOWN_RUNS = 10_000;
-/** The words one search may look for on a terminal, and how long each may be. */
-const MAX_SEARCH_TERMS = 16;
-const MAX_SEARCH_TERM_LENGTH = 200;
 /** How much of a terminal a search reads: its screen and the history the describer reads. */
 const SEARCH_MAX_BYTES = 96 * 1024;
 
@@ -512,17 +514,28 @@ function assertScreenSearchTarget(value: unknown): asserts value is CanopyScreen
   const target = value as Record<string, unknown>;
   assertRunId(target.runId);
   assertTarget(target);
-  const terms = target.terms;
+  const { terms, orTerms } = target;
   if (
-    !Array.isArray(terms) ||
-    terms.length === 0 ||
-    terms.length > MAX_SEARCH_TERMS ||
-    !terms.every(
-      (term) => typeof term === "string" && term.length > 0 && term.length <= MAX_SEARCH_TERM_LENGTH
-    )
+    !isSearchAlternative(terms) ||
+    (orTerms !== undefined &&
+      (!Array.isArray(orTerms) ||
+        orTerms.length + 1 > CANOPY_SEARCH_MAX_ALTERNATIVES ||
+        !orTerms.every(isSearchAlternative)))
   ) {
     throw new Error("Invalid search");
   }
+}
+
+function isSearchAlternative(terms: unknown): terms is string[] {
+  return (
+    Array.isArray(terms) &&
+    terms.length > 0 &&
+    terms.length <= CANOPY_SEARCH_MAX_TERMS &&
+    terms.every(
+      (term) =>
+        typeof term === "string" && term.length > 0 && term.length <= CANOPY_SEARCH_MAX_TERM_LENGTH
+    )
+  );
 }
 
 function isTurn(value: unknown): value is number {

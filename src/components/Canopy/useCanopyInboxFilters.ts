@@ -11,7 +11,8 @@ import { useAgentDirectory } from "@/hooks/useAgentDirectory";
 import { useAssistantWork } from "@/hooks/useAssistantWork";
 import type { HostMenuRow } from "@/components/Hosts/hostModel";
 import { useCanopyFrame } from "./canopyFrame";
-import { unmatchedTerms, type CanopyInbox, type CanopyItem } from "./canopyModel";
+import type { CanopyInbox, CanopyItem } from "./canopyModel";
+import { unmatchedAlternatives, type CanopySearchAlternatives } from "./canopySearch";
 import {
   assistantMatches,
   buildAssistantItems,
@@ -62,7 +63,7 @@ export function useCanopyInboxFilters({
   band,
   query,
   appliedQuery,
-  terms,
+  alternatives,
   searching,
   searchKey,
   screenAsk,
@@ -92,7 +93,7 @@ export function useCanopyInboxFilters({
   band: ReadonlySet<string>;
   query: string;
   appliedQuery: string;
-  terms: string[];
+  alternatives: CanopySearchAlternatives;
   searching: boolean;
   searchKey: string;
   screenAsk: string | null;
@@ -181,9 +182,9 @@ export function useCanopyInboxFilters({
         : workOf !== null
           ? assistantItems.filter((item) => item.id === workOf.assistantId)
           : searching
-            ? assistantItems.filter((item) => assistantMatches(item, terms))
+            ? assistantItems.filter((item) => assistantMatches(item, alternatives))
             : assistantItems,
-    [assistantsShown, workOf, searching, assistantItems, terms]
+    [assistantsShown, workOf, searching, assistantItems, alternatives]
   );
   const showWork = (item: CanopyAssistantItem) => {
     if (workOf?.assistantId === item.id) {
@@ -211,9 +212,9 @@ export function useCanopyInboxFilters({
       inWork(item) &&
       (!searching ||
         onScreen?.has(item.runId) === true ||
-        unmatchedTerms(item, terms).length === 0);
+        unmatchedAlternatives(item, alternatives) === null);
     return { inbox: inbox.inbox.filter(matches), archived: inbox.archived.filter(matches) };
-  }, [inbox, workersShown, searching, onScreen, terms, workOf, inWork]);
+  }, [inbox, workersShown, searching, onScreen, alternatives, workOf, inWork]);
   const unreadOnly = useCanopyStore((s) => s.unreadOnly);
   const setUnreadOnly = useCanopyStore((s) => s.setUnreadOnly);
   // A run read while the Unread filter is on stays listed until the filter is

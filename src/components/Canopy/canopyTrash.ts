@@ -7,6 +7,7 @@ import {
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { pluralize } from "@/lib/pluralize";
 import { rowSubject } from "./canopyModel";
+import { textMatchesSearch, type CanopySearchAlternatives } from "./canopySearch";
 
 /** One run in Canopy's Trash, named and placed as its inbox row was. */
 export interface CanopyTrashItem {
@@ -63,9 +64,12 @@ export function buildCanopyTrash(
   });
 }
 
-/** Whether every word of a search is in one of the names the row goes by. */
-export function trashMatches(item: CanopyTrashItem, terms: readonly string[]): boolean {
-  if (terms.length === 0) return true;
+/** Whether every word of one of a search's alternatives is in the names the row goes by. */
+export function trashMatches(
+  item: CanopyTrashItem,
+  alternatives: CanopySearchAlternatives
+): boolean {
+  if (alternatives.length === 0) return true;
   const text = [
     item.subject,
     item.row.title,
@@ -79,7 +83,7 @@ export function trashMatches(item: CanopyTrashItem, terms: readonly string[]): b
     .filter((part): part is string => typeof part === "string" && part !== "")
     .join("\n")
     .toLowerCase();
-  return terms.every((term) => text.includes(term));
+  return textMatchesSearch(text, alternatives);
 }
 
 /** "Closed 12s ago": to the second while it is new, as the trash keeps it only that long. */

@@ -679,18 +679,6 @@ export function buildCanopyInbox(
   return items;
 }
 
-/** The words of a search, each to be found somewhere on a run, ignoring case. */
-export function searchTerms(query: string): string[] {
-  return [
-    ...new Set(
-      query
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((term) => term !== "")
-    ),
-  ];
-}
-
 /**
  * Everything the panel can match a run on without its terminal: the names it
  * goes by (project, title, worktree, agent) and the words written about it —
@@ -724,15 +712,4 @@ export function itemSearchText(item: CanopyItem): string {
     .filter((text): text is string => typeof text === "string" && text !== "")
     .join("\n")
     .toLowerCase();
-}
-
-/**
- * The words of a search a run's names and words don't hold: what is left for
- * its terminal to answer. Each is matched as written, never by scattered
- * letters, which across a paragraph would find a little of anything.
- */
-export function unmatchedTerms(item: CanopyItem, terms: readonly string[]): string[] {
-  if (terms.length === 0) return [];
-  const text = itemSearchText(item);
-  return terms.filter((term) => !text.includes(term));
 }
