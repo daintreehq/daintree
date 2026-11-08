@@ -162,7 +162,9 @@ export function usePanelPalette(): UsePanelPaletteReturn {
         return {
           id: `agent:${agentId}`,
           name: agentConfig.name,
-          iconId: agentConfig.iconId,
+          // The agent id rather than its icon id: `PanelKindIcon` only gives a
+          // mark the agent treatment when it can tell the row is an agent.
+          iconId: agentId,
           color: agentConfig.color,
           description: displayCombo || agentConfig.tooltip,
           shortcut:

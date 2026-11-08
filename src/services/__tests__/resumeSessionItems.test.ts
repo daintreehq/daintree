@@ -58,6 +58,18 @@ describe("buildResumeSessionItems", () => {
     expect(items.map((i) => i.session.sessionId)).toEqual(["keep"]);
   });
 
+  it("names the agent for its icon, and the terminal when the agent is gone (#16467)", () => {
+    const [known, gone] = buildResumeSessionItems(
+      [
+        rec({ sessionId: "known", agentId: "codex" }),
+        rec({ sessionId: "gone", agentId: "uninstalled-agent" }),
+      ],
+      { currentProjectId: "p1", worktrees }
+    );
+    expect(known?.iconId).toBe("codex");
+    expect(gone?.iconId).toBe("terminal");
+  });
+
   it("flags a same-project record whose worktree no longer resolves as stale", () => {
     const [item] = buildResumeSessionItems([rec({ worktreeId: "gone", branch: "old/branch" })], {
       currentProjectId: "p1",

@@ -123,9 +123,20 @@ export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIc
   // fall through to the terminal glyph the way the old id conditionals did.
   // A plugin's own SVG (#13143) — from a panel or a detected process tool —
   // renders neutrally too, keeping the terminal glyph until the asset arrives.
+  // An agent's mark is the exception: it wears the agent's colour, like a
+  // built-in agent's mark above.
   if (isPluginCustomIconKey(resolvedChrome.iconId)) {
     const CustomIcon = resolvePluginIcon(resolvedChrome.iconId, DEFAULT_PANEL_ICON);
-    return withIconMarker(<CustomIcon {...finalProps} />);
+    const customIcon = <CustomIcon {...finalProps} />;
+    return withIconMarker(
+      resolvedChrome.isAgent ? (
+        <BrandMark brandColor={markerColor} className={finalProps.className}>
+          {customIcon}
+        </BrandMark>
+      ) : (
+        customIcon
+      )
+    );
   }
 
   const RegisteredIcon = getPluginIconComponent(resolvedChrome.iconId);

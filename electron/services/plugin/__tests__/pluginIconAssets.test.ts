@@ -207,6 +207,41 @@ describe("loadPluginCustomIcons", () => {
     );
   });
 
+  it("collects an agent's icon, sharing a reference other contributions name", () => {
+    const withAgents = {
+      panels: [{ iconId: "./icons/a.svg" }],
+      toolbarButtons: [],
+      processTools: [],
+      agents: [{ iconId: "./icons/a.svg" }, { iconId: "./icons/pi.svg" }, { iconId: "codex" }],
+    };
+    expect(collectPluginCustomIconRefs(withAgents)).toEqual(
+      new Map([
+        ["./icons/a.svg", ["contributes.panels.0.iconId", "contributes.agents.0.iconId"]],
+        ["./icons/pi.svg", ["contributes.agents.1.iconId"]],
+      ])
+    );
+  });
+
+  it("reports an agent's unusable icon at its own manifest location", async () => {
+    await write("icons/bad.svg", GOOD_SVG.replace("</svg>", "<script>alert(1)</script></svg>"));
+    const result = await loadPluginCustomIcons("acme.tools", pluginDir, {
+      panels: [],
+      toolbarButtons: [],
+      processTools: [],
+      agents: [
+        { iconId: "./icons/bad.svg" },
+        { iconId: "./../outside.svg" },
+        { iconId: "./icons/missing.svg" },
+      ],
+    });
+    expect(result.loaded.size).toBe(0);
+    expect(result.issues.map((issue) => issue.path)).toEqual([
+      "contributes.agents.0.iconId",
+      "contributes.agents.1.iconId",
+      "contributes.agents.2.iconId",
+    ]);
+  });
+
   it("loads the good references and reports each location of a broken one", async () => {
     await write("icons/a.svg", GOOD_SVG);
     const result = await loadPluginCustomIcons("acme.tools", pluginDir, contributes);

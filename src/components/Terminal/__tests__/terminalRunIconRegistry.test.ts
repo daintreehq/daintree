@@ -43,6 +43,28 @@ describe("resolveTerminalRunIcon", () => {
     }
   });
 
+  it("resolves an agent's own SVG by registry id, but not one it failed to load", () => {
+    const key = "plugin-icon:acme.agents:./icons/pi.svg";
+    const agent = {
+      name: "Pi",
+      command: "pi",
+      color: "#3366ff",
+      supportsContextInjection: false,
+    };
+    setPluginAgentRegistry({
+      pi: { ...agent, id: "pi", iconId: key },
+      broken: { ...agent, id: "broken", iconId: "./icons/missing.svg" },
+    });
+    try {
+      expect(resolveTerminalRunIcon("pi")).toBe(getAgentConfig("pi")?.icon);
+      expect(resolveTerminalRunIcon("broken")).toBeUndefined();
+      // The key alone names no agent: `TerminalIcon` decides how it is tinted.
+      expect(resolveTerminalRunIcon(key)).toBeUndefined();
+    } finally {
+      setPluginAgentRegistry({});
+    }
+  });
+
   it("resolves a renderable component for every process tool in the registry", () => {
     // The brand glob is the only icon source now that PROCESS_RUN_ICON_MAP is
     // gone, so a registry key with no matching brand file would silently fall

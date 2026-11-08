@@ -1,6 +1,7 @@
 import type { ComponentType, CSSProperties } from "react";
 import { AGENT_ICON_MAP } from "@/config/agentIcons";
 import { getAgentConfig } from "@/config/agents";
+import { isPluginCustomIconKey } from "@shared/config/pluginCustomIcon";
 
 export interface TerminalRunIconProps {
   className?: string;
@@ -30,9 +31,10 @@ export function resolveTerminalRunIcon(
   // name any brand mark). `PanelKindIcon` resolves the registry id via
   // `getAgentConfig`, so accept it here too — otherwise the same manifest
   // `iconId` shows a brand mark in the palette and a terminal glyph in the tab.
-  const agentIconId = getAgentConfig(iconId)?.iconId;
-  if (agentIconId && Object.hasOwn(TERMINAL_RUN_ICON_MAP, agentIconId)) {
-    return TERMINAL_RUN_ICON_MAP[agentIconId];
+  const config = getAgentConfig(iconId);
+  if (!config) return undefined;
+  if (Object.hasOwn(TERMINAL_RUN_ICON_MAP, config.iconId)) {
+    return TERMINAL_RUN_ICON_MAP[config.iconId];
   }
-  return undefined;
+  return isPluginCustomIconKey(config.iconId) ? config.icon : undefined;
 }

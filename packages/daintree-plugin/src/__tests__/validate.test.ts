@@ -209,10 +209,12 @@ describe("runValidate", () => {
       name: "acme.demo",
       version: "1.0.0",
       engines: { daintree: ">=0.11.0" },
+      capabilities: ["agent:register"],
       contributes: {
         panels: [{ id: "main", name: "Main", iconId, color: "var(--x)" }],
         toolbarButtons: [{ id: "plan", label: "Plan", iconId, actionId: "acme.demo.plan" }],
         processTools: [{ command: "acme-cli", iconId }],
+        agents: [{ id: "acme-agent", name: "Acme", command: "acme", color: "#3366ff", iconId }],
       },
     });
 
@@ -233,6 +235,7 @@ describe("runValidate", () => {
       expect(result.errors).toHaveLength(3);
       expect(result.errors[0]).toMatch(/contributes\.panels\.0\.iconId: .*not found/);
       expect(result.errors.join("\n")).toMatch(/contributes\.processTools\.0\.iconId/);
+      expect(result.errors.join("\n")).toMatch(/contributes\.agents\.0\.iconId/);
     });
 
     it("fails on an unsafe icon", async () => {

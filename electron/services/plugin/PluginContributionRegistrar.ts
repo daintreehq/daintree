@@ -564,7 +564,14 @@ export class PluginContributionRegistrar {
     const { resolveIconId } = pending;
 
     if (manifest.contributes.agents.length > 0) {
-      registerPluginAgents(pluginId, manifest.contributes.agents, pluginDir);
+      registerPluginAgents(
+        pluginId,
+        manifest.contributes.agents.map((agent) => ({
+          ...agent,
+          iconId: resolveIconId(agent.iconId),
+        })),
+        pluginDir
+      );
       recordPluginAgentBypassArgs(Object.values(getPluginAgentRegistry()));
       this.deps.broadcaster.scheduleAgentsBroadcast(false);
       // Mirror the updated registry into the pty-host so its activity monitor
