@@ -1149,7 +1149,12 @@ describe("terminalClient.submitWithImages (#12792)", () => {
       ["/a/shot.png"]
     );
 
-    await terminalClient.submitWithImages("t1", "see \\\\srv\\s\\a.png", ["\\\\srv\\s\\a.png"], "tok");
+    await terminalClient.submitWithImages(
+      "t1",
+      "see \\\\srv\\s\\a.png",
+      ["\\\\srv\\s\\a.png"],
+      "tok"
+    );
     expect(mockElectronTerminal.submit).toHaveBeenLastCalledWith(
       "t1",
       "see \\\\srv\\s\\a.png",

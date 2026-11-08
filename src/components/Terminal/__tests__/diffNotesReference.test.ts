@@ -91,9 +91,7 @@ describe("@notes expansion", () => {
   it("moves what follows the token onto its own line, so it doesn't read as part of the last note", async () => {
     addNote("/repo/a", "src/a.ts", "Rename this");
     const { out } = await expand("Fix @notes and also rename X");
-    expect(out).toBe(
-      'Fix\nFile: src/a.ts\nLine(s): whole file\n"Rename this"\nand also rename X'
-    );
+    expect(out).toBe('Fix\nFile: src/a.ts\nLine(s): whole file\n"Rename this"\nand also rename X');
   });
 
   it("takes one file's notes for the per-file form, spelled plain or quoted", async () => {

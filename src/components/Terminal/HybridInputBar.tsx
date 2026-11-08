@@ -1501,7 +1501,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       );
     const submitAttemptRef = useRef(0);
     const notingRefusal = useCallback(
-      (submit: (outgoing: string, submissionToken?: string) => Promise<boolean>, dictated: boolean) =>
+      (
+        submit: (outgoing: string, submissionToken?: string) => Promise<boolean>,
+        dictated: boolean
+      ) =>
         async (outgoing: string, submissionToken?: string): Promise<boolean> => {
           const attempt = ++submitAttemptRef.current;
           setSendNote(dictated ? null : { terminalId, refused: false });
