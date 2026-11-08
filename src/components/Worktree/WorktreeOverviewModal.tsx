@@ -257,77 +257,74 @@ export function WorktreeOverviewModal({
 
   const hasNonMainWorktrees = useMemo(() => worktrees.some((w) => !w.isMainWorktree), [worktrees]);
 
-  const { filteredWorktrees, typeSections, quickStateCounts, finishedUnseenCount } =
-    useMemo(() => {
-      const hasActiveQuery = liveQuery.trim().length > 0;
-      // Counted over what the search and facets leave, before the quick-state
-      // narrowing, so each segment says how many rows pressing it would show.
-      const counts: Record<QuickStateFilter, number> = {
-        all: 0,
-        working: 0,
-        waiting: 0,
-        finished: 0,
-      };
-      const unseen = { finished: 0 };
+  const { filteredWorktrees, typeSections, quickStateCounts, finishedUnseenCount } = useMemo(() => {
+    const hasActiveQuery = liveQuery.trim().length > 0;
+    // Counted over what the search and facets leave, before the quick-state
+    // narrowing, so each segment says how many rows pressing it would show.
+    const counts: Record<QuickStateFilter, number> = {
+      all: 0,
+      working: 0,
+      waiting: 0,
+      finished: 0,
+    };
+    const unseen = { finished: 0 };
 
-      const filtered = worktrees.filter((worktree) => {
-        const derived = derivedMetaMap.get(worktree.id) ?? EMPTY_META;
-        const isActive = worktree.id === activeWorktreeId;
-        const matchesScope = matchesFilters(
-          worktree,
-          facetFilters,
-          derived,
-          isActive,
-          devServerSessions
-        );
-        if (matchesScope) {
-          counts.all++;
-          if (matchesQuickStateFilter("working", derived)) counts.working++;
-          if (matchesQuickStateFilter("waiting", derived)) counts.waiting++;
-          if (matchesQuickStateFilter("finished", derived)) counts.finished++;
-          if (derived.buckets.finishedUnseen) unseen.finished++;
-        }
+    const filtered = worktrees.filter((worktree) => {
+      const derived = derivedMetaMap.get(worktree.id) ?? EMPTY_META;
+      const isActive = worktree.id === activeWorktreeId;
+      const matchesScope = matchesFilters(
+        worktree,
+        facetFilters,
+        derived,
+        isActive,
+        devServerSessions
+      );
+      if (matchesScope) {
+        counts.all++;
+        if (matchesQuickStateFilter("working", derived)) counts.working++;
+        if (matchesQuickStateFilter("waiting", derived)) counts.waiting++;
+        if (matchesQuickStateFilter("finished", derived)) counts.finished++;
+        if (derived.buckets.finishedUnseen) unseen.finished++;
+      }
 
-        const bypassesNarrowing =
-          !hasActiveQuery && quickStateFilter === "all" && !hasFacetFiltersActive;
-        if (alwaysShowActive && isActive && bypassesNarrowing) return true;
-        if (alwaysShowWaiting && derived.hasWaitingAgent && bypassesNarrowing) return true;
+      const bypassesNarrowing =
+        !hasActiveQuery && quickStateFilter === "all" && !hasFacetFiltersActive;
+      if (alwaysShowActive && isActive && bypassesNarrowing) return true;
+      if (alwaysShowWaiting && derived.hasWaitingAgent && bypassesNarrowing) return true;
 
-        if (quickStateFilter !== "all" && !matchesQuickStateFilter(quickStateFilter, derived)) {
-          return false;
-        }
+      if (quickStateFilter !== "all" && !matchesQuickStateFilter(quickStateFilter, derived)) {
+        return false;
+      }
 
-        return matchesScope;
-      });
+      return matchesScope;
+    });
 
-      const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
-      const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
-      const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
+    const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
+    const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
+    const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
 
-      return {
-        filteredWorktrees: sorted,
-        typeSections: isGroupedByType
-          ? groupByType(sorted, orderBy, validPinnedWorktrees)
-          : null,
-        quickStateCounts: counts,
-        finishedUnseenCount: unseen.finished,
-      };
-    }, [
-      worktrees,
-      liveQuery,
-      facetFilters,
-      orderBy,
-      isGroupedByType,
-      devServerSessions,
-      alwaysShowActive,
-      alwaysShowWaiting,
-      pinnedWorktrees,
-      manualOrder,
-      derivedMetaMap,
-      activeWorktreeId,
-      quickStateFilter,
-      hasFacetFiltersActive,
-    ]);
+    return {
+      filteredWorktrees: sorted,
+      typeSections: isGroupedByType ? groupByType(sorted, orderBy, validPinnedWorktrees) : null,
+      quickStateCounts: counts,
+      finishedUnseenCount: unseen.finished,
+    };
+  }, [
+    worktrees,
+    liveQuery,
+    facetFilters,
+    orderBy,
+    isGroupedByType,
+    devServerSessions,
+    alwaysShowActive,
+    alwaysShowWaiting,
+    pinnedWorktrees,
+    manualOrder,
+    derivedMetaMap,
+    activeWorktreeId,
+    quickStateFilter,
+    hasFacetFiltersActive,
+  ]);
 
   // Sizes are measured only while the overview is mounted, and ordering by
   // them is this opening's choice, not the sidebar's persisted order: it gives

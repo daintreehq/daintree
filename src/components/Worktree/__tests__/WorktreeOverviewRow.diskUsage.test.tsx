@@ -137,7 +137,12 @@ describe("WorktreeOverviewColumnHeaders size ordering", () => {
     const labels = Array.from(container.firstElementChild!.children).filter(
       (el) => el.tagName !== "BUTTON"
     );
-    expect(labels.map((el) => el.textContent)).toEqual(["Worktree", "Sessions", "Changes", "Active"]);
+    expect(labels.map((el) => el.textContent)).toEqual([
+      "Worktree",
+      "Sessions",
+      "Changes",
+      "Active",
+    ]);
     for (const label of labels) expect(label.getAttribute("aria-hidden")).toBe("true");
   });
 });

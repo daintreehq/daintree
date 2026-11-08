@@ -171,7 +171,10 @@ describe("worktreeDiskUsage handlers", () => {
       sessionId: "s1",
       worktreeId: "main",
     });
-    void invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, b, { sessionId: "s1", worktreeId: "sibling" });
+    void invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, b, {
+      sessionId: "s1",
+      worktreeId: "sibling",
+    });
     await vi.waitFor(() => expect(signals).toHaveLength(2));
 
     a.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });

@@ -82,7 +82,11 @@ export function isStrictlyInside(parent: string, child: string, platform: Platfo
  * The excluded roots inside `root`, collapsed to the outermost: a root nested
  * in another excluded root is already left out with its parent.
  */
-function nearestNestedRoots(root: string, exclude: readonly string[], platform: Platform): string[] {
+function nearestNestedRoots(
+  root: string,
+  exclude: readonly string[],
+  platform: Platform
+): string[] {
   const inside = exclude
     .map((p) => path.resolve(p))
     .filter((p) => isStrictlyInside(root, p, platform));
@@ -164,7 +168,10 @@ const VANISHED_ENTRY_LINE = /No such file or directory$/;
  * that's gone takes no space. Anything else (permission denied, an I/O error)
  * means part of the tree went uncounted, and the answer is null.
  */
-function runDu(operands: readonly string[], signal: AbortSignal | undefined): Promise<number | null> {
+function runDu(
+  operands: readonly string[],
+  signal: AbortSignal | undefined
+): Promise<number | null> {
   return new Promise((resolve) => {
     if (signal?.aborted) {
       resolve(null);
