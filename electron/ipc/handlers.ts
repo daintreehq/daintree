@@ -133,6 +133,7 @@ import { registerConnectivityHandlers } from "./handlers/connectivity.js";
 import { registerAgentDefaultsHandlers } from "./handlers/agentDefaults.js";
 import { registerAgentToolbarPinsHandlers } from "./handlers/agentToolbarPins.js";
 import { registerUserPromptTemplatesHandlers } from "./handlers/userPromptTemplates.js";
+import { registerProjectCloneHandlers } from "./handlers/projectClone.js";
 import { registerAgentAccountsHandlers } from "./handlers/agentAccounts.js";
 import { registerProjectPresenceHandlers } from "./handlers/projectPresence.js";
 import { registerOnlineOnlyFilesHandlers } from "./handlers/onlineOnlyFiles.js";
@@ -305,6 +306,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerAgentDefaultsHandlers());
     register(() => registerAgentToolbarPinsHandlers());
     register(() => registerUserPromptTemplatesHandlers());
+    register(() => registerProjectCloneHandlers());
     register(() => registerAgentAccountsHandlers());
     register(() => registerProjectPresenceHandlers(deps));
     register(() => registerOnlineOnlyFilesHandlers(deps));

@@ -115,6 +115,12 @@ export const LazyCloneRepoDialog = lazyWithPreload(
 );
 export const preloadCloneRepoDialog = LazyCloneRepoDialog.preload;
 
+// Only a project still awaiting its clone draws it (#16352).
+export const LazyProjectCloneView = lazyWithPreload(
+  () => import("./components/Project/ProjectCloneView"),
+  (m) => m.ProjectCloneView
+);
+
 export const LazyCreateProjectFolderDialog = lazyWithPreload(
   () => import("./components/Project/CreateProjectFolderDialog"),
   (m) => m.CreateProjectFolderDialog

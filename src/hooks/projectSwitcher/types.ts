@@ -165,6 +165,8 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
   resumableAgentCount?: number;
   isBackground: boolean;
   isMissing: boolean;
+  /** Still cloning, or a clone that ended without a checkout (#16352). */
+  cloneState?: Project["cloneState"];
   isPinned: boolean;
   /**
    * Filed away by the user. Live work still lifts it out of the Archived band.

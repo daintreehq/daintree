@@ -122,4 +122,7 @@ export type AppErrorCode =
   // An agent launch that requires a plugin's agent tools was refused because
   // they couldn't be handed over; the per-plugin states travel as details.
   | "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE"
+  // The project's repository is still being cloned, or its clone ended without
+  // a checkout: there is no folder to start a terminal or load worktrees in.
+  | "PROJECT_NOT_READY"
   | "INTERNAL";

@@ -336,6 +336,12 @@ export const CHANNELS = {
   PROJECT_CLONE_REPO: "project:clone-repo",
   PROJECT_CLONE_PROGRESS: "project:clone-progress",
   PROJECT_CLONE_CANCEL: "project:clone-cancel",
+  // A clone that runs in the background as its own project (#16352).
+  PROJECT_CLONE_START: "project-clone:start",
+  PROJECT_CLONE_GET_JOB: "project-clone:get-job",
+  PROJECT_CLONE_STOP: "project-clone:stop",
+  PROJECT_CLONE_RETRY: "project-clone:retry",
+  PROJECT_CLONE_JOB_UPDATED: "project-clone:job-updated",
   PROJECT_GET_RECIPES: "project:get-recipes",
   PROJECT_SAVE_RECIPES: "project:save-recipes",
   PROJECT_ADD_RECIPE: "project:add-recipe",

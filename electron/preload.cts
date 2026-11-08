@@ -35,6 +35,7 @@ import type {
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import type { ForgeNewPRLinkRequest } from "../shared/types/ipc/forge.js";
+import type { ProjectCloneJobSnapshot } from "../shared/types/ipc/projectClone.js";
 import type { KeybindingOverridesSnapshot } from "../shared/types/ipc/api.js";
 import type { GitPushReview } from "../shared/types/git.js";
 import type { PluginPerfSnapshot } from "../shared/types/pluginMetrics.js";
@@ -144,6 +145,7 @@ import { buildPluginAgentMcpPreloadBindings } from "./ipc/handlers/pluginAgentMc
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildAgentDefaultsPreloadBindings } from "./ipc/handlers/agentDefaults.preload.js";
 import { buildAgentToolbarPinsPreloadBindings } from "./ipc/handlers/agentToolbarPins.preload.js";
+import { buildProjectClonePreloadBindings } from "./ipc/handlers/projectClone.preload.js";
 import { buildAgentAccountsPreloadBindings } from "./ipc/handlers/agentAccounts.preload.js";
 import { buildAgentCliCopiesPreloadBindings } from "./ipc/handlers/agentCliCopies.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
@@ -1975,6 +1977,14 @@ function buildElectronApi(): ElectronAPI {
     // An agent's accounts (#16040)
     agentAccounts: buildAgentAccountsPreloadBindings(_unwrappingInvoke),
     agentCliCopies: buildAgentCliCopiesPreloadBindings(_unwrappingInvoke),
+
+    // A clone that runs in the background as its own project (#16352)
+    projectClone: {
+      ...buildProjectClonePreloadBindings(_unwrappingInvoke),
+
+      onJobUpdated: (callback: (snapshot: ProjectCloneJobSnapshot) => void) =>
+        _typedOn(CHANNELS.PROJECT_CLONE_JOB_UPDATED, callback),
+    },
 
     // Per-service connectivity API
     connectivity: {

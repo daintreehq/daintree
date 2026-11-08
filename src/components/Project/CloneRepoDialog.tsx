@@ -42,6 +42,7 @@ import { join as joinPath } from "@shared/utils/path";
 import { matchProviderForRemoteUrl } from "@shared/utils/forgeHostnames";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import type { CloneRepoProgressEvent, CloneRepoResult } from "@shared/types/ipc/gitClone";
+import type { ProjectCloneStartRequest } from "@shared/types/ipc/projectClone";
 import type { ProjectCreationIdentity } from "@shared/types";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { isClientGitError } from "@/utils/clientGitError";
@@ -66,6 +67,15 @@ interface CloneRepoDialogProps {
     identity: ProjectCreationIdentity | undefined,
     options: { disposition: ProjectOpenDestination; groupId?: string }
   ) => void;
+  /**
+   * Hand a local clone to main, where it runs in the background as its own
+   * project (#16352): the dialog closes once the clone is accepted. Absent, or
+   * in a view bound to a remote host, the dialog waits for the clone itself.
+   */
+  onStartBackground?: (
+    request: ProjectCloneStartRequest,
+    options: { disposition: ProjectOpenDestination }
+  ) => Promise<void>;
   onCancel: () => void;
 }
 
@@ -182,7 +192,12 @@ const URL_PROBLEM_COPY: Record<Exclude<CloneUrlCheck, "ok">, string> = {
   malformed: "Check the repository URL",
 };
 
-export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialogProps) {
+export function CloneRepoDialog({
+  isOpen,
+  onSuccess,
+  onStartBackground,
+  onCancel,
+}: CloneRepoDialogProps) {
   const folderNameErrorId = useId();
   const shallowHintId = useId();
   const urlProblemId = useId();
@@ -206,6 +221,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const [stages, setStages] = useState<CloneRepoProgressEvent[]>([]);
   const [currentStageKey, setCurrentStageKey] = useState<string | null>(null);
   const [isCloning, setIsCloning] = useState(false);
+  // Handing a background clone over: only the checks and the project's
+  // registration, so the form just holds still until the dialog closes.
+  const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<CloneError | null>(null);
   // A user-initiated stop is an outcome, not a failure — it gets a neutral
   // banner over the re-enabled form instead of the error surface.
@@ -268,6 +286,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       setStages([]);
       setCurrentStageKey(null);
       setIsCloning(false);
+      setIsStarting(false);
       setError(null);
       setWasCancelled(false);
       setIsStopping(false);
@@ -364,8 +383,36 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const startClone = async () => {
     // Every entry point (button, Enter, Retry) funnels here, so the guard does
     // too: a Retry after the user cleared a field must not launch a clone.
-    if (isCloning || !canClone) return;
+    if (isBusy || !canClone) return;
     const targetFolder = folderName.trim();
+    // Named only in a remote-bound view; a local clone runs untracked, as before.
+    const opId = mintRemoteOperationId() ?? null;
+
+    if (opId === null && onStartBackground) {
+      setIsStarting(true);
+      setError(null);
+      setWasCancelled(false);
+      setCleanupError(null);
+      try {
+        await onStartBackground(
+          {
+            url: normalizeCloneUrl(url, shorthandHost),
+            parentPath,
+            folderName: targetFolder,
+            shallowClone,
+            ...(targetFolder ? { identity: { name: targetFolder, emoji: effectiveEmoji } } : {}),
+            ...(groupId ? { groupId } : {}),
+          },
+          { disposition: destination }
+        );
+      } catch (err) {
+        setError({ message: formatErrorMessage(err, "Failed to clone repository") });
+      } finally {
+        setIsStarting(false);
+      }
+      return;
+    }
+
     setIsCloning(true);
     setError(null);
     setWasCancelled(false);
@@ -379,8 +426,6 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     setStrandedPath(joinPath(parentPath, targetFolder));
     setLaunchedDestination(destination);
     hasFinalizedRef.current = false;
-    // Named only in a remote-bound view; a local clone runs untracked, as before.
-    const opId = mintRemoteOperationId() ?? null;
     cloneOpIdRef.current = opId;
 
     try {
@@ -451,7 +496,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const canFinalize = isComplete && clonedPath !== null;
 
   const handleClose = () => {
-    if (isCloning) return;
+    if (isBusy) return;
     if (canFinalize) {
       finalizeSuccess();
     } else {
@@ -464,6 +509,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   // a bad auto-derived name (e.g. URL ending in "con.git") still surfaces.
   const folderNameError =
     folderNameEdited || folderName.trim() !== "" ? validateFolderName(folderName) : null;
+  const isBusy = isCloning || isStarting;
   const canClone =
     isValidCloneUrl(url, shorthandHost) &&
     parentPath.trim() !== "" &&
@@ -526,7 +572,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     // Enter acts as Retry too — startClone resets `error` internally, so this
     // matches the on-screen Retry button instead of going dead after a failure.
     if (!isEnterToSubmit(e)) return;
-    if (canClone && !isCloning && !isComplete) {
+    if (canClone && !isBusy && !isComplete) {
       e.preventDefault();
       void startClone();
     }
@@ -640,7 +686,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       // header X all route to `handleClose`, which in this mode opens the
       // project — so leaving them live would dress the forward action up as a
       // dismissal. The mode has one action and it is labelled.
-      dismissible={!isCloning && !canFinalize}
+      dismissible={!isBusy && !canFinalize}
       initialFocus="none"
     >
       <AppDialog.Header>
@@ -799,7 +845,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                           id="clone-shallow"
                           checked={shallowClone}
                           onCheckedChange={(checked) => setShallowClone(checked === true)}
-                          disabled={isCloning}
+                          disabled={isBusy}
                           aria-describedby={shallowHintId}
                         />
                         <label
@@ -827,7 +873,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                     onKeyDown={handleKeyDown}
                     // Only offer the shorthand when one forge makes it resolvable.
                     placeholder={shorthandHost ? "owner/repo or repository URL" : "Repository URL"}
-                    disabled={isCloning}
+                    disabled={isBusy}
                     aria-invalid={urlIsInvalid || undefined}
                     aria-describedby={urlIsInvalid ? urlProblemId : undefined}
                     spellCheck={false}
@@ -845,9 +891,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                     onBrowse={() => void pickDirectory()}
                     // Enter here answers like the dialog's other fields do.
                     onEnter={() => {
-                      if (canClone && !isCloning && !isComplete) void startClone();
+                      if (canClone && !isBusy && !isComplete) void startClone();
                     }}
-                    disabled={isCloning}
+                    disabled={isBusy}
                     browseLabel="Browse for a location"
                   />
                 </FormRow>
@@ -871,7 +917,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                       setFolderNameEdited(next !== "");
                     }}
                     onKeyDown={handleKeyDown}
-                    disabled={isCloning}
+                    disabled={isBusy}
                     invalid={folderNameError != null}
                     aria-describedby={folderNameError ? folderNameErrorId : undefined}
                     spellCheck={false}
@@ -881,7 +927,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                       <ProjectEmojiButton
                         emoji={effectiveEmoji}
                         onEmojiChange={setPickedEmoji}
-                        disabled={isCloning}
+                        disabled={isBusy}
                         ariaLabel="Choose project emoji"
                         className={EMOJI_SLOT_CLASS}
                       />
@@ -893,13 +939,13 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                   groups={groups}
                   value={groupId}
                   onChange={setGroupId}
-                  disabled={isCloning}
+                  disabled={isBusy}
                 />
                 <FormRow label="Open in" selfLabelled>
                   <OpenDestinationControl
                     value={destination}
                     onChange={setDestination}
-                    disabled={isCloning}
+                    disabled={isBusy}
                   />
                 </FormRow>
               </FormSection>
@@ -927,18 +973,32 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               ref={footerActionRef}
               variant="contrast"
               onClick={() => {
-                if (isCloning || !canClone) return;
+                if (isBusy || !canClone) return;
                 void startClone();
               }}
-              aria-disabled={isCloning || !canClone || undefined}
-              className={cn((isCloning || !canClone) && ARIA_DISABLED_CLASSES)}
+              aria-disabled={isBusy || !canClone || undefined}
+              className={cn((isBusy || !canClone) && ARIA_DISABLED_CLASSES)}
             >
               Retry
             </Button>
           </div>
         ) : (
           <div className="flex shrink-0 items-center gap-3">
-            <Button variant="ghost" onClick={isCloning ? stopClone : onCancel} loading={isStopping}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (isCloning) {
+                  stopClone();
+                  return;
+                }
+                // A handed-off clone closes the dialog itself once accepted.
+                if (isStarting) return;
+                onCancel();
+              }}
+              loading={isStopping}
+              aria-disabled={isStarting || undefined}
+              className={cn(isStarting && ARIA_DISABLED_CLASSES)}
+            >
               {isCloning ? "Stop clone" : "Cancel"}
             </Button>
             <Button
@@ -949,7 +1009,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               }}
               aria-disabled={!canClone || undefined}
               className={cn(!canClone && ARIA_DISABLED_CLASSES)}
-              loading={isCloning}
+              loading={isBusy}
               aria-keyshortcuts="Enter"
             >
               Clone

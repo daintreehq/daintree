@@ -90,9 +90,15 @@ export type {
 export type { BrowserHistory } from "./browser.js";
 
 // Project types
-export { isGitBackedProject, isPluginRecipe, pickAgentVisibleProjectSettings } from "./project.js";
+export {
+  isAwaitingClone,
+  isGitBackedProject,
+  isPluginRecipe,
+  pickAgentVisibleProjectSettings,
+} from "./project.js";
 export type {
   ProjectStatus,
+  ProjectCloneState,
   Project,
   ProjectAddOptions,
   ProjectCreationIdentity,

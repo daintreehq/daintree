@@ -154,6 +154,7 @@ import type {
   DiagnosticsBundleSavePayload,
 } from "./system.js";
 import type { CloneRepoProgressEvent } from "./gitClone.js";
+import type { ProjectCloneJobSnapshot } from "./projectClone.js";
 import type { AppAgentConfig } from "../appAgent.js";
 import type { GeneratedIpcInvokeMap } from "./generated.js";
 import type {
@@ -1692,6 +1693,7 @@ export interface IpcEventMap {
    * payload shape live in `shared/types/ipc/gitClone.ts`.
    */
   "project:clone-progress": CloneRepoProgressEvent;
+  "project-clone:job-updated": ProjectCloneJobSnapshot;
 
   // PR detection events
   "pr:detected": PRDetectedPayload;

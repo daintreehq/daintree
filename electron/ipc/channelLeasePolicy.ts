@@ -601,6 +601,11 @@ export const CHANNEL_LEASE_POLICY = {
   // Filing — groups, a project's group, archiving — organises the switcher's
   // list and changes nothing about any project, so it is host-wide settings,
   // not driving: a viewer can file what it can see.
+  "project-clone:get-job": "free",
+  "project-clone:job-updated": "free",
+  "project-clone:retry": "free",
+  "project-clone:start": "free",
+  "project-clone:stop": "free",
   "project-groups:create": "free",
   "project-groups:delete": "free",
   "project-groups:list": "free",

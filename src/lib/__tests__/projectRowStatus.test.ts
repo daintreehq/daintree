@@ -400,6 +400,35 @@ describe("getProjectRowStatus", () => {
     expect(status.text).toBe("Directory not found");
   });
 
+  it("says a project is still cloning instead of when it was opened (#16352)", () => {
+    const status = getProjectRowStatus(
+      project({ cloneState: "cloning", lastOpened: NOW - 5000 }),
+      NOW
+    );
+
+    expect(status).toMatchObject({ text: "Cloning…", tone: "running" });
+  });
+
+  it("puts the clone's state above any activity the row reports", () => {
+    const status = getProjectRowStatus(
+      project({ cloneState: "cloning", waitingAgentCount: 2, activeAgentCount: 1 }),
+      NOW
+    );
+
+    expect(status.text).toBe("Cloning…");
+  });
+
+  it("names a clone that ended without a checkout, failed apart from stopped", () => {
+    expect(getProjectRowStatus(project({ cloneState: "failed" }), NOW)).toMatchObject({
+      text: "Clone failed",
+      tone: "blocked",
+    });
+    expect(getProjectRowStatus(project({ cloneState: "cancelled" }), NOW)).toMatchObject({
+      text: "Clone stopped",
+      tone: "muted",
+    });
+  });
+
   it("names the auto-park reason instead of showing a bare time-ago", () => {
     const status = getProjectRowStatus(
       project({ status: "closed", autoParkedAt: NOW - 1000, lastOpened: NOW - 5000 }),

@@ -60,6 +60,14 @@ export const projects = sqliteTable(
     statsPrCount: integer("stats_pr_count"),
     statsProviderId: text("stats_provider_id"),
     statsLastUpdated: integer("stats_last_updated"),
+    // Set from the moment a clone registers the project until it succeeds
+    // (#16352): `cloning`, `failed` or `cancelled`. Null on every ready
+    // project, so no backfill is needed.
+    cloneState: text("clone_state"),
+    // The clone request behind `clone_state` (JSON: the URL as entered, the
+    // shallow flag, git's scrubbed error), so Retry and the failed view survive
+    // a restart. Main-only: never mapped onto the shared project.
+    cloneJob: text("clone_job"),
   },
   (table) => [
     // Equality lookup for getProjectByPath().

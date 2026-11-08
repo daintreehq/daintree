@@ -95,7 +95,7 @@ const CONTROL_CHARS = /[\x00-\x1F\x7F]/;
  * Reads own properties only and returns a fresh object, so neither inherited
  * fields nor extra keys (`id`, `path`) can ride along into the insert.
  */
-function normalizeCreationIdentity(
+export function normalizeCreationIdentity(
   identity: ProjectCreationIdentity | undefined
 ): ProjectCreationIdentity | undefined {
   if (!identity || typeof identity !== "object" || Array.isArray(identity)) return undefined;
@@ -123,7 +123,7 @@ const MAX_CREATION_GROUP_ID_LENGTH = 128;
  * still exists is decided by `addProject` at the moment it writes the row, the
  * one point a group deleted mid-add can't slip past.
  */
-function normalizeCreationGroupId(groupId: unknown): string | undefined {
+export function normalizeCreationGroupId(groupId: unknown): string | undefined {
   if (typeof groupId !== "string") return undefined;
   if (groupId.length === 0 || groupId.length > MAX_CREATION_GROUP_ID_LENGTH) return undefined;
   return groupId;
@@ -144,6 +144,44 @@ export async function removeProjectWithCleanup(
   // keys window-states.json by path, which is unrecoverable once the row is gone.
   const removedPath = projectStore.getProjectById(projectId)?.path ?? null;
 
+  // A clone still running for the project stops first, and its partial
+  // checkout goes with it, so nothing keeps writing a folder no row owns
+  // (#16352). Nothing has used the service without a clone to release.
+  const { peekProjectCloneService } =
+    await import("../../../services/projectClone/ProjectCloneService.js");
+  const endCloneRemoval = await peekProjectCloneService()?.releaseForRemoval(projectId);
+  try {
+    await removeProjectRow(projectId, deps);
+  } catch (error) {
+    endCloneRemoval?.(false);
+    throw error;
+  }
+  endCloneRemoval?.(true);
+
+  if (removedPath) {
+    pruneWindowStateForPath(removedPath);
+    // The project's file indexes are megabytes apiece and nothing will read
+    // them again — the worktree-delete path invalidates per worktree, but a
+    // project removed whole never goes through it (#12240). Best-effort, like
+    // the worktree lifecycle handlers: a cache drop must not fail a removal the
+    // user asked for and that has already deleted the row.
+    try {
+      fileSearchCacheInvalidator.handleProjectClosed(removedPath);
+    } catch (error) {
+      console.warn("[project.remove] Failed to invalidate file search cache:", error);
+    }
+  }
+  broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
+  // The row is gone, so a window still bound to it no longer has a project open.
+  refreshProjectMenuState();
+  notificationService.refreshTitles();
+}
+
+/** The teardown that has to succeed before the row goes, then the row itself. */
+async function removeProjectRow(
+  projectId: string,
+  deps: Pick<HandlerDependencies, "ptyClient" | "worktreeService">
+): Promise<void> {
   if (deps.ptyClient) {
     // Gracefully tear down and journal each agent session before the row (and
     // its restoration state) is permanently deleted. Fail closed: if the host
@@ -170,23 +208,6 @@ export async function removeProjectWithCleanup(
   notifyProjectPluginsRemoved(projectId);
 
   await projectStore.removeProject(projectId);
-  if (removedPath) {
-    pruneWindowStateForPath(removedPath);
-    // The project's file indexes are megabytes apiece and nothing will read
-    // them again — the worktree-delete path invalidates per worktree, but a
-    // project removed whole never goes through it (#12240). Best-effort, like
-    // the worktree lifecycle handlers: a cache drop must not fail a removal the
-    // user asked for and that has already deleted the row.
-    try {
-      fileSearchCacheInvalidator.handleProjectClosed(removedPath);
-    } catch (error) {
-      console.warn("[project.remove] Failed to invalidate file search cache:", error);
-    }
-  }
-  broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
-  // The row is gone, so a window still bound to it no longer has a project open.
-  refreshProjectMenuState();
-  notificationService.refreshTitles();
 }
 
 export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () => void {
@@ -266,6 +287,8 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     // (`project-groups:*`), which check the group exists and stamp the archive
     // time on the host's clock. A generic update could file a project under a
     // group that was never created.
+    // `cloneState` joins them: only the clone service knows whether a checkout
+    // exists, and a row claiming one it doesn't have would open onto nothing.
     const {
       id: _id,
       path: _path,
@@ -276,6 +299,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       resumableAgentCount: _rac,
       archivedAt: _archivedAt,
       groupId: _groupId,
+      cloneState: _cloneState,
       ...safeUpdates
     } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);

@@ -1556,4 +1556,124 @@ describe("CloneRepoDialog", () => {
       expect(screen.queryByTestId("cleanup-banner")).toBeNull();
     });
   });
+
+  describe("background clone (#16352)", () => {
+    async function fillAndClone() {
+      fireEvent.change(screen.getByLabelText(/^url$/i), {
+        target: { value: "https://github.com/user/test-repo.git" },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+      });
+    }
+
+    it("hands a local clone to the background instead of waiting on it", async () => {
+      const onStartBackground = vi.fn().mockResolvedValue(undefined);
+      render(
+        <CloneRepoDialog
+          isOpen={true}
+          onSuccess={vi.fn()}
+          onStartBackground={onStartBackground}
+          onCancel={vi.fn()}
+        />
+      );
+
+      await fillAndClone();
+
+      expect(cloneRepoMock).not.toHaveBeenCalled();
+      expect(onStartBackground).toHaveBeenCalledWith(
+        {
+          url: "https://github.com/user/test-repo.git",
+          parentPath: "/tmp",
+          folderName: "test-repo",
+          shallowClone: false,
+          identity: { name: "test-repo", emoji: suggestProjectEmoji("test-repo") },
+        },
+        { disposition: "current" }
+      );
+      // No running mode: the wait lives on the project now.
+      expect(screen.queryByText("Connecting…")).toBeNull();
+    });
+
+    it("keeps the form up with the reason when the clone can't start", async () => {
+      const onStartBackground = vi
+        .fn()
+        .mockRejectedValue(new Error('Folder "test-repo" already exists in this location'));
+      render(
+        <CloneRepoDialog
+          isOpen={true}
+          onSuccess={vi.fn()}
+          onStartBackground={onStartBackground}
+          onCancel={vi.fn()}
+        />
+      );
+
+      await fillAndClone();
+
+      await screen.findByText("Clone failed");
+      expect(screen.getByText(/already exists in this location/)).toBeTruthy();
+      expect((screen.getByLabelText(/^url$/i) as HTMLInputElement).disabled).toBe(false);
+
+      // The busy guard cleared with the failure: Retry hands the request over again.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      });
+      expect(onStartBackground).toHaveBeenCalledTimes(2);
+    });
+
+    it("holds the form and Cancel while the clone is being handed over", async () => {
+      let accept!: () => void;
+      const onStartBackground = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
+      const onCancel = vi.fn();
+      render(
+        <CloneRepoDialog
+          isOpen={true}
+          onSuccess={vi.fn()}
+          onStartBackground={onStartBackground}
+          onCancel={onCancel}
+        />
+      );
+
+      await fillAndClone();
+
+      const cancel = screen.getByRole("button", { name: "Cancel" });
+      expect(cancel.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(cancel);
+      expect(onCancel).not.toHaveBeenCalled();
+      // A second press can't hand over a second clone.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+      });
+      expect(onStartBackground).toHaveBeenCalledTimes(1);
+
+      await act(async () => accept());
+      expect(
+        screen.getByRole("button", { name: "Cancel" }).getAttribute("aria-disabled")
+      ).toBeNull();
+    });
+
+    it("keeps waiting on the clone itself in a remote-bound view", async () => {
+      cloneRepoMock.mockImplementation(() => new Promise(() => {}));
+      const onStartBackground = vi.fn();
+      window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+      try {
+        render(
+          <CloneRepoDialog
+            isOpen={true}
+            onSuccess={vi.fn()}
+            onStartBackground={onStartBackground}
+            onCancel={vi.fn()}
+          />
+        );
+        await fillAndClone();
+        expect(onStartBackground).not.toHaveBeenCalled();
+        expect(cloneRepoMock).toHaveBeenCalledTimes(1);
+      } finally {
+        delete window.__DAINTREE_HOST_ID__;
+      }
+    });
+  });
 });

@@ -43,6 +43,7 @@ let _getWorktreeIdSet: (() => Set<string> | null) | null = null;
 let _getWorktreeGitDirById: ((worktreeId: string) => string | undefined) | null = null;
 let _getWorktreePathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
 let _getProjectPathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
+let _isCurrentProjectAwaitingClone: (() => boolean) | null = null;
 let _getViewedMarkSources: ((worktreePath: string) => ViewedMarkSources) | null = null;
 let _setPanelExtensionState: ((panelId: string, patch: Record<string, unknown>) => boolean) | null =
   null;
@@ -169,6 +170,18 @@ export function getProjectPathIndex(): ReadonlyMap<string, string> | null {
  * the host a leaf, which is the same reason every other cross-store read in the
  * renderer goes through this module.
  */
+export function setCurrentProjectAwaitingCloneAccessor(getter: () => boolean): void {
+  _isCurrentProjectAwaitingClone = getter;
+}
+
+/**
+ * Whether this view's project has no checkout yet because its clone is running
+ * or ended without one (#16352). `false` until the project store registers.
+ */
+export function isCurrentProjectAwaitingClone(): boolean {
+  return _isCurrentProjectAwaitingClone?.() ?? false;
+}
+
 export function setPanelExtensionStateAccessor(
   setter: (panelId: string, patch: Record<string, unknown>) => boolean
 ): void {
@@ -294,6 +307,7 @@ export function resetStoreAccessorsForTesting(): void {
   _getWorktreeGitDirById = null;
   _getWorktreePathIndex = null;
   _getProjectPathIndex = null;
+  _isCurrentProjectAwaitingClone = null;
   _getViewedMarkSources = null;
   _setPanelExtensionState = null;
   _setPanelTitle = null;

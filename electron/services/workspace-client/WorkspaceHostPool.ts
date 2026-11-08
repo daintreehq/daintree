@@ -501,7 +501,10 @@ export class WorkspaceHostPool {
   releaseWindow(windowId: number): void {
     // Invalidate any in-flight loadProject for this window so a late
     // completion can't resurrect the mapping after the window released it.
-    this.windowLoadSeq.delete(windowId);
+    // Advanced rather than deleted: a reset counter would hand the window's
+    // next load the same number as one still in flight, which would then
+    // pass as current and overwrite the newer mapping.
+    this.windowLoadSeq.set(windowId, (this.windowLoadSeq.get(windowId) ?? 0) + 1);
 
     const projectPath = this.windowToProject.get(windowId);
     if (!projectPath) return;
