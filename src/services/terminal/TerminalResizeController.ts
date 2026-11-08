@@ -1305,11 +1305,12 @@ export class TerminalResizeController {
     // so the flush has to be explicit here.
     //
     // For an alt-screen pane this is the whole of what #10805 allows: the same
-    // xterm-then-PTY pair the ResizeObserver path commits, only when the grid
-    // really moved, and with nothing left to parse (the gate above), so the
-    // frame on screen is a finished one. The alternate buffer has no
-    // scrollback, so xterm crops or pads that frame rather than reflowing it,
-    // and the app's SIGWINCH redraw repaints it at the new size.
+    // xterm-then-PTY pair the ResizeObserver path commits, and only when the
+    // grid really moved. For every automatic caller nothing is left to parse
+    // (the gate above), so the frame on screen is a finished one; a forced
+    // Redraw may land a frame early, the churn #11638 accepts. The alternate
+    // buffer has no scrollback, so xterm crops or pads that frame rather than
+    // reflowing it, and the app's SIGWINCH redraw repaints it at the new size.
     let heldBytesFlushed = true;
     if (gridChanges) {
       heldBytesFlushed = this.flushHeldBytesBeforeResize(id);

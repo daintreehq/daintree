@@ -1184,11 +1184,10 @@ describe("TerminalReconciliationWatchdog", () => {
     });
 
     it("still issues the reveal-pending repair for a streaming ALT-buffer pane (quiescence gate is main-buffer only)", () => {
-      // The geometry branch excludes alt panes outright (#11443), but the
-      // reveal-pending obligation still belongs to them: its repair also
-      // restores the WebGL atlas and unpauses the renderer, and
-      // reconcileGeometryFresh's quiescence gate sits after the alt early
-      // return, so writes must not defer it.
+      // Recent writes that have finished parsing leave nothing in flight, so
+      // reconcileGeometryFresh would accept the resize: the main buffer's
+      // quiet window must not defer an alt pane's reveal repair, which also
+      // restores the WebGL atlas and unpauses the renderer.
       const managed = makeManaged({ isAltBuffer: true });
       setRenderPaused(managed, false);
       setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
@@ -1203,8 +1202,35 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(1);
       expect(managed.revealPendingRepair).toBe(false);
       // The reveal obligation is not a convergence repair — it must not spend a
-      // breaker attempt the alt pane can never win back.
+      // breaker attempt.
       expect(managed.geometryRepairAttempts ?? 0).toBe(0);
+    });
+
+    it("defers a diverged alt pane's reveal repair while output is in flight, and still unpauses it", () => {
+      // reconcileGeometryFresh would refuse this resize, so issuing the repair
+      // would only spend a heavy slot on a refusal and skip the cheaper layers
+      // — and a few busy panes could starve the rest. The tick defers instead,
+      // the render-pause layer still runs, and a later tick with the output
+      // parsed discharges the obligation.
+      const managed = makeManaged({ isAltBuffer: true });
+      setRenderPaused(managed, true);
+      setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      managed.pendingWrites = 1;
+      managed.revealPendingRepair = true;
+      managed.revealPendingGeneration = managed.attachGeneration;
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+      expect(managed.revealPendingRepair).toBe(true);
+      expect(refreshCount(managed)).toBe(1);
+
+      managed.pendingWrites = 0;
+      vi.advanceTimersByTime(WATCHDOG_REPAIR_COOLDOWN_MS + WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledWith("t1");
+      expect(managed.revealPendingRepair).toBe(false);
     });
 
     it("neither advances nor resets the breaker while a synchronized-output block stays open", () => {
