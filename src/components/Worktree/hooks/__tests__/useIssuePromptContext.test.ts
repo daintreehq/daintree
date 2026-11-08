@@ -214,6 +214,26 @@ describe("loadIssuePromptContext", () => {
   });
 });
 
+describe("loadIssuePromptContext's deadline", () => {
+  it("starts no comments read once the issue read has spent the budget", async () => {
+    vi.useFakeTimers();
+    mockGetIssue.mockImplementation(async () => {
+      // The issue arrives just as the budget runs out; no timer has fired yet.
+      vi.setSystemTime(Date.now() + ISSUE_PROMPT_READ_TIMEOUT_MS);
+      return makeIssue(7);
+    });
+
+    const read = await loadIssuePromptContext({
+      cwd: ROOT,
+      issue: { number: 7 },
+      providerName: "GitHub",
+    });
+
+    expect(mockListIssueComments).not.toHaveBeenCalled();
+    expect(read).toMatchObject({ status: "ready", comments: "failed" });
+  });
+});
+
 describe("useIssuePromptContext", () => {
   function render(initial: { enabled: boolean; issue: Issue | null }) {
     return renderHook(
