@@ -446,8 +446,13 @@ export class HelpSessionController {
   private _lastResumeTarget: HelpLaunchOptions["resumeTarget"] = undefined;
   /** The agent the latest launch was pinned to (`pinAgent`), until it goes live. */
   private _lastPinnedAgentId: string | null = null;
-  /** The latest launch was a vacant-only fresh start, which Retry repeats as one. */
-  private _lastVacantFresh = false;
+  /**
+   * The agent of the latest launch when it was a vacant-only fresh start
+   * (#16495), which Retry and a passed version recheck repeat as one: a plain
+   * relaunch would resume the conversation it was meant to leave alone, or take
+   * the lane from whoever holds it now.
+   */
+  private _lastVacantFresh: string | null = null;
 
   private readonly _versionGate = new HelpVersionGate({
     getSnapshot: () => this._snapshot,
@@ -460,7 +465,9 @@ export class HelpSessionController {
     // than an auto-launch, so once that agent is current it goes ahead.
     maybeAutoLaunch: (inputs) => {
       const pinned = this._lastPinnedAgentId;
-      if (pinned) this.launch({ agentId: pinned, replaceExisting: true, pinAgent: true });
+      const fresh = this._lastVacantFresh;
+      if (fresh) this._relaunchVacantFresh(fresh);
+      else if (pinned) this.launch({ agentId: pinned, replaceExisting: true, pinAgent: true });
       else this._maybeAutoLaunch(inputs);
     },
   });
@@ -609,17 +616,8 @@ export class HelpSessionController {
   retryLaunch(agentId: string): void {
     const resumeTarget = this._lastResumeTarget;
     const pinAgent = this._lastPinnedAgentId === agentId;
-    // A plain relaunch would resume the conversation the fresh start was meant to
-    // leave alone, or take the lane from whoever holds it now.
     if (this._lastVacantFresh) {
-      this.launch({
-        agentId,
-        replaceExisting: true,
-        requestedId: `terminal-${crypto.randomUUID()}`,
-        checkVersion: true,
-        vacantOnly: true,
-        ...(pinAgent ? { pinAgent } : {}),
-      });
+      this._relaunchVacantFresh(agentId);
       return;
     }
     this.launch(
@@ -627,6 +625,17 @@ export class HelpSessionController {
         ? { agentId, replaceExisting: true, resumeTarget }
         : { agentId, ...(pinAgent ? { pinAgent } : {}) }
     );
+  }
+
+  private _relaunchVacantFresh(agentId: string): void {
+    this.launch({
+      agentId,
+      replaceExisting: true,
+      requestedId: `terminal-${crypto.randomUUID()}`,
+      checkVersion: true,
+      vacantOnly: true,
+      ...(this._lastPinnedAgentId === agentId ? { pinAgent: true } : {}),
+    });
   }
 
   /**
@@ -983,7 +992,8 @@ export class HelpSessionController {
     this._isLaunching = true;
     this._lastResumeTarget = options.resumeTarget;
     this._lastPinnedAgentId = options.pinAgent ? launchAgentId : null;
-    this._lastVacantFresh = options.vacantOnly === true && options.requestedId !== undefined;
+    this._lastVacantFresh =
+      options.vacantOnly === true && options.requestedId !== undefined ? launchAgentId : null;
 
     // A launch supersedes any revoked-session banner — the user is starting a
     // fresh session, so the prior session's revocation no longer applies (#10017).

@@ -486,6 +486,7 @@ import {
   acquireHelpSessionController,
 } from "@/controllers/helpSessionControllerRegistry";
 import { assistantSlotKey } from "@shared/config/assistantSlots";
+import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
 
 // The real `app:view-revealed` bridge fans out to every registered listener;
 // HelpPanel registers the switch-back recovery effect against it (#10739).
@@ -941,9 +942,25 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     });
 
     // The tab still opens, launching nothing over what its slot holds.
-    expect(helpPanelState.openSlot).toHaveBeenCalledWith(undefined);
+    expect(helpPanelState.openSlot).toHaveBeenCalledWith(1);
     expect(acquireHelpSessionController(1)["_queuedLaunch"]).toBeNull();
     expect(mockProvisionSession).not.toHaveBeenCalled();
+  });
+
+  it("opens nothing in a slot a launch in flight has claimed (#16495)", async () => {
+    setUpStripNewSession();
+    keepLanes({});
+    for (const slot of [1, 2, 3, 4, 5]) {
+      claimedHelpLaneKeys.add(assistantSlotKey("proj-default", slot));
+    }
+    onTestFinished(() => claimedHelpLaneKeys.clear());
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(newSessionItem());
+    });
+
+    expect(helpPanelState.openSlot).not.toHaveBeenCalled();
   });
 
   it("opens the tab but launches nothing when main's lanes can't be read (#16495)", async () => {
@@ -960,7 +977,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
       fireEvent.click(newSessionItem());
     });
 
-    expect(helpPanelState.openSlot).toHaveBeenCalledWith(undefined);
+    expect(helpPanelState.openSlot).toHaveBeenCalledWith(1);
     expect(acquireHelpSessionController(1)["_queuedLaunch"]).toBeNull();
   });
 

@@ -41,7 +41,7 @@ import {
   acquireHelpSessionController,
   useHelpSessionController,
 } from "@/controllers/helpSessionControllerRegistry";
-import { assistantSlotKey } from "@shared/config/assistantSlots";
+import { ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import {
   closeSessionDescription,
@@ -58,6 +58,7 @@ import { useHelpPanelRevealFocus } from "./useHelpPanelRevealFocus";
 import { useHelpSessionLanes, type PausedLane } from "./useHelpSessionLanes";
 import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
 import {
+  canStartOverKeptLane,
   freshSessionLaunch,
   pickNewSessionSlot,
   readKeptLanes,
@@ -1053,15 +1054,17 @@ export function HelpPanel({
         mainKept && workspaceId
           ? withMirroredLanes(mainKept, workspaceId, hibernateSessions)
           : null;
+      const isTaken = (slot: number) =>
+        slot in sessions ||
+        (workspaceId !== null && claimedHelpLaneKeys.has(assistantSlotKey(workspaceId, slot)));
+      const picked = kept ? pickNewSessionSlot(kept, isTaken) : null;
       const pick =
-        kept && workspaceId
-          ? pickNewSessionSlot(
-              kept,
-              (slot) =>
-                slot in sessions || claimedHelpLaneKeys.has(assistantSlotKey(workspaceId, slot))
-            )
-          : null;
-      const slot = handleOpenParallelSession(pick?.slot);
+        picked?.replacesKept && !(launchableAgentId && canStartOverKeptLane(launchableAgentId))
+          ? null
+          : picked;
+      const target = pick?.slot ?? ASSISTANT_SLOTS.find((slot) => !isTaken(slot));
+      if (target === undefined) return;
+      const slot = handleOpenParallelSession(target);
       if (slot === null || !launchableAgentId || read === "unread") return;
       const controller = acquireHelpSessionController(slot);
       if (pick?.slot === slot) {

@@ -1,4 +1,5 @@
 import { ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { HelpLaunchOptions } from "@/controllers/HelpSessionController";
 import type { HelpHibernateSession } from "@/store/helpPanelStore";
 import { isListedAssistantAgent } from "./pastSessionsNote";
@@ -78,6 +79,15 @@ export function withMirroredLanes(
  */
 export function isReplaceableKeptLane(lane: KeptLane): boolean {
   return !lane.live && lane.agentSessionId !== "" && isListedAssistantAgent(lane.agentId);
+}
+
+/**
+ * Whether a new session on `agentId` may start over a kept conversation. Main
+ * replaces a lane's pointer only when an agent that can resume spawns there; any
+ * other leaves the old conversation attached, to come back once it exits.
+ */
+export function canStartOverKeptLane(agentId: string): boolean {
+  return Boolean(getEffectiveAgentConfig(agentId)?.resume);
 }
 
 /**

@@ -861,6 +861,37 @@ describe("HelpSessionController — a fresh start over a kept conversation (#164
     expect(window.electron.help.takePendingHibernation).not.toHaveBeenCalled();
     ctrl.stop();
   });
+
+  it("starts afresh again, not a resume, once a version it was held back for is current", async () => {
+    vi.mocked(window.electron.system.getAgentVersion).mockResolvedValue({
+      installedVersion: "0.5.0",
+      latestVersion: null,
+    } as never);
+    const ctrl = new HelpSessionController();
+    syncWorkspaceInputs(ctrl, { id: "proj-1", path: "/repo" }, { terminalId: null });
+
+    ctrl.launch(freshLaunch());
+    helpPanelState.terminalId = vi.mocked(helpPanelState.setTerminal).mock.calls[0]?.[1] ?? null;
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().assistantVersionTooOld).toMatchObject({ agentId: "claude" });
+    });
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+
+    helpPanelState.terminalId = null;
+    vi.mocked(window.electron.system.getAgentVersion).mockResolvedValue({
+      installedVersion: "99.0.0",
+      latestVersion: null,
+    } as never);
+    ctrl.checkVersionAgain();
+    await vi.waitFor(() => {
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ slot: 0, vacantOnly: true })
+      );
+    });
+    expect(window.electron.help.takePendingHibernation).not.toHaveBeenCalled();
+    expect(window.electron.help.discardConversation).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
 });
 
 describe("HelpSessionController — terminal PTY exit slides the sidebar out (#10989)", () => {

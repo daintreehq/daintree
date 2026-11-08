@@ -1701,6 +1701,15 @@ describe("help.newSessionWithAgent (#13442)", () => {
     );
   });
 
+  it("never starts an agent that can't resume over a kept conversation, which it would leave attached", async () => {
+    bindLane(0, "term-0", "claude");
+    for (const slot of [1, 2, 3, 4, 5]) kept[slot] = "claude";
+
+    expect(await run("crush")).toEqual({ outcome: "lanes-full" });
+
+    expect(controllers.size).toBe(0);
+  });
+
   it("holds the tab it chose until the launch settles", async () => {
     bindLane(0, "term-0", "claude");
     await run("codex");

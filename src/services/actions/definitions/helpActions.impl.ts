@@ -50,6 +50,7 @@ import { usePaletteStore } from "@/store/paletteStore";
 import type { HelpSessionController } from "@/controllers/HelpSessionController";
 import type { HelpLaunchSnapshot } from "./helpLaunchSnapshot";
 import {
+  canStartOverKeptLane,
   freshSessionLaunch,
   pickNewSessionSlot,
   readKeptLanes,
@@ -491,15 +492,16 @@ async function startHelpSessionWithAgent(
     );
     // The last resort is a slot whose conversation stays in past sessions
     // (#16495). It has no tab, so it mustn't make the tabs read as full.
-    const replaceable = free
-      ? null
-      : pickNewSessionSlot(
-          withMirroredLanes(kept, workspace.id, state.hibernateSessions),
-          (slot) =>
-            slot in state.sessions ||
-            busy.has(slot) ||
-            claimedHelpLaneKeys.has(assistantSlotKey(workspace.id, slot))
-        );
+    const replaceable =
+      free || !canStartOverKeptLane(agentId)
+        ? null
+        : pickNewSessionSlot(
+            withMirroredLanes(kept, workspace.id, state.hibernateSessions),
+            (slot) =>
+              slot in state.sessions ||
+              busy.has(slot) ||
+              claimedHelpLaneKeys.has(assistantSlotKey(workspace.id, slot))
+          );
     const target =
       free ?? (replaceable?.replacesKept ? { slot: replaceable.slot, isNew: true } : null);
     if (!target) {

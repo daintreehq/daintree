@@ -2489,11 +2489,16 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
   it.each([
     ["nobody touched it", {}, true],
     ["it is on screen", { onScreen: true }, false],
+    ["it was on screen before", { visited: true }, false],
     ["its conversation was touched", { touched: true }, false],
     ["a launch has claimed it", { claimed: true }, false],
   ] as const)(
     "closes the tab it opened for a scheduled run once the run ends, unless %s (#16495)",
-    async (_case, lane: { onScreen?: boolean; touched?: boolean; claimed?: boolean }, hidden) => {
+    async (
+      _case,
+      lane: { onScreen?: boolean; visited?: boolean; touched?: boolean; claimed?: boolean },
+      hidden
+    ) => {
       helpPanelState.terminalId = "term-live";
       helpPanelState.agentId = "claude";
       projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
@@ -2541,13 +2546,22 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
       };
 
       try {
+        let view: ReturnType<typeof render> | undefined;
         await act(async () => {
-          render(<HelpPanel width={380} />);
+          view = render(<HelpPanel width={380} />);
         });
         await flushAsyncWork();
         await runChanged();
         expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(1);
 
+        if (lane.visited) {
+          for (const slot of [1, 0]) {
+            helpPanelState.activeSlot = slot;
+            await act(async () => {
+              view!.rerender(<HelpPanel width={380} />);
+            });
+          }
+        }
         if (lane.onScreen) helpPanelState.activeSlot = 1;
         if (lane.claimed) claimedHelpLaneKeys.add(slotKey("proj-1", 1));
         running = false;
