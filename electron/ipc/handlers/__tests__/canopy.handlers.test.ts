@@ -66,6 +66,8 @@ const ptyClient = vi.hoisted(() => ({
 /** Who drives every project: this screen, another one, or nobody (no lease service at all). */
 const lease = vi.hoisted(() => ({
   holder: null as "self" | "other" | null,
+  /** Projects this screen drives even while another screen holds the rest. */
+  driven: new Set<string>(),
   /** The handle of the endpoint holding the lease, when one is attached. */
   holderHandle: undefined as number | undefined,
   listeners: new Set<() => void>(),
@@ -76,7 +78,8 @@ vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
     lease.holder === null
       ? null
       : {
-          isDriving: () => lease.holder === "self",
+          isDriving: (projectId?: string) =>
+            lease.holder === "self" || (projectId !== undefined && lease.driven.has(projectId)),
           getHolderEndpoint: () =>
             lease.holderHandle === undefined ? null : { handle: lease.holderHandle },
           onChange: (listener: () => void) => {
@@ -352,6 +355,7 @@ describe("canopy IPC", () => {
     state.packaged = false;
     state.generation = 1;
     lease.holder = null;
+    lease.driven.clear();
     state.terminalProject = "project-1";
     saved.state = null;
     // setMode is rate-limited across the file; each case starts with the window clear.
@@ -1293,6 +1297,150 @@ describe("canopy IPC", () => {
     // A second Undo has nothing left to take back.
     const again = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
     expect(again.ok).toBe(false);
+  });
+
+  describe("bulk trash", () => {
+    /** What a handler answered, out of its envelope. */
+    function answer<T>(result: unknown): T {
+      const envelope = result as { ok?: boolean; data?: unknown };
+      return (envelope && "ok" in envelope ? envelope.data : result) as T;
+    }
+
+    /** Runs the fleet holds, each its own terminal in the incarnation listed. */
+    function fleetOf(count: number): Array<{ runId: string; spawnedAt: number }> {
+      state.runs = Array.from({ length: count }, (_, index) => ({
+        runId: `run-${index}`,
+        spawnedAt: 100,
+        workspaceId: "project-1",
+      }));
+      return state.runs.map(({ runId, spawnedAt }) => ({ runId, spawnedAt }));
+    }
+
+    it("trashes a confirmed set past one-by-one trash's limit in one call, and takes it all back", async () => {
+      const targets = fleetOf(25);
+      const outcomes = answer<Array<{ runId: string; receipt?: number | null }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets)
+      );
+      expect(outcomes).toHaveLength(25);
+      expect(outcomes.every((outcome) => typeof outcome.receipt === "number")).toBe(true);
+      expect(ptyClient.trash).toHaveBeenCalledTimes(25);
+
+      state.runs = [];
+      const receipts = outcomes.map((outcome) => outcome.receipt!);
+      const undone = answer<Array<{ receipt: number; error?: string }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.untrashBatch, fakeSender(1), receipts)
+      );
+      expect(undone.filter((outcome) => outcome.error === undefined)).toHaveLength(25);
+      expect(ptyClient.restore).toHaveBeenCalledTimes(25);
+      // Spent: the same Undo again puts nothing back.
+      const again = answer<Array<{ receipt: number; error?: string }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.untrashBatch, fakeSender(1), receipts.slice(0, 1))
+      );
+      expect(again[0]!.error).toBeTruthy();
+      expect(ptyClient.restore).toHaveBeenCalledTimes(25);
+    });
+
+    /** Each run's own terminal record, by id, for the length of `body`. */
+    async function withRecords<T>(
+      records: Record<string, { spawnedAt: number; projectId?: string; isExited?: boolean }>,
+      body: () => Promise<T>,
+      onLookup: (id: string) => void = () => {}
+    ): Promise<T> {
+      ptyClient.getTerminalAsync.mockImplementation(async (id?: string) => {
+        onLookup(id ?? "");
+        return (records[id ?? ""] ?? null) as typeof state.record;
+      });
+      ptyClient.getTerminalProjectId.mockImplementation(() => null);
+      try {
+        return await body();
+      } finally {
+        ptyClient.getTerminalAsync.mockImplementation(async () => state.record);
+        ptyClient.getTerminalProjectId.mockImplementation(() => state.terminalProject);
+        lease.driven.clear();
+      }
+    }
+
+    type Outcome = { runId: string; receipt?: number; error?: string };
+
+    it("refuses alone a run respawned since, or whose project another screen drives, exited or not", async () => {
+      const targets = fleetOf(4);
+      lease.holder = "other";
+      lease.driven.add("project-1");
+      const outcomes = await withRecords(
+        {
+          "run-0": { spawnedAt: 100, projectId: "project-1" },
+          "run-1": { spawnedAt: 200, projectId: "project-1" },
+          "run-2": { spawnedAt: 100, projectId: "project-2" },
+          // Exited: its spawn is no longer tracked, so only its record names the project.
+          "run-3": { spawnedAt: 100, projectId: "project-2", isExited: true },
+        },
+        async () =>
+          answer<Outcome[]>(await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets))
+      );
+      const byRun = new Map(outcomes.map((outcome) => [outcome.runId, outcome]));
+      expect(typeof byRun.get("run-0")!.receipt).toBe("number");
+      expect(byRun.get("run-1")!.error).toBeTruthy();
+      expect(byRun.get("run-2")!.error).toBe("This project is being driven from another screen.");
+      expect(byRun.get("run-3")!.error).toBe("This project is being driven from another screen.");
+      expect(ptyClient.trash).toHaveBeenCalledTimes(1);
+      expect(ptyClient.trash).toHaveBeenCalledWith("run-0");
+    });
+
+    it("refuses a run whose project another screen took while its record was read", async () => {
+      const targets = fleetOf(1);
+      lease.holder = "self";
+      const outcomes = await withRecords(
+        { "run-0": { spawnedAt: 100, projectId: "project-1" } },
+        async () =>
+          answer<Outcome[]>(
+            await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets)
+          ),
+        () => {
+          lease.holder = "other";
+        }
+      );
+      expect(outcomes[0]!.error).toBe("This project is being driven from another screen.");
+      expect(ptyClient.trash).not.toHaveBeenCalled();
+    });
+
+    it("keeps the receipt and the views' move for a run that leaves the fleet while it is trashed", async () => {
+      const targets = fleetOf(1);
+      const view = { send: vi.fn() };
+      state.views = [view];
+      const outcomes = await withRecords(
+        { "run-0": { spawnedAt: 100, projectId: "project-1" } },
+        async () =>
+          answer<Outcome[]>(
+            await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets)
+          ),
+        () => {
+          state.runs = [];
+        }
+      );
+      expect(typeof outcomes[0]!.receipt).toBe("number");
+      expect(view.send).toHaveBeenCalledWith("canopy:trash-requested", { runId: "run-0" });
+    });
+
+    it("refuses a set larger than the Trash lists, before trashing any of it", async () => {
+      const targets = fleetOf(51);
+      const refused = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets)
+      );
+      expect(refused.ok).toBe(false);
+      expect(ptyClient.trash).not.toHaveBeenCalled();
+    });
+
+    it("reads input lines only for runs the fleet holds in the incarnation named", async () => {
+      fleetOf(1);
+      const readings = answer<Array<{ runId: string; state: string }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.readInputLines, fakeSender(1), [
+          { runId: "run-0", spawnedAt: 100 },
+          { runId: "run-0", spawnedAt: 99 },
+          { runId: "elsewhere", spawnedAt: 100 },
+        ])
+      );
+      expect(readings.map((reading) => reading.runId)).toEqual(["run-0"]);
+    });
   });
 
   describe("Canopy's Trash", () => {

@@ -10,6 +10,7 @@
  */
 
 import type { FleetRunRow } from "./fleet.js";
+import type { TerminalInputLineState } from "../terminalStatus.js";
 
 /** The screen's current state, as the classifier read it. */
 export type CanopyCategory =
@@ -608,6 +609,30 @@ export interface CanopyScreenSearchTarget extends CanopyTarget {
    * from before alternatives ignores these and answers for `terms` alone.
    */
   orTerms?: string[][];
+}
+
+/** A run a bulk action names, in the incarnation the panel listed. */
+export interface CanopyRunTarget extends CanopyTarget {
+  runId: string;
+}
+
+/**
+ * What a run's input box held when the panel asked, read off its screen on the
+ * machine it runs on: only the state leaves, never the text.
+ */
+export interface CanopyInputLineReading {
+  runId: string;
+  state: TerminalInputLineState;
+}
+
+/** One run of a bulk trash: the receipt Undo takes back, or why that run alone was not trashed. */
+export type CanopyTrashOutcome =
+  { runId: string; receipt: number } | { runId: string; error: string };
+
+/** One receipt of a bulk Undo: put back, or why that one was not. */
+export interface CanopyUntrashOutcome {
+  receipt: number;
+  error?: string;
 }
 
 /**

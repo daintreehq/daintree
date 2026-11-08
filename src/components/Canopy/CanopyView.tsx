@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Globe, Keyboard, RefreshCw } from "lucide-react";
+import { Globe, Keyboard, RefreshCw, Trash2 } from "lucide-react";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { Telescope } from "@/components/icons";
 import { useCanopyStore } from "@/store/canopyStore";
@@ -92,6 +92,10 @@ import { canopyAssistantDomId } from "./openAssistantItem";
 import { CANOPY_ROLE_FILTERS, type CanopyRoleFilter } from "./canopyAssistants";
 import { isFullAgentDirectory } from "@shared/types/agentDirectory";
 import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
+import { CanopyBulkTrashDialog, type BulkTrashEntry } from "./CanopyBulkTrashDialog";
+import { hasReplyDraft } from "./canopyBulkTrash";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { CANOPY_TRASH_LIMIT } from "@shared/config/trash";
 import type { BulkTarget } from "@shared/utils/canopyBulkEnable";
 import { canopyBulkTransport, unlessHostDisconnected } from "./canopyHostSource";
 import { ALL_HOSTS_ID, canopyOwnHostId } from "@/store/canopyStore";
@@ -276,6 +280,7 @@ export function CanopyView({ frame = CANOPY_DIALOG_FRAME }: { frame?: CanopyFram
 }
 
 const NO_BULK_TARGETS: readonly BulkTarget[] = [];
+const NO_BULK_TRASH: readonly BulkTrashEntry[] = [];
 
 function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow[]) => void }) {
   const frame = useCanopyFrame();
@@ -541,6 +546,7 @@ function CanopyShortcuts() {
         { keys: ["Shift+F10"], label: "More actions" },
         { keys: ["/"], label: "Search" },
         { keys: ["Cmd+Backspace"], label: "Trash, pressed twice; Z takes it back" },
+        { keys: ["Cmd+A"], label: "With a search: review every result to trash" },
         { keys: ["Escape"], label: "Close" },
         ...(closeCombo ? [{ keys: [closeCombo], label: "Close Canopy" }] : []),
       ],
@@ -859,6 +865,7 @@ function CanopyInbox({
     handlers,
     toggleRead,
     markAllRead,
+    trashMany,
     askRename,
     rowMenu,
     setAside,
@@ -941,6 +948,33 @@ function CanopyInbox({
   const needsYouWorkers = projection.needsYou.filter(isWorkerEntry).length;
   const needsYouAssistants = projection.needsYou.length - needsYouWorkers;
   const needsYou = projection.needsYou.length;
+
+  // A search's results, reviewed for the Trash: frozen as the review opened,
+  // so a run matching later is never in it.
+  const [bulkTrash, setBulkTrash] = useState<{
+    query: string;
+    entries: readonly BulkTrashEntry[];
+    more: number;
+  } | null>(null);
+  const bulkTrashable = searching && visible.length > 0;
+  const openBulkTrash = () => {
+    if (!bulkTrashable) return;
+    const drafts = useTerminalInputStore.getState().draftInputs;
+    const shown = visible.slice(0, CANOPY_TRASH_LIMIT);
+    setBulkTrash({
+      query: appliedQuery.trim(),
+      more: visible.length - shown.length,
+      entries: shown.map((item) => ({
+        item,
+        host: item.workspace.host || (otherHost ? hostName : null),
+        replyDraft: hasReplyDraft(drafts, item, hostId, ownHostId),
+      })),
+    });
+  };
+  // A review is of runs on the host it was opened on, while the panel is open.
+  useEffect(() => {
+    setBulkTrash(null);
+  }, [hostId, isOpen]);
 
   const unreadCount = inbox.inbox.filter((item) => item.unread).length;
   // The section bar speaks for what the search shows; the header keeps the whole inbox.
@@ -1123,6 +1157,7 @@ function CanopyInbox({
     askRename,
     toggleRead,
     markAllRead,
+    onSelectAll: bulkTrashable ? openBulkTrash : undefined,
     onPastEnd: () => trashRef.current?.focusHeader() ?? false,
   });
   // The keys the open card names are the ones that act from where the keyboard is.
@@ -1919,6 +1954,25 @@ function CanopyInbox({
                               <KbdChord shortcut="Alt+U" />
                             </TooltipContent>
                           </Tooltip>
+                          {bulkTrashable && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  aria-label="Trash results…"
+                                  aria-keyshortcuts={isMac() ? "Meta+A" : "Control+A"}
+                                  data-canopy-trash-results=""
+                                  onClick={openBulkTrash}
+                                >
+                                  <Trash2 aria-hidden="true" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom">
+                                Trash results… <KbdChord shortcut="Cmd+A" />
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
                         </span>
                       }
                     />
@@ -2364,6 +2418,22 @@ function CanopyInbox({
           <LazyParkRunDialog key={parkRunId} runId={parkRunId} onClose={closePark} />
         </Suspense>
       )}
+      <CanopyBulkTrashDialog
+        isOpen={bulkTrash !== null}
+        onClose={() => setBulkTrash(null)}
+        query={bulkTrash?.query ?? ""}
+        entries={bulkTrash?.entries ?? NO_BULK_TRASH}
+        more={bulkTrash?.more ?? 0}
+        readInputLines={api.readInputLines}
+        onTrash={trashMany}
+        // The selected row, where Z takes the trash back; once it leaves with
+        // the trash, the panel moves the keyboard on as for any row that goes.
+        // Never the search: Z there is a letter.
+        restoreFocusTo={() =>
+          (focusedItem ? document.getElementById(canopyCardDomId(focusedItem.runId)) : null) ??
+          refreshRef.current
+        }
+      />
     </CanopySurface>
   );
 }
