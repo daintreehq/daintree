@@ -58,6 +58,9 @@ const {
         processCount: number;
       }
     >,
+    // Bumped by a spec to model a push landing; the real listener bumps it on
+    // every push, equal or not.
+    pushCount: 0,
   };
 
   const setStatsMock = vi.fn((stats: typeof projectStatsState.stats) => {
@@ -107,6 +110,7 @@ const {
     {
       getState: () => ({
         stats: projectStatsState.stats,
+        pushCount: projectStatsState.pushCount,
         setStats: (stats: typeof projectStatsState.stats) => {
           setStatsMock(stats);
           for (const listener of statsListeners) listener();
@@ -228,6 +232,10 @@ function collapseBand(key: string): void {
   usePreferencesStore.getState().setProjectSwitcherBandCollapsed(key, true);
 }
 
+beforeEach(() => {
+  projectStatsState.pushCount = 0;
+});
+
 const emptyBulkStats = (projectIds: string[]) => {
   const result: Record<
     string,
@@ -266,12 +274,41 @@ const emptyBulkStats = (projectIds: string[]) => {
   return result;
 };
 
+type BulkStatsFixture = ReturnType<typeof emptyBulkStats>;
+
+/**
+ * Main's default answer: zeros for `zeroFilled`, and agreement with every
+ * entry the store already holds. Bulk replaces an entry it disagrees with, so
+ * a spec that seeds the store to stand for pushed counts needs main to report
+ * the same counts.
+ */
+const agreeingBulkStats = (projectIds: string[], zeroFilled: string[]): BulkStatsFixture => {
+  const result = emptyBulkStats(zeroFilled);
+  for (const id of projectIds) {
+    const stored = projectStatsState.stats[id];
+    if (stored === undefined) continue;
+    result[id] = {
+      terminalCount: stored.processCount,
+      estimatedMemoryMB: 0,
+      terminalTypes: {},
+      processIds: [],
+      ...stored,
+    } as BulkStatsFixture[string];
+  }
+  return result;
+};
+
+const answerBulkStatsLikeTheStore = ({ zeroFillRequested = false } = {}) =>
+  getBulkStatsMock.mockImplementation((ids: string[]) =>
+    Promise.resolve(agreeingBulkStats(ids, zeroFillRequested ? ids : ["project-1"]))
+  );
+
 describe("useProjectSwitcherPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     projectState.currentProject = null;
     projectStatsState.stats = {};
-    getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
+    answerBulkStatsLikeTheStore();
     sleepProjectMock.mockResolvedValue({
       terminalsKilled: 0,
       rendererViewsEvicted: 0,
@@ -401,7 +438,7 @@ describe("useProjectSwitcherPalette", () => {
 
   it("does not leak unhandled rejections when project loading fails", async () => {
     projectState.loadProjects.mockRejectedValueOnce(new Error("load failed"));
-    getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
+    answerBulkStatsLikeTheStore();
 
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -1037,7 +1074,7 @@ describe("useProjectSwitcherPalette", () => {
     it("returns null when no project is currently active", async () => {
       projectState.projects = [makeProject(1)];
       projectState.currentProject = null;
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
+      answerBulkStatsLikeTheStore();
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -1375,7 +1412,7 @@ describe("useProjectSwitcherPalette", () => {
     it("is a no-op with only 1 project", async () => {
       projectState.projects = [threeProjects[0]!];
       projectState.currentProject = { id: "project-1" };
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
+      answerBulkStatsLikeTheStore();
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -1559,30 +1596,80 @@ describe("useProjectSwitcherPalette", () => {
       projectState.projects = savedProjects;
     });
 
-    it("seeds only projects the push store has never heard of", async () => {
-      // Bulk stats can't tell an error-blocked wait from a prompt and don't net
-      // out the assistant PTY, and the push service suppresses unchanged
-      // payloads — so a bulk write landing on top of a push would stick until
-      // the underlying counts happened to move again. Bulk fills gaps only.
+    it("replaces a stale entry with the bulk reading when no push lands in flight", async () => {
+      // The store missed a push, and main never repeats an unchanged payload,
+      // so the open-time pull is the one reading that can repair it (#16418).
       projectStatsState.stats = {
         "project-1": {
           activeAgentCount: 0,
           waitingAgentCount: 3,
           blockedAgentCount: 2,
           oldestWaitingSince: 1_000,
+          completedAgentCount: 0,
+          unacknowledgedCompletedAgentCount: 0,
+          snoozedAgentCount: 0,
           processCount: 2,
         },
       };
       getBulkStatsMock.mockResolvedValue({
         "project-1": {
-          processCount: 99,
-          terminalCount: 99,
+          processCount: 0,
+          terminalCount: 0,
           estimatedMemoryMB: 0,
           terminalTypes: {},
           processIds: [],
-          activeAgentCount: 99,
-          waitingAgentCount: 99,
-          blockedAgentCount: 9,
+          activeAgentCount: 0,
+          waitingAgentCount: 0,
+          blockedAgentCount: 0,
+          completedAgentCount: 0,
+          unacknowledgedCompletedAgentCount: 0,
+          snoozedAgentCount: 0,
+        },
+      });
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(setStatsMock).toHaveBeenCalledTimes(1);
+      });
+      // Main's reading, field for field: the stale wait and its timestamp go.
+      expect(setStatsMock.mock.calls[0]![0]["project-1"]).toEqual({
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        blockedAgentCount: 0,
+        completedAgentCount: 0,
+        unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
+        processCount: 0,
+      });
+      await waitFor(() => {
+        expect(asProject(result.current.results[0]).blockedAgentCount).toBe(0);
+      });
+    });
+
+    it("writes nothing when the bulk reading matches the store", async () => {
+      // Counts that are already right must not hand every subscriber a new map.
+      const current = {
+        activeAgentCount: 1,
+        waitingAgentCount: 0,
+        blockedAgentCount: 0,
+        completedAgentCount: 0,
+        unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
+        processCount: 1,
+      };
+      projectStatsState.stats = { "project-1": current };
+      getBulkStatsMock.mockResolvedValue({
+        "project-1": {
+          ...current,
+          terminalCount: 1,
+          estimatedMemoryMB: 50,
+          terminalTypes: {},
+          processIds: [],
         },
       });
 
@@ -1595,19 +1682,22 @@ describe("useProjectSwitcherPalette", () => {
       await waitFor(() => {
         expect(getBulkStatsMock).toHaveBeenCalled();
       });
-      // Nothing was absent, so nothing was written.
+      await act(async () => {});
       expect(setStatsMock).not.toHaveBeenCalled();
-      expect(asProject(result.current.results[0]).blockedAgentCount).toBe(2);
+      expect(projectStatsState.stats["project-1"]).toBe(current);
     });
 
-    it("keeps a push that lands while the bulk pull is in flight", async () => {
-      // The seed decides what is absent when the response lands, not when the
-      // request went out: a push in between is newer than anything bulk read.
+    it("drops the bulk answer when a push lands while it is in flight", async () => {
+      // The reply and the push share no ordering, so a push in between may be
+      // newer than anything bulk read, and main won't send it again. It carries
+      // the whole map, so not even an id it left out is taken from bulk.
       projectState.projects = [
         ...projectState.projects,
         { ...projectState.projects[0]!, id: "project-2", name: "Project Two", path: "/repo/two" },
       ];
-      projectStatsState.stats = {};
+      projectStatsState.stats = {
+        "project-1": { activeAgentCount: 0, waitingAgentCount: 3, processCount: 3 },
+      };
       let resolveBulk!: (value: Awaited<ReturnType<typeof getBulkStatsMock>>) => void;
       getBulkStatsMock.mockReturnValue(new Promise((resolve) => (resolveBulk = resolve)));
 
@@ -1621,6 +1711,7 @@ describe("useProjectSwitcherPalette", () => {
 
       const pushed = { activeAgentCount: 0, waitingAgentCount: 1, processCount: 1 };
       projectStatsState.stats = { "project-1": pushed };
+      projectStatsState.pushCount++;
       const stale = {
         processCount: 0,
         terminalCount: 0,
@@ -1635,12 +1726,75 @@ describe("useProjectSwitcherPalette", () => {
         resolveBulk({ "project-1": stale, "project-2": { ...stale, activeAgentCount: 2 } });
       });
 
-      await waitFor(() => {
-        expect(setStatsMock).toHaveBeenCalledTimes(1);
+      expect(setStatsMock).not.toHaveBeenCalled();
+      expect(projectStatsState.stats).toEqual({ "project-1": pushed });
+      expect(projectStatsState.stats["project-1"]).toBe(pushed);
+    });
+
+    it("drops the bulk answer when the push in flight changed nothing", async () => {
+      // A push equal to the store still says main's map was this when it was
+      // sent, possibly after bulk read. The count of pushes moves, the map
+      // doesn't, and the store's own reading stands.
+      const current = { activeAgentCount: 1, waitingAgentCount: 0, processCount: 1 };
+      projectStatsState.stats = { "project-1": current };
+      let resolveBulk!: (value: Awaited<ReturnType<typeof getBulkStatsMock>>) => void;
+      getBulkStatsMock.mockReturnValue(new Promise((resolve) => (resolveBulk = resolve)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open();
       });
-      const seeded = setStatsMock.mock.calls[0]![0];
-      expect(seeded["project-1"]).toBe(pushed);
-      expect(seeded["project-2"]).toMatchObject({ activeAgentCount: 2 });
+      await waitFor(() => {
+        expect(getBulkStatsMock).toHaveBeenCalled();
+      });
+
+      projectStatsState.pushCount++;
+      await act(async () => {
+        resolveBulk(emptyBulkStats(["project-1"]));
+      });
+
+      expect(setStatsMock).not.toHaveBeenCalled();
+      expect(projectStatsState.stats["project-1"]).toBe(current);
+    });
+
+    it("never lets a closed palette's late answer overwrite a later open's", async () => {
+      projectStatsState.stats = {};
+      const pending: Array<(value: Awaited<ReturnType<typeof getBulkStatsMock>>) => void> = [];
+      getBulkStatsMock.mockImplementation(
+        () => new Promise((resolve) => pending.push(resolve as (typeof pending)[number]))
+      );
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open();
+      });
+      await waitFor(() => {
+        expect(pending).toHaveLength(1);
+      });
+      act(() => {
+        result.current.close();
+      });
+      act(() => {
+        result.current.open();
+      });
+      await waitFor(() => {
+        expect(pending).toHaveLength(2);
+      });
+
+      const fresh = { ...emptyBulkStats(["project-1"])["project-1"]!, activeAgentCount: 2 };
+      await act(async () => {
+        pending[1]!({ "project-1": fresh });
+      });
+      await waitFor(() => {
+        expect(projectStatsState.stats["project-1"]?.activeAgentCount).toBe(2);
+      });
+      // The first open's request resolves last, with what it read earlier.
+      await act(async () => {
+        pending[0]!(emptyBulkStats(["project-1"]));
+      });
+
+      expect(setStatsMock).toHaveBeenCalledTimes(1);
+      expect(projectStatsState.stats["project-1"]?.activeAgentCount).toBe(2);
     });
 
     it("seeds a project the push store has no entry for", async () => {
@@ -2811,7 +2965,7 @@ describe("useProjectSwitcherPalette", () => {
           processCount: 0,
         },
       };
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["p"]));
+      answerBulkStatsLikeTheStore();
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
       act(() => {
@@ -3358,7 +3512,7 @@ describe("assistant presence banding (#11806)", () => {
     vi.clearAllMocks();
     projectState.currentProject = null;
     projectStatsState.stats = {};
-    getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
+    answerBulkStatsLikeTheStore();
     setStatsMock.mockImplementation((stats: typeof projectStatsState.stats) => {
       projectStatsState.stats = stats;
     });
@@ -4080,7 +4234,7 @@ describe("useProjectSwitcherPalette project groups and archive", () => {
   async function openWith(projects: ReturnType<typeof base>[]) {
     projectState.projects = projects;
     projectState.currentProject = projects.find((p) => p.status === "active") ?? null;
-    getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+    answerBulkStatsLikeTheStore({ zeroFillRequested: true });
     const rendered = renderHook(() => useProjectSwitcherPalette());
     act(() => {
       rendered.result.current.open("modal");
