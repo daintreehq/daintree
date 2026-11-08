@@ -1426,9 +1426,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // rejected spawn can't type it into a pre-existing live PTY (#11341).
       // Wrapper shells already carry the command in `args`, so they replay
       // faithfully with no postSpawnInput.
+      // Only an agent launch can carry a built prompt; any other command is the
+      // user's own text and goes in as written.
       const postSpawnInput =
         safeCommand.length > 0 && !commandLaunchShell
-          ? `${typedLaunchCommand(safeCommand, quotingShell)}\r`
+          ? `${launchAgentId ? typedLaunchCommand(safeCommand, quotingShell) : safeCommand}\r`
           : undefined;
 
       // A scheduled run's first spawn registers the run in its history from

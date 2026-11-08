@@ -1,8 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
-import { launchPromptMatchText, quoteLaunchPrompt, typedLaunchCommand } from "../launchPromptArg";
-import { setAgentCommandDialectResolver } from "../shellEscape";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  launchPromptMatchText,
+  quoteLaunchPrompt,
+  typedLaunchCommand,
+} from "../launchPromptArg.js";
+import { setAgentCommandDialectResolver } from "../shellEscape.js";
 
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTER = /[\x00-\x1F\x7F]/;
@@ -24,6 +28,8 @@ describe("quoteLaunchPrompt", () => {
   afterEach(() => setAgentCommandDialectResolver(null));
 
   describe("POSIX", () => {
+    beforeEach(() => setAgentCommandDialectResolver(() => "posix"));
+
     it("leaves a single-line prompt a plain quoted literal", () => {
       expect(quoteLaunchPrompt("Fix the bug")).toBe("'Fix the bug'");
       expect(quoteLaunchPrompt("  it's done  ")).toBe(`'it'\\''s done'`);
@@ -32,6 +38,11 @@ describe("quoteLaunchPrompt", () => {
     it("has the shell build line breaks, with no control character in the word", () => {
       expect(quoteLaunchPrompt("one\ntwo")).toBe(`"$(printf '%b' 'one\\ntwo')"`);
       expect(quoteLaunchPrompt("one\r\ntwo")).toBe(`"$(printf '%b' 'one\\ntwo')"`);
+    });
+
+    it("never spells a setting template, even after a backslash", () => {
+      const word = quoteLaunchPrompt("\\${settings:token}\n${settings:token}");
+      expect(word).toBe(`"$(printf '%b' '\\0134\\0044{settings:token}\\n\\0044{settings:token}')"`);
     });
 
     it("leaves any other control character for the spawn guard to refuse", () => {
@@ -54,11 +65,10 @@ describe("quoteLaunchPrompt", () => {
 
     describe
       .skipIf(process.platform === "win32")
-      .each(
-        ["/bin/sh", "/bin/bash", "/bin/zsh", "/bin/dash", "/bin/ksh"].filter((shell) =>
-          existsSync(shell)
-        )
-      )("as read by %s", (shell) => {
+      .each([
+        "/bin/sh",
+        ...["/bin/bash", "/bin/zsh", "/bin/dash", "/bin/ksh"].filter((shell) => existsSync(shell)),
+      ])("as read by %s", (shell) => {
       it.each(Object.entries(MULTI_LINE_PROMPTS))("delivers the prompt whole: %s", (_n, prompt) => {
         const printArgv = `"${process.execPath}" -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' --`;
         const out = execFileSync(
@@ -77,6 +87,11 @@ describe("quoteLaunchPrompt", () => {
     it("leaves a single-line prompt a plain quoted literal", () => {
       windows();
       expect(quoteLaunchPrompt("it's done")).toBe("'it''s done'");
+    });
+
+    it("never spells a setting template", () => {
+      windows();
+      expect(quoteLaunchPrompt("${settings:token}\nnext")).toBe('"`$`{settings:token}`nnext"');
     });
 
     it("has the shell build line breaks and tabs, with every special escaped", () => {
@@ -112,6 +127,9 @@ describe("launchPromptMatchText", () => {
 });
 
 describe("typedLaunchCommand", () => {
+  beforeEach(() => setAgentCommandDialectResolver(() => "posix"));
+  afterEach(() => setAgentCommandDialectResolver(null));
+
   const command = (prompt: string) => `claude --flag ${quoteLaunchPrompt(prompt)} --after`;
 
   it("leaves a command with no built prompt alone", () => {
@@ -129,7 +147,7 @@ describe("typedLaunchCommand", () => {
 
   it("gives nushell a double-quoted string holding the same text", () => {
     expect(typedLaunchCommand(command(`it's "a"\n\n\\b\tc $(id)`), "/usr/bin/nu")).toBe(
-      `claude --flag "it's \\"a\\"\\n\\n\\\\b\\tc $(id)" --after`
+      `claude --flag "it's \\u{22}a\\u{22}\\n\\n\\\\b\\tc $(id)" --after`
     );
   });
 
@@ -144,6 +162,15 @@ describe("typedLaunchCommand", () => {
       for (const shell of ["/usr/bin/fish", "/usr/bin/nu", "/bin/tcsh"]) {
         expect(typedLaunchCommand(command(prompt), shell)).not.toMatch(CONTROL_CHARACTER);
       }
+    }
+  });
+
+  it("only takes a whole word, so a quote that merely precedes one is left alone", () => {
+    for (const shell of ["/usr/bin/fish", "/usr/bin/nu", "/bin/tcsh"]) {
+      const inside = `echo "x\\"$(printf '%b' 'a')"`;
+      expect(typedLaunchCommand(inside, shell)).toBe(inside);
+      const before = `echo "$(printf '%b' 'a')"tail`;
+      expect(typedLaunchCommand(before, shell)).toBe(before);
     }
   });
 

@@ -56,6 +56,17 @@ describe("the carrier a replay rebuilds after spending a session assignment (#16
     expect(decodedPowerShellCommand(replay.args)).toBe(`& 'C:\\claude.exe' 'one two'`);
   });
 
+  it("keeps a typed nushell prompt's spacing when stripping the spent id", () => {
+    const prompt = `"say \\u{22}a  b\\u{22}\\nnext"`;
+    const replay = replayedAfterDelivery("linux", {
+      shell: "/usr/bin/nu",
+      command: `claude --session-id ${SESSION} "$(printf '%b' 'say \\0042a  b\\0042\\nnext')"`,
+      postSpawnInput: `claude --session-id ${SESSION} ${prompt}\r`,
+    });
+
+    expect(replay.postSpawnInput).toContain(`claude ${prompt}`);
+  });
+
   it("keeps the line breaks on POSIX, where the wrapper builds them", () => {
     const prompt = `"$(printf '%b' 'one\\ntwo')"`;
     const replay = replayedAfterDelivery("linux", {

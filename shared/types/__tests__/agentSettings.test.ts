@@ -446,7 +446,10 @@ describe("generateAgentCommand with a multi-line prompt (#16378)", () => {
     const word = `"$(printf '%b' '# Plan\\n\\n- it\\0047s one\\n\\t- \\0042two\\0042')"`;
     const built = command(id, interactive, prompt);
 
-    expect(built).toBe(command(id, interactive, "PLACEHOLDER").replace("'PLACEHOLDER'", word));
+    const baseline = command(id, interactive, "PLACEHOLDER");
+    expect(baseline).toContain("'PLACEHOLDER'");
+    expect(built).toContain(word);
+    expect(built).toBe(baseline.replace("'PLACEHOLDER'", word));
     // eslint-disable-next-line no-control-regex
     expect(built).not.toMatch(/[\x00-\x1F\x7F]/);
   });
@@ -456,7 +459,10 @@ describe("generateAgentCommand with a multi-line prompt (#16378)", () => {
     const word = `"# Plan\`n\`n- it's one\`n\`t- ""two"""`;
     const built = command(id, interactive, prompt);
 
-    expect(built).toBe(command(id, interactive, "PLACEHOLDER").replace("'PLACEHOLDER'", word));
+    const baseline = command(id, interactive, "PLACEHOLDER");
+    expect(baseline).toContain("'PLACEHOLDER'");
+    expect(built).toContain(word);
+    expect(built).toBe(baseline.replace("'PLACEHOLDER'", word));
     // eslint-disable-next-line no-control-regex
     expect(built).not.toMatch(/[\x00-\x1F\x7F]/);
   });

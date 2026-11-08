@@ -11,6 +11,7 @@ import {
 import { generateAgentCommand } from "../../../../shared/types/agentSettings.js";
 import { appendHandbackInstruction } from "../../../../shared/utils/handback.js";
 import { launchPromptMatchText } from "../../../../shared/utils/launchPromptArg.js";
+import { setAgentCommandDialectResolver } from "../../../../shared/utils/shellEscape.js";
 
 const AT = 1_800_000_000_000;
 
@@ -42,11 +43,16 @@ describe("promptHashesForFirstMessage", () => {
     // and the launch command carries exactly this.
     const received = "Triage #12\n\nRead the logs\nthen report";
 
-    expect(
-      generateAgentCommand("codex", {}, "codex", { initialPrompt: written }).endsWith(
-        `"$(printf '%b' 'Triage #12\\n\\nRead the logs\\nthen report')"`
-      )
-    ).toBe(true);
+    setAgentCommandDialectResolver(() => "posix");
+    try {
+      expect(
+        generateAgentCommand("codex", {}, "codex", { initialPrompt: written }).endsWith(
+          `"$(printf '%b' 'Triage #12\\n\\nRead the logs\\nthen report')"`
+        )
+      ).toBe(true);
+    } finally {
+      setAgentCommandDialectResolver(null);
+    }
     expect(promptHashesForFirstMessage(received)).toContain(paneHash(written));
   });
 

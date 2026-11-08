@@ -26,7 +26,7 @@ describe("resolveRecipeAgentStep (#13797)", () => {
     const step = resolveRecipeAgentStep(pluginRecipe(terminal), terminal, "claude", {
       pluginVariables: { notes: "one\ntwo\r\nthree  " },
     });
-    expect(step.ok && step.initialPrompt).toBe("Review one two three");
+    expect(step.ok && step.initialPrompt).toBe("Review one\ntwo\nthree");
   });
 
   it("keeps the first turn's line breaks for the pane's record of it (#14592)", () => {
@@ -38,7 +38,7 @@ describe("resolveRecipeAgentStep (#13797)", () => {
       pluginVariables: { notes: "one\ntwo" },
     });
     expect(step.ok && step.promptAsWritten).toBe("Review one\ntwo\n\nThen report back.");
-    expect(step.ok && step.initialPrompt).toBe("Review one two  Then report back.");
+    expect(step.ok && step.initialPrompt).toBe("Review one\ntwo\n\nThen report back.");
   });
 
   it("records nothing for a step with no first turn", () => {

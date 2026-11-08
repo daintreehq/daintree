@@ -11,40 +11,47 @@ export function launchPromptMatchText(prompt: string): string {
   return prompt.trim().replace(/\r\n|[\n\t]/g, " ");
 }
 
-// The three quote and escape characters go by number, which leaves the word with
-// no `'` or `"` of its own for anything scanning the command (`scanShellWords`)
-// to trip on, and no `\\`, which fish's single quotes would halve before printf
-// ever saw it.
+// The quote and escape characters go by number, which leaves the word with no
+// `'` or `"` of its own for anything scanning the command (`scanShellWords`) to
+// trip on, and no `\\`, which fish's single quotes would halve before printf ever
+// saw it. So does `$`, or a prompt's `${settings:id}` would be read as a plugin
+// agent's setting template (`substituteSettingsTemplates`).
 const POSIX_PROMPT_ESCAPES: Readonly<Record<string, string>> = {
   "\\": "\\0134",
   "'": "\\0047",
   '"': "\\0042",
+  $: "\\0044",
   "\n": "\\n",
   "\t": "\\t",
 };
 
 function encodePosixPrompt(text: string): string {
-  return text.replace(/[\\'"\n\t]/g, (char) => POSIX_PROMPT_ESCAPES[char] ?? char);
+  return text.replace(/[\\'"$\n\t]/g, (char) => POSIX_PROMPT_ESCAPES[char] ?? char);
 }
 
 const POSIX_PROMPT_DECODES: Readonly<Record<string, string>> = {
   "\\0134": "\\",
   "\\0047": "'",
   "\\0042": '"',
+  "\\0044": "$",
   "\\n": "\n",
   "\\t": "\t",
 };
 
 function decodePosixPrompt(encoded: string): string {
-  return encoded.replace(/\\0(?:134|047|042)|\\[nt]/g, (escape) => POSIX_PROMPT_DECODES[escape]!);
+  return encoded.replace(
+    /\\0(?:134|047|042|044)|\\[nt]/g,
+    (escape) => POSIX_PROMPT_DECODES[escape]!
+  );
 }
 
 /**
  * Inside PowerShell's double quotes a backtick is the escape, `""` is a `"`, and
- * the typographic double quotes close the string just as `"` does.
+ * the typographic double quotes close the string just as `"` does. A `{` after
+ * a `$` is escaped as well, so the word never spells a setting template.
  */
 function quotePowerShellPrompt(text: string): string {
-  const escaped = text.replace(/[`$"“-„\n\t]/g, (char) => {
+  const escaped = text.replace(/[`$"“-„\n\t]|(?<=\$)\{/g, (char) => {
     if (char === "\n") return "`n";
     if (char === "\t") return "`t";
     return char === '"' ? '""' : `\`${char}`;
@@ -72,23 +79,36 @@ export function quoteLaunchPrompt(prompt: string): string {
 }
 
 // The encoded text holds no `'` or `"`, and a quoted literal escapes every `'`,
-// so this can't match inside anything but the word it was built as.
-const POSIX_PROMPT_WORD = /"\$\(printf '%b' '([^'"]*)'\)"/g;
+// so this can't match inside anything but a whole word built as one.
+const POSIX_PROMPT_WORD = /(?<!\S)"\$\(printf '%b' '([^'"]*)'\)"(?!\S)/g;
+
+/**
+ * nushell's double quotes expand nothing and take these escapes. A `"` goes by
+ * number, so the string stays one word to `scanShellWords` when a crash replay
+ * strips a spent session id from the typed line.
+ */
+function quoteNushellPrompt(text: string): string {
+  const escaped = text.replace(/[\\"\n\t]/g, (char) => {
+    if (char === "\n") return "\\n";
+    if (char === "\t") return "\\t";
+    return char === '"' ? "\\u{22}" : "\\\\";
+  });
+  return `"${escaped}"`;
+}
 
 /**
  * A launch command as typed into a shell that can't host the startup wrapper
  * (`buildCommandLaunchShell`). fish only reads `"$(...)"` from 3.4, so it gets
- * the form every fish since 3.1 reads, and nushell's double quotes take JSON's
- * escapes without expanding anything. Any other such shell (tcsh, xonsh) has no
- * form to rely on and gets the prompt on one line, with no literal tab for its
- * line editor to read as completion.
+ * the form every fish since 3.1 reads, and nushell gets its own string. Any other
+ * such shell (tcsh, xonsh) has no form to rely on and gets the prompt on one line,
+ * with no literal tab for its line editor to read as completion.
  */
 export function typedLaunchCommand(command: string, shell: string): string {
   const name = shell.split(/[\\/]/).pop()?.toLowerCase() ?? "";
   return command.replace(POSIX_PROMPT_WORD, (_word, encoded: string) => {
     if (name === "fish") return `(printf '%b' '${encoded}' | string collect)`;
     const text = decodePosixPrompt(encoded);
-    if (name === "nu") return JSON.stringify(text);
+    if (name === "nu") return quoteNushellPrompt(text);
     return escapeShellArg(launchPromptMatchText(text), "posix");
   });
 }

@@ -22,6 +22,7 @@ const DOUBLE_QUOTED_ESCAPES: Readonly<Record<string, string>> = {
   t: "\t",
   "`": "`",
   $: "$",
+  "{": "{",
   "“": "“",
   "”": "”",
   "„": "„",

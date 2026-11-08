@@ -70,6 +70,7 @@ describe("Windows agent argv", () => {
       "func main() {\n\treturn\t1\n}",
       `it's "quoted", ""doubled"" and 'single'\nsecond "line`,
       "$(Write-Output DAINTREE_PROBE) $env:PATH `whoami` ``\n`n `t `$ %PATH%",
+      "${settings:token} `${x} ${\n{`{",
       "“curly” „low” ‘single’ ‚low‛\nnext",
       "C:\\path with space\\\nnext\\",
       "--flag=$(Write-Output DAINTREE_PROBE)\n-x",
