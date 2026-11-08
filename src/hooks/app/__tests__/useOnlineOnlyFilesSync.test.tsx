@@ -56,7 +56,10 @@ describe("useOnlineOnlyFilesSync", () => {
     viewWorkspaceId.current = "p1";
     store().reset();
     useProjectStore.setState({
-      projects: [{ id: "p1", path: "/cloud/p1" }, { id: "p2", path: "/cloud/p2" }] as never,
+      projects: [
+        { id: "p1", path: "/cloud/p1" },
+        { id: "p2", path: "/cloud/p2" },
+      ] as never,
       currentProject: null,
     });
   });
@@ -162,9 +165,7 @@ describe("useOnlineOnlyFilesSync", () => {
     expect(store().phase).toBe("asking");
     await waitFor(() => expect(store().phase).toBe("answered"));
 
-    act(() =>
-      useProjectStore.setState({ projects: [{ id: "p1", path: "/cloud/p1" }] as never })
-    );
+    act(() => useProjectStore.setState({ projects: [{ id: "p1", path: "/cloud/p1" }] as never }));
     expect(api.watch).toHaveBeenCalledTimes(1);
   });
 

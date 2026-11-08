@@ -3,7 +3,10 @@ import type { StatusDownloadGate } from "../../../shared/types/workspace-host.js
 import type { ProjectOnlineOnlyFiles } from "../../../shared/types/onlineOnlyFiles.js";
 import { detectCloudSyncService } from "../../../shared/utils/cloudSyncDetection.js";
 import { gitStatusWaitsForDownload } from "../../../shared/utils/onlineOnlyFiles.js";
-import { getProjectOnlineOnlyService, type ProjectOnlineOnlyService } from "../ProjectOnlineOnlyService.js";
+import {
+  getProjectOnlineOnlyService,
+  type ProjectOnlineOnlyService,
+} from "../ProjectOnlineOnlyService.js";
 
 // The first `.git` verdict takes a 5s probe and a 15s walk, plus any wait behind
 // another project's walk. Past this a project gets the status it would get

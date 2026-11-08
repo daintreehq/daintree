@@ -3,10 +3,7 @@ import { notify } from "@/lib/notify";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { actionService } from "@/services/ActionService";
 import { onHostResync } from "@/store/hostResyncSignal";
-import {
-  selectOnlineOnlyOutstanding,
-  useOnlineOnlyFilesStore,
-} from "@/store/onlineOnlyFilesStore";
+import { selectOnlineOnlyOutstanding, useOnlineOnlyFilesStore } from "@/store/onlineOnlyFilesStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { getOnlineOnlyFilesInboxCopy } from "@/utils/onlineOnlyFilesCopy";
