@@ -11,13 +11,21 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: typeof state) => unknown) => selector(state),
 }));
 
+const statsState = vi.hoisted(() => ({ stats: {} as Record<string, unknown> }));
+
+vi.mock("@/store/projectStatsStore", () => ({
+  useProjectStatsStore: { getState: () => statsState },
+}));
+
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
     title,
     description,
     confirmLabel,
+    children,
   }: {
+    children?: React.ReactNode;
     isOpen: boolean;
     title: string;
     description: string;
@@ -27,6 +35,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
       <div>
         <h2>{title}</h2>
         <p data-testid="description">{description}</p>
+        {children}
         <button>{confirmLabel}</button>
       </div>
     ) : null,
@@ -49,6 +58,27 @@ describe("StopProjectConfirmDialog", () => {
   afterEach(() => {
     cleanup();
     state.currentProject = { id: "p1" };
+    statsState.stats = {};
+  });
+
+  it("lists what it ends with the sleep confirm's counts", () => {
+    statsState.stats = { p1: { processCount: 4, activeAgentCount: 3, waitingAgentCount: 1 } };
+    renderDialog("p1");
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("4 terminals");
+    expect(text).toContain("3 active agents");
+    expect(text).toContain("1 waiting agent");
+  });
+
+  it("shows no count lines for zero counts or missing stats", () => {
+    statsState.stats = { p1: { processCount: 2, activeAgentCount: 0, waitingAgentCount: 0 } };
+    renderDialog("p1");
+    expect(document.body.textContent).not.toContain("active agent");
+    expect(document.body.textContent).not.toContain("waiting agent");
+    cleanup();
+    statsState.stats = {};
+    renderDialog("p1");
+    expect(document.querySelector("[data-stop-counts]")).toBeNull();
   });
 
   it("names every kind of terminal that ends, not just agents", () => {
