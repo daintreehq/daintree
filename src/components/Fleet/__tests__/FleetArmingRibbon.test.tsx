@@ -124,6 +124,8 @@ function resetStores() {
   useAnnouncerStore.setState({ polite: null, assertive: null });
   useFleetSnapshotStore.setState({ snapshot: null });
   resetEscapeStack();
+  // Releases the swallowing of a held answering key a previous test left behind.
+  fireEvent.blur(window);
 }
 
 function pushFleet(runs: Array<Partial<FleetRunRow> & { runId: string }>): void {
@@ -442,7 +444,12 @@ describe("FleetArmingRibbon", () => {
     expect(ribbon.getAttribute("data-pending-action")).toBe("restart");
     expect(screen.getByText(/Restart 3 agents\?/)).toBeTruthy();
     expect(screen.getByText(/2 agents will lose their session/)).toBeTruthy();
-    expect(ribbon.getAttribute("aria-atomic")).toBe("true");
+    // The question is the live region; the buttons beside it are not read into it.
+    const status = screen.getByRole("status");
+    expect(status.getAttribute("aria-atomic")).toBe("true");
+    expect(status.textContent).toMatch(/Restart 3 agents\?/);
+    expect(status.querySelector("button")).toBeNull();
+    expect(ribbon.contains(status)).toBe(true);
   });
 
   it("collapses pending confirmation when the armed set drains", () => {
@@ -890,6 +897,134 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  // The confirm almost always starts from a chord pressed in an agent terminal,
+  // so the keys the banner names must work from there and never reach any
+  // terminal: an Enter that slipped through was broadcast to the fleet (#16435).
+  describe("with focus in a terminal", () => {
+    let pane: HTMLElement;
+    let textarea: HTMLTextAreaElement;
+    let terminalKeys: string[];
+
+    beforeEach(() => {
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+      useFleetPendingActionStore.setState({
+        pending: { kind: "restart", targetCount: 3, sessionLossCount: 0 },
+      });
+      pane = document.createElement("div");
+      pane.setAttribute("data-panel-id", "a");
+      const xterm = document.createElement("div");
+      xterm.className = "xterm";
+      textarea = document.createElement("textarea");
+      textarea.className = "xterm-helper-textarea";
+      xterm.appendChild(textarea);
+      pane.appendChild(xterm);
+      document.body.appendChild(pane);
+      terminalKeys = [];
+      textarea.addEventListener("keydown", (e) => terminalKeys.push(e.key));
+    });
+
+    afterEach(() => {
+      pane.remove();
+    });
+
+    it("confirms on Enter and keeps the Enter from the terminal", async () => {
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      render(<FleetArmingRibbon />);
+      textarea.focus();
+
+      const notPrevented = fireEvent.keyDown(textarea, { key: "Enter" });
+
+      expect(notPrevented).toBe(false);
+      expect(terminalKeys).toEqual([]);
+      const match = dispatchSpy.mock.calls.find((c) => c[0] === "fleet.restart");
+      expect(match?.[1]).toEqual({ confirmed: true });
+      dispatchSpy.mockRestore();
+    });
+
+    it("cancels on Escape and keeps the Escape from the terminal", async () => {
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      render(<FleetArmingRibbon />);
+      textarea.focus();
+
+      const notPrevented = fireEvent.keyDown(textarea, { key: "Escape" });
+
+      expect(notPrevented).toBe(false);
+      expect(terminalKeys).toEqual([]);
+      expect(useFleetPendingActionStore.getState().pending).toBeNull();
+      expect(dispatchSpy.mock.calls.find((c) => c[0] === "fleet.restart")).toBeUndefined();
+      dispatchSpy.mockRestore();
+    });
+
+    it("doesn't count the Escape that cancelled toward a fleet interrupt", async () => {
+      seed([makeAgent("a", "working"), makeAgent("b", "working"), makeAgent("c", "working")]);
+      useFleetPendingActionStore.setState({
+        pending: { kind: "interrupt", targetCount: 3, sessionLossCount: 0 },
+      });
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      const interrupts = () => dispatchSpy.mock.calls.filter((c) => c[0] === "fleet.interrupt");
+      render(<FleetArmingRibbon />);
+      textarea.focus();
+
+      fireEvent.keyDown(textarea, { key: "Escape" });
+      fireEvent.keyUp(textarea, { key: "Escape" });
+      fireEvent.keyDown(textarea, { key: "Escape" });
+
+      expect(useFleetPendingActionStore.getState().pending).toBeNull();
+      expect(interrupts()).toEqual([]);
+      // The double tap still works once the confirm is gone: this Escape completes it.
+      fireEvent.keyDown(textarea, { key: "Escape" });
+      expect(interrupts()).toHaveLength(1);
+      dispatchSpy.mockRestore();
+    });
+  });
+
+  describe("confirmation banner controls", () => {
+    beforeEach(() => {
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+      useFleetPendingActionStore.setState({
+        pending: { kind: "kill", targetCount: 3, sessionLossCount: 0 },
+      });
+    });
+
+    it("confirms from its button", async () => {
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      render(<FleetArmingRibbon />);
+      const confirm = screen.getByRole("button", { name: /Kill terminals/ });
+
+      fireEvent.pointerDown(confirm);
+      fireEvent.click(confirm);
+
+      const kills = dispatchSpy.mock.calls.filter((c) => c[0] === "fleet.kill");
+      expect(kills.map((c) => c[1])).toEqual([{ confirmed: true }]);
+      expect(useFleetPendingActionStore.getState().pending).toBeNull();
+      dispatchSpy.mockRestore();
+    });
+
+    it("cancels from its button", async () => {
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      render(<FleetArmingRibbon />);
+      const cancel = screen.getByRole("button", { name: /Cancel kill/ });
+      const asked = useFleetPendingActionStore.getState().pending;
+
+      fireEvent.pointerDown(cancel);
+      expect(useFleetPendingActionStore.getState().pending).toBe(asked);
+      cancel.focus();
+      // Enter on the focused Cancel is the button's own, never a confirm.
+      expect(fireEvent.keyDown(cancel, { key: "Enter" })).toBe(true);
+      expect(useFleetPendingActionStore.getState().pending).toBe(asked);
+      fireEvent.click(cancel);
+
+      expect(dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill")).toBeUndefined();
+      expect(useFleetPendingActionStore.getState().pending).toBeNull();
+      dispatchSpy.mockRestore();
+    });
+  });
+
   // A dictated send waiting on its cleanup blurs the composer to the page, and
   // an Enter there means "send it now", never "confirm the fleet action" (#14780).
   it("leaves a pending action unconfirmed when Enter is for a waiting dictated send", async () => {
@@ -1028,22 +1163,38 @@ describe("FleetArmingRibbon", () => {
       dispatchSpy.mockRestore();
     });
 
-    it.each([
-      { name: "a button in another pane", target: () => document.body.appendChild(button()) },
-      { name: "the page", target: () => document.body },
-    ])("still confirms the fleet action on Enter from $name", async ({ target }) => {
+    it("still confirms the fleet action on Enter from the page", async () => {
       const actionServiceModule = await import("@/services/ActionService");
       const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
       render(<FleetArmingRibbon />);
-      const el = target();
-      el.focus();
 
-      const notPrevented = fireEvent.keyDown(el, { key: "Enter" });
+      const notPrevented = fireEvent.keyDown(document.body, { key: "Enter" });
 
       expect(notPrevented).toBe(false);
       const match = dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill");
       expect(match?.[1]).toEqual({ confirmed: true });
-      if (el !== document.body) el.remove();
+      dispatchSpy.mockRestore();
+    });
+
+    // Enter on another pane's button is meant for that button: confirming the
+    // kill instead would let a confirm the user walked away from fire on an
+    // unrelated press (#16435).
+    it("leaves Enter on a button in another pane to that button and drops the confirm", async () => {
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      render(<FleetArmingRibbon />);
+      const otherPane = document.createElement("div");
+      otherPane.setAttribute("data-panel-id", "b");
+      const el = otherPane.appendChild(button());
+      document.body.appendChild(otherPane);
+      el.focus();
+
+      const notPrevented = fireEvent.keyDown(el, { key: "Enter" });
+
+      expect(notPrevented).toBe(true);
+      expect(dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill")).toBeUndefined();
+      expect(useFleetPendingActionStore.getState().pending).toBeNull();
+      otherPane.remove();
       dispatchSpy.mockRestore();
     });
 
