@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/icons";
 import {
@@ -12,7 +12,12 @@ import {
 import type { PanelKind } from "@/types";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { resolveTerminalRunIcon } from "./terminalRunIconRegistry";
+import { getAgentConfig } from "@/config/agents";
 import { isPluginCustomIconKey } from "@shared/config/pluginCustomIcon";
+import {
+  getPluginAgentRegistrySnapshot,
+  subscribeToPluginAgentRegistry,
+} from "@shared/config/pluginAgentRegistry";
 import type { ReactNode } from "react";
 
 /** Built-in panel kinds pin their glyph regardless of the chrome's `iconId`. */
@@ -49,6 +54,28 @@ function semanticId(iconId: string | null | undefined): PluginIconId | undefined
   return PLUGIN_ICON_IDS.find((id) => id === iconId);
 }
 
+/**
+ * Callers memoise chrome, and a pane restored at startup derives it before
+ * plugins load, so an agent's chrome can predate its registry entry and hold the
+ * bare agent id. Nothing re-derives it until an input changes, which for an agent
+ * with no `detection` block is never, so its icon and colour are read live here.
+ * Agent chrome only: a panel or process tool sharing an agent's id keeps its own.
+ */
+function useLiveAgentChrome(chrome: TerminalChromeDescriptor): TerminalChromeDescriptor {
+  const pluginAgents = useSyncExternalStore(
+    subscribeToPluginAgentRegistry,
+    getPluginAgentRegistrySnapshot
+  );
+  return useMemo(() => {
+    // Referenced so this re-reads when the registry changes; `getAgentConfig`
+    // reads the merged registry, not this snapshot.
+    void pluginAgents;
+    const config = chrome.isAgent && chrome.agentId ? getAgentConfig(chrome.agentId) : undefined;
+    if (!config || config.iconId === chrome.iconId) return chrome;
+    return { ...chrome, iconId: config.iconId, color: config.color };
+  }, [pluginAgents, chrome]);
+}
+
 export interface TerminalIconProps {
   kind?: PanelKind;
   chrome?: TerminalChromeDescriptor;
@@ -57,7 +84,7 @@ export interface TerminalIconProps {
 }
 
 export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIconProps) {
-  const resolvedChrome = chrome ?? deriveTerminalChrome({ kind });
+  const resolvedChrome = useLiveAgentChrome(chrome ?? deriveTerminalChrome({ kind }));
   const iconId = resolvedChrome.iconId ?? "terminal";
   const finalProps = {
     className: cn("w-4 h-4", className),

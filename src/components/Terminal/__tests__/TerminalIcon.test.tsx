@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { TerminalIcon } from "../TerminalIcon";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { setPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
@@ -375,6 +375,26 @@ describe("TerminalIcon", () => {
         const svg = container.querySelector("svg")!;
         expect(svg.getAttribute("data-plugin-icon")).toBe(KEY);
         expect(svg.getAttribute("class")).not.toContain("brand-mark");
+      });
+
+      it("draws an agent's mark when the registry arrives after its chrome was derived", () => {
+        // A pane restored at startup: nothing re-derives this memoised chrome.
+        setPluginAgentRegistry({});
+        const chrome = deriveTerminalChrome({ launchAgentId: "pi" });
+        const { container } = render(<TerminalIcon kind="agent" chrome={chrome} />);
+        const marker = () => container.querySelector("[data-terminal-icon-id]")!;
+        expect(container.querySelector("svg")!.innerHTML).toBe(registryGlyph("terminal"));
+
+        act(() => setPluginAgentRegistry({ pi: { ...agent, id: "pi", iconId: KEY } }));
+
+        const svg = container.querySelector("svg")!;
+        expect(svg.getAttribute("data-plugin-icon")).toBe(KEY);
+        expect(svg.getAttribute("class")).toContain("brand-mark");
+        expect(marker().getAttribute("data-terminal-icon-color")).toBe(agent.color);
+
+        act(() => setPluginAgentRegistry({}));
+
+        expect(container.querySelector("[data-plugin-icon]")).toBeNull();
       });
 
       it("keeps a panel or process tool on its own glyph when an agent shares its id", () => {
