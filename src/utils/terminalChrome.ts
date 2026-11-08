@@ -214,7 +214,8 @@ export function deriveTerminalChrome(input: TerminalChromeInput = {}): TerminalC
     return {
       iconId: config?.iconId ?? identity.iconId,
       color: presetColor ?? config?.color ?? getPanelKindColor(kind),
-      ...(presetColor ? { presetColor } : undefined),
+      // The dock passes its computed fallback here when there is no preset.
+      ...(presetColor && presetColor !== getPanelKindColor(kind) ? { presetColor } : undefined),
       label: config?.name ?? agentId,
       isAgent: true,
       agentId,

@@ -413,6 +413,21 @@ describe("TerminalIcon", () => {
         ).toBe("#ff3366");
       });
 
+      it("doesn't take the dock's computed fallback for a preset", () => {
+        setPluginAgentRegistry({});
+        const input = { kind: "terminal" as const, launchAgentId: "pi" };
+        const chrome = deriveTerminalChrome({
+          ...input,
+          presetColor: deriveTerminalChrome(input).color,
+        });
+        const { container } = render(<TerminalIcon kind="terminal" chrome={chrome} />);
+
+        act(() => setPluginAgentRegistry({ pi: { ...agent, id: "pi", iconId: KEY } }));
+
+        const marker = container.querySelector("[data-terminal-icon-color]")!;
+        expect(marker.getAttribute("data-terminal-icon-color")).toBe(agent.color);
+      });
+
       it("lets the agent's colour replace a stale one the caller echoes back", () => {
         setPluginAgentRegistry({});
         const chrome = deriveTerminalChrome({ kind: "terminal", launchAgentId: "pi" });
