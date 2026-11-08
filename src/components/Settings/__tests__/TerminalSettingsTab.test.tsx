@@ -545,22 +545,49 @@ describe("TerminalSettingsTab panel limit editing", () => {
 });
 
 describe("TerminalSettingsTab auto-restart threshold", () => {
-  it("keeps an out-of-range draft out of the store and puts the effective value back on blur", () => {
+  const setup = () => {
     useResourceMonitoringStore.getState().setEnabled(true);
     useMemoryLeakConfigStore.getState().setEnabled(true);
-    const effective = useMemoryLeakConfigStore.getState().autoRestartThresholdMb;
+    useMemoryLeakConfigStore.getState().setAutoRestartThresholdMb(8192);
     renderSubtab("performance");
-    const input = screen.getByRole("spinbutton", {
-      name: "Auto-restart threshold",
-    }) as HTMLInputElement;
+    return screen.getByRole("spinbutton", { name: "Auto-restart threshold" }) as HTMLInputElement;
+  };
+  const saved = () => useMemoryLeakConfigStore.getState().autoRestartThresholdMb;
 
-    fireEvent.change(input, { target: { value: String(Math.floor(effective / 10)) } });
+  it("neither saves nor flags anything while a number is being typed", () => {
+    const input = setup();
+    fireEvent.change(input, { target: { value: "" } });
+    for (const v of ["1", "16", "163", "1638", "16384"]) {
+      fireEvent.change(input, { target: { value: v } });
+      expect(saved()).toBe(8192);
+      expect(input.getAttribute("aria-invalid")).not.toBe("true");
+    }
+  });
 
-    expect(useMemoryLeakConfigStore.getState().autoRestartThresholdMb).toBe(effective);
+  it("saves once on blur", () => {
+    const input = setup();
+    fireEvent.change(input, { target: { value: "16384" } });
+    fireEvent.blur(input);
+    expect(saved()).toBe(16384);
+    expect(input.value).toBe("16384");
+  });
+
+  it("saves on Enter", () => {
+    const input = setup();
+    fireEvent.change(input, { target: { value: "4096" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(saved()).toBe(4096);
+  });
+
+  it("flags an out-of-range value on blur, keeps it in the field and does not save", () => {
+    const input = setup();
+    fireEvent.change(input, { target: { value: "409" } });
+    fireEvent.blur(input);
+    expect(saved()).toBe(8192);
+    expect(input.value).toBe("409");
     expect(input.getAttribute("aria-invalid")).toBe("true");
 
-    fireEvent.blur(input);
-    expect(input.value).toBe(String(effective));
+    fireEvent.change(input, { target: { value: "4096" } });
     expect(input.getAttribute("aria-invalid")).not.toBe("true");
   });
 });
