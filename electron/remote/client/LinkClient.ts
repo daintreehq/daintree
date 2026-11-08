@@ -907,7 +907,9 @@ export class LinkClient {
 
   /** The soonest an early dial may go: now, unless the last dial started too recently. */
   private earliestEarlyDial(now: number): number {
-    return this.lastDialAt === null ? now : Math.max(now, this.lastDialAt + EARLY_DIAL_GAP_MS);
+    // One that started later than now is a clock that moved back, which says nothing about the gap.
+    if (this.lastDialAt === null || this.lastDialAt > now) return now;
+    return Math.max(now, this.lastDialAt + EARLY_DIAL_GAP_MS);
   }
 
   /**

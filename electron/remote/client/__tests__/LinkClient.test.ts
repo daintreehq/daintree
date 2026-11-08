@@ -1796,6 +1796,10 @@ describe("LinkClient network change and focus (#16386)", () => {
         t += ms;
         await vi.advanceTimersByTimeAsync(ms);
       },
+      /** The wall clock jumps; timers don't move. */
+      jump(ms: number) {
+        t += ms;
+      },
       retryAt(): number | null | undefined {
         const state = client!.getState();
         return state.status === "unreachable" ? state.retryAt : undefined;
@@ -1874,7 +1878,7 @@ describe("LinkClient network change and focus (#16386)", () => {
 
   function linkTo(
     transport: LinkTransport,
-    probes: { networkProbeMs?: number; wakeProbeMs?: number }
+    options: { networkProbeMs?: number; wakeProbeMs?: number; now?: () => number }
   ) {
     client = new LinkClient({
       transport,
@@ -1883,7 +1887,7 @@ describe("LinkClient network change and focus (#16386)", () => {
       session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
       backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
       quietAfterMs: 0,
-      ...probes,
+      ...options,
     });
     return client;
   }
@@ -1949,6 +1953,19 @@ describe("LinkClient network change and focus (#16386)", () => {
     expect(Math.min(...gaps)).toBeGreaterThanOrEqual(1_000);
   });
 
+  it("dials at once when the clock moved back since the last dial", async () => {
+    const transport = failingTransport("Network is unreachable");
+    const clock = onTestClock(transport);
+    client!.start();
+    await clock.advance(10_000);
+    expect(transport.opens).toBe(1);
+    // An hour back: the last dial reads as still to come, which is no reason to wait.
+    clock.jump(-3_600_000);
+    client!.noteForegrounded();
+    await clock.advance(0);
+    expect(transport.opens).toBe(2);
+  });
+
   it("retries soon after an attempt that the network changed under fails", async () => {
     let failOpen: (() => void) | null = null;
     const transport = {
@@ -2003,9 +2020,12 @@ describe("LinkClient network change and focus (#16386)", () => {
       protocolVersion: TEST_HANDSHAKE.protocolVersion + 1,
     });
     try {
-      const link = linkTo(host.transport, { networkProbeMs: 10 });
+      let t = 0;
+      const link = linkTo(host.transport, { networkProbeMs: 10, now: () => t });
       link.start();
       await waitFor(() => link.getState().status === "version-mismatch");
+      // Long past any dial gap: a dial these let through would go at once.
+      t += 60_000;
       link.noteNetworkChanged();
       link.noteForegrounded();
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -2021,7 +2041,8 @@ describe("LinkClient network change and focus (#16386)", () => {
   it("keeps a connected link that answers, and a focused window leaves it be", async () => {
     const host = await welcomingHost({ answerPings: true });
     try {
-      const link = linkTo(host.transport, { networkProbeMs: 30 });
+      const networkProbeMs = 500;
+      const link = linkTo(host.transport, { networkProbeMs });
       const states: string[] = [];
       link.onStateChange((state) => states.push(state.status));
       link.start();
@@ -2029,8 +2050,13 @@ describe("LinkClient network change and focus (#16386)", () => {
       states.length = 0;
       link.noteNetworkChanged();
       link.noteForegrounded();
-      await waitFor(() => host.kinds.includes(ControlKind.PING));
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Probed and answered, then kept past the probe's deadline.
+      await waitFor(() => {
+        const state = link.getState();
+        return state.status === "connected" && state.rttMs !== null;
+      });
+      expect(host.kinds).toContain(ControlKind.PING);
+      await new Promise((resolve) => setTimeout(resolve, networkProbeMs + 200));
       expect(link.getState().status).toBe("connected");
       expect(states.every((status) => status === "connected")).toBe(true);
       expect(host.hellos).toHaveLength(1);

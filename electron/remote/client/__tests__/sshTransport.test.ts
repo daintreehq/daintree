@@ -1249,7 +1249,9 @@ describe("reconnecting to a host the transport already knows", () => {
     const host = await knownHost();
     const clientDir = path.join(root, "c");
     const transport = new SshTransport({ target: "studio", clientDir, spawn: host.spawner });
-    const first = await transport.open(new AbortController().signal);
+    // No link has ridden a master yet: nothing to say about one.
+    const first = await transport.open(new AbortController().signal, { routeSuspect: true });
+    expect(host.calls.filter((args) => args.includes("exit"))).toEqual([]);
     await first.dispose();
 
     const before = host.calls.length;

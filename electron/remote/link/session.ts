@@ -504,11 +504,20 @@ export class LinkSession {
     this.probeReads = reads;
     this.ping();
     if (this.probeTimer) clearTimeout(this.probeTimer);
-    this.probeTimer = setTimeout(() => {
-      this.probeTimer = null;
-      if (this.state === "open" && this.reads === reads) this.drop(reason);
-    }, withinMs);
-    this.probeTimer.unref?.();
+    const timer = setTimeout(
+      () =>
+        // Judged after the loop's next poll for input, as the idle check is:
+        // a stalled loop runs its overdue timers before it reads what arrived.
+        setImmediate(() => {
+          // A later probe took over.
+          if (this.probeTimer !== timer) return;
+          this.probeTimer = null;
+          if (this.state === "open" && this.reads === reads) this.drop(reason);
+        }),
+      withinMs
+    );
+    this.probeTimer = timer;
+    timer.unref?.();
   }
 
   onRtt(listener: (rttMs: number) => void): () => void {
