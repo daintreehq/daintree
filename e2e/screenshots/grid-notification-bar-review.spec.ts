@@ -117,8 +117,9 @@ const MEMORY: Fixture = {
 const STALLED: Fixture = {
   type: "warning",
   title: "Terminal output stalled",
-  message: "Reset the queue from the terminal banner to recover.",
-  expect: "Reset the queue",
+  message:
+    "It affects 4 terminals, and an automatic refresh didn't clear it. Use Retry in each one.",
+  expect: "automatic refresh",
 };
 const ERROR: Fixture = {
   type: "error",

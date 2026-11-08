@@ -44,7 +44,10 @@ import { TerminalWebGLManager } from "./TerminalWebGLManager";
 import { TerminalWebGLPolicy } from "./TerminalWebGLPolicy";
 import { TerminalRevealController } from "./TerminalRevealController";
 import { TerminalAgentStateController } from "./TerminalAgentStateController";
-import { TerminalRestoreController } from "./TerminalRestoreController";
+import {
+  TerminalRestoreController,
+  type FetchAndRestoreOptions,
+} from "./TerminalRestoreController";
 import {
   TerminalReflowController,
   attemptRendererUnpause,
@@ -3819,8 +3822,8 @@ class TerminalInstanceService {
     return this.restoreController.restoreFetchedState(id, serializedState, captureGeometry);
   }
 
-  async fetchAndRestore(id: string): Promise<boolean> {
-    return this.restoreController.fetchAndRestore(id);
+  async fetchAndRestore(id: string, options?: FetchAndRestoreOptions): Promise<boolean> {
+    return this.restoreController.fetchAndRestore(id, options);
   }
 
   restoreFromSerialized(

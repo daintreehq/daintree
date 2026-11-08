@@ -11,7 +11,7 @@ import React, {
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { PaneState } from "@/components/ui/PaneState";
 import { useShallow } from "zustand/react/shallow";
-import { Plug, RotateCcw, Hourglass, Folders, XCircle } from "lucide-react";
+import { Plug, RefreshCw, Hourglass, Folders, XCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -782,8 +782,11 @@ function TerminalPaneComponent({
     restartKey,
   });
 
-  const { showBanner: showForceResumeStall, resetQueue: resetForceResumeQueue } =
-    useForceResumeCycleWatchdog(id);
+  const {
+    showBanner: showForceResumeStall,
+    isRetrying: isRetryingForceResumeStall,
+    retry: retryForceResumeStall,
+  } = useForceResumeCycleWatchdog(id, restartKey);
 
   const {
     cancel: cancelInjection,
@@ -1670,12 +1673,16 @@ function TerminalPaneComponent({
           <InlineStatusBanner
             severity="error"
             title="Terminal output stalled"
-            description="Output keeps backing up faster than it can render. Reset the queue to recover."
+            description="An automatic refresh didn't clear it. Retry redraws the terminal from its latest output."
             action={{
-              id: "reset-force-resume-queue",
-              label: "Reset queue",
-              icon: RotateCcw,
-              onClick: resetForceResumeQueue,
+              id: "retry-stalled-output",
+              label: "Retry",
+              icon: RefreshCw,
+              variant: "primary",
+              onClick: retryForceResumeStall,
+              title: "Redraw the terminal from its latest output",
+              ariaLabel: "Retry stalled terminal output",
+              loading: isRetryingForceResumeStall,
             }}
           />
         </BannerSlot>

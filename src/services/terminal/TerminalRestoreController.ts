@@ -34,6 +34,48 @@ function hasBeenFed(managed: ManagedTerminal): boolean {
 export type MissingOutputRecoveryOutcome =
   "recovered" | "no-host-output" | "live-output" | "stale" | "failed";
 
+export interface FetchAndRestoreOptions {
+  /**
+   * Hold the reset until every write xterm already accepted has parsed. A
+   * pane resynced while live output is backed up has chunks in xterm's write
+   * buffer that `reset()` does not discard, so they would land on the cleared
+   * grid ahead of the snapshot. The restore window stops new writes reaching
+   * xterm, so one barrier write settles the backlog. If it doesn't parse in
+   * time the restore is abandoned rather than painted over stale output.
+   */
+  settlePendingWrites?: boolean;
+  /**
+   * Abort to give up while the snapshot is still on its way: the window closes
+   * and held output replays at once, and a late snapshot is never applied. A
+   * replay already under way finishes; it is writing a snapshot that is good.
+   */
+  signal?: AbortSignal;
+}
+
+// Bounds the barrier `settlePendingWrites` waits on. A parser that can't get
+// through the backlog in this long won't paint a snapshot either.
+const PENDING_WRITES_SETTLE_TIMEOUT_MS = 5000;
+
+const ABORTED = Symbol("aborted");
+
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T | typeof ABORTED> {
+  if (signal.aborted) return Promise.resolve(ABORTED);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(ABORTED);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
+}
+
 export interface RestoreControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   // chunkCount travels with each replayed deferred batch: the batch's pending
@@ -560,7 +602,24 @@ export class TerminalRestoreController {
     return Promise.resolve(this.restoreFromSerialized(id, "\x1bc", captureGeometry, continuation));
   }
 
-  async fetchAndRestore(id: string): Promise<boolean> {
+  private settlePendingWrites(managed: ManagedTerminal): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), PENDING_WRITES_SETTLE_TIMEOUT_MS);
+      try {
+        // An empty write parses to nothing but queues behind everything already
+        // in the buffer, so its callback means the backlog has parsed.
+        managed.terminal.write("", () => {
+          clearTimeout(timer);
+          resolve(true);
+        });
+      } catch {
+        clearTimeout(timer);
+        resolve(false);
+      }
+    });
+  }
+
+  async fetchAndRestore(id: string, options: FetchAndRestoreOptions = {}): Promise<boolean> {
     const managed = this.deps.getInstance(id);
     if (!managed) {
       logWarn(`Cannot fetch-and-restore: terminal ${id} not found`);
@@ -585,8 +644,39 @@ export class TerminalRestoreController {
       this.endRestoreWindow(managed, restoreWindow);
     };
 
+    // Gives up before anything is written: the window closes if it's still
+    // ours, and output held meanwhile replays unless a newer restore owns it.
+    const abandon = (): false => {
+      releaseIfStillOwned();
+      if (
+        this.deps.getInstance(id) === managed &&
+        managed.restoreGeneration === restoreGeneration
+      ) {
+        this.replayDeferred(id, managed);
+      }
+      return false;
+    };
+
     try {
-      const snapshot = await terminalClient.getSerializedState(id);
+      const fetching = terminalClient.getSerializedState(id);
+      // Awaited below; this only keeps a rejection that lands while the barrier
+      // is pending from being reported as unhandled.
+      fetching.catch(() => undefined);
+
+      // Queued after the window opened, so nothing new can land behind it.
+      if (options.settlePendingWrites && !(await this.settlePendingWrites(managed))) {
+        logWarn(`Abandoned fetch-and-restore for ${id}: accepted writes did not parse in time`);
+        return abandon();
+      }
+
+      // The caller stopping waiting releases the window now rather than when a
+      // slow host finally answers, and a snapshot it no longer expects must not
+      // reset the pane under whatever it has done since.
+      const fetched = options.signal
+        ? await untilAborted(fetching, options.signal)
+        : await fetching;
+      if (fetched === ABORTED) return abandon();
+      const snapshot = fetched;
 
       // Check staleness after IPC round-trip
       const current = this.deps.getInstance(id);
@@ -594,6 +684,8 @@ export class TerminalRestoreController {
         releaseIfStillOwned();
         return false;
       }
+      // An abort can still land between the fetch settling and this resuming.
+      if (options.signal?.aborted) return abandon();
 
       // restoreFetchedState will take over the isSerializedRestoreInProgress flag
       const result = await this.restoreFetchedState(

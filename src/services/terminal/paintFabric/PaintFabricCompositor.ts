@@ -12,6 +12,7 @@ import type { UnseenOutputSnapshot } from "../TerminalUnseenOutputTracker";
 import type { TerminalGeometry } from "@shared/types/terminal";
 import type { TerminalPaintPlane } from "../TerminalInstanceService";
 import type { OpenLinkOptions } from "../TerminalLinkHandler";
+import type { FetchAndRestoreOptions } from "../TerminalRestoreController";
 import type { BatchResizeOptions, ResizePassOptions } from "../TerminalResizePassScheduler";
 import type { TerminalPaddingPaint } from "../terminalPaddingPaint";
 import { logWarn } from "@/utils/logger";
@@ -1218,8 +1219,8 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.plane(id).restoreFetchedState(id, serializedState, captureGeometry);
   }
 
-  fetchAndRestore(id: string): Promise<boolean> {
-    return this.plane(id).fetchAndRestore(id);
+  fetchAndRestore(id: string, options?: FetchAndRestoreOptions): Promise<boolean> {
+    return this.plane(id).fetchAndRestore(id, options);
   }
 
   /**
