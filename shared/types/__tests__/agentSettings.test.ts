@@ -18,6 +18,7 @@ import {
   supportsSessionIdAssignment,
   mintAssignedSessionId,
   assignmentReopensSession,
+  commandNamesSession,
   stripAssignedSessionIdArgs,
   stripConversationSelectorArgs,
   stripConversationSelectorFlags,
@@ -2500,6 +2501,32 @@ describe("a plugin agent's assigned session id (#16470)", () => {
     expect(assignmentReopensSession("claude")).toBe(false);
     expect(assignmentReopensSession("no-such-agent")).toBe(false);
     expect(assignmentReopensSession(undefined)).toBe(false);
+  });
+
+  describe("commandNamesSession", () => {
+    it.each([
+      ["a word of its own", `pi --session ${SESSION}`],
+      ["a quoted word", `pi --session '${SESSION}'`],
+      ["a fused option", `pi --session=${SESSION}`],
+      ["a quoted fused option", `pi '--session=${SESSION}'`],
+      ["a bare positional", `pi ${SESSION}`],
+    ])("finds %s", (_label, command) => {
+      expect(commandNamesSession(command, SESSION)).toBe(true);
+    });
+
+    it("doesn't find a short id inside a longer word, or in the binary", () => {
+      expect(commandNamesSession("pi --no-banner", "a")).toBe(false);
+      expect(commandNamesSession("a --no-banner", "a")).toBe(false);
+    });
+
+    it("doesn't take a prompt that mentions the id for a selector", () => {
+      expect(commandNamesSession(`pi 'look at ${SESSION} please'`, SESSION)).toBe(false);
+    });
+
+    it("finds nothing with no id", () => {
+      expect(commandNamesSession("pi --session", undefined)).toBe(false);
+      expect(commandNamesSession("pi --session", "")).toBe(false);
+    });
   });
 
   describe("stripConversationSelectorArgs", () => {

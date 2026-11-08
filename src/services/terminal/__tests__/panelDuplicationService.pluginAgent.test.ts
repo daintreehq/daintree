@@ -156,6 +156,39 @@ describe("duplicating a plugin agent's pane (#16470)", () => {
       ).rejects.toThrow(/Cannot duplicate agent terminal/);
     });
 
+    it("doesn't take a short captured id for part of a longer word", async () => {
+      withResume({ kind: "session-id", args: ["--session", "{sessionId}"], quitCommand: "/quit" });
+
+      const options = await buildPanelDuplicateOptions(
+        piPane({ agentSessionId: "a", command: "pi --no-banner --session a" }),
+        "grid"
+      );
+
+      expect(options.command).toBe("pi --no-banner");
+    });
+
+    it("doesn't refuse a copy over a prompt that mentions the id", async () => {
+      withResume({ kind: "session-id", args: ["--session", "{sessionId}"], quitCommand: "/quit" });
+
+      const options = await buildPanelDuplicateOptions(
+        piPane({ command: `pi --session '${SOURCE_ID}' 'look at ${SOURCE_ID}'` }),
+        "grid"
+      );
+
+      expect(options.command).toBe(`pi 'look at ${SOURCE_ID}'`);
+    });
+
+    it("refuses rather than launching a bare shell for a pane saved with no kind", async () => {
+      withResume({ kind: "session-id", args: ["{sessionId}"] });
+
+      await expect(
+        buildPanelDuplicateOptions(
+          piPane({ kind: undefined, command: `pi '${SOURCE_ID}'` }),
+          "grid"
+        )
+      ).rejects.toThrow(/Cannot duplicate agent terminal/);
+    });
+
     it("refuses a copy whose resume has a quoted word no shape matches", async () => {
       withResume({
         kind: "session-id",
@@ -203,6 +236,14 @@ describe("duplicating a plugin agent's pane (#16470)", () => {
     clearPluginAgentRegistryForTests();
 
     await expect(buildPanelDuplicateOptions(piPane(), "grid")).rejects.toThrow(
+      /Cannot duplicate agent terminal/
+    );
+  });
+
+  it("refuses a gone plugin's copy for a pane saved with no kind too", async () => {
+    clearPluginAgentRegistryForTests();
+
+    await expect(buildPanelDuplicateOptions(piPane({ kind: undefined }), "grid")).rejects.toThrow(
       /Cannot duplicate agent terminal/
     );
   });

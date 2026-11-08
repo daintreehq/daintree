@@ -8,6 +8,7 @@ import {
 } from "@shared/types/panel";
 import type { TabGroupLocation } from "@/types";
 import {
+  commandNamesSession,
   generateAgentCommand,
   mintAssignedSessionId,
   stripAssignedSessionIdArgs,
@@ -69,18 +70,6 @@ export interface ResolvedCommand {
    * which never carries one.
    */
   replaysSourceCommand: boolean;
-}
-
-/**
- * Whether a command meant for a copy still names the source's conversation. A
- * pane's id only reaches its command as a selector, so this holds however the
- * flag was written, including a form nothing could recognise to strip (#16470).
- */
-function namesSourceSession(
-  command: string,
-  panel: import("@shared/types/panel").PtyPanelData
-): boolean {
-  return !!panel.agentSessionId && command.includes(panel.agentSessionId);
 }
 
 /**
@@ -195,7 +184,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         );
         return {
           agentAccountId: accountEnv ? panel.agentAccountId : undefined,
-          command: namesSourceSession(copied, panel) ? undefined : copied,
+          command: commandNamesSession(copied, panel.agentSessionId) ? undefined : copied,
           env: accountEnv,
           agentLaunchFlags: panel.agentLaunchFlags,
           callerLaunchFlags: panel.callerLaunchFlags,
@@ -215,7 +204,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
     isPtyPanel(panel) &&
     !!panel.launchAgentId &&
     !!panel.command &&
-    namesSourceSession(panel.command, panel);
+    commandNamesSession(panel.command, panel.agentSessionId);
   return {
     command: isPtyPanel(panel) && !holdsSourceSession ? panel.command : undefined,
     env: undefined,
@@ -524,6 +513,11 @@ export async function buildPanelDuplicateOptions(
   }
 
   if (isPtyPanel(sourcePanel)) {
+    // A pane saved with no kind gets here too, and a refused copy of an agent
+    // must not come back as a bare shell wearing that agent's identity.
+    if (sourcePanel.launchAgentId && !command) {
+      throw new Error(`Cannot duplicate agent terminal: command is missing`);
+    }
     return {
       kind: "terminal",
       launchAgentId: sourcePanel.launchAgentId,

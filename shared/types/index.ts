@@ -395,6 +395,7 @@ export {
   supportsExactSessionCapture,
   mintAssignedSessionId,
   assignmentReopensSession,
+  commandNamesSession,
   stripAssignedSessionIdArgs,
   stripConversationSelectorArgs,
   stripConversationSelectorFlags,

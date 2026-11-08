@@ -1411,6 +1411,21 @@ export function stripConversationSelectorArgs(
   return kept.length === args.length ? command : [binary, ...kept].join(" ");
 }
 
+/**
+ * Whether a stored command's arguments name `sessionId`, as a word of its own or
+ * as `--option=<id>`: the forms a selector takes when nothing could recognise it
+ * to strip (#16470). A captured id can be short, so it is never looked for inside
+ * a longer word, and a prompt that mentions it is one word of prose.
+ */
+export function commandNamesSession(command: string, sessionId: string | undefined): boolean {
+  if (!sessionId) return false;
+  const [, ...args] = splitShellWords(command);
+  return args.some((word) => {
+    const bare = unquoteShellWord(word);
+    return bare === sessionId || bare.endsWith(`=${sessionId}`);
+  });
+}
+
 const MODEL_FLAG = "--model";
 
 /**
