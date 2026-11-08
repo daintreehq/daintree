@@ -17,7 +17,9 @@ function escapeHomeRelativePosix(path: string, homeDir: string | null): string |
 /**
  * The executable an agent launch starts: the CLI's probed path when the probe
  * found a launchable one, otherwise the registry command, quoted for the shell
- * of the host the command runs on.
+ * of the host the command runs on. A copy the user chose is started even when
+ * the check couldn't confirm it, so the launch fails there instead of starting
+ * whichever copy PATH reaches first.
  *
  * `dialect` names that shell; omitted, this process's platform stands in for
  * it. `homeDir` is the home a leading `~` stands for on the host; omitted, a
@@ -30,12 +32,14 @@ export function resolveAgentLaunchBaseCommandFor(
   homeDir: string | null | undefined
 ): string {
   const resolvedPath =
-    detail &&
+    (detail &&
     detail.state !== "missing" &&
     detail.state !== "blocked" &&
     detail.state !== "installed"
       ? detail.resolvedPath?.trim()
-      : undefined;
+      : undefined) ||
+    detail?.chosenPath?.trim() ||
+    undefined;
 
   const effective = resolvedPath ?? registryCommand;
   const isPathLike = effective.includes("/") || effective.includes("\\");

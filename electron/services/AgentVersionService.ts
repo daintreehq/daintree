@@ -12,7 +12,7 @@ import {
 import type { AgentCliCopy, AgentVersionInfo } from "../../shared/types/ipc/system.js";
 import type { AgentId } from "../../shared/types/agent.js";
 import { CliAvailabilityService } from "./CliAvailabilityService.js";
-import { isAgentInstalled } from "../../shared/utils/agentAvailability.js";
+import { isAgentInstalled, isAgentLaunchable } from "../../shared/utils/agentAvailability.js";
 import { buildProbeEnv } from "../utils/spawnEnv.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { stripAnsiAndOscCodes } from "../../shared/utils/urlUtils.js";
@@ -37,6 +37,8 @@ export class AgentVersionService {
   private readonly EXIT_DRAIN_MS = 200;
   private readonly MAX_BUFFER = 256 * 1024;
   private inFlightChecks = new Map<AgentId, Promise<AgentVersionInfo>>();
+  /** Bumped when the copy an agent launches changes, so no older answer is kept. */
+  private readonly generations = new Map<string, number>();
   private runningCopyProbes = 0;
   private readonly copyProbeWaiters: Array<() => void> = [];
 
@@ -61,6 +63,17 @@ export class AgentVersionService {
       lastChecked: Date.now(),
       error: this.toErrorString(error),
     };
+  }
+
+  /**
+   * Forgets what is known about an agent's version once the copy it launches
+   * changes. A check already under way still answers its caller, but its answer
+   * is never kept for anyone else.
+   */
+  invalidate(agentId: string): void {
+    this.generations.set(agentId, (this.generations.get(agentId) ?? 0) + 1);
+    this.cache.delete(agentId as AgentId);
+    this.inFlightChecks.delete(agentId as AgentId);
   }
 
   async getVersions(refresh = false): Promise<AgentVersionInfo[]> {
@@ -112,12 +125,15 @@ export class AgentVersionService {
       }
     }
 
+    const generation = this.generations.get(agentId);
     const checkPromise = this.checkVersion(agentId);
     this.inFlightChecks.set(agentId, checkPromise);
 
     try {
       const result = await checkPromise;
-      this.cache.set(agentId, { info: result, timestamp: Date.now() });
+      if (this.generations.get(agentId) === generation) {
+        this.cache.set(agentId, { info: result, timestamp: Date.now() });
+      }
       return result;
     } catch (error) {
       return this.createErrorInfo(agentId, error);
@@ -144,12 +160,15 @@ export class AgentVersionService {
     const config = getEffectiveAgentConfig(agentId);
     if (!config) return [];
     const paths = await this.cliAvailabilityService.findCopies(agentId, config);
+    const detail = this.cliAvailabilityService.getDetails()?.[agentId];
+    // A chosen copy that can't launch leaves every copy found unmarked.
+    const launchPath = detail && isAgentLaunchable(detail.state) ? detail.resolvedPath : null;
     const versionArgs = config.version?.args;
     return Promise.all(
-      paths.map(async (path, index) => ({
+      paths.map(async (path) => ({
         path,
         version: versionArgs ? await this.readCopyVersion(path, versionArgs) : null,
-        launches: index === 0,
+        launches: path === launchPath,
       }))
     );
   }
@@ -283,9 +302,18 @@ export class AgentVersionService {
       return null;
     }
 
+    // A chosen copy is asked by its path, and only while it can launch: the
+    // registry command would answer for whichever copy PATH reaches first.
+    let command = config.command;
+    const detail = this.cliAvailabilityService.getDetails()?.[agentId];
+    if (detail?.chosenPath !== undefined) {
+      if (!isAgentLaunchable(detail.state) || !detail.resolvedPath) return null;
+      command = detail.resolvedPath;
+    }
+
     let output: string;
     try {
-      output = await this.runVersionProbe(config.command, config.version.args);
+      output = await this.runVersionProbe(command, config.version.args);
     } catch (error: any) {
       if (error.code === "ENOENT") {
         return null;
@@ -294,7 +322,7 @@ export class AgentVersionService {
       // toErrorString → .message), so it is scrubbed/sanitized; the original is
       // preserved only as `cause` for local debugging, never surfaced to the UI.
       if (error.code === "EACCES") {
-        throw new Error(`Permission denied: ${config.command}`, { cause: error });
+        throw new Error(`Permission denied: ${command}`, { cause: error });
       }
       throw new Error(`Command failed: ${scrubSecrets(error.message ?? "")}`, { cause: error });
     }

@@ -1489,6 +1489,10 @@ export const CHANNELS = {
 
   // Every copy of an agent's CLI, read when its settings page is open (#16409)
   AGENT_CLI_COPIES_LIST: "agent-cli-copies:list",
+  // Which copy launches, chosen from those found (#16399)
+  AGENT_CLI_COPIES_CHOOSE: "agent-cli-copies:choose",
+  AGENT_CLI_COPIES_RESET: "agent-cli-copies:reset",
+  AGENT_CLI_COPIES_CHANGED: "agent-cli-copies:changed",
 
   // Per-project presentation profile (#13771)
   PROJECT_PRESENTATION_GET: "project-presentation:get",

@@ -74,6 +74,20 @@ const SECURITY_ERROR_CODES = new Set(["EACCES", "EPERM"]);
 
 const CHECK_TIMED_OUT_MESSAGE = "The most recent check didn't finish in time.";
 
+const CHOSEN_COPY_MISSING_MESSAGE =
+  "The copy chosen to launch isn't there any more. Choose another copy or use the default.";
+
+/** The copy chosen for each agent, keeping only entries that can name one. */
+function readCliChoices(): Record<string, string> {
+  const stored: unknown = store.get("agentCliChoices");
+  if (!stored || typeof stored !== "object") return {};
+  const choices: Record<string, string> = {};
+  for (const [agentId, path] of Object.entries(stored)) {
+    if (typeof path === "string" && path.length > 0) choices[agentId] = path;
+  }
+  return choices;
+}
+
 const WINDOWS_EXECUTABLE_PRIORITY = new Map<string, number>([
   [".cmd", 0],
   [".exe", 1],
@@ -258,6 +272,11 @@ export class CliAvailabilityService {
 
         const registry = getEffectiveRegistry();
         const entries = Object.entries(registry);
+        const choices = readCliChoices();
+        // Whatever this check can't confirm still names the chosen copy, so a
+        // launch never falls back to whichever copy PATH reaches first.
+        const chosen = (id: string) =>
+          Object.hasOwn(choices, id) ? { chosenPath: choices[id] } : {};
 
         // Outcomes are recorded as each agent settles, so an agent that
         // outlives the batch budget can't take the ones that already answered
@@ -266,12 +285,12 @@ export class CliAvailabilityService {
         const checksPromise = Promise.all(
           entries.map(async ([id, config]) => {
             try {
-              settled.set(id, await this.checkAgent(config));
+              settled.set(id, await this.checkAgent(config, chosen(id).chosenPath));
             } catch (error) {
               logger.error("Agent CLI check failed", error, { agentId: id });
               settled.set(id, {
                 state: "missing",
-                detail: { state: "missing", resolvedPath: null, via: null },
+                detail: { state: "missing", resolvedPath: null, via: null, ...chosen(id) },
               });
             }
           })
@@ -300,7 +319,9 @@ export class CliAvailabilityService {
           // that it wasn't re-confirmed — unless that detail already carries
           // its own diagnostic, which stays the more useful thing to show.
           const previous = this.details?.[id];
-          if (previous) {
+          // Unless the choice changed since: a launch path read for another choice
+          // would start the wrong copy.
+          if (previous && previous.chosenPath === chosen(id).chosenPath) {
             return [
               id,
               {
@@ -318,6 +339,7 @@ export class CliAvailabilityService {
                 resolvedPath: null,
                 via: null,
                 message: CHECK_TIMED_OUT_MESSAGE,
+                ...chosen(id),
               },
             },
           ];
@@ -382,6 +404,23 @@ export class CliAvailabilityService {
     return this.details;
   }
 
+  /**
+   * Records the copy launches start for an agent, or with `null` returns it to
+   * whichever copy detection finds first. Takes effect with the next check, so
+   * follow it with {@link refresh}. The caller vouches that `path` is one
+   * {@link findCopies} returned.
+   */
+  setChosenCopy(agentId: string, path: string | null): void {
+    const choices = readCliChoices();
+    if (path === null) {
+      if (!Object.hasOwn(choices, agentId)) return;
+      delete choices[agentId];
+    } else {
+      choices[agentId] = path;
+    }
+    store.set("agentCliChoices", choices);
+  }
+
   async refresh(): Promise<CliAvailability> {
     // Counted across the PATH refresh: an older check can still publish during
     // it, and must not read as reusable while this one is about to replace it.
@@ -399,7 +438,8 @@ export class CliAvailabilityService {
 
   /**
    * Every copy of an agent's CLI on this machine, the one launches start first.
-   * Empty unless the last check found a launchable copy.
+   * Empty unless the last check found a launchable copy, or a chosen copy that
+   * can't launch now, which leaves the others to choose from.
    *
    * A check stops at the first layer that answers, so this goes through all of
    * them. It stays out of the check because the npm layer spawns npm, which the
@@ -412,9 +452,9 @@ export class CliAvailabilityService {
     if (this.details === null) await this.checkAvailability();
     const detail = this.details?.[agentId];
     const launchPath = detail && isAgentLaunchable(detail.state) ? detail.resolvedPath : null;
-    if (!launchPath) return [];
+    if (!launchPath && detail?.chosenPath === undefined) return [];
 
-    const copies = [launchPath];
+    const copies = launchPath ? [launchPath] : [];
     const deadline = new AbortController();
     let timeoutHandle: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<void>((resolve) => {
@@ -444,11 +484,11 @@ export class CliAvailabilityService {
    */
   private async collectCopies(
     config: AgentConfig,
-    launchPath: string,
+    launchPath: string | null,
     copies: string[],
     signal: AbortSignal
   ): Promise<void> {
-    const seen = new Set(await copyIdentities(launchPath, signal));
+    const seen = new Set(launchPath ? await copyIdentities(launchPath, signal) : []);
     const add = async (candidate: string): Promise<void> => {
       const identities = await copyIdentities(candidate, signal);
       if (signal.aborted || identities.some((identity) => seen.has(identity))) return;
@@ -492,9 +532,45 @@ export class CliAvailabilityService {
     }
   }
 
-  private async checkAgent(config: AgentConfig): Promise<AgentCheckOutcome> {
-    const probe = await this.probeCommand(config);
+  /**
+   * A chosen copy is checked where it is and nowhere else: finding the CLI
+   * somewhere else would launch a copy the user didn't choose.
+   */
+  private async checkAgent(config: AgentConfig, chosenPath?: string): Promise<AgentCheckOutcome> {
+    if (chosenPath === undefined) {
+      return this.classifyProbe(config, await this.probeCommand(config));
+    }
+    const outcome = await this.classifyProbe(config, await this.probeChosenPath(chosenPath));
+    return {
+      state: outcome.state,
+      detail: {
+        ...outcome.detail,
+        chosenPath,
+        ...(outcome.state === "missing" ? { message: CHOSEN_COPY_MISSING_MESSAGE } : {}),
+      },
+    };
+  }
 
+  private async probeChosenPath(path: string): Promise<ProbeResult> {
+    try {
+      await access(path, constants.X_OK);
+      return { status: "found", path, via: "chosen" };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (typeof code === "string" && SECURITY_ERROR_CODES.has(code)) {
+        return {
+          status: "blocked",
+          reason: code === "EACCES" ? "permissions" : "security",
+          path,
+          via: "chosen",
+          message: `${path} exists but execution failed with ${code} — check file permissions or security software allowlist`,
+        };
+      }
+      return { status: "missing" };
+    }
+  }
+
+  private async classifyProbe(config: AgentConfig, probe: ProbeResult): Promise<AgentCheckOutcome> {
     if (probe.status === "blocked") {
       return {
         state: "blocked",

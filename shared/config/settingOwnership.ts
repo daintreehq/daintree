@@ -136,6 +136,8 @@ export const SETTING_CATALOG = {
       notificationSettings: device,
       userAgentRegistry: host,
       agentUpdateSettings: host,
+      // A path on the machine the agents run on, so it is that machine's.
+      agentCliChoices: host,
       keybindingOverrides: device,
       projectEnv: hostPerProject,
       globalEnvironmentVariables: host,
