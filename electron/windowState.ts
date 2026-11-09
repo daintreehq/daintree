@@ -409,7 +409,9 @@ function keepRestoredBounds(
 function snapshotDisplay(display: Electron.Display): SavedDisplay {
   const { x, y, width, height } = display.bounds;
   // electron-store rejects undefined, so a display without a usable id is saved by bounds alone.
-  return Number.isFinite(display.id) ? { id: display.id, x, y, width, height } : { x, y, width, height };
+  return Number.isFinite(display.id)
+    ? { id: display.id, x, y, width, height }
+    : { x, y, width, height };
 }
 
 /** The display a maximized or full-screen window was on, when its saved state names one. */
