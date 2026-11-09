@@ -35,10 +35,7 @@ export const DECISIONS_STORE_MAX_BATCH = 256;
  * `storage-fault`: any other failure of the database.
  */
 export type DecisionsStoreUnavailableReason =
-  | "disk-pressure"
-  | "disk-full"
-  | "storage-fault"
-  | "closed";
+  "disk-pressure" | "disk-full" | "storage-fault" | "closed";
 
 /** A call the store refused. Nothing it carried was stored. */
 export class DecisionsStoreUnavailableError extends Error {

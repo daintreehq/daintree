@@ -57,14 +57,20 @@ export class StorageRecovery {
       return;
     }
     if (this.timer !== null) return;
-    if (this.lastRestartAt === null || this.now() - this.lastRestartAt >= DISK_FULL_SAME_OUTAGE_MS) {
+    if (
+      this.lastRestartAt === null ||
+      this.now() - this.lastRestartAt >= DISK_FULL_SAME_OUTAGE_MS
+    ) {
       this.restarts = 0;
     }
     const delay = DISK_FULL_RESTART_DELAYS_MS[this.restarts];
     if (delay === undefined) {
-      logWarn("[Decisions] The local store ran out of room again after restarting; it stays stopped", {
-        restarts: this.restarts,
-      });
+      logWarn(
+        "[Decisions] The local store ran out of room again after restarting; it stays stopped",
+        {
+          restarts: this.restarts,
+        }
+      );
       return;
     }
     this.timer = setTimeout(() => {
