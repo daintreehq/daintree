@@ -795,7 +795,7 @@ test("MCP approval dialog review — trust hierarchy across caller, danger, and 
           dangerRationale:
             "Ends every selected process immediately. Unsaved shell state and any agent turn in progress are lost.",
           selectableTargets: PANEL_TARGETS,
-          selectionConfirmLabel: { verb: "Kill", one: "terminal", many: "terminals" },
+          selectionConfirmLabel: { verb: "Remove", one: "panel", many: "panels" },
         },
       ]);
       await snap(page, "97-long-target-list", DIALOG);
@@ -819,7 +819,7 @@ test("MCP approval dialog review — trust hierarchy across caller, danger, and 
             kindLabel: "Terminal",
             agentRunning: false,
           })),
-          selectionConfirmLabel: { verb: "Kill", one: "terminal", many: "terminals" },
+          selectionConfirmLabel: { verb: "Remove", one: "panel", many: "panels" },
         },
       ]);
       await snap(page, "97b-twin-targets-long-worktree", DIALOG);

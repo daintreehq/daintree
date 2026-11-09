@@ -119,7 +119,7 @@ export function CanopyPitch({
               </h2>
               <p className="text-sm leading-6 text-text-secondary">
                 Canopy reads each agent's screen and keeps one inbox for all of them, most urgent
-                first, so you stop hunting through panes to find out who needs you.
+                first, so you stop hunting through panels to find out who needs you.
               </p>
             </div>
             <ul className="flex flex-col gap-4">

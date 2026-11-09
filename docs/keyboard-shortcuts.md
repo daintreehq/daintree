@@ -129,7 +129,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Open changes for focused worktree | `⌘+⇧+D` | `Ctrl+Shift+D` |
 | Open file browser panel for focused worktree | `⌘+⌥+F` | `Ctrl+Alt+F` (Windows), `Ctrl+Shift+Alt+F` (Linux) |
 
-## Worktree sessions
+## Worktree panels
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |

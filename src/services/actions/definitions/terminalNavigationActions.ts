@@ -17,6 +17,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["focus next terminal"],
     nonRepeatable: true,
     run: async () => {
       usePanelStore.getState().focusNext();
@@ -31,6 +32,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["focus previous terminal"],
     nonRepeatable: true,
     run: async () => {
       usePanelStore.getState().focusPrevious();
@@ -81,6 +83,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["focus terminal up"],
     nonRepeatable: true,
     run: async () => {
       const nav = callbacks.getGridNavigation();
@@ -98,6 +101,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["focus terminal down"],
     nonRepeatable: true,
     run: async () => {
       const nav = callbacks.getGridNavigation();
@@ -115,6 +119,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["focus terminal left"],
     nonRepeatable: true,
     run: async () => {
       const nav = callbacks.getGridNavigation();
@@ -135,6 +140,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["focus terminal right"],
     nonRepeatable: true,
     run: async () => {
       const nav = callbacks.getGridNavigation();
@@ -174,6 +180,7 @@ export function registerTerminalNavigationActions(
     actions.set(actionId, () => ({
       id: actionId,
       title: `Focus panel ${index}`,
+      keywords: [`focus terminal ${index}`],
       description: `Focus panel at position ${index}; press again to toggle fullscreen`,
       category: "terminal",
       kind: "command",

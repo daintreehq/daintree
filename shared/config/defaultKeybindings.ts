@@ -1233,7 +1233,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Dock all panels in active worktree",
-    category: "Worktree sessions",
+    category: "Worktree panels",
   },
   {
     actionId: "worktree.sessions.maximizeAll",
@@ -1241,7 +1241,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Move all panels to grid in active worktree",
-    category: "Worktree sessions",
+    category: "Worktree panels",
   },
   {
     actionId: "worktree.sessions.resetRenderers",
@@ -1249,7 +1249,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Redraw all terminals in active worktree",
-    category: "Worktree sessions",
+    category: "Worktree panels",
   },
 ];
 
@@ -1481,7 +1481,7 @@ export const KEYBINDING_CATEGORY_ORDER: readonly string[] = [
   "Agents",
   "Fleet",
   "Worktrees",
-  "Worktree sessions",
+  "Worktree panels",
   "Panels",
   "Layout",
   "Search",

@@ -624,7 +624,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `workflow.focusNextAttention` | Focus next attention | safe | — |
 | `workflow.prepBranchForReview` | Inspect branch for review | safe | `cwd?`, `projectId?`, `worktreeId?`, `worktreePath?` |
 | `workflow.startWorkOnIssue` | Start work on issue | safe | `agentId`, `issueNumber`, `assignToSelf?`, `baseBranch?`, `branchName?`, `focusPolicy?`, `injectContext?`, `recipeId?`, `spawnedBy?` |
-| `worktree.bulk.closeSessions` | Close panels for selected worktrees | confirm | — |
+| `worktree.bulk.closeSessions` | Remove panels for selected worktrees | confirm | — |
 | `worktree.bulk.remove` | Delete selected worktrees | confirm | — |
 | `worktree.clearReviewMark` | Clear review mark | safe | `worktreeId?` |
 | `worktree.compareDiff` | Compare worktree diff | safe | `compareToWorktreeId`, `ignoreWhitespace?`, `limit?`, `offset?`, `useMergeBase?`, `worktreeId?` |
@@ -686,7 +686,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.sessions.maximizeAll` | Move all panels to grid | safe | `worktreeId?` |
 | `worktree.sessions.minimizeAll` | Dock all panels | safe | `worktreeId?` |
 | `worktree.sessions.resetRenderers` | Redraw all terminals | safe | `worktreeId?` |
-| `worktree.sessions.restartAll` | Restart all terminals | confirm | `confirmed?`, `worktreeId?` |
+| `worktree.sessions.restartAll` | Restart all terminals in worktree | confirm | `confirmed?`, `worktreeId?` |
 | `worktree.sessions.trashAll` | Trash all panels | confirm | `confirmed?`, `worktreeId?` |
 | `worktree.setActive` | Set active worktree | safe | `worktreeId` |
 | `worktree.setCustomTitle` | Set worktree title | safe | `title`, `worktreeId` |

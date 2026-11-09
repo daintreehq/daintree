@@ -218,7 +218,7 @@ export function TerminalNotifyChip({
         <div className="flex flex-col gap-2 p-3">
           <p className="text-xs text-text-secondary">
             The agent asked to be told when other terminals stop working. Daintree types one line
-            into this pane's prompt while it sits idle.
+            into this terminal's prompt while it sits idle.
           </p>
           <p
             className={cn(

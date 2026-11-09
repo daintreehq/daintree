@@ -18,7 +18,7 @@ import type { ActionContext } from "@shared/types/actions";
 export function registerWorktreeBulkActions(actions: ActionRegistry): void {
   actions.set("worktree.bulk.closeSessions", () => ({
     id: "worktree.bulk.closeSessions",
-    title: "Close panels for selected worktrees",
+    title: "Remove panels for selected worktrees",
     description: "Remove all panels across the selected worktrees in the overview",
     category: "worktree",
     kind: "command",

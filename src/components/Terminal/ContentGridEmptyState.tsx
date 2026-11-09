@@ -444,7 +444,7 @@ export function ContentGridEmptyState({
                   scale="canvas"
                   icon={<FolderX />}
                   title="Worktree deleted"
-                  description="Its leftover panels stay in the sidebar row until they close — drag them to another worktree to keep them"
+                  description="Its leftover terminals stay in the sidebar row until they close — drag them to another worktree to keep them"
                   action={
                     <Button variant="contrast" size="sm" onClick={handleGoToMainWorktree}>
                       Go to main worktree

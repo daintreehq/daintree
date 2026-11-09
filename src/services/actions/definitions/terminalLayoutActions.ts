@@ -198,6 +198,7 @@ export function registerTerminalLayoutActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["maximize terminal"],
     run: async () => {
       const state = usePanelStore.getState();
       if (state.focusedId) {
@@ -264,6 +265,7 @@ export function registerTerminalLayoutActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["move terminal left"],
     run: async (_args: unknown, ctx) => moveAlongRow(-1, ctx),
   }));
 
@@ -276,6 +278,7 @@ export function registerTerminalLayoutActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["move terminal right"],
     run: async (_args: unknown, ctx) => moveAlongRow(1, ctx),
   }));
 
@@ -287,6 +290,7 @@ export function registerTerminalLayoutActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["move terminal up"],
     run: async () => {
       if (isHydrationBatchActive()) return;
       const state = usePanelStore.getState();
@@ -327,6 +331,7 @@ export function registerTerminalLayoutActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["move terminal down"],
     run: async () => {
       if (isHydrationBatchActive()) return;
       const state = usePanelStore.getState();

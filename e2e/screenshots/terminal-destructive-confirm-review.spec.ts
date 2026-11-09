@@ -476,7 +476,7 @@ test("terminal destructive confirm review — every copy variant", async () => {
       const card = page.locator(`[aria-label^="Deleted worktree:"]`).first();
       await card.waitFor({ state: "visible", timeout: 30_000 });
       await card.locator('button[aria-label^="Close "]').first().click();
-      await snapDialog(page, "10-deleted-single", /^Close \d+ terminals? from '.+'\?$/);
+      await snapDialog(page, "10-deleted-single", /^Close \d+ panels? from '.+'\?$/);
     });
 
     await step(page, "deleted-group", async () => {

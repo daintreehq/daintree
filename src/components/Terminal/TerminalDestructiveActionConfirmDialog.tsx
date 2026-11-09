@@ -81,8 +81,8 @@ export function buildRestartRunningAgentCopy(terminalTitle?: string): Destructiv
 function recentlyClosedSentence(count: number): string {
   const ttl = `${TRASH_TTL_SECONDS}\u00a0seconds`;
   return count === 1
-    ? `It keeps running in Recently closed for ${ttl}. Restore it before then, or its process ends.`
-    : `They keep running in Recently closed for ${ttl}. Restore them before then, or their processes end.`;
+    ? `It stays in Recently closed for ${ttl}. Restore it before then, or it closes for good and any process in it ends.`
+    : `They stay in Recently closed for ${ttl}. Restore them before then, or they close for good and any processes in them end.`;
 }
 
 function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DestructiveConfirmCopy {
@@ -166,10 +166,7 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
         title: `Close ${counted} from ${worktree}?`,
         lead: workingLead(pending.runningAgentCount),
         description: recentlyClosedSentence(count),
-        note:
-          count === 1
-            ? "To keep it open, cancel and drag it to another worktree."
-            : "To keep one open, cancel and drag it to another worktree.",
+        note: "To keep a terminal open, cancel and drag it to another worktree.",
         confirmLabel: `Close ${counted}`,
       };
     }
@@ -183,10 +180,7 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
         title: `Close ${counted} from ${countedWorktrees}?`,
         lead: workingLead(pending.runningAgentCount),
         description: recentlyClosedSentence(count),
-        note:
-          count === 1
-            ? "To keep it open, cancel and drag it to another worktree."
-            : "To keep one open, cancel and drag it to another worktree.",
+        note: "To keep a terminal open, cancel and drag it to another worktree.",
         confirmLabel: `Close ${counted}`,
       };
     }

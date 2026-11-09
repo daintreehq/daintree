@@ -137,7 +137,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["trash", "hide", "dismiss", "remove", "terminal"],
+    keywords: ["trash", "hide", "dismiss", "remove", "close terminal"],
     argsSchema: z
       .object({
         terminalId: z
@@ -290,6 +290,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["trash terminal"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.trash", args, ctx),
@@ -322,7 +323,7 @@ export function registerTerminalLifecycleActions(
     danger: "confirm",
     scope: "renderer",
     dangerRationale: "Permanently kills the PTY process. Scrollback and session state are lost.",
-    keywords: ["kill", "terminate", "stop", "remove", "delete"],
+    keywords: ["kill terminal", "terminate", "stop", "remove", "delete"],
     argsSchema: z.object({
       terminalId: z.string().optional(),
       confirmed: z
@@ -526,7 +527,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["title", "label", "name", "edit"],
+    keywords: ["title", "label", "name", "edit", "rename terminal"],
     argsSchema: z.object({
       terminalId: z.string().optional(),
       name: z.string().optional().describe("New title; omitted, opens the rename dialog."),
@@ -748,7 +749,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["trash", "hide", "clear", "cleanup"],
+    keywords: ["trash", "hide", "clear", "cleanup", "close all terminals"],
     resultSchema: PanelCloseResultSchema,
     mcpOutputSchema: true,
     // Eager for the same reason as terminal.close: "the active worktree" is
@@ -791,7 +792,7 @@ export function registerTerminalLifecycleActions(
     scope: "renderer",
     dangerRationale:
       "Permanently removes every user-facing panel. All scrollback and session state are lost.",
-    keywords: ["kill", "terminate", "stop", "remove", "delete"],
+    keywords: ["kill all terminals", "terminate", "stop", "remove", "delete"],
     argsSchema: z
       .object({
         confirmed: z
@@ -809,7 +810,7 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.restartAll", () => ({
     id: "terminal.restartAll",
     title: "Restart all terminals",
-    description: "Restart all terminals in the active worktree",
+    description: "Restart every terminal in the project",
     category: "terminal",
     kind: "command",
     danger: "confirm",

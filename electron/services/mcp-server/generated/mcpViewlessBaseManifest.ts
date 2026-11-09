@@ -2553,7 +2553,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
       },
     },
-    keywords: ["trash", "hide", "dismiss", "remove", "terminal"],
+    keywords: ["trash", "hide", "dismiss", "remove", "close terminal"],
     kind: "command",
     name: "terminal.close",
     outputSchema: {

@@ -4,6 +4,7 @@ import type { ActionContext } from "@shared/types/actions";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { nextFrame } from "@/services/terminal/revealUntilStable";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isPtyPanel } from "@shared/types/panel";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import {
@@ -40,7 +41,7 @@ export function registerWorktreeSessionActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["collapse", "hide", "zen", "dock"],
+    keywords: ["collapse", "hide", "zen", "dock", "dock all sessions"],
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { worktreeId } = args as { worktreeId?: string };
@@ -62,6 +63,7 @@ export function registerWorktreeSessionActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["move all sessions to grid"],
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { worktreeId } = args as { worktreeId?: string };
@@ -73,12 +75,13 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.restartAll", () => ({
     id: "worktree.sessions.restartAll",
-    title: "Restart all terminals",
+    title: "Restart all terminals in worktree",
     description: "Restart all terminals for a worktree",
     category: "worktree",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["restart all sessions"],
     dangerRationale:
       "Restarts all terminals for a worktree. Scrollback is lost for every restarted terminal.",
     argsSchema: z
@@ -98,10 +101,13 @@ export function registerWorktreeSessionActions(
         .filter(
           (t): t is NonNullable<typeof t> =>
             t != null &&
+            // Only PTY panels restart, so a browser or review panel in the
+            // worktree must not inflate the confirmation's terminal count.
+            isPtyPanel(t) &&
             t.worktreeId === targetWorktreeId &&
             t.location !== "trash" &&
             t.location !== "overlay" &&
-            // Dialog panels are ephemeral modal content, not worktree sessions —
+            // Dialog panels are ephemeral modal content, not worktree panels —
             // including one inflates the confirmation count while the bulk
             // action that follows correctly skips it.
             t.location !== "dialog"
@@ -136,6 +142,7 @@ export function registerWorktreeSessionActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["reset session renderers"],
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { worktreeId } = args as { worktreeId?: string };
@@ -180,6 +187,7 @@ export function registerWorktreeSessionActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["close completed sessions"],
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { worktreeId } = args as { worktreeId?: string };
@@ -199,6 +207,7 @@ export function registerWorktreeSessionActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["trash all sessions"],
     dangerRationale:
       "Moves all panels for a worktree to trash. Scrollback is lost for each trashed terminal.",
     argsSchema: z
