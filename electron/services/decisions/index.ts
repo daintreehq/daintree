@@ -4,7 +4,11 @@ import { hostname } from "node:os";
 import { basename, dirname } from "node:path";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
-import { broadcastToProjectRenderers, broadcastToRenderer } from "../../ipc/utils.js";
+import {
+  broadcastToProjectRenderers,
+  broadcastToRenderer,
+  hasBroadcastAudience,
+} from "../../ipc/utils.js";
 import type { MainProcessToastPayload } from "../../../shared/types/ipc/maps.js";
 import { isDiskSpaceFault } from "./storageRecovery.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
@@ -347,7 +351,8 @@ let storageOutageNoticed = false;
 /**
  * Agents lose `ask_human` while Decisions is stopped for storage, and nothing
  * outside Settings showed it (#16605): the first time it stops for that, a
- * warning says so, once, until it connects again or turns off.
+ * warning says so, once, until it connects again or turns off. With no window
+ * to show it in, the outage stays unnoticed, so the next stop tries again.
  */
 function noticeStorageOutage(running: DecisionsService, status: DecisionsStatus): void {
   if (status.state === "connected" || status.state === "off") {
@@ -356,18 +361,19 @@ function noticeStorageOutage(running: DecisionsService, status: DecisionsStatus)
   }
   if (shutDown || storageOutageNoticed) return;
   if (status.state !== "not-connected" || status.problem !== "storage") return;
-  storageOutageNoticed = true;
   const forSpace = isDiskSpaceFault(running.getStore()?.faultReason() ?? null);
   const toast: MainProcessToastPayload = {
     type: "warning",
     title: "Decisions connection lost",
     message: forSpace
-      ? "The local Decisions database stopped accepting writes while disk space ran low, so agents can't ask you questions through Decisions. It reconnects by itself once there is space again."
+      ? "The local Decisions database stopped accepting writes while disk space ran low, so agents can't ask you questions through Decisions. It tries again by itself once there's space; if it stays disconnected, turn Decisions off and on in Settings."
       : "The local Decisions database isn't accepting writes, so agents can't ask you questions through Decisions. Turn Decisions off and on in Settings to try again.",
     rateLimitKey: "decisions-storage",
     rateLimitLabel: "Decisions",
     replaceKey: "decisions-storage",
   };
+  if (!hasBroadcastAudience(CHANNELS.NOTIFICATION_SHOW_TOAST, toast)) return;
+  storageOutageNoticed = true;
   try {
     broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, toast);
   } catch (error) {
@@ -576,6 +582,8 @@ export function getDecisionsService(): Promise<DecisionsService> {
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
         checkDiskSpace,
+        // A check mid-question holds the old store and connection; it ends as off and on would end it.
+        onStoreReplacing: () => void endSetupCheck(),
       });
       next.onStatusChanged((event) => {
         // A Host enrolls no Hosts: only an owner's lifetime does.

@@ -136,27 +136,75 @@ describe("StorageRecovery", () => {
     expect(calls).toEqual(["check", "restart"]);
   });
 
-  it("looks again at a fault that lands while it is restarting", async () => {
-    let release!: (room: boolean) => void;
+  it("looks again, after the next wait, at a fault that lands while it is restarting", async () => {
+    const calls: string[] = [];
+    let finish!: () => void;
+    const subject = new StorageRecovery({
+      checkDiskSpace: async () => {
+        calls.push("check");
+        return true;
+      },
+      restart: () => {
+        calls.push("restart");
+        return new Promise<boolean>((resolve) => {
+          finish = () => resolve(true);
+        });
+      },
+    });
+
+    subject.diskFull();
+    await vi.advanceTimersByTimeAsync(FIRST);
+    // The replacement store ran out of room before this restart finished.
+    subject.diskFull();
+    await vi.advanceTimersByTimeAsync(SECOND);
+    expect(calls).toEqual(["check", "restart"]);
+
+    finish();
+    await vi.advanceTimersByTimeAsync(SECOND - 1);
+    expect(calls).toEqual(["check", "restart"]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual(["check", "restart", "check", "restart"]);
+  });
+
+  it("restarts nothing when disposed while it reads free space", async () => {
+    let read!: (room: boolean) => void;
     const { subject, calls } = recovery(
       () =>
         new Promise<boolean>((resolve) => {
-          release = resolve;
+          read = resolve;
         })
     );
 
     subject.diskFull();
     await vi.advanceTimersByTimeAsync(FIRST);
-    // The replacement store ran out of room before this attempt finished.
-    subject.diskFull();
-    release(true);
+    subject.dispose();
+    read(true);
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls).toEqual(["check", "restart"]);
 
-    await vi.advanceTimersByTimeAsync(SECOND);
-    release(true);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(calls).toEqual(["check", "restart", "check", "restart"]);
+    expect(calls).toEqual(["check"]);
+  });
+
+  it("keeps a restart that throws contained, and the next fault still gets its wait", async () => {
+    const calls: string[] = [];
+    let fail = true;
+    const subject = new StorageRecovery({
+      checkDiskSpace: async () => true,
+      restart: async () => {
+        calls.push("restart");
+        if (fail) {
+          fail = false;
+          throw new Error("store wouldn't open");
+        }
+        return true;
+      },
+    });
+
+    subject.diskFull();
+    await vi.advanceTimersByTimeAsync(FIRST);
+    subject.diskFull();
+    await vi.advanceTimersByTimeAsync(FIRST);
+
+    expect(calls).toEqual(["restart", "restart"]);
   });
 
   it("does nothing once disposed, not even a wait already set", async () => {

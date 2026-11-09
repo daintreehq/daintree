@@ -178,6 +178,12 @@ export interface DecisionsServiceOptions {
    * that ran out of room is replaced after it says so.
    */
   checkDiskSpace?: () => Promise<boolean | null>;
+  /**
+   * The store is about to be replaced after a disk-space fault (#16605).
+   * Anything holding the old store or its connection (a running setup check)
+   * lets go now; it runs inside the service's queue, so it must not wait on it.
+   */
+  onStoreReplacing?: () => void;
 }
 
 /**
@@ -242,6 +248,7 @@ export class DecisionsService {
   private faultedAt: number | null = null;
   /** Replaces a store the database ran out of room for (#16605). */
   private readonly storageRecovery: StorageRecovery;
+  private readonly onStoreReplacing: () => void;
   /** Connections stopped but still settling: the store closes only after them. */
   private readonly stopping = new Set<Promise<void>>();
   /**
@@ -308,6 +315,7 @@ export class DecisionsService {
     this.modelOptions = options.model;
     this.onModelChanged = options.onModelChanged ?? (() => {});
     this.deleteModelFiles = options.deleteModelFiles ?? deleteDecisionModelFiles;
+    this.onStoreReplacing = options.onStoreReplacing ?? (() => {});
     const checkDiskSpace = options.checkDiskSpace ?? (async () => null);
     this.storageRecovery = new StorageRecovery({
       checkDiskSpace,
@@ -567,6 +575,11 @@ export class DecisionsService {
       if (this.disposed || this.settings === null || store === null) return false;
       if (!isDiskSpaceFault(reason) || getWritesSuppressed()) return false;
       const keyFilePath = this.keyFilePath();
+      try {
+        this.onStoreReplacing();
+      } catch (error) {
+        console.warn("[Decisions] Letting go of the old store failed:", error);
+      }
       logInfo("[Decisions] Opening a fresh local store after it stopped for disk space", {
         reason,
         ...(this.faultedAt !== null ? { stoppedForMs: Date.now() - this.faultedAt } : {}),

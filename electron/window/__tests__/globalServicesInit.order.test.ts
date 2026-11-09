@@ -455,6 +455,7 @@ import {
   setStopAppMetricsMonitor,
   _resetDecisionsModuleForTesting,
   loadDecisionsModule,
+  peekDecisionsModule,
   sealDecisionsModule,
 } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
@@ -1565,9 +1566,11 @@ describe("initGlobalServices task ordering", () => {
     try {
       // Decisions never used: the exit loads nothing to ask.
       const load = vi.fn(async () => ({ decisionsDiskSpaceRecovered: recovered }) as never);
+      const evaluated = { ...decisionsEvaluated };
       monitorOptions.onCriticalChange(false);
-      await Promise.resolve();
-      expect(load).not.toHaveBeenCalled();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(peekDecisionsModule()).toBeNull();
+      expect({ ...decisionsEvaluated }).toEqual(evaluated);
 
       await loadDecisionsModule(load);
       monitorOptions.onCriticalChange(true);

@@ -2204,31 +2204,42 @@ describe("DecisionsService disk-space recovery (#16605)", () => {
     const store = fakeStore();
     let reason: FaultReason | null = null;
     const listeners = new Set<(reason: FaultReason) => void>();
-    Object.assign(store, {
-      listQuestions: async () => rows,
-      faultReason: () => reason,
-      onFault: (listener: (reason: FaultReason) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    });
-    return {
+    const record = {
       store,
+      /** Fault listeners let go of. */
+      released: 0,
+      /** Every listener ever subscribed, let go of or not. */
+      subscribed: [] as Array<(reason: FaultReason) => void>,
       fault(next: FaultReason) {
         reason = next;
         for (const listener of [...listeners]) listener(next);
       },
     };
+    Object.assign(store, {
+      listQuestions: async () => rows,
+      faultReason: () => reason,
+      onFault: (listener: (reason: FaultReason) => void) => {
+        listeners.add(listener);
+        record.subscribed.push(listener);
+        return () => {
+          if (listeners.delete(listener)) record.released += 1;
+        };
+      },
+    });
+    return record;
   }
 
   /** A service whose stores and connections are recorded, the connections never run. */
-  function recovering(options: Partial<DecisionsServiceOptions> = {}) {
+  function recovering(
+    options: Partial<DecisionsServiceOptions> = {},
+    rowsOf: (opened: number) => QuestionRow[] = () => [row(1)]
+  ) {
     const stores: Array<ReturnType<typeof faultableStore>> = [];
     const made: Array<{ options: RelayConnectionOptions; stopped: boolean }> = [];
     const pushes: PaneDecisionState[] = [];
     const service = new DecisionsService({
       openStore: async () => {
-        const opened = faultableStore([row(1)]);
+        const opened = faultableStore(rowsOf(stores.length));
         stores.push(opened);
         return opened.store;
       },
@@ -2268,6 +2279,7 @@ describe("DecisionsService disk-space recovery (#16605)", () => {
 
     expect(stores).toHaveLength(2);
     expect(stores[0]!.store.close).toHaveBeenCalledOnce();
+    expect(stores[0]!.released).toBe(1);
     expect(service.getStore()).toBe(stores[1]!.store);
     expect(made.map((m) => m.stopped)).toEqual([true, false]);
     expect(made[1]!.options.relay).toEqual(RELAY);
@@ -2386,6 +2398,101 @@ describe("DecisionsService disk-space recovery (#16605)", () => {
     expect(service.getStatus()).toEqual({ state: "not-connected", problem: "storage" });
   });
 
+  it("opens the fresh store only once the old connection has settled what it was typing", async () => {
+    let settle!: () => void;
+    const { service, stores, made } = recovering({
+      connect: (connection) => {
+        const record = { options: connection, stopped: false };
+        made.push(record);
+        return {
+          start: () => {},
+          stop: () => {
+            record.stopped = true;
+            return made.length === 1
+              ? new Promise<void>((resolve) => (settle = resolve))
+              : undefined;
+          },
+        };
+      },
+    });
+    await service.start(on(RELAY));
+    stores[0]!.fault("disk-pressure");
+
+    const recovered = service.diskSpaceRecovered();
+    await vi.waitFor(() => expect(made[0]!.stopped).toBe(true));
+    // A settings change meanwhile connects nothing: no store is attached.
+    service.updateSettings(on({ ...RELAY, proxyAllowlisted: true }));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(stores[0]!.store.close).not.toHaveBeenCalled();
+    expect(stores).toHaveLength(1);
+    expect(made).toHaveLength(1);
+
+    settle();
+    expect(await recovered).toBe(true);
+    expect(stores).toHaveLength(2);
+    expect(made).toHaveLength(2);
+    expect(service.getSettings()?.proxyAllowlisted).toBe(true);
+  });
+
+  it("connects the fresh connection to the fresh store, and shows the panes what it holds", async () => {
+    const { service, stores, made, pushes } = recovering({}, (opened) =>
+      opened === 0 ? [row(1)] : [row(1), row(2)]
+    );
+    await service.start(on(RELAY));
+    stores[0]!.fault("disk-pressure");
+
+    await service.diskSpaceRecovered();
+
+    expect(await made[1]!.options.store.listQuestions()).toEqual([row(1), row(2)]);
+    expect(pushes).toHaveLength(2);
+    expect(pushes[1]!.revision).toBeGreaterThan(pushes[0]!.revision);
+  });
+
+  it("watches the fresh store for its own disk-space fault", async () => {
+    const { service, stores } = recovering();
+    await service.start(on(RELAY));
+    stores[0]!.fault("disk-pressure");
+    await service.diskSpaceRecovered();
+
+    stores[1]!.fault("disk-pressure");
+    expect(await service.diskSpaceRecovered()).toBe(true);
+
+    expect(stores).toHaveLength(3);
+    expect(stores[1]!.released).toBe(1);
+  });
+
+  it("replaces the store under a suspension, and connects only once it is resumed", async () => {
+    const { service, stores, made } = recovering();
+    await service.start(on(RELAY));
+    stores[0]!.fault("disk-pressure");
+    await service.suspendConnection();
+
+    expect(await service.diskSpaceRecovered()).toBe(true);
+    expect(stores).toHaveLength(2);
+    expect(made).toHaveLength(1);
+    expect(service.getStatus()).toEqual({ state: "not-connected" });
+
+    service.resumeConnection();
+    expect(made).toHaveLength(2);
+    expect(made[1]!.stopped).toBe(false);
+  });
+
+  it("lets go of what holds the old store before it is replaced, and only then", async () => {
+    const order: string[] = [];
+    const { service, stores } = recovering({ onStoreReplacing: () => order.push("replacing") });
+    await service.start(on(RELAY));
+    stores[0]!.store.close.mockImplementation(async () => {
+      order.push("closed");
+    });
+
+    await service.diskSpaceRecovered();
+    expect(order).toEqual([]);
+
+    stores[0]!.fault("disk-pressure");
+    await service.diskSpaceRecovered();
+    expect(order).toEqual(["replacing", "closed"]);
+  });
+
   it("replaces a store the database ran out of room for once free space reads fine", async () => {
     vi.useFakeTimers();
     try {
@@ -2413,16 +2520,26 @@ describe("DecisionsService disk-space recovery (#16605)", () => {
   it("leaves a store the database ran out of room for to the monitor while space reads critical", async () => {
     vi.useFakeTimers();
     try {
-      const { service, stores } = recovering({ checkDiskSpace: async () => false });
+      // The read that finds space critical publishes the suppression, as the monitor does.
+      const { service, stores } = recovering({
+        checkDiskSpace: async () => {
+          setWritesSuppressed(true);
+          return false;
+        },
+      });
       await service.start(on(RELAY));
       stores[0]!.fault("disk-full");
 
       await vi.advanceTimersByTimeAsync(DISK_FULL_RESTART_DELAYS_MS[0]!);
       expect(stores).toHaveLength(1);
+      expect(await service.diskSpaceRecovered()).toBe(false);
 
+      // The monitor's exit: suppression lifts before it asks.
+      resetWritesSuppressedForTesting();
       expect(await service.diskSpaceRecovered()).toBe(true);
       expect(stores).toHaveLength(2);
     } finally {
+      resetWritesSuppressedForTesting();
       vi.useRealTimers();
     }
   });
@@ -2439,7 +2556,11 @@ describe("DecisionsService disk-space recovery (#16605)", () => {
       });
       await service.start(on(RELAY));
       await service.stop();
+      expect(stores[0]!.released).toBe(1);
       stores[0]!.fault("disk-full");
+      // Even a listener that outlived its store (a fault mid-detach) is ignored once another runs.
+      await service.start(on(RELAY));
+      stores[0]!.subscribed[0]!("disk-full");
 
       await vi.advanceTimersByTimeAsync(DISK_FULL_RESTART_DELAYS_MS[0]!);
       expect(checks).toEqual([]);

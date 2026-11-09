@@ -459,20 +459,34 @@ describe("SetupCheck", () => {
     expect(relay.devices).not.toHaveBeenCalled();
   });
 
-  it("names the problem the connection stopped for, not a missing relay, when it has no identity", async () => {
+  it.each(["storage", "keys", "other-relay"] as const)(
+    "names the problem (%s) the connection stopped for, not a missing relay, when it has no identity",
+    async (problem) => {
+      const h = await harness({
+        questionSource: () => null,
+        status: () => ({ state: "not-connected", problem }),
+      });
+
+      const run = await h.check.start();
+
+      expect(run.steps.claim).toEqual({
+        state: "failed",
+        observation: { result: "not-connected", problem },
+      });
+      expect(run.steps.socket.state).toBe("skipped");
+      expect(relay.devices).not.toHaveBeenCalled();
+    }
+  );
+
+  it("calls a connection stopped for no named problem no relay set up", async () => {
     const h = await harness({
       questionSource: () => null,
-      status: () => ({ state: "not-connected", problem: "storage" }),
+      status: () => ({ state: "not-connected" }),
     });
 
     const run = await h.check.start();
 
-    expect(run.steps.claim).toEqual({
-      state: "failed",
-      observation: { result: "not-connected", problem: "storage" },
-    });
-    expect(run.steps.socket.state).toBe("skipped");
-    expect(relay.devices).not.toHaveBeenCalled();
+    expect(run.steps.claim).toEqual({ state: "failed", observation: { result: "not-set-up" } });
   });
 
   it("reports what a fresh attempt saw, and never a connection it couldn't refresh as connected", async () => {

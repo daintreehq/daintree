@@ -22,6 +22,15 @@ vi.mock("electron", () => ({
   },
 }));
 
+const logWarn = vi.hoisted(() => vi.fn());
+vi.mock("../../../utils/logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/logger.js")>();
+  return {
+    ...actual,
+    logWarn: vi.fn((...args: Parameters<typeof actual.logWarn>) => logWarn(...args)),
+  };
+});
+
 import { openDb } from "../../persistence/db.js";
 import { resetWritesSuppressedForTesting, setWritesSuppressed } from "../../diskPressureState.js";
 import {
@@ -416,6 +425,7 @@ describe("DaintreeLocalStore", () => {
   });
 
   it("stops writing after the database runs out of room, even once there is room again", async () => {
+    logWarn.mockClear();
     const store = new DaintreeLocalStore(sqlite);
     const faults: string[] = [];
     store.onFault((reason) => faults.push(reason));
@@ -435,6 +445,11 @@ describe("DaintreeLocalStore", () => {
     expect(await store.getMeta("small")).toBeNull();
     expect(sqlite.pragma("synchronous", { simple: true })).toBe(SYNCHRONOUS_NORMAL);
     expect(faults).toEqual(["disk-full"]);
+    // One line, when it stopped, with the cause's code and nothing it was writing.
+    const latched = logWarn.mock.calls.filter(([message]) =>
+      String(message).includes("stopped taking writes")
+    );
+    expect(latched).toEqual([[expect.any(String), { reason: "disk-full", code: "SQLITE_FULL" }]]);
     warn.mockRestore();
   });
 

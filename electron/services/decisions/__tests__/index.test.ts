@@ -29,6 +29,8 @@ const loads = vi.hoisted(() => ({
 }));
 const broadcast = vi.hoisted(() => vi.fn());
 const toasts = vi.hoisted(() => vi.fn());
+// Whether a window could show a toast now.
+const toastAudience = vi.hoisted(() => ({ present: true }));
 // The relay check's network: Chromium's, which tests answer by hand.
 const netFetch = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Promise<Response>>());
 
@@ -100,6 +102,7 @@ vi.mock("../recoveryKit.js", async (importOriginal) => ({
 vi.mock("../../../ipc/utils.js", () => ({
   broadcastToProjectRenderers: broadcast,
   broadcastToRenderer: toasts,
+  hasBroadcastAudience: () => toastAudience.present,
 }));
 
 // The Decisions bearers `/mcp/decisions` reads, as the pane config service
@@ -535,6 +538,7 @@ describe("Decisions entry", () => {
     loads.closing = null;
     loads.opening = null;
     loads.faultReason = null;
+    toastAudience.present = true;
     vi.mocked(store.set).mockClear();
     broadcast.mockClear();
     toasts.mockClear();
@@ -2233,6 +2237,9 @@ describe("Decisions entry", () => {
       const toastsShown = () =>
         toasts.mock.calls.filter(([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST);
 
+      const messageOf = (index: number) =>
+        (toastsShown()[index]![1] as { message: string }).message;
+
       it("warns once per outage that agents can't ask through Decisions, again only after it connected", async () => {
         saved.value = { enabled: true, ...RELAY };
         await startDecisionsIfEnabled();
@@ -2245,14 +2252,68 @@ describe("Decisions entry", () => {
 
         expect(toastsShown()).toHaveLength(1);
         const [, toast] = toastsShown()[0]!;
-        expect(toast).toMatchObject({ type: "warning", replaceKey: "decisions-storage" });
-        expect((toast as { message: string }).message).toMatch(/once there is space again/);
+        // Its own rate-limit bucket and one live toast, never a shared warning bucket.
+        expect(toast).toMatchObject({
+          type: "warning",
+          rateLimitKey: expect.stringContaining("decisions"),
+          replaceKey: expect.stringContaining("decisions"),
+        });
+        expect(messageOf(0)).toMatch(/tries again by itself/);
 
         connection!.options.onStatus({ state: "connected" });
         loads.faultReason = "storage-fault";
         connection!.options.onStatus({ state: "not-connected", problem: "storage" });
         expect(toastsShown()).toHaveLength(2);
-        expect((toastsShown()[1]![1] as { message: string }).message).toMatch(/off and on/);
+        expect(messageOf(1)).not.toMatch(/tries again by itself/);
+        expect(messageOf(1)).toMatch(/off and on/);
+      });
+
+      it("says a store the database ran out of room for tries again by itself too", async () => {
+        saved.value = { enabled: true, ...RELAY };
+        await startDecisionsIfEnabled();
+        loads.faultReason = "disk-full";
+
+        connections[0]!.options.onStatus({ state: "not-connected", problem: "storage" });
+
+        expect(messageOf(0)).toMatch(/tries again by itself/);
+      });
+
+      it("warns again for an outage after Decisions was turned off and on", async () => {
+        saved.value = { enabled: true, ...RELAY };
+        await startDecisionsIfEnabled();
+        connections[0]!.options.onStatus({ state: "not-connected", problem: "storage" });
+
+        await setDecisionsEnabled(false);
+        await setDecisionsEnabled(true);
+        connections[1]!.options.onStatus({ state: "not-connected", problem: "storage" });
+
+        expect(toastsShown()).toHaveLength(2);
+      });
+
+      it("tries the warning again at the next stop when no window could show it", async () => {
+        saved.value = { enabled: true, ...RELAY };
+        await startDecisionsIfEnabled();
+        const [connection] = connections;
+        toastAudience.present = false;
+        connection!.options.onStatus({ state: "not-connected", problem: "storage" });
+        expect(toastsShown()).toHaveLength(0);
+
+        toastAudience.present = true;
+        connection!.options.onStatus({ state: "connecting" });
+        connection!.options.onStatus({ state: "not-connected", problem: "storage" });
+        expect(toastsShown()).toHaveLength(1);
+      });
+
+      it("ends a setup check holding the old store when the store is replaced", async () => {
+        saved.value = { enabled: true, ...RELAY };
+        await startSetupCheck();
+        expect(getSetupCheck()).toMatchObject({ state: "running" });
+        loads.faultReason = "disk-pressure";
+
+        await decisionsDiskSpaceRecovered();
+
+        expect(setupChecks.made[0]!.cancelled).toBe(1);
+        expect(getSetupCheck()).toBeNull();
       });
 
       it("warns of no other connection problem", async () => {

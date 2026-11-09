@@ -107,6 +107,10 @@ describe("describeSetupStep", () => {
     const halted = detail("claim", { result: "not-connected", problem: "storage" });
     expect(halted).toMatch(/database/);
     expect(halted).not.toMatch(/No relay is set up/);
+    expect(detail("claim", { result: "not-connected", problem: "keys" })).toMatch(/keys/);
+    expect(detail("claim", { result: "not-connected", problem: "other-relay" })).toMatch(
+      /another relay/
+    );
     expect(detail("socket", { result: "replaced" })).toMatch(/Another connection/);
     expect(detail("socket", { result: "not-connected", problem: "storage" })).toMatch(/database/);
     expect(detail("push", { result: "no-phone" })).toMatch(/No phone is paired/);
