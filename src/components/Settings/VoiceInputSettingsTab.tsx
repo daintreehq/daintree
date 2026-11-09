@@ -101,9 +101,13 @@ const CLEANUP_PROVIDER_NOTE: Record<VoiceCorrectionProvider, string> = {
 };
 
 // From the cleanup benchmark (#14793), all four on the same passages.
-const CLEANUP_MODEL_COPY: Record<VoiceCorrectionModel, { label: string; description: string }> = {
+const CLEANUP_MODEL_COPY: Record<
+  VoiceCorrectionModel,
+  { label: string; description: string; isDefault?: boolean }
+> = {
   "gpt-6.1-terra": {
-    label: "GPT-6.1 Terra (default)",
+    label: "GPT-6.1 Terra",
+    isDefault: true,
     description: "Careful, and catches most misheard names. Under a tenth of a cent a cleanup.",
   },
   "gpt-6-luna": {
@@ -111,7 +115,8 @@ const CLEANUP_MODEL_COPY: Record<VoiceCorrectionModel, { label: string; descript
     description: "Cheapest, but misses more misheard words.",
   },
   "claude-haiku-5-5": {
-    label: "Claude Haiku 5.5 (default)",
+    label: "Claude Haiku 5.5",
+    isDefault: true,
     description: "Fastest, usually about a second. Close to Terra at a fifth of the price.",
   },
   "claude-sonnet-5-5": {

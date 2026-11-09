@@ -66,8 +66,13 @@ const TIER_SUMMARIES: Record<HelpAssistantTier, string> = {
 
 // Descriptive exclusive choice: each tool set's consequence stays readable in full, so
 // the larger one can't hide what it adds behind a truncated label.
-const TIER_CHOICES: { value: HelpAssistantTier; label: string; description: string }[] = [
-  { value: "core", label: "Core (default)", description: TIER_SUMMARIES.core },
+const TIER_CHOICES: {
+  value: HelpAssistantTier;
+  label: string;
+  description: string;
+  isDefault?: boolean;
+}[] = [
+  { value: "core", label: "Core", isDefault: true, description: TIER_SUMMARIES.core },
   { value: "full", label: "Full", description: TIER_SUMMARIES.full },
 ];
 
@@ -93,7 +98,7 @@ function groupToolsByNamespace(tools: readonly string[]): Array<[string, string[
 
 const HIBERNATE_OPTIONS = [
   { value: "0", label: "Off" },
-  { value: "5", label: "5 minutes (default)" },
+  { value: "5", label: "5 minutes", isDefault: true },
   { value: "15", label: "15 minutes" },
   { value: "30", label: "30 minutes" },
   { value: "60", label: "1 hour" },
