@@ -286,6 +286,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "canopy-window:focus-last-project-window": {
+    args: [];
+    result: boolean;
+  };
   "canopy-window:go-to-run": {
     args: [__1: { workspaceId: string; runId: string }];
     result: void;
