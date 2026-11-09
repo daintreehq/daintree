@@ -662,7 +662,7 @@ test.describe("Core: Settings", () => {
       const { window } = ctx;
       const canopyButton = window
         .getByRole("toolbar", { name: "Main toolbar" })
-        .locator('button[aria-haspopup="dialog"][aria-label^="Canopy"]');
+        .getByRole("button", { name: /^Canopy/ });
       const canopyDialog = window.locator('[data-testid="canopy-dialog"]');
       const shortcut = process.platform === "darwin" ? "Meta+E" : "Control+Shift+O";
       const setShown = async (shown: boolean) => {
@@ -692,13 +692,36 @@ test.describe("Core: Settings", () => {
       };
 
       try {
+        const readingPanel = await openSettingsTab(window, "canopy");
+        const read = readingPanel.getByRole("switch", { name: "Read agent terminals" });
+        await read.check();
+        await expect(read).toBeChecked({ timeout: T_SHORT });
+        await closeSettingsWithEscape(window);
         await expect(canopyButton).toBeVisible({ timeout: T_MEDIUM });
-        // Shown: the shortcut is Canopy's, and opens it.
+        // Reading: the shortcut opens the standalone inbox, not an in-project dialog.
         const owned = await pressIntoField();
-        await expect(canopyDialog).toBeVisible({ timeout: T_SHORT });
+        let inbox: Page | undefined;
+        await expect
+          .poll(
+            async () => {
+              for (const page of ctx.app.windows()) {
+                if (await page.locator("[data-canopy-standalone]").count()) {
+                  inbox = page;
+                  return true;
+                }
+              }
+              return false;
+            },
+            { timeout: T_MEDIUM }
+          )
+          .toBe(true);
+        if (!inbox) throw new Error("Canopy's standalone inbox did not open");
+        await expect(inbox.locator("[data-canopy-standalone]")).toBeVisible();
+        await expect(canopyDialog).toHaveCount(0);
         await expect(owned).toHaveAttribute("data-presses", "0");
-        await window.keyboard.press("Escape");
-        await expect(canopyDialog).toHaveCount(0, { timeout: T_SHORT });
+        await inbox.getByRole("button", { name: "Close Daintree Canopy", exact: true }).click();
+        await expect.poll(() => inbox?.isClosed(), { timeout: T_SHORT }).toBe(true);
+        await window.bringToFront();
 
         const panel = await setShown(false);
         await expect(panel.getByRole("switch", { name: "Read agent terminals" })).toBeDisabled();
@@ -714,6 +737,7 @@ test.describe("Core: Settings", () => {
         await setShown(true);
         await closeSettingsWithEscape(window);
         await expect(canopyButton).toBeVisible({ timeout: T_SHORT });
+        // Showing it again leaves reading off and offers to turn it on here.
         await pressIntoField();
         await expect(canopyDialog).toBeVisible({ timeout: T_SHORT });
         await window.keyboard.press("Escape");
