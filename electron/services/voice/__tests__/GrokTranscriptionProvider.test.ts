@@ -856,6 +856,106 @@ describe("GrokTranscriptionProvider", () => {
       provider.stop();
     });
 
+    it("keeps the words an interim had past a chunk final until the next interim", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      // As Grok sends them: interims in five-second windows, each chunk final
+      // from the last one's end, landing short of the interim before it.
+      socket.simulateMessage(
+        partial("I want to look at the way the preview behaves when I keep talking for a long.", {
+          start: 0,
+          duration: 4.7,
+        })
+      );
+      socket.simulateMessage(
+        chunkFinal("I want to look at the way the preview behaves when I", 0, 3.19)
+      );
+      expect(deltasOf(events).at(-1)?.text).toBe(
+        "I want to look at the way the preview behaves when I keep talking for a long."
+      );
+      socket.simulateMessage(
+        partial("keep talking for a long time without stopping, because it seems", {
+          start: 5.02,
+          duration: 1.7,
+        })
+      );
+      socket.simulateMessage(chunkFinal("keep talking for a long time without", 3.19, 2.4));
+      expect(deltasOf(events).at(-1)?.text).toBe(
+        "I want to look at the way the preview behaves when I keep talking for a long time without stopping, because it seems"
+      );
+      socket.simulateMessage(
+        utteranceFinal(
+          "I want to look at the way the preview behaves when I keep talking for a long time without stopping, because it seems fine.",
+          0,
+          7
+        )
+      );
+      expect(completesOf(events).map((c) => c.text)).toEqual([
+        "I want to look at the way the preview behaves when I keep talking for a long time without stopping, because it seems fine.",
+      ]);
+      provider.stop();
+    });
+
+    it("lets a chunk final finish a word the interim cut off", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(partial("every few sec-", { start: 0, duration: 1 }));
+      socket.simulateMessage(chunkFinal("Every few seconds", 0, 1.2));
+      expect(deltasOf(events).map((d) => d.text)).toEqual(["every few sec", "Every few seconds"]);
+      provider.stop();
+    });
+
+    it("holds the preview when a chunk final rewrites the words it ends on", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(
+        partial("open shared slash types slash a p i dot t s and then check", {
+          start: 0,
+          duration: 4,
+        })
+      );
+      socket.simulateMessage(chunkFinal("Open shared/types/api.ts", 0, 3));
+      // Neither "a p i dot t s" repeated after the chunk nor "and then check" gone.
+      expect(deltasOf(events).map((d) => d.text)).toEqual([
+        "open shared slash types slash a p i dot t s and then check",
+      ]);
+      socket.simulateMessage(partial("and then check the build", { start: 3, duration: 1.5 }));
+      expect(deltasOf(events).at(-1)?.text).toBe(
+        "Open shared/types/api.ts and then check the build"
+      );
+      provider.stop();
+    });
+
+    it("keeps the tail across chunk finals that land before the next interim", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(partial("one two three four five six", { start: 0, duration: 3 }));
+      socket.simulateMessage(chunkFinal("One two.", 0, 1));
+      expect(deltasOf(events).at(-1)?.text).toBe("One two. three four five six");
+      socket.simulateMessage(chunkFinal("Three four.", 1, 1));
+      expect(deltasOf(events).at(-1)?.text).toBe("One two. Three four. five six");
+      provider.stop();
+    });
+
+    it("shows only the chunk when it reaches past the interim", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(partial("Final", { start: 0, duration: 0.5 }));
+      socket.simulateMessage(chunkFinal("Finally, a short closing sentence.", 0, 2.5));
+      expect(deltasOf(events).at(-1)?.text).toBe("Finally, a short closing sentence.");
+      provider.stop();
+    });
+
+    it("drops the interim when an empty chunk final takes it back", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("Still here.", 0, 1));
+      socket.simulateMessage(partial("um", { start: 1, duration: 0.5 }));
+      socket.simulateMessage(chunkFinal("", 1, 0.5));
+      expect(deltasOf(events).at(-1)?.text).toBe("Still here.");
+      provider.stop();
+    });
+
     it("keeps a chunk final's own ellipsis in the preview", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);

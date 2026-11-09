@@ -376,6 +376,66 @@ function chunksNotRestated(
   return [...chunks];
 }
 
+/** The latest interim, and the locked chunks it followed rather than restated. */
+interface ShownInterim {
+  scored: ScoredText;
+  followed: readonly LockedChunk[];
+}
+
+/**
+ * What an interim says past the words of the chunks locked since it came, so
+ * the preview keeps it until the next interim restates it. Interim word
+ * timing is spread evenly over the interim rather than measured, so the words
+ * decide: the tail starts after the shortest opening of the interim that
+ * holds as many of the chunks' words, in order, as the whole of it does.
+ *
+ * Null when the words can't place the chunks' end: their last words aren't
+ * the interim's ("1st" for "first", "api.ts" for "a p i dot t s") with more
+ * of the interim left than those words, or the two share under half the
+ * chunks' words. The interim then stays as shown until the next one, which
+ * neither drops nor repeats a word. When the interim has no more words past
+ * that than the chunks do, the chunks reach past it, and there is no tail.
+ */
+function interimTail(interim: ScoredText, chunks: readonly LockedChunk[]): ScoredText | null {
+  const said = chunks.flatMap((chunk) => spokenWords(chunk.text));
+  const tokens = [...interim.text.matchAll(/\S+/gu)].map((match) => ({
+    start: match.index,
+    words: spokenWords(match[0]),
+  }));
+  const heard = tokens.flatMap((token, index) => token.words.map((word) => ({ word, index })));
+  if (said.length === 0) return NO_TEXT;
+  // shared[i][j]: words shared in order by the first i of `said` and the first j heard.
+  const shared = [new Array<number>(heard.length + 1).fill(0)];
+  for (let i = 0; i < said.length; i++) {
+    const row = [0];
+    for (let j = 0; j < heard.length; j++) {
+      row.push(
+        said[i] === heard[j]!.word ? shared[i]![j]! + 1 : Math.max(shared[i]![j + 1]!, row[j]!)
+      );
+    }
+    shared.push(row);
+  }
+  const all = shared[said.length]!;
+  const best = all[heard.length]!;
+  if (best < RESTATED_MIN_WORD_SHARE * said.length) {
+    return heard.length <= said.length ? NO_TEXT : null;
+  }
+  const covered = all.indexOf(best);
+  const next = heard[covered - 1]!.index + 1;
+  // The chunks' words after the last one the interim holds.
+  const unmatched = said.length - shared.findIndex((row) => row[covered] === best);
+  if (unmatched > 0) return tokens.length - next <= unmatched ? NO_TEXT : null;
+  if (next >= tokens.length) return NO_TEXT;
+  const at = tokens[next]!.start;
+  return {
+    text: interim.text.slice(at),
+    uncertain: shiftSpans(
+      interim.uncertain.filter((span) => span.from >= at),
+      -at
+    ),
+  };
+}
+
 export class GrokTranscriptionProvider implements TranscriptionProvider {
   readonly hasServerVAD = true;
   private readonly tuning: Readonly<GrokTranscriptionTuning>;
@@ -485,6 +545,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
   private utteranceItemId: string | null = null;
   private carriedText: ScoredText[] = [];
   private lockedChunks: LockedChunk[] = [];
+  private interim: ShownInterim | null = null;
   private preview: ScoredText = NO_TEXT;
   // Where the last utterance completed on this connection ends, in its
   // seconds, so `transcript.done` can tell the tail no final covered.
@@ -1305,6 +1366,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
 
   private showInterim(interim: ScoredText, start: number | null): void {
     const before = this.chunksBefore(start);
+    this.interim = { scored: interim, followed: before };
     this.showPreview([...this.carriedText, ...before, interim]);
   }
 
@@ -1313,6 +1375,13 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
    * for the preview. It doesn't complete anything: the utterance final
    * restates it. Grok times it from the utterance's start, though its text is
    * only its own words, so it follows the chunks that end before it does.
+   *
+   * It lands short of the interim before it, which already ran on past it, so
+   * the preview keeps that interim's tail until the next interim restates it.
+   * Without the tail, the words past the chunk vanish for the half second
+   * until the next interim brings them back. When the words can't say where
+   * the chunk ends in the interim, the preview stays as it is until the next
+   * interim. An empty chunk final takes the interim back.
    */
   private lockChunk(
     chunk: ScoredText,
@@ -1329,8 +1398,18 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
           ? this.lockedChunks
           : this.lockedChunks.filter((locked) => locked.end + WORD_BOUNDARY_EPSILON_SECONDS < end);
       this.lockedChunks = [...before, { ...chunk, end: end ?? Number.NEGATIVE_INFINITY, at }];
+    } else {
+      this.interim = null;
     }
-    this.showPreview([...this.carriedText, ...this.lockedChunks]);
+    const interim = this.interim;
+    const tail = interim
+      ? interimTail(
+          interim.scored,
+          this.lockedChunks.filter((locked) => !interim.followed.includes(locked))
+        )
+      : NO_TEXT;
+    if (tail === null) return;
+    this.showPreview([...this.carriedText, ...this.lockedChunks, tail]);
   }
 
   private completeUtterance(
@@ -1436,6 +1515,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     this.utteranceItemId = null;
     this.carriedText = [];
     this.lockedChunks = [];
+    this.interim = null;
     this.preview = NO_TEXT;
   }
 
@@ -1612,6 +1692,8 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
   private flushHeldAudio(): void {
     this.carriedText = [...this.carriedText, ...this.lockedChunks];
     this.lockedChunks = [];
+    // Its audio is resent, so the new connection's results restate it.
+    this.interim = null;
     this.connectionCompletedEnd = 0;
     this.finalizeAtSeconds = null;
     this.stopAtSeconds = null;
