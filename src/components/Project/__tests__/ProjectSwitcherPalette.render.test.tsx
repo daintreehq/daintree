@@ -2416,7 +2416,9 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
     useProjectSettingsStore.setState({ notificationOverridesByProjectId: {} });
   });
 
-  it("marks a project another window owns, in its accessible name", () => {
+  const control = () => screen.queryAllByTestId("project-open-elsewhere-marker");
+
+  it("says a project another window owns in its accessible name", () => {
     render(
       <ProjectSwitcherPalette
         {...modalProps}
@@ -2424,19 +2426,49 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
       />
     );
 
-    const marker = screen.getByTestId("project-open-elsewhere-marker");
-    expect(marker.getAttribute("aria-label")).toBe("Open in another window");
-    // Neutral, never accent — it appears on several rows at once.
-    expect(marker.getAttribute("class") ?? "").not.toMatch(/accent/);
     // The name-computation polyfill trims each node, so the separator survives
-    // as the comma alone (see the muted-bell spec above).
+    // as the comma alone (see the muted-bell spec below).
     expect(screen.getByRole("option", { name: /Payments,\s*Open in another window/ })).toBeTruthy();
   });
 
-  it("marks owners showing the project and still-activating ones the same way", () => {
+  it("puts a go-to-window control at the row's end, shown only on the lit row (#16616)", () => {
+    const onSelect = vi.fn();
+    const onSelectNewWindow = vi.fn();
+    const project = makeProject({ name: "Payments", openInOtherWindow: "foreground" });
     render(
       <ProjectSwitcherPalette
         {...modalProps}
+        onSelect={onSelect}
+        onSelectNewWindow={onSelectNewWindow}
+        results={[project]}
+      />
+    );
+
+    const [button] = control();
+    const option = screen.getByRole("option", { name: /Payments/ });
+    // At the row's end, after the name column, not inline beside the name.
+    expect(button.closest('[role="option"]')).toBe(option);
+    expect(option.lastElementChild?.contains(button)).toBe(true);
+    // Hidden at rest, revealed by the row's hover or its lit state.
+    const cls = button.getAttribute("class") ?? "";
+    expect(cls).toContain("opacity-0");
+    expect(cls).toContain("group-hover:opacity-100");
+    expect(cls).toContain("group-aria-selected:opacity-100");
+    // Neutral, never accent; and kept out of the option's name, which already says it.
+    expect(cls).not.toMatch(/accent/);
+    expect(button.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(screen.queryByRole("option", { name: /Go to window/ })).toBeNull();
+
+    fireEvent.click(button);
+    expect(onSelectNewWindow).toHaveBeenCalledWith(project);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("offers the control on owners showing the project and still-activating ones alike", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        onSelectNewWindow={vi.fn()}
         results={[
           makeProject({ id: "a", name: "Alpha", openInOtherWindow: "foreground" }),
           makeProject({ id: "b", name: "Beta", openInOtherWindow: "activating" }),
@@ -2444,13 +2476,16 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
       />
     );
 
-    expect(screen.getAllByTestId("project-open-elsewhere-marker")).toHaveLength(2);
+    expect(control()).toHaveLength(2);
+    expect(screen.getByRole("option", { name: /Alpha,\s*Open in another window/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /Beta,\s*Open in another window/ })).toBeTruthy();
   });
 
   it("leaves unowned, locally held, current and missing rows unmarked", () => {
     render(
       <ProjectSwitcherPalette
         {...modalProps}
+        onSelectNewWindow={vi.fn()}
         results={[
           makeProject({ id: "free", name: "Free" }),
           makeProject({ id: "local", name: "Local", isOpenInThisWindow: true }),
@@ -2473,7 +2508,20 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
       />
     );
 
-    expect(screen.queryByTestId("project-open-elsewhere-marker")).toBeNull();
+    expect(control()).toHaveLength(0);
+    expect(screen.queryByRole("option", { name: /Open in another window/ })).toBeNull();
+  });
+
+  it("still says it where no Go to window action is wired, without a control", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={[makeProject({ name: "Payments", openInOtherWindow: "foreground" })]}
+      />
+    );
+
+    expect(control()).toHaveLength(0);
+    expect(screen.getByRole("option", { name: /Payments,\s*Open in another window/ })).toBeTruthy();
   });
 
   it("keeps the name readable next to the muted bell", () => {
