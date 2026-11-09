@@ -451,10 +451,14 @@ describe("Canopy's inbox with no dialog and no project", () => {
     render(<CanopyView frame={hostFrame().frame} />);
     await settle();
 
-    // window-modes.css drags a `.dialog-window-header` only beneath `.app-no-drag`.
+    // window-modes.css drags a `.dialog-window-header` only beneath a window
+    // surface. Nothing in the body may claim no-drag: Chromium cuts a no-drag
+    // box out whole, and a scrolled terminal's runs up through the header.
     const header = surface()!.querySelector(".dialog-window-header");
     expect(header).not.toBeNull();
-    expect(header!.closest(".app-no-drag")).not.toBeNull();
+    expect(header!.closest(".app-window-surface")).not.toBeNull();
+    expect(surface()!.closest(".app-no-drag")).toBeNull();
+    expect(surface()!.querySelector(".app-no-drag")).toBeNull();
   });
 
   it("takes no scope from a view it stands in, whatever the view says it is", async () => {

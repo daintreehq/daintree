@@ -30,18 +30,23 @@
    over the whole window, which is what masks the toolbar and any global banner
    beneath it, and `.app-no-drag *` reaches every element in the header too.
    These rules outrank it: the header and everything in it drag the window, and
-   only its controls (and anything else focusable) stay clickable. */
-.app-no-drag .dialog-window-header,
-.app-no-drag .dialog-window-header * {
+   only its controls (and anything else focusable) stay clickable.
+
+   `.app-window-surface` is a window with nothing beneath it to mask (the Canopy
+   window), so it claims no no-drag of its own: Chromium cuts every later no-drag
+   box out of the drag region whole, clipped or scrolled away or not, and its
+   body's scrolled content would cut through the header above it. */
+:is(.app-no-drag, .app-window-surface) .dialog-window-header,
+:is(.app-no-drag, .app-window-surface) .dialog-window-header * {
   -webkit-app-region: drag;
   app-region: drag;
   user-select: none;
 }
 
-.app-no-drag
+:is(.app-no-drag, .app-window-surface)
   .dialog-window-header
   :is(button, a[href], input, select, textarea, [role="button"], [role="combobox"], [tabindex]),
-.app-no-drag
+:is(.app-no-drag, .app-window-surface)
   .dialog-window-header
   :is(button, a[href], input, select, textarea, [role="button"], [role="combobox"], [tabindex])
   * {
