@@ -1049,6 +1049,14 @@ describe("CanopyView", () => {
       ]);
       expect(rebound).toContainEqual(closeCanopy);
 
+      // The terminal's paste key stays the terminal's, so the close works only in a reply.
+      keybindingService.applyOverrides({ "terminal.close": ["Cmd+Shift+V"] });
+      const paste = await openSheet();
+      expect(paste).toContainEqual([
+        "In a reply: trash the agent's terminal; Z takes it back",
+        ["Ctrl", "Shift", "V"],
+      ]);
+
       // A chord can't reach the pane, and an unbound close has no row.
       for (const combos of [["Cmd+K Cmd+W"], []]) {
         keybindingService.applyOverrides({ "terminal.close": combos });

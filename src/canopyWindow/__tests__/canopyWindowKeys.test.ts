@@ -539,11 +539,16 @@ describe("Cmd+W in the Canopy window (#16618)", () => {
       expect(trashed).toBe(3);
     });
 
-    it("leaves Ctrl+W to the shell, closing nothing", () => {
-      const event = press(paneTerminal, "w", { ctrlKey: true });
+    it("leaves a close bound to Ctrl+W to the shell in the terminal, trashing from the reply", () => {
+      keybindingService.applyOverrides({ "terminal.close": ["Ctrl+W"] });
 
-      expect(event.defaultPrevented).toBe(false);
+      const inTerminal = press(paneTerminal, "w", { ctrlKey: true });
+      expect(inTerminal.defaultPrevented).toBe(false);
       expect(trashed).toBe(0);
+
+      const inReply = press(paneReply, "w", { ctrlKey: true });
+      expect(inReply.defaultPrevented).toBe(true);
+      expect(trashed).toBe(1);
       expect(closeWindow).not.toHaveBeenCalled();
     });
   });

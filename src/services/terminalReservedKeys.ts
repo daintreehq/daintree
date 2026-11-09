@@ -147,7 +147,9 @@ export function isTerminalReservedKey(event: Keystroke): boolean {
 export function isTerminalReservedCombo(combo: string): boolean {
   const { cmd, ctrl, shift, alt, key } = parseCombo(combo);
   const mac = isMac();
-  const name = key.length === 1 ? key.toLowerCase() : key;
+  // As a keydown spells them: a letter in lower case, Insert capitalised.
+  const name =
+    key.length === 1 ? key.toLowerCase() : key.toLowerCase() === "insert" ? "Insert" : key;
   return isTerminalReservedKey({
     key: name,
     code: /^[a-z]$/.test(name) ? `Key${name.toUpperCase()}` : name,

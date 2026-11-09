@@ -79,6 +79,7 @@ describe("isTerminalReservedCombo", () => {
     expect(isTerminalReservedCombo("Ctrl+W")).toBe(true);
     expect(isTerminalReservedCombo("Cmd+Shift+V")).toBe(true);
     expect(isTerminalReservedCombo("Shift+Insert")).toBe(true);
+    expect(isTerminalReservedCombo("Shift+insert")).toBe(true);
     expect(isTerminalReservedCombo("Cmd+Shift+W")).toBe(false);
     expect(isTerminalReservedCombo("Cmd+Alt+W")).toBe(false);
     expect(isTerminalReservedCombo("Cmd+V")).toBe(false);
