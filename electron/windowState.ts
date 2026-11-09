@@ -54,6 +54,8 @@ function debounce<T extends (...args: unknown[]) => void>(
   return debounced as DebouncedFunction<T>;
 }
 
+type SavedDisplay = NonNullable<WindowStateEntry["display"]>;
+
 type WindowStateBounds = {
   x?: number;
   y?: number;
@@ -61,6 +63,7 @@ type WindowStateBounds = {
   height: number;
   isMaximized: boolean;
   isFullScreen: boolean;
+  display?: SavedDisplay;
 };
 
 let lastSavedKey: string | null = null;
@@ -386,18 +389,98 @@ export function rekeyWindowStateForPath(oldPath: string, newPath: string): void 
 
 const RESTORE_ROUNDING_PX = 16;
 
+function boundsNear(actual: Electron.Rectangle, restored: Electron.Rectangle): boolean {
+  const close = (a: number, b: number) => Math.abs(a - b) <= RESTORE_ROUNDING_PX;
+  return (
+    close(actual.x, restored.x) &&
+    close(actual.y, restored.y) &&
+    close(actual.width, restored.width) &&
+    close(actual.height, restored.height)
+  );
+}
+
 function keepRestoredBounds(
   actual: Electron.Rectangle,
   restored: Electron.Rectangle | null
 ): Electron.Rectangle {
-  if (!restored) return actual;
-  const close = (a: number, b: number) => Math.abs(a - b) <= RESTORE_ROUNDING_PX;
-  return close(actual.x, restored.x) &&
-    close(actual.y, restored.y) &&
-    close(actual.width, restored.width) &&
-    close(actual.height, restored.height)
-    ? restored
-    : actual;
+  return restored && boundsNear(actual, restored) ? restored : actual;
+}
+
+function snapshotDisplay(display: Electron.Display): SavedDisplay {
+  const { x, y, width, height } = display.bounds;
+  // electron-store rejects undefined, so a display without a usable id is saved by bounds alone.
+  return Number.isFinite(display.id)
+    ? { id: display.id, x, y, width, height }
+    : { x, y, width, height };
+}
+
+/** The display a maximized or full-screen window was on, when its saved state names one. */
+function savedModeDisplay(state: WindowStateBounds): SavedDisplay | null {
+  if (!state.isMaximized && !state.isFullScreen) return null;
+  const saved: unknown = state.display;
+  if (!saved || typeof saved !== "object") return null;
+  const { id, x, y, width, height } = saved as Record<string, unknown>;
+  const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+  if (id !== undefined && !finite(id)) return null;
+  if (!finite(x) || !finite(y) || !finite(width) || !finite(height)) return null;
+  if (width <= 0 || height <= 0) return null;
+  return id === undefined ? { x, y, width, height } : { id, x, y, width, height };
+}
+
+/**
+ * That display, if it is connected: by id, or else by the one display at the
+ * spot it had, since a display can come back under another id.
+ */
+function findSavedDisplay(saved: SavedDisplay): Electron.Display | null {
+  const displays = screen.getAllDisplays();
+  const byId = saved.id === undefined ? undefined : displays.find((d) => d.id === saved.id);
+  if (byId) return byId;
+  const atSpot = displays.filter(
+    ({ bounds }) =>
+      bounds.x === saved.x &&
+      bounds.y === saved.y &&
+      bounds.width === saved.width &&
+      bounds.height === saved.height
+  );
+  return atSpot.length === 1 ? atSpot[0] : null;
+}
+
+/**
+ * A window restored maximized or full screen while the display it was on is
+ * missing. Until the user moves it, resizes it or changes its mode, it keeps
+ * saving the state it was restored from, so the next launch with that display
+ * puts it back there (#16579).
+ */
+interface HeldPlacement {
+  entry: WindowStateBounds;
+  /** Its normal bounds as restore left them. */
+  placed: Electron.Rectangle;
+  /** The display restore maximized it, or made it full screen, on instead. */
+  placedDisplayId: number;
+  fullScreen: boolean;
+}
+
+function holdPlacement(
+  win: BrowserWindow,
+  state: WindowStateBounds,
+  display: SavedDisplay
+): HeldPlacement {
+  const placed = win.getNormalBounds();
+  const { x, y, width, height, isMaximized, isFullScreen } = state;
+  return {
+    entry: {
+      ...(x !== undefined && { x }),
+      ...(y !== undefined && { y }),
+      width,
+      height,
+      isMaximized,
+      isFullScreen,
+      display,
+    },
+    placed,
+    placedDisplayId: screen.getDisplayMatching(placed).id,
+    fullScreen: isFullScreen,
+  };
 }
 
 /**
@@ -473,6 +556,11 @@ function createWindowAtSavedBounds(
   separateSize: WindowSize | null
 ): BrowserWindow {
   const windowState = resolveWindowBounds(initialKey, separateSize);
+  // Maximized or full screen, a window goes back to the display it was on, which
+  // can be another than the one its normal bounds sit on: macOS "Move to iPad"
+  // zooms a window onto the iPad and leaves its normal frame on the Mac (#16579).
+  const modeDisplay = savedModeDisplay(windowState);
+  const modeTarget = modeDisplay ? findSavedDisplay(modeDisplay) : null;
 
   const win = new BrowserWindow({
     ...options,
@@ -494,7 +582,13 @@ function createWindowAtSavedBounds(
   // When the saved state has no x/y (cold-start / first-run / defaults), getBounds() on a
   // show:false window returns placeholder coordinates, so getDisplayMatching would route to
   // the primary display anyway — call it directly to make the intent explicit (#10076).
-  const display = hasSavedPosition ? screen.getDisplayMatching(bounds) : screen.getPrimaryDisplay();
+  const normalDisplay = hasSavedPosition
+    ? screen.getDisplayMatching(bounds)
+    : screen.getPrimaryDisplay();
+  // Sized against the display it goes back to, not the one it is moved off.
+  const display = modeTarget ?? normalDisplay;
+  const relocate =
+    modeTarget !== null && !(hasSavedPosition && normalDisplay?.id === modeTarget.id);
 
   if (
     !display ||
@@ -517,7 +611,7 @@ function createWindowAtSavedBounds(
     // short-circuited to win.center() and skipped this entirely, leaving an oversized
     // default window off-screen on small displays (1366x768 taskbar, 1280x720, RDP, VMs).
     const sizeClamped = clampedWidth !== bounds.width || clampedHeight !== bounds.height;
-    if (sizeClamped) {
+    if (sizeClamped && !relocate) {
       win.setSize(clampedWidth, clampedHeight);
       bounds = win.getBounds();
     }
@@ -528,7 +622,17 @@ function createWindowAtSavedBounds(
         ? { width: placedWidth, height: placedHeight }
         : null;
 
-    if (hasSavedPosition) {
+    if (relocate) {
+      // Centred there, so un-maximizing it later leaves it on that display.
+      const centred = {
+        x: Math.round(safeWorkArea.x + (safeWorkArea.width - clampedWidth) / 2),
+        y: Math.round(safeWorkArea.y + (safeWorkArea.height - clampedHeight) / 2),
+        width: clampedWidth,
+        height: clampedHeight,
+      };
+      win.setBounds(centred);
+      if (placedSize) placedBounds = { x: centred.x, y: centred.y, ...placedSize };
+    } else if (hasSavedPosition) {
       // Route through clampToDisplay so windows that are partially off-screen (e.g.
       // x=-300 on a 1920px display) get pulled back to keep the title bar reachable,
       // not just the >50% off-screen case the old inline math caught.
@@ -559,12 +663,26 @@ function createWindowAtSavedBounds(
     if (spot && placedBounds) placedBounds = { ...placedBounds, x: spot.x, y: spot.y };
   }
 
+  // Decided once, at launch: a display connecting later never moves the window.
+  let heldPlacement =
+    modeDisplay && !modeTarget ? holdPlacement(win, windowState, modeDisplay) : null;
+
   // Electron's maximize() on a hidden window shows it, maximized, and on Linux
   // that show activates it: the window maps before its reveal gate, and a
   // restored background window takes focus and the top of the stack from the
   // window the user is in. On Linux the maximize waits for the reveal instead.
   let maximizeOnShow = false;
+  // Full screen waits for the reveal, and macOS reports it only once its transition
+  // ends: until then a save is still of a full-screen window. A request that never
+  // lands keeps saving the full screen the window was restored with.
+  let fullScreenPending = false;
   if (windowState.isFullScreen) {
+    if (options.show === false) {
+      fullScreenPending = true;
+      win.once("enter-full-screen", () => {
+        fullScreenPending = false;
+      });
+    }
     win.once("show", () => {
       if (!win.isDestroyed()) {
         win.setFullScreen(true);
@@ -622,18 +740,40 @@ function createWindowAtSavedBounds(
     if (win.isDestroyed()) return;
 
     const isMaximized = win.isMaximized() || maximizeOnShow;
-    const isFullScreen = win.isFullScreen();
+    const isFullScreen = win.isFullScreen() || fullScreenPending;
 
-    const normalBounds = keepRestoredBounds(win.getNormalBounds(), restoredBounds);
+    const actualBounds = win.getNormalBounds();
+    // The frame's display, not the normal bounds': the two can differ (#16579).
+    const frameDisplay =
+      isMaximized || isFullScreen ? screen.getDisplayMatching(win.getBounds()) : null;
 
-    const entry: WindowStateBounds = {
-      x: normalBounds.x,
-      y: normalBounds.y,
-      width: normalBounds.width,
-      height: normalBounds.height,
-      isMaximized,
-      isFullScreen,
-    };
+    // Checked at each save rather than on every move: the debounced save sees the
+    // window once a native zoom or full-screen transition has settled. Minimized,
+    // macOS reports a maximized window unmaximized: only its normal bounds tell.
+    if (
+      heldPlacement &&
+      !(
+        boundsNear(actualBounds, heldPlacement.placed) &&
+        (win.isMinimized() ||
+          ((heldPlacement.fullScreen ? isFullScreen : isMaximized && !isFullScreen) &&
+            frameDisplay?.id === heldPlacement.placedDisplayId))
+      )
+    ) {
+      heldPlacement = null;
+    }
+
+    const normalBounds = keepRestoredBounds(actualBounds, restoredBounds);
+    const entry: WindowStateBounds = heldPlacement
+      ? { ...heldPlacement.entry }
+      : {
+          x: normalBounds.x,
+          y: normalBounds.y,
+          width: normalBounds.width,
+          height: normalBounds.height,
+          isMaximized,
+          isFullScreen,
+          ...(frameDisplay && { display: snapshotDisplay(frameDisplay) }),
+        };
 
     saveWindowStates(saveKey, entry, separateSize !== null);
     boundsKey = saveKey;
