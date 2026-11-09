@@ -358,6 +358,19 @@ function selectedRun() {
   return document.querySelector("[data-canopy-card][aria-selected=true]")?.id;
 }
 
+/** The open shortcut list's rows under one heading, each as its label and its keys. */
+function shortcutRows() {
+  return (heading: string): Array<[string | null, Array<string | null>]> => {
+    const group = [...document.querySelectorAll("section")].find(
+      (section) => section.querySelector(":scope > h3")?.textContent === heading
+    )!;
+    return [...group.querySelectorAll("dd")].map((dd) => [
+      dd.textContent,
+      [...dd.previousElementSibling!.querySelectorAll("kbd")].map((kbd) => kbd.textContent),
+    ]);
+  };
+}
+
 /** The terminal waits a moment between watches, sparing a run stepped straight past. */
 async function answerWatch(runId: string, watchId: number, screen: string) {
   await vi.waitFor(() => expect(watches.some((watch) => watch.runId === runId)).toBe(true));
@@ -660,6 +673,31 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(surface()).not.toBeNull();
   });
 
+  it("leaves Escape to a dialog already open when the inbox mounts", async () => {
+    const host = hostFrame();
+    const closeDialog = vi.fn();
+    const dialog = (
+      <AppDialog isOpen onClose={closeDialog}>
+        <AppDialog.Title>Park agent</AppDialog.Title>
+      </AppDialog>
+    );
+    const view = render(dialog);
+    await settle();
+    view.rerender(
+      <>
+        {dialog}
+        <CanopyView frame={host.frame} />
+      </>
+    );
+    await settle();
+
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+    });
+    expect(closeDialog).toHaveBeenCalledTimes(1);
+    expect(host.close).not.toHaveBeenCalled();
+  });
+
   it("leaves a held Escape, and one an input method took, alone", async () => {
     const host = hostFrame();
     render(<CanopyView frame={host.frame} />);
@@ -710,37 +748,36 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(surface()).not.toBeNull();
   });
 
-  it("lists Escape as unwinding what is open, and the window's own key as its close", async () => {
-    // A rebound close is a project window's: this window's menu keeps Cmd+W.
-    const effective = keybindingService.getEffectiveCombo.bind(keybindingService);
-    vi.spyOn(keybindingService, "getEffectiveCombo").mockImplementation((actionId) =>
-      actionId === "terminal.close" ? "Cmd+Shift+Q" : effective(actionId)
-    );
-    render(<CanopyView frame={hostFrame().frame} />);
-    await settle();
+  it.each([
+    { platform: "Linux x86_64", primary: "Ctrl", escape: "Esc" },
+    { platform: "MacIntel", primary: "⌘", escape: "⎋" },
+  ])(
+    "lists Escape as unwinding what is open, and the window's own key as its close ($platform)",
+    async ({ platform, primary, escape }) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      // A rebound close is a project window's: this window's menu keeps Cmd+W.
+      const effective = keybindingService.getEffectiveCombo.bind(keybindingService);
+      vi.spyOn(keybindingService, "getEffectiveCombo").mockImplementation((actionId) =>
+        actionId === "terminal.close" ? "Cmd+Shift+Q" : effective(actionId)
+      );
+      render(<CanopyView frame={hostFrame().frame} />);
+      await settle();
 
-    await act(async () => {
-      fireEvent.click(within(surface()!).getByRole("button", { name: "Keyboard shortcuts" }));
-    });
-    const rows = (heading: string) => {
-      const group = [...document.querySelectorAll("section")].find(
-        (section) => section.querySelector(":scope > h3")?.textContent === heading
-      )!;
-      return [...group.querySelectorAll("dd")].map((dd) => [
-        dd.textContent,
-        [...dd.previousElementSibling!.querySelectorAll("kbd")].map((kbd) => kbd.textContent),
+      await act(async () => {
+        fireEvent.click(within(surface()!).getByRole("button", { name: "Keyboard shortcuts" }));
+      });
+      const rows = shortcutRows();
+      expect(rows("In the search")).toContainEqual(["Clear the search", [escape]]);
+      expect(rows("In the list").filter(([, keys]) => keys.includes(escape))).toEqual([]);
+      expect(rows("In the list")).toContainEqual(["Close Canopy", [primary, "W"]]);
+      // Nothing here hands the pane Cmd+W: the menu closes the window instead.
+      expect(document.body.textContent).not.toMatch(/trash the agent's terminal/i);
+      expect(rows("In a reply or the terminal")).toContainEqual([
+        "Back to the list from a reply",
+        [escape],
       ]);
-    };
-    expect(rows("In the search")).toContainEqual(["Clear the search", ["Esc"]]);
-    expect(rows("In the list").filter(([, keys]) => keys.includes("Esc"))).toEqual([]);
-    expect(rows("In the list")).toContainEqual(["Close Canopy", [isMac() ? "⌘" : "Ctrl", "W"]]);
-    // Nothing here hands the pane Cmd+W: the menu closes the window instead.
-    expect(document.body.textContent).not.toMatch(/trash the agent's terminal/i);
-    expect(rows("In a reply or the terminal")).toContainEqual([
-      "Back to the list from a reply",
-      ["Esc"],
-    ]);
-  });
+    }
+  );
 
   it("stays up when a view around it is cached: there is no project view to follow", async () => {
     const host = hostFrame();
