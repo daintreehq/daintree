@@ -854,7 +854,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <>
         <div className="flex flex-col h-full">
           <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
-            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
+            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm">
               Worktrees
             </SidebarViewHeading>
           </div>
@@ -876,7 +876,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <div className="flex flex-col h-full">
         <div className={SIDEBAR_HEADER_ROW}>
-          <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
+          <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm">
             Worktrees
           </SidebarViewHeading>
         </div>
@@ -885,14 +885,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             the moment the list arrives. */}
         <div
           aria-hidden="true"
-          className="worktree-filter-bar flex shrink-0 gap-1.5 border-b border-divider px-3 pb-3"
+          className="worktree-filter-bar flex shrink-0 gap-1.5 border-b border-divider px-4 pb-3"
         >
           <SkeletonBone className="flex-1 rounded-[var(--radius-md)]" heightPx={28} />
           <SkeletonBone className="w-7 rounded-[var(--radius-md)]" heightPx={28} />
         </div>
         <div
           aria-hidden="true"
-          className="worktree-filter-bar flex h-[29px] shrink-0 items-center gap-3 border-b border-border-default px-3"
+          className="worktree-filter-bar flex h-[29px] shrink-0 items-center gap-3 border-b border-divider px-3"
         >
           {/* The bar's four segments, so its shape is there before its counts. */}
           {[0, 1, 2, 3].map((segment) => (
@@ -942,7 +942,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <>
         <div className="flex flex-col h-full">
           <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
-            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
+            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm">
               Worktrees
             </SidebarViewHeading>
           </div>
@@ -1070,7 +1070,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           {/* Heading navigation lands here, not on the tag, so the host rides in
               the heading's name, and stays there when the tag hides. */}
           <SidebarViewHeading
-            className="min-w-0 truncate text-text-primary font-semibold text-sm tracking-wide"
+            className="min-w-0 truncate text-text-primary font-semibold text-sm"
             aria-label={
               remoteHostName === null ? undefined : `Worktrees, on host ${remoteHostName}`
             }
@@ -1128,7 +1128,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         {/* The cluster also stays up while the refresh icon is turning, so a
             refresh the pointer has left, or one started from the palette, still
             shows — and it fades back only once SpinningIcon finishes its turn. */}
-        <div className="flex shrink-0 items-center gap-0.5">
+        {/* -mr-1.5, as on a popover header's actions: the last 24px button's
+            glyph, not its transparent box, lands on the column's right edge,
+            over the filter button's edge below it. */}
+        <div className="flex shrink-0 items-center gap-0.5 -mr-1.5">
           {/* Faded, not `invisible`: `visibility: hidden` took these out of the
               tab order, so focus-within could never reveal them and a keyboard
               user tabbing in never met them. Gone below 13rem, where their
@@ -1348,9 +1351,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           </div>
         )}
 
-        {/* Strong divider between pinned worktrees and scrollable list */}
+        {/* The pinned/scrolling boundary: the 2px card gutter plus one hairline
+            in the shell's divider token, so it reads as a seam without a second
+            line weight in the column. */}
         {(hasNonMainWorktrees || pendingCreationRows) && mainVisible && (
-          <div role="presentation" className="shrink-0 border-b border-border-default" />
+          <div role="presentation" className="shrink-0 border-b border-divider" />
         )}
 
         {/* A worktree being created sits at the head of the list it will join,

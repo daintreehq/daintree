@@ -517,7 +517,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               onKeyDown={handleDockKeyDown}
               onFocusCapture={handleDockFocusCapture}
               className={cn(
-                "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-px-4 px-1 transition-[color,background-color,box-shadow]",
+                "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-px-4 transition-[color,background-color,box-shadow]",
                 !skipMotion && "scroll-smooth",
                 isDockDropRejected && "cursor-no-drop",
                 isDropTarget && cn(DROP_TARGET_FRAME, "rounded-[var(--radius-md)]")

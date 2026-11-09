@@ -83,7 +83,9 @@
   --dock-bg: var(--color-surface-sidebar);
   --dock-border: var(--border-divider);
   --dock-shadow: 0 -2px 12px rgb(from var(--theme-shadow-color) r g b / 0.35);
-  --dock-padding-x: 0.5rem;
+  /* The grid's own 4px inset, so the dock's first and last controls sit on
+     the pane frames' left and right edges above them. */
+  --dock-padding-x: 0.25rem;
   --dock-padding-y: 0.375rem;
   --dock-gap: 0.375rem;
   --dock-item-height: 2rem;

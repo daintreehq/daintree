@@ -174,7 +174,7 @@ export function SettingsSubjectPicker<T extends { id: string }>({
           page's subject sitting on it as the active tab. It says "this switches the
           page" in the dialog's own tab language, and the underline is the subtab
           accent the settings dialog already reserves for exactly this. */}
-      <div className="flex min-w-0 items-end gap-3 border-b border-border-default">
+      <div className="flex min-w-0 items-end gap-3 border-b border-divider">
         <PopoverTrigger asChild>
           <button
             type="button"

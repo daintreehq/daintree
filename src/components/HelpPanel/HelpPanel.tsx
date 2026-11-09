@@ -1239,7 +1239,7 @@ export function HelpPanel({
       }}
       className={cn(
         "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
-        "bg-surface-canvas border-l border-border-default transition-[border-left-color,box-shadow] duration-150",
+        "bg-surface-canvas border-l border-divider transition-[border-left-color,box-shadow] duration-150",
         isHighlighted && "assistant-focused",
         !isVisible && "pointer-events-none"
       )}

@@ -127,7 +127,7 @@ export function QuickStateFilterBar({
   };
 
   return (
-    <div className={cn("flex border-b border-border-default", className)}>
+    <div className={cn("flex border-b border-divider", className)}>
       <div
         onKeyDown={handleKeyDown}
         className="flex min-w-0 flex-1"
@@ -201,7 +201,7 @@ export function QuickStateFilterBar({
                     // three counts that answer the bar's real question pinched
                     // against their dividers at the 200px sidebar floor.
                     option.value === "all" ? "flex-[1.25]" : "flex-1",
-                    idx > 0 && "border-l border-border-default",
+                    idx > 0 && "border-l border-divider",
                     isActive
                       ? // Fallback keeps themes without the var byte-identical.
                         "bg-[var(--worktree-quick-state-active-bg,var(--color-overlay-subtle))] shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"

@@ -532,7 +532,14 @@ export function WorktreeFilterPopover({
             // Every other control in this rail carries the accent focus ring;
             // without one here the browser painted its own blue outline.
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-            isField ? "self-stretch border border-border-default px-2" : "h-6 min-w-6 px-1.5",
+            isField
+              ? // Square while idle, the field's height and the skeleton's w-7;
+                // a count widens it.
+                cn(
+                  "self-stretch border border-border-default",
+                  filterCount > 0 ? "min-w-7 px-1.5" : "w-7 px-0"
+                )
+              : "h-6 min-w-6 px-1.5",
             // Active state is a neutral fill + count, never a saturated colour or a
             // floating notification dot. A dot reads as "something new"; what matters
             // here is "how many filters", so we surface the number instead.

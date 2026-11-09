@@ -1133,8 +1133,12 @@ export function WorktreeCard({
     (isCompactCard || (variant === "sidebar" && isMainWorktree)) && lifecycleAlarm === null;
   const isSessionsFooterInline = hasInlineFooter && !isExpanded && terminalCounts.total > 0;
   // A card with no sessions keeps the trigger's slot empty on that row, so the
-  // age column sits on the same x on every card with the shared footer.
-  const reservesSessionsSlot = hasInlineFooter && !isExpanded && terminalCounts.total === 0;
+  // age column sits on the same x on every card with the shared footer. Only
+  // the compact density gives every card that footer; in comfortable the pinned
+  // main card is the only one, and an empty slot there pushed its age off the
+  // column every other card's age ends on.
+  const reservesSessionsSlot =
+    isCompactCard && hasInlineFooter && !isExpanded && terminalCounts.total === 0;
 
   const ariaStatusParts: string[] = [spineState];
   if (gitStateIndicator) {

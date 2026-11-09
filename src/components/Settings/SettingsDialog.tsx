@@ -44,7 +44,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { appClient } from "@/clients";
 import type { AppVersionInfo } from "@shared/types/ipc/app";
-import { AppDialog } from "@/components/ui/AppDialog";
+import { AppDialog, useBodyEdgesReport } from "@/components/ui/AppDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { GeneralTab } from "./GeneralTab";
@@ -985,7 +985,7 @@ function SettingsDialogInner({
     >
       <div className="flex h-full overflow-hidden">
         <div
-          className="settings-sidebar w-52 border-r border-border-default p-3 flex flex-col shrink-0"
+          className="settings-sidebar w-52 border-r border-divider p-3 flex flex-col shrink-0"
           // Escape clears an active search before it closes the dialog wherever focus sits
           // in the sidebar, not only inside the field — Tab to the nav and back out was
           // otherwise one keypress from losing the whole dialog.
@@ -1105,7 +1105,7 @@ function SettingsDialogInner({
             ))}
           </ScrollShadow>
 
-          <div className="pt-2 mt-2 border-t border-border-default px-3">
+          <div className="pt-2 mt-2 border-t border-divider px-3">
             <span className="settings-meta font-mono">{appVersion}</span>
           </div>
         </div>
@@ -2594,11 +2594,19 @@ export function SearchResults({
   );
 }
 
-/** The page column: inset content, so a status banner in it is a box, not a band. */
+/**
+ * The page column: inset content, so a status banner in it is a box, not a band.
+ * It reports its scroll edges to the dialog like `AppDialog.Body`, so the
+ * header's rule shows only once a page runs under it; at rest the page and its
+ * header are one surface, as in every other dialog.
+ */
 function SettingsPageScroll(props: ComponentProps<typeof ScrollShadow>) {
+  const reportEdges = useBodyEdgesReport();
   return (
     <InsetSurface>
-      <ScrollShadow {...props} />
+      {/* The fade stays: the header rule answers the top edge, but Settings
+          has no footer whose rule could answer the bottom one. */}
+      <ScrollShadow {...props} onEdgesChange={reportEdges} />
     </InsetSurface>
   );
 }

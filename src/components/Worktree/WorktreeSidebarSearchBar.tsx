@@ -257,12 +257,11 @@ export function WorktreeSidebarSearchBar({
   return (
     <div
       className={cn(
-        // px-3 matches the header above and the status line below, so the whole
-        // control zone sits on one 12px inset instead of three (#11991).
-        // No top padding in the sidebar: the header's py-3 already sets the
-        // 12px above the field. pb-3 matches it below, so the rule under the
-        // rail lands on the same rhythm the title sits on.
-        "px-3 pb-3 border-b border-divider shrink-0",
+        // px-4 matches the header above and the cards below, so the whole
+        // column sits on one 16px inset (#11991 unified the zone; the cards set
+        // the value). No top padding in the sidebar: the header row already
+        // sets the gap above the field.
+        "px-4 pb-3 border-b border-divider shrink-0",
         variant === "sidebar" && "worktree-filter-bar",
         // The palette header it sits in owns the inset and the rule.
         variant === "palette" && "px-0 pb-0 border-b-0"

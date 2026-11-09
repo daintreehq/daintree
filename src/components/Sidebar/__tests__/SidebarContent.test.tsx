@@ -426,7 +426,7 @@ describe("Worktrees sidebar control zone — issue #11991", () => {
     // contents jump as a project resolves or the workspace kind changes. One
     // shared row with a fixed height — not padding around whatever sits in it —
     // is what holds them together.
-    expect(headerRow).toMatch(/(?:^|\s)h-\d+(?:\s|$)/);
+    expect(headerRow).toMatch(/(?:^|\s)h-\d+(?:\.5)?(?:\s|$)/);
     expect(headerRow).not.toMatch(/\bpy-/);
 
     // The loading branch takes the bare row (its shells below own the rule),

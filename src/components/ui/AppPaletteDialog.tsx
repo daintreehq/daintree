@@ -496,7 +496,7 @@ AppPaletteDialog.Header = function AppPaletteHeader({
         // are the two surfaces the family is modelled on. Promoted to the
         // default so every palette breathes the same.
         // `shrink-0`: in the card's capped column only the body gives way.
-        "relative shrink-0 overflow-hidden px-3 pt-2 pb-2 border-b border-border-strong",
+        "relative shrink-0 overflow-hidden px-3 pt-2 pb-2 border-b border-divider",
         className
       )}
     >
@@ -586,7 +586,7 @@ AppPaletteDialog.Divider = function AppPaletteDivider({
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div aria-hidden="true" className={cn("h-px bg-border-strong", className)} {...props} />;
+  return <div aria-hidden="true" className={cn("h-px bg-border-divider", className)} {...props} />;
 };
 
 interface AppPaletteBodyProps {
@@ -774,7 +774,7 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
   return (
     <div
       className={cn(
-        "shrink-0 px-3 py-2 border-t border-border-strong bg-surface-panel text-xs text-text-secondary flex items-center gap-4",
+        "shrink-0 px-3 py-2 border-t border-divider bg-surface-panel text-xs text-text-secondary flex items-center gap-4",
         className
       )}
     >
