@@ -61,21 +61,23 @@ export function PilotFooterHint({
       data-no-submit={noSubmit ? "" : undefined}
       data-testid={testId}
       className={cn(
-        "relative flex shrink-0 items-center rounded-[var(--radius-sm)] px-1 py-0.5 transition-colors",
+        "relative flex min-w-0 items-center rounded-[var(--radius-sm)] px-1 py-0.5 transition-colors",
         "hover:bg-overlay-subtle hover:text-text-primary disabled:pointer-events-none disabled:opacity-50",
         "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
       )}
     >
-      <span className={cn("flex items-center", busy && "invisible")}>
+      {/* The verb gives way before the keys do: off a Mac the chords are
+          spelled out, and three of them overrun a narrow Linux window. */}
+      <span className={cn("flex min-w-0 items-center", busy && "invisible")}>
         {keys !== undefined && (
           // The space isn't rendered between flex items, but it keeps the
           // spoken keys and the verb two words in the button's name ("Alt
           // Enter to park") wherever the items aren't blockified.
           <>
-            <KbdChord shortcut={keys} />{" "}
+            <KbdChord shortcut={keys} className="shrink-0" />{" "}
           </>
         )}
-        <span className={cn(keys !== undefined && "ml-1.5")}>{label}</span>
+        <span className={cn("min-w-0 truncate", keys !== undefined && "ml-1.5")}>{label}</span>
       </span>
       {busy && (
         <span className="absolute inset-0 flex items-center justify-center">

@@ -2077,6 +2077,28 @@ describe("PilotView", () => {
       expect(body.contains(screen.getByTestId("pilot-park-cancel"))).toBe(false);
     });
 
+    it("speaks the editor's verbs in the footer's grammar, keys first", () => {
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      // jsdom reports no Mac platform, so the keys are named the way Windows
+      // and Linux name them.
+      expect(screen.getByRole("button", { name: "Enter to park" })).toBe(
+        screen.getByTestId("pilot-park-confirm")
+      );
+      expect(screen.getByRole("button", { name: "Escape to cancel" })).toBe(
+        screen.getByTestId("pilot-park-cancel")
+      );
+    });
+
     it("names the dialog for the editing mode, and says it on screen", () => {
       seed([
         run({

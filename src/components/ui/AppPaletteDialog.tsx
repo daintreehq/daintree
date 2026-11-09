@@ -841,10 +841,15 @@ function HintChip({
 // trailing edge. Index 0 is the rightmost chip (drops first), index 1 is the
 // next-to-rightmost, etc. Tailwind needs each variant present in source for the
 // JIT compiler — keep as a static array.
+//
+// Sized for the widest chips: Windows and Linux spell keys out ("Shift + F10",
+// "Backspace"), and the worktree overview's three "to …" chips need about 530px.
+// Every surface that carries secondaries opens at least 584px wide, so these
+// only bite in a narrower Linux window, where a tiling manager may size it.
 const SECONDARY_DROP_CLASSES = [
+  "@max-[560px]/palette-footer:hidden",
   "@max-[380px]/palette-footer:hidden",
-  "@max-[280px]/palette-footer:hidden",
-  "@max-[200px]/palette-footer:hidden",
+  "@max-[260px]/palette-footer:hidden",
 ];
 
 /**

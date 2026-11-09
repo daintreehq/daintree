@@ -286,8 +286,14 @@ describe("ActionPalette", () => {
       />
     );
     fireKey(">");
-    expect(screen.getByText("to alpha run")).toBeTruthy();
-    expect(screen.getByText("to exit scope")).toBeTruthy();
+    // jsdom reports no Mac platform, so the keys are spelled out.
+    const capsOf = (label: string) =>
+      Array.from(
+        screen.getByText(label).parentElement!.querySelectorAll("kbd"),
+        (kbd) => kbd.textContent
+      );
+    expect(capsOf("to alpha run")).toEqual(["Enter"]);
+    expect(capsOf("to exit scope")).toEqual(["Backspace"]);
   });
 
   it("offers Backspace to exit the scope only while Backspace would do that", () => {
@@ -493,7 +499,7 @@ describe("ActionPalette", () => {
       render(<ActionPalette {...baseProps} />);
       fireKey(">");
       expect(screen.getByText("to exit scope")).toBeTruthy();
-      expect(screen.queryByText("close")).toBeNull();
+      expect(screen.queryByText(/close$/)).toBeNull();
     });
   });
 
