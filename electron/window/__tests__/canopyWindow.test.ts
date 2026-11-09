@@ -19,6 +19,7 @@ import {
   CANOPY_POP_OUT_TIMEOUT_MS,
   closeCanopyWindow,
   focusCanopyWindow,
+  focusLastProjectWindow,
   isCanopyWindowView,
   openCanopyWindow,
   peekPendingPopOut,
@@ -365,6 +366,96 @@ describe("the Canopy window beside project targeting", () => {
     expect(snapshotOpenWorld(registry, "default").windows.map((w) => w.windowId)).toEqual([
       projectWindow.id,
     ]);
+  });
+
+  describe("going back to a project window (#16578)", () => {
+    /** A registered project window, focused as the user would focus it. */
+    function projectWindow(focusing: EventEmitter): FakeWindow {
+      const win = makeWindow();
+      registry.register(win as unknown as BrowserWindow);
+      focusing.emit("browser-window-focus", {}, win);
+      return win;
+    }
+
+    it("brings forward the project window the user was last in, and leaves Canopy as it stands", () => {
+      const app = new EventEmitter();
+      registry.wireFocusTracking(app);
+      const first = projectWindow(app);
+      const second = projectWindow(app);
+      openCanopyWindow(noWatch);
+      const canopy = made.at(-1)!;
+      // Back to the first before going to Canopy: the first is where the user was.
+      app.emit("browser-window-focus", {}, first);
+      canopy.focus.mockClear();
+      canopy.show.mockClear();
+
+      first.focus.mockClear();
+      second.focus.mockClear();
+
+      expect(focusLastProjectWindow()).toBe(true);
+
+      expect(first.focus).toHaveBeenCalledTimes(1);
+      expect(second.focus).not.toHaveBeenCalled();
+      expect(canopy.close).not.toHaveBeenCalled();
+      expect(canopy.focus).not.toHaveBeenCalled();
+      expect(canopy.show).not.toHaveBeenCalled();
+
+      // Then into the second and back to Canopy: the second is where the user was.
+      app.emit("browser-window-focus", {}, second);
+      first.focus.mockClear();
+
+      expect(focusLastProjectWindow()).toBe(true);
+
+      expect(second.focus).toHaveBeenCalledTimes(1);
+      expect(first.focus).not.toHaveBeenCalled();
+      expect(focusCanopyWindow()).toBe(true);
+    });
+
+    it("restores a minimized project window as it brings it forward", () => {
+      const app = new EventEmitter();
+      registry.wireFocusTracking(app);
+      const win = projectWindow(app);
+      win.isMinimized.mockReturnValue(true);
+
+      expect(focusLastProjectWindow()).toBe(true);
+
+      expect(win.restore).toHaveBeenCalledTimes(1);
+      expect(win.show).toHaveBeenCalledTimes(1);
+      expect(win.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves a project window that isn't minimized as it is, maximized or not", () => {
+      const app = new EventEmitter();
+      registry.wireFocusTracking(app);
+      const win = projectWindow(app);
+
+      expect(focusLastProjectWindow()).toBe(true);
+
+      expect(win.restore).not.toHaveBeenCalled();
+      expect(win.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it("takes a project window never focused when it is the only one open", () => {
+      const win = makeWindow();
+      registry.register(win as unknown as BrowserWindow);
+
+      expect(focusLastProjectWindow()).toBe(true);
+      expect(win.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it("moves nothing with no project window open", () => {
+      openCanopyWindow(noWatch);
+      const canopy = made[0]!;
+
+      expect(focusLastProjectWindow()).toBe(false);
+      expect(canopy.close).not.toHaveBeenCalled();
+      expect(focusCanopyWindow()).toBe(true);
+    });
+
+    it("moves nothing before the app has a window registry", () => {
+      setWindowRegistry(null as unknown as WindowRegistry);
+      expect(focusLastProjectWindow()).toBe(false);
+    });
   });
 
   it("holds no project binding, and forgets its view once the view is destroyed", () => {

@@ -6,6 +6,7 @@ import { installHostProjectsLoader } from "@/components/Hosts/installHostProject
 import { VoiceRecordingAnnouncer } from "@/components/Terminal/VoiceRecordingAnnouncer";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useCanopyDoubleShift } from "@/hooks/app/useCanopyDoubleShift";
 import { useCanopySnapshotSync } from "@/hooks/app/useCanopySnapshotSync";
 import { useAppThemeConfig } from "@/hooks/useAppThemeConfig";
 import { useTerminalConfig } from "@/hooks/useTerminalConfig";
@@ -20,7 +21,7 @@ import { useScratchStore } from "@/store/scratchStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_WINDOW_FRAME } from "./canopyWindowFrame";
 import { CanopyPluginSupport } from "./CanopyPluginSupport";
-import { startCanopyWindowDictation } from "./canopyWindowDictation";
+import { returnToLastProjectWindow, startCanopyWindowKeys } from "./canopyWindowKeys";
 import { receiveCanopyPopOuts } from "./canopyWindowPopOut";
 
 /**
@@ -32,6 +33,8 @@ export function CanopyWindowRoot() {
   useAppThemeConfig();
   useTerminalConfig();
   useCanopySnapshotSync();
+  // Double-Shift goes back to a project window from here, as Canopy's key does.
+  useCanopyDoubleShift(returnToLastProjectWindow);
   const offersPluginViews = usePluginHostedViewsStore(
     (state) => state.views?.some((view) => view.location === "canopy") ?? false
   );
@@ -42,7 +45,7 @@ export function CanopyWindowRoot() {
       setupFleetSnapshotListeners(),
       installHostProjectsLoader(),
       receiveCanopyPopOuts(),
-      startCanopyWindowDictation(),
+      startCanopyWindowKeys(),
     ];
     // Project and scratch names label the rows; both stores follow their own pushes.
     safeFireAndForget(useProjectStore.getState().loadProjects(), {

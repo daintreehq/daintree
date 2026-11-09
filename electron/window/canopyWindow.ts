@@ -4,6 +4,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { AppError } from "../utils/errorTypes.js";
 import type { CreateWindowResult, SetupBrowserWindowOptions } from "./createWindow.js";
 import { setCanopyWindowOpen } from "./openWindowsTracker.js";
+import { getWindowRegistry } from "./windowRef.js";
 
 const CANOPY_WINDOW_TITLE = "Canopy";
 
@@ -36,13 +37,32 @@ function liveCanopyWindow(): BrowserWindow | null {
   return canopyWindow && !canopyWindow.isDestroyed() ? canopyWindow : null;
 }
 
+function bringForward(win: BrowserWindow): void {
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
 /** Bring the window forward, if there is one. False means there is none. */
 export function focusCanopyWindow(): boolean {
   const win = liveCanopyWindow();
   if (!win) return false;
-  if (win.isMinimized()) win.restore();
-  win.show();
-  win.focus();
+  bringForward(win);
+  return true;
+}
+
+/**
+ * The Canopy window's way back (#16578): bring forward the project window the
+ * user was last in, leaving the Canopy window where it stands. The registry
+ * lists project windows alone, the one most recently focused first. False with
+ * none open, when nothing moves.
+ */
+export function focusLastProjectWindow(): boolean {
+  const target = getWindowRegistry()
+    ?.focusOrder()
+    .find((ctx) => !ctx.browserWindow.isDestroyed());
+  if (!target) return false;
+  bringForward(target.browserWindow);
   return true;
 }
 

@@ -1,14 +1,14 @@
 import type { ActionRegistry } from "../actionTypes";
-import { useCanopyStore } from "@/store/canopyStore";
+import { canopyOwnHostId, useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { isCanopyUnread } from "@shared/types/ipc/canopy";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
-import { popOutCanopyDialog } from "@/components/Canopy/canopyPopOut";
 import { actionService } from "@/services/ActionService";
-import { clientErrorText } from "@/utils/clientAppError";
+import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 const CANOPY_HIDDEN_REASON = "Canopy is hidden. Show it from Settings > Canopy.";
@@ -55,7 +55,7 @@ function projectRunsInScope(): ReadonlySet<string> | null | undefined {
   );
 }
 
-/** The window didn't open, or didn't take the dialog up: whatever was open here still is. */
+/** The window didn't open. */
 function notifyWindowFailed(error: unknown): void {
   notify({
     type: "error",
@@ -76,13 +76,51 @@ function notifyWindowFailed(error: unknown): void {
   });
 }
 
+/**
+ * A view on a remote host reads that host's Canopy, while the window is this
+ * machine's and opens only while this machine's Canopy is on, which the view
+ * can't read.
+ */
+function onRemoteHost(): boolean {
+  return canopyOwnHostId() !== LOCAL_HOST_ID;
+}
+
+/**
+ * Whether the window is offered here: once Canopy is on, or in a view on a
+ * remote host, wherever it is shown, since only main knows whether this
+ * machine's Canopy is on and says so if it isn't.
+ */
+function windowOffered(): boolean {
+  return onRemoteHost() ? canopyShown() : canopyOn();
+}
+
+/**
+ * Open the one Canopy window, or bring it forward, restored if minimized:
+ * Canopy's only home once it is on (#16578), whatever was opened before. A
+ * panel this view still holds is put away once the window stands. False when
+ * main refused because this machine's Canopy isn't on and `fallsBackWhenOff`
+ * asked to hear it rather than tell the user.
+ */
+async function openCanopyWindow({ fallsBackWhenOff = false } = {}): Promise<boolean> {
+  try {
+    await window.electron.canopyWindow.open();
+  } catch (error) {
+    if (fallsBackWhenOff && clientErrorCode(error) === "UNSUPPORTED") return false;
+    notifyWindowFailed(error);
+    throw error;
+  }
+  const { isOpen, close } = useCanopyStore.getState();
+  if (isOpen) close();
+  return true;
+}
+
 /** The canopy panel: every agent, read off its screen and laid out by what it needs. */
 export function registerCanopyActions(actions: ActionRegistry): void {
   actions.set("canopy.toggle", () => ({
     id: "canopy.toggle",
     title: "Open Canopy",
     description:
-      "Open or close Canopy, the bird's-eye view of every agent across all projects, read off its screen and ordered by what it needs from the user. While Canopy has its own window, brings that window forward",
+      "Open Canopy's window, the bird's-eye view of every agent across all projects, read off its screen and ordered by what it needs from the user, or bring it forward. Before Canopy is on, offers to turn it on",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -92,43 +130,38 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     isEnabled: canopyShown,
     disabledReason: () => (canopyShown() ? undefined : CANOPY_HIDDEN_REASON),
     keywords: ["canopy", "inbox", "agents", "waiting", "summary", "overview", "fleet"],
+    selfNotifiesOnExecutionError: true,
     run: async () => {
-      const { mode, isOpen } = useCanopyStore.getState();
-      // Only an on Canopy can have a window, and a panel open here closes as ever.
-      if (mode === "on" && !isOpen && (await window.electron.canopyWindow.focus())) return;
+      if (onRemoteHost()) {
+        // While this machine's Canopy is off there is no window: the host's
+        // own panel opens here, as it did before the window.
+        if (await openCanopyWindow({ fallsBackWhenOff: true })) return;
+      } else if (useCanopyStore.getState().mode === "on") {
+        await openCanopyWindow();
+        return;
+      }
+      // Before Canopy is on there is no window: the panel here offers to turn it on.
       useCanopyStore.getState().toggle();
     },
   }));
 
   actions.set("canopy.openWindow", () => ({
     id: "canopy.openWindow",
-    title: "Open Canopy in new window",
+    title: "Open Canopy window",
     description:
-      "Open Canopy in its own window, with every agent of every project and host, or bring it forward. A panel open here moves into it as it stands",
+      "Open Canopy in its own window, with every agent of every project and host, or bring that window forward, restoring it if minimized",
     category: "project",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     nonRepeatable: true,
-    isVisible: canopyOn,
-    isEnabled: canopyOn,
-    disabledReason: () => (canopyOn() ? undefined : CANOPY_OFF_REASON),
+    isVisible: windowOffered,
+    isEnabled: windowOffered,
+    disabledReason: () => (windowOffered() ? undefined : CANOPY_OFF_REASON),
     keywords: ["canopy", "inbox", "agents", "window", "monitor", "detach"],
     selfNotifiesOnExecutionError: true,
     run: async () => {
-      // A panel open here moves into the window where it stood, closing once
-      // the window has its place: the window shows what it would, and both
-      // would size a terminal.
-      if (useCanopyStore.getState().isOpen && window.__DAINTREE_CANOPY_WINDOW__ !== true) {
-        await popOutCanopyDialog(notifyWindowFailed);
-        return;
-      }
-      try {
-        await window.electron.canopyWindow.open();
-      } catch (error) {
-        notifyWindowFailed(error);
-        throw error;
-      }
+      await openCanopyWindow();
     },
   }));
 

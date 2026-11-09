@@ -189,6 +189,7 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUIStore } from "@/store/uiStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { keybindingService } from "@/services/KeybindingService";
 import { isMac } from "@/lib/platform";
 import {
@@ -459,6 +460,44 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(useCanopyStore.getState().scope).toBe("project");
     expect(useCanopyStore.getState().orders.all).toBeDefined();
     expect(useCanopyStore.getState().orders.project).toBeUndefined();
+  });
+
+  it("lists Canopy's key and double-Shift as the way back to a project window (#16578)", async () => {
+    usePreferencesStore.setState({ doubleShiftOpensCanopy: true });
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+
+    await act(async () => {
+      fireEvent.click(within(surface()!).getByRole("button", { name: "Keyboard shortcuts" }));
+    });
+
+    const labels = [...document.querySelectorAll("dd")].map((dd) => dd.textContent);
+    expect(labels).toContain("Back to the last project window");
+    expect(labels).toContain("Twice quickly: back to the last project window");
+    expect(labels).not.toContain("Open or close Canopy");
+    const back = [...document.querySelectorAll("dd")].find(
+      (dd) => dd.textContent === "Back to the last project window"
+    )!;
+    expect(back.closest("section")?.querySelector("h3")?.textContent).toBe("Anywhere");
+    expect(back.previousElementSibling!.querySelectorAll("kbd").length).toBeGreaterThan(0);
+  });
+
+  it("lists no double-Shift while the preference is off", async () => {
+    usePreferencesStore.setState({ doubleShiftOpensCanopy: false });
+    try {
+      render(<CanopyView frame={hostFrame().frame} />);
+      await settle();
+
+      await act(async () => {
+        fireEvent.click(within(surface()!).getByRole("button", { name: "Keyboard shortcuts" }));
+      });
+
+      const labels = [...document.querySelectorAll("dd")].map((dd) => dd.textContent);
+      expect(labels).toContain("Back to the last project window");
+      expect(labels.some((label) => label?.startsWith("Twice quickly"))).toBe(false);
+    } finally {
+      usePreferencesStore.setState({ doubleShiftOpensCanopy: true });
+    }
   });
 
   it("makes its header the window's title bar, a handle that drags the window", async () => {

@@ -5,6 +5,7 @@ import { AppError } from "../../utils/errorTypes.js";
 import {
   acknowledgePopOut,
   focusCanopyWindow,
+  focusLastProjectWindow,
   hasCanopyWindowOpenedThisSession,
   isCanopyWindowView,
   openCanopyWindow,
@@ -53,12 +54,12 @@ function refuseUnlessCanopyIsOn(): void {
   }
 }
 
-function refuseUnlessCanopyWindow(ctx: IpcContext): void {
+function refuseUnlessCanopyWindow(
+  ctx: IpcContext,
+  message = "Only the Canopy window takes up a pop-out"
+): void {
   if (!isCanopyWindowView(ctx.webContentsId)) {
-    throw new AppError({
-      code: "UNSUPPORTED",
-      message: "Only the Canopy window takes up a pop-out",
-    });
+    throw new AppError({ code: "UNSUPPORTED", message });
   }
 }
 
@@ -136,6 +137,18 @@ export const canopyWindowNamespace = defineIpcNamespace({
     focus: op(CANOPY_WINDOW_METHOD_CHANNELS.focus, async (): Promise<boolean> => {
       return focusCanopyWindow();
     }),
+    /**
+     * From the Canopy window, bring forward the project window the user was
+     * last in. False when no project window is open, and nothing moves.
+     */
+    focusLastProjectWindow: op(
+      CANOPY_WINDOW_METHOD_CHANNELS.focusLastProjectWindow,
+      async (ctx: IpcContext): Promise<boolean> => {
+        refuseUnlessCanopyWindow(ctx, "Only the Canopy window goes back to a project window");
+        return focusLastProjectWindow();
+      },
+      { withContext: true }
+    ),
     /**
      * Go to a run's pane on this machine from the Canopy window, in the window
      * that has its workspace or a new one. Only the Canopy window asks: a

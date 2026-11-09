@@ -223,7 +223,7 @@ describe("CanopyToolbarButton", () => {
   });
 });
 
-describe("Open in new window", () => {
+describe("where the button opens Canopy (#16578)", () => {
   afterEach(() => dispatchMock.mockClear());
 
   async function openMenu(activated: boolean) {
@@ -233,30 +233,50 @@ describe("Open in new window", () => {
     await act(async () => {});
   }
 
-  it("is on the right-click menu once Canopy is on, and runs the action", async () => {
-    await openMenu(true);
+  it.each([true, false])(
+    "offers no second way in from the right-click menu (Canopy on: %s)",
+    async (activated) => {
+      await openMenu(activated);
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Open in new window" }));
+      // The menu itself still opens, with the toolbar's own items.
+      expect(screen.getAllByRole("menuitem").length).toBeGreaterThan(0);
+      expect(screen.queryByRole("menuitem", { name: "Open in new window" })).toBeNull();
+      expect(dispatchMock).not.toHaveBeenCalledWith(
+        "canopy.openWindow",
+        undefined,
+        expect.anything()
+      );
+    }
+  );
 
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "canopy.openWindow",
-      undefined,
-      expect.objectContaining({ source: "context-menu" })
-    );
-  });
+  it.each([true, false])(
+    "leaves the click to the toggle, which decides where Canopy opens (Canopy on: %s)",
+    async (activated) => {
+      const view = renderButton(activated);
+      await act(async () => {});
 
-  it("isn't offered with Canopy off", async () => {
-    await openMenu(false);
+      fireEvent.click(view.container.querySelector("button")!);
 
-    expect(screen.queryByRole("menuitem", { name: "Open in new window" })).toBeNull();
-  });
+      expect(dispatchMock).toHaveBeenCalledWith("canopy.toggle", undefined, { source: "user" });
+    }
+  );
 
-  it("leaves the button's click to the toggle, which decides where Canopy opens", async () => {
-    const view = renderButton(true);
+  it("says it opens a dialog only before Canopy is on, when it opens the offer here", async () => {
+    const on = renderButton(true);
     await act(async () => {});
+    const onButton = on.container.querySelector("button")!;
+    expect(onButton.hasAttribute("aria-haspopup")).toBe(false);
+    expect(onButton.hasAttribute("aria-expanded")).toBe(false);
+    on.unmount();
 
-    fireEvent.click(view.container.querySelector("button")!);
+    const off = renderButton(false);
+    await act(async () => {});
+    const offButton = off.container.querySelector("button")!;
+    expect(offButton.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(offButton.getAttribute("aria-expanded")).toBe("false");
 
-    expect(dispatchMock).toHaveBeenCalledWith("canopy.toggle", undefined, { source: "user" });
+    act(() => useCanopyStore.setState({ isOpen: true }));
+    expect(offButton.getAttribute("aria-expanded")).toBe("true");
+    act(() => useCanopyStore.setState({ isOpen: false }));
   });
 });

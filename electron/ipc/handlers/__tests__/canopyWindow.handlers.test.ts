@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
 const windowMock = vi.hoisted(() => ({
   openCanopyWindow: vi.fn(),
   focusCanopyWindow: vi.fn(() => false),
+  focusLastProjectWindow: vi.fn(() => false),
   hasCanopyWindowOpenedThisSession: vi.fn(() => false),
   isCanopyWindowView: vi.fn((id: number) => id === CANOPY_VIEW_ID),
   popOutToCanopyWindow: vi.fn(async (_popOut: unknown, _watch: unknown) => {}),
@@ -119,6 +120,32 @@ describe("the Canopy window's IPC", () => {
     windowMock.focusCanopyWindow.mockReturnValue(true);
     const answer = (await invoke(CANOPY_WINDOW_METHOD_CHANNELS.focus)) as { data?: boolean };
     expect(answer?.data ?? answer).toBe(true);
+  });
+});
+
+describe("back to a project window from the Canopy window (#16578)", () => {
+  beforeEach(() => windowMock.focusLastProjectWindow.mockReset());
+
+  it.each([true, false])(
+    "brings the last project window forward when the Canopy window asks, answering %s",
+    async (found) => {
+      windowMock.focusLastProjectWindow.mockReturnValue(found);
+
+      const answer = (await invokeFrom(
+        CANOPY_VIEW_ID,
+        CANOPY_WINDOW_METHOD_CHANNELS.focusLastProjectWindow
+      )) as { data?: boolean };
+
+      expect(windowMock.focusLastProjectWindow).toHaveBeenCalledTimes(1);
+      expect(answer?.data ?? answer).toBe(found);
+    }
+  );
+
+  it("refuses a project view, which is already in a project window", async () => {
+    expect(await refused(invokeFrom(3, CANOPY_WINDOW_METHOD_CHANNELS.focusLastProjectWindow))).toBe(
+      true
+    );
+    expect(windowMock.focusLastProjectWindow).not.toHaveBeenCalled();
   });
 });
 

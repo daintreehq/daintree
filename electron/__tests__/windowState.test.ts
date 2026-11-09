@@ -1214,6 +1214,37 @@ describe("a window whose bounds are its own (the Canopy window, #16336)", () => 
     expect(winInstance.center).toHaveBeenCalledTimes(1);
   });
 
+  it("first opens as a normal window, never maximized or full screen as project windows were (#16578)", () => {
+    const filling = { ...projectBounds, isMaximized: true, isFullScreen: true };
+    makeStateful({ "/proj/a": filling, __legacy__: filling });
+
+    openCanopy();
+    onceHandlers.get("show")?.();
+
+    expect(constructorCalls[0]).toEqual(expect.objectContaining(CANOPY_SIZE));
+    expect(winInstance.maximize).not.toHaveBeenCalled();
+    expect(winInstance.setFullScreen).not.toHaveBeenCalled();
+  });
+
+  it("comes back full screen when it was left full screen", () => {
+    makeStateful({
+      [CANOPY_BOUNDS_KEY]: {
+        x: 300,
+        y: 200,
+        width: 1300,
+        height: 900,
+        isMaximized: false,
+        isFullScreen: true,
+      },
+    });
+
+    openCanopy();
+    onceHandlers.get("show")?.();
+
+    expect(winInstance.setFullScreen).toHaveBeenCalledWith(true);
+    expect(winInstance.maximize).not.toHaveBeenCalled();
+  });
+
   it("comes back at its saved bounds, maximized if it was", () => {
     makeStateful({
       [CANOPY_BOUNDS_KEY]: { x: 300, y: 200, width: 1300, height: 900, isMaximized: true },

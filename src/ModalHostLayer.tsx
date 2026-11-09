@@ -30,7 +30,7 @@ import {
   useScheduleRunConfirmStore,
 } from "@/store/scheduleRunConfirmStore";
 import { usePilotStore } from "@/store/pilotStore";
-import { useCanopyStore } from "@/store/canopyStore";
+import { useCanopyPanelShown } from "@/hooks/app/useCanopyPanelShown";
 import { useScratchStore } from "@/store/scratchStore";
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
@@ -297,7 +297,7 @@ export function ModalHostLayer({
   // path into this layer.
   const isPilotOpen = usePilotStore((s) => s.isOpen);
   const hasProjectGroupDialog = useProjectGroupsStore((s) => s.dialog !== null);
-  const isCanopyOpen = useCanopyStore((s) => s.isOpen);
+  const isCanopyOpen = useCanopyPanelShown();
   const hasScratch = useScratchStore((s) => s.currentScratch !== null);
   // Each Run now question retries a dialog that failed, so none waits on a fallback.
   const scheduleRunConfirmKey = useScheduleRunConfirmStore((s) => s.current?.requestId ?? "");

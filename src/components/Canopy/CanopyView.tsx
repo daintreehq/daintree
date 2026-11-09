@@ -514,13 +514,13 @@ function TitleDot() {
 function CanopyShortcuts() {
   const frame = useCanopyFrame();
   const canGoTo = frame.goToRun !== null;
-  // Reaching Canopy again is for a project window; its own window is already here.
-  const reachedByShortcut = frame.host === "dialog";
+  // In a project window Canopy's key opens and closes it; in Canopy's own
+  // window it goes back to the project window the user was last in (#16578).
   // Escape and the user's close binding put the dialog away; a window left open
   // all day stays where it was put until its own close.
   const inDialog = frame.host === "dialog";
   const step = isMac() ? "Cmd" : "Alt";
-  // How to get here again: the user's own binding, and double-Shift while on.
+  // The user's own binding, and double-Shift while on.
   const toggle = useEffectiveCombo("canopy.toggle");
   // Close as the user has it bound, and only where it works: a chord can't
   // reach the pane, and off the Mac the terminal keeps Ctrl+W for the shell.
@@ -535,9 +535,23 @@ function CanopyShortcuts() {
     {
       heading: "Anywhere",
       rows: [
-        ...(toggle && reachedByShortcut ? [{ keys: [toggle], label: "Open or close Canopy" }] : []),
-        ...(doubleShift && reachedByShortcut
-          ? [{ keys: ["Shift"], label: "Twice quickly: open or close Canopy" }]
+        ...(toggle
+          ? [
+              {
+                keys: [toggle],
+                label: inDialog ? "Open or close Canopy" : "Back to the last project window",
+              },
+            ]
+          : []),
+        ...(doubleShift
+          ? [
+              {
+                keys: ["Shift"],
+                label: inDialog
+                  ? "Twice quickly: open or close Canopy"
+                  : "Twice quickly: back to the last project window",
+              },
+            ]
           : []),
       ],
     },

@@ -374,7 +374,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
 | `canopy.markAllRead` | Mark all Canopy agents as read | safe | — |
-| `canopy.openWindow` | Open Canopy in new window | safe | — |
+| `canopy.openWindow` | Open Canopy window | safe | — |
 | `canopy.toggle` | Open Canopy | safe | — |
 | `pilot.openProject` | View this project's agents | safe | — |
 | `pilot.openRun` | Open run | safe | `runId`, `workspaceId?` |

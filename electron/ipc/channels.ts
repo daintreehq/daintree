@@ -1805,6 +1805,7 @@ export const CHANNELS = {
   CANOPY_HOST_EVENT: "canopy-host:event",
   CANOPY_WINDOW_OPEN: "canopy-window:open",
   CANOPY_WINDOW_FOCUS: "canopy-window:focus",
+  CANOPY_WINDOW_FOCUS_LAST_PROJECT_WINDOW: "canopy-window:focus-last-project-window",
   CANOPY_WINDOW_GO_TO_RUN: "canopy-window:go-to-run",
   CANOPY_WINDOW_POP_OUT: "canopy-window:pop-out",
   CANOPY_WINDOW_PEEK_POP_OUT: "canopy-window:peek-pop-out",

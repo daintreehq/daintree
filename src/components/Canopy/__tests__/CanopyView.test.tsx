@@ -1027,6 +1027,10 @@ describe("CanopyView", () => {
       fireEvent.click(button);
     });
     expect(document.body.textContent).toContain("Take the first choice");
+    // In a project window Canopy's key opens and closes it, as the window's goes back.
+    const labels = [...document.querySelectorAll("dd")].map((dd) => dd.textContent);
+    expect(labels).toContain("Open or close Canopy");
+    expect(labels).not.toContain("Back to the last project window");
     // Every way the list moves, and what Cmd+W does where the keyboard is.
     expect(document.body.textContent).toContain("Move down or up");
     expect(document.body.textContent).toContain("First or last agent");
