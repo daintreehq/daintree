@@ -850,7 +850,7 @@ function HintChip({
 // narrower Linux window, where a tiling manager may size it.
 const SECONDARY_DROP_CLASSES: readonly (readonly string[])[] = [
   ["@max-[380px]/palette-footer:hidden"],
-  ["@max-[420px]/palette-footer:hidden", "@max-[260px]/palette-footer:hidden"],
+  ["@max-[460px]/palette-footer:hidden", "@max-[260px]/palette-footer:hidden"],
   [
     "@max-[560px]/palette-footer:hidden",
     "@max-[380px]/palette-footer:hidden",
