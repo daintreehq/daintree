@@ -416,7 +416,7 @@ export function WorktreeOverviewRow({
         ? getPrStateGlyph(headlinePr?.state)
         : // The branch's type mark, as the sidebar card draws it, so a row
           // carries the same glyph in both lists.
-          (isBranchTitled ? splitBranchType(branchLabel).Icon : undefined) ?? GitBranch;
+          ((isBranchTitled ? splitBranchType(branchLabel).Icon : undefined) ?? GitBranch);
   const typeIconColor =
     headline.kind === "issue"
       ? "text-pr-open"

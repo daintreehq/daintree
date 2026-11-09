@@ -31,7 +31,15 @@
  */
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { BUILT_IN_APP_SCHEMES } from "../../shared/theme/index.js";
@@ -120,22 +128,25 @@ async function boxOf(locator: Locator): Promise<Rect> {
 async function framedBox(locator: Locator): Promise<Rect> {
   const box = await boxOf(locator);
   if (box.width * box.height < WINDOW.width * WINDOW.height * 0.8) return box;
-  const inner = await locator.evaluate((root, limit) => {
-    // Measured by the part on screen: a long page's scroll content can be
-    // taller than the window, and its full box would outrank the dialog.
-    let best: { x: number; y: number; width: number; height: number } | null = null;
-    for (const el of Array.from(root.querySelectorAll("*"))) {
-      const r = el.getBoundingClientRect();
-      const x = Math.max(0, r.left);
-      const y = Math.max(0, r.top);
-      const width = Math.min(window.innerWidth, r.right) - x;
-      const height = Math.min(window.innerHeight, r.bottom) - y;
-      const area = width * height;
-      if (width < 300 || height < 100 || area >= limit) continue;
-      if (!best || area > best.width * best.height) best = { x, y, width, height };
-    }
-    return best;
-  }, WINDOW.width * WINDOW.height * 0.8);
+  const inner = await locator.evaluate(
+    (root, limit) => {
+      // Measured by the part on screen: a long page's scroll content can be
+      // taller than the window, and its full box would outrank the dialog.
+      let best: { x: number; y: number; width: number; height: number } | null = null;
+      for (const el of Array.from(root.querySelectorAll("*"))) {
+        const r = el.getBoundingClientRect();
+        const x = Math.max(0, r.left);
+        const y = Math.max(0, r.top);
+        const width = Math.min(window.innerWidth, r.right) - x;
+        const height = Math.min(window.innerHeight, r.bottom) - y;
+        const area = width * height;
+        if (width < 300 || height < 100 || area >= limit) continue;
+        if (!best || area > best.width * best.height) best = { x, y, width, height };
+      }
+      return best;
+    },
+    WINDOW.width * WINDOW.height * 0.8
+  );
   if (!inner) throw new Error("no framed surface inside the overlay");
   return inner;
 }
@@ -214,7 +225,8 @@ test("app coherence — whole window, floating surfaces, theme sweep", async () 
       return launched.terminalId;
     };
 
-    for (const side of SIDE_AGENTS) await launch(side.agentId, await worktreeIdFor(page, side.branch));
+    for (const side of SIDE_AGENTS)
+      await launch(side.agentId, await worktreeIdFor(page, side.branch));
     const focusId = await worktreeIdFor(page, FOCUS_BRANCH);
     await act(page, "worktree.select", { worktreeId: focusId });
     const ids: Record<string, string> = {};
@@ -272,14 +284,18 @@ test("app coherence — whole window, floating surfaces, theme sweep", async () 
             chain.push(`${el.tagName.toLowerCase()}.${String(el.className).slice(0, 160)}`);
           const r = age?.getBoundingClientRect();
           return {
-            branch: row.querySelector("[data-worktree-branch]")?.getAttribute("data-worktree-branch"),
+            branch: row
+              .querySelector("[data-worktree-branch]")
+              ?.getAttribute("data-worktree-branch"),
             age: r ? { x: r.x, right: r.right, y: r.y } : null,
             chain,
           };
         })
       );
       writeFileSync(path.join(OUT, "01-shell.layout.json"), JSON.stringify(layout, null, 2));
-      const toolbar = await boxOf(page.locator("header, [data-toolbar-root], [role='toolbar']").first());
+      const toolbar = await boxOf(
+        page.locator("header, [data-toolbar-root], [role='toolbar']").first()
+      );
       const sidebar = await boxOf(page.locator(SEL.sidebar.aside).first());
       // Title bar meeting the sidebar: the top-left corner of the window.
       await shoot("02-corner-titlebar-sidebar", {
@@ -297,7 +313,12 @@ test("app coherence — whole window, floating surfaces, theme sweep", async () 
         height: Math.min(WINDOW.height, grid.y + 120),
       });
       // The full sidebar column.
-      await shoot("04-sidebar-column", { x: 0, y: 0, width: sidebar.width + 24, height: WINDOW.height });
+      await shoot("04-sidebar-column", {
+        x: 0,
+        y: 0,
+        width: sidebar.width + 24,
+        height: WINDOW.height,
+      });
       // Bottom edge: dock, quick-run and how the grid ends.
       await shoot("05-bottom-edge", {
         x: 0,
@@ -430,7 +451,9 @@ test("app coherence — whole window, floating surfaces, theme sweep", async () 
     await step("23-settings", async () => {
       await overlay("23-settings", async () => {
         await act(page, "app.settings");
-        return page.locator('[role="dialog"].settings-shell, [role="dialog"]:has(.settings-sidebar)').first();
+        return page
+          .locator('[role="dialog"].settings-shell, [role="dialog"]:has(.settings-sidebar)')
+          .first();
       });
     });
 
@@ -463,7 +486,9 @@ test("app coherence — whole window, floating surfaces, theme sweep", async () 
 
     await step("32-empty-worktree", async () => {
       // fix/fx-rounding runs no agents, so its grid is the empty state.
-      await act(page, "worktree.select", { worktreeId: await worktreeIdFor(page, "fix/fx-rounding") });
+      await act(page, "worktree.select", {
+        worktreeId: await worktreeIdFor(page, "fix/fx-rounding"),
+      });
       await restShot("32-empty-worktree");
       await act(page, "worktree.select", { worktreeId: focusId });
       await settle(page, 600);
@@ -516,7 +541,10 @@ test("app coherence — whole window, floating surfaces, theme sweep", async () 
     await step("52-delete-worktree-dialog", async () => {
       await dialogShot("52-delete-worktree-dialog", async () => {
         await page.locator(SEL.worktree.row("refactor/matcher")).first().click({ button: "right" });
-        await page.getByRole("menuitem", { name: /Delete worktree/ }).first().click();
+        await page
+          .getByRole("menuitem", { name: /Delete worktree/ })
+          .first()
+          .click();
         return page.locator(SEL.worktree.deleteDialog).first();
       });
     });
@@ -536,9 +564,21 @@ test("app coherence — whole window, floating surfaces, theme sweep", async () 
       await page.evaluate((id) => document.getElementById(id)?.remove(), "readme-showcase-polish");
       await resetNotifications(page);
       const toasts = [
-        { type: "success", title: "Claude finished", message: "Settlement CSV export is ready for review in feature/settlement-export." },
-        { type: "warning", title: "Antigravity is waiting", message: "Split matcher passes needs permission to run git mv." },
-        { type: "info", title: "Update available", message: "Daintree is downloading the next release in the background." },
+        {
+          type: "success",
+          title: "Claude finished",
+          message: "Settlement CSV export is ready for review in feature/settlement-export.",
+        },
+        {
+          type: "warning",
+          title: "Antigravity is waiting",
+          message: "Split matcher passes needs permission to run git mv.",
+        },
+        {
+          type: "info",
+          title: "Update available",
+          message: "Daintree is downloading the next release in the background.",
+        },
       ] as const;
       for (const t of toasts) await injectToast(page, { ...t, duration: 0 });
       const region = page.locator(SEL.notifications.toastRegion).first();
@@ -551,7 +591,9 @@ test("app coherence — whole window, floating surfaces, theme sweep", async () 
 
     await step("55-theme-browser", async () => {
       await act(page, "app.theme.browser.open");
-      await page.locator(SEL.settings.themeBrowserDialog).waitFor({ state: "visible", timeout: T_LONG });
+      await page
+        .locator(SEL.settings.themeBrowserDialog)
+        .waitFor({ state: "visible", timeout: T_LONG });
       await settle(page, 900);
       await shoot("55-theme-browser");
     });

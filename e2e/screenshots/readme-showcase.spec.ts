@@ -88,7 +88,6 @@ const FEATURES: FeatureShot[] = FEATURE_SHOTS.filter(
 );
 const themeOf = (slug: FeatureShot): string => slug.slice(slug.lastIndexOf("-") + 1);
 
-
 // ---------------------------------------------------------------------------
 // The run
 // ---------------------------------------------------------------------------
