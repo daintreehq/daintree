@@ -53,7 +53,7 @@ import { CanopyListColumn } from "./CanopyListColumn";
 import { CANOPY_TITLE } from "./canopyTerms";
 import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
 import { CanopyFrameContext, useCanopyFrame, type CanopyFrame } from "./canopyFrame";
-import { CanopyCloseButton, CanopySurface } from "./CanopySurface";
+import { CanopySurface } from "./CanopySurface";
 import { CanopyHostOffer, CanopyHostOutdated } from "./CanopyHostOffer";
 import { useCanopyInboxData } from "./useCanopyInboxData";
 import { useCanopyInboxOrder } from "./useCanopyInboxOrder";
@@ -316,10 +316,9 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
         <AppDialog.Header>
           <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
           <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
-          <CanopyCloseButton />
         </AppDialog.Header>
-        {/* The keyboard waits here, inside the window, rather than on Close,
-            where a reflexive Enter would close it. */}
+        {/* The keyboard waits here, inside the window, rather than on the
+            host picker, where a reflexive Enter would open it. */}
         <div ref={loadingRef} tabIndex={-1} className="flex-1" aria-busy="true" />
       </CanopySurface>
     );
@@ -333,7 +332,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
         <AppDialog.Header>
           <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
           <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
-          <CanopyCloseButton />
         </AppDialog.Header>
         <CanopyHostOutdated hostName="this host" />
       </CanopySurface>
@@ -1409,7 +1407,6 @@ function CanopyInbox({
           </Tooltip>
         )}
       </span>
-      <CanopyCloseButton />
     </>
   );
 

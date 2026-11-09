@@ -7,7 +7,6 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { hideCanopy } from "./canopyHide";
 import { CanopyHeaderCenter } from "./CanopyHostPicker";
 import { CanopyPitch } from "./CanopyPitch";
-import { CanopyCloseButton } from "./CanopySurface";
 import { CANOPY_TITLE } from "./canopyTerms";
 
 /**
@@ -47,6 +46,9 @@ export function CanopyOffer() {
     []
   );
   const loadingRef = useRef<HTMLDivElement>(null);
+  // A dialog over a project window, whose own controls close the project: this
+  // is what puts the offer away.
+  const closeButton = <AppDialog.CloseButton aria-label={`Close ${CANOPY_TITLE}`} />;
   useEffect(() => {
     if (!isOpen || activated !== null) return;
     const frame = requestAnimationFrame(() => {
@@ -74,13 +76,14 @@ export function CanopyOffer() {
           isOpen={isOpen}
           onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
           onHide={hideCanopy}
+          headerActions={closeButton}
         />
       ) : (
         <>
           <AppDialog.Header>
             <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
             <CanopyHeaderCenter />
-            <CanopyCloseButton />
+            {closeButton}
           </AppDialog.Header>
           {/* Main hasn't said yet whether Canopy is on. The keyboard waits
               here, inside the dialog, rather than on whatever opened it — a

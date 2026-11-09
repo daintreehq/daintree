@@ -175,7 +175,6 @@ vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
 
 import { CanopyView } from "../CanopyView";
 import type { CanopyAssistantItem } from "../canopyAssistants";
-import { CANOPY_TITLE } from "../canopyTerms";
 import { _resetCanopyWatchBurstForTests } from "../CanopyTerminal";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
@@ -313,6 +312,7 @@ function installElectron() {
       fleet: {},
       terminal: { restore: vi.fn() },
       system: { openExternal: vi.fn() },
+      window: { close: vi.fn(async () => {}) },
       // The docked global assistant, still attaching: enough to draw its pane.
       help: {
         onGlobalAssistantChanged: vi.fn(() => () => {}),
@@ -328,7 +328,6 @@ function installElectron() {
 
 function hostFrame(refusal: string | null = null) {
   const decisions = {
-    close: vi.fn(),
     goToRun: vi.fn(),
     restoreElsewhere: vi.fn(),
     openAssistant: vi.fn(async (_item: CanopyAssistantItem) => refusal),
@@ -600,7 +599,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
     });
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(switchToHostMock).not.toHaveBeenCalled();
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(surface()).not.toBeNull();
   });
@@ -618,7 +617,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
       });
     }
 
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(surface()).not.toBeNull();
     // The window keeps its place: the same row, with the keyboard on it.
@@ -626,18 +625,15 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(document.activeElement).toBe(card("first"));
   });
 
-  it("hands its close button to the host, and then only it decides", async () => {
-    const host = hostFrame();
-    render(<CanopyView frame={host.frame} />);
+  it("leaves its close to the window's own controls, with none in its title bar", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
     await settle();
 
-    await act(async () => {
-      fireEvent.click(within(surface()!).getByRole("button", { name: `Close ${CANOPY_TITLE}` }));
-    });
-    expect(host.close).toHaveBeenCalledTimes(1);
-
-    expect(useCanopyStore.getState().isOpen).toBe(true);
-    expect(surface()).not.toBeNull();
+    const header = surface()!.querySelector<HTMLElement>(".dialog-window-header")!;
+    // Still the title bar, ending on the inbox's own controls.
+    expect(within(header).getByRole("button", { name: "Refresh" })).toBeTruthy();
+    expect(header.querySelector("[data-dialog-close]")).toBeNull();
+    expect(within(header).queryByRole("button", { name: /close/i })).toBeNull();
   });
 
   it("closes a menu open in the inbox on Escape, and stops at the list", async () => {
@@ -651,12 +647,12 @@ describe("Canopy's inbox with no dialog and no project", () => {
       fireEvent.keyDown(items[0]!, { key: "Escape" });
     });
     await vi.waitFor(() => expect(document.querySelector("[role=menu]")).toBeNull());
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
 
     await act(async () => {
       fireEvent.keyDown(card("first"), { key: "Escape" });
     });
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(surface()).not.toBeNull();
   });
@@ -684,8 +680,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
       fireEvent.keyDown(document.body, { key: "Escape" });
     });
     expect(closeDialog).toHaveBeenCalledTimes(1);
-    expect(host.close).not.toHaveBeenCalled();
-    expect(replaced.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
 
     view.rerender(shown(replaced.frame, false));
     await settle();
@@ -693,8 +688,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
       fireEvent.keyDown(document.body, { key: "Escape" });
     });
     expect(closeDialog).toHaveBeenCalledTimes(1);
-    expect(replaced.close).not.toHaveBeenCalled();
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(surface()).not.toBeNull();
   });
@@ -721,7 +715,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
       fireEvent.keyDown(document.body, { key: "Escape" });
     });
     expect(closeDialog).toHaveBeenCalledTimes(1);
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
   });
 
   it("leaves a held Escape, and one an input method took, alone", async () => {
@@ -734,7 +728,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
       fireEvent.keyDown(card("first"), { key: "Escape", isComposing: true });
     });
 
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
   });
 
   it("leaves Escape in the terminal to the agent", async () => {
@@ -748,7 +742,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
     xterm.current!.emitData("\x1b");
 
     expect(canopy.terminalInput).toHaveBeenCalledWith(7, "\x1b");
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
   });
 
   it("clears the search on Escape, and stays open once it is empty", async () => {
@@ -764,18 +758,19 @@ describe("Canopy's inbox with no dialog and no project", () => {
       fireEvent.keyDown(search, { key: "Escape" });
     });
     expect(search.value).toBe("");
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
 
     await act(async () => {
       fireEvent.keyDown(search, { key: "Escape" });
     });
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(surface()).not.toBeNull();
   });
 
   it.each([
     { platform: "Linux x86_64", primary: "Ctrl", escape: "Esc" },
+    { platform: "Win32", primary: "Ctrl", escape: "Esc" },
     { platform: "MacIntel", primary: "⌘", escape: "⎋" },
   ])(
     "lists Escape as unwinding what is open, and the window's own key as its close ($platform)",
@@ -814,7 +809,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
       for (const listener of lifecycle) listener("cached");
     });
 
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
     expect(surface()).not.toBeNull();
   });
 
@@ -939,7 +934,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
       expect(host.openAssistant.mock.calls[0]![0].subject).toEqual(assistantEntry().subject);
       expect(openInAssistantMock).not.toHaveBeenCalled();
       expect(surface()!.textContent).toContain(refusal);
-      expect(host.close).not.toHaveBeenCalled();
+      expect(window.electron.window.close).not.toHaveBeenCalled();
     });
 
     it("leaves the host open once it opened one: only the host says when to close", async () => {
@@ -951,7 +946,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
       await pressAssistantButton("Open in Assistant");
 
       expect(host.openAssistant).toHaveBeenCalledTimes(1);
-      expect(host.close).not.toHaveBeenCalled();
+      expect(window.electron.window.close).not.toHaveBeenCalled();
       expect(useCanopyStore.getState().isOpen).toBe(true);
       expect(surface()).not.toBeNull();
     });
@@ -1023,7 +1018,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
     await act(async () => {
       fireEvent.keyDown(document.body, { key: "Escape" });
     });
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
   });
 });
 
@@ -1196,7 +1191,7 @@ describe("app-wide plugin views in the Canopy window (#16344)", () => {
     await act(async () => {
       fireEvent.keyDown(input, { key: "Escape" });
     });
-    expect(host.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(pluginRow("Triage"));
     expect(screen.queryByTestId("plugin-view")).not.toBeNull();
     // A dialog of the view's own takes its Escape where it listens, past this box.

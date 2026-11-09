@@ -227,6 +227,7 @@ function installElectron(
       fleet: fleetApi,
       terminal: { restore: vi.fn() },
       system: { openExternal: vi.fn() },
+      window: { close: vi.fn(async () => {}) },
     },
     configurable: true,
     writable: true,
@@ -308,6 +309,7 @@ afterEach(() => {
     readingOfferDismissed: false,
     listWidth: null,
     listDrag: null,
+    outdatedHost: false,
   });
   window.localStorage.removeItem("daintree-canopy-order");
   window.localStorage.removeItem("daintree-canopy-reading-offer-dismissed");
@@ -483,7 +485,7 @@ describe("CanopyView search", () => {
     });
     expect(searchInput().value).toBe("");
     expect(useCanopyStore.getState().isOpen).toBe(true);
-    expect(frame.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
     expect(cards(container)).toHaveLength(3);
   });
 
@@ -762,11 +764,7 @@ describe("CanopyView", () => {
     const first = render(<CanopyView frame={frame} />);
     await frames();
     expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
-    await act(async () => {
-      fireEvent.click(within(document.body).getByRole("button", { name: `Close ${CANOPY_TITLE}` }));
-    });
-    expect(frame.close).toHaveBeenCalledTimes(1);
-    // The window closing takes the inbox with it; the next one mounts afresh.
+    // The window's own control closes it, taking the inbox with it; the next one mounts afresh.
     first.unmount();
     expect(useCanopyStore.getState().isOpen).toBe(false);
     render(<CanopyView frame={frame} />);
@@ -1660,7 +1658,7 @@ describe("CanopyView", () => {
     });
     await act(async () => {});
     expect(useCanopyStore.getState().isOpen).toBe(true);
-    expect(frame.close).not.toHaveBeenCalled();
+    expect(window.electron.window.close).not.toHaveBeenCalled();
   });
 
   it("looks at a run the arrow keys move onto, leaving the reading to the look", async () => {
@@ -1834,6 +1832,52 @@ describe("CanopyView", () => {
     expect(fleetApi.unparkRun).toHaveBeenCalledWith(target);
   });
 
+  // The window's own title bar closes it, with the OS's control: a second one
+  // in the header beside it would be a duplicate.
+  it.each([
+    {
+      state: "the inbox",
+      shows: "[role=listbox]",
+      arrange: () => {
+        installElectron();
+      },
+    },
+    {
+      state: "loading",
+      shows: "[aria-busy=true]",
+      arrange: () => {
+        useCanopyStore.setState({ snapshot: null });
+        installElectron().setActive.mockReturnValue(new Promise(() => {}));
+      },
+    },
+    {
+      state: "an outdated host",
+      shows: "[data-canopy-host-outdated]",
+      arrange: () => {
+        const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
+        useCanopyStore.setState({ snapshot: off, outdatedHost: true });
+        installElectron(off).setActive.mockReturnValue(new Promise(() => {}));
+      },
+    },
+    {
+      state: "the pitch",
+      shows: "#canopy-pitch-title",
+      arrange: () => {
+        const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
+        useCanopyStore.setState({ snapshot: off });
+        installElectron(off);
+      },
+    },
+  ])("draws no close button of its own in $state", async ({ shows, arrange }) => {
+    arrange();
+    render(<CanopyView frame={frame} />);
+    await frames();
+    const surface = document.querySelector<HTMLElement>(CANOPY_SURFACE)!;
+    expect(surface.querySelector(shows)).not.toBeNull();
+    expect(surface.querySelector("[data-dialog-close]")).toBeNull();
+    expect(within(surface).queryByRole("button", { name: /close/i })).toBeNull();
+  });
+
   it("shows neither the offer nor the inbox until main says whether Canopy is on", async () => {
     useCanopyStore.setState({ snapshot: null });
     const canopy = installElectron();
@@ -1845,7 +1889,7 @@ describe("CanopyView", () => {
     expect(surface.querySelector("[role=listbox]")).toBeNull();
     expect(surface.querySelector("[aria-busy=true]")).not.toBeNull();
     expect(within(document.body).getByRole("region", { name: CANOPY_TITLE })).toBeTruthy();
-    // The keyboard waits inside the window's surface, not on Close.
+    // The keyboard waits inside the window's surface, on no control of the header.
     await frames();
     expect(document.activeElement).toBe(surface.querySelector("[aria-busy=true]"));
   });

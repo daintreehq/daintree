@@ -2,7 +2,6 @@ import type { CanopyFrame, CanopyGoToRun } from "@/components/Canopy/canopyFrame
 import { switchToHost } from "@/components/Hosts/hostSwitching";
 import { notify } from "@/lib/notify";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 /**
  * A run on this machine: main brings forward the window holding its workspace,
@@ -56,7 +55,6 @@ function goToRun({ place }: CanopyGoToRun): void {
  * needs a project says which one to open.
  */
 export const CANOPY_WINDOW_FRAME: CanopyFrame = {
-  close: () => safeFireAndForget(window.electron.window.close(), { context: "Closing Canopy" }),
   goToRun,
   restoreElsewhere: () => {
     notify({

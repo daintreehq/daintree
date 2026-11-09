@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AppDialog, type DialogPlacement } from "../AppDialog";
+import { AppDialog, AppDialogWindowChrome, type DialogPlacement } from "../AppDialog";
 import { _resetForTests } from "@/lib/escapeStack";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 import { UI_ENTER_EASING, UI_EXIT_EASING } from "@/lib/animationUtils";
@@ -305,5 +305,24 @@ describe("AppDialog window placement", () => {
     rerender(<Dialog placement="window" isOpen={false} onClose={onClose} />);
     expect(document.activeElement).toBe(opener);
     opener.remove();
+  });
+});
+
+describe("AppDialogWindowChrome", () => {
+  it("makes a window's title bar that leaves closing it to the window's own controls", () => {
+    setNavigatorPlatform("Win32");
+    render(
+      <AppDialogWindowChrome>
+        <AppDialog.Header>
+          <AppDialog.Title>Canopy</AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+      </AppDialogWindowChrome>
+    );
+    expect(header().className).toContain("dialog-window-header");
+    expect(header().style.paddingRight).not.toBe("");
+    // Nothing here closes the window: a close button composed in anyway says so.
+    const close = screen.getByRole<HTMLButtonElement>("button", { name: "Close dialog" });
+    expect(close.disabled).toBe(true);
   });
 });
