@@ -419,6 +419,18 @@ describe("GlobalAssistantService", () => {
       await expect(launch).rejects.toMatchObject({ code: "CANCELLED" });
     });
 
+    it("says a launch was cancelled when quitting closed admission while it provisioned", async () => {
+      const provision = deferred<never>();
+      const { deps } = makeDeps();
+      deps.provision.mockReturnValueOnce(provision.promise);
+      const service = new GlobalAssistantService(deps);
+      const launch = service.ensureSession();
+      await vi.waitFor(() => expect(deps.provision).toHaveBeenCalled());
+      service.closeAdmission();
+      provision.reject(new Error("disk full"));
+      await expect(launch).rejects.toMatchObject({ code: "CANCELLED" });
+    });
+
     it("keeps nothing of a launch cancelled while it chose its agent", async () => {
       const agent = deferred<string | null>();
       const { deps } = makeDeps();

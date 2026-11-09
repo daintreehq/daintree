@@ -195,7 +195,7 @@ export class GlobalAssistantService {
     )
       .catch((err: unknown) => {
         // Stopped while starting, whatever it ran into on the way down.
-        if (generation !== this.generation) throw stoppedWhileStarting();
+        if (generation !== this.generation || this.closed) throw stoppedWhileStarting();
         // Failed by itself, it is over too: a Cancel still on its way for it
         // must not stop the next launch, which would otherwise share its generation.
         this.generation += 1;

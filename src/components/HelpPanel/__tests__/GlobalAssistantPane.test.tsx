@@ -602,6 +602,29 @@ describe("GlobalAssistantPane (#14454)", () => {
     });
 
     const cancelButton = () => screen.queryByRole("button", { name: "Cancel" });
+    const advance = (ms: number) =>
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+    /** The options Start was focused with, by whatever focused it. */
+    function startFocusOptions(focus: ReturnType<typeof vi.spyOn>) {
+      const start = screen.getByTestId("help-global-start");
+      const at = focus.mock.contexts.indexOf(start);
+      return at === -1 ? undefined : focus.mock.calls[at]![0];
+    }
+    /** A launch long enough for Cancel, with Cancel's answer held until the test gives it. */
+    async function heldCancel() {
+      vi.useFakeTimers();
+      installHelp(viewOf({ phase: "launching", generation: 4, agentId: "claude" }));
+      let answer!: (state: GlobalAssistantView) => void;
+      help.cancelGlobalAssistantLaunch.mockImplementationOnce(
+        () => new Promise<GlobalAssistantView>((resolve) => (answer = resolve))
+      );
+      const pane = renderPane();
+      await flush();
+      advance(5_000);
+      return { pane, answer: (state: GlobalAssistantView) => act(async () => answer(state)) };
+    }
 
     it("offers Cancel once the wait runs long, and stops that launch without forgetting the conversation", async () => {
       vi.useFakeTimers();
@@ -613,17 +636,53 @@ describe("GlobalAssistantPane (#14454)", () => {
       act(() => {
         vi.advanceTimersByTime(5_000);
       });
-      // Pressed from the keyboard: Cancel holds it, and loses it as the launch goes.
+      // Cancel holds the keyboard, and loses it as the launch goes.
       act(() => cancelButton()!.focus());
       fireEvent.click(cancelButton()!);
       await flush();
       expect(help.cancelGlobalAssistantLaunch).toHaveBeenCalledWith(4);
       expect(help.discardGlobalAssistant).not.toHaveBeenCalled();
       expect(help.restartGlobalAssistant).not.toHaveBeenCalled();
-      act(() => {
-        vi.advanceTimersByTime(50);
-      });
+      advance(50);
       expect(document.activeElement).toBe(screen.getByTestId("help-global-start"));
+    });
+
+    it("hands a click's Cancel on to Start without a ring", async () => {
+      const { answer } = await heldCancel();
+      const focus = vi.spyOn(HTMLElement.prototype, "focus");
+      // jsdom reads a dispatched click as a pointer press, as Chromium does.
+      act(() => cancelButton()!.focus());
+      fireEvent.click(cancelButton()!);
+      push(viewOf({ generation: 5 }));
+      await answer(viewOf({ generation: 5 }));
+      advance(50);
+      expect(startFocusOptions(focus)).toMatchObject({ focusVisible: false });
+      focus.mockRestore();
+    });
+
+    it("waits for the launching state to go when main answers before it has", async () => {
+      const { answer } = await heldCancel();
+      act(() => cancelButton()!.focus());
+      fireEvent.click(cancelButton()!);
+      // Answered while every view still shows the launch: Cancel keeps the keyboard a frame or two.
+      await answer(viewOf({ phase: "launching", generation: 4, agentId: "claude" }));
+      advance(20);
+      expect(document.activeElement).toBe(cancelButton());
+      push(viewOf({ generation: 5 }));
+      advance(50);
+      expect(document.activeElement).toBe(screen.getByTestId("help-global-start"));
+    });
+
+    it("moves no keyboard once the pane is gone, as a switch to a project leaves it", async () => {
+      const { pane, answer } = await heldCancel();
+      const { focusRequest } = useHelpPanelStore.getState();
+      act(() => cancelButton()!.focus());
+      fireEvent.click(cancelButton()!);
+      pane.unmount();
+      await answer(viewOf({ generation: 5 }));
+      advance(200);
+      expect(useHelpPanelStore.getState().focusRequest).toBe(focusRequest);
+      expect(document.activeElement).toBe(document.body);
     });
 
     it("leaves the keyboard where it went if it moved on before the launch stopped", async () => {

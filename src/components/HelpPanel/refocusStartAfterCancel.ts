@@ -15,8 +15,10 @@ export function refocusStartAfterCancel(
   void cancel().then(() => {
     const attempt = (frame: number) => {
       const focused = document.activeElement;
-      if (focused !== null && focused !== document.body) return;
-      const target = start();
+      const stranded = focused === null || focused === document.body;
+      // Cancel still holding it means the launching state hasn't gone yet: wait for it.
+      if (!stranded && focused !== pressed) return;
+      const target = stranded ? start() : null;
       if (target) {
         target.focus({ preventScroll: true, focusVisible: ringed });
         return;
