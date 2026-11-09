@@ -228,6 +228,52 @@ describe("DiskSpaceMonitor", () => {
     expect(getWritesSuppressed()).toBe(false);
   });
 
+  describe("checkDiskSpaceNow", () => {
+    it("reads free space now, with the exit published before it resolves", async () => {
+      statfsMock.mockResolvedValue(makeStatfs(50));
+      const actions = createActions();
+      const mod = await importAndStart(actions);
+      statfsMock.mockResolvedValue(makeStatfs(3000));
+
+      const status = await mod.checkDiskSpaceNow();
+
+      expect(status?.availableMb).toBeCloseTo(3000, 0);
+      expect(status?.writesSuppressed).toBe(false);
+      expect(actions.calls.onCriticalChange).toEqual([true, false]);
+      const { getWritesSuppressed } = await import("../diskPressureState.js");
+      expect(getWritesSuppressed()).toBe(false);
+    });
+
+    it("waits for a read already under way instead of starting another", async () => {
+      statfsMock.mockResolvedValue(makeStatfs(3000));
+      const mod = await importAndStart(createActions());
+      let finish!: (value: ReturnType<typeof makeStatfs>) => void;
+      statfsMock.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+
+      mod.refreshDiskSpaceMonitor();
+      const checking = mod.checkDiskSpaceNow();
+      finish(makeStatfs(1500));
+
+      expect((await checking)?.status).toBe("warning");
+      expect(statfsMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("is null without a monitor, once it stopped, or when the read fails", async () => {
+      const mod = await import("../DiskSpaceMonitor.js");
+      expect(await mod.checkDiskSpaceNow()).toBeNull();
+
+      statfsMock.mockResolvedValue(makeStatfs(3000));
+      await importAndStart(createActions());
+      statfsMock.mockRejectedValueOnce(new Error("EIO"));
+      expect(await mod.checkDiskSpaceNow()).toBeNull();
+      expect((await mod.checkDiskSpaceNow())?.status).toBe("normal");
+
+      cleanup?.();
+      cleanup = null;
+      expect(await mod.checkDiskSpaceNow()).toBeNull();
+    });
+  });
+
   it("does not suppress writes at warning level", async () => {
     statfsMock.mockResolvedValue(makeStatfs(1500));
     const actions = createActions();

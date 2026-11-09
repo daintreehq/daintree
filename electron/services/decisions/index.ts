@@ -360,7 +360,7 @@ function noticeStorageOutage(running: DecisionsService, status: DecisionsStatus)
   const forSpace = isDiskSpaceFault(running.getStore()?.faultReason() ?? null);
   const toast: MainProcessToastPayload = {
     type: "warning",
-    title: "Decisions disconnected",
+    title: "Decisions connection lost",
     message: forSpace
       ? "The local Decisions database stopped accepting writes while disk space ran low, so agents can't ask you questions through Decisions. It reconnects by itself once there is space again."
       : "The local Decisions database isn't accepting writes, so agents can't ask you questions through Decisions. Turn Decisions off and on in Settings to try again.",
@@ -580,9 +580,9 @@ export function getDecisionsService(): Promise<DecisionsService> {
       next.onStatusChanged((event) => {
         // A Host enrolls no Hosts: only an owner's lifetime does.
         hostEnrollerFollows(next.getRole() === "host" ? "off" : event.status.state);
-        noticeStorageOutage(next, event.status);
         publishStatus();
         publishHostRuntime();
+        noticeStorageOutage(next, event.status);
       });
       service = next;
       return next;

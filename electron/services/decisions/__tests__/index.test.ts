@@ -24,8 +24,11 @@ const loads = vi.hoisted(() => ({
   closing: null as Promise<void> | null,
   // While set, opening a store waits for it, holding a start partway.
   opening: null as Promise<void> | null,
+  // Why the stores stopped writing; null while they write.
+  faultReason: null as "disk-pressure" | "disk-full" | "storage-fault" | null,
 }));
 const broadcast = vi.hoisted(() => vi.fn());
+const toasts = vi.hoisted(() => vi.fn());
 // The relay check's network: Chromium's, which tests answer by hand.
 const netFetch = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Promise<Response>>());
 
@@ -94,7 +97,10 @@ vi.mock("../recoveryKit.js", async (importOriginal) => ({
   checkRecoveryKit: kitRuns.check,
 }));
 
-vi.mock("../../../ipc/utils.js", () => ({ broadcastToProjectRenderers: broadcast }));
+vi.mock("../../../ipc/utils.js", () => ({
+  broadcastToProjectRenderers: broadcast,
+  broadcastToRenderer: toasts,
+}));
 
 // The Decisions bearers `/mcp/decisions` reads, as the pane config service
 // holds them, and a control-surface bearer it must never take.
@@ -407,6 +413,7 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             onCommit: () => () => {},
             onQuestionDeleted: () => () => {},
             onFault: () => () => {},
+            faultReason: () => loads.faultReason,
             listQuestions: async () => [],
           } as never;
         },
@@ -471,6 +478,7 @@ import {
   noteHostIdentity,
   onDecisionsHostRuntimeChanged,
   peekDecisionsService,
+  decisionsDiskSpaceRecovered,
   restoreIdentity,
   setAutoEnrollHosts,
   setDecisionsEnabled,
@@ -526,8 +534,10 @@ describe("Decisions entry", () => {
     loads.failNextOpen = false;
     loads.closing = null;
     loads.opening = null;
+    loads.faultReason = null;
     vi.mocked(store.set).mockClear();
     broadcast.mockClear();
+    toasts.mockClear();
     netFetch.mockReset();
     statusView.send.mockClear();
     connections.length = 0;
@@ -2217,6 +2227,61 @@ describe("Decisions entry", () => {
       expect([...revisions].sort((a, b) => a - b)).toEqual(revisions);
       expect(pushedStatuses().at(-1)).toMatchObject({ state: "connected" });
       expect((await getDecisionsStatus()).revision).toBe(revisions.at(-1));
+    });
+
+    describe("stopped for storage (#16605)", () => {
+      const toastsShown = () =>
+        toasts.mock.calls.filter(([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST);
+
+      it("warns once per outage that agents can't ask through Decisions, again only after it connected", async () => {
+        saved.value = { enabled: true, ...RELAY };
+        await startDecisionsIfEnabled();
+        const [connection] = connections;
+        loads.faultReason = "disk-pressure";
+
+        connection!.options.onStatus({ state: "not-connected", problem: "storage" });
+        connection!.options.onStatus({ state: "connecting" });
+        connection!.options.onStatus({ state: "not-connected", problem: "storage" });
+
+        expect(toastsShown()).toHaveLength(1);
+        const [, toast] = toastsShown()[0]!;
+        expect(toast).toMatchObject({ type: "warning", replaceKey: "decisions-storage" });
+        expect((toast as { message: string }).message).toMatch(/once there is space again/);
+
+        connection!.options.onStatus({ state: "connected" });
+        loads.faultReason = "storage-fault";
+        connection!.options.onStatus({ state: "not-connected", problem: "storage" });
+        expect(toastsShown()).toHaveLength(2);
+        expect((toastsShown()[1]![1] as { message: string }).message).toMatch(/off and on/);
+      });
+
+      it("warns of no other connection problem", async () => {
+        saved.value = { enabled: true, ...RELAY };
+        await startDecisionsIfEnabled();
+
+        connections[0]!.options.onStatus({ state: "not-connected", problem: "keys" });
+        connections[0]!.options.onStatus({ state: "revoked" });
+
+        expect(toastsShown()).toHaveLength(0);
+      });
+
+      it("replaces a store stopped for disk space once it lifts, and makes no service to do it", async () => {
+        const constructed = loads.constructed;
+        await decisionsDiskSpaceRecovered();
+        expect(peekDecisionsService()).toBeNull();
+        expect(loads.constructed).toBe(constructed);
+
+        saved.value = { enabled: true, ...RELAY };
+        await startDecisionsIfEnabled();
+        const before = peekDecisionsService()!.getStore();
+        loads.faultReason = "disk-pressure";
+
+        await decisionsDiskSpaceRecovered();
+
+        expect(peekDecisionsService()!.getStore()).not.toBe(before);
+        expect(connections.map((made) => made.stopped)).toEqual([1, 0]);
+        expect(connections[1]!.started).toBe(1);
+      });
     });
 
     it("stops the connection when turned off, and pushes nothing at quit", async () => {

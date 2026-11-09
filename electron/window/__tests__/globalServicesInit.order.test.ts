@@ -454,6 +454,7 @@ import {
   getStopAppMetricsMonitor,
   setStopAppMetricsMonitor,
   _resetDecisionsModuleForTesting,
+  loadDecisionsModule,
   sealDecisionsModule,
 } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
@@ -1555,6 +1556,59 @@ describe("initGlobalServices task ordering", () => {
         sweepError
       );
     });
+  });
+
+  it("asks a Decisions already loaded to restart a store stopped for disk space, on the exit only (#16605)", async () => {
+    _resetDecisionsModuleForTesting();
+    const recovered = vi.fn(async () => {});
+    const monitorOptions = await captureDiskMonitorOptions();
+    try {
+      // Decisions never used: the exit loads nothing to ask.
+      const load = vi.fn(async () => ({ decisionsDiskSpaceRecovered: recovered }) as never);
+      monitorOptions.onCriticalChange(false);
+      await Promise.resolve();
+      expect(load).not.toHaveBeenCalled();
+
+      await loadDecisionsModule(load);
+      monitorOptions.onCriticalChange(true);
+      await Promise.resolve();
+      expect(recovered).not.toHaveBeenCalled();
+
+      monitorOptions.onCriticalChange(false);
+      await vi.waitFor(() => expect(recovered).toHaveBeenCalledTimes(1));
+      expect(load).toHaveBeenCalledTimes(1);
+    } finally {
+      _resetDecisionsModuleForTesting();
+    }
+  });
+
+  it("logs but does not reject when the Decisions recovery on the exit fails", async () => {
+    _resetDecisionsModuleForTesting();
+    const { logError } = await import("../../utils/logger.js");
+    const logErrorSpy = logError as ReturnType<typeof vi.fn>;
+    logErrorSpy.mockClear();
+    const failure = new Error("store busy");
+    const monitorOptions = await captureDiskMonitorOptions();
+    try {
+      await loadDecisionsModule(
+        async () =>
+          ({
+            decisionsDiskSpaceRecovered: async () => {
+              throw failure;
+            },
+          }) as never
+      );
+      monitorOptions.onCriticalChange(false);
+
+      await vi.waitFor(() => {
+        expect(logErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("Decisions recovery threw"),
+          failure
+        );
+      });
+    } finally {
+      _resetDecisionsModuleForTesting();
+    }
   });
 
   it("prune-native-crash-dumps task starts the prune without holding the deferred queue", async () => {
