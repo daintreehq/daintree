@@ -176,6 +176,8 @@ describe("HostSwitcherPalette", () => {
     const rows = [...document.querySelectorAll<HTMLElement>("[data-host-id]")];
     expect(rows.map((el) => el.dataset.hostId)).toEqual(["local", "h1"]);
     expect(rows[0]!.getAttribute("aria-current")).toBe("true");
+    expect(rows[0]!.textContent).toContain("Current");
+    expect(row("h1").textContent).not.toContain("Current");
     const text = row("h1").textContent ?? "";
     expect(text).toContain("studio-01");
     expect(text).toContain("3 projects");

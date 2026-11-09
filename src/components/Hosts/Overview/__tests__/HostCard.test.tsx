@@ -211,6 +211,13 @@ describe("HostCard", () => {
     expect(card.textContent).not.toContain("working");
   });
 
+  it("marks the host this window is on with the visible word Current", () => {
+    render(
+      <HostCard row={makeRow({ isCurrent: true })} history={[makeSummary()]} onSwitch={() => {}} />
+    );
+    expect(screen.getByTestId("host-overview-status").textContent).toContain("Current");
+  });
+
   it("switches to the host on click, in a new window with the modifier", () => {
     const onSwitch = vi.fn();
     render(<HostCard row={makeRow()} history={[]} onSwitch={onSwitch} />);
