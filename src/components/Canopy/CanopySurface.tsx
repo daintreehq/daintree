@@ -83,7 +83,9 @@ function StandaloneSurface({
       <section
         aria-label={CANOPY_TITLE}
         data-canopy-standalone=""
-        className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-surface-dialog"
+        // The window's title bar is the header: `.dialog-window-header` drags
+        // only beneath `app-no-drag`, as in a window AppDialog.
+        className="app-no-drag flex h-full min-h-0 w-full flex-col overflow-hidden bg-surface-dialog"
       >
         {children}
       </section>

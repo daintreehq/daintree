@@ -447,6 +447,16 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(useCanopyStore.getState().orders.project).toBeUndefined();
   });
 
+  it("makes its header the window's title bar, a handle that drags the window", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+
+    // window-modes.css drags a `.dialog-window-header` only beneath `.app-no-drag`.
+    const header = surface()!.querySelector(".dialog-window-header");
+    expect(header).not.toBeNull();
+    expect(header!.closest(".app-no-drag")).not.toBeNull();
+  });
+
   it("takes no scope from a view it stands in, whatever the view says it is", async () => {
     window.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
     render(<CanopyView frame={hostFrame().frame} />);
