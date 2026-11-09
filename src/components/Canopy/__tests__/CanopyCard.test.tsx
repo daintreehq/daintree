@@ -1,18 +1,16 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render as rtlRender } from "@testing-library/react";
-import { createRef, type KeyboardEvent, type ReactElement } from "react";
+import { createRef, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useCanopyStore } from "@/store/canopyStore";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { CanopyCard as CanopyCardData, CanopyCategory } from "@shared/types/ipc/canopy";
 import { buildPilotGroups } from "@/components/Pilot/pilotRows";
 import { bandForRun } from "@shared/utils/fleetBands";
-import { usePanelStore } from "@/store/panelStore";
-import type { PtyPanelData } from "@shared/types/panel";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
-import { CanopyFrameContext } from "../canopyFrame";
-import { CANOPY_WINDOW_FRAME } from "@/canopyWindow/canopyWindowFrame";
+import { CanopyFrameContext, type CanopyFrame } from "../canopyFrame";
+import { canopyTestFrame } from "./canopyTestFrame";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { DICTATION_OWNER_ATTR, canopyReplyVoiceId } from "@/services/canopyReplyDictation";
 import {
@@ -96,7 +94,11 @@ vi.mock("@/components/Terminal/HybridInputBar", async () => {
   };
 });
 
+/** What hosts the pane: the Canopy window's shape unless a test says otherwise. */
+let hostFrame: CanopyFrame;
+
 beforeEach(() => {
+  hostFrame = canopyTestFrame();
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -111,8 +113,16 @@ beforeEach(() => {
 });
 
 /** The app root provides tooltips; the pane's buttons need one. */
+function Hosted({ children }: { children: ReactNode }) {
+  return (
+    <TooltipProvider>
+      <CanopyFrameContext value={hostFrame}>{children}</CanopyFrameContext>
+    </TooltipProvider>
+  );
+}
+
 function render(ui: ReactElement) {
-  return rtlRender(ui, { wrapper: TooltipProvider });
+  return rtlRender(ui, { wrapper: Hosted });
 }
 
 const PROPS = { domId: "card" };
@@ -748,10 +758,6 @@ describe("CanopyCard", () => {
   });
 
   describe("dictating a reply (#14777)", () => {
-    beforeEach(() => {
-      // This view is p1's, the project the fixtures' runs are in.
-      window.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
-    });
     afterEach(() => {
       delete window.__DAINTREE_INITIAL_PROJECT__;
       useVoiceRecordingStore.setState({ micNotice: null });
@@ -781,7 +787,6 @@ describe("CanopyCard", () => {
         panelId: canopyReplyVoiceId("run-1"),
         panelTitle: "Reply to Fix flaky panel tests",
         surface: "canopy-reply",
-        terminalId: "run-1",
         canopyRow: { runId: "run-1", hostScope: null },
       });
     });
@@ -857,8 +862,9 @@ describe("CanopyCard", () => {
       expect(dictationFocus.mock.calls.length).toBe(landed);
     });
 
-    it("names no terminal for main to read when another project's view has the run", async () => {
-      window.__DAINTREE_INITIAL_PROJECT__ = { id: "p2" };
+    it("names no terminal for main to read, even where the view names the run's own project", async () => {
+      // The Canopy window owns no project's terminal, whatever its view was opened on.
+      window.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
       renderWithHandle(itemFor("question"));
       const target = (await composer()).voiceTarget!;
       expect(target.panelId).toBe(canopyReplyVoiceId("run-1"));
@@ -1082,15 +1088,13 @@ describe("CanopyCard", () => {
     function renderInWindow() {
       const h = handlers();
       const ref = createRef<CanopyCardHandle>();
-      render(
-        <CanopyFrameContext value={CANOPY_WINDOW_FRAME}>
-          <CanopyCard ref={ref} item={itemFor("approval", RISKY)} {...PROPS} {...h} />
-        </CanopyFrameContext>
-      );
+      hostFrame = canopyTestFrame({ takesTerminalSize: "on-use" });
+      render(<CanopyCard ref={ref} item={itemFor("approval", RISKY)} {...PROPS} {...h} />);
       return { h, ref };
     }
 
-    it("leaves the dialog's terminal taking the size as its row is selected", () => {
+    it("leaves a frame that sizes on selection to the terminal, taking the size as its row is selected", () => {
+      hostFrame = canopyTestFrame({ takesTerminalSize: "on-select" });
       renderCard(itemFor("question"));
       expect(terminalProps.current!.sizesOnUse).toBe(false);
     });
@@ -1409,76 +1413,6 @@ describe("CanopyCard", () => {
     it("draws nothing for a prompt that asks nothing", () => {
       const { container } = renderCard(withRun({ agentState: "waiting" }));
       expect(chip(container)).toBeNull();
-    });
-
-    describe("the pane this view holds speaks for the run", () => {
-      const ask = { kind: "asked", quote: "Run npm test?", readAt: NOW - 1, seen: false } as const;
-      const viewWindow = window as { __DAINTREE_INITIAL_PROJECT__?: { id: string } };
-
-      function holdPane(observation: Partial<PtyPanelData>) {
-        const pane = {
-          id: "run-1",
-          kind: "terminal",
-          title: "Claude",
-          location: "grid",
-          cwd: "/Users/dev/app",
-          cols: 80,
-          rows: 24,
-          launchAgentId: "claude",
-          ...observation,
-        } as PtyPanelData;
-        usePanelStore.setState({ panelsById: { "run-1": pane }, panelIds: ["run-1"] });
-      }
-
-      afterEach(() => {
-        delete viewWindow.__DAINTREE_INITIAL_PROJECT__;
-        usePanelStore.setState({ panelsById: {}, panelIds: [] });
-      });
-
-      it("drops the ask's amber once its own pane restarts or works, ahead of the row", () => {
-        viewWindow.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
-        holdPane({ agentState: "waiting", isRestarting: true });
-        const restarting = renderCard(withRun({ agentState: "waiting", canopy: ask }));
-        expect(chip(restarting.container)).toBeNull();
-        restarting.unmount();
-
-        holdPane({ agentState: "working" });
-        const working = renderCard(withRun({ agentState: "waiting", canopy: ask }));
-        expect(chip(working.container)?.getAttribute("aria-label")).toBe("Agent state: working");
-      });
-
-      it("follows its own pane past an exit or a stop the row still reports", () => {
-        viewWindow.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
-        // The row as the fleet built it for an exited run: its chrome has exited.
-        const exitedRun = { ...itemFor("finished").row.run, agentState: "exited" as const };
-        const exited = buildPilotGroups([exitedRun], {
-          workspaces: new Map([["p1", { kind: "project", name: "app" }]]),
-          currentWorkspaceId: null,
-          nowMs: NOW,
-        }).flatMap((group) => group.rows)[0]!;
-        const base = itemFor("finished");
-        holdPane({ agentState: "working", runtimeStatus: "running" });
-        const restarted = renderCard({ ...base, row: { ...base.row, ...exited } } as CanopyItem);
-        expect(chip(restarted.container)?.getAttribute("aria-label")).toBe("Agent state: working");
-        restarted.unmount();
-
-        holdPane({ agentState: "waiting", runtimeStatus: "exited" });
-        const gone = renderCard(withRun({ agentState: "waiting", canopy: ask }));
-        expect(chip(gone.container)).toBeNull();
-        gone.unmount();
-
-        // An exit on record outranks a stale working state, as on the pane.
-        holdPane({ agentState: "working", runtimeStatus: "exited" });
-        const exitedPane = renderCard(withRun({ agentState: "working" }));
-        expect(chip(exitedPane.container)).toBeNull();
-      });
-
-      it("keeps the row's own observation for another project's run under the same id", () => {
-        viewWindow.__DAINTREE_INITIAL_PROJECT__ = { id: "p2" };
-        holdPane({ agentState: "waiting", isRestarting: true });
-        const { container } = renderCard(withRun({ agentState: "waiting", canopy: ask }));
-        expect(chip(container)?.getAttribute("aria-label")).toBe("Agent state: waiting");
-      });
     });
 
     it("draws nothing for a completion with no hand-back", () => {

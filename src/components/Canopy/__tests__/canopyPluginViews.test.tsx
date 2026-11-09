@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import type { ReactNode } from "react";
 import type {
   PluginCanopyHostedViewDescriptor,
   PluginHostedViewDescriptor,
@@ -10,7 +9,6 @@ import {
   _resetPluginHostedViewsStoreForTest,
   usePluginHostedViewsStore,
 } from "@/store/pluginHostedViewsStore";
-import { CanopyFrameContext, CANOPY_DIALOG_FRAME, standaloneCanopyFrame } from "../canopyFrame";
 import { canopyPluginViews, useCanopyPluginViews } from "../canopyPluginViews";
 
 function canopyView(
@@ -59,28 +57,15 @@ describe("canopyPluginViews", () => {
 
 describe("useCanopyPluginViews", () => {
   const view = canopyView("acme.beads", "triage", "Triage", "Beads");
-  const wrapperFor =
-    (frame: typeof CANOPY_DIALOG_FRAME) =>
-    ({ children }: { children: ReactNode }) => (
-      <CanopyFrameContext value={frame}>{children}</CanopyFrameContext>
-    );
 
-  it("offers the views in the Canopy window and none in a project window's dialog", () => {
-    act(() => usePluginHostedViewsStore.setState({ views: [view] }));
-    const standalone = standaloneCanopyFrame({
-      close: vi.fn(),
-      goToRun: vi.fn(),
-      restoreElsewhere: vi.fn(),
-      openAssistant: vi.fn(async () => null),
-      takesTerminalSize: "on-use",
-    });
-    const inWindow = renderHook(() => useCanopyPluginViews(), {
-      wrapper: wrapperFor(standalone),
-    });
-    expect(inWindow.result.current.map((entry) => entry.id)).toEqual([view.id]);
-    const inDialog = renderHook(() => useCanopyPluginViews(), {
-      wrapper: wrapperFor(CANOPY_DIALOG_FRAME),
-    });
-    expect(inDialog.result.current).toEqual([]);
+  it("offers the Canopy window the views plugins offer it, and follows them as they change", () => {
+    const { result } = renderHook(() => useCanopyPluginViews());
+    expect(result.current).toEqual([]);
+
+    act(() => usePluginHostedViewsStore.setState({ views: [view, SETTINGS] }));
+    expect(result.current.map((entry) => entry.id)).toEqual([view.id]);
+
+    act(() => usePluginHostedViewsStore.setState({ views: [] }));
+    expect(result.current).toEqual([]);
   });
 });
