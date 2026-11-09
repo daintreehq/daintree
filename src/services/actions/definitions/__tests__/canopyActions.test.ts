@@ -6,6 +6,7 @@ import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import type { CanopyPopOut, CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import { notify } from "@/lib/notify";
+import { ClientAppError } from "@/utils/clientAppError";
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
@@ -105,12 +106,17 @@ describe("canopy actions", () => {
         expect(useCanopyStore.getState().isOpen).toBe(false);
       });
 
-      it("puts away a panel this view still holds, opening the window instead of moving it", async () => {
+      it("puts away a panel this view still holds once the window stands, never moving it", async () => {
         installWindowApi();
+        let openWhileAsking: boolean | null = null;
+        open.mockImplementationOnce(async () => {
+          openWhileAsking = useCanopyStore.getState().isOpen;
+        });
         useCanopyStore.setState({ mode: "on", isOpen: true });
 
         await definition(id).run(undefined, {});
 
+        expect(openWhileAsking).toBe(true);
         expect(useCanopyStore.getState().isOpen).toBe(false);
         expect(popOut).not.toHaveBeenCalled();
         expect(open).toHaveBeenCalledTimes(1);
@@ -128,6 +134,59 @@ describe("canopy actions", () => {
         const toast = vi.mocked(notify).mock.calls[0]![0];
         expect(toast.type).toBe("error");
         expect(toast.actions?.map((action) => action.label)).toEqual(["Try again"]);
+        expect(useCanopyStore.getState().isOpen).toBe(false);
+      });
+    });
+
+    describe("in a view on a remote host, which reads that host's Canopy", () => {
+      const offHere = () =>
+        new ClientAppError(
+          "UNSUPPORTED",
+          "Canopy isn't on",
+          "Turn Canopy on before opening its window."
+        );
+
+      afterEach(() => delete window.__DAINTREE_HOST_ID__);
+
+      it.each(["on", "unset"] as const)(
+        "opens this machine's window whatever the host's Canopy is (%s)",
+        async (mode) => {
+          installWindowApi();
+          window.__DAINTREE_HOST_ID__ = { id: "host-1" };
+          useCanopyStore.setState({ mode, isOpen: false });
+
+          await definition("canopy.toggle").run(undefined, {});
+
+          expect(open).toHaveBeenCalledTimes(1);
+          expect(useCanopyStore.getState().isOpen).toBe(false);
+          expect(notify).not.toHaveBeenCalled();
+        }
+      );
+
+      it("opens and closes the host's panel here while this machine's Canopy is off", async () => {
+        installWindowApi();
+        open.mockRejectedValueOnce(offHere()).mockRejectedValueOnce(offHere());
+        window.__DAINTREE_HOST_ID__ = { id: "host-1" };
+        useCanopyStore.setState({ mode: "on", isOpen: false });
+
+        await definition("canopy.toggle").run(undefined, {});
+        expect(useCanopyStore.getState().isOpen).toBe(true);
+
+        await definition("canopy.toggle").run(undefined, {});
+        expect(useCanopyStore.getState().isOpen).toBe(false);
+        expect(open).toHaveBeenCalledTimes(2);
+        expect(notify).not.toHaveBeenCalled();
+      });
+
+      it("says why when the window failed for another reason, opening nothing here", async () => {
+        installWindowApi();
+        open.mockRejectedValueOnce(new Error("no"));
+        window.__DAINTREE_HOST_ID__ = { id: "host-1" };
+        useCanopyStore.setState({ mode: "on", isOpen: false });
+
+        await expect(definition("canopy.toggle").run(undefined, {})).rejects.toThrow("no");
+
+        expect(notify).toHaveBeenCalledTimes(1);
         expect(useCanopyStore.getState().isOpen).toBe(false);
       });
     });

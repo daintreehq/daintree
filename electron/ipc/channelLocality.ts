@@ -135,6 +135,7 @@ export const CHANNEL_LOCALITY = {
   "canopy-host:watch-assistant": "shell",
   "canopy-window:acknowledge-pop-out": "shell",
   "canopy-window:focus": "shell",
+  "canopy-window:focus-last-project-window": "shell",
   "canopy-window:go-to-run": "shell",
   "canopy-window:open": "shell",
   "canopy-window:peek-pop-out": "shell",

@@ -1,42 +1,93 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, render } from "@testing-library/react";
+import { useEffect } from "react";
+
+const dispatch = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
+
 import { useCanopyStore } from "@/store/canopyStore";
 import { useCanopyPanelShown } from "../useCanopyPanelShown";
 
-afterEach(() => useCanopyStore.setState({ mode: "unset", isOpen: false }));
+/** Every mount of the panel, so a panel shown for one commit is caught too. */
+let mounts = 0;
+function Panel() {
+  useEffect(() => {
+    mounts += 1;
+  }, []);
+  return <div data-testid="panel" />;
+}
+
+/** ModalHostLayer's use of the gate: the panel mounts only while it is shown. */
+function Host() {
+  return useCanopyPanelShown() ? <Panel /> : null;
+}
+
+const OPEN_WINDOW = ["canopy.openWindow", undefined, { source: "user" }];
+
+afterEach(() => {
+  useCanopyStore.setState({ mode: "unset", isOpen: false });
+  mounts = 0;
+  dispatch.mockClear();
+  delete window.__DAINTREE_HOST_ID__;
+});
 
 describe("useCanopyPanelShown (#16578)", () => {
   it("shows the panel a project view opens before Canopy is on, where it offers turning it on", () => {
     useCanopyStore.setState({ mode: "unset", isOpen: false });
-    const { result } = renderHook(() => useCanopyPanelShown());
-    expect(result.current).toBe(false);
+    const view = render(<Host />);
+    expect(view.queryByTestId("panel")).toBeNull();
 
     act(() => useCanopyStore.getState().toggle());
 
-    expect(result.current).toBe(true);
+    expect(view.queryByTestId("panel")).not.toBeNull();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("never shows a panel asked for once Canopy is on, and puts it away", () => {
+  it("never mounts a panel asked for once Canopy is on, and opens the window instead", () => {
     useCanopyStore.setState({ mode: "on", isOpen: false });
-    const { result } = renderHook(() => useCanopyPanelShown());
+    render(<Host />);
 
     act(() => useCanopyStore.getState().open());
 
-    expect(result.current).toBe(false);
+    expect(mounts).toBe(0);
     expect(useCanopyStore.getState().isOpen).toBe(false);
+    expect(dispatch.mock.calls).toEqual([OPEN_WINDOW]);
   });
 
-  it("puts away the offer as Canopy turns on, so turning it off again shows nothing", () => {
+  it("puts the offer away as Canopy turns on and opens the window, so turning it off shows nothing", () => {
     useCanopyStore.setState({ mode: "unset", isOpen: true });
-    const { result } = renderHook(() => useCanopyPanelShown());
-    expect(result.current).toBe(true);
+    const view = render(<Host />);
+    expect(view.queryByTestId("panel")).not.toBeNull();
 
     act(() => useCanopyStore.setState({ mode: "on" }));
-    expect(result.current).toBe(false);
+    expect(view.queryByTestId("panel")).toBeNull();
     expect(useCanopyStore.getState().isOpen).toBe(false);
+    expect(dispatch.mock.calls).toEqual([OPEN_WINDOW]);
 
     act(() => useCanopyStore.setState({ mode: "unset" }));
-    expect(result.current).toBe(false);
+    expect(view.queryByTestId("panel")).toBeNull();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens nothing while no panel was asked for", () => {
+    useCanopyStore.setState({ mode: "unset", isOpen: false });
+    render(<Host />);
+
+    act(() => useCanopyStore.setState({ mode: "on" }));
+
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps a remote host's panel, which opens only when this machine's window couldn't", () => {
+    window.__DAINTREE_HOST_ID__ = { id: "host-1" };
+    useCanopyStore.setState({ mode: "on", isOpen: false });
+    const view = render(<Host />);
+
+    act(() => useCanopyStore.getState().open());
+
+    expect(view.queryByTestId("panel")).not.toBeNull();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });

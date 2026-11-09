@@ -30,14 +30,23 @@ export function returnToLastProjectWindow(): void {
 }
 
 /**
- * Canopy's key on one a focused terminal owns (Ctrl+E off the Mac) is the
- * shell's, as in a project window. The dictation keys reach the reply from
- * anywhere, the terminal included.
+ * Canopy's key is left to what is typed into, as in a project window: bound
+ * without Cmd or Ctrl, it is typing in the reply, the search or the terminal,
+ * and one a focused terminal owns (Ctrl+E off the Mac) is the shell's. The
+ * dictation keys reach the reply from anywhere, the terminal included.
  */
-function leftToTerminal(event: KeyboardEvent, actionId: WindowKey): boolean {
-  if (actionId !== "canopy.toggle" || !isTerminalReservedKey(event)) return false;
+function leftToTarget(event: KeyboardEvent, actionId: WindowKey): boolean {
+  if (actionId !== "canopy.toggle") return false;
   const target = event.target;
-  return target instanceof Element && target.closest(".xterm") !== null;
+  if (!(target instanceof HTMLElement)) return false;
+  const inTerminal = target.closest(".xterm") !== null;
+  const typedInto =
+    inTerminal ||
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target.isContentEditable;
+  if (typedInto && !event.metaKey && !event.ctrlKey) return true;
+  return inTerminal && isTerminalReservedKey(event);
 }
 
 async function runWindowKey(actionId: WindowKey): Promise<void> {
@@ -81,7 +90,7 @@ export function startCanopyWindowKeys(): () => void {
     // condition fails: the key then goes on to the reply or the terminal.
     const result = keybindingService.resolveKeybinding(event);
     const actionId = result.match?.actionId;
-    if (!isWindowKey(actionId) || leftToTerminal(event, actionId)) {
+    if (!isWindowKey(actionId) || leftToTarget(event, actionId)) {
       if (result.chordPrefix) keybindingService.clearPendingChord();
       return;
     }

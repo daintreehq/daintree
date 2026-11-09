@@ -482,6 +482,24 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(back.previousElementSibling!.querySelectorAll("kbd").length).toBeGreaterThan(0);
   });
 
+  it("lists no double-Shift while the preference is off", async () => {
+    usePreferencesStore.setState({ doubleShiftOpensCanopy: false });
+    try {
+      render(<CanopyView frame={hostFrame().frame} />);
+      await settle();
+
+      await act(async () => {
+        fireEvent.click(within(surface()!).getByRole("button", { name: "Keyboard shortcuts" }));
+      });
+
+      const labels = [...document.querySelectorAll("dd")].map((dd) => dd.textContent);
+      expect(labels).toContain("Back to the last project window");
+      expect(labels.some((label) => label?.startsWith("Twice quickly"))).toBe(false);
+    } finally {
+      usePreferencesStore.setState({ doubleShiftOpensCanopy: true });
+    }
+  });
+
   it("makes its header the window's title bar, a handle that drags the window", async () => {
     render(<CanopyView frame={hostFrame().frame} />);
     await settle();

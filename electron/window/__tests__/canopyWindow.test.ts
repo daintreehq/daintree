@@ -389,13 +389,25 @@ describe("the Canopy window beside project targeting", () => {
       canopy.focus.mockClear();
       canopy.show.mockClear();
 
+      first.focus.mockClear();
+      second.focus.mockClear();
+
       expect(focusLastProjectWindow()).toBe(true);
 
-      expect(first.focus).toHaveBeenCalled();
+      expect(first.focus).toHaveBeenCalledTimes(1);
       expect(second.focus).not.toHaveBeenCalled();
       expect(canopy.close).not.toHaveBeenCalled();
       expect(canopy.focus).not.toHaveBeenCalled();
       expect(canopy.show).not.toHaveBeenCalled();
+
+      // Then into the second and back to Canopy: the second is where the user was.
+      app.emit("browser-window-focus", {}, second);
+      first.focus.mockClear();
+
+      expect(focusLastProjectWindow()).toBe(true);
+
+      expect(second.focus).toHaveBeenCalledTimes(1);
+      expect(first.focus).not.toHaveBeenCalled();
       expect(focusCanopyWindow()).toBe(true);
     });
 
@@ -409,6 +421,17 @@ describe("the Canopy window beside project targeting", () => {
 
       expect(win.restore).toHaveBeenCalledTimes(1);
       expect(win.show).toHaveBeenCalledTimes(1);
+      expect(win.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves a project window that isn't minimized as it is, maximized or not", () => {
+      const app = new EventEmitter();
+      registry.wireFocusTracking(app);
+      const win = projectWindow(app);
+
+      expect(focusLastProjectWindow()).toBe(true);
+
+      expect(win.restore).not.toHaveBeenCalled();
       expect(win.focus).toHaveBeenCalledTimes(1);
     });
 

@@ -1,5 +1,5 @@
 import type { ActionRegistry } from "../actionTypes";
-import { useCanopyStore } from "@/store/canopyStore";
+import { canopyOwnHostId, useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { isCanopyUnread } from "@shared/types/ipc/canopy";
@@ -7,7 +7,8 @@ import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { actionService } from "@/services/ActionService";
-import { clientErrorText } from "@/utils/clientAppError";
+import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 const CANOPY_HIDDEN_REASON = "Canopy is hidden. Show it from Settings > Canopy.";
@@ -76,20 +77,32 @@ function notifyWindowFailed(error: unknown): void {
 }
 
 /**
+ * A view on a remote host reads that host's Canopy, while the window is this
+ * machine's and opens only while this machine's Canopy is on, which the view
+ * can't read.
+ */
+function onRemoteHost(): boolean {
+  return canopyOwnHostId() !== LOCAL_HOST_ID;
+}
+
+/**
  * Open the one Canopy window, or bring it forward, restored if minimized:
  * Canopy's only home once it is on (#16578), whatever was opened before. A
- * panel this view still holds is put away, as nothing shows it while Canopy
- * is on.
+ * panel this view still holds is put away once the window stands. False when
+ * main refused because this machine's Canopy isn't on and `fallsBackWhenOff`
+ * asked to hear it rather than tell the user.
  */
-async function openCanopyWindow(): Promise<void> {
-  const { isOpen, close } = useCanopyStore.getState();
-  if (isOpen) close();
+async function openCanopyWindow({ fallsBackWhenOff = false } = {}): Promise<boolean> {
   try {
     await window.electron.canopyWindow.open();
   } catch (error) {
+    if (fallsBackWhenOff && clientErrorCode(error) === "UNSUPPORTED") return false;
     notifyWindowFailed(error);
     throw error;
   }
+  const { isOpen, close } = useCanopyStore.getState();
+  if (isOpen) close();
+  return true;
 }
 
 /** The canopy panel: every agent, read off its screen and laid out by what it needs. */
@@ -110,7 +123,11 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     keywords: ["canopy", "inbox", "agents", "waiting", "summary", "overview", "fleet"],
     selfNotifiesOnExecutionError: true,
     run: async () => {
-      if (useCanopyStore.getState().mode === "on") {
+      if (onRemoteHost()) {
+        // While this machine's Canopy is off there is no window: the host's
+        // own panel opens here, as it did before the window.
+        if (await openCanopyWindow({ fallsBackWhenOff: true })) return;
+      } else if (useCanopyStore.getState().mode === "on") {
         await openCanopyWindow();
         return;
       }
@@ -134,7 +151,9 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     disabledReason: () => (canopyOn() ? undefined : CANOPY_OFF_REASON),
     keywords: ["canopy", "inbox", "agents", "window", "monitor", "detach"],
     selfNotifiesOnExecutionError: true,
-    run: openCanopyWindow,
+    run: async () => {
+      await openCanopyWindow();
+    },
   }));
 
   actions.set("canopy.markAllRead", () => ({

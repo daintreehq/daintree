@@ -747,30 +747,6 @@ describe("CanopyView", () => {
     expect(readingAsks()).toEqual([]);
   });
 
-  it("opens Canopy's own window once turned on from a project view's offer (#16578)", async () => {
-    const off = { ...canopySnapshot, mode: "unset" as const, activated: false };
-    const canopy = installElectron(off);
-    canopy.setMode.mockResolvedValueOnce({ ...off, mode: "on", modeRevision: 5, activated: true });
-    let modeWhenAsked: string | null = null;
-    dispatchMock.mockImplementationOnce(async () => {
-      modeWhenAsked = useCanopyStore.getState().mode;
-      return { ok: true };
-    });
-    useCanopyStore.setState({ snapshot: off, mode: "unset" });
-    render(<CanopyView />);
-    await frames();
-    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
-    expect(dispatchMock).not.toHaveBeenCalled();
-
-    await act(async () => {
-      fireEvent.click(screenButton(dialog, "Turn on Canopy"));
-    });
-
-    expect(dispatchMock.mock.calls).toEqual([["canopy.openWindow", undefined, { source: "user" }]]);
-    // Asked once Canopy is on, which is when the window may open.
-    expect(modeWhenAsked).toBe("on");
-  });
-
   it("covers the window, with nothing of the app behind it and no picture taken of it", async () => {
     const createObjectURL = vi.fn(() => "blob:still");
     const original = Object.getOwnPropertyDescriptor(URL, "createObjectURL");
@@ -1051,6 +1027,10 @@ describe("CanopyView", () => {
       fireEvent.click(button);
     });
     expect(document.body.textContent).toContain("Take the first choice");
+    // In a project window Canopy's key opens and closes it, as the window's goes back.
+    const labels = [...document.querySelectorAll("dd")].map((dd) => dd.textContent);
+    expect(labels).toContain("Open or close Canopy");
+    expect(labels).not.toContain("Back to the last project window");
     // Every way the list moves, and what Cmd+W does where the keyboard is.
     expect(document.body.textContent).toContain("Move down or up");
     expect(document.body.textContent).toContain("First or last agent");

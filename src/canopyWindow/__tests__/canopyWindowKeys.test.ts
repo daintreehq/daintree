@@ -210,6 +210,26 @@ describe("Canopy's own key in its window (#16578)", () => {
     expect(focusLastProjectWindow).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves a rebind without Cmd or Ctrl to the search and the terminal, taking it elsewhere", () => {
+    keybindingService.applyOverrides({ "canopy.toggle": ["E"] });
+    const search = document.createElement("input");
+    search.addEventListener("keydown", (event) => reached.push(event));
+    document.body.append(search);
+
+    const typed = press(search, "e", {});
+    const inTerminal = press(terminalInput, "e", {});
+
+    expect(typed.defaultPrevented).toBe(false);
+    expect(inTerminal.defaultPrevented).toBe(false);
+    expect(reached).toEqual([typed, inTerminal]);
+    expect(focusLastProjectWindow).not.toHaveBeenCalled();
+
+    // Out of anything typed into, as on the list, it is Canopy's key.
+    const onList = press(document.body, "e", {});
+    expect(onList.defaultPrevented).toBe(true);
+    expect(focusLastProjectWindow).toHaveBeenCalledTimes(1);
+  });
+
   it("follows a rebound shortcut, and leaves the old one alone", () => {
     keybindingService.applyOverrides({ "canopy.toggle": ["Cmd+Alt+K"] });
 

@@ -238,6 +238,8 @@ describe("where the button opens Canopy (#16578)", () => {
     async (activated) => {
       await openMenu(activated);
 
+      // The menu itself still opens, with the toolbar's own items.
+      expect(screen.getAllByRole("menuitem").length).toBeGreaterThan(0);
       expect(screen.queryByRole("menuitem", { name: "Open in new window" })).toBeNull();
       expect(dispatchMock).not.toHaveBeenCalledWith(
         "canopy.openWindow",
@@ -272,5 +274,9 @@ describe("where the button opens Canopy (#16578)", () => {
     const offButton = off.container.querySelector("button")!;
     expect(offButton.getAttribute("aria-haspopup")).toBe("dialog");
     expect(offButton.getAttribute("aria-expanded")).toBe("false");
+
+    act(() => useCanopyStore.setState({ isOpen: true }));
+    expect(offButton.getAttribute("aria-expanded")).toBe("true");
+    act(() => useCanopyStore.setState({ isOpen: false }));
   });
 });
