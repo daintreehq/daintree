@@ -3,7 +3,7 @@ import {
   isTerminalClipboardCopyKey,
   isTerminalClipboardPasteKey,
   isTerminalReservedKey,
-  isTuiReservedCombo,
+  isTerminalReservedCombo,
   isTuiReservedKey,
   isWindowsTerminalCopyKey,
   isWindowsTerminalPasteKey,
@@ -72,20 +72,31 @@ describe("isTuiReservedKey", () => {
 });
 
 // The shortcut help names a binding the terminal keeps only where it works.
-describe("isTuiReservedCombo", () => {
-  it("agrees with the keystroke check off the Mac, where Cmd is the Ctrl key", () => {
-    expect(isTuiReservedCombo("Cmd+W", false)).toBe(true);
-    expect(isTuiReservedCombo("Ctrl+W", false)).toBe(true);
-    expect(isTuiReservedCombo("Cmd+Shift+W", false)).toBe(false);
-    expect(isTuiReservedCombo("Cmd+Alt+W", false)).toBe(false);
-    expect(isTuiReservedCombo("Cmd+C", false)).toBe(false);
-    expect(isTuiReservedCombo("W", false)).toBe(false);
+describe("isTerminalReservedCombo", () => {
+  it("agrees with the keystroke check on Linux, where Cmd is the Ctrl key", () => {
+    setPlatform("Linux x86_64");
+    expect(isTerminalReservedCombo("Cmd+W")).toBe(true);
+    expect(isTerminalReservedCombo("Ctrl+W")).toBe(true);
+    expect(isTerminalReservedCombo("Cmd+Shift+V")).toBe(true);
+    expect(isTerminalReservedCombo("Shift+Insert")).toBe(true);
+    expect(isTerminalReservedCombo("Cmd+Shift+W")).toBe(false);
+    expect(isTerminalReservedCombo("Cmd+Alt+W")).toBe(false);
+    expect(isTerminalReservedCombo("Cmd+V")).toBe(false);
+    expect(isTerminalReservedCombo("W")).toBe(false);
+  });
+
+  it("keeps Windows' plain Ctrl+C and Ctrl+V for the terminal", () => {
+    setPlatform("Win32");
+    expect(isTerminalReservedCombo("Cmd+V")).toBe(true);
+    expect(isTerminalReservedCombo("Cmd+C")).toBe(true);
   });
 
   it("reserves only the Control key on the Mac, never Cmd", () => {
-    expect(isTuiReservedCombo("Cmd+W", true)).toBe(false);
-    expect(isTuiReservedCombo("Ctrl+W", true)).toBe(true);
-    expect(isTuiReservedCombo("Cmd+Ctrl+W", true)).toBe(false);
+    setPlatform("MacIntel");
+    expect(isTerminalReservedCombo("Cmd+W")).toBe(false);
+    expect(isTerminalReservedCombo("Ctrl+W")).toBe(true);
+    expect(isTerminalReservedCombo("Cmd+Ctrl+W")).toBe(false);
+    expect(isTerminalReservedCombo("Cmd+Shift+V")).toBe(false);
   });
 });
 

@@ -89,13 +89,27 @@ describe("createWindow wires the overlay owner — issue #11766", () => {
 
 describe("every app view hands Cmd+W to its renderer — issue #16618", () => {
   // The Canopy window used to leave Cmd+W to Close Window, so its agent pane
-  // could never take it. Its renderer now decides: the pane's terminal, or the
-  // window from the list. One gate, no window kind exempt.
-  it.each(["../createWindow.ts", "../ProjectViewHandlers.ts"])("%s", async (file) => {
-    const source = await fs.readFile(path.resolve(__dirname, file), "utf-8");
-    const gates = source.match(/\.setIgnoreMenuShortcuts\(([^;]*)\);/g) ?? [];
-    expect(gates).toHaveLength(1);
-    expect(gates[0]).toMatch(/\.setIgnoreMenuShortcuts\(keepsKeyFromMenu\(input\)\);/);
+  // could never take it. Its renderer now decides, through the one gate every
+  // app view uses (appViewKeyGate.test.ts drives it), with no window kind exempt.
+  const read = (file: string) => fs.readFile(path.resolve(__dirname, file), "utf-8");
+
+  it.each(["../createWindow.ts", "../ProjectViewHandlers.ts"])(
+    "%s keeps keys from the menu only through gateAppViewKey",
+    async (file) => {
+      const source = await read(file);
+      expect(source).not.toContain("setIgnoreMenuShortcuts");
+      expect(source.match(/gateAppViewKey\(/g)).toHaveLength(1);
+    }
+  );
+
+  it("createWindow gates the app view of every window kind, the Canopy window's included", async () => {
+    const source = await read("../createWindow.ts");
+    const at = source.indexOf('appWebContents.on("before-input-event"');
+    expect(at).toBeGreaterThan(-1);
+    // At the setup function's top level, not under a branch on the window's kind.
+    expect(source.slice(source.lastIndexOf("\n", at) + 1, at)).toBe("  ");
+    const handler = source.slice(at, source.indexOf(");", at));
+    expect(handler).toMatch(/=>\s*gateAppViewKey\(appWebContents, event, input\)\s*$/);
   });
 });
 

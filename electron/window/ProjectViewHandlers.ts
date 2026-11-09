@@ -10,10 +10,9 @@ import { app, BrowserWindow, type WebContentsView } from "electron";
 import path from "path";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
-import { findTerminalCycleAction, keepsKeyFromMenu } from "../services/menuAccelerators.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
-import { CHANNELS } from "../ipc/channels.js";
+import { gateAppViewKey } from "./appViewKeyGate.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import {
@@ -130,19 +129,8 @@ export function setupViewHandlers(
     webPreferences.partition = params.partition;
   };
 
-  const handleBeforeInputEvent = (event: Electron.Event, input: Electron.Input) => {
-    const terminalCycleAction = findTerminalCycleAction(input);
-    if (terminalCycleAction) {
-      event.preventDefault();
-      wc.send(CHANNELS.MENU_ACTION, terminalCycleAction);
-      return;
-    }
-
-    // Mirrors createWindow.ts: Cmd+W and renderer-owned menu accelerators
-    // yield to the renderer's KeybindingService per-event on every platform
-    // (see menuAccelerators.ts).
-    wc.setIgnoreMenuShortcuts(keepsKeyFromMenu(input));
-  };
+  const handleBeforeInputEvent = (event: Electron.Event, input: Electron.Input) =>
+    gateAppViewKey(wc, event, input);
 
   // Fire onViewReady on load/reload, but ONLY for the active view.
   // A cached view reloading (e.g. after crash recovery) must not steal

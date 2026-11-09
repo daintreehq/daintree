@@ -35,9 +35,9 @@ import { isWebviewSrcAllowed } from "./ProjectViewHandlers.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { gateAppViewKey } from "./appViewKeyGate.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
-import { findTerminalCycleAction, keepsKeyFromMenu } from "../services/menuAccelerators.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
   buildSkeletonCss,
@@ -572,27 +572,13 @@ export function setupBrowserWindow(
     webPreferences.partition = params.partition;
   });
 
-  // Prevent Cmd+W / Ctrl+W from closing the window, and route the terminal
-  // cycle shortcuts (Ctrl+Tab by default) for the initial app view. ProjectViewManager installs the
-  // same Ctrl+Tab bridge for cold-started project views.
-  appWebContents.on("before-input-event", (event, input) => {
-    const terminalCycleAction = findTerminalCycleAction(input);
-    if (terminalCycleAction) {
-      event.preventDefault();
-      appWebContents.send(CHANNELS.MENU_ACTION, terminalCycleAction);
-      return;
-    }
-
-    // Renderer-owned menu accelerators (derived from effective keybindings)
-    // are suppressed per-event on every platform so the renderer's
-    // KeybindingService — scopes, priorities, rebinds, terminal-reserved
-    // keys — owns keyboard execution while this renderer has focus; the
-    // native item stays clickable and registered, which keeps the shortcut
-    // working when focus is in a guest webview or DevTools where this
-    // handler never fires. Cmd+W is the renderer's too, the Canopy window's
-    // included: its agent pane takes it before Close Window.
-    appWebContents.setIgnoreMenuShortcuts(keepsKeyFromMenu(input));
-  });
+  // Cmd+W, renderer-owned accelerators and the terminal cycle keys are the
+  // renderer's, in the Canopy window too: its agent pane takes Cmd+W before
+  // Close Window (#16618). ProjectViewManager gates cold-started project views
+  // the same way.
+  appWebContents.on("before-input-event", (event, input) =>
+    gateAppViewKey(appWebContents, event, input)
+  );
 
   attachAppViewRendererGoneHandler({
     win,

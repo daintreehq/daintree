@@ -772,14 +772,14 @@ describe("Canopy's inbox with no dialog and no project", () => {
   });
 
   it.each([
-    { platform: "Linux x86_64", primary: "Ctrl", escape: "Esc" },
-    { platform: "Win32", primary: "Ctrl", escape: "Esc" },
-    { platform: "MacIntel", primary: "⌘", escape: "⎋" },
+    { platform: "Linux x86_64", primary: "Ctrl", shift: "Shift", escape: "Esc" },
+    { platform: "Win32", primary: "Ctrl", shift: "Shift", escape: "Esc" },
+    { platform: "MacIntel", primary: "⌘", shift: "⇧", escape: "⎋" },
   ])(
     "lists Escape as unwinding what is open, and the window's own key as its close ($platform)",
-    async ({ platform, primary, escape }) => {
+    async ({ platform, primary, shift, escape }) => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
-      // A rebound close is a project window's: this window's menu keeps Cmd+W.
+      // A rebound close is the pane's (#16618): the window's menu keeps Cmd+W.
       const effective = keybindingService.getEffectiveCombo.bind(keybindingService);
       vi.spyOn(keybindingService, "getEffectiveCombo").mockImplementation((actionId) =>
         actionId === "terminal.close" ? "Cmd+Shift+Q" : effective(actionId)
@@ -794,8 +794,11 @@ describe("Canopy's inbox with no dialog and no project", () => {
       expect(rows("In the search")).toContainEqual(["Clear the search", [escape]]);
       expect(rows("In the list").filter(([, keys]) => keys.includes(escape))).toEqual([]);
       expect(rows("In the list")).toContainEqual(["Close Canopy", [primary, "W"]]);
-      // Nothing here hands the pane Cmd+W: the menu closes the window instead.
-      expect(document.body.textContent).not.toMatch(/trash the agent's terminal/i);
+      // The pane takes the close as bound, from its terminal too, which keeps no Shift key.
+      expect(rows("In a reply or the terminal")).toContainEqual([
+        "Trash the agent's terminal; Z takes it back",
+        [primary, shift, "Q"],
+      ]);
       expect(rows("In a reply or the terminal")).toContainEqual([
         "Back to the list from a reply",
         [escape],

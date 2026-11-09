@@ -8,6 +8,12 @@ import { parseCombo } from "@/services/keybindingUtils";
  * shortcut while a terminal has focus — it belongs to the PTY.
  */
 
+/** What the policy reads of a keystroke: a key event, or a binding's combo. */
+type Keystroke = Pick<
+  KeyboardEvent,
+  "key" | "code" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey"
+>;
+
 // Readline/emacs-style Ctrl+key bindings that TUIs depend on. On Windows/Linux
 // these collide with Cmd+<key> app bindings (Ctrl is the primary modifier
 // there), so the capture handler must exempt them BEFORE resolveKeybinding —
@@ -21,7 +27,7 @@ export const TUI_KEYBINDS = new Set([
   ...["j", "l", "t", "y"],
 ]);
 
-export function isTuiReservedKey(event: KeyboardEvent): boolean {
+export function isTuiReservedKey(event: Keystroke): boolean {
   return (
     event.ctrlKey &&
     !event.shiftKey &&
@@ -31,14 +37,6 @@ export function isTuiReservedKey(event: KeyboardEvent): boolean {
     // reserved key through to app-shortcut resolution.
     TUI_KEYBINDS.has(event.key.length === 1 ? event.key.toLowerCase() : event.key)
   );
-}
-
-/** A single-stroke combo whose keystroke `isTuiReservedKey` keeps for the terminal. */
-export function isTuiReservedCombo(combo: string, mac: boolean): boolean {
-  const { cmd, ctrl, shift, alt, key } = parseCombo(combo);
-  // Off the Mac, Cmd is the Ctrl key.
-  const ctrlOnly = mac ? ctrl && !cmd : cmd || ctrl;
-  return ctrlOnly && !shift && !alt && TUI_KEYBINDS.has(key.toLowerCase());
 }
 
 /**
@@ -56,7 +54,7 @@ export function terminalClipboardCombos(mac: boolean): { copy: string; paste: st
  * shell's "literal next", which Windows shells don't use. Ctrl+Shift+V and
  * Shift+Insert keep working too.
  */
-export function isWindowsTerminalPasteKey(event: KeyboardEvent): boolean {
+export function isWindowsTerminalPasteKey(event: Keystroke): boolean {
   return isWindows() && isCtrlVKey(event);
 }
 
@@ -64,7 +62,7 @@ export function isWindowsTerminalPasteKey(event: KeyboardEvent): boolean {
  * Plain Ctrl+C on Windows. It copies when the terminal has a selection and is
  * the interrupt otherwise, as in Windows Terminal — the caller checks which.
  */
-export function isWindowsTerminalCopyKey(event: KeyboardEvent): boolean {
+export function isWindowsTerminalCopyKey(event: Keystroke): boolean {
   return (
     isWindows() &&
     event.ctrlKey &&
@@ -81,7 +79,7 @@ export function isWindowsTerminalCopyKey(event: KeyboardEvent): boolean {
  * clipboard API doesn't expose X11 PRIMARY). macOS terminals use Cmd+C/V via
  * the native Edit menu roles instead.
  */
-export function isTerminalClipboardCopyKey(event: KeyboardEvent): boolean {
+export function isTerminalClipboardCopyKey(event: Keystroke): boolean {
   return (
     !isMac() &&
     event.ctrlKey &&
@@ -92,7 +90,7 @@ export function isTerminalClipboardCopyKey(event: KeyboardEvent): boolean {
   );
 }
 
-export function isTerminalClipboardPasteKey(event: KeyboardEvent): boolean {
+export function isTerminalClipboardPasteKey(event: Keystroke): boolean {
   if (isMac()) return false;
   if (
     event.ctrlKey &&
@@ -119,7 +117,7 @@ export function isTerminalClipboardPasteKey(event: KeyboardEvent): boolean {
  * holds an image (see `ctrlVImagePaste.ts`); everywhere else it goes to the
  * PTY untouched.
  */
-export function isCtrlVKey(event: KeyboardEvent): boolean {
+export function isCtrlVKey(event: Keystroke): boolean {
   return (
     event.ctrlKey &&
     !event.shiftKey &&
@@ -131,7 +129,7 @@ export function isCtrlVKey(event: KeyboardEvent): boolean {
 
 /** Any key the terminal owns outright while focused — checked by the window
  *  capture handler before global shortcut resolution. */
-export function isTerminalReservedKey(event: KeyboardEvent): boolean {
+export function isTerminalReservedKey(event: Keystroke): boolean {
   return (
     isTuiReservedKey(event) ||
     isTerminalClipboardCopyKey(event) ||
@@ -139,4 +137,24 @@ export function isTerminalReservedKey(event: KeyboardEvent): boolean {
     isWindowsTerminalPasteKey(event) ||
     isWindowsTerminalCopyKey(event)
   );
+}
+
+/**
+ * Whether a single-stroke binding is a key `isTerminalReservedKey` keeps for a
+ * focused terminal on this platform, so the shortcut help names it only where
+ * it works.
+ */
+export function isTerminalReservedCombo(combo: string): boolean {
+  const { cmd, ctrl, shift, alt, key } = parseCombo(combo);
+  const mac = isMac();
+  const name = key.length === 1 ? key.toLowerCase() : key;
+  return isTerminalReservedKey({
+    key: name,
+    code: /^[a-z]$/.test(name) ? `Key${name.toUpperCase()}` : name,
+    // Off the Mac, Cmd is the Ctrl key.
+    ctrlKey: mac ? ctrl : cmd || ctrl,
+    metaKey: mac && cmd,
+    shiftKey: shift,
+    altKey: alt,
+  });
 }

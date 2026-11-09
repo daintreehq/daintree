@@ -19,7 +19,7 @@ import { clientErrorCode } from "@/utils/clientAppError";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useEffectiveCombo } from "@/hooks";
-import { isTuiReservedCombo } from "@/services/terminalReservedKeys";
+import { isTerminalReservedCombo } from "@/services/terminalReservedKeys";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -466,7 +466,7 @@ function CanopyShortcuts() {
           ? [
               {
                 keys: [paneClose],
-                label: isTuiReservedCombo(paneClose, isMac())
+                label: isTerminalReservedCombo(paneClose)
                   ? "In a reply: trash the agent's terminal; Z takes it back"
                   : "Trash the agent's terminal; Z takes it back",
               },

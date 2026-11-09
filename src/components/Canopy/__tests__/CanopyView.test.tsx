@@ -1031,22 +1031,33 @@ describe("CanopyView", () => {
       await act(async () => {
         fireEvent.click(button);
       });
-      const labels = [...document.querySelectorAll("dd")].map((dd) => dd.textContent);
+      const rows = [...document.querySelectorAll("dd")].map((dd) => [
+        dd.textContent,
+        [...dd.previousElementSibling!.querySelectorAll("kbd")].map((kbd) => kbd.textContent),
+      ]);
       view.unmount();
-      return labels;
+      return rows;
     };
+    const closeCanopy = ["Close Canopy", ["Ctrl", "W"]];
     try {
       // A key the terminal doesn't own trashes from the terminal too.
       keybindingService.applyOverrides({ "terminal.close": ["Cmd+Shift+W"] });
       const rebound = await openSheet();
-      expect(rebound).toContain("Trash the agent's terminal; Z takes it back");
-      expect(rebound).toContain("Close Canopy");
+      expect(rebound).toContainEqual([
+        "Trash the agent's terminal; Z takes it back",
+        ["Ctrl", "Shift", "W"],
+      ]);
+      expect(rebound).toContainEqual(closeCanopy);
 
-      // A chord can't reach the pane.
-      keybindingService.applyOverrides({ "terminal.close": ["Cmd+K Cmd+W"] });
-      const chord = await openSheet();
-      expect(chord.some((label) => /trash the agent's terminal/i.test(label ?? ""))).toBe(false);
-      expect(chord).toContain("Close Canopy");
+      // A chord can't reach the pane, and an unbound close has no row.
+      for (const combos of [["Cmd+K Cmd+W"], []]) {
+        keybindingService.applyOverrides({ "terminal.close": combos });
+        const rows = await openSheet();
+        expect(rows.some(([label]) => /trash the agent's terminal/i.test(String(label)))).toBe(
+          false
+        );
+        expect(rows).toContainEqual(closeCanopy);
+      }
     } finally {
       keybindingService.applyOverrides({});
     }

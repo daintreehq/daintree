@@ -350,14 +350,17 @@ describe("keepsKeyFromMenu", () => {
     expect(keepsKeyFromMenu(input({ key: "W", meta: true, shift: true }))).toBe(true);
     expect(keepsKeyFromMenu(input({ key: "w", control: true }))).toBe(false);
     expect(keepsKeyFromMenu(input({ key: "w", meta: true, control: true }))).toBe(false);
-    expect(keepsKeyFromMenu(input({ key: "∑", meta: true, alt: true }))).toBe(false);
+    expect(keepsKeyFromMenu(input({ key: "w", meta: true, alt: true }))).toBe(false);
+    expect(keepsKeyFromMenu(input({ key: "w" }))).toBe(false);
   });
 
   it.each(["win32", "linux"] as const)("keeps Ctrl+W from the menu on %s, not Meta+W", (os) => {
     setProcessPlatform(os);
     expect(keepsKeyFromMenu(input({ key: "w", control: true }))).toBe(true);
     expect(keepsKeyFromMenu(input({ key: "w", meta: true }))).toBe(false);
+    expect(keepsKeyFromMenu(input({ key: "w", control: true, meta: true }))).toBe(false);
     expect(keepsKeyFromMenu(input({ key: "w", control: true, alt: true }))).toBe(false);
+    expect(keepsKeyFromMenu(input({ key: "w" }))).toBe(false);
   });
 
   it("hands the menu its key back on release", () => {
