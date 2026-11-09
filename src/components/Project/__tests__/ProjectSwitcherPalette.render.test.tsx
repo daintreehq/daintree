@@ -2449,19 +2449,65 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
     // At the row's end, after the name column, not inline beside the name.
     expect(button.closest('[role="option"]')).toBe(option);
     expect(option.lastElementChild?.contains(button)).toBe(true);
-    // Hidden at rest, revealed by the row's hover or its lit state.
-    const cls = button.getAttribute("class") ?? "";
-    expect(cls).toContain("opacity-0");
-    expect(cls).toContain("group-hover:opacity-100");
-    expect(cls).toContain("group-aria-selected:opacity-100");
-    // Neutral, never accent; and kept out of the option's name, which already says it.
-    expect(cls).not.toMatch(/accent/);
+    // Neutral, never accent — several rows can carry it. Kept out of the
+    // option's name, which already says it, and out of the tab order.
+    expect(button.getAttribute("class") ?? "").not.toMatch(/accent/);
     expect(button.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(button.querySelector("button, [tabindex]")).toBeNull();
+    expect(button.hasAttribute("tabindex")).toBe(false);
     expect(screen.queryByRole("option", { name: /Go to window/ })).toBeNull();
 
+    // A press leaves focus in the search input, which drives the list.
+    expect(fireEvent.pointerDown(button)).toBe(false);
+
     fireEvent.click(button);
+    expect(onSelectNewWindow).toHaveBeenCalledTimes(1);
     expect(onSelectNewWindow).toHaveBeenCalledWith(project);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("goes to the window once on a modifier-click of the control, never through the row", () => {
+    const onSelect = vi.fn();
+    const onSelectNewWindow = vi.fn();
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        onSelect={onSelect}
+        onSelectNewWindow={onSelectNewWindow}
+        results={[makeProject({ name: "Payments", openInOtherWindow: "foreground" })]}
+      />
+    );
+
+    fireEvent.click(control()[0], { metaKey: true, ctrlKey: true });
+    expect(onSelectNewWindow).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("offers no control where the row's menu offers no Go to window", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        onSelectNewWindow={vi.fn()}
+        results={[
+          // This window is already bringing it in front: Enter switches here.
+          makeProject({
+            id: "here",
+            name: "Here",
+            openInOtherWindow: "foreground",
+            isOpenInThisWindow: true,
+          }),
+          // Its live view is cached here, so a new window moves it rather than going anywhere.
+          makeProject({
+            id: "kept",
+            name: "Kept",
+            openInOtherWindow: "activating",
+            isCachedInThisWindow: true,
+          }),
+        ]}
+      />
+    );
+
+    expect(control()).toHaveLength(0);
   });
 
   it("offers the control on owners showing the project and still-activating ones alike", () => {

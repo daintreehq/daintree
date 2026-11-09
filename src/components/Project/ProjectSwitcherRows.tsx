@@ -809,6 +809,8 @@ export function ProjectListItem({
         // Only on the lit row: on every row that qualified it read as clutter
         // beside the names. Presentational, like the action palette's pin, so
         // Enter and ⌘↵ stay its keyboard route and the name above its speech.
+        // Hidden by visibility, not opacity, so an unlit row has no invisible
+        // target at its end, and the slot is kept so names don't reflow.
         <div className="shrink-0 flex items-center" aria-hidden="true">
           <RowControlTooltip label="Go to window">
             <span
@@ -822,7 +824,7 @@ export function ProjectListItem({
               }}
               className={cn(
                 ROW_CONTROL_CLASS,
-                "opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100"
+                "invisible group-hover:visible group-aria-selected:visible"
               )}
             >
               <AppWindow className="w-3.5 h-3.5" aria-hidden />
