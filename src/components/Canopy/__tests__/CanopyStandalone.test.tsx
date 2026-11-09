@@ -189,6 +189,7 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUIStore } from "@/store/uiStore";
+import { keybindingService } from "@/services/KeybindingService";
 import { isMac } from "@/lib/platform";
 import {
   _resetPluginHostedViewsStoreForTest,
@@ -571,15 +572,19 @@ describe("Canopy's inbox with no dialog and no project", () => {
     await settle();
 
     act(() => card("first").focus());
-    await act(async () => {
-      fireEvent.keyDown(card("first"), { key: "Escape" });
-      fireEvent.keyDown(card("first"), { key: "Escape" });
-      fireEvent.keyDown(document.body, { key: "Escape" });
-    });
+    const selected = selectedRun();
+    for (const target of [card("first"), card("first"), document.body]) {
+      await act(async () => {
+        fireEvent.keyDown(target, { key: "Escape" });
+      });
+    }
 
     expect(host.close).not.toHaveBeenCalled();
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(surface()).not.toBeNull();
+    // The window keeps its place: the same row, with the keyboard on it.
+    expect(selectedRun()).toBe(selected);
+    expect(document.activeElement).toBe(card("first"));
   });
 
   it("hands its close button to the host, and then only it decides", async () => {
@@ -613,6 +618,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
       fireEvent.keyDown(card("first"), { key: "Escape" });
     });
     expect(host.close).not.toHaveBeenCalled();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(surface()).not.toBeNull();
   });
 
@@ -650,6 +656,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(closeDialog).toHaveBeenCalledTimes(1);
     expect(replaced.close).not.toHaveBeenCalled();
     expect(host.close).not.toHaveBeenCalled();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(surface()).not.toBeNull();
   });
 
@@ -699,10 +706,16 @@ describe("Canopy's inbox with no dialog and no project", () => {
       fireEvent.keyDown(search, { key: "Escape" });
     });
     expect(host.close).not.toHaveBeenCalled();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(surface()).not.toBeNull();
   });
 
-  it("lists Escape as unwinding what is open, never as closing the window", async () => {
+  it("lists Escape as unwinding what is open, and the window's own key as its close", async () => {
+    // A rebound close is a project window's: this window's menu keeps Cmd+W.
+    const effective = keybindingService.getEffectiveCombo.bind(keybindingService);
+    vi.spyOn(keybindingService, "getEffectiveCombo").mockImplementation((actionId) =>
+      actionId === "terminal.close" ? "Cmd+Shift+Q" : effective(actionId)
+    );
     render(<CanopyView frame={hostFrame().frame} />);
     await settle();
 
@@ -713,12 +726,20 @@ describe("Canopy's inbox with no dialog and no project", () => {
       const group = [...document.querySelectorAll("section")].find(
         (section) => section.querySelector(":scope > h3")?.textContent === heading
       )!;
-      return [...group.querySelectorAll("dd")].map((dd) => dd.textContent);
+      return [...group.querySelectorAll("dd")].map((dd) => [
+        dd.textContent,
+        [...dd.previousElementSibling!.querySelectorAll("kbd")].map((kbd) => kbd.textContent),
+      ]);
     };
-    expect(rows("In the search")).toContain("Clear the search");
-    expect(rows("In the search")).not.toContain("Clear the search, then close");
-    expect(rows("In the list")).not.toContain("Close");
-    expect(rows("In a reply or the terminal")).toContain("Back to the list from a reply");
+    expect(rows("In the search")).toContainEqual(["Clear the search", ["Esc"]]);
+    expect(rows("In the list").filter(([, keys]) => keys.includes("Esc"))).toEqual([]);
+    expect(rows("In the list")).toContainEqual(["Close Canopy", [isMac() ? "⌘" : "Ctrl", "W"]]);
+    // Nothing here hands the pane Cmd+W: the menu closes the window instead.
+    expect(document.body.textContent).not.toMatch(/trash the agent's terminal/i);
+    expect(rows("In a reply or the terminal")).toContainEqual([
+      "Back to the list from a reply",
+      ["Esc"],
+    ]);
   });
 
   it("stays up when a view around it is cached: there is no project view to follow", async () => {

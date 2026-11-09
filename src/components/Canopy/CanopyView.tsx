@@ -516,15 +516,20 @@ function CanopyShortcuts() {
   const canGoTo = frame.goToRun !== null;
   // Reaching Canopy again is for a project window; its own window is already here.
   const reachedByShortcut = frame.host === "dialog";
-  // Escape puts the dialog away; a window left open all day stays where it was put.
-  const escapeCloses = frame.host === "dialog";
+  // Escape and the user's close binding put the dialog away; a window left open
+  // all day stays where it was put until its own close.
+  const inDialog = frame.host === "dialog";
   const step = isMac() ? "Cmd" : "Alt";
   // How to get here again: the user's own binding, and double-Shift while on.
   const toggle = useEffectiveCombo("canopy.toggle");
   // Close as the user has it bound, and only where it works: a chord can't
   // reach the pane, and off the Mac the terminal keeps Ctrl+W for the shell.
-  const closeCombo = useEffectiveCombo("terminal.close");
-  const paneClose = closeCombo !== undefined && !closeCombo.includes(" ") ? closeCombo : undefined;
+  // A window closes by its menu's Close Window, whatever the binding, and has
+  // nothing to hand the pane its close.
+  const boundClose = useEffectiveCombo("terminal.close");
+  const closeCombo = inDialog ? boundClose : "Cmd+W";
+  const paneClose =
+    inDialog && boundClose !== undefined && !boundClose.includes(" ") ? boundClose : undefined;
   const doubleShift = usePreferencesStore((s) => s.doubleShiftOpensCanopy);
   const groups: Array<{ heading: string; rows: ShortcutRow[] }> = [
     {
@@ -544,7 +549,7 @@ function CanopyShortcuts() {
         { keys: ["Tab"], label: "Into the list, where the keys below act" },
         {
           keys: ["Escape"],
-          label: escapeCloses ? "Clear the search, then close" : "Clear the search",
+          label: inDialog ? "Clear the search, then close" : "Clear the search",
         },
       ],
     },
@@ -571,7 +576,7 @@ function CanopyShortcuts() {
         { keys: ["/"], label: "Search" },
         { keys: ["Cmd+Backspace"], label: "Trash, pressed twice; Z takes it back" },
         { keys: ["Cmd+A"], label: "With a search: review every result to trash" },
-        ...(escapeCloses ? [{ keys: ["Escape"], label: "Close" }] : []),
+        ...(inDialog ? [{ keys: ["Escape"], label: "Close" }] : []),
         ...(closeCombo ? [{ keys: [closeCombo], label: "Close Canopy" }] : []),
       ],
     },

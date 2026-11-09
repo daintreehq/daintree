@@ -1030,6 +1030,8 @@ describe("CanopyView", () => {
     expect(document.body.textContent).toContain("Move down or up");
     expect(document.body.textContent).toContain("First or last agent");
     expect(document.body.textContent).toContain("Close Canopy");
+    // The dialog, unlike Canopy's window, goes away on Escape.
+    expect(document.body.textContent).toContain("Clear the search, then close");
     // In the pane it trashes the agent's terminal; off the Mac only from a
     // reply, since the terminal keeps Ctrl+W for the shell.
     expect(document.body.textContent).toMatch(/in a reply: trash the agent's terminal/i);
