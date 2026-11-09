@@ -4,12 +4,14 @@ import { act, cleanup, render } from "@testing-library/react";
 import type { CanopyPendingPopOut, CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { CanopyFrame } from "@/components/Canopy/canopyFrame";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
 const stops = vi.hoisted(() => ({
   terminalConfig: vi.fn(),
   keybindings: vi.fn(),
   fleet: vi.fn(),
   hostProjects: vi.fn(),
+  dictation: vi.fn(),
 }));
 const shownFrames = vi.hoisted(() => [] as CanopyFrame[]);
 const notifyMock = vi.hoisted(() => vi.fn());
@@ -49,6 +51,9 @@ vi.mock("@/services/keybindingOverridesSync", () => ({
 vi.mock("@/services/KeybindingService", () => ({ keybindingService: { loadOverrides } }));
 vi.mock("@/components/Hosts/installHostProjectsLoader", () => ({
   installHostProjectsLoader: () => stops.hostProjects,
+}));
+vi.mock("../canopyWindowDictation", () => ({
+  startCanopyWindowDictation: () => stops.dictation,
 }));
 vi.mock("@/store/fleetSnapshotStore", () => ({
   setupFleetSnapshotListeners: () => stops.fleet,
@@ -230,6 +235,33 @@ describe("CanopyWindowRoot", () => {
 
     act(() => usePluginHostedViewsStore.setState({ views: [] }));
     expect(view.queryByTestId("plugin-support")).toBeNull();
+  });
+
+  it("says what the voice service announces, such as why the dictation key started nothing", async () => {
+    const said = "Select an agent in Canopy to dictate a reply to it.";
+    const frames: FrameRequestCallback[] = [];
+    const request = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const view = render(<CanopyWindowRoot />);
+    try {
+      await act(async () => {});
+
+      act(() => useVoiceRecordingStore.getState().announce(said));
+      act(() => {
+        for (const frame of frames.splice(0)) frame(performance.now());
+      });
+
+      const regions = Array.from(view.baseElement.querySelectorAll('[role="status"]'));
+      expect(regions.map((region) => region.textContent)).toContain(said);
+    } finally {
+      view.unmount();
+      request.mockRestore();
+      cancel.mockRestore();
+      useVoiceRecordingStore.setState({ announcement: null });
+    }
   });
 
   it("stops everything it started when it goes", async () => {

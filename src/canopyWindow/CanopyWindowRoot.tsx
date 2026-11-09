@@ -3,6 +3,7 @@ import { AccessibilityAnnouncer } from "@/components/Accessibility/Accessibility
 import { CanopyView } from "@/components/Canopy/CanopyView";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { installHostProjectsLoader } from "@/components/Hosts/installHostProjectsLoader";
+import { VoiceRecordingAnnouncer } from "@/components/Terminal/VoiceRecordingAnnouncer";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useCanopySnapshotSync } from "@/hooks/app/useCanopySnapshotSync";
@@ -19,6 +20,7 @@ import { useScratchStore } from "@/store/scratchStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_WINDOW_FRAME } from "./canopyWindowFrame";
 import { CanopyPluginSupport } from "./CanopyPluginSupport";
+import { startCanopyWindowDictation } from "./canopyWindowDictation";
 import { receiveCanopyPopOuts } from "./canopyWindowPopOut";
 
 /**
@@ -40,6 +42,7 @@ export function CanopyWindowRoot() {
       setupFleetSnapshotListeners(),
       installHostProjectsLoader(),
       receiveCanopyPopOuts(),
+      startCanopyWindowDictation(),
     ];
     // Project and scratch names label the rows; both stores follow their own pushes.
     safeFireAndForget(useProjectStore.getState().loadProjects(), {
@@ -68,6 +71,8 @@ export function CanopyWindowRoot() {
       </div>
       <Toaster standalone />
       <AccessibilityAnnouncer />
+      {/* Why the dictation key started nothing, or what it did, is said here. */}
+      <VoiceRecordingAnnouncer />
       {offersPluginViews && <CanopyPluginSupport />}
     </TooltipProvider>
   );
