@@ -12,6 +12,7 @@ import { GitCommit, FolderTree, FileDiff, Sparkles } from "lucide-react";
 import { parseNoteWithLinks, formatPath, type TextSegment } from "../../utils/textParsing";
 import { actionService } from "@/services/ActionService";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 
@@ -125,8 +126,8 @@ export function WorktreeDetails({
         <LiveTimeAgo timestamp={activityTime} className="shrink-0 text-text-secondary" noTooltip />
         {activityAuthor && (
           <>
-            <span className="shrink-0 text-text-secondary" aria-hidden="true">
-              ·
+            <span className="shrink-0" aria-hidden="true">
+              <FactSeparator />
             </span>
             <span className="min-w-0 truncate text-text-secondary">{activityAuthor.name}</span>
           </>

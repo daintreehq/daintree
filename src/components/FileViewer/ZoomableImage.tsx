@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/paneToolbarStyles";
 import { Minus, Plus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 
 export interface ZoomableImageProps {
@@ -316,7 +317,7 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
             <span className="whitespace-nowrap">
               {natural.width} × {natural.height}
               <span aria-hidden="true" className="px-1.5">
-                ·
+                <FactSeparator />
               </span>
             </span>
           )}

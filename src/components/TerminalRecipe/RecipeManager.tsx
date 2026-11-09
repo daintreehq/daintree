@@ -19,6 +19,7 @@ import {
 import { Plug, Workflow } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { SearchField } from "@/components/ui/SearchField";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -397,20 +398,20 @@ export function RecipeManager({
                 <TruncatedTooltip content={pluginLabel}>
                   <span className="max-w-[40%] truncate">From {pluginLabel}</span>
                 </TruncatedTooltip>
-                <span aria-hidden>·</span>
+                <FactSeparator />
               </>
             )}
             {worktreeLabel && (
               <>
                 <span className="shrink-0">{worktreeLabel}</span>
-                <span aria-hidden>·</span>
+                <FactSeparator />
               </>
             )}
             <span className="min-w-0 truncate">
               {pluralize(recipe.terminals.length, "terminal")}
               {summary && summary !== recipe.name ? `: ${summary}` : ""}
             </span>
-            <span aria-hidden>·</span>
+            <FactSeparator />
             <span className="shrink-0">
               {recipe.lastUsedAt ? (
                 <>

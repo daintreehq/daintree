@@ -4,6 +4,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 // FUTURE_SAB: the `flowStatus` prop is widened to `TerminalFlowStatus` (not
 // `PersistableFlowStatus`) so the suspended presentation below remains
@@ -74,8 +75,8 @@ function HeldDuration({ id }: { id: string }) {
   if (heldDurationMs == null || heldDurationMs <= 0) return null;
   return (
     <span className="font-normal text-text-secondary tabular-nums">
-      {" · "}
-      {formatElapsedDuration(heldDurationMs)}
+      {" "}
+      <FactSeparator /> {formatElapsedDuration(heldDurationMs)}
     </span>
   );
 }

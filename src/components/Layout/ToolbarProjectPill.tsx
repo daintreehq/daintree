@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { Sprout } from "@/components/icons";
 import { splitBranchType } from "@/components/Worktree/BranchLabel";
 import { SkeletonBone } from "@/components/ui/Skeleton";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { shortSha } from "@/utils/textParsing";
 import type { ActiveWorkspaceIdentity, BranchChipState } from "@/lib/workspaceIdentity";
 
@@ -161,7 +162,12 @@ export function ToolbarProjectPillTooltipBody({
     <div className="flex flex-col gap-0.5">
       <div className="text-xs font-medium break-words">
         {name}
-        {branchLabel ? ` · ${branchLabel}` : ""}
+        {branchLabel && (
+          <>
+            {" "}
+            <FactSeparator /> {branchLabel}
+          </>
+        )}
       </div>
       {path ? (
         // Breaks after a separator where it can, inside a segment only where it must.

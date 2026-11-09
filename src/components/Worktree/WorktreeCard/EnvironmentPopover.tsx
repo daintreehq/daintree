@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { cn } from "@/lib/utils";
 import {
   Check,
@@ -275,7 +276,13 @@ export function EnvironmentPopover({
           </PopoverTrigger>
         </TooltipTrigger>
         <TooltipContent side="top">
-          {triggerStatus ? `${environmentName} · ${triggerStatus}` : environmentName}
+          {triggerStatus ? (
+            <>
+              {environmentName} <FactSeparator /> {triggerStatus}
+            </>
+          ) : (
+            environmentName
+          )}
         </TooltipContent>
       </Tooltip>
       <PopoverContent

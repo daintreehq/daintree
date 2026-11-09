@@ -12,6 +12,7 @@ import type { PluginShortcutRecorderProps } from "@shared/types/plugin-sdk-react
 import { Button } from "@/components/ui/button";
 import { InlineError } from "@/components/ui/field";
 import { KbdChord } from "@/components/ui/Kbd";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import {
@@ -312,7 +313,10 @@ export function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
     content = (
       <span className="truncate">
         Press a shortcut
-        <span className="text-text-secondary"> · Esc to stop</span>
+        <span className="text-text-secondary">
+          {" "}
+          <FactSeparator /> Esc to stop
+        </span>
       </span>
     );
   } else if (combo) {

@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { AppDialog, type RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
@@ -415,15 +416,43 @@ export function ImportEnvDialog({
               {incomingCount > 0 && (
                 <p className="text-xs text-text-secondary" data-testid="import-env-summary">
                   {pluralize(incomingCount, "variable")} detected
-                  {newCount > 0 && newCount !== incomingCount ? ` · ${newCount} new` : ""}
-                  {conflicts.length > 0 ? ` · ${pluralize(conflicts.length, "conflict")}` : ""}
-                  {unchangedCount > 0 ? ` · ${unchangedCount} already set` : ""}
-                  {conflicts.length === 0 && newCount > 0 ? " · existing values unchanged" : ""}
+                  {newCount > 0 && newCount !== incomingCount ? (
+                    <>
+                      {" "}
+                      <FactSeparator /> {newCount} new
+                    </>
+                  ) : (
+                    ""
+                  )}
+                  {conflicts.length > 0 ? (
+                    <>
+                      {" "}
+                      <FactSeparator /> {pluralize(conflicts.length, "conflict")}
+                    </>
+                  ) : (
+                    ""
+                  )}
+                  {unchangedCount > 0 ? (
+                    <>
+                      {" "}
+                      <FactSeparator /> {unchangedCount} already set
+                    </>
+                  ) : (
+                    ""
+                  )}
+                  {conflicts.length === 0 && newCount > 0 ? (
+                    <>
+                      {" "}
+                      <FactSeparator /> existing values unchanged
+                    </>
+                  ) : (
+                    ""
+                  )}
                   {duplicateInPasteCount > 0 ? (
                     <span className="text-text-primary">
                       {" "}
-                      · {pluralize(duplicateInPasteCount, "duplicate key")} in paste (last value
-                      kept)
+                      <FactSeparator /> {pluralize(duplicateInPasteCount, "duplicate key")} in paste
+                      (last value kept)
                     </span>
                   ) : null}
                 </p>

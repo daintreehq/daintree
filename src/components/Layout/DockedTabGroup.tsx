@@ -34,6 +34,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { logError } from "@/utils/logger";
 import { useTabOverflow } from "@/hooks";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
@@ -892,11 +893,17 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                     </div>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {stateLabel
-                      ? isReinterpreted
-                        ? `Agent ${stateLabel} · Observed: ${observedStateLabel}`
-                        : `Agent ${stateLabel}`
-                      : "No agent state observed"}
+                    {stateLabel ? (
+                      isReinterpreted ? (
+                        <>
+                          Agent {stateLabel} <FactSeparator /> Observed: {observedStateLabel}
+                        </>
+                      ) : (
+                        `Agent ${stateLabel}`
+                      )
+                    ) : (
+                      "No agent state observed"
+                    )}
                   </TooltipContent>
                 </Tooltip>
               )}

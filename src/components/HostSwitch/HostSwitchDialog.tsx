@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/Spinner";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
@@ -1255,15 +1256,25 @@ export function HostSwitchDialog({
     };
   }
 
-  const fraction = status?.fraction != null ? ` · ${Math.round(status.fraction * 100)}%` : "";
+  const percent = status?.fraction != null ? Math.round(status.fraction * 100) : null;
   const hint = running ? (
     showProgress ? (
       <span className="flex min-w-0 items-center gap-2" aria-live="polite">
         <Spinner size="xs" />
         <span className="min-w-0 [overflow-wrap:anywhere] [text-wrap:pretty]">
           {status?.message ?? running.label} on {running.hostName}
-          {fraction}
-          {stillWorkingOp === running.opId && " · Still working…"}
+          {percent !== null && (
+            <>
+              {" "}
+              <FactSeparator /> {percent}%
+            </>
+          )}
+          {stillWorkingOp === running.opId && (
+            <>
+              {" "}
+              <FactSeparator /> Still working…
+            </>
+          )}
         </span>
       </span>
     ) : undefined

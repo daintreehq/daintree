@@ -6,6 +6,7 @@ import { NO_WORKTREE } from "@/store/slices/panelRegistry/worktreeIndex";
 import { CollapsedSessionIndicators } from "@/components/Worktree/WorktreeCard/CollapsedSessionIndicators";
 import { summarizeSessionStates } from "@/components/Worktree/terminalStateConfig";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -143,7 +144,7 @@ export function WorkspaceRootRow({
                 would be a second emphasis signal on a one-row list. */}
             <div className="flex items-center gap-1.5 text-xs text-text-secondary min-w-0">
               <span className="shrink-0">{kindLabel(workspace)}</span>
-              <span aria-hidden="true">·</span>
+              <FactSeparator />
               <TruncatedTooltip content={displayPath}>
                 <span className="truncate min-w-0 font-mono">{displayPath}</span>
               </TruncatedTooltip>

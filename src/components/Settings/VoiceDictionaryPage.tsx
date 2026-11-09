@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ChevronLeft, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -319,9 +320,15 @@ export function VoiceDictionaryPage({
                     {suggestion.utterance
                       ? `Heard as "${suggestion.utterance}"`
                       : "Typed over a mishearing"}
-                    {suggestion.frequency > 1 ? ` · ${suggestion.frequency} times` : ""}
-                    {" · "}
-                    <TimeAgo timestamp={suggestion.suggestedAt} verbose />
+                    {suggestion.frequency > 1 ? (
+                      <>
+                        {" "}
+                        <FactSeparator /> {suggestion.frequency} times
+                      </>
+                    ) : (
+                      ""
+                    )}{" "}
+                    <FactSeparator /> <TimeAgo timestamp={suggestion.suggestedAt} verbose />
                   </>
                 }
                 control={
@@ -493,7 +500,8 @@ export function VoiceDictionaryPage({
                         )}
                         <ShadowedHeardAs owners={owners} entry={entry} />
                         <span className="block">
-                          {sourceLabel(entry)} · <TimeAgo timestamp={entry.addedAt} verbose />
+                          {sourceLabel(entry)} <FactSeparator />{" "}
+                          <TimeAgo timestamp={entry.addedAt} verbose />
                         </span>
                       </>
                     }

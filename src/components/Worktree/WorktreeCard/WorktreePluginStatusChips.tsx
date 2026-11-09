@@ -16,6 +16,7 @@ import {
 import type { ActionId } from "@shared/types/actions";
 import type { PluginWorktreeCardStatus } from "@shared/types/plugin";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { FocusHandoffGuard } from "../FocusHandoffGuard";
 
 interface PluginStatusChipProps {
@@ -79,7 +80,9 @@ function PluginStatusChip({
       </TooltipTrigger>
       <TooltipContent side="top">
         <div className="flex flex-col gap-1">
-          <span>{`${name} · ${status.label}`}</span>
+          <span>
+            {name} <FactSeparator /> {status.label}
+          </span>
           {status.tooltip && (
             <span className="whitespace-pre-wrap break-words text-text-secondary">
               {status.tooltip}

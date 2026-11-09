@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { cn } from "@/lib/utils";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import type {
@@ -1967,8 +1968,14 @@ function FileDiff({
               DOM while hidden. */}
           {notesEnabled && (
             <p ref={noteKeysHintRef} id={noteKeysHintId} className="diff-note-keys">
-              Arrow keys move · Shift+arrows select lines · Enter adds a note
-              {noteDraft?.kind === "lines" && " · Shift+Enter extends the open note"}
+              Arrow keys move <FactSeparator /> Shift+arrows select lines <FactSeparator /> Enter
+              adds a note
+              {noteDraft?.kind === "lines" && (
+                <>
+                  {" "}
+                  <FactSeparator /> Shift+Enter extends the open note
+                </>
+              )}
             </p>
           )}
         </div>

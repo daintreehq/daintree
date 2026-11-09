@@ -171,7 +171,7 @@ describe("HostsSettingsTab", () => {
     );
     expect(await screen.findByText("studio-03")).toBeTruthy();
     // The build it last reported is in the host's details, not its row.
-    expect(screen.getByText(/greg@studio-03 · Linux/)).toBeTruthy();
+    expect(screen.getByText(/greg@studio-03/).textContent).toMatch(/greg@studio-03 · Linux/);
     expect(screen.getByText(/Unreachable · never seen/)).toBeTruthy();
 
     listeners.forEach((l) =>

@@ -310,13 +310,15 @@ export function FileMetadataFacts({
             )}
           </span>
         ))}
-        <span data-measure="separator">·</span>
+        <span data-measure="separator">
+          <FactSeparator />
+        </span>
         <span data-measure="marker">…</span>
         {routine.length > 0 && (
           <span data-measure="routine" className="inline-flex shrink-0 items-center gap-1.5">
             {routine.map((item, index) => (
               <span key={item.key} className="inline-flex items-center gap-1.5">
-                {index > 0 && <span>·</span>}
+                {index > 0 && <FactSeparator />}
                 {item.label}
               </span>
             ))}

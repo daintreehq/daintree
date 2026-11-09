@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { CLOSE_OWNER_ATTR, CLOSE_REQUEST_EVENT } from "@/lib/closeRequest";
 import { Button } from "@/components/ui/button";
+import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 import { Kbd, KbdChord } from "@/components/ui/Kbd";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -998,12 +999,14 @@ export function CanopyCard({
             <span className="ml-auto flex max-w-[45%] min-w-0 items-center">
               {summaryNotes.length > 0 && (
                 <TruncatedTooltip content={summaryNotes.join(" · ")}>
-                  <span className="min-w-0 truncate">{summaryNotes.join(" · ")}</span>
+                  <span className="min-w-0 truncate">
+                    <FactRun facts={summaryNotes} />
+                  </span>
                 </TruncatedTooltip>
               )}
               {summaryNotes.length > 0 && detailAttribution !== null && (
                 <span aria-hidden="true" className="shrink-0 px-1">
-                  ·
+                  <FactSeparator />
                 </span>
               )}
               {/* Last, so it is read as covering everything before it. */}

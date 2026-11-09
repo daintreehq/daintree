@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { ChevronDown, RotateCcw } from "lucide-react";
 import { DecisionsIcon, TriangleAlert } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -137,8 +138,7 @@ function AnswerPreview({ item }: { item: DecisionsAttentionItem }) {
     <figure className="flex flex-col gap-1 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2">
       <figcaption className="text-2xs text-text-secondary">
         {source}
-        {answer.correction && ", correcting an earlier one"}
-        {" · "}
+        {answer.correction && ", correcting an earlier one"} <FactSeparator />{" "}
         <TimeAgo timestamp={answer.answeredAt} />
       </figcaption>
       {answer.choices.length > 0 && (
@@ -202,9 +202,8 @@ function FollowUpPreview({
     <figure className="flex flex-col gap-1 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2">
       <figcaption className="text-2xs text-text-secondary">
         Your follow-up from your phone
-        {followUp.status === "delivery-uncertain" && ", may or may not have been delivered"}
-        {" · "}
-        <TimeAgo timestamp={followUp.sentAt} />
+        {followUp.status === "delivery-uncertain" && ", may or may not have been delivered"}{" "}
+        <FactSeparator /> <TimeAgo timestamp={followUp.sentAt} />
       </figcaption>
       {followUp.text !== null ? (
         <blockquote
@@ -309,7 +308,12 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
       </div>
       <p className="text-xs text-text-secondary [text-wrap:pretty]">
         {pane}
-        {place !== null && ` · ${place}`}
+        {place !== null && (
+          <>
+            {" "}
+            <FactSeparator /> {place}
+          </>
+        )}
       </p>
       <p className="flex items-start gap-1.5 text-xs text-text-primary [text-wrap:pretty]">
         <TriangleAlert className="mt-0.5 size-3 shrink-0 text-status-warning" aria-hidden="true" />

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { InlineError } from "@/components/ui/field";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import type { KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -227,7 +228,7 @@ export function PilotParkEditor({
             {target.row.title}
           </p>
           <p className="truncate text-xs text-text-secondary">
-            {target.row.chrome.label} · {target.group.name}
+            {target.row.chrome.label} <FactSeparator /> {target.group.name}
           </p>
         </div>
       </div>

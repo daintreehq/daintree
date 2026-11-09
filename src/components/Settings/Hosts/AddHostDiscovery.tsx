@@ -2,6 +2,7 @@ import { useId, useRef, type KeyboardEvent } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { SearchField } from "@/components/ui/SearchField";
 import { Spinner } from "@/components/ui/Spinner";
@@ -255,7 +256,12 @@ export function AddHostDiscovery({
                       className="block truncate text-xs text-text-secondary select-text"
                     >
                       {address}
-                      {platform && ` · ${platform}`}
+                      {platform && (
+                        <>
+                          {" "}
+                          <FactSeparator /> {platform}
+                        </>
+                      )}
                     </span>
                   </span>
                   <span

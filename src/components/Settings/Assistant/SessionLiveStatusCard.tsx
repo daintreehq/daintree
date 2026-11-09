@@ -13,6 +13,7 @@ import {
 } from "@/store/assistantIdentityStore";
 import { displayIdentityLabel } from "@shared/utils/displayIdentity";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { trimSessionTabTitle } from "@/components/HelpPanel/sessionTabTitle";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -55,11 +56,16 @@ function SessionIdentity({
       {scope}
       {name && (
         <>
-          {" · "}
-          <span className="text-text-primary">{name}</span>
+          {" "}
+          <FactSeparator /> <span className="text-text-primary">{name}</span>
         </>
       )}
-      {agentId && ` · ${agentName(agentId)}`}
+      {agentId && (
+        <>
+          {" "}
+          <FactSeparator /> {agentName(agentId)}
+        </>
+      )}
     </div>
   );
 }

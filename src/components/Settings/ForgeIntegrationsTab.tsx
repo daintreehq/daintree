@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { InlineError } from "@/components/ui/field";
 import type {
   ForgeProviderEntry,
@@ -488,7 +489,15 @@ function ProjectRoutingPanel({
           label={remote.name}
           accessory={
             remote.name === liveRemoteName ? (
-              <Badge size="xs">{forgeRemote ? "In use" : "In use · auto-detected"}</Badge>
+              <Badge size="xs">
+                {forgeRemote ? (
+                  "In use"
+                ) : (
+                  <>
+                    In use <FactSeparator /> auto-detected
+                  </>
+                )}
+              </Badge>
             ) : undefined
           }
           description={
@@ -546,7 +555,12 @@ function RoutingResult({
       <span className="block text-sm text-text-primary">{resolved.entry.contribution.name}</span>
       <span className="block text-text-secondary">
         by {VIA_LABEL[resolved.resolvedVia]}
-        {resolved.entry.unavailableReason ? " · unavailable" : null}
+        {resolved.entry.unavailableReason ? (
+          <>
+            {" "}
+            <FactSeparator /> unavailable
+          </>
+        ) : null}
       </span>
     </span>
   );

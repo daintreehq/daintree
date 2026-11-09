@@ -7,6 +7,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps, type TabInfo } from "@/components/Panel";
 import { useGridGroupAttention } from "@/components/Panel/gridGroupAttention";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { BrowserToolbar } from "../Browser/BrowserToolbar";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
 import { DevPreviewStuckBanner, DevPreviewHmrDeadBanner } from "./DevPreviewBanners";
@@ -1067,9 +1068,16 @@ export function DevPreviewPane({
                 tone="outline"
                 className="absolute top-1 left-1/2 z-10 -translate-x-1/2 bg-surface/90"
               >
-                {getViewportPreset(viewportPreset).label} · {effectiveViewport.width}×
-                {effectiveViewport.height}
-                {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}
+                <span>
+                  {getViewportPreset(viewportPreset).label} <FactSeparator />{" "}
+                  {effectiveViewport.width}×{effectiveViewport.height}
+                  {viewportFit && fitScale < 1 && (
+                    <>
+                      {" "}
+                      <FactSeparator /> {Math.round(fitScale * 100)}%
+                    </>
+                  )}
+                </span>
               </Badge>
             )}
             {showEmptyState ? (

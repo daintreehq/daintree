@@ -16,6 +16,7 @@ import { logError, logWarn } from "@/utils/logger";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 const CHORD_WINDOW_STYLE: React.CSSProperties & Record<"--chord-window", string> = {
   "--chord-window": `${CHORD_TIMEOUT_MS}ms`,
@@ -611,12 +612,17 @@ export function SettingsShortcutCapture({
                 // recorder stays armed: the next press is the retry.
                 <span className="inline-flex items-center gap-2">
                   <KbdChord shortcut={rejected} />
-                  <span className="text-text-secondary">Try again · Esc to cancel</span>
+                  <span className="text-text-secondary">
+                    Try again <FactSeparator /> Esc to cancel
+                  </span>
                 </span>
               ) : (
                 <span>
                   {recordingHint ?? "Press a key combination"}
-                  <span className="text-text-secondary"> · Esc to cancel</span>
+                  <span className="text-text-secondary">
+                    {" "}
+                    <FactSeparator /> Esc to cancel
+                  </span>
                 </span>
               )}
             </div>

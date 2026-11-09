@@ -3,6 +3,7 @@ import type * as React from "react";
 import { EyeOff, SquareTerminal } from "lucide-react";
 import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import type { RecipeContext } from "@/utils/recipeVariables";
 import type { ActionSource } from "@shared/types";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
@@ -181,7 +182,13 @@ export function DockLaunchMenuItems({
       <Workflow className="w-3.5 h-3.5 mr-2 shrink-0" />
       <span className="truncate">{item.name}</span>
       <C.Meta aria-hidden={false} className="shrink-0">
-        {item.isShadowed ? `${item.scopeLabel} · Overridden by Team` : item.scopeLabel}
+        {item.isShadowed ? (
+          <>
+            {item.scopeLabel} <FactSeparator /> Overridden by Team
+          </>
+        ) : (
+          item.scopeLabel
+        )}
       </C.Meta>
     </C.Item>
   );

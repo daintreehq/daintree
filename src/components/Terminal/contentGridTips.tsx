@@ -10,6 +10,7 @@ import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import type { ActionId } from "@shared/types/actions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 // HCI: surface 3–5 unlearned tips at a time; 4 balances variety vs cognitive load.
 const ROTATING_TIP_SUBSET_SIZE = 4;
@@ -276,7 +277,7 @@ export function RotatingTip() {
         {tip.actionId && tip.actionLabel && (
           <>
             <span aria-hidden="true" className="mx-1.5">
-              ·
+              <FactSeparator />
             </span>
             <Button
               variant="link"

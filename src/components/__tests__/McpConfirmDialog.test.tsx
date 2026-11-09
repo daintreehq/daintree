@@ -776,7 +776,7 @@ describe("McpConfirmDialog", () => {
         screen.getByRole("checkbox", { name: /claude · api/ }).getAttribute("aria-label")
       ).toBe(null);
       expect(screen.getByRole("checkbox", { name: /Agent running/ })).toBeTruthy();
-      expect(screen.getByRole("checkbox", { name: /feature\/x · Terminal/ })).toBeTruthy();
+      expect(screen.getByRole("checkbox", { name: /feature\/x Terminal t2$/ })).toBeTruthy();
     });
 
     it("approves only the rows left checked, in display order", async () => {
@@ -1244,7 +1244,11 @@ describe("McpConfirmDialog", () => {
       });
       render(<McpConfirmDialog />);
 
-      expect(screen.getByText(/Later Push calls from 'Orchestrator' · any arguments/)).toBeTruthy();
+      const grant = screen.getByRole("checkbox", { name: "Allow for this session" });
+      const description = document.getElementById(grant.getAttribute("aria-describedby") ?? "");
+      expect(description?.textContent).toBe(
+        "Later Push calls from 'Orchestrator' · any arguments · up to 30 minutes"
+      );
     });
 
     it("names the Assistant tab that asked", () => {

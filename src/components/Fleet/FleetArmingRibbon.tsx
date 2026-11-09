@@ -85,6 +85,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { pluralize } from "@/lib/pluralize";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 
 interface RunCountSegment {
@@ -202,7 +203,12 @@ function FleetRunStatusLine({
               key={segment.label}
               className={segment.tone === "error" ? "font-medium text-text-primary" : undefined}
             >
-              {index > 0 ? " · " : ""}
+              {index > 0 && (
+                <>
+                  {" "}
+                  <FactSeparator />{" "}
+                </>
+              )}
               {/* The glyph carries the tone and sits with the clause it is
                 about; the words stay on a text token because the danger
                 colour sits under 4.5:1 on the amber fill. */}
@@ -802,7 +808,8 @@ export function FleetArmingRibbon(): ReactElement | null {
                     Sending {progressCompleted}/{progressTotal}
                     {progressFailed > 0 && (
                       <span className="font-medium text-text-primary">
-                        {" · "}
+                        {" "}
+                        <FactSeparator />{" "}
                         <XCircle
                           className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
                           aria-hidden="true"

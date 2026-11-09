@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useId } from "react";
 import { InlineError } from "@/components/ui/field";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { RadioChoiceGroup, RadioChoiceRow, CHOICE_LABEL_INSET } from "@/components/ui/RadioChoice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -302,7 +303,12 @@ export function ImageViewerTab() {
             ) : (
               <span>
                 Saved: <span className="font-medium">{describeViewer(persisted)}</span>
-                {isDirty && " · Unsaved changes"}
+                {isDirty && (
+                  <>
+                    {" "}
+                    <FactSeparator /> Unsaved changes
+                  </>
+                )}
               </span>
             )
           }

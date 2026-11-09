@@ -48,6 +48,7 @@ import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { isClientGitError } from "@/utils/clientGitError";
 import { isClientAppError } from "@/utils/clientAppError";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 interface CloneError {
   message: string;
@@ -854,9 +855,7 @@ export function CloneRepoDialog({
                         >
                           Shallow clone
                         </label>
-                        <span aria-hidden="true" className="text-text-secondary">
-                          ·
-                        </span>
+                        <FactSeparator />
                         <span id={shallowHintId} className="truncate text-text-secondary">
                           Latest commit only, limits history
                         </span>

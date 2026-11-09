@@ -20,6 +20,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { useFleetWorktreeScope } from "./useFleetWorktreeScope";
 import { FleetWorktreeDots } from "./FleetWorktreeDots";
 import { renderPaneStateBadge } from "./renderPaneStateBadge";
@@ -282,18 +283,26 @@ export function FleetCountChip({
           {/* One run of text with the place in it, so the separator keeps the
               sentence's spacing rather than the chip's gap. */}
           <span className="flex min-w-0 text-text-secondary">
-            in fleet
-            {scope.worktreeCount > 1 ? ` · ${scope.worktreeCount} worktrees` : ""}
+            <span>
+              in fleet
+              {scope.worktreeCount > 1 && (
+                <>
+                  {" "}
+                  <FactSeparator /> {scope.worktreeCount} worktrees
+                </>
+              )}
+            </span>
             {hostScope && (
               <span className="max-w-40 truncate" data-testid="fleet-host-scope">
-                {`\u00a0· ${hostScope}`}
+                &nbsp;
+                <FactSeparator /> {hostScope}
               </span>
             )}
           </span>
           <FleetWorktreeDots scope={scope} />
           {scope.exitedCount > 0 ? (
             <span className="text-text-secondary tabular-nums" data-testid="fleet-exited-count">
-              · {scope.exitedCount} exited
+              <FactSeparator /> {scope.exitedCount} exited
             </span>
           ) : null}
           <ChevronDown className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
@@ -385,7 +394,13 @@ export function FleetCountChip({
                               <span className="truncate">{title}</span>
                             </TooltipTrigger>
                             <TooltipContent side="right">
-                              {worktreeName ? `${title} · ${worktreeName}` : title}
+                              {worktreeName ? (
+                                <>
+                                  {title} <FactSeparator /> {worktreeName}
+                                </>
+                              ) : (
+                                title
+                              )}
                             </TooltipContent>
                           </Tooltip>
                           {id === focusedId && (
@@ -545,13 +560,19 @@ export function FleetCountChip({
             <FleetPickerContent picker={picker} testIdPrefix="fleet-picker-add" autoFocusSearch />
             <div className="mt-1 flex items-center justify-between gap-2 border-t border-divider px-1 pt-2">
               <span className="text-2xs tabular-nums text-text-secondary">
-                {picker.confirmedIds.length === 0
-                  ? "Select panes to add"
-                  : `${picker.confirmedIds.length} selected${
-                      picker.hiddenSelectedCount > 0
-                        ? ` · ${picker.hiddenSelectedCount} hidden by search`
-                        : ""
-                    }`}
+                {picker.confirmedIds.length === 0 ? (
+                  "Select panes to add"
+                ) : (
+                  <>
+                    {picker.confirmedIds.length} selected
+                    {picker.hiddenSelectedCount > 0 && (
+                      <>
+                        {" "}
+                        <FactSeparator /> {picker.hiddenSelectedCount} hidden by search
+                      </>
+                    )}
+                  </>
+                )}
               </span>
               <div className="flex items-center gap-1.5">
                 <Button

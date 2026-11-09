@@ -4,6 +4,7 @@ import { BrandMark, DaintreeIcon, History, Play } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { TimeAgo } from "@/components/ui/TimeAgo";
@@ -143,7 +144,9 @@ function LastRun({
       />
       {words.detail && (
         <TruncatedTooltip content={words.detail} focusable={false}>
-          <span className="min-w-0 truncate">· {words.detail}</span>
+          <span className="min-w-0 truncate">
+            <FactSeparator /> {words.detail}
+          </span>
         </TruncatedTooltip>
       )}
     </span>
@@ -234,8 +237,7 @@ function ScheduleRow({
             {worktreeLabel && <Badge size="xs">{worktreeLabel}</Badge>}
           </div>
           <p className="mt-1 truncate text-xs text-text-secondary">
-            {words ?? <span className="font-mono">{schedule.cadence.cron}</span>}
-            <span aria-hidden="true"> · </span>
+            {words ?? <span className="font-mono">{schedule.cadence.cron}</span>} <FactSeparator />{" "}
             {agentName}
           </p>
           <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 text-xs text-text-secondary">

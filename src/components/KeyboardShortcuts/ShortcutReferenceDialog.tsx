@@ -4,6 +4,7 @@ import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { Button } from "@/components/ui/button";
 import { useOverlayState } from "@/hooks";
 import { KbdChord } from "@/components/ui/Kbd";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { describeChord } from "@/lib/kbdShortcut";
 import { useKeyLabels, type KeyLabels } from "@/lib/keyboardLayout";
 import { isMac } from "@/lib/platform";
@@ -87,7 +88,14 @@ function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps
               categoryLabel ? "text-xs text-text-secondary" : "ml-2 text-xs text-text-secondary"
             }
           >
-            {categoryLabel ? " · Custom" : "Custom"}
+            {categoryLabel ? (
+              <>
+                {" "}
+                <FactSeparator /> Custom
+              </>
+            ) : (
+              "Custom"
+            )}
           </span>
         )}
       </span>

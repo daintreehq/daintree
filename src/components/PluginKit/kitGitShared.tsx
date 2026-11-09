@@ -1,5 +1,6 @@
 import { type MouseEvent } from "react";
 import type { PluginForgePerson } from "@shared/types/plugin-sdk-react";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { safeDetailsUrl } from "@/components/Worktree/ReviewHub/prChecks";
 import { field, nonEmpty } from "./kitProps";
 import { pluginKitDates } from "./PluginKitDates";
@@ -54,7 +55,7 @@ export function preventFocusSteal(event: MouseEvent<HTMLElement>): void {
 export function Dot() {
   return (
     <span aria-hidden="true" className="shrink-0">
-      &middot;
+      <FactSeparator />
     </span>
   );
 }

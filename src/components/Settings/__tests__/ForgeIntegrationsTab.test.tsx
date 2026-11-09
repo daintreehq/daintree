@@ -156,7 +156,9 @@ describe("ForgeIntegrationsTab", () => {
       // same answer PullRequestService reaches.
       renderWithBothRemotes(undefined);
 
-      await waitFor(() => expect(screen.getByText("In use · auto-detected")).toBeTruthy());
+      await waitFor(() =>
+        expect(screen.getByText(/^In use\b/).textContent).toBe("In use · auto-detected")
+      );
       expect(rowFor("origin").textContent).toContain("In use · auto-detected");
       expect(rowFor("upstream").textContent).not.toContain("In use");
     });
@@ -408,7 +410,7 @@ describe("ForgeIntegrationsTab — installed plugins' providers (#15583)", () =>
     render(<ForgeIntegrationsTab />);
 
     await waitFor(() => {
-      expect(screen.getByText(/by hostname\s*· unavailable/)).toBeTruthy();
+      expect(screen.getByText(/^by hostname/).textContent).toMatch(/by hostname\s*· unavailable/);
     });
   });
 });

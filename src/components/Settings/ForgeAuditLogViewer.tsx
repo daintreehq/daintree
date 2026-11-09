@@ -3,6 +3,7 @@ import { Check, Clock, Download, RefreshCw } from "lucide-react";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
@@ -309,7 +310,8 @@ export function ForgeAuditLogViewer({
                         wrap never leaves it dangling at a line end. */}
                     {repo && (
                       <>
-                        <AuditId>{repo}</AuditId> <span aria-hidden="true">·{"\u00a0"}</span>
+                        <AuditId>{repo}</AuditId> <FactSeparator />
+                        {"\u00a0"}
                       </>
                     )}
                     <AuditId>{record.providerId}</AuditId>

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 
 import { CornerDownLeft } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import { useArmedCrossHostTargets } from "./crossHostFleet";
@@ -128,7 +129,9 @@ export function FleetHostComposer(): ReactElement {
               <CornerDownLeft className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Send (Enter) · new line (Shift+Enter)</TooltipContent>
+          <TooltipContent side="bottom">
+            Send (Enter) <FactSeparator /> new line (Shift+Enter)
+          </TooltipContent>
         </Tooltip>
       </div>
     </form>

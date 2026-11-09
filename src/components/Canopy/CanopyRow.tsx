@@ -4,6 +4,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { BAND_GLYPH_TONE, PilotRunState } from "@/components/Pilot/PilotRunState";
 import { Archive, ArchiveRestore, Mic } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AskingCircle, Clock } from "@/components/icons";
 import type { CanopyCategory } from "@shared/types/ipc/canopy";
@@ -241,7 +242,11 @@ export function itemDetail(item: CanopyItem): {
 
 /** The meta line's separator: the same space either side, wherever it falls. */
 export function MetaDot() {
-  return <span className="shrink-0 px-1">·</span>;
+  return (
+    <span className="shrink-0 px-1">
+      <FactSeparator />
+    </span>
+  );
 }
 
 /**

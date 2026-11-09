@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { InlineError } from "@/components/ui/field";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
@@ -377,7 +378,8 @@ export function HostDetail({
             label="Daintree build"
             description={
               <>
-                {buildLabel(descriptor)} · {platformLabel(descriptor.platform, descriptor.arch)}
+                {buildLabel(descriptor)} <FactSeparator />{" "}
+                {platformLabel(descriptor.platform, descriptor.arch)}
                 {buildMismatch && (
                   <>
                     <br />

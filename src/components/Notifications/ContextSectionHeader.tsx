@@ -2,6 +2,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { Button } from "@/components/ui/button";
 import { CountBadge } from "@/components/ui/badge";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import {
   APP_SOURCE_LABEL,
   UNKNOWN_PROJECT_LABEL,
@@ -91,8 +92,8 @@ export function ContextSectionHeader({
           >
             {host ? <span className="shrink-0 truncate">{host}</span> : null}
             {host && (project || worktree) ? (
-              <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
-                ·
+              <span aria-hidden="true" className="shrink-0 px-1">
+                <FactSeparator />
               </span>
             ) : null}
             {/* Both names give way in proportion to their length, each kept to
@@ -101,8 +102,8 @@ export function ContextSectionHeader({
                 the header is the only place the project is said at all. */}
             {project ? <span className="min-w-[5ch] truncate">{project}</span> : null}
             {project && worktree ? (
-              <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
-                ·
+              <span aria-hidden="true" className="shrink-0 px-1">
+                <FactSeparator />
               </span>
             ) : null}
             {worktree ? <span className="min-w-[5ch] truncate">{worktree}</span> : null}
@@ -111,7 +112,7 @@ export function ContextSectionHeader({
                 data-testid="context-section-unavailable"
                 className="shrink-0 pl-1 text-text-secondary"
               >
-                · unavailable
+                <FactSeparator /> unavailable
               </span>
             ) : null}
             {!host && !project && !worktree ? (
@@ -123,7 +124,7 @@ export function ContextSectionHeader({
           <CountBadge label={`${pluralize(count, "notification")}`}>{count}</CountBadge>
           {newCount > 0 && (
             <span data-testid="context-section-new" className="shrink-0 tabular-nums">
-              · {newCount} new
+              <FactSeparator /> {newCount} new
             </span>
           )}
         </span>

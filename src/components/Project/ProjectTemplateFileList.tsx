@@ -7,6 +7,7 @@ import { Skeleton, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { formatBytes } from "@/lib/formatBytes";
 import { pluralize } from "@/lib/pluralize";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 interface ProjectTemplateFileListProps {
   /** `null` while the template's files are still being read. */
@@ -72,7 +73,8 @@ export function ProjectTemplateFileList({
       <div className="flex items-baseline justify-between gap-3">
         <h3 className={SECTION_LABEL_CLASS}>Files</h3>
         <span className="text-2xs text-text-secondary tabular-nums">
-          {pluralize(preview.files.length, "file")} · {formatBytes(preview.totalBytes)}
+          {pluralize(preview.files.length, "file")} <FactSeparator />{" "}
+          {formatBytes(preview.totalBytes)}
         </span>
       </div>
       {/* Scrollable with no focusable children, so the region itself is the

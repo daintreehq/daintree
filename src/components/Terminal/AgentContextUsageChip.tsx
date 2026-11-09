@@ -7,6 +7,7 @@ import { formatTokenCount } from "@/utils/formatTokenCount";
 import { useAgentContextUsage } from "@/hooks/useAgentContextUsage";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { cn } from "@/lib/utils";
 import {
   HEADER_CHIP_CLASS,
@@ -86,7 +87,12 @@ export function AgentContextUsageChip({ terminalId }: { terminalId: string }) {
         >
           <span aria-hidden="true">
             {formatTokenCount(reading.contextTokens)} context
-            {percent !== null && ` · ${percent}%`}
+            {percent !== null && (
+              <>
+                {" "}
+                <FactSeparator /> {percent}%
+              </>
+            )}
           </span>
         </span>
       </TooltipTrigger>

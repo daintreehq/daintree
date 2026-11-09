@@ -1,5 +1,6 @@
 import { useState, useEffect, useReducer, useRef } from "react";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -742,10 +743,9 @@ export function McpServerSettingsTab() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-xs text-text-primary">{bearer.userAgent}</div>
                       <div className="text-2xs text-text-secondary">
-                        <span className="font-mono">…{bearer.token4LastChars}</span>
-                        {" · "}
-                        {pluralize(bearer.requestsSinceLaunch, "request")}
-                        {" · "}
+                        <span className="font-mono">…{bearer.token4LastChars}</span>{" "}
+                        <FactSeparator /> {pluralize(bearer.requestsSinceLaunch, "request")}{" "}
+                        <FactSeparator />{" "}
                         <TimeAgo timestamp={bearer.lastActiveAt} verbose prefix="active " />
                       </div>
                     </div>
@@ -794,10 +794,8 @@ export function McpServerSettingsTab() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-xs text-text-primary">{bearer.userAgent}</div>
                       <div className="text-2xs text-text-secondary">
-                        {pluralize(bearer.sessionCount, "session")}
-                        {" · "}
-                        {pluralize(bearer.requestsSinceLaunch, "request")}
-                        {" · "}
+                        {pluralize(bearer.sessionCount, "session")} <FactSeparator />{" "}
+                        {pluralize(bearer.requestsSinceLaunch, "request")} <FactSeparator />{" "}
                         <TimeAgo timestamp={bearer.lastActiveAt} verbose prefix="active " />
                       </div>
                     </div>

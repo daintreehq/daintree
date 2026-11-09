@@ -4,6 +4,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ArrowDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { DiagnosticsNotice } from "./DiagnosticsNotice";
 import { ListSkeleton } from "./ListSkeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -316,7 +317,9 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
               )}
             />
             <span className="font-medium">Previous session</span>
-            <span>· last {previousSessionLines} lines before Daintree restarted</span>
+            <span>
+              <FactSeparator /> last {previousSessionLines} lines before Daintree restarted
+            </span>
           </button>
           {showPreviousSession ? (
             <pre

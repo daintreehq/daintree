@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { POPOVER_HEADER_CLASS, POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
 import { cn } from "@/lib/utils";
@@ -71,7 +72,9 @@ export function DockStatusPillLabel({
         <AnimatedLabel label={String(count)} />
       </span>
       {!compact && detail && (
-        <span className={cn("tabular-nums text-text-secondary", condensable)}>· {detail}</span>
+        <span className={cn("tabular-nums text-text-secondary", condensable)}>
+          <FactSeparator /> {detail}
+        </span>
       )}
     </>
   );

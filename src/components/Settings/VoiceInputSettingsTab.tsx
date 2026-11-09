@@ -4,6 +4,7 @@ import { Eye, EyeOff, XCircle, ExternalLink, ChevronRight, CheckCircle2 } from "
 import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
 import { Input } from "@/components/ui/input";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
@@ -761,8 +762,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
               label="Input device"
               description={
                 <>
-                  {micDescription}
-                  {" · "}
+                  {micDescription} <FactSeparator />{" "}
                   <Button variant="link" onClick={refreshDevices}>
                     Refresh list
                   </Button>
@@ -1201,7 +1201,7 @@ function ApiKeyRow({
               id={savedId}
               className="rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-1.5 py-0.5 font-mono text-2xs text-text-secondary"
             >
-              Saved · {maskApiKey(value)}
+              Saved <FactSeparator /> {maskApiKey(value)}
             </span>
           ) : (
             <span id={savedId} className="text-xs text-text-secondary">
