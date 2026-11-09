@@ -29,4 +29,24 @@ describe("SettingsChoicebox default annotation (#16598)", () => {
     ]);
     expect(screen.getByRole("radio", { name: "Full" }).getAttribute("aria-describedby")).toBeNull();
   });
+
+  it("keeps the name plain outside a group too", () => {
+    render(
+      <SettingsChoicebox
+        label="Tool set"
+        value="core"
+        onChange={() => {}}
+        options={[
+          { value: "core", label: "Core", isDefault: true, description: "Smaller" },
+          { value: "full", label: "Full" },
+        ]}
+      />
+    );
+    const core = screen.getByRole("radio", { name: "Core" });
+    const ids = (core.getAttribute("aria-describedby") ?? "").split(" ");
+    expect(ids.map((id) => document.getElementById(id)?.textContent)).toEqual([
+      "Default",
+      "Smaller",
+    ]);
+  });
 });
