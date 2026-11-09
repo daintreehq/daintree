@@ -455,7 +455,6 @@ export function useCanopyInboxFocus({
       return;
     }
     landedRef.current = true;
-    restoreRef.current = null;
     setPluginViewId(null);
     setAssistantId(null);
     setPaneFocus(null);

@@ -2,9 +2,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ActionRegistry } from "../../actionTypes";
 import { useCanopyStore } from "@/store/canopyStore";
-import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import type { CanopyPopOut, CanopySnapshot } from "@shared/types/ipc/canopy";
-import type { FleetSnapshot } from "@shared/types/ipc/fleet";
+import type { CanopySnapshot } from "@shared/types/ipc/canopy";
 import { notify } from "@/lib/notify";
 import { ClientAppError } from "@/utils/clientAppError";
 
@@ -64,11 +62,10 @@ describe("canopy actions", () => {
       }
     });
     const focus = vi.fn<() => Promise<boolean>>();
-    const popOut = vi.fn<(popOut: CanopyPopOut) => Promise<void>>(async () => {});
 
     function installWindowApi(): void {
       Object.defineProperty(window, "electron", {
-        value: { canopyWindow: { focus, open, popOut } },
+        value: { canopyWindow: { focus, open } },
         configurable: true,
         writable: true,
       });
@@ -78,7 +75,6 @@ describe("canopy actions", () => {
       Object.assign(main, { standing: false, made: 0, broughtForward: 0 });
       open.mockClear();
       focus.mockClear();
-      popOut.mockClear();
       vi.mocked(notify).mockClear();
     });
 
@@ -106,7 +102,7 @@ describe("canopy actions", () => {
         expect(useCanopyStore.getState().isOpen).toBe(false);
       });
 
-      it("puts away a panel this view still holds once the window stands, never moving it", async () => {
+      it("puts away an offer this view still holds once the window stands", async () => {
         installWindowApi();
         let openWhileAsking: boolean | null = null;
         open.mockImplementationOnce(async () => {
@@ -118,7 +114,6 @@ describe("canopy actions", () => {
 
         expect(openWhileAsking).toBe(true);
         expect(useCanopyStore.getState().isOpen).toBe(false);
-        expect(popOut).not.toHaveBeenCalled();
         expect(open).toHaveBeenCalledTimes(1);
       });
 
@@ -143,7 +138,7 @@ describe("canopy actions", () => {
         new ClientAppError(
           "UNSUPPORTED",
           "Canopy isn't on",
-          "Turn Canopy on before opening its window."
+          "Canopy is off on this computer. Turn it on before opening its window."
         );
 
       afterEach(() => delete window.__DAINTREE_HOST_ID__);
@@ -163,20 +158,23 @@ describe("canopy actions", () => {
         }
       );
 
-      it("opens and closes the host's panel here while this machine's Canopy is off", async () => {
-        installWindowApi();
-        open.mockRejectedValueOnce(offHere()).mockRejectedValueOnce(offHere());
-        window.__DAINTREE_HOST_ID__ = { id: "host-1" };
-        useCanopyStore.setState({ mode: "on", isOpen: false });
+      it.each(["on", "unset"] as const)(
+        "opens no panel here while this machine's Canopy is off (host's %s), and says why (#16581)",
+        async (mode) => {
+          installWindowApi();
+          open.mockRejectedValueOnce(offHere());
+          window.__DAINTREE_HOST_ID__ = { id: "host-1" };
+          useCanopyStore.setState({ mode, isOpen: false });
 
-        await definition("canopy.toggle").run(undefined, {});
-        expect(useCanopyStore.getState().isOpen).toBe(true);
+          await expect(definition("canopy.toggle").run(undefined, {})).rejects.toThrow();
 
-        await definition("canopy.toggle").run(undefined, {});
-        expect(useCanopyStore.getState().isOpen).toBe(false);
-        expect(open).toHaveBeenCalledTimes(2);
-        expect(notify).not.toHaveBeenCalled();
-      });
+          expect(useCanopyStore.getState().isOpen).toBe(false);
+          expect(notify).toHaveBeenCalledTimes(1);
+          const toast = vi.mocked(notify).mock.calls[0]![0];
+          expect(toast.type).toBe("error");
+          expect(toast.message).toBe(offHere().userMessage);
+        }
+      );
 
       it.each(["on", "unset"] as const)(
         "offers the window whatever the host's Canopy is (%s), leaving main to say if it can't",
@@ -238,16 +236,13 @@ describe("canopy actions", () => {
     });
   });
 
-  it("marks read only this project's agents when Canopy is set to This project", async () => {
+  it("marks read every agent Canopy lists, in every project, with no project scope to wait on (#16581)", async () => {
     const markAllRead = vi.fn(async () => []);
     Object.defineProperty(window, "electron", {
       value: { canopy: { markAllRead, restoreReads: vi.fn() } },
       configurable: true,
       writable: true,
     });
-    window.__DAINTREE_INITIAL_PROJECT__ = {
-      id: "p1",
-    } as typeof window.__DAINTREE_INITIAL_PROJECT__;
     const mark = (runId: string) => ({
       runId,
       spawnedAt: 1,
@@ -256,20 +251,10 @@ describe("canopy actions", () => {
       markedUnreadAt: null,
       version: 1,
     });
-    useFleetSnapshotStore.setState({
-      snapshot: {
-        runs: [
-          { runId: "here", workspaceId: "p1", spawnedAt: 1 },
-          { runId: "there", workspaceId: "p2", spawnedAt: 1 },
-        ],
-        changedAt: 0,
-        degraded: false,
-        lastSuccessfulAt: 0,
-      } as unknown as FleetSnapshot,
-    });
+    // An earlier build's "This project", left in storage, narrows nothing.
+    window.localStorage.setItem("daintree-canopy-scope", "project");
     useCanopyStore.setState({
       mode: "on",
-      scope: "project",
       snapshot: {
         activated: true,
         dispositions: [],
@@ -277,19 +262,15 @@ describe("canopy actions", () => {
       } as unknown as CanopySnapshot,
     });
     try {
+      expect(definition("canopy.markAllRead").isEnabled?.({})).toBe(true);
       await definition("canopy.markAllRead").run(undefined, {});
-      expect(markAllRead).toHaveBeenCalledWith([{ runId: "here", spawnedAt: 1, turn: 2 }]);
-      // Before the fleet is read, which runs are this project's can't be told:
-      // the action stands down and says why, rather than doing nothing.
-      useFleetSnapshotStore.setState({ snapshot: null });
-      expect(definition("canopy.markAllRead").isEnabled?.({})).toBe(false);
-      expect(definition("canopy.markAllRead").disabledReason?.({})).toBe(
-        "Canopy hasn't listed this project's agents yet."
-      );
+      expect(markAllRead).toHaveBeenCalledWith([
+        { runId: "here", spawnedAt: 1, turn: 2 },
+        { runId: "there", spawnedAt: 1, turn: 2 },
+      ]);
     } finally {
-      delete window.__DAINTREE_INITIAL_PROJECT__;
-      useCanopyStore.setState({ scope: "all", snapshot: null });
-      useFleetSnapshotStore.setState({ snapshot: null });
+      window.localStorage.removeItem("daintree-canopy-scope");
+      useCanopyStore.setState({ snapshot: null });
     }
   });
 

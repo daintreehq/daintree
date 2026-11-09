@@ -3,7 +3,6 @@ import type { RefObject } from "react";
 import type { CanopyReadMark, CanopyTrashOutcome } from "@shared/types/ipc/canopy";
 import type { HostId } from "@shared/types/remoteHosts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { useCanopyStore } from "@/store/canopyStore";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";

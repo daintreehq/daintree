@@ -9,20 +9,20 @@ const viewCached = vi.hoisted(() => ({ current: false }));
 vi.mock("@/lib/viewCacheState", () => ({ isProjectViewCached: () => viewCached.current }));
 
 import { useCanopyStore } from "@/store/canopyStore";
-import { useCanopyPanelShown } from "../useCanopyPanelShown";
+import { useCanopyOfferShown } from "../useCanopyOfferShown";
 
-/** Every mount of the panel, so a panel shown for one commit is caught too. */
+/** Every mount of the offer, so an offer shown for one commit is caught too. */
 let mounts = 0;
-function Panel() {
+function Offer() {
   useEffect(() => {
     mounts += 1;
   }, []);
-  return <div data-testid="panel" />;
+  return <div data-testid="offer" />;
 }
 
-/** ModalHostLayer's use of the gate: the panel mounts only while it is shown. */
+/** ModalHostLayer's use of the gate: the offer mounts only while it is shown. */
 function Host() {
-  return useCanopyPanelShown() ? <Panel /> : null;
+  return useCanopyOfferShown() ? <Offer /> : null;
 }
 
 const OPEN_WINDOW = ["canopy.openWindow", undefined, { source: "user" }];
@@ -41,19 +41,19 @@ afterEach(() => {
   delete window.__DAINTREE_HOST_ID__;
 });
 
-describe("useCanopyPanelShown (#16578)", () => {
-  it("shows the panel a project view opens before Canopy is on, where it offers turning it on", () => {
+describe("useCanopyOfferShown (#16578, #16581)", () => {
+  it("shows the offer a project view opens before Canopy is on", () => {
     useCanopyStore.setState({ mode: "unset", isOpen: false });
     const view = render(<Host />);
-    expect(view.queryByTestId("panel")).toBeNull();
+    expect(view.queryByTestId("offer")).toBeNull();
 
     act(() => useCanopyStore.getState().toggle());
 
-    expect(view.queryByTestId("panel")).not.toBeNull();
+    expect(view.queryByTestId("offer")).not.toBeNull();
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("never mounts a panel asked for once Canopy is on, and opens the window instead", () => {
+  it("never mounts an offer asked for once Canopy is on, and opens the window instead", () => {
     useCanopyStore.setState({ mode: "on", isOpen: false });
     render(<Host />);
 
@@ -67,19 +67,19 @@ describe("useCanopyPanelShown (#16578)", () => {
   it("puts the offer away as Canopy turns on and opens the window, so turning it off shows nothing", () => {
     useCanopyStore.setState({ mode: "unset", isOpen: true });
     const view = render(<Host />);
-    expect(view.queryByTestId("panel")).not.toBeNull();
+    expect(view.queryByTestId("offer")).not.toBeNull();
 
     act(() => useCanopyStore.setState({ mode: "on" }));
-    expect(view.queryByTestId("panel")).toBeNull();
+    expect(view.queryByTestId("offer")).toBeNull();
     expect(useCanopyStore.getState().isOpen).toBe(false);
     expect(dispatch.mock.calls).toEqual([OPEN_WINDOW]);
 
     act(() => useCanopyStore.setState({ mode: "unset" }));
-    expect(view.queryByTestId("panel")).toBeNull();
+    expect(view.queryByTestId("offer")).toBeNull();
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
-  it("only puts away a panel left open in a view the user has left, opening no window from it", () => {
+  it("only puts away an offer left open in a view the user has left, opening no window from it", () => {
     // Asked for while its code loaded, then the project switched away before it mounted.
     useCanopyStore.setState({ mode: "unset", isOpen: true });
     viewCached.current = true;
@@ -102,7 +102,7 @@ describe("useCanopyPanelShown (#16578)", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("opens nothing while no panel was asked for", () => {
+  it("opens nothing while no offer was asked for", () => {
     useCanopyStore.setState({ mode: "unset", isOpen: false });
     render(<Host />);
 
@@ -111,15 +111,18 @@ describe("useCanopyPanelShown (#16578)", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("keeps a remote host's panel, which opens only when this machine's window couldn't", () => {
-    window.__DAINTREE_HOST_ID__ = { id: "host-1" };
-    useCanopyStore.setState({ mode: "on", isOpen: false });
-    const view = render(<Host />);
+  it.each(["on", "unset"] as const)(
+    "mounts nothing in a view on a remote host (host's Canopy %s), and opens no window from it",
+    (mode) => {
+      window.__DAINTREE_HOST_ID__ = { id: "host-1" };
+      useCanopyStore.setState({ mode, isOpen: false });
+      render(<Host />);
 
-    act(() => useCanopyStore.getState().open());
+      act(() => useCanopyStore.getState().open());
 
-    expect(view.queryByTestId("panel")).not.toBeNull();
-    expect(useCanopyStore.getState().isOpen).toBe(true);
-    expect(dispatch).not.toHaveBeenCalled();
-  });
+      expect(mounts).toBe(0);
+      expect(useCanopyStore.getState().isOpen).toBe(false);
+      expect(dispatch).not.toHaveBeenCalled();
+    }
+  );
 });

@@ -293,7 +293,6 @@ export const SETTING_CATALOG = {
       "daintree-plugin-terminal-links": device,
       "help-panel-storage": device,
       "project-storage": device,
-      "daintree-canopy-scope": device,
       "daintree-canopy-all-hosts": device,
       "daintree-canopy-order": device,
       "daintree-canopy-role": device,
