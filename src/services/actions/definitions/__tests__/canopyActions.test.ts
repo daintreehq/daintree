@@ -178,6 +178,22 @@ describe("canopy actions", () => {
         expect(notify).not.toHaveBeenCalled();
       });
 
+      it.each(["on", "unset"] as const)(
+        "offers the window whatever the host's Canopy is (%s), leaving main to say if it can't",
+        (mode) => {
+          window.__DAINTREE_HOST_ID__ = { id: "host-1" };
+          useCanopyStore.setState({ mode });
+          const openWindow = definition("canopy.openWindow");
+
+          expect(openWindow.isVisible?.({})).toBe(true);
+          expect(openWindow.isEnabled?.({})).toBe(true);
+          expect(openWindow.disabledReason?.({})).toBeUndefined();
+
+          useCanopyStore.setState({ mode: "hidden" });
+          expect(openWindow.isEnabled?.({})).toBe(false);
+        }
+      );
+
       it("says why when the window failed for another reason, opening nothing here", async () => {
         installWindowApi();
         open.mockRejectedValueOnce(new Error("no"));

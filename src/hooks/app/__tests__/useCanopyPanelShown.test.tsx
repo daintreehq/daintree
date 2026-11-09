@@ -5,6 +5,8 @@ import { useEffect } from "react";
 
 const dispatch = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
+const viewCached = vi.hoisted(() => ({ current: false }));
+vi.mock("@/lib/viewCacheState", () => ({ isProjectViewCached: () => viewCached.current }));
 
 import { useCanopyStore } from "@/store/canopyStore";
 import { useCanopyPanelShown } from "../useCanopyPanelShown";
@@ -29,6 +31,7 @@ afterEach(() => {
   useCanopyStore.setState({ mode: "unset", isOpen: false });
   mounts = 0;
   dispatch.mockClear();
+  viewCached.current = false;
   delete window.__DAINTREE_HOST_ID__;
 });
 
@@ -68,6 +71,18 @@ describe("useCanopyPanelShown (#16578)", () => {
     act(() => useCanopyStore.setState({ mode: "unset" }));
     expect(view.queryByTestId("panel")).toBeNull();
     expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("only puts away a panel left open in a view the user has left, opening no window from it", () => {
+    // Asked for while its code loaded, then the project switched away before it mounted.
+    useCanopyStore.setState({ mode: "unset", isOpen: true });
+    viewCached.current = true;
+    render(<Host />);
+
+    act(() => useCanopyStore.setState({ mode: "on" }));
+
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("opens nothing while no panel was asked for", () => {

@@ -213,15 +213,20 @@ describe("Canopy's own key in its window (#16578)", () => {
   it("leaves a rebind without Cmd or Ctrl to the search and the terminal, taking it elsewhere", () => {
     keybindingService.applyOverrides({ "canopy.toggle": ["E"] });
     const search = document.createElement("input");
-    search.addEventListener("keydown", (event) => reached.push(event));
-    document.body.append(search);
+    const note = document.createElement("textarea");
+    for (const field of [search, note]) {
+      field.addEventListener("keydown", (event) => reached.push(event));
+      document.body.append(field);
+    }
 
     const typed = press(search, "e", {});
+    const written = press(note, "e", {});
     const inTerminal = press(terminalInput, "e", {});
 
     expect(typed.defaultPrevented).toBe(false);
+    expect(written.defaultPrevented).toBe(false);
     expect(inTerminal.defaultPrevented).toBe(false);
-    expect(reached).toEqual([typed, inTerminal]);
+    expect(reached).toEqual([typed, written, inTerminal]);
     expect(focusLastProjectWindow).not.toHaveBeenCalled();
 
     // Out of anything typed into, as on the list, it is Canopy's key.

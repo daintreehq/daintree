@@ -86,6 +86,15 @@ function onRemoteHost(): boolean {
 }
 
 /**
+ * Whether the window is offered here: once Canopy is on, or in a view on a
+ * remote host, wherever it is shown, since only main knows whether this
+ * machine's Canopy is on and says so if it isn't.
+ */
+function windowOffered(): boolean {
+  return onRemoteHost() ? canopyShown() : canopyOn();
+}
+
+/**
  * Open the one Canopy window, or bring it forward, restored if minimized:
  * Canopy's only home once it is on (#16578), whatever was opened before. A
  * panel this view still holds is put away once the window stands. False when
@@ -146,9 +155,9 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     nonRepeatable: true,
-    isVisible: canopyOn,
-    isEnabled: canopyOn,
-    disabledReason: () => (canopyOn() ? undefined : CANOPY_OFF_REASON),
+    isVisible: windowOffered,
+    isEnabled: windowOffered,
+    disabledReason: () => (windowOffered() ? undefined : CANOPY_OFF_REASON),
     keywords: ["canopy", "inbox", "agents", "window", "monitor", "detach"],
     selfNotifiesOnExecutionError: true,
     run: async () => {
