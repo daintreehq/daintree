@@ -672,12 +672,18 @@ function createWindowAtSavedBounds(
   // restored background window takes focus and the top of the stack from the
   // window the user is in. On Linux the maximize waits for the reveal instead.
   let maximizeOnShow = false;
-  // Full screen always waits for the reveal; a save before it is still of a full-screen window.
-  let fullScreenOnShow = false;
+  // Full screen waits for the reveal, and macOS reports it only once its transition
+  // ends: until then a save is still of a full-screen window. A request that never
+  // lands keeps saving the full screen the window was restored with.
+  let fullScreenPending = false;
   if (windowState.isFullScreen) {
-    fullScreenOnShow = options.show === false;
+    if (options.show === false) {
+      fullScreenPending = true;
+      win.once("enter-full-screen", () => {
+        fullScreenPending = false;
+      });
+    }
     win.once("show", () => {
-      fullScreenOnShow = false;
       if (!win.isDestroyed()) {
         win.setFullScreen(true);
       }
@@ -734,7 +740,7 @@ function createWindowAtSavedBounds(
     if (win.isDestroyed()) return;
 
     const isMaximized = win.isMaximized() || maximizeOnShow;
-    const isFullScreen = win.isFullScreen() || fullScreenOnShow;
+    const isFullScreen = win.isFullScreen() || fullScreenPending;
 
     const actualBounds = win.getNormalBounds();
     // The frame's display, not the normal bounds': the two can differ (#16579).
@@ -742,9 +748,11 @@ function createWindowAtSavedBounds(
       isMaximized || isFullScreen ? screen.getDisplayMatching(win.getBounds()) : null;
 
     // Checked at each save rather than on every move: the debounced save sees the
-    // window once a native zoom or full-screen transition has settled.
+    // window once a native zoom or full-screen transition has settled. Minimized,
+    // macOS reports a maximized window unmaximized, but minimizing moves nothing.
     if (
       heldPlacement &&
+      !win.isMinimized() &&
       !(
         (heldPlacement.fullScreen ? isFullScreen : isMaximized && !isFullScreen) &&
         boundsNear(actualBounds, heldPlacement.placed) &&

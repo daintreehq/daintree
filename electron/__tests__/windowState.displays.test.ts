@@ -50,10 +50,13 @@ const fakes = vi.hoisted(() => {
    */
   class FakeWindow {
     static created: FakeWindow[] = [];
+    /** macOS: full screen is reported only once its transition ends. */
+    static asyncFullScreen = false;
     normal: Rect;
     frame: Rect | null = null;
     maximized = false;
     fullScreen = false;
+    minimized = false;
     destroyed = false;
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
@@ -97,12 +100,28 @@ const fakes = vi.hoisted(() => {
       this.emit("resize");
     };
     setFullScreen = vi.fn((flag: boolean) => {
+      if (flag && FakeWindow.asyncFullScreen) {
+        this.emit("resize");
+        return;
+      }
       this.fullScreen = flag;
       this.frame = flag ? { ...screen.getDisplayMatching(this.normal).bounds } : null;
       this.emit(flag ? "enter-full-screen" : "leave-full-screen");
       this.emit("resize");
     });
-    isMaximized = () => this.maximized;
+    finishFullScreen() {
+      this.fullScreen = true;
+      this.frame = { ...screen.getDisplayMatching(this.normal).bounds };
+      this.emit("enter-full-screen");
+      this.emit("resize");
+    }
+    minimize() {
+      this.minimized = true;
+      this.emit("minimize");
+    }
+    // As on macOS: a minimized window reports itself unmaximized.
+    isMaximized = () => this.maximized && !this.minimized;
+    isMinimized = () => this.minimized;
     isFullScreen = () => this.fullScreen;
     isDestroyed = () => this.destroyed;
 
@@ -228,6 +247,7 @@ beforeEach(() => {
   setPlatform("darwin");
   fakes.store.state = {};
   fakes.FakeWindow.created.length = 0;
+  fakes.FakeWindow.asyncFullScreen = false;
   connect(MAC, IPAD);
 });
 
@@ -274,6 +294,11 @@ describe("a window maximized or full screen on another display than its normal b
     expect(displayOf(win.getBounds())).toBe(IPAD.id);
     win.setFullScreen(false);
     expect(within(win.getBounds(), IPAD.workArea)).toBe(true);
+    quit(win);
+    expect(fakes.store.state[CANOPY_BOUNDS_KEY]).toEqual(
+      expect.objectContaining({ isFullScreen: false })
+    );
+    expect(fakes.store.state[CANOPY_BOUNDS_KEY]).not.toHaveProperty("display");
   });
 
   it("keeps normal bounds that already sit on that display where they were", async () => {
@@ -389,22 +414,35 @@ describe("a window maximized or full screen on another display than its normal b
     expect(displayOf(win.getBounds())).toBe(MAC.id);
   });
 
-  it("ignores a saved display it can't read", async () => {
+  it.each([
+    ["its id with bounds it can't have", { id: IPAD.id, ...IPAD.bounds, width: 0 }, true],
+    ["an id it can't read, at its exact bounds", { id: String(IPAD.id), ...IPAD.bounds }, true],
+    ["it, for a window that wasn't maximized", { id: IPAD.id, ...IPAD.bounds }, false],
+  ])("ignores a saved display naming %s", async (_name, display, isMaximized) => {
     fakes.store.state = {
       [CANOPY_BOUNDS_KEY]: {
         x: 862,
         y: 477,
         width: 1376,
         height: 974,
-        isMaximized: true,
+        isMaximized,
         isFullScreen: false,
-        display: { id: "ipad", x: -1366, y: 0, width: 0, height: 1024 },
+        display,
       },
     };
 
     const win = await launch();
 
     expect(win.getNormalBounds()).toEqual({ x: 862, y: 477, width: 1376, height: 974 });
+    expect(displayOf(win.getBounds())).toBe(MAC.id);
+  });
+
+  it("takes no display when another id leaves two at its spot", async () => {
+    await leftOnIpad("maximized");
+    connect(MAC, { ...IPAD, id: 10 }, { ...IPAD, id: 11 });
+
+    const win = await launch();
+
     expect(displayOf(win.getBounds())).toBe(MAC.id);
   });
 
@@ -463,6 +501,75 @@ describe("when that display is absent at launch", () => {
     quit(await launch());
 
     expect(fakes.store.state[CANOPY_BOUNDS_KEY]).toEqual(saved);
+  });
+
+  it("keeps it when its normal bounds had to be pulled onto a remaining display", async () => {
+    const saved = {
+      x: -1200,
+      y: 100,
+      width: 1000,
+      height: 700,
+      isMaximized: true,
+      isFullScreen: false,
+      display: { id: IPAD.id, ...IPAD.bounds },
+    };
+    fakes.store.state = { [CANOPY_BOUNDS_KEY]: structuredClone(saved) };
+    connect(MAC);
+
+    const win = await launch();
+    expect(within(win.getNormalBounds(), MAC.workArea)).toBe(true);
+    quit(win);
+    expect(fakes.store.state[CANOPY_BOUNDS_KEY]).toEqual(saved);
+    connect(MAC, IPAD);
+
+    const next = await launch();
+    expect(next.getNormalBounds()).toEqual({ x: -1200, y: 100, width: 1000, height: 700 });
+    expect(displayOf(next.getBounds())).toBe(IPAD.id);
+  });
+
+  it("keeps it while macOS is still entering full screen", async () => {
+    await leftOnIpad("full screen");
+    connect(MAC);
+    fakes.FakeWindow.asyncFullScreen = true;
+    // launch() runs the save the transition's first resize queued, before it ends.
+    const win = await launch();
+    expect(win.isFullScreen()).toBe(false);
+    win.finishFullScreen();
+    quit(win);
+    fakes.FakeWindow.asyncFullScreen = false;
+    connect(MAC, IPAD);
+
+    const next = await launch();
+
+    expect(next.isFullScreen()).toBe(true);
+    expect(displayOf(next.getBounds())).toBe(IPAD.id);
+  });
+
+  it("keeps it through minimizing the window", async () => {
+    await leftOnIpad("maximized");
+    connect(MAC);
+    const win = await launch();
+    win.minimize();
+    quit(win);
+    connect(MAC, IPAD);
+
+    const next = await launch();
+
+    expect(next.isMaximized()).toBe(true);
+    expect(displayOf(next.getBounds())).toBe(IPAD.id);
+  });
+
+  it("keeps it when the window reports its bounds a few pixels off", async () => {
+    await leftOnIpad("maximized");
+    connect(MAC);
+    const win = await launch();
+    win.normal = { ...win.normal, width: win.normal.width + 6, height: win.normal.height + 5 };
+    quit(win);
+    connect(MAC, IPAD);
+
+    const next = await launch();
+
+    expect(displayOf(next.getBounds())).toBe(IPAD.id);
   });
 
   it("keeps it through a save before the window is revealed", async () => {
@@ -538,6 +645,54 @@ describe("when that display is absent at launch", () => {
 
     const next = await launch();
 
+    expect(displayOf(next.getBounds())).toBe(MAC.id);
+  });
+
+  it.each([
+    ["width", { width: 1100 }],
+    ["height", { height: 700 }],
+  ])("lets go of it once the user changes its %s alone", async (_name, change) => {
+    await leftOnIpad("maximized");
+    connect(MAC);
+    const win = await launch();
+    win.unmaximize();
+    win.moveTo({ ...win.getNormalBounds(), ...change });
+    win.maximize();
+    quit(win);
+    connect(MAC, IPAD);
+
+    const next = await launch();
+
+    expect(displayOf(next.getBounds())).toBe(MAC.id);
+  });
+
+  it("lets go of it once the user takes the maximized window full screen", async () => {
+    await leftOnIpad("maximized");
+    connect(MAC);
+    const win = await launch();
+    win.setFullScreen(true);
+    quit(win);
+    connect(MAC, IPAD);
+
+    const next = await launch();
+
+    expect(next.isFullScreen()).toBe(true);
+    expect(displayOf(next.getBounds())).toBe(MAC.id);
+  });
+
+  it("lets go of it once the user turns full screen into maximized", async () => {
+    await leftOnIpad("full screen");
+    connect(MAC);
+    const win = await launch();
+    win.setFullScreen(false);
+    win.maximize();
+    quit(win);
+    connect(MAC, IPAD);
+
+    const next = await launch();
+
+    expect(next.isFullScreen()).toBe(false);
+    expect(next.isMaximized()).toBe(true);
     expect(displayOf(next.getBounds())).toBe(MAC.id);
   });
 
