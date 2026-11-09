@@ -749,14 +749,14 @@ function createWindowAtSavedBounds(
 
     // Checked at each save rather than on every move: the debounced save sees the
     // window once a native zoom or full-screen transition has settled. Minimized,
-    // macOS reports a maximized window unmaximized, but minimizing moves nothing.
+    // macOS reports a maximized window unmaximized: only its normal bounds tell.
     if (
       heldPlacement &&
-      !win.isMinimized() &&
       !(
-        (heldPlacement.fullScreen ? isFullScreen : isMaximized && !isFullScreen) &&
         boundsNear(actualBounds, heldPlacement.placed) &&
-        frameDisplay?.id === heldPlacement.placedDisplayId
+        (win.isMinimized() ||
+          ((heldPlacement.fullScreen ? isFullScreen : isMaximized && !isFullScreen) &&
+            frameDisplay?.id === heldPlacement.placedDisplayId))
       )
     ) {
       heldPlacement = null;

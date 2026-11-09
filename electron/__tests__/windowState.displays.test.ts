@@ -666,6 +666,21 @@ describe("when that display is absent at launch", () => {
     expect(displayOf(next.getBounds())).toBe(MAC.id);
   });
 
+  it("lets go of it once the user resizes the window, even when it is minimized right after", async () => {
+    await leftOnIpad("maximized");
+    connect(MAC);
+    const win = await launch();
+    win.unmaximize();
+    win.moveTo({ ...win.getNormalBounds(), width: 1100 });
+    win.minimize();
+    quit(win);
+    connect(MAC, IPAD);
+
+    const next = await launch();
+
+    expect(displayOf(next.getBounds())).toBe(MAC.id);
+  });
+
   it("lets go of it once the user takes the maximized window full screen", async () => {
     await leftOnIpad("maximized");
     connect(MAC);
