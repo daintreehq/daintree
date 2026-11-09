@@ -1,22 +1,22 @@
 import type { ReactNode } from "react";
-import { AppDialog, AppDialogWindowChrome } from "@/components/ui/AppDialog";
-import { useCanopyFrame } from "./canopyFrame";
+import { AppDialogWindowChrome } from "@/components/ui/AppDialog";
 import { CANOPY_TITLE } from "./canopyTerms";
 
 /**
  * What the inbox's every state is drawn in: a plain section filling the window
- * that hosts it, under a header whose title and close button are a dialog's.
+ * that hosts it, under a header whose title is a dialog's.
  *
- * No Escape here: the host is a window left open all day, often on another
- * display, and one stray press would lose it and its place (#16580). Escape
- * unwinds what is open inside it and stops at the list; the window closes by
- * its close button, Cmd+W or its own title bar.
+ * No close button here: the window closes by the OS's own control, as every
+ * Daintree window does, or by Cmd+W and the menu's Close Window, and a second ×
+ * beside the first would be a duplicate (#16594). No Escape either: the window
+ * is left open all day, often on another display, and one stray press would
+ * lose it and its place (#16580). Escape unwinds what is open inside it and
+ * stops at the list.
  */
 export function CanopySurface({ isOpen, children }: { isOpen: boolean; children: ReactNode }) {
-  const { close } = useCanopyFrame();
   if (!isOpen) return null;
   return (
-    <AppDialogWindowChrome onClose={close}>
+    <AppDialogWindowChrome>
       <section
         aria-label={CANOPY_TITLE}
         data-canopy-standalone=""
@@ -28,9 +28,4 @@ export function CanopySurface({ isOpen, children }: { isOpen: boolean; children:
       </section>
     </AppDialogWindowChrome>
   );
-}
-
-/** Names what it closes where there is no dialog to call it. */
-export function CanopyCloseButton() {
-  return <AppDialog.CloseButton aria-label={`Close ${CANOPY_TITLE}`} />;
 }

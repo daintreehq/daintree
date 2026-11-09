@@ -7,7 +7,6 @@ import type { CanopyFrame } from "../canopyFrame";
  */
 export function canopyTestFrame(overrides: Partial<CanopyFrame> = {}): CanopyFrame {
   return {
-    close: vi.fn(),
     goToRun: vi.fn(),
     restoreElsewhere: vi.fn(),
     openAssistant: vi.fn(async () => null),

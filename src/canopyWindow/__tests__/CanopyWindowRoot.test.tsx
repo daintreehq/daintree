@@ -256,11 +256,6 @@ describe("CanopyWindowRoot", () => {
 });
 
 describe("the Canopy window's frame", () => {
-  it("closes the window when the inbox is put away", () => {
-    CANOPY_WINDOW_FRAME.close();
-    expect(closeWindow).toHaveBeenCalledTimes(1);
-  });
-
   describe("Go to pane (#16337)", () => {
     const go = (
       place: { hostId: string | null; runId: string; workspaceId: string },

@@ -11,7 +11,6 @@ import { CANOPY_DEMO_FRAME_COUNT, canopyDemoItems } from "./canopyDemo";
 import { itemNeedsAttention } from "./canopyModel";
 import { useListReorderMotion } from "./useListReorderMotion";
 import { CanopyHeaderCenter } from "./CanopyHostPicker";
-import { CanopyCloseButton } from "./CanopySurface";
 import { canopyListStyle } from "./canopyListWidth";
 import { CANOPY_LOCAL, CANOPY_STOP, CANOPY_TITLE } from "./canopyTerms";
 
@@ -44,6 +43,11 @@ interface CanopyPitchProps {
   onHide: () => Promise<void>;
   /** The host picker, when there is another host to show: the offer is this host's alone. */
   hostPicker?: React.ReactNode;
+  /**
+   * The offer's close button: a dialog over a project window, whose own controls
+   * close the project. The Canopy window's are its own, so it passes none.
+   */
+  headerActions?: React.ReactNode;
 }
 
 const FAILED: Record<"on" | "hide", string> = {
@@ -58,7 +62,13 @@ const FAILED: Record<"on" | "hide", string> = {
  * Its header and body only: the offer in a project window draws it in a
  * dialog, and the Canopy window in its own surface.
  */
-export function CanopyPitch({ isOpen, onTurnOn, onHide, hostPicker }: CanopyPitchProps) {
+export function CanopyPitch({
+  isOpen,
+  onTurnOn,
+  onHide,
+  hostPicker,
+  headerActions,
+}: CanopyPitchProps) {
   const [pending, setPending] = useState<"on" | "hide" | null>(null);
   const [failed, setFailed] = useState<"on" | "hide" | null>(null);
   // The keyboard lands on the offer's heading, not on Turn on: a reflexive
@@ -89,7 +99,7 @@ export function CanopyPitch({ isOpen, onTurnOn, onHide, hostPicker }: CanopyPitc
       <AppDialog.Header>
         <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
         <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
-        <CanopyCloseButton />
+        {headerActions}
       </AppDialog.Header>
       <div className="canopy-frame flex min-h-0 flex-1">
         <DemoInbox paused={!isOpen} />
@@ -132,7 +142,8 @@ export function CanopyPitch({ isOpen, onTurnOn, onHide, hostPicker }: CanopyPitc
                 </p>
               </div>
               {/* Turning it on and not wanting it are the same size, side by
-                  side: the close button is the "not now". */}
+                  side: "not now" is closing it, by the offer's close button or
+                  the Canopy window's own controls. */}
               <div className="flex items-center gap-3">
                 <Button
                   variant="contrast"

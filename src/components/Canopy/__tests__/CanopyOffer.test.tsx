@@ -189,6 +189,18 @@ describe("CanopyOffer, all of Canopy in a project window (#16581)", () => {
     expect(useCanopyStore.getState().isOpen).toBe(false);
   });
 
+  // A project window's own controls close the project, not the offer over it:
+  // unlike the Canopy window's, this header keeps its ×, waiting on main too.
+  it("keeps its close button while main hasn't said, putting away only the offer", () => {
+    render(<CanopyOffer />);
+    expect(offer()!.querySelector('[aria-busy="true"]')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: `Close ${CANOPY_TITLE}` }));
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+    expect(useCanopyStore.getState().mode).toBe("unset");
+    expect(canopy.setMode).not.toHaveBeenCalled();
+  });
+
   it("goes when its project view is put in the background, or already was", () => {
     useCanopyStore.setState({ snapshot: snapshot("unset", false) });
     const view = render(<CanopyOffer />);

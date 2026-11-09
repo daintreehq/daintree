@@ -119,7 +119,8 @@ function resolveRestoreFocusTarget(target: RestoreFocusTarget | undefined): HTML
 }
 
 interface AppDialogContextValue {
-  onClose: () => void;
+  /** Absent in window chrome: there the window's own controls close it. */
+  onClose?: () => void;
   titleId: string;
   descriptionId: string;
   variant: DialogVariant;
@@ -148,27 +149,21 @@ const NO_DESCRIPTION = () => () => {};
 const NO_BODY_EDGES = () => {};
 
 /**
- * A window dialog's header, title and close button for a host that fills its
- * own window: none of the dialog around them, so no portal, focus trap, or
- * Escape layer. The host draws the surface and says what closing does.
+ * A window dialog's header and title for a host that fills its own window:
+ * none of the dialog around them, so no portal, focus trap, or Escape layer.
+ * The host draws the surface, and the window closes by its own controls, so
+ * nothing here closes it: a close button composed in anyway shows unavailable.
  */
-export function AppDialogWindowChrome({
-  onClose,
-  children,
-}: {
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
+export function AppDialogWindowChrome({ children }: { children: React.ReactNode }) {
   const titleId = useId();
   const descriptionId = useId();
   return (
     <AppDialogContext.Provider
       value={{
-        onClose,
         titleId,
         descriptionId,
         variant: "default",
-        dismissible: true,
+        dismissible: false,
         registerDescription: NO_DESCRIPTION,
         placement: "window",
         bodyEdges: null,
