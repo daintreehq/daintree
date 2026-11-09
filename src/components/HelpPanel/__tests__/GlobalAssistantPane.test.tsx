@@ -650,14 +650,17 @@ describe("GlobalAssistantPane (#14454)", () => {
     it("hands a click's Cancel on to Start without a ring", async () => {
       const { answer } = await heldCancel();
       const focus = vi.spyOn(HTMLElement.prototype, "focus");
-      // jsdom reads a dispatched click as a pointer press, as Chromium does.
-      act(() => cancelButton()!.focus());
-      fireEvent.click(cancelButton()!);
-      push(viewOf({ generation: 5 }));
-      await answer(viewOf({ generation: 5 }));
-      advance(50);
-      expect(startFocusOptions(focus)).toMatchObject({ focusVisible: false });
-      focus.mockRestore();
+      try {
+        // jsdom reads a dispatched click as a pointer press, as Chromium does.
+        act(() => cancelButton()!.focus());
+        fireEvent.click(cancelButton()!);
+        push(viewOf({ generation: 5 }));
+        await answer(viewOf({ generation: 5 }));
+        advance(50);
+        expect(startFocusOptions(focus)).toMatchObject({ focusVisible: false });
+      } finally {
+        focus.mockRestore();
+      }
     });
 
     it("waits for the launching state to go when main answers before it has", async () => {

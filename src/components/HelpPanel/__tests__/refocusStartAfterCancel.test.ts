@@ -71,6 +71,7 @@ describe("refocusStartAfterCancel (#16603)", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(document.activeElement).toBe(document.body);
 
+    // Taken by something else for even a frame, the keyboard is no longer Cancel's to hand on.
     const elsewhere = document.createElement("input");
     document.body.append(cancel, elsewhere);
     cancel.focus();
@@ -79,7 +80,10 @@ describe("refocusStartAfterCancel (#16603)", () => {
       () => start
     );
     elsewhere.focus();
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(20);
     expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(document.activeElement).toBe(document.body);
   });
 });
