@@ -13,10 +13,10 @@ const OPTIONS = [
 ] as const satisfies readonly { value: ResumeOnRestart; label: string }[];
 
 const DESCRIPTIONS: Record<ResumeOnRestart, string> = {
-  always: "Every agent pane resumes its conversation as its project restores",
+  always: "Every agent panel resumes its conversation as its project restores",
   "on-focus":
-    "Agent panes wait, and each resumes its conversation when you first focus it. Saves memory when many panes come back",
-  never: "Agent panes wait for you to resume their conversation or start a new one",
+    "Agent panels wait, and each resumes its conversation when you first focus it. Saves memory when many panels come back",
+  never: "Agent panels wait for you to resume their conversation or start a new one",
 };
 
 export interface ResumeOnRestartRowProps {

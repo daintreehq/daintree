@@ -422,7 +422,7 @@ describe.each(["comfortable", "compact"] as const)("WorktreeCard selection — %
 
     it("Review & commit opens the review without selecting", () => {
       const { onSelect } = renderCard({ isActive });
-      fireEvent.click(screen.getByRole("button", { name: "Open Review & commit" }));
+      fireEvent.click(screen.getByRole("button", { name: "Review & commit" }));
       expect(dispatch).toHaveBeenCalledWith("worktree.openReviewHub", { worktreeId: WORKTREE.id });
       expect(onSelect).not.toHaveBeenCalled();
     });

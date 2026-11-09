@@ -978,13 +978,13 @@ test("sidebar worktree card review — states and themes", async () => {
         // nesting evidence, but the session rows have to be legible somewhere.
         await setSection(flagship, "details", false);
         await setSection(flagship, "terminals", true);
-        await snap(page, "100-card-sessions-expanded", flagship, "Active sessions");
+        await snap(page, "100-card-sessions-expanded", flagship, "Active terminals");
         await snap(page, "102-sidebar-loaded", sidebar);
         await setSection(flagship, "terminals", false);
         await snap(page, "103-card-sessions-collapsed", flagship, "active");
         await setSection(flagship, "terminals", true);
         await setSection(flagship, "details", true);
-        await snap(page, "101-card-details-and-sessions", flagship, "Active sessions");
+        await snap(page, "101-card-details-and-sessions", flagship, "Active terminals");
         await setSection(flagship, "details", false);
       });
 

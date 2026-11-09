@@ -321,14 +321,14 @@ async function selectWorktree(page: Page, branch: string | null): Promise<void> 
 }
 
 /**
- * Open the main worktree card's actions menu and pick an item under Sessions — the
+ * Open the main worktree card's actions menu and pick an item under Panels — the
  * pointer path to the same session-wide actions the palette reaches.
  */
 async function pickCardSessionsItem(page: Page, item: RegExp): Promise<void> {
   const card = page.locator(SEL.worktree.mainCard).first();
   await card.hover();
   await card.locator(SEL.worktree.actionsMenu).first().click();
-  const sessions = page.getByRole("menuitem", { name: "Sessions" });
+  const sessions = page.getByRole("menuitem", { name: "Panels" });
   await sessions.waitFor({ state: "visible", timeout: 5000 });
   await sessions.hover();
   await sessions.press("ArrowRight").catch(() => {});
@@ -404,7 +404,7 @@ test("terminal destructive confirm review — every copy variant", async () => {
     await step(page, "kill-all", async () => {
       await running();
       await dispatch(page, "terminal.killAll");
-      await snapDialog(page, "03-kill-all", /^Kill \d+ terminals\?$/);
+      await snapDialog(page, "03-kill-all", /^Remove \d+ panels\?$/);
     });
 
     await step(page, "restart-all", async () => {
@@ -416,17 +416,17 @@ test("terminal destructive confirm review — every copy variant", async () => {
     await step(page, "worktree-restart-all", async () => {
       await running();
       await dispatch(page, "worktree.sessions.restartAll");
-      await snapDialog(page, "05-worktree-restart-all", /^Restart \d+ sessions in '.+'\?$/);
+      await snapDialog(page, "05-worktree-restart-all", /^Restart \d+ terminals in '.+'\?$/);
     });
 
     await step(page, "worktree-trash-all", async () => {
       await dispatch(page, "worktree.sessions.trashAll");
-      await snapDialog(page, "06-worktree-trash-all", /^Trash \d+ sessions in '.+'\?$/);
+      await snapDialog(page, "06-worktree-trash-all", /^Trash \d+ panels in '.+'\?$/);
     });
 
     await step(page, "worktree-end-all", async () => {
       await dispatch(page, "worktree.sessions.endAll");
-      await snapDialog(page, "07-worktree-end-all", /^End \d+ sessions in '.+'\?$/);
+      await snapDialog(page, "07-worktree-end-all", /^Remove \d+ panels in '.+'\?$/);
     });
 
     await step(page, "clear-history", async () => {
@@ -437,12 +437,12 @@ test("terminal destructive confirm review — every copy variant", async () => {
     // The worktree card menu reaches the same three session-wide actions by pointer.
     // Whatever dialog it raises must be this one, not a call-site copy of it.
     await step(page, "menu-trash-all", async () => {
-      await pickCardSessionsItem(page, /^Trash all sessions/);
+      await pickCardSessionsItem(page, /^Trash all panels/);
       await snapDialog(page, "13-menu-trash-all", /\?$/);
     });
 
     await step(page, "menu-end-all", async () => {
-      await pickCardSessionsItem(page, /^(End|Terminate) all sessions/);
+      await pickCardSessionsItem(page, /^Remove all panels/);
       await snapDialog(page, "14-menu-end-all", /\?$/);
     });
 
@@ -491,7 +491,7 @@ test("terminal destructive confirm review — every copy variant", async () => {
       await snapDialog(
         page,
         "11-deleted-group",
-        /^Close \d+ terminals from \d+ deleted worktrees\?$/,
+        /^Close \d+ panels from \d+ deleted worktrees\?$/,
         {
           window: true,
         }

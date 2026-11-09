@@ -57,7 +57,7 @@ function getGateCopy(agentName: string, detail: AgentCliDetail, hostName: string
       return {
         icon: severityIcon("success"),
         title: `${agentName} CLI is available`,
-        description: `Continue to start ${agentName} in this pane.`,
+        description: `Continue to start ${agentName} in this panel.`,
       };
     // Launchable by design — the CLI prompts for sign-in itself — so this is
     // reachable only when a re-check lands here mid-flight or a probe reports it

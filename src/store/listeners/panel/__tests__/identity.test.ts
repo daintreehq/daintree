@@ -171,7 +171,7 @@ describe("identity listener — completed-with-changes notification", () => {
         context: { worktreeId: "wt-1", panelId: "term-1", eventKind: "completed" },
         supersedeKey: "agent-completed:wt-1",
         action: expect.objectContaining({
-          label: "Open review hub",
+          label: "Open Review Hub",
           actionId: "worktree.openReviewHub",
           actionArgs: { worktreeId: "wt-1" },
         }),

@@ -624,7 +624,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                         "-my-1 mr-0.5 flex min-h-6 min-w-6 items-center justify-center rounded-[var(--radius-md)] px-1.5",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                       )}
-                      aria-label={`Open ${reviewHubButtonLabel}`}
+                      aria-label={reviewHubButtonLabel}
                     >
                       <GitCommitHorizontal className="w-3.5 h-3.5" />
                     </button>

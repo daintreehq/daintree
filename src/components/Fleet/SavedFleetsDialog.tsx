@@ -138,7 +138,7 @@ export function SavedFleetsDialog({
         <div ref={bodyRef}>
           {isEmpty ? (
             <p className="text-sm text-text-secondary">
-              Arm two or more panes, then choose Save as fleet… from the fleet menu.
+              Arm two or more terminals, then choose Save as fleet… from the fleet menu.
             </p>
           ) : (
             <div className="flex flex-col gap-4">

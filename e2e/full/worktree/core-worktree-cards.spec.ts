@@ -114,7 +114,7 @@ test.describe.serial("Core: Worktree Cards", () => {
       const featureCard = window.locator(SEL.worktree.card(FEATURE));
       await featureCard.locator(SEL.worktree.actionsMenu).click();
 
-      const sessionsTrigger = window.getByRole("menuitem", { name: "Sessions" });
+      const sessionsTrigger = window.getByRole("menuitem", { name: "Panels" });
       await expect(sessionsTrigger).toBeVisible({ timeout: T_SHORT });
       // Hover doesn't reliably open Radix submenus on Linux CI. Click the
       // trigger so the submenu opens on all platforms.
@@ -220,7 +220,7 @@ test.describe.serial("Core: Worktree Cards", () => {
       await test.step("Verify the intent-based root hierarchy is visible", async () => {
         // The root is submenu triggers plus the destructive row — filesystem,
         // session and card-organization commands live one level down now.
-        for (const name of ["Launch", "Open", "Sessions", "Copy"]) {
+        for (const name of ["Launch", "Open", "Panels", "Copy"]) {
           await expect(window.getByRole("menuitem", { name })).toBeVisible({ timeout: T_SHORT });
         }
 

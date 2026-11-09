@@ -11,8 +11,8 @@ export function registerTerminalNavigationActions(
 ): void {
   actions.set("terminal.focusNext", () => ({
     id: "terminal.focusNext",
-    title: "Focus next terminal",
-    description: "Focus the next terminal (cycles through grid then dock)",
+    title: "Focus next panel",
+    description: "Focus the next panel (cycles through grid then dock)",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -25,8 +25,8 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.focusPrevious", () => ({
     id: "terminal.focusPrevious",
-    title: "Focus previous terminal",
-    description: "Focus the previous terminal (cycles through grid then dock)",
+    title: "Focus previous panel",
+    description: "Focus the previous panel (cycles through grid then dock)",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -56,7 +56,7 @@ export function registerTerminalNavigationActions(
     id: "terminal.toggleInputSurface",
     title: "Switch between hybrid input and terminal",
     description:
-      "Move the keyboard between the focused agent pane's hybrid input and its terminal. Affects only this pane; a pane that can't take the hybrid input stays on its terminal",
+      "Move the keyboard between the focused agent panel's hybrid input and its terminal. Affects only this panel; a panel that can't take the hybrid input stays on its terminal",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -75,8 +75,8 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.focusUp", () => ({
     id: "terminal.focusUp",
-    title: "Focus terminal up",
-    description: "Focus terminal above",
+    title: "Focus panel up",
+    description: "Focus panel above",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -92,8 +92,8 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.focusDown", () => ({
     id: "terminal.focusDown",
-    title: "Focus terminal down",
-    description: "Focus terminal below",
+    title: "Focus panel down",
+    description: "Focus panel below",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -109,8 +109,8 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.focusLeft", () => ({
     id: "terminal.focusLeft",
-    title: "Focus terminal left",
-    description: "Focus terminal to the left",
+    title: "Focus panel left",
+    description: "Focus panel to the left",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -129,8 +129,8 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.focusRight", () => ({
     id: "terminal.focusRight",
-    title: "Focus terminal right",
-    description: "Focus terminal to the right",
+    title: "Focus panel right",
+    description: "Focus panel to the right",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -173,8 +173,8 @@ export function registerTerminalNavigationActions(
     const actionId = `terminal.focusIndex${index}` as ActionId;
     actions.set(actionId, () => ({
       id: actionId,
-      title: `Focus terminal ${index}`,
-      description: `Focus terminal at position ${index}; press again to toggle fullscreen`,
+      title: `Focus panel ${index}`,
+      description: `Focus panel at position ${index}; press again to toggle fullscreen`,
       category: "terminal",
       kind: "command",
       danger: "safe",
@@ -191,7 +191,7 @@ export function registerTerminalNavigationActions(
   actions.set("terminal.focusDock", () => ({
     id: "terminal.focusDock",
     title: "Focus dock",
-    description: "Focus the active dock terminal (or first dock terminal in the active worktree)",
+    description: "Focus the active dock panel (or first dock panel in the active worktree)",
     category: "terminal",
     kind: "command",
     danger: "safe",

@@ -47,12 +47,12 @@ const SESSION_LOST_COPY: Record<
   },
   "sibling-owns-session-id": {
     title: "Session already open elsewhere",
-    description: "Another pane already holds this conversation. A fresh session was started here.",
+    description: "Another panel already holds this conversation. A fresh session was started here.",
   },
   "sibling-owns-resume-latest-slot": {
     title: "Most recent session claimed elsewhere",
     description:
-      "Another pane in this folder already reopened the most recent session. A fresh session was started here.",
+      "Another panel in this folder already reopened the most recent session. A fresh session was started here.",
   },
 };
 
@@ -65,7 +65,7 @@ export const RESTART_BANNER_COPY: RestartBannerCopyMap = {
   "agent-resume-offer": ({ agentName, hasSession }) => ({
     title: `${agentName} quit to the shell`,
     description: hasSession
-      ? "Resume the conversation this pane opened, or carry on in the shell."
+      ? "Resume the conversation this panel opened, or carry on in the shell."
       : "Find the conversation to reopen it here, or carry on in the shell.",
     resumeLabel: "Resume conversation",
   }),

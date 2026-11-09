@@ -31,7 +31,7 @@ const POINTS = [
   {
     icon: Hourglass,
     title: "The one that went quiet",
-    body: "A run stuck behind a spinner, or waiting on you for ten minutes, surfaces instead of hiding in a pane.",
+    body: "A run stuck behind a spinner, or waiting on you for ten minutes, surfaces instead of hiding in a panel.",
   },
 ] as const;
 

@@ -108,7 +108,7 @@ export function DecisionsQuestionsSection({
         <SettingsSwitchCard
           id="decisions-terminal-snapshots"
           title="Show agent status and recent terminal lines on my phone"
-          subtitle="For the pane that asked, only while its question is open, redacted on a best-effort basis"
+          subtitle="For the agent that asked, only while its question is open, redacted on a best-effort basis"
           isEnabled={snapshots.enabled}
           onChange={() => {
             if (snapshotsLocked) return;

@@ -25,7 +25,7 @@ function reportDropsOutOfSight(
     const title = (panel ?? previous[terminalId])?.title?.trim();
     const message = title
       ? `“${title}” closed before its held message was sent.`
-      : "A pane closed before its held message was sent.";
+      : "A panel closed before its held message was sent.";
     notify({
       type: "info",
       title: "Held message not sent",

@@ -94,15 +94,15 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
     case "restart":
       return buildRestartRunningAgentCopy(pending.terminalTitle);
     case "killAll": {
-      const counted = pluralize(count, "terminal");
+      const counted = pluralize(count, "panel");
       return {
-        title: `Kill ${counted}?`,
+        title: `Remove ${counted}?`,
         lead: workingLead(pending.runningAgentCount, "will be stopped"),
         description:
           count === 1
-            ? "The process ends and its scrollback is discarded."
-            : "Every terminal's process ends and its scrollback is discarded.",
-        confirmLabel: `Kill ${counted}`,
+            ? "The panel is removed for good. Any process in it ends and its scrollback is discarded."
+            : "Every panel is removed for good. Any process in them ends and their scrollback is discarded.",
+        confirmLabel: `Remove ${counted}`,
       };
     }
     case "restartAll": {
@@ -118,19 +118,19 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
       };
     }
     case "worktreeRestartAll": {
-      const counted = pluralize(count, "session");
+      const counted = pluralize(count, "terminal");
       return {
         title: `Restart ${counted} in ${worktree}?`,
         lead: workingLead(pending.runningAgentCount, "will be interrupted"),
         description:
           count === 1
-            ? "The session respawns and its scrollback is discarded."
-            : "Every session respawns and its scrollback is discarded.",
+            ? "The terminal respawns and its scrollback is discarded."
+            : "Every terminal respawns and its scrollback is discarded.",
         confirmLabel: `Restart ${counted}`,
       };
     }
     case "worktreeTrashAll": {
-      const counted = pluralize(count, "session");
+      const counted = pluralize(count, "panel");
       return {
         title: `Trash ${counted} in ${worktree}?`,
         lead: workingLead(pending.runningAgentCount),
@@ -139,15 +139,15 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
       };
     }
     case "worktreeEndAll": {
-      const counted = pluralize(count, "session");
+      const counted = pluralize(count, "panel");
       return {
-        title: `End ${counted} in ${worktree}?`,
+        title: `Remove ${counted} in ${worktree}?`,
         lead: workingLead(pending.runningAgentCount, "will be stopped"),
         description:
           count === 1
-            ? "The session is removed outright and its scrollback is discarded. Unlike trashing, it can't be restored."
-            : "The sessions are removed outright and their scrollback is discarded. Unlike trashing, they can't be restored.",
-        confirmLabel: `End ${counted}`,
+            ? "The panel is removed outright and its scrollback is discarded. Unlike trashing, it can't be restored."
+            : "The panels are removed outright and their scrollback is discarded. Unlike trashing, they can't be restored.",
+        confirmLabel: `Remove ${counted}`,
       };
     }
     case "worktreeClearHistory": {
@@ -161,7 +161,7 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
       };
     }
     case "deletedWorktreeDismiss": {
-      const counted = pluralize(count, "terminal");
+      const counted = pluralize(count, "panel");
       return {
         title: `Close ${counted} from ${worktree}?`,
         lead: workingLead(pending.runningAgentCount),
@@ -178,7 +178,7 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
       // A member whose terminals all left is dropped from the preview, so the
       // group can be clearing a single worktree even though it holds several.
       const countedWorktrees = pluralize(worktreeCount, "deleted worktree");
-      const counted = pluralize(count, "terminal");
+      const counted = pluralize(count, "panel");
       return {
         title: `Close ${counted} from ${countedWorktrees}?`,
         lead: workingLead(pending.runningAgentCount),
@@ -267,7 +267,7 @@ function TargetPreview({
           )}
           <ul
             className="space-y-1"
-            aria-label={showGroupTitles ? group.worktreeTitle : "Affected terminals"}
+            aria-label={showGroupTitles ? group.worktreeTitle : "Affected panels"}
           >
             {group.terminals.map((terminal) => {
               const panel = panelsById[terminal.terminalId];
@@ -281,7 +281,7 @@ function TargetPreview({
                     className="h-3.5 w-3.5 shrink-0"
                   />
                   <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-                    {terminal.terminalTitle.trim() || "Untitled terminal"}
+                    {terminal.terminalTitle.trim() || "Untitled panel"}
                   </span>
                   {terminal.hasRunningAgent && (
                     <span className="flex shrink-0 items-center gap-1 text-xs text-text-secondary">
@@ -348,7 +348,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         break;
       case "killAll": {
         void actionService.dispatch("terminal.killAll", { confirmed: true }, { source });
-        announcement = `Killed ${pluralize(pending.targetCount, "terminal")}`;
+        announcement = `Removed ${pluralize(pending.targetCount, "panel")}`;
         break;
       }
       case "restartAll": {
@@ -363,7 +363,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { worktreeId: pending.worktreeId, confirmed: true },
           { source }
         );
-        announcement = `Restarted ${pluralize(pending.targetCount, "session")}`;
+        announcement = `Restarted ${pluralize(pending.targetCount, "terminal")}`;
         break;
       }
       case "worktreeTrashAll": {
@@ -373,7 +373,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { worktreeId: pending.worktreeId, confirmed: true },
           { source }
         );
-        announcement = `Trashed ${pluralize(pending.targetCount, "session")}`;
+        announcement = `Trashed ${pluralize(pending.targetCount, "panel")}`;
         break;
       }
       case "worktreeEndAll": {
@@ -383,7 +383,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { worktreeId: pending.worktreeId, confirmed: true },
           { source }
         );
-        announcement = `Ended ${pluralize(pending.targetCount, "session")}`;
+        announcement = `Removed ${pluralize(pending.targetCount, "panel")}`;
         break;
       }
       case "worktreeClearHistory": {
@@ -407,7 +407,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { worktreeId: pending.worktreeId, confirmed: true },
           { source }
         );
-        announcement = `Closed ${pluralize(pending.targetCount, "terminal")}`;
+        announcement = `Closed ${pluralize(pending.targetCount, "panel")}`;
         break;
       }
       case "deletedWorktreeGroupDismiss": {
@@ -426,7 +426,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
             { source }
           );
         }
-        announcement = `Closed ${pluralize(pending.targetCount, "terminal")}`;
+        announcement = `Closed ${pluralize(pending.targetCount, "panel")}`;
         break;
       }
     }

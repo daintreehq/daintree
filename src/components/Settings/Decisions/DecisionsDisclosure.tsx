@@ -30,7 +30,7 @@ export function DecisionsDisclosure({ className }: { className?: string }) {
           Photos from your phone are stored on this computer.
         </span>{" "}
         A photo you attach to an answer or follow-up reaches the relay end-to-end encrypted, then is
-        saved unencrypted on the computer whose agent asked, or on the Remote Host for a pane on
+        saved unencrypted on the computer whose agent asked, or on the Remote Host for a panel on
         one, in a .daintree/decisions folder Git ignores inside the folder the agent started in, so
         agents like Claude Code and Codex can open it. Gemini CLI can&apos;t open a file Git
         ignores. On macOS and Linux only your user account can read it; on Windows it has that
@@ -84,7 +84,7 @@ export function DecisionsDisclosure({ className }: { className?: string }) {
 export function TerminalSnapshotsDisclosure() {
   return (
     <>
-      While a question is open, the title of the pane that asked it, the agent state Daintree
+      While a question is open, the title of the panel that asked it, the agent state Daintree
       observed there and its last terminal lines go to your relay, end-to-end encrypted like the
       question, so your phone can show them. They&apos;re redacted on a best-effort basis, so a
       secret the redaction misses can still be sent. Only the latest snapshot is kept, never a

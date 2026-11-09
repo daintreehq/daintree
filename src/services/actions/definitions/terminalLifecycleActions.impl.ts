@@ -633,7 +633,7 @@ export const terminalLifecycleActionRuns = {
           runningAgentCount: runningAgents.length,
           preview: buildDestructivePreview(targets),
         },
-        "Killing every terminal"
+        "Removing every panel"
       );
     }
     clearPendingIf("killAll");

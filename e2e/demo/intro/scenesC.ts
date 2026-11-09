@@ -41,7 +41,7 @@ export async function sceneReview(d: Director): Promise<void> {
   await d.beat(174.2, "open review", async () => {
     const btn = d.page
       .locator(
-        `[data-worktree-row]:has([data-worktree-branch="${branch}"]) [aria-label^="Open Review &"]`
+        `[data-worktree-row]:has([data-worktree-branch="${branch}"]) [aria-label^="Review &"]`
       )
       .first();
     if (await btn.isVisible().catch(() => false)) {

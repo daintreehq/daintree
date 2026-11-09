@@ -135,7 +135,7 @@ const BUSY: PreviewSection[] = [
     upd("gemini", "Gemini CLI"),
   ]),
   section("keybindingOverrides", 9, [
-    upd("terminal.close", "Close focused terminal"),
+    upd("terminal.close", "Close focused panel"),
     upd("terminal.new", "New terminal"),
     add("terminal.split", "Split terminal"),
     add("worktree.next", "Next worktree"),

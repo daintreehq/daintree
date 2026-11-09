@@ -228,9 +228,9 @@ export function registerFleetActions(actions: ActionRegistry): void {
   actions.set("fleet.armFocused", () => ({
     id: "fleet.armFocused",
     palette: { mode: "hidden" },
-    title: "Fleet: toggle arm focused pane",
+    title: "Fleet: toggle arm focused terminal",
     description:
-      "Toggle fleet membership on the focused terminal — keyboard equivalent of ⌘/⇧-clicking pane chrome",
+      "Toggle fleet membership on the focused terminal — keyboard equivalent of ⌘/⇧-clicking panel chrome",
     category: "terminal",
     kind: "command",
     danger: "safe",

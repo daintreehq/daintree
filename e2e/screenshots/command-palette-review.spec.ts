@@ -356,8 +356,8 @@ test("command palette review — every state, every theme", async () => {
 
       await state("danger", page, async () => {
         await openPalette(page);
-        await search(page, "kill terminal");
-        await expectFirst(page, "Kill terminal");
+        await search(page, "remove panel");
+        await expectFirst(page, "Remove panel");
         await capture(page, theme, "06-danger", { rows: true, text: ["Permanently kills"] });
       });
 

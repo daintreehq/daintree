@@ -76,33 +76,33 @@ function describeDelivery(delivery: TerminalNotifyDelivery): { text: string; ton
     case "held":
       if (delivery.reason === "typing") {
         return {
-          text: "Held: something was typed into this pane's prompt since it settled. It goes out after the next turn.",
+          text: "Held: something was typed into this terminal's prompt since it settled. It goes out after the next turn.",
           tone: "quiet",
         };
       }
       if (delivery.reason === "interval") {
         return { text: "Held briefly to keep notices spaced out.", tone: "quiet" };
       }
-      return { text: "Held until this pane finishes its turn.", tone: "quiet" };
+      return { text: "Held until this terminal finishes its turn.", tone: "quiet" };
     case "blocked":
       if (delivery.reason === "approval") {
-        return { text: "Not sent: this pane is waiting on an approval.", tone: "warning" };
+        return { text: "Not sent: this terminal is waiting on an approval.", tone: "warning" };
       }
       if (delivery.reason === "question") {
         return {
-          text: "Not sent: this pane is waiting on an answer to a question.",
+          text: "Not sent: this terminal is waiting on an answer to a question.",
           tone: "warning",
         };
       }
       if (delivery.reason === "error") {
-        return { text: "Not sent: this pane stopped on an error.", tone: "warning" };
+        return { text: "Not sent: this terminal stopped on an error.", tone: "warning" };
       }
-      return { text: "Not sent: no agent is waiting at this pane's prompt.", tone: "warning" };
+      return { text: "Not sent: no agent is waiting at this terminal's prompt.", tone: "warning" };
     case "outstanding":
       return { text: "Delivered.", tone: "quiet" };
     case "failed":
       return {
-        text: "The last notice couldn't be confirmed, so it goes out again after this pane's next turn.",
+        text: "The last notice couldn't be confirmed, so it goes out again after this terminal's next turn.",
         tone: "warning",
       };
   }
@@ -191,7 +191,7 @@ export function TerminalNotifyChip({
                       ? "hover:text-text-primary"
                       : "text-text-secondary hover:text-text-primary"
                 )}
-                aria-label={`${heading}; Daintree may type a notice into this pane`}
+                aria-label={`${heading}; Daintree may type a notice into this terminal`}
                 data-testid="terminal-notify-chip"
               >
                 <Radar className="w-3 h-3 shrink-0" aria-hidden="true" />

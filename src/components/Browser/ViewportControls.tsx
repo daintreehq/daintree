@@ -192,14 +192,14 @@ export function ViewportControls({
                 type="button"
                 onClick={onFitToggle}
                 className={cn(PANE_TOOLBAR_TEXT_BUTTON_CLASS, "ml-auto")}
-                aria-label="Fit to pane"
+                aria-label="Fit to panel"
                 aria-pressed={fit}
               >
                 Fit
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              Shrink the preview to fit the pane; the page still sees{" "}
+              Shrink the preview to fit the panel; the page still sees{" "}
               {formatSize(size.width, size.height)}
             </TooltipContent>
           </Tooltip>

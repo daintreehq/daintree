@@ -97,7 +97,7 @@ export const TOUR_CHAPTERS: readonly TourChapter[] = [
     id: "review",
     title: "Review and push",
     summary:
-      "Ask your agent to commit and push for you, or review it yourself: Review & commit shows every change in the worktree, then commits and pushes its branch.",
+      "Ask your agent to commit and push for you, or review it yourself: Review Hub shows every change in the worktree, then commits and pushes its branch.",
     narration:
       "When an agent finishes, you can simply [[ask]] ask it to commit and push the work for you. If you'd rather review it yourself, [[files]] its worktree in the sidebar shows what changed. [[open]] Press Review and commit to see every file that changed, [[diff]] and step through the diff. [[commit]] Then write a message, and commit and push the branch, right from here.",
   },

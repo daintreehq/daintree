@@ -743,10 +743,10 @@ function RequesterRow({
   // identification, not an inference from missing fields (#12692).
   if (requester?.identity.kind === "pane" || current.offerSessionApproval === true) {
     Icon = SquareTerminal;
-    name = requester?.name ?? "Agent in a terminal pane";
+    name = requester?.name ?? "Agent in a terminal panel";
     if (requester?.kindLabel) qualifiers.push(requester.kindLabel);
     if (live.otherWorktreeName) qualifiers.push(live.otherWorktreeName);
-    showLabel = "Show pane";
+    showLabel = "Show panel";
   } else if (callerInfo) {
     Icon = Plug;
     name = truncateUserAgent(callerInfo.userAgent);

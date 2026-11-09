@@ -672,7 +672,7 @@ test("worktrees sidebar rail — state matrix", async () => {
     // 12. Popover expanded — chips, counts, and the zero-count dimming.
     await cap.step("popover-expanded", async () => {
       const popover = await openFilterPopover(page);
-      for (const section of ["Status", "Branch type", "Sessions"]) {
+      for (const section of ["Status", "Branch type", "Terminals"]) {
         await ensureFilterSectionOpen(popover, section);
         await settle(page, 250);
       }

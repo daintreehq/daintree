@@ -290,7 +290,7 @@ export { claudeWindowLabel };
 // No title is all a closed pane and a host that didn't answer have in common,
 // so neither is claimed.
 function paneSource(reading: ClaudeUsageReading): string {
-  const pane = reading.paneTitle ?? "a pane";
+  const pane = reading.paneTitle ?? "a terminal";
   return reading.projectName ? `${pane} (${reading.projectName})` : pane;
 }
 
@@ -328,7 +328,7 @@ function ClaudeUsageRow({
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={percent}
-          aria-valuetext={`${statement}, as a pane showed it${stale ? ", stale" : ""}`}
+          aria-valuetext={`${statement}, as a terminal showed it${stale ? ", stale" : ""}`}
           className="bg-overlay-emphasis h-1.5 flex-1 overflow-hidden rounded-full"
         >
           <div className="h-full rounded-full bg-text-secondary" style={{ width: `${percent}%` }} />
@@ -399,7 +399,7 @@ function ClaudeUsage() {
       <SettingsGroup>
         <SettingsRow
           label="Usage unavailable"
-          description="Daintree couldn't read what its panes showed"
+          description="Daintree couldn't read what its terminals showed"
           control={
             <Button size="sm" variant="outline" onClick={refresh}>
               Retry
@@ -417,7 +417,7 @@ function ClaudeUsage() {
       <SettingsGroup>
         <SettingsRow
           label="No usage seen yet"
-          description="Claude Code reports usage in a pane as a limit approaches, and the latest it showed appears here. Use View usage to check the account on claude.ai."
+          description="Claude Code reports usage in a terminal as a limit approaches, and the latest it showed appears here. Use View usage to check the account on claude.ai."
         />
       </SettingsGroup>
     );
@@ -448,7 +448,7 @@ function ClaudeUsage() {
   return (
     <SettingsSection
       title="Account quota"
-      description="Claude Code's own usage messages, as your panes showed them. Not a live account reading."
+      description="Claude Code's own usage messages, as your terminals showed them. Not a live account reading."
     >
       {body}
       {refreshFailed}

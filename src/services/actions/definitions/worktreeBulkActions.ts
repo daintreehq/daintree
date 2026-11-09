@@ -18,14 +18,14 @@ import type { ActionContext } from "@shared/types/actions";
 export function registerWorktreeBulkActions(actions: ActionRegistry): void {
   actions.set("worktree.bulk.closeSessions", () => ({
     id: "worktree.bulk.closeSessions",
-    title: "Close sessions for selected worktrees",
-    description: "End all sessions across the selected worktrees in the overview",
+    title: "Close panels for selected worktrees",
+    description: "Remove all panels across the selected worktrees in the overview",
     category: "worktree",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
     dangerRationale:
-      "Permanently ends every session for each selected worktree. Scrollback is lost for each terminal.",
+      "Permanently removes every panel for each selected worktree. Scrollback is lost for each terminal.",
     palette: { mode: "hidden" },
     argsSchema: z.object({}).optional(),
     run: async (_args: unknown, _ctx: ActionContext) => {

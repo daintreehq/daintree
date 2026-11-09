@@ -34,8 +34,8 @@ export function registerWorktreeSessionActions(
 ): void {
   actions.set("worktree.sessions.minimizeAll", () => ({
     id: "worktree.sessions.minimizeAll",
-    title: "Dock all sessions",
-    description: "Move all grid sessions for a worktree to the dock",
+    title: "Dock all panels",
+    description: "Move all grid panels for a worktree to the dock",
     category: "worktree",
     kind: "command",
     danger: "safe",
@@ -56,8 +56,8 @@ export function registerWorktreeSessionActions(
     // back into the grid. Renamed everywhere it surfaces so the palette, the
     // worktree menu and the audit trail name the same operation. The action ID
     // is load-bearing and stays.
-    title: "Move all sessions to grid",
-    description: "Move all dock sessions for a worktree into the grid",
+    title: "Move all panels to grid",
+    description: "Move all dock panels for a worktree into the grid",
     category: "worktree",
     kind: "command",
     danger: "safe",
@@ -73,14 +73,14 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.restartAll", () => ({
     id: "worktree.sessions.restartAll",
-    title: "Restart all sessions",
-    description: "Restart all sessions for a worktree",
+    title: "Restart all terminals",
+    description: "Restart all terminals for a worktree",
     category: "worktree",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
     dangerRationale:
-      "Restarts all sessions for a worktree. Scrollback is lost for every restarted terminal.",
+      "Restarts all terminals for a worktree. Scrollback is lost for every restarted terminal.",
     argsSchema: z
       .object({
         worktreeId: z.string().optional(),
@@ -130,7 +130,7 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.resetRenderers", () => ({
     id: "worktree.sessions.resetRenderers",
-    title: "Reset session renderers",
+    title: "Redraw all terminals",
     description: "Reset all xterm renderers for a worktree",
     category: "worktree",
     kind: "command",
@@ -174,8 +174,8 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.closeCompleted", () => ({
     id: "worktree.sessions.closeCompleted",
-    title: "Close completed sessions",
-    description: "Close completed sessions for a worktree",
+    title: "Close completed terminals",
+    description: "Close completed terminals for a worktree",
     category: "worktree",
     kind: "command",
     danger: "safe",
@@ -193,14 +193,14 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.trashAll", () => ({
     id: "worktree.sessions.trashAll",
-    title: "Trash all sessions",
-    description: "Move all sessions for a worktree to trash",
+    title: "Trash all panels",
+    description: "Move all panels for a worktree to trash",
     category: "worktree",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
     dangerRationale:
-      "Moves all sessions for a worktree to trash. Scrollback is lost for each trashed terminal.",
+      "Moves all panels for a worktree to trash. Scrollback is lost for each trashed terminal.",
     argsSchema: z
       .object({
         worktreeId: z.string().optional(),
@@ -252,8 +252,8 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.endAll", () => ({
     id: "worktree.sessions.endAll",
-    title: "End all sessions",
-    description: "Permanently end all sessions for a worktree",
+    title: "Remove all panels",
+    description: "Permanently remove all panels for a worktree",
     category: "worktree",
     kind: "command",
     danger: "confirm",
@@ -265,7 +265,7 @@ export function registerWorktreeSessionActions(
     // not the safety mechanism.
     palette: { mode: "hidden" },
     scope: "renderer",
-    dangerRationale: "Permanently ends all sessions for a worktree. All scrollback is lost.",
+    dangerRationale: "Permanently removes all panels for a worktree. All scrollback is lost.",
     argsSchema: z
       .object({
         worktreeId: z.string().optional(),

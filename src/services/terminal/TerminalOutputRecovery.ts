@@ -126,7 +126,7 @@ export class TerminalOutputRecovery {
           managed.lastScrollbackRestoreError ?? {
             type: "error",
             message:
-              "Output the terminal produced never reached this pane and couldn't be replayed.",
+              "Output the terminal produced never reached this panel and couldn't be replayed.",
             timestamp: Date.now(),
           }
         );

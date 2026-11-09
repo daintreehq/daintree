@@ -59,22 +59,22 @@ function describeHostEnd(hostEnd: PanelHostEnd, now: number, hostName?: string):
 // conversation is still there, restore just wouldn't guess which one it was.
 const REASON_COPY: Record<RestoreRecoveryReason, RecoveryCopy> = {
   "sibling-owns-session-id": {
-    title: "Conversation already open in another pane",
+    title: "Conversation already open in another panel",
     description:
-      "Another pane restored this conversation, so this one waited instead of opening it twice. Pick a conversation for this pane, or start a new one.",
+      "Another panel restored this conversation, so this one waited instead of opening it twice. Pick a conversation for this panel, or start a new one.",
   },
   "sibling-owns-resume-latest-slot": {
-    title: "Choose this pane's conversation",
+    title: "Choose this panel's conversation",
     description:
-      "Several panes began in the same folder without a saved conversation, so restore couldn't tell which one was this pane's.",
+      "Several panels began in the same folder without a saved conversation, so restore couldn't tell which one was this panel's.",
   },
   "session-unresolved": {
-    title: "Choose this pane's conversation",
+    title: "Choose this panel's conversation",
     description:
-      "This pane now works in another worktree and had no saved conversation, so restore couldn't name it safely.",
+      "This panel now works in another worktree and had no saved conversation, so restore couldn't name it safely.",
   },
   "destination-unavailable": {
-    title: "Choose how this pane continues",
+    title: "Choose how this panel continues",
     description: "Resume its conversation or start a new one.",
   },
   "resume-deferred": {
@@ -94,25 +94,25 @@ const REASON_COPY: Record<RestoreRecoveryReason, RecoveryCopy> = {
 };
 
 const RESUMES_ON_FOCUS_COPY: RecoveryCopy = {
-  title: "Resumes when you focus this pane",
+  title: "Resumes when you focus this panel",
   description:
-    "Agents resume one at a time after a restart, as each pane is focused, as set in Settings > General > Startup.",
+    "Agents resume one at a time after a restart, as each panel is focused, as set in Settings > General > Startup.",
 };
 
 const AWAITING_DESTINATION_COPY: RecoveryCopy = {
   title: "Worktree no longer available",
   description:
-    "This pane's worktree isn't part of this project anymore, so it hasn't started. Move it onto a worktree, or keep the folder it began in.",
+    "This panel's worktree isn't part of this project anymore, so it hasn't started. Move it onto a worktree, or keep the folder it began in.",
 };
 
 const OUTCOME_MESSAGES: Partial<Record<RestoreRecoveryLaunchResult, RecoveryCopy>> = {
   "held-elsewhere": {
     title: "Conversation already open",
-    description: "Another pane is using that conversation. Pick a different one.",
+    description: "Another panel is using that conversation. Pick a different one.",
   },
   unavailable: {
-    title: "Couldn't start this pane",
-    description: "The pane changed while it was starting. Try again.",
+    title: "Couldn't start this panel",
+    description: "The panel changed while it was starting. Try again.",
   },
 };
 

@@ -416,8 +416,8 @@ test("collapsed session indicators review — placements, states and themes", as
       await setCardCollapsed(busy, true);
       await setCardCollapsed(solo, true);
       await activateOther();
-      await snap(page, "10-header-working", card(busy), { expectLabel: /^3 sessions: 3 working$/ });
-      await snap(page, "11-header-solo", card(solo), { expectLabel: /^1 session: 1 working$/ });
+      await snap(page, "10-header-working", card(busy), { expectLabel: /^3 terminals: 3 working$/ });
+      await snap(page, "11-header-solo", card(solo), { expectLabel: /^1 terminal: 1 working$/ });
     });
 
     // Panels mount only for the active worktree, so every drive happens with
@@ -430,7 +430,7 @@ test("collapsed session indicators review — placements, states and themes", as
 
     // 2. Mixed — two working, one waiting. The state every other shot keys off.
     await inBusy(() => driveWaiting(page, agents[0]!));
-    const mixed = /^3 sessions: 2 working, 1 waiting$/;
+    const mixed = /^3 terminals: 2 working, 1 waiting$/;
     await step("mixed", async () => {
       await snap(page, "20-header-mixed", card(busy), { expectLabel: mixed });
       const headerCluster = busy.locator(INDICATORS).first();
@@ -524,7 +524,7 @@ test("collapsed session indicators review — placements, states and themes", as
     //    seconds after the last keystroke, so these shots are taken together.
     await step("three-states", async () => {
       await inBusy(() => driveWaiting(page, agents[1]!));
-      const three = /^3 sessions: 1 working, 1 directing, 1 waiting$/;
+      const three = /^3 terminals: 1 working, 1 directing, 1 waiting$/;
       // Re-typed before each shot: under load, two captures can outlast the
       // ten-second window a single burst of typing buys.
       await inBusy(() => driveDirecting(page, agents[1]!));
@@ -545,11 +545,11 @@ test("collapsed session indicators review — placements, states and themes", as
         await expectAgentState(page, agents[1]!, "waiting");
       });
       await snap(page, "80-header-all-waiting", card(busy), {
-        expectLabel: /^3 sessions: 3 waiting$/,
+        expectLabel: /^3 terminals: 3 waiting$/,
       });
       await snap(page, "81-sidebar-collapsed-waiting", sidebar, {
         scope: busy,
-        expectLabel: /^3 sessions: 3 waiting$/,
+        expectLabel: /^3 terminals: 3 waiting$/,
       });
     });
 
@@ -572,11 +572,11 @@ test("collapsed session indicators review — placements, states and themes", as
       await dismissBlockingPalette(page);
       await parkPointer(page);
       await snap(page, "90-workspace-root-row", rootRow, {
-        expectLabel: /^2 sessions: 1 working, 1 waiting$/,
+        expectLabel: /^2 terminals: 1 working, 1 waiting$/,
       });
       await snap(page, "91-workspace-root-sidebar", page.locator(SEL.sidebar.aside).first(), {
         scope: rootRow,
-        expectLabel: /^2 sessions: 1 working, 1 waiting$/,
+        expectLabel: /^2 terminals: 1 working, 1 waiting$/,
       });
     });
   } finally {

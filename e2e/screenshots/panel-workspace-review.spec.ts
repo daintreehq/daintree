@@ -1185,7 +1185,7 @@ async function daintreeStates(run: Run): Promise<void> {
     await settle(page, 1200);
     const readout = page
       .locator('[role="status"]')
-      .filter({ hasText: /other panes?/ })
+      .filter({ hasText: /other panels?/ })
       .first();
     await readout.waitFor({ state: "visible", timeout: 10_000 });
     const text = ((await readout.textContent()) ?? "").replace(/\s+/g, " ").trim();

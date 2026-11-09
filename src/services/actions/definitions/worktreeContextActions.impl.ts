@@ -468,7 +468,7 @@ export const worktreeContextActionRuns: {
 
     await usePanelDialogStore.getState().openPanelDialog({
       kind: "review",
-      title: "Review & commit",
+      title: "Review Hub",
       worktreeId: targetWorktreeId,
       // The AI note's first line if it is still current, else "". Never any
       // other source — a substituted commit message caused a real bad push

@@ -98,7 +98,7 @@ async function closeAllAndEmptyTrash(
     await trashBtn.click();
   }
 
-  const popover = window.locator('[role="dialog"][aria-label="Recently closed terminals"]');
+  const popover = window.locator('[role="dialog"][aria-label="Recently closed panels"]');
   await expect(popover).toBeVisible({ timeout: T_SHORT });
   await popover.locator('[data-testid="empty-trash-button"]').click();
 
@@ -182,7 +182,7 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
       await expect(trashBtn).toBeVisible({ timeout: T_MEDIUM });
       await trashBtn.click();
 
-      const popover = window.locator('[role="dialog"][aria-label="Recently closed terminals"]');
+      const popover = window.locator('[role="dialog"][aria-label="Recently closed panels"]');
       await expect(popover).toBeVisible({ timeout: T_SHORT });
 
       const restoreBtn = popover.getByRole("button", { name: /Restore/ });

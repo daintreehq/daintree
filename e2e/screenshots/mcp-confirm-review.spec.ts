@@ -568,7 +568,7 @@ test("MCP approval dialog review — trust hierarchy across caller, danger, and 
         {
           requestId: "shot-queue-3",
           actionId: "terminal.kill",
-          actionTitle: "Kill terminal",
+          actionTitle: "Remove panel",
           actionDescription: "Terminate a running terminal process.",
           argsSummary: '{\n  "terminalId": "pty-7"\n}',
           danger: "confirm",
@@ -787,7 +787,7 @@ test("MCP approval dialog review — trust hierarchy across caller, danger, and 
         {
           requestId: "shot-d-long-targets",
           actionId: "terminal.killBatch",
-          actionTitle: "Kill terminals",
+          actionTitle: "Remove panels",
           actionDescription: "Terminate running terminal processes.",
           argsSummary: ARGS_SHORT,
           danger: "confirm",
@@ -807,7 +807,7 @@ test("MCP approval dialog review — trust hierarchy across caller, danger, and 
         {
           requestId: "shot-d-twin-targets",
           actionId: "terminal.killBatch",
-          actionTitle: "Kill terminals",
+          actionTitle: "Remove panels",
           actionDescription: "Terminate running terminal processes.",
           argsSummary: ARGS_SHORT,
           danger: "confirm",

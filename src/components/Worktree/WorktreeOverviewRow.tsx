@@ -126,7 +126,7 @@ export function WorktreeOverviewColumnHeaders({
       <span aria-hidden="true" className="pl-6">
         Worktree
       </span>
-      <span aria-hidden="true">Sessions</span>
+      <span aria-hidden="true">Terminals</span>
       <span aria-hidden="true" className="text-right">
         Changes
       </span>
@@ -694,7 +694,7 @@ export function WorktreeOverviewRow({
                 full — icon, what it is on, state — like the sidebar's session
                 rows; past that the row collapses to the sidebar's own
                 "N active" strip with its state counts, and expands in place. */}
-            <div className="min-w-0" role="group" aria-label={sessionsLabel || "No sessions"}>
+            <div className="min-w-0" role="group" aria-label={sessionsLabel || "No terminals"}>
               {marks.length === 0 ? (
                 <span className="text-xs leading-5 text-text-secondary" aria-hidden="true">
                   —
@@ -721,7 +721,7 @@ export function WorktreeOverviewRow({
                       type="button"
                       tabIndex={-1}
                       aria-expanded={sessionsExpanded}
-                      aria-label={`${pluralize(marks.length, "active session")}${sessionSummary.breakdown ? `: ${sessionSummary.breakdown}` : ""}`}
+                      aria-label={`${pluralize(marks.length, "active terminal")}${sessionSummary.breakdown ? `: ${sessionSummary.breakdown}` : ""}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         setSessionsExpanded((v) => !v);
@@ -837,7 +837,7 @@ export function WorktreeOverviewRow({
               hover: Shift+F10 on the cursor row opens this menu. */}
           {sessionLines.length > 0 && (
             <>
-              <ContextMenuLabel>Sessions</ContextMenuLabel>
+              <ContextMenuLabel>Terminals</ContextMenuLabel>
               {sessionLines.map((line) => (
                 <ContextMenuItem
                   key={line.id}
@@ -886,7 +886,7 @@ export function WorktreeOverviewRow({
             onSelect={onBeforeMenuAction}
           >
             <GitCommitHorizontal data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            Open review hub
+            Open Review Hub
           </ContextMenuActionItem>
           {(showPr || worktree.issueNumber) && <ContextMenuSeparator />}
           {showPr && (

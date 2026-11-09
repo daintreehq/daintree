@@ -101,7 +101,7 @@ export const config: AgentConfig = {
       offArgs: ["-c", "tui.whimsy=false"],
       label: "Composer sparkles",
       description:
-        "Codex's ambient animation behind the prompt. Off keeps idle panes from repainting continuously.",
+        "Codex's ambient animation behind the prompt. Off keeps idle terminals from repainting continuously.",
     },
     supportsBracketedPaste: true,
     // "Update now" on the startup prompt runs the installer and exits without

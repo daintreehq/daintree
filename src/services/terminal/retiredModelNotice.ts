@@ -53,8 +53,8 @@ export function notifyRetiredModelDropped(
   const removed = modelIds.length === 1 ? "it was" : "they were";
   const message =
     count === 1
-      ? `This ${agentName} pane was set to ${models}, ${retired}, so ${removed} removed from its launch.`
-      : `${pluralize(count, `${agentName} pane`)} were set to ${models}, ${retired}, so ${removed} removed from their launches.`;
+      ? `This ${agentName} terminal was set to ${models}, ${retired}, so ${removed} removed from its launch.`
+      : `${pluralize(count, `${agentName} terminal`)} were set to ${models}, ${retired}, so ${removed} removed from their launches.`;
   const barId = notify({
     type: "warning",
     placement: "grid-bar",

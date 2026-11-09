@@ -529,7 +529,7 @@ export function TrashContainer({
                 aria-expanded={isOpen}
                 aria-controls={contentId}
                 onClick={focusHandoff.onTriggerClick}
-                aria-label={`Trash: ${pluralize(count, "terminal")} ${dockStatusScopeDescription(count, hereCount)}, removed for good ${TRASH_TTL_SECONDS} seconds after closing`}
+                aria-label={`Trash: ${pluralize(count, "panel")} ${dockStatusScopeDescription(count, hereCount)}, removed for good ${TRASH_TTL_SECONDS} seconds after closing`}
               >
                 <DockStatusPillLabel
                   icon={
@@ -558,7 +558,7 @@ export function TrashContainer({
         <PopoverContent
           id={contentId}
           role="dialog"
-          aria-label="Recently closed terminals"
+          aria-label="Recently closed panels"
           className="w-96 p-0"
           side="top"
           align="end"

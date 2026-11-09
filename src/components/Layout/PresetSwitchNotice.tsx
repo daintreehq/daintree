@@ -80,7 +80,7 @@ export function PresetSwitchNoticeItems({
     <>
       <DropdownMenuSeparator />
       <div role="status" className="px-2 py-1.5 text-xs text-text-secondary">
-        {pluralize(paneIds.length, `${agentName} pane`)} still on {notice.fromName}
+        {pluralize(paneIds.length, `${agentName} terminal`)} still on {notice.fromName}
       </div>
       <DropdownMenuItem inset onSelect={onRestart}>
         {paneIds.length === 1 ? "Restart it" : "Restart them"} on {notice.toName}…
@@ -145,7 +145,7 @@ export function PresetSwitchRestartDialog({
           { terminalId: pane.id, presetId: request.toPresetId, confirmed: true },
           { source: "user" }
         ),
-      (count) => `Restarting ${pluralize(count, "pane")} on ${request.toName}`
+      (count) => `Restarting ${pluralize(count, "terminal")} on ${request.toName}`
     );
   }, [request, onClose]);
 
@@ -156,7 +156,7 @@ export function PresetSwitchRestartDialog({
     <ConfirmDialog
       isOpen
       onClose={onClose}
-      title={`Restart ${pluralize(count, "pane")} on '${request.toName}'?`}
+      title={`Restart ${pluralize(count, "terminal")} on '${request.toName}'?`}
       description={
         <>
           {working > 0 && (
@@ -172,7 +172,7 @@ export function PresetSwitchRestartDialog({
           </span>
         </>
       }
-      confirmLabel={count === 1 ? "Restart pane" : `Restart ${pluralize(count, "pane")}`}
+      confirmLabel={count === 1 ? "Restart terminal" : `Restart ${pluralize(count, "terminal")}`}
       variant="destructive"
       onConfirm={handleConfirm}
     >

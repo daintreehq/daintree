@@ -516,7 +516,7 @@ export function HostWorkSettingsPage({
             {presetRow<ResumeOnRestart>({
               key: "agentSettings.resumeOnRestart",
               label: "Resume agents after restart",
-              description: "What agent panes do when Daintree restarts",
+              description: "What agent panels do when Daintree restarts",
               options: RESUME_OPTIONS,
               value: isResumeOnRestart(resume) ? resume : null,
             })}

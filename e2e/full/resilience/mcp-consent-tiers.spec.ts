@@ -535,7 +535,7 @@ test.describe.serial("MCP: consent dialogs and project tiers, end to end", () =>
     await expect(dialog).toContainText("Above this project's MCP tier, so it needs your approval");
     await expect(dialog).toContainText("tier-core");
     await expect(dialog).toContainText("Claude");
-    await expect(dialog.getByRole("button", { name: "Show pane", exact: true })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Show panel", exact: true })).toBeVisible();
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(toolErrorCode(await declined)).toBe("USER_REJECTED");
     await expect(dialog).toHaveCount(0);

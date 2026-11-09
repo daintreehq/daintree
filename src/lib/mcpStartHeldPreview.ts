@@ -41,10 +41,10 @@ export function formatStartHeldPreviewLines(
   pane: StartHeldPaneSnapshot | undefined
 ): string[] {
   if (pane === undefined) {
-    return [`${MCP_PREVIEW_CAUTION_PREFIX}This pane isn't held, so the start will be refused.`];
+    return [`${MCP_PREVIEW_CAUTION_PREFIX}This panel isn't held, so the start will be refused.`];
   }
   const lines = [
-    ...(pane.title ? [`Pane: ${boundStartHeldTitle(pane.title)}`] : []),
+    ...(pane.title ? [`Panel: ${boundStartHeldTitle(pane.title)}`] : []),
     `Held: ${pane.reason}`,
   ];
   if (start === "fresh") {

@@ -83,7 +83,7 @@ export function registerTerminalQueryActions(
 ): void {
   actions.set("terminal.list", () => ({
     id: "terminal.list",
-    title: "List terminals",
+    title: "List terminals and panels",
     description:
       "List open terminals and panels with enough metadata to pick one and learn its id. A cheap inventory, not a polling path: the status snapshot carries agent state for many in one call. Ephemeral and internal panels are omitted; empty means nothing matched.",
     category: "terminal",
@@ -208,9 +208,9 @@ export function registerTerminalQueryActions(
 
   actions.set("terminal.closeMany", () => ({
     id: "terminal.closeMany",
-    title: "Close several terminals",
+    title: "Close several panels",
     description:
-      "Close several terminals in one call, each as a single close (owned for an agent pane), to the trash; results, in order, say if each process still runs.",
+      "Close several panels in one call, each as a single close (owned for an agent panel), to the trash; results, in order, say if each process still runs.",
     category: "terminal",
     kind: "command",
     danger: "safe",

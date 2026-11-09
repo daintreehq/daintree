@@ -465,7 +465,7 @@ export function WorktreeOverviewModal({
     useAnnouncerStore
       .getState()
       .announce(
-        count === 1 ? "Closed sessions for 1 worktree" : `Closed sessions for ${count} worktrees`
+        count === 1 ? "Closed panels for 1 worktree" : `Closed panels for ${count} worktrees`
       );
   }, [clearSelection]);
 
@@ -890,7 +890,7 @@ export function WorktreeOverviewModal({
                     onClick={handleCloseSessionsClick}
                     data-testid="worktree-bulk-close-sessions"
                   >
-                    Close sessions
+                    Close panels
                   </Button>
                   <Button
                     variant="ghost-danger"
@@ -911,7 +911,7 @@ export function WorktreeOverviewModal({
                 primaryHint={{ keys: "Enter", label: "to switch" }}
                 hints={[
                   { keys: "Space", label: "to select" },
-                  { keys: "F2", label: "to browse sessions" },
+                  { keys: "F2", label: "to browse terminals" },
                   { keys: "Shift+F10", label: "to open actions" },
                 ]}
               />
@@ -926,11 +926,11 @@ export function WorktreeOverviewModal({
         onClose={handleCloseSessionsCancel}
         title={
           closeSessionsCount === 1
-            ? "Close sessions for 1 worktree?"
-            : `Close sessions for ${closeSessionsCount} worktrees?`
+            ? "Close panels for 1 worktree?"
+            : `Close panels for ${closeSessionsCount} worktrees?`
         }
-        description="Every grid and dock session for the selected worktrees will end. Scrollback is lost for each terminal."
-        confirmLabel="Close sessions"
+        description="Every grid and dock panel for the selected worktrees will close. Scrollback is lost for each terminal."
+        confirmLabel="Close panels"
         cancelLabel="Cancel"
         variant="default"
         zIndex="nested"

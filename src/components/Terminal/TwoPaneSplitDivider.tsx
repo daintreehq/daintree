@@ -211,13 +211,13 @@ export function TwoPaneSplitDivider({
           ref={dividerRef}
           growKey="ArrowRight"
           edge="inline"
-          label="Resize left pane"
+          label="Resize left panel"
           value={percent(ratio)}
           min={percent(minRatio)}
           max={percent(maxRatio)}
           isResizing={isDragging}
           aria-controls={controlsId}
-          aria-valuetext={`Left pane ${percent(ratio)}%, right pane ${100 - percent(ratio)}%`}
+          aria-valuetext={`Left panel ${percent(ratio)}%, right panel ${100 - percent(ratio)}%`}
           className="z-10"
           onMouseDown={handleMouseDown}
           onKeyDown={handleKeyDown}
@@ -231,14 +231,14 @@ export function TwoPaneSplitDivider({
           onSelect={() => applyRatio(ratio + KEYBOARD_COARSE_STEP)}
         >
           <PanelLeftOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-          Widen left pane
+          Widen left panel
         </ContextMenuItem>
         <ContextMenuItem
           disabled={ratio <= minRatio}
           onSelect={() => applyRatio(ratio - KEYBOARD_COARSE_STEP)}
         >
           <PanelRightOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-          Widen right pane
+          Widen right panel
         </ContextMenuItem>
         <ContextMenuItem disabled={!canEvenSplit} onSelect={() => applyRatio(0.5)}>
           <Columns2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />

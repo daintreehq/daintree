@@ -214,9 +214,9 @@ export function registerTerminalSpawnActions(
 
   actions.set("terminal.reopenLast", () => ({
     id: "terminal.reopenLast",
-    title: "Reopen last closed",
+    title: "Reopen last closed panel",
     description:
-      "Restore the most recently trashed terminal, or resume the most recent journaled agent session once the trash window has lapsed",
+      "Restore the most recently trashed panel, or resume the most recent journaled agent session once the trash window has lapsed",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -357,7 +357,7 @@ export function registerTerminalSpawnActions(
   actions.set("terminal.moveToNewWorktree", () => ({
     id: "terminal.moveToNewWorktree",
     title: "Move to new worktree…",
-    description: "Create a new worktree and move this terminal panel to it",
+    description: "Create a new worktree and move this panel to it",
     category: "terminal",
     kind: "command",
     danger: "safe",

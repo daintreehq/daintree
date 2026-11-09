@@ -120,7 +120,7 @@ export function describeActiveFacets(facets: ActiveFacets): string {
     facetPhrase("Status", STATUS_OPTIONS, facets.statusFilters),
     facetPhrase("Branch type", TYPE_OPTIONS, facets.typeFilters),
     facetPhrase("Issues & PRs", PR_ISSUE_OPTIONS, facets.prIssueFilters),
-    facetPhrase("Sessions", SESSION_OPTIONS, facets.sessionFilters),
+    facetPhrase("Terminals", SESSION_OPTIONS, facets.sessionFilters),
     facetPhrase("Activity", ACTIVITY_OPTIONS, facets.activityFilters),
     facetPhrase("Dev server", DEV_SERVER_OPTIONS, facets.devServerFilters),
   ]

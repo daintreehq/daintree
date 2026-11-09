@@ -103,7 +103,7 @@ export async function restartPanesOnPreset(
   const title =
     refused.length === 1
       ? `Couldn't restart ${first.pane.title?.trim() ? paneName(first.pane) : "the terminal"} on ${presetName}`
-      : `Couldn't restart ${pluralize(refused.length, "pane")} on ${presetName}`;
+      : `Couldn't restart ${pluralize(refused.length, "terminal")} on ${presetName}`;
   // The way to a pane that is still open now, after the restarts settled: one
   // that closed, or went to the trash meanwhile, has nowhere to go.
   const panelsById = usePanelStore.getState().panelsById;

@@ -1128,11 +1128,11 @@ describe("PanelHeader", () => {
     it("labels the grid close button as a destructive close and keeps its shortcut", () => {
       render(<PanelHeader {...makeProps({ location: "grid" })} />);
       const closeBtn = screen.getByTestId("panel-close");
-      expect(closeBtn.getAttribute("aria-label")).toMatch(/close session/i);
+      expect(closeBtn.getAttribute("aria-label")).toMatch(/close panel/i);
       expect(closeBtn.getAttribute("aria-label")).not.toMatch(/dismiss/i);
       // Grid keeps advertising the terminal.close chord (it closes the panel).
       expect(closeBtn.getAttribute("aria-keyshortcuts")).toBe("Meta+W");
-      expect(tooltipTexts().some((t) => /close session/i.test(t))).toBe(true);
+      expect(tooltipTexts().some((t) => /close panel/i.test(t))).toBe(true);
     });
 
     it("labels the dock close button as a non-destructive dismiss and drops the destructive chord", () => {
@@ -1143,11 +1143,11 @@ describe("PanelHeader", () => {
       render(<PanelHeader {...makeProps({ location: "dock" })} />);
       const closeBtn = screen.getByTestId("panel-close");
       expect(closeBtn.getAttribute("aria-label")).toMatch(/dismiss preview/i);
-      expect(closeBtn.getAttribute("aria-label")).not.toMatch(/close session/i);
+      expect(closeBtn.getAttribute("aria-label")).not.toMatch(/close panel/i);
       expect(closeBtn.getAttribute("aria-keyshortcuts")).toBeNull();
       const texts = tooltipTexts();
       expect(texts.some((t) => /dismiss preview/i.test(t))).toBe(true);
-      expect(texts.every((t) => !/close session/i.test(t))).toBe(true);
+      expect(texts.every((t) => !/close panel/i.test(t))).toBe(true);
     });
 
     it("keeps the Alt+Click force-close affordance on both surfaces", () => {

@@ -322,7 +322,7 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   forgeCreateIssue: "Issue to be filed",
   forgeAddIssueComment: "Comment to be posted",
   terminalLaunch: "Terminal to be opened",
-  terminalStartHeld: "Held pane to be started",
+  terminalStartHeld: "Held panel to be started",
   // Replaced per operation below. Present so the map stays exhaustive.
   agentPreset: "Launch preset",
 };

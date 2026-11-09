@@ -42,7 +42,7 @@ export function registerTerminalLayoutActions(
     id: "terminal.moveToDock",
     title: "Move to dock",
     description:
-      "Move a terminal out of the main grid into the sidebar dock, keeping its process running; a grouped panel takes its group along. Reversible. A panel not in this view, a kind the dock can't show, or one in the trash, background, an overlay or a dialog is refused. Name the target explicitly; the result names where it is now.",
+      "Move a panel out of the main grid into the sidebar dock, keeping its process running; a grouped panel takes its group along. Reversible. A panel not in this view, a kind the dock can't show, or one in the trash, background, an overlay or a dialog is refused. Name the target explicitly; the result names where it is now.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -87,7 +87,7 @@ export function registerTerminalLayoutActions(
     id: "terminal.moveToGrid",
     title: "Move to grid",
     description:
-      "Move a terminal from the sidebar dock back into the main grid, keeping its process running; a grouped panel takes its group along. Reversible. A panel not in this view, or one in the trash, background, an overlay or a dialog, is refused. Name the target explicitly; the result names where it is now.",
+      "Move a panel from the sidebar dock back into the main grid, keeping its process running; a grouped panel takes its group along. Reversible. A panel not in this view, or one in the trash, background, an overlay or a dialog, is refused. Name the target explicitly; the result names where it is now.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -130,7 +130,7 @@ export function registerTerminalLayoutActions(
   // `terminal.revealOwned` stays the one owned tool that moves the user.
   actions.set("terminal.placeOwned", () => ({
     id: "terminal.placeOwned",
-    title: "Place owned terminal",
+    title: "Place owned panel",
     description:
       "Move a panel this session created or was handed to the background, dock or grid; its process keeps running. Never takes focus or moves the user. Other panels are refused.",
     category: "terminal",
@@ -169,7 +169,7 @@ export function registerTerminalLayoutActions(
   actions.set("terminal.toggleMaximize", () => ({
     id: "terminal.toggleMaximize",
     title: "Toggle maximize",
-    description: "Toggle terminal maximize state (maximizes entire tab group if panel is grouped)",
+    description: "Toggle panel maximize state (maximizes entire tab group if panel is grouped)",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -192,8 +192,8 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.maximize", () => ({
     id: "terminal.maximize",
-    title: "Maximize terminal",
-    description: "Toggle terminal maximize state (maximizes entire tab group if panel is grouped)",
+    title: "Maximize panel",
+    description: "Toggle panel maximize state (maximizes entire tab group if panel is grouped)",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -258,7 +258,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.moveLeft", () => ({
     id: "terminal.moveLeft",
-    title: "Move terminal left",
+    title: "Move panel left",
     description: "Move the focused panel left in the grid, or its chip one place left in the dock",
     category: "terminal",
     kind: "command",
@@ -269,7 +269,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.moveRight", () => ({
     id: "terminal.moveRight",
-    title: "Move terminal right",
+    title: "Move panel right",
     description:
       "Move the focused panel right in the grid, or its chip one place right in the dock",
     category: "terminal",
@@ -281,8 +281,8 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.moveUp", () => ({
     id: "terminal.moveUp",
-    title: "Move terminal up",
-    description: "Move terminal up in the grid",
+    title: "Move panel up",
+    description: "Move panel up in the grid",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -321,8 +321,8 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.moveDown", () => ({
     id: "terminal.moveDown",
-    title: "Move terminal down",
-    description: "Move terminal down in the grid",
+    title: "Move panel down",
+    description: "Move panel down in the grid",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -363,7 +363,7 @@ export function registerTerminalLayoutActions(
     id: "terminal.toggleDock",
     title: "Toggle dock",
     description:
-      "Move a terminal between the grid and the dock, whichever it is not currently in. The move is recorded so the user can undo it. Name the target explicitly — an automated caller cannot see what the user has focused, and this rearranges what they see.",
+      "Move a panel between the grid and the dock, whichever it is not currently in. The move is recorded so the user can undo it. Name the target explicitly — an automated caller cannot see what the user has focused, and this rearranges what they see.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -403,7 +403,7 @@ export function registerTerminalLayoutActions(
   actions.set("terminal.toggleDockAll", () => ({
     id: "terminal.toggleDockAll",
     title: "Toggle all dock",
-    description: "Toggle all terminals between grid and dock",
+    description: "Toggle all panels between grid and dock",
     category: "terminal",
     kind: "command",
     danger: "safe",

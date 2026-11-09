@@ -333,7 +333,7 @@ export function registerWorktreeContextActions(
   actions.set("worktree.openReviewHub", () =>
     defineAction({
       id: "worktree.openReviewHub",
-      title: "Open review hub",
+      title: "Open Review Hub",
       description:
         "Open the Review Hub for a worktree to review uncommitted changes. With mode 'since-review' it opens the view of what changed since the worktree's review mark, without staging anything",
       category: "worktree",

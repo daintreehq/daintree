@@ -90,7 +90,7 @@ function ReviewSurface({
       }}
     >
       <div className="flex h-7 shrink-0 items-center gap-1.5 border-b border-border-subtle px-3">
-        <span className="text-2xs font-semibold text-text-primary">Review &amp; commit</span>
+        <span className="text-2xs font-semibold text-text-primary">Review Hub</span>
         <span className="flex items-center gap-1 rounded-sm bg-overlay-subtle px-1 font-mono text-3xs text-text-secondary">
           <GitBranch className="size-2.5" aria-hidden="true" />
           add-search

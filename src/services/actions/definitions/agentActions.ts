@@ -535,9 +535,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   // which is why `agentSessionHistory.resume` above can't take its place.
   actions.set("agent.resumeOwned", () => ({
     id: "agent.resumeOwned",
-    title: "Resume agent session as an owned pane",
+    title: "Resume agent session as an owned panel",
     description:
-      "Reopen a closed session as a new pane you own. `launched` means it is starting, not that the agent is ready. `existing`: a live pane holds it, so nothing launched and this call doesn't make it yours. `refused` gives the reason.",
+      "Reopen a closed session as a new panel you own. `launched` means it is starting, not that the agent is ready. `existing`: a live panel holds it, so nothing launched and this call doesn't make it yours. `refused` gives the reason.",
     category: "agent",
     kind: "command",
     danger: "safe",

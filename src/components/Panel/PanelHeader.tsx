@@ -2110,7 +2110,7 @@ function PanelHeaderComponent({
               aria-label={formatShortcutForTooltip(
                 location === "dock"
                   ? "Dismiss preview. Hold Alt and click to force close without recovery."
-                  : "Close session. Hold Alt and click to force close without recovery."
+                  : "Close panel. Hold Alt and click to force close without recovery."
               )}
               // Dock previews dismiss non-destructively; the terminal.close chord
               // (Cmd+W) still trashes the focused panel, so don't advertise it as
@@ -2124,7 +2124,7 @@ function PanelHeaderComponent({
             <div className="flex flex-col gap-1">
               {location === "dock"
                 ? createTooltipContent("Dismiss preview")
-                : createTooltipContent("Close session", closeShortcut)}
+                : createTooltipContent("Close panel", closeShortcut)}
               <span className="text-text-secondary text-2xs">
                 {formatShortcutForTooltip("Alt+Click to force close")}
               </span>
