@@ -292,6 +292,8 @@ export function HostSwitcherRow({
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-2">
             <HostName name={row.name} dim={tone === "offline"} />
+            {/* In the name too: `aria-current` is often unannounced inside a listbox. */}
+            {row.isCurrent && <span className="sr-only">, current</span>}
             {row.isCurrent && <PaletteCurrentLabel />}
           </span>
           {meta && (
