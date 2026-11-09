@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from
 import { createPortal } from "react-dom";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Callout } from "@/components/ui/Callout";
-import { FactSeparator } from "@/components/ui/FactSeparator";
+import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 import {
   AlertTriangle,
   ChevronRight,
@@ -775,7 +775,7 @@ function RequesterRow({
           {qualifiers.length > 0 && (
             // Gives way before the name does: the name is who is asking.
             <span className="min-w-0 shrink-[3] truncate text-xs text-text-secondary">
-              <FactSeparator /> {qualifiers.join(" · ")}
+              <FactSeparator /> <FactRun facts={qualifiers} />
             </span>
           )}
         </span>

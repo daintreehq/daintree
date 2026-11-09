@@ -530,9 +530,9 @@ export function PluginDetailPane({
                 // out of the same build (#12277).
                 <Badge size="xs">
                   {runtimeStatus?.viewGeneration != null ? (
-                    <>
+                    <span>
                       Dev <FactSeparator /> gen {runtimeStatus.viewGeneration}
-                    </>
+                    </span>
                   ) : (
                     "Dev"
                   )}

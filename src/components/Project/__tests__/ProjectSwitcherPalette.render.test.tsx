@@ -1559,7 +1559,8 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     expect(screen.queryByText(/^Opened /)).toBeNull();
     expect(screen.queryByTestId("workspace-status-dot")).toBeNull();
     // Provenance is identity, not status — it survives the collapse.
-    expect(document.getElementById("project-option-s1")!.textContent).toContain("· Scratch");
+    const row = document.getElementById("project-option-s1")!;
+    expect(within(row).getByText("Scratch").textContent!.trim()).toBe("· Scratch");
   });
 
   // The lone ranked result is also the cursor, so this is the both-at-once

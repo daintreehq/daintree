@@ -209,7 +209,9 @@ export function MarkdownTextSizeControl({
           >
             <RotateCcw aria-hidden="true" />
             {/* The destination is the label, so nobody has to press it to find out. */}
-            Reset to default <FactSeparator /> {STEP_LABEL[DEFAULT_MARKDOWN_FONT_SIZE]} px
+            <span>
+              Reset to default <FactSeparator /> {STEP_LABEL[DEFAULT_MARKDOWN_FONT_SIZE]} px
+            </span>
           </Button>
         </div>
       </PopoverContent>

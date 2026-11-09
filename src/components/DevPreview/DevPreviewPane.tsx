@@ -1068,14 +1068,16 @@ export function DevPreviewPane({
                 tone="outline"
                 className="absolute top-1 left-1/2 z-10 -translate-x-1/2 bg-surface/90"
               >
-                {getViewportPreset(viewportPreset).label} <FactSeparator />{" "}
-                {effectiveViewport.width}×{effectiveViewport.height}
-                {viewportFit && fitScale < 1 && (
-                  <>
-                    {" "}
-                    <FactSeparator /> {Math.round(fitScale * 100)}%
-                  </>
-                )}
+                <span>
+                  {getViewportPreset(viewportPreset).label} <FactSeparator />{" "}
+                  {effectiveViewport.width}×{effectiveViewport.height}
+                  {viewportFit && fitScale < 1 && (
+                    <>
+                      {" "}
+                      <FactSeparator /> {Math.round(fitScale * 100)}%
+                    </>
+                  )}
+                </span>
               </Badge>
             )}
             {showEmptyState ? (

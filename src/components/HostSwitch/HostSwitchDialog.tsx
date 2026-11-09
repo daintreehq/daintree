@@ -1256,14 +1256,19 @@ export function HostSwitchDialog({
     };
   }
 
-  const fraction = status?.fraction != null ? ` · ${Math.round(status.fraction * 100)}%` : "";
+  const percent = status?.fraction != null ? Math.round(status.fraction * 100) : null;
   const hint = running ? (
     showProgress ? (
       <span className="flex min-w-0 items-center gap-2" aria-live="polite">
         <Spinner size="xs" />
         <span className="min-w-0 [overflow-wrap:anywhere] [text-wrap:pretty]">
           {status?.message ?? running.label} on {running.hostName}
-          {fraction}
+          {percent !== null && (
+            <>
+              {" "}
+              <FactSeparator /> {percent}%
+            </>
+          )}
           {stillWorkingOp === running.opId && (
             <>
               {" "}

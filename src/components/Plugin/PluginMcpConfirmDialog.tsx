@@ -592,7 +592,9 @@ export function tierLabelFor(tier: PluginMcpDangerTier): string {
 function DangerTierBadge({ tier }: { tier: PluginMcpDangerTier }) {
   return (
     <Badge size="xs" tone="outline" className="font-mono">
-      {tier} <FactSeparator /> {tierLabelFor(tier)}
+      <span>
+        {tier} <FactSeparator /> {tierLabelFor(tier)}
+      </span>
     </Badge>
   );
 }

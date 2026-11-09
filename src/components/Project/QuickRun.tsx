@@ -31,7 +31,7 @@ import { hostScopedKey } from "@/hooks/useHostPlatform";
 import { QUICK_RUN_AUTO_RESTART_KEY_PREFIX } from "./quickRunStorageKeys";
 import { historyStorageKey, loadHistory, recordHistory, type HistoryItem } from "./quickRunHistory";
 import { QUICK_RUN_PANEL_ID } from "./QuickRunToggle";
-import { FactSeparator } from "@/components/ui/FactSeparator";
+import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 
 interface QuickRunProps {
   projectId: string;
@@ -701,7 +701,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // The branch, beside a branch glyph — the worktree's folder name is often
   // something else entirely (worktree "main" on branch "develop").
   const destinationLabel = activeWorktree?.branch || activeWorktree?.name || "";
-  const runSummary = `${effective.dock ? "Dock" : "Grid"}${effective.restart ? " · Restarts" : ""}`;
+  const runSummary = [effective.dock ? "Dock" : "Grid", ...(effective.restart ? ["Restarts"] : [])];
   const isWorktreeValid = activeWorktree != null && activeWorktree.path != null;
 
   return (
@@ -1022,7 +1022,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                           <span aria-hidden="true" className="@max-[280px]/footer:hidden">
                             <FactSeparator />{" "}
                           </span>
-                          {runSummary}
+                          <FactRun facts={runSummary} />
                         </span>
                       </span>
                     </div>

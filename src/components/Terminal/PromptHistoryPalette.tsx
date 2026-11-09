@@ -22,7 +22,7 @@ import { excerptPreview, findPreviewMatches } from "@/utils/promptHistoryPreview
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/projectStore";
 import { isMac } from "@/lib/platform";
-import { FactSeparator } from "@/components/ui/FactSeparator";
+import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 
 /**
  * The composer opens this palette with Mod+R (`inputEditorExtensions/base.ts`),
@@ -106,7 +106,11 @@ export function PromptHistoryRow({
         <span className="flex shrink-0 items-center gap-1 text-xs text-text-secondary tabular-nums">
           {projectName && <span className="max-w-32 truncate">{projectName}</span>}
           {projectName && counts.length > 0 && <FactSeparator />}
-          {counts.length > 0 && <span>{counts.join(" · ")}</span>}
+          {counts.length > 0 && (
+            <span>
+              <FactRun facts={counts} />
+            </span>
+          )}
         </span>
       )}
       <TimeAgo

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -26,7 +26,7 @@ import { keyBelongsToField } from "@/hooks/useListboxCursor";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { pluralize } from "@/lib/pluralize";
-import { FactSeparator } from "@/components/ui/FactSeparator";
+import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 
 let closedAtFormatter: Intl.DateTimeFormat | undefined;
 let closedAtSecondsFormatter: Intl.DateTimeFormat | undefined;
@@ -195,19 +195,7 @@ function ResumeSessionRow({
           <TruncatedTooltip content={meta} focusable={false}>
             <div id={`${optionId}-meta`} className="text-xs text-text-secondary truncate">
               {scheduleLabel === undefined ? (
-                [item.location, item.modelName, closedAt]
-                  .filter((part): part is string => Boolean(part))
-                  .map((part, index) => (
-                    <Fragment key={part}>
-                      {index > 0 && (
-                        <>
-                          {" "}
-                          <FactSeparator />{" "}
-                        </>
-                      )}
-                      {part}
-                    </Fragment>
-                  ))
+                <FactRun facts={[item.location, item.modelName, closedAt].filter(Boolean)} />
               ) : (
                 <>
                   {lead && (

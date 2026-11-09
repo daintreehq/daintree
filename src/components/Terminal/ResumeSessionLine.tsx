@@ -9,7 +9,7 @@ import { useResumeAgentSession } from "@/hooks/useResumeAgentSession";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { pluralNoun } from "@/lib/pluralize";
-import { FactSeparator } from "@/components/ui/FactSeparator";
+import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 
 /**
  * First-run-quiet resume affordance for the launcher: one line for the single
@@ -35,9 +35,10 @@ export function ResumeSessionLine() {
 
   const primary = resumable[0];
   const extraCount = resumable.length - 1;
-  const meta = primary
-    ? [primary.location, primary.modelName].filter((part): part is string => !!part).join(" · ")
-    : "";
+  const metaParts = primary
+    ? [primary.location, primary.modelName].filter((part): part is string => !!part)
+    : [];
+  const meta = metaParts.join(" · ");
 
   if (!hasLoaded || !primary) return null;
 
@@ -99,7 +100,7 @@ export function ResumeSessionLine() {
                 <span aria-hidden="true" className="mr-1.5">
                   <FactSeparator />
                 </span>
-                {meta}
+                <FactRun facts={metaParts} />
               </span>
             )}
           </button>

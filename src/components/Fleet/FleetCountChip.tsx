@@ -560,13 +560,19 @@ export function FleetCountChip({
             <FleetPickerContent picker={picker} testIdPrefix="fleet-picker-add" autoFocusSearch />
             <div className="mt-1 flex items-center justify-between gap-2 border-t border-divider px-1 pt-2">
               <span className="text-2xs tabular-nums text-text-secondary">
-                {picker.confirmedIds.length === 0
-                  ? "Select panes to add"
-                  : `${picker.confirmedIds.length} selected${
-                      picker.hiddenSelectedCount > 0
-                        ? ` · ${picker.hiddenSelectedCount} hidden by search`
-                        : ""
-                    }`}
+                {picker.confirmedIds.length === 0 ? (
+                  "Select panes to add"
+                ) : (
+                  <>
+                    {picker.confirmedIds.length} selected
+                    {picker.hiddenSelectedCount > 0 && (
+                      <>
+                        {" "}
+                        <FactSeparator /> {picker.hiddenSelectedCount} hidden by search
+                      </>
+                    )}
+                  </>
+                )}
               </span>
               <div className="flex items-center gap-1.5">
                 <Button

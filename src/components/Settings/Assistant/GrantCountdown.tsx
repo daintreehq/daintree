@@ -3,6 +3,7 @@ import { formatCountdown } from "@/utils/formatCountdown";
 import { grantDeadline } from "@/utils/grantDeadline";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { MCP_GRANT_MAX_LIFETIME_MS } from "@shared/config/mcpGrants";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 const CEILING_MINUTES = Math.round(MCP_GRANT_MAX_LIFETIME_MS / 60_000);
 
@@ -27,9 +28,19 @@ export function GrantCountdown({
   const remainingMs = endsAt - now;
   return (
     <span role="timer" className="font-mono text-text-secondary tabular-nums shrink-0">
-      {remainingMs <= 0
-        ? "expiring"
-        : `${formatCountdown(remainingMs / 1000)} left${atCeiling ? ` · ${CEILING_MINUTES}-minute limit` : ""}`}
+      {remainingMs <= 0 ? (
+        "expiring"
+      ) : (
+        <>
+          {formatCountdown(remainingMs / 1000)} left
+          {atCeiling && (
+            <>
+              {" "}
+              <FactSeparator /> {CEILING_MINUTES}-minute limit
+            </>
+          )}
+        </>
+      )}
     </span>
   );
 }
