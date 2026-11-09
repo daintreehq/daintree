@@ -59,6 +59,7 @@ import { PaletteCurrentLabel as CurrentLabel } from "@/components/ui/PaletteCurr
 import { type OtherHostOption } from "@/components/Hosts/OtherHostsSection";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { FactSeparator } from "@/components/ui/FactSeparator";
+import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 
 export interface ProjectListItemProps {
   project: ProjectSwitcherProjectRow;
@@ -666,6 +667,10 @@ export function ProjectListItem({
   const showResumeDot = showResumableAgentMark(status, project);
   const showOpenElsewhere = isOpenElsewhere(project);
   const newWindowLabel = getNewWindowMenuLabel(project);
+  // The control does what the context menu's "Go to window" does, so it is
+  // offered exactly where that item is.
+  const showGoToWindow =
+    showOpenElsewhere && onSelectNewWindow !== undefined && newWindowLabel === "Go to window";
 
   const row = (
     <div
@@ -758,22 +763,12 @@ export function ProjectListItem({
           {project.isActive && <span className="sr-only">, current</span>}
           {/* Same shape as `, current` above — see `ResumableAgentsLabel`. */}
           {showResumeDot && <ResumableAgentsLabel count={project.resumableAgentCount ?? 0} />}
-          {showOpenElsewhere && (
-            <>
-              {/*
-               * Quiet, like the bell beside it: the glyph VS Code puts on a
-               * workspace open in another window. The footer names the action
-               * once the row is highlighted, so the row only has to say where
-               * the project lives.
-               */}
-              <span className="sr-only">, </span>
-              <AppWindow
-                className="w-3.5 h-3.5 text-text-secondary shrink-0 ml-1"
-                aria-label="Open in another window"
-                data-testid="project-open-elsewhere-marker"
-              />
-            </>
-          )}
+          {/*
+           * Spoken here, in the name, on every such row: the visible control at
+           * the row's end only shows on the lit row and is hidden from
+           * assistive tech, as a control inside `role="option"` has to be.
+           */}
+          {showOpenElsewhere && <span className="sr-only">, Open in another window</span>}
           {project.neverAutoSleep && (
             <>
               <span className="sr-only">, </span>
@@ -810,6 +805,38 @@ export function ProjectListItem({
          */}
         <RowStatusLine status={status} />
       </div>
+      {showGoToWindow && (
+        // Only on the lit row: on every row that qualified it read as clutter
+        // beside the names. Presentational, like the action palette's pin, so
+        // Enter and ⌘↵ stay its keyboard route and the name above its speech.
+        // Hidden by visibility, not opacity, so an unlit row has no invisible
+        // target at its end, and the slot is kept so names don't reflow.
+        <div className="shrink-0 flex items-center" aria-hidden="true">
+          <RowControlTooltip label="Go to window">
+            <span
+              role="presentation"
+              data-testid="project-open-elsewhere-marker"
+              // A mouse press would otherwise take focus from the search input.
+              // Touch and pen are left alone: the row's context menu arms its
+              // long-press from that same pointerdown.
+              onPointerDown={(e) => {
+                if (e.pointerType === "mouse") e.preventDefault();
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onSelectNewWindow?.(project);
+              }}
+              className={cn(
+                ROW_CONTROL_CLASS,
+                "invisible group-hover:visible group-aria-selected:visible"
+              )}
+            >
+              <AppWindow className="w-3.5 h-3.5" aria-hidden />
+            </span>
+          </RowControlTooltip>
+        </div>
+      )}
       {/* Not under the "Current project" band header: it already names this
           row, and a label beside it would say it twice. */}
       {project.isActive && showCurrentLabel && <CurrentLabel />}
