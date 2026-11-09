@@ -43,7 +43,7 @@ vi.mock("@xterm/xterm", () => ({
     };
     private onDataListener: ((data: string) => void) | null = null;
     unicode = { activeVersion: "6" };
-    modes = { bracketedPasteMode: false };
+    modes = { bracketedPasteMode: false, showCursor: true };
     cols = 80;
     rows = 24;
     element: HTMLElement | undefined;
@@ -77,6 +77,9 @@ vi.mock("@xterm/xterm", () => ({
       this.rows = rows;
     }
     onDimensionsChange() {
+      return { dispose() {} };
+    }
+    onRender() {
       return { dispose() {} };
     }
     attachCustomKeyEventHandler() {}
