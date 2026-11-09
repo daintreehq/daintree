@@ -364,7 +364,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restart",
     title: "Restart terminal",
     description:
-      "Restart a terminal's process in place, keeping the panel. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. Fails on a held pane.",
+      "Restart a terminal's process in place, keeping the panel. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. Fails on a held panel.",
     category: "terminal",
     kind: "command",
     danger: "confirm",

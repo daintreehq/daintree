@@ -6174,7 +6174,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "confirm",
     "dangerRationale": "Restarts the terminal process. Scrollback is lost and the process is re-spawned.",
-    "description": "Restart a terminal's process in place, keeping the panel. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. Fails on a held pane.",
+    "description": "Restart a terminal's process in place, keeping the panel. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. Fails on a held panel.",
     "examples": undefined,
     "id": "terminal.restart",
     "keywords": [
