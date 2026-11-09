@@ -416,7 +416,9 @@ test("collapsed session indicators review — placements, states and themes", as
       await setCardCollapsed(busy, true);
       await setCardCollapsed(solo, true);
       await activateOther();
-      await snap(page, "10-header-working", card(busy), { expectLabel: /^3 terminals: 3 working$/ });
+      await snap(page, "10-header-working", card(busy), {
+        expectLabel: /^3 terminals: 3 working$/,
+      });
       await snap(page, "11-header-solo", card(solo), { expectLabel: /^1 terminal: 1 working$/ });
     });
 

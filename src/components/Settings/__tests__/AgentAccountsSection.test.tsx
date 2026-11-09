@@ -252,7 +252,9 @@ describe("AgentAccountsSection (#16040)", () => {
 
       expect(updateAgent).toHaveBeenCalledWith("codex", { accountId: "company" });
       expect(readUsageLimitedPaneIds).toHaveBeenCalledWith("codex", "company");
-      expect(screen.getByRole("status").textContent).toBe("1 Codex terminal stopped on a usage limit");
+      expect(screen.getByRole("status").textContent).toBe(
+        "1 Codex terminal stopped on a usage limit"
+      );
 
       fireEvent.click(screen.getByRole("button", { name: "Switch it to Company…" }));
       expect(screen.getByText("Restart 1 terminal on 'Company'?")).toBeTruthy();

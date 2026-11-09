@@ -2667,7 +2667,9 @@ describe("account pick offers the panes stopped on a usage limit (#16136)", () =
 
     expect(updateWorktreeAccountMock).toHaveBeenCalledWith("claude", "wt-A", "company");
     expect(readUsageLimitedPaneIdsMock).toHaveBeenCalledWith("claude", "company");
-    expect(screen.getByRole("status").textContent).toBe("1 Claude terminal stopped on a usage limit");
+    expect(screen.getByRole("status").textContent).toBe(
+      "1 Claude terminal stopped on a usage limit"
+    );
     expect(screen.getByText("Switch it to Company…")).toBeTruthy();
   });
 

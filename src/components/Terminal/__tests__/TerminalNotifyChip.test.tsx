@@ -113,7 +113,9 @@ describe("TerminalNotifyChip", () => {
     );
     render(<TerminalNotifyChip terminalId="t1" />);
 
-    expect(await screen.findByText("Not sent: this terminal is waiting on an approval.")).toBeTruthy();
+    expect(
+      await screen.findByText("Not sent: this terminal is waiting on an approval.")
+    ).toBeTruthy();
   });
 
   it("stays visible while a fired notice waits to be delivered", async () => {
