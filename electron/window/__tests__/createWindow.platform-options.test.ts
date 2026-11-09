@@ -87,6 +87,18 @@ describe("createWindow wires the overlay owner — issue #11766", () => {
   });
 });
 
+describe("every app view hands Cmd+W to its renderer — issue #16618", () => {
+  // The Canopy window used to leave Cmd+W to Close Window, so its agent pane
+  // could never take it. Its renderer now decides: the pane's terminal, or the
+  // window from the list. One gate, no window kind exempt.
+  it.each(["../createWindow.ts", "../ProjectViewHandlers.ts"])("%s", async (file) => {
+    const source = await fs.readFile(path.resolve(__dirname, file), "utf-8");
+    const gates = source.match(/\.setIgnoreMenuShortcuts\(([^;]*)\);/g) ?? [];
+    expect(gates).toHaveLength(1);
+    expect(gates[0]).toMatch(/\.setIgnoreMenuShortcuts\(keepsKeyFromMenu\(input\)\);/);
+  });
+});
+
 describe("minimum window size", () => {
   it("lets a Linux tiling window manager's narrow tile fit, instead of clipping an 800px layout", () => {
     expect(getMinimumWindowSize("linux")).toEqual({ minWidth: 400, minHeight: 300 });

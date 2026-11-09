@@ -3,6 +3,7 @@ import {
   isTerminalClipboardCopyKey,
   isTerminalClipboardPasteKey,
   isTerminalReservedKey,
+  isTuiReservedCombo,
   isTuiReservedKey,
   isWindowsTerminalCopyKey,
   isWindowsTerminalPasteKey,
@@ -67,6 +68,24 @@ describe("isTuiReservedKey", () => {
 
   it("does not reserve Ctrl+C — SIGINT never routes through the app at all", () => {
     expect(isTuiReservedKey(keyEvent({ key: "c", ctrlKey: true }))).toBe(false);
+  });
+});
+
+// The shortcut help names a binding the terminal keeps only where it works.
+describe("isTuiReservedCombo", () => {
+  it("agrees with the keystroke check off the Mac, where Cmd is the Ctrl key", () => {
+    expect(isTuiReservedCombo("Cmd+W", false)).toBe(true);
+    expect(isTuiReservedCombo("Ctrl+W", false)).toBe(true);
+    expect(isTuiReservedCombo("Cmd+Shift+W", false)).toBe(false);
+    expect(isTuiReservedCombo("Cmd+Alt+W", false)).toBe(false);
+    expect(isTuiReservedCombo("Cmd+C", false)).toBe(false);
+    expect(isTuiReservedCombo("W", false)).toBe(false);
+  });
+
+  it("reserves only the Control key on the Mac, never Cmd", () => {
+    expect(isTuiReservedCombo("Cmd+W", true)).toBe(false);
+    expect(isTuiReservedCombo("Ctrl+W", true)).toBe(true);
+    expect(isTuiReservedCombo("Cmd+Ctrl+W", true)).toBe(false);
   });
 });
 

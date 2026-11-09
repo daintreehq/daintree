@@ -10,7 +10,7 @@ import { app, BrowserWindow, type WebContentsView } from "electron";
 import path from "path";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
-import { findTerminalCycleAction, isRendererOwnedShortcut } from "../services/menuAccelerators.js";
+import { findTerminalCycleAction, keepsKeyFromMenu } from "../services/menuAccelerators.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -131,8 +131,6 @@ export function setupViewHandlers(
   };
 
   const handleBeforeInputEvent = (event: Electron.Event, input: Electron.Input) => {
-    const isMac = process.platform === "darwin";
-    const key = input.key.toLowerCase();
     const terminalCycleAction = findTerminalCycleAction(input);
     if (terminalCycleAction) {
       event.preventDefault();
@@ -140,15 +138,10 @@ export function setupViewHandlers(
       return;
     }
 
-    const isCloseShortcut =
-      input.type === "keyDown" &&
-      key === "w" &&
-      ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
-      !input.alt;
-    // Mirrors createWindow.ts: renderer-owned menu accelerators yield to the
-    // renderer's KeybindingService per-event on every platform
+    // Mirrors createWindow.ts: Cmd+W and renderer-owned menu accelerators
+    // yield to the renderer's KeybindingService per-event on every platform
     // (see menuAccelerators.ts).
-    wc.setIgnoreMenuShortcuts(isCloseShortcut || isRendererOwnedShortcut(input));
+    wc.setIgnoreMenuShortcuts(keepsKeyFromMenu(input));
   };
 
   // Fire onViewReady on load/reload, but ONLY for the active view.

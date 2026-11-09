@@ -37,7 +37,7 @@ import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
-import { findTerminalCycleAction, isRendererOwnedShortcut } from "../services/menuAccelerators.js";
+import { findTerminalCycleAction, keepsKeyFromMenu } from "../services/menuAccelerators.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
   buildSkeletonCss,
@@ -576,7 +576,6 @@ export function setupBrowserWindow(
   // cycle shortcuts (Ctrl+Tab by default) for the initial app view. ProjectViewManager installs the
   // same Ctrl+Tab bridge for cold-started project views.
   appWebContents.on("before-input-event", (event, input) => {
-    const key = input.key.toLowerCase();
     const terminalCycleAction = findTerminalCycleAction(input);
     if (terminalCycleAction) {
       event.preventDefault();
@@ -584,24 +583,15 @@ export function setupBrowserWindow(
       return;
     }
 
-    const isMac = process.platform === "darwin";
-    const isCloseShortcut =
-      input.type === "keyDown" &&
-      key === "w" &&
-      ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
-      !input.alt;
-
     // Renderer-owned menu accelerators (derived from effective keybindings)
     // are suppressed per-event on every platform so the renderer's
     // KeybindingService — scopes, priorities, rebinds, terminal-reserved
     // keys — owns keyboard execution while this renderer has focus; the
     // native item stays clickable and registered, which keeps the shortcut
     // working when focus is in a guest webview or DevTools where this
-    // handler never fires.
-    // A Canopy window has no pane for Cmd+W to close, so Close Window keeps it.
-    appWebContents.setIgnoreMenuShortcuts(
-      (isCloseShortcut && !canopyWindow) || isRendererOwnedShortcut(input)
-    );
+    // handler never fires. Cmd+W is the renderer's too, the Canopy window's
+    // included: its agent pane takes it before Close Window.
+    appWebContents.setIgnoreMenuShortcuts(keepsKeyFromMenu(input));
   });
 
   attachAppViewRendererGoneHandler({

@@ -93,6 +93,7 @@ vi.mock("@/components/Terminal/HybridInputBar", async () => {
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 import { notify } from "@/lib/notify";
+import { keybindingService } from "@/services/KeybindingService";
 import { CanopyView } from "../CanopyView";
 import { CANOPY_SURFACE, type CanopyFrame } from "../canopyFrame";
 import { CANOPY_TITLE } from "../canopyTerms";
@@ -996,8 +997,17 @@ describe("CanopyView", () => {
     // A window left open all day doesn't go away on Escape: it only clears the search.
     expect(labels).toContain("Clear the search");
     expect(labels).not.toContain("Clear the search, then close");
-    // The window has nothing to hand the pane its close: no key trashes the agent's terminal.
-    expect(document.body.textContent).not.toMatch(/trash the agent's terminal/i);
+    // The pane takes the close binding (#16618), named in the reply's group; off
+    // the Mac its Ctrl+W stays the shell's inside the terminal.
+    const trash = [...document.querySelectorAll("dd")].find(
+      (dd) => dd.textContent === "In a reply: trash the agent's terminal; Z takes it back"
+    )!;
+    expect(trash.closest("section")?.querySelector("h3")?.textContent).toBe(
+      "In a reply or the terminal"
+    );
+    expect(
+      [...trash.previousElementSibling!.querySelectorAll("kbd")].map((kbd) => kbd.textContent)
+    ).toEqual(["Ctrl", "W"]);
     // Named with its keys in the reply's group, not the list's.
     const goTo = [...document.querySelectorAll("dd")].find(
       (dd) => dd.textContent === "In a reply: go to terminal"
@@ -1008,6 +1018,38 @@ describe("CanopyView", () => {
     expect(
       [...goTo.previousElementSibling!.querySelectorAll("kbd")].map((kbd) => kbd.textContent)
     ).toEqual(["Ctrl", "Alt", "Enter"]);
+  });
+
+  it("names the pane's close as the user has it bound, and none for a chord (#16618)", async () => {
+    installElectron();
+    const openSheet = async () => {
+      const view = render(<CanopyView frame={frame} />);
+      await frames();
+      const button = document.querySelector<HTMLElement>(
+        'button[aria-label="Keyboard shortcuts"]'
+      )!;
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      const labels = [...document.querySelectorAll("dd")].map((dd) => dd.textContent);
+      view.unmount();
+      return labels;
+    };
+    try {
+      // A key the terminal doesn't own trashes from the terminal too.
+      keybindingService.applyOverrides({ "terminal.close": ["Cmd+Shift+W"] });
+      const rebound = await openSheet();
+      expect(rebound).toContain("Trash the agent's terminal; Z takes it back");
+      expect(rebound).toContain("Close Canopy");
+
+      // A chord can't reach the pane.
+      keybindingService.applyOverrides({ "terminal.close": ["Cmd+K Cmd+W"] });
+      const chord = await openSheet();
+      expect(chord.some((label) => /trash the agent's terminal/i.test(label ?? ""))).toBe(false);
+      expect(chord).toContain("Close Canopy");
+    } finally {
+      keybindingService.applyOverrides({});
+    }
   });
 
   it("steps to the next agent with ⌘↓ from inside its terminal, keeping the keyboard in the pane", async () => {

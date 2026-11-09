@@ -1,4 +1,5 @@
 import { isMac, isWindows } from "@/lib/platform";
+import { parseCombo } from "@/services/keybindingUtils";
 
 /**
  * Terminal-first key ownership policy, shared by the window capture handler
@@ -30,6 +31,14 @@ export function isTuiReservedKey(event: KeyboardEvent): boolean {
     // reserved key through to app-shortcut resolution.
     TUI_KEYBINDS.has(event.key.length === 1 ? event.key.toLowerCase() : event.key)
   );
+}
+
+/** A single-stroke combo whose keystroke `isTuiReservedKey` keeps for the terminal. */
+export function isTuiReservedCombo(combo: string, mac: boolean): boolean {
+  const { cmd, ctrl, shift, alt, key } = parseCombo(combo);
+  // Off the Mac, Cmd is the Ctrl key.
+  const ctrlOnly = mac ? ctrl && !cmd : cmd || ctrl;
+  return ctrlOnly && !shift && !alt && TUI_KEYBINDS.has(key.toLowerCase());
 }
 
 /**

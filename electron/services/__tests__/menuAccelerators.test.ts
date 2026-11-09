@@ -17,6 +17,7 @@ import {
   isDictationKey,
   isKeybindingOwnedAction,
   isRendererOwnedShortcut,
+  keepsKeyFromMenu,
   rendererMenuAccelerator,
   resetRendererOwnedAccelerators,
 } from "../menuAccelerators.js";
@@ -336,5 +337,38 @@ describe("isRendererOwnedShortcut", () => {
     setProcessPlatform("darwin");
     rendererMenuAccelerator("nav.toggleSidebar");
     expect(isRendererOwnedShortcut(input({ type: "keyUp", key: "b", meta: true }))).toBe(false);
+  });
+});
+
+// Cmd+W is the renderer's in every app window, the Canopy window's included:
+// there it trashes the focused agent's terminal, or closes the window from the
+// list (#16618). Close Window's item and the OS control close it regardless.
+describe("keepsKeyFromMenu", () => {
+  it("keeps Cmd+W from Close Window on macOS, leaving Ctrl+W and Cmd+Alt+W to the menu", () => {
+    setProcessPlatform("darwin");
+    expect(keepsKeyFromMenu(input({ key: "w", meta: true }))).toBe(true);
+    expect(keepsKeyFromMenu(input({ key: "W", meta: true, shift: true }))).toBe(true);
+    expect(keepsKeyFromMenu(input({ key: "w", control: true }))).toBe(false);
+    expect(keepsKeyFromMenu(input({ key: "w", meta: true, control: true }))).toBe(false);
+    expect(keepsKeyFromMenu(input({ key: "∑", meta: true, alt: true }))).toBe(false);
+  });
+
+  it.each(["win32", "linux"] as const)("keeps Ctrl+W from the menu on %s, not Meta+W", (os) => {
+    setProcessPlatform(os);
+    expect(keepsKeyFromMenu(input({ key: "w", control: true }))).toBe(true);
+    expect(keepsKeyFromMenu(input({ key: "w", meta: true }))).toBe(false);
+    expect(keepsKeyFromMenu(input({ key: "w", control: true, alt: true }))).toBe(false);
+  });
+
+  it("hands the menu its key back on release", () => {
+    setProcessPlatform("darwin");
+    expect(keepsKeyFromMenu(input({ type: "keyUp", key: "w", meta: true }))).toBe(false);
+  });
+
+  it("keeps the renderer-owned accelerators too, and nothing else", () => {
+    setProcessPlatform("darwin");
+    rendererMenuAccelerator("nav.toggleSidebar"); // Cmd+B
+    expect(keepsKeyFromMenu(input({ key: "b", meta: true }))).toBe(true);
+    expect(keepsKeyFromMenu(input({ key: "c", meta: true }))).toBe(false);
   });
 });
