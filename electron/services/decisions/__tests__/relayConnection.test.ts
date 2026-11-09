@@ -31,6 +31,15 @@ vi.mock("electron", () => ({
   powerMonitor: { on: vi.fn(), off: vi.fn() },
 }));
 
+const logWarn = vi.hoisted(() => vi.fn());
+vi.mock("../../../utils/logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/logger.js")>();
+  return {
+    ...actual,
+    logWarn: vi.fn((...args: Parameters<typeof actual.logWarn>) => logWarn(...args)),
+  };
+});
+
 import {
   RECONNECT_BASE_MS,
   RECONNECT_CAP_MS,
@@ -1091,11 +1100,17 @@ describe("RelayConnection", () => {
     h.connection.start();
     const socket = await connectLive(h);
 
+    logWarn.mockClear();
     faulted = true;
     socket.event(1);
     expect(await h.status("not-connected")).toEqual({ state: "not-connected", problem: "storage" });
     expect(socket.frames().some((frame) => frame.t === "ack" && frame.seq === 1)).toBe(false);
     expect(socket.closedByClient).toBe(1000);
+    // The halt is on disk, with why (#16605).
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("relay connection stopped"), {
+      state: "not-connected",
+      problem: "storage",
+    });
   });
 
   it("leaves the store's injection intents to delivery: a socket attempt reconciles none", async () => {

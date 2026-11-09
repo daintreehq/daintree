@@ -2697,6 +2697,28 @@ describe("app:first-interactive handler", () => {
     expect(noteDatabaseNoticeRendererReady).toHaveBeenCalledExactlyOnceWith(7);
   });
 
+  it("tells a Decisions already loaded that a window is ready, and loads none (#16605)", async () => {
+    const { loadDecisionsModule, peekDecisionsModule, _resetDecisionsModuleForTesting } =
+      await import("../../window/serviceRefs.js");
+    _resetDecisionsModuleForTesting();
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    const handler = ipcHandlers.get(CHANNELS.APP_FIRST_INTERACTIVE);
+    if (!handler) throw new Error("app:first-interactive handler not registered");
+    try {
+      await handler(makeInvokeEvent(7));
+      expect(peekDecisionsModule()).toBeNull();
+
+      const ready = vi.fn();
+      await loadDecisionsModule(async () => ({ noteDecisionsRendererReady: ready }) as never);
+      await handler(makeInvokeEvent(7));
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledExactlyOnceWith(7));
+    } finally {
+      cleanup();
+      _resetDecisionsModuleForTesting();
+    }
+  });
+
   it("releases the reload notice held for the sender", async () => {
     vi.mocked(releaseReloadNotice).mockClear();
     ipcHandlers.clear();

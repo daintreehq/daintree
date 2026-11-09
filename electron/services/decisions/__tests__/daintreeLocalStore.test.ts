@@ -22,6 +22,15 @@ vi.mock("electron", () => ({
   },
 }));
 
+const logWarn = vi.hoisted(() => vi.fn());
+vi.mock("../../../utils/logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/logger.js")>();
+  return {
+    ...actual,
+    logWarn: vi.fn((...args: Parameters<typeof actual.logWarn>) => logWarn(...args)),
+  };
+});
+
 import { openDb } from "../../persistence/db.js";
 import { resetWritesSuppressedForTesting, setWritesSuppressed } from "../../diskPressureState.js";
 import {
@@ -415,21 +424,74 @@ describe("DaintreeLocalStore", () => {
     });
   });
 
-  it("stops writing after the database refuses a write, even once there is room again", async () => {
+  it("stops writing after the database runs out of room, even once there is room again", async () => {
+    logWarn.mockClear();
     const store = new DaintreeLocalStore(sqlite);
+    const faults: string[] = [];
+    store.onFault((reason) => faults.push(reason));
     sqlite.pragma("wal_checkpoint(TRUNCATE)");
     const pages = Number(sqlite.pragma("page_count", { simple: true }));
     sqlite.pragma(`max_page_count = ${pages}`);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
+    // SQLITE_FULL: room, not the database, ran out (#16605).
     const big = "x".repeat(64 * 1024);
-    await expect(store.setMeta("big", big)).rejects.toMatchObject({ reason: "storage-fault" });
+    await expect(store.setMeta("big", big)).rejects.toMatchObject({ reason: "disk-full" });
     expect(store.isFaulted()).toBe(true);
+    expect(store.faultReason()).toBe("disk-full");
 
     sqlite.pragma(`max_page_count = ${pages * 1000}`);
-    await expect(store.setMeta("small", "1")).rejects.toMatchObject({ reason: "storage-fault" });
+    await expect(store.setMeta("small", "1")).rejects.toMatchObject({ reason: "disk-full" });
     expect(await store.getMeta("small")).toBeNull();
     expect(sqlite.pragma("synchronous", { simple: true })).toBe(SYNCHRONOUS_NORMAL);
+    expect(faults).toEqual(["disk-full"]);
+    // One line, when it stopped, with the cause's code and nothing it was writing.
+    const latched = logWarn.mock.calls.filter(([message]) =>
+      String(message).includes("stopped taking writes")
+    );
+    expect(latched).toEqual([[expect.any(String), { reason: "disk-full", code: "SQLITE_FULL" }]]);
+    warn.mockRestore();
+  });
+
+  it("tells its fault listeners once, with the first reason, and keeps that reason", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const faults: string[] = [];
+    const removed: string[] = [];
+    store.onFault((reason) => faults.push(reason));
+    store.onFault((reason) => removed.push(reason))();
+    expect(store.faultReason()).toBeNull();
+
+    setWritesSuppressed(true);
+    await expect(store.setMeta("k", "v")).rejects.toMatchObject({ reason: "disk-pressure" });
+    setWritesSuppressed(false);
+    failNextRead(sqlite, "FROM decisions_meta WHERE key", sqliteError("SQLITE_IOERR_READ"));
+    await expect(store.getMeta("k")).rejects.toMatchObject({ reason: "storage-fault" });
+
+    expect(faults).toEqual(["disk-pressure"]);
+    expect(removed).toEqual([]);
+    expect(store.faultReason()).toBe("disk-pressure");
+  });
+
+  it("keeps any other storage error a storage fault", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    failNextRead(sqlite, "FROM decisions_meta WHERE key", sqliteError("SQLITE_CORRUPT"));
+
+    await expect(store.getMeta("k")).rejects.toMatchObject({ reason: "storage-fault" });
+    expect(store.faultReason()).toBe("storage-fault");
+  });
+
+  it("still tells its other fault listeners when one throws", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const later: string[] = [];
+    store.onFault(() => {
+      throw new Error("listener broke");
+    });
+    store.onFault((reason) => later.push(reason));
+    setWritesSuppressed(true);
+
+    await expect(store.setMeta("k", "v")).rejects.toMatchObject({ reason: "disk-pressure" });
+    expect(later).toEqual(["disk-pressure"]);
     warn.mockRestore();
   });
 

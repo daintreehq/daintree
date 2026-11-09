@@ -13,6 +13,7 @@ import {
 } from "@daintreehq/decisions-client";
 import { getWritesSuppressed } from "../diskPressureState.js";
 import { withDiskRecovery } from "../persistence/db.js";
+import { logWarn } from "../../utils/logger.js";
 
 /** Every table the store keeps. */
 const DECISIONS_TABLES = [
@@ -27,7 +28,14 @@ const DECISIONS_TABLES = [
 /** The most calls one transaction runs, so a burst can't hold the main thread in one long commit. */
 export const DECISIONS_STORE_MAX_BATCH = 256;
 
-export type DecisionsStoreUnavailableReason = "disk-pressure" | "storage-fault" | "closed";
+/**
+ * `disk-pressure`: refused while disk space was critical. `disk-full`: the
+ * database itself ran out of room (`SQLITE_FULL`), which a dip between two
+ * disk-space checks can cause with the monitor never seeing it.
+ * `storage-fault`: any other failure of the database.
+ */
+export type DecisionsStoreUnavailableReason =
+  "disk-pressure" | "disk-full" | "storage-fault" | "closed";
 
 /** A call the store refused. Nothing it carried was stored. */
 export class DecisionsStoreUnavailableError extends Error {
@@ -38,9 +46,11 @@ export class DecisionsStoreUnavailableError extends Error {
     super(
       reason === "disk-pressure"
         ? "Decisions can't save while disk space is critical"
-        : reason === "closed"
-          ? "The Decisions store is closed"
-          : "Decisions stopped saving after a storage error",
+        : reason === "disk-full"
+          ? "Decisions stopped saving because the disk was full"
+          : reason === "closed"
+            ? "The Decisions store is closed"
+            : "Decisions stopped saving after a storage error",
       options
     );
     this.name = "DecisionsStoreUnavailableError";
@@ -422,7 +432,8 @@ export function hasDecisionsData(sqlite: Database.Database): boolean {
  * refused write, or any storage error, stops this store writing for good, so
  * a library step that failed can't be followed by one that records it as
  * done (an event marked processed after its answer wasn't saved). Reads keep
- * working; the next enabled lifetime opens a fresh store.
+ * working; the next enabled lifetime opens a fresh store, and so does the
+ * service once a disk-space fault has room again (#16605).
  */
 export class DaintreeLocalStore implements LocalStore {
   readonly durable = true;
@@ -439,6 +450,7 @@ export class DaintreeLocalStore implements LocalStore {
   private readonly deletedCreates = new Set<string>();
   private readonly commitListeners = new Set<() => void>();
   private readonly deletionListeners = new Set<(questionId: string) => void>();
+  private readonly faultListeners = new Set<(reason: DecisionsStoreUnavailableReason) => void>();
 
   constructor(private readonly sqlite: Database.Database) {}
 
@@ -488,6 +500,22 @@ export class DaintreeLocalStore implements LocalStore {
   /** True once a refused write or a storage error has stopped this store writing. */
   isFaulted(): boolean {
     return this.fault !== null;
+  }
+
+  /** Why this store stopped writing; null while it still writes. */
+  faultReason(): DecisionsStoreUnavailableReason | null {
+    return this.fault?.reason ?? null;
+  }
+
+  /**
+   * Calls `listener` once, when this store stops writing, with why. It runs
+   * inside the call that stopped it and must not call back into the store.
+   */
+  onFault(listener: (reason: DecisionsStoreUnavailableReason) => void): () => void {
+    this.faultListeners.add(listener);
+    return () => {
+      this.faultListeners.delete(listener);
+    };
   }
 
   getMeta(key: string): Promise<string | null> {
@@ -909,7 +937,7 @@ export class DaintreeLocalStore implements LocalStore {
 
   private runBatch(ops: Op[]): Outcome[] {
     if (!this.fault && getWritesSuppressed() && ops.some((op) => op.kind === "write")) {
-      this.fault = new DecisionsStoreUnavailableError("disk-pressure");
+      this.latch(new DecisionsStoreUnavailableError("disk-pressure"));
     }
     const outcomes = new Array<Outcome>(ops.length);
     const runnable: number[] = [];
@@ -972,14 +1000,31 @@ export class DaintreeLocalStore implements LocalStore {
    */
   private latch(cause: unknown): DecisionsStoreUnavailableError {
     const fault = this.storageFault(cause);
-    this.fault ??= fault;
+    if (this.fault !== null) return fault;
+    this.fault = fault;
+    // Under disk pressure the logger drops this line too; the restart after it logs again.
+    const code = (fault.cause as { code?: unknown } | null | undefined)?.code;
+    logWarn("[Decisions] The local store stopped taking writes", {
+      reason: fault.reason,
+      ...(typeof code === "string" ? { code } : {}),
+    });
+    for (const listener of [...this.faultListeners]) {
+      try {
+        listener(fault.reason);
+      } catch (error) {
+        console.warn("[Decisions] A store fault listener threw:", error);
+      }
+    }
     return fault;
   }
 
   private storageFault(cause: unknown): DecisionsStoreUnavailableError {
-    return cause instanceof DecisionsStoreUnavailableError
-      ? cause
-      : new DecisionsStoreUnavailableError("storage-fault", { cause });
+    if (cause instanceof DecisionsStoreUnavailableError) return cause;
+    const code = (cause as { code?: unknown } | null)?.code;
+    return new DecisionsStoreUnavailableError(
+      code === "SQLITE_FULL" ? "disk-full" : "storage-fault",
+      { cause }
+    );
   }
 
   private st(sql: string): Database.Statement {

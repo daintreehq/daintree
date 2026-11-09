@@ -17,6 +17,7 @@ import {
   type DecisionsSetupCheckRun,
   type DecisionsSetupCheckStep,
   type DecisionsSetupCheckSteps,
+  type DecisionsSetupClaimObservation,
   type DecisionsSetupSocketObservation,
   type DecisionsState,
   type DecisionsRelayCheck,
@@ -302,7 +303,7 @@ export class SetupCheck {
     const opened: { session: Signed | null } = { session: null };
     const claimed = await this.step("claim", async (): Promise<StepOutcome<"claim">> => {
       const session = await this.openSigned();
-      if (session === null) return { passed: false, observation: { result: "not-set-up" } };
+      if (session === null) return { passed: false, observation: this.unsigned() };
       opened.session = session;
       return this.signedStep(session, async (): Promise<StepOutcome<"claim">> => {
         const recognised = relayRecognises(await session.client.devices(), session.identity);
@@ -348,6 +349,17 @@ export class SetupCheck {
     if (!pushReady) return;
 
     await this.askTestQuestion(session);
+  }
+
+  /**
+   * Why there is no signed client: the connection stopped for a problem
+   * (#16605), which leaves it no identity, or no relay is set up.
+   */
+  private unsigned(): DecisionsSetupClaimObservation {
+    const status = this.deps.status();
+    return status.state === "not-connected" && status.problem !== undefined
+      ? { result: "not-connected", problem: status.problem }
+      : { result: "not-set-up" };
   }
 
   /**

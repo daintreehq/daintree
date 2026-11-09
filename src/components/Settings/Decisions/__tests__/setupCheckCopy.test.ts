@@ -27,6 +27,8 @@ const OBSERVATIONS: { [S in DecisionsSetupCheckStep]: DecisionsSetupCheckObserva
     { result: "recognised" },
     { result: "not-recognised" },
     { result: "not-set-up" },
+    { result: "not-connected", problem: "storage" },
+    { result: "not-connected", problem: "keys" },
     { result: "refused", origin: ORIGIN, reason: "rate-limited" },
     { result: "unexpected" },
   ],
@@ -101,6 +103,14 @@ describe("describeSetupStep", () => {
       observation: DecisionsSetupCheckObservations[S]
     ) => describeSetupStep(step, { state: "failed", observation }, { state: "failed" }).detail;
     expect(detail("claim", { result: "not-recognised" })).toMatch(/another owner/);
+    // A relay that is set up is never reported as missing (#16605).
+    const halted = detail("claim", { result: "not-connected", problem: "storage" });
+    expect(halted).toMatch(/database/);
+    expect(halted).not.toMatch(/No relay is set up/);
+    expect(detail("claim", { result: "not-connected", problem: "keys" })).toMatch(/keys/);
+    expect(detail("claim", { result: "not-connected", problem: "other-relay" })).toMatch(
+      /another relay/
+    );
     expect(detail("socket", { result: "replaced" })).toMatch(/Another connection/);
     expect(detail("socket", { result: "not-connected", problem: "storage" })).toMatch(/database/);
     expect(detail("push", { result: "no-phone" })).toMatch(/No phone is paired/);

@@ -271,6 +271,11 @@ export function loadDecisionsModule(
   return decisionsModule;
 }
 
+/** Decisions' entry module if something already loaded it (or is loading it); never loads it. */
+export function peekDecisionsModule(): Promise<typeof DecisionsModule> | null {
+  return decisionsModuleSealed ? null : decisionsModule;
+}
+
 function fieldOf(value: unknown, key: string): unknown {
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)[key]
