@@ -3,6 +3,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ActionRegistry } from "../../actionTypes";
 import { useCanopyStore } from "@/store/canopyStore";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
+import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import { notify } from "@/lib/notify";
 import { ClientAppError } from "@/utils/clientAppError";
 
@@ -236,7 +237,7 @@ describe("canopy actions", () => {
     });
   });
 
-  it("marks read every agent Canopy lists, in every project, with no project scope to wait on (#16581)", async () => {
+  it("marks read every project's agents in a view an earlier build left on This project (#16581)", async () => {
     const markAllRead = vi.fn(async () => []);
     Object.defineProperty(window, "electron", {
       value: { canopy: { markAllRead, restoreReads: vi.fn() } },
@@ -251,26 +252,49 @@ describe("canopy actions", () => {
       markedUnreadAt: null,
       version: 1,
     });
-    // An earlier build's "This project", left in storage, narrows nothing.
+    // A view of p1 that an earlier build left on "This project", read as the
+    // view and its stores load, with the fleet telling the two projects apart.
     window.localStorage.setItem("daintree-canopy-scope", "project");
-    useCanopyStore.setState({
-      mode: "on",
-      snapshot: {
-        activated: true,
-        dispositions: [],
-        reads: [mark("here"), mark("there")],
-      } as unknown as CanopySnapshot,
-    });
+    window.__DAINTREE_INITIAL_PROJECT__ = {
+      id: "p1",
+    } as typeof window.__DAINTREE_INITIAL_PROJECT__;
+    vi.resetModules();
     try {
-      expect(definition("canopy.markAllRead").isEnabled?.({})).toBe(true);
-      await definition("canopy.markAllRead").run(undefined, {});
+      const { useCanopyStore: store } = await import("@/store/canopyStore");
+      const { useFleetSnapshotStore } = await import("@/store/fleetSnapshotStore");
+      const { registerCanopyActions } = await import("../canopyActions");
+      const loaded: ActionRegistry = new Map();
+      registerCanopyActions(loaded);
+      useFleetSnapshotStore.setState({
+        snapshot: {
+          runs: [
+            { runId: "here", workspaceId: "p1", spawnedAt: 1 },
+            { runId: "there", workspaceId: "p2", spawnedAt: 1 },
+          ],
+          changedAt: 0,
+          degraded: false,
+          lastSuccessfulAt: 0,
+        } as unknown as FleetSnapshot,
+      });
+      store.setState({
+        mode: "on",
+        snapshot: {
+          activated: true,
+          dispositions: [],
+          reads: [mark("here"), mark("there")],
+        } as unknown as CanopySnapshot,
+      });
+      const action = loaded.get("canopy.markAllRead")!();
+
+      expect(action.isEnabled?.({})).toBe(true);
+      await action.run(undefined, {});
       expect(markAllRead).toHaveBeenCalledWith([
         { runId: "here", spawnedAt: 1, turn: 2 },
         { runId: "there", spawnedAt: 1, turn: 2 },
       ]);
     } finally {
       window.localStorage.removeItem("daintree-canopy-scope");
-      useCanopyStore.setState({ snapshot: null });
+      delete window.__DAINTREE_INITIAL_PROJECT__;
     }
   });
 

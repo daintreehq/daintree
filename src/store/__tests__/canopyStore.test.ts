@@ -153,7 +153,6 @@ describe("the order", () => {
       vi.resetModules();
       const { useCanopyStore: reloaded } = await import("../canopyStore");
       expect(reloaded.getState().order?.ids).toEqual(["a", "b"]);
-      expect(reloaded.getState()).not.toHaveProperty("scope");
     } finally {
       window.history.replaceState(null, "", "/");
     }

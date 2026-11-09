@@ -479,6 +479,7 @@ describe("a Canopy window replaced before its close was told", () => {
     old.isDestroyed.mockReturnValue(true);
     openCanopyWindow(watch);
     expect(made).toHaveLength(2);
+    setCanopyWindowOpen.mockClear();
 
     old.emit("closed");
 
@@ -486,5 +487,10 @@ describe("a Canopy window replaced before its close was told", () => {
     expect(stops[1]).not.toHaveBeenCalled();
     expect(isCanopyWindowView(made[1]!.view.webContents.id)).toBe(true);
     expect(focusCanopyWindow()).toBe(true);
+    // The manifest still has the window standing for the next launch.
+    expect(setCanopyWindowOpen).not.toHaveBeenCalledWith(false);
+
+    made[1]!.emit("closed");
+    expect(setCanopyWindowOpen).toHaveBeenCalledWith(false);
   });
 });

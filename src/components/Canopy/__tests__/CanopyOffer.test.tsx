@@ -104,6 +104,26 @@ describe("CanopyOffer, all of Canopy in a project window (#16581)", () => {
     expect(dialog.querySelector('[aria-busy="true"]')).toBeNull();
   });
 
+  it("covers the window, with nothing of the app behind it and no picture taken of it", async () => {
+    const createObjectURL = vi.fn(() => "blob:still");
+    const original = Object.getOwnPropertyDescriptor(URL, "createObjectURL");
+    Object.defineProperty(URL, "createObjectURL", { value: createObjectURL, configurable: true });
+    try {
+      useCanopyStore.setState({ snapshot: snapshot("unset", false) });
+      render(<CanopyOffer />);
+      await nextFrames();
+
+      const layer = offer()!;
+      expect(layer.className).not.toMatch(/\bbackdrop-blur-|\bbg-scrim-/);
+      expect(layer.firstElementChild?.className ?? "").not.toMatch(/\bmax-w-/);
+      expect(createObjectURL).not.toHaveBeenCalled();
+      expect(document.querySelector("img[src^='blob:']")).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(URL, "createObjectURL", original);
+      else Reflect.deleteProperty(URL, "createObjectURL");
+    }
+  });
+
   it("reads nothing and lists no host or agent: no inbox, search or host picker", async () => {
     useCanopyStore.setState({ snapshot: snapshot("unset", false) });
     render(<CanopyOffer />);
@@ -111,7 +131,7 @@ describe("CanopyOffer, all of Canopy in a project window (#16581)", () => {
 
     expect(canopy.setActive).not.toHaveBeenCalled();
     expect(canopy.onSnapshotUpdated).not.toHaveBeenCalled();
-    expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
     expect(document.querySelector("[data-canopy-standalone]")).toBeNull();
     expect(screen.queryByRole("button", { name: /host/i })).toBeNull();
   });
@@ -186,7 +206,7 @@ describe("CanopyOffer, all of Canopy in a project window (#16581)", () => {
     expect(useCanopyStore.getState().isOpen).toBe(false);
   });
 
-  it("keeps the keyboard inside, off Turn on, and hands it back to what opened it", async () => {
+  it("takes the keyboard off Turn on, and hands it back to what opened it", async () => {
     const opener = document.createElement("button");
     document.body.appendChild(opener);
     opener.focus();
