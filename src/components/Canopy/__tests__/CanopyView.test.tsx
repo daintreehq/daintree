@@ -108,6 +108,7 @@ import { notify } from "@/lib/notify";
 import { CanopyView } from "../CanopyView";
 import { CANOPY_TITLE } from "../canopyTerms";
 import { useCanopyStore } from "@/store/canopyStore";
+import { keybindingService } from "@/services/KeybindingService";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -1030,6 +1031,8 @@ describe("CanopyView", () => {
     expect(document.body.textContent).toContain("Move down or up");
     expect(document.body.textContent).toContain("First or last agent");
     expect(document.body.textContent).toContain("Close Canopy");
+    // The dialog, unlike Canopy's window, goes away on Escape.
+    expect(document.body.textContent).toContain("Clear the search, then close");
     // In the pane it trashes the agent's terminal; off the Mac only from a
     // reply, since the terminal keeps Ctrl+W for the shell.
     expect(document.body.textContent).toMatch(/in a reply: trash the agent's terminal/i);
@@ -1043,6 +1046,38 @@ describe("CanopyView", () => {
     expect(
       [...goTo.previousElementSibling!.querySelectorAll("kbd")].map((kbd) => kbd.textContent)
     ).toEqual(["Ctrl", "Alt", "Enter"]);
+  });
+
+  it("closes the dialog by Escape and the user's own close binding, which reaches the pane", async () => {
+    const effective = keybindingService.getEffectiveCombo.bind(keybindingService);
+    vi.spyOn(keybindingService, "getEffectiveCombo").mockImplementation((actionId) =>
+      actionId === "terminal.close" ? "Cmd+Shift+Q" : effective(actionId)
+    );
+    installElectron();
+    render(<CanopyView />);
+    await frames();
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    await act(async () => {
+      fireEvent.click(
+        dialog.querySelector<HTMLElement>('button[aria-label="Keyboard shortcuts"]')!
+      );
+    });
+    const rows = (heading: string) => {
+      const group = [...document.querySelectorAll("section")].find(
+        (section) => section.querySelector(":scope > h3")?.textContent === heading
+      )!;
+      return [...group.querySelectorAll("dd")].map((dd): [string | null, Array<string | null>] => [
+        dd.textContent,
+        [...dd.previousElementSibling!.querySelectorAll("kbd")].map((kbd) => kbd.textContent),
+      ]);
+    };
+    expect(rows("In the search")).toContainEqual(["Clear the search, then close", ["Esc"]]);
+    expect(rows("In the list")).toContainEqual(["Close", ["Esc"]]);
+    expect(rows("In the list")).toContainEqual(["Close Canopy", ["Ctrl", "Shift", "Q"]]);
+    expect(rows("In a reply or the terminal")).toContainEqual([
+      "In a reply: trash the agent's terminal; Z takes it back",
+      ["Ctrl", "Shift", "Q"],
+    ]);
   });
 
   it("steps to the next agent with ⌘↓ from inside its terminal, keeping the keyboard in the pane", async () => {

@@ -42,7 +42,7 @@ export interface CanopyFrame {
   host: "dialog" | "standalone";
   /** The workspace around the inbox, null with none. Only the dialog has "This project". */
   workspaceId: () => string | null;
-  /** The user put the inbox away: its close button, or Escape. */
+  /** The user put the inbox away: its close button, or Escape in the dialog. */
   close: () => void;
   /** Null where a run's pane can't be reached from: the inbox offers no way to it. */
   goToRun: ((run: CanopyGoToRun, panel: CanopyPanelHold) => void) | null;

@@ -189,6 +189,7 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUIStore } from "@/store/uiStore";
+import { keybindingService } from "@/services/KeybindingService";
 import { isMac } from "@/lib/platform";
 import {
   _resetPluginHostedViewsStoreForTest,
@@ -355,6 +356,19 @@ function card(runId: string) {
 
 function selectedRun() {
   return document.querySelector("[data-canopy-card][aria-selected=true]")?.id;
+}
+
+/** The open shortcut list's rows under one heading, each as its label and its keys. */
+function shortcutRows() {
+  return (heading: string): Array<[string | null, Array<string | null>]> => {
+    const group = [...document.querySelectorAll("section")].find(
+      (section) => section.querySelector(":scope > h3")?.textContent === heading
+    )!;
+    return [...group.querySelectorAll("dd")].map((dd) => [
+      dd.textContent,
+      [...dd.previousElementSibling!.querySelectorAll("kbd")].map((kbd) => kbd.textContent),
+    ]);
+  };
 }
 
 /** The terminal waits a moment between watches, sparing a run stepped straight past. */
@@ -565,7 +579,28 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(surface()).not.toBeNull();
   });
 
-  it("hands closing to the host: the close button and Escape, and then only it decides", async () => {
+  it("stays open on Escape at the list, however often it is pressed", async () => {
+    const host = hostFrame();
+    render(<CanopyView frame={host.frame} />);
+    await settle();
+
+    act(() => card("first").focus());
+    const selected = selectedRun();
+    for (const target of [card("first"), card("first"), document.body]) {
+      await act(async () => {
+        fireEvent.keyDown(target, { key: "Escape" });
+      });
+    }
+
+    expect(host.close).not.toHaveBeenCalled();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(surface()).not.toBeNull();
+    // The window keeps its place: the same row, with the keyboard on it.
+    expect(selectedRun()).toBe(selected);
+    expect(document.activeElement).toBe(card("first"));
+  });
+
+  it("hands its close button to the host, and then only it decides", async () => {
     const host = hostFrame();
     render(<CanopyView frame={host.frame} />);
     await settle();
@@ -575,16 +610,11 @@ describe("Canopy's inbox with no dialog and no project", () => {
     });
     expect(host.close).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
-      fireEvent.keyDown(card("first"), { key: "Escape" });
-    });
-    expect(host.close).toHaveBeenCalledTimes(2);
-
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(surface()).not.toBeNull();
   });
 
-  it("keeps Escape for a menu open in the inbox", async () => {
+  it("closes a menu open in the inbox on Escape, and stops at the list", async () => {
     const host = hostFrame();
     render(<CanopyView frame={host.frame} />);
     await settle();
@@ -600,10 +630,12 @@ describe("Canopy's inbox with no dialog and no project", () => {
     await act(async () => {
       fireEvent.keyDown(card("first"), { key: "Escape" });
     });
-    expect(host.close).toHaveBeenCalledTimes(1);
+    expect(host.close).not.toHaveBeenCalled();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(surface()).not.toBeNull();
   });
 
-  it("keeps Escape for a dialog open over the inbox, even past a new closer", async () => {
+  it("leaves Escape to a dialog open over the inbox, and to nothing once it closes", async () => {
     const host = hostFrame();
     const closeDialog = vi.fn();
     const shown = (frame: typeof host.frame, dialogOpen: boolean) => (
@@ -634,7 +666,35 @@ describe("Canopy's inbox with no dialog and no project", () => {
     await act(async () => {
       fireEvent.keyDown(document.body, { key: "Escape" });
     });
-    expect(replaced.close).toHaveBeenCalledTimes(1);
+    expect(closeDialog).toHaveBeenCalledTimes(1);
+    expect(replaced.close).not.toHaveBeenCalled();
+    expect(host.close).not.toHaveBeenCalled();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(surface()).not.toBeNull();
+  });
+
+  it("leaves Escape to a dialog already open when the inbox mounts", async () => {
+    const host = hostFrame();
+    const closeDialog = vi.fn();
+    const dialog = (
+      <AppDialog isOpen onClose={closeDialog}>
+        <AppDialog.Title>Park agent</AppDialog.Title>
+      </AppDialog>
+    );
+    const view = render(dialog);
+    await settle();
+    view.rerender(
+      <>
+        {dialog}
+        <CanopyView frame={host.frame} />
+      </>
+    );
+    await settle();
+
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+    });
+    expect(closeDialog).toHaveBeenCalledTimes(1);
     expect(host.close).not.toHaveBeenCalled();
   });
 
@@ -665,7 +725,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(host.close).not.toHaveBeenCalled();
   });
 
-  it("keeps Escape for the search until it is empty", async () => {
+  it("clears the search on Escape, and stays open once it is empty", async () => {
     const host = hostFrame();
     render(<CanopyView frame={host.frame} />);
     await settle();
@@ -683,8 +743,41 @@ describe("Canopy's inbox with no dialog and no project", () => {
     await act(async () => {
       fireEvent.keyDown(search, { key: "Escape" });
     });
-    expect(host.close).toHaveBeenCalledTimes(1);
+    expect(host.close).not.toHaveBeenCalled();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(surface()).not.toBeNull();
   });
+
+  it.each([
+    { platform: "Linux x86_64", primary: "Ctrl", escape: "Esc" },
+    { platform: "MacIntel", primary: "⌘", escape: "⎋" },
+  ])(
+    "lists Escape as unwinding what is open, and the window's own key as its close ($platform)",
+    async ({ platform, primary, escape }) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      // A rebound close is a project window's: this window's menu keeps Cmd+W.
+      const effective = keybindingService.getEffectiveCombo.bind(keybindingService);
+      vi.spyOn(keybindingService, "getEffectiveCombo").mockImplementation((actionId) =>
+        actionId === "terminal.close" ? "Cmd+Shift+Q" : effective(actionId)
+      );
+      render(<CanopyView frame={hostFrame().frame} />);
+      await settle();
+
+      await act(async () => {
+        fireEvent.click(within(surface()!).getByRole("button", { name: "Keyboard shortcuts" }));
+      });
+      const rows = shortcutRows();
+      expect(rows("In the search")).toContainEqual(["Clear the search", [escape]]);
+      expect(rows("In the list").filter(([, keys]) => keys.includes(escape))).toEqual([]);
+      expect(rows("In the list")).toContainEqual(["Close Canopy", [primary, "W"]]);
+      // Nothing here hands the pane Cmd+W: the menu closes the window instead.
+      expect(document.body.textContent).not.toMatch(/trash the agent's terminal/i);
+      expect(rows("In a reply or the terminal")).toContainEqual([
+        "Back to the list from a reply",
+        [escape],
+      ]);
+    }
+  );
 
   it("stays up when a view around it is cached: there is no project view to follow", async () => {
     const host = hostFrame();

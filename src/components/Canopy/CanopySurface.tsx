@@ -1,11 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { AppDialog, AppDialogWindowChrome, type AppDialogProps } from "@/components/ui/AppDialog";
-import {
-  isTopmostDialogBackstop,
-  markBackstopConsumedEscape,
-  radixLayerWasOpenWhenEscapePressed,
-  registerDialogEscapeBackstop,
-} from "@/lib/dialogEscapeBackstop";
 import { useCanopyFrame } from "./canopyFrame";
 import { CANOPY_TITLE } from "./canopyTerms";
 
@@ -20,7 +14,7 @@ type CanopySurfaceProps = Pick<
 /**
  * What the panel's every state is drawn in: today's window dialog, or a plain
  * section filling whatever a standalone host gives it. The header, title and
- * close button inside are the same in both.
+ * close button inside are the same in both; only the dialog closes on Escape.
  */
 export function CanopySurface({ isOpen, children, ...dialog }: CanopySurfaceProps) {
   const frame = useCanopyFrame();
@@ -53,30 +47,10 @@ function StandaloneSurface({
   close: () => void;
   children: ReactNode;
 }) {
-  // Read when Escape lands: registering again for a new closer would put this
-  // surface back on top of a dialog open over it, as AppDialog's comment says.
-  const closeRef = useRef(close);
-  useEffect(() => {
-    closeRef.current = close;
-  }, [close]);
-  // Escape reaches the host as it reaches the dialog: from the list, after the
-  // search has cleared, and never past a dialog or a menu open inside the inbox.
-  useLayoutEffect(() => {
-    if (!isOpen) return;
-    const closeThis = () => closeRef.current();
-    const unregister = registerDialogEscapeBackstop(closeThis);
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.isComposing || event.repeat) return;
-      if (!isTopmostDialogBackstop(closeThis) || radixLayerWasOpenWhenEscapePressed()) return;
-      markBackstopConsumedEscape();
-      closeThis();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      unregister();
-    };
-  }, [isOpen]);
+  // No Escape here: the host is a window left open all day, often on another
+  // display, and one stray press would lose it and its place (#16580). Escape
+  // unwinds what is open inside it and stops at the list; the window closes by
+  // its close button, Cmd+W or its own title bar.
   if (!isOpen) return null;
   return (
     <AppDialogWindowChrome onClose={close}>
