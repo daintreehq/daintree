@@ -347,25 +347,15 @@ function sendStatus(status: DecisionsStatus): void {
 
 /** The person was told Decisions stopped for storage; cleared once it connects or turns off (#16605). */
 let storageOutageNoticed = false;
-/** Decisions stopped for storage with no window to say so in; the next window ready for toasts is told. */
-let storageOutageUntold = false;
 
-/**
- * Agents lose `ask_human` while Decisions is stopped for storage, and nothing
- * outside Settings showed it (#16605): the first time it stops for that, a
- * warning says so, once, until it connects again or turns off. With no window
- * to show it in, it waits for the next window that is ready for toasts.
- */
-function noticeStorageOutage(running: DecisionsService, status: DecisionsStatus): void {
-  if (status.state === "connected" || status.state === "off") {
-    storageOutageNoticed = false;
-    storageOutageUntold = false;
-    return;
-  }
-  if (shutDown || storageOutageNoticed) return;
-  if (status.state !== "not-connected" || status.problem !== "storage") return;
+/** The warning for Decisions stopped for storage; null while it isn't. */
+function storageOutageToast(
+  running: DecisionsService,
+  status: DecisionsStatus
+): MainProcessToastPayload | null {
+  if (status.state !== "not-connected" || status.problem !== "storage") return null;
   const forSpace = isDiskSpaceFault(running.getStore()?.faultReason() ?? null);
-  const toast: MainProcessToastPayload = {
+  return {
     type: "warning",
     title: "Decisions connection lost",
     message: forSpace
@@ -375,12 +365,24 @@ function noticeStorageOutage(running: DecisionsService, status: DecisionsStatus)
     rateLimitLabel: "Decisions",
     replaceKey: "decisions-storage",
   };
-  if (!hasBroadcastAudience(CHANNELS.NOTIFICATION_SHOW_TOAST, toast)) {
-    storageOutageUntold = true;
+}
+
+/**
+ * Agents lose `ask_human` while Decisions is stopped for storage, and nothing
+ * outside Settings showed it (#16605): the first time it stops for that, a
+ * warning says so, once, until it connects again or turns off. A window that
+ * wasn't ready to show it is told when it is (`noteDecisionsRendererReady`).
+ */
+function noticeStorageOutage(running: DecisionsService, status: DecisionsStatus): void {
+  if (status.state === "connected" || status.state === "off") {
+    storageOutageNoticed = false;
     return;
   }
+  if (shutDown || storageOutageNoticed) return;
+  const toast = storageOutageToast(running, status);
+  // With no window at all, the next stop tries again, as does the next window ready.
+  if (toast === null || !hasBroadcastAudience(CHANNELS.NOTIFICATION_SHOW_TOAST, toast)) return;
   storageOutageNoticed = true;
-  storageOutageUntold = false;
   try {
     broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, toast);
   } catch (error) {
@@ -389,14 +391,24 @@ function noticeStorageOutage(running: DecisionsService, status: DecisionsStatus)
 }
 
 /**
- * A window's renderer reported first-interactive, so its toast listener is
- * mounted: a storage outage no window could be told about is told now, if
- * Decisions is still stopped for it.
+ * A renderer reported first-interactive, so its toast listener is mounted:
+ * while Decisions is stopped for storage, that renderer is told, since a
+ * warning sent while it was loading (or before it existed) never reached it.
+ * Only that one: a window already told isn't told again.
  */
-export function noteDecisionsRendererReady(): void {
+export function noteDecisionsRendererReady(webContentsId: number): void {
   const running = service;
-  if (!storageOutageUntold || shutDown || running === null) return;
-  noticeStorageOutage(running, running.getStatus());
+  if (shutDown || running === null) return;
+  const toast = storageOutageToast(running, running.getStatus());
+  if (toast === null) return;
+  const view = getAllAppWebContents().find((wc) => wc.id === webContentsId && !wc.isDestroyed());
+  if (!view) return;
+  try {
+    view.send(CHANNELS.NOTIFICATION_SHOW_TOAST, toast);
+    storageOutageNoticed = true;
+  } catch {
+    // A view torn down mid-send.
+  }
 }
 
 /**
@@ -2394,7 +2406,6 @@ export function _resetDecisionsForTesting(): void {
   statusRevision = 0;
   statusPushes = Promise.resolve();
   storageOutageNoticed = false;
-  storageOutageUntold = false;
   policyRevision = 0;
   modelRevision = 0;
   hostEnroller.dispose();

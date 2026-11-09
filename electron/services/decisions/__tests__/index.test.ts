@@ -265,7 +265,7 @@ vi.mock("../setupCheck.js", () => {
 });
 
 // This machine's own windows, which the status push goes to.
-const statusView = vi.hoisted(() => ({ send: vi.fn(), isDestroyed: () => false }));
+const statusView = vi.hoisted(() => ({ id: 7, send: vi.fn(), isDestroyed: () => false }));
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getAllAppWebContents: () => [statusView],
 }));
@@ -2291,32 +2291,45 @@ describe("Decisions entry", () => {
         expect(toastsShown()).toHaveLength(2);
       });
 
-      it("holds the warning for the next window ready for toasts when none could show it", async () => {
+      /** The warnings sent to one view as it reported ready, rather than broadcast. */
+      const toldView = () =>
+        statusView.send.mock.calls.filter(
+          ([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST
+        );
+
+      it("tells a window that becomes ready while Decisions is stopped for storage, and only it", async () => {
         saved.value = { enabled: true, ...RELAY };
         await startDecisionsIfEnabled();
-        const [connection] = connections;
+        // No window could show it when it stopped, or one was still loading.
         toastAudience.present = false;
-        connection!.options.onStatus({ state: "not-connected", problem: "storage" });
-        noteDecisionsRendererReady();
+        connections[0]!.options.onStatus({ state: "not-connected", problem: "storage" });
         expect(toastsShown()).toHaveLength(0);
 
+        noteDecisionsRendererReady(statusView.id);
+        expect(toldView()).toHaveLength(1);
+        expect(toldView()[0]![1]).toMatchObject({
+          type: "warning",
+          replaceKey: expect.any(String),
+        });
+        // Another view: not one this machine shows, so nothing is sent.
+        noteDecisionsRendererReady(99);
+        expect(toldView()).toHaveLength(1);
+        // Told: a later stop in the same outage doesn't broadcast it again.
         toastAudience.present = true;
-        noteDecisionsRendererReady();
-        noteDecisionsRendererReady();
-        expect(toastsShown()).toHaveLength(1);
+        connections[0]!.options.onStatus({ state: "connecting" });
+        connections[0]!.options.onStatus({ state: "not-connected", problem: "storage" });
+        expect(toastsShown()).toHaveLength(0);
       });
 
-      it("drops a held warning once Decisions connected again", async () => {
+      it("tells a ready window nothing once Decisions connected again, or with no outage", async () => {
         saved.value = { enabled: true, ...RELAY };
         await startDecisionsIfEnabled();
-        const [connection] = connections;
-        toastAudience.present = false;
-        connection!.options.onStatus({ state: "not-connected", problem: "storage" });
-        connection!.options.onStatus({ state: "connected" });
+        noteDecisionsRendererReady(statusView.id);
+        connections[0]!.options.onStatus({ state: "not-connected", problem: "storage" });
+        connections[0]!.options.onStatus({ state: "connected" });
 
-        toastAudience.present = true;
-        noteDecisionsRendererReady();
-        expect(toastsShown()).toHaveLength(0);
+        noteDecisionsRendererReady(statusView.id);
+        expect(toldView()).toHaveLength(0);
       });
 
       it("calls off a setup check holding the old store when the store is replaced, and shows it cancelled", async () => {

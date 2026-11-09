@@ -1326,7 +1326,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       noteDatabaseNoticeRendererReady(ctx.webContentsId);
       // So does a Decisions storage outage (#16605), only if Decisions is already loaded.
       peekDecisionsModule()
-        ?.then((decisions) => decisions.noteDecisionsRendererReady())
+        ?.then((decisions) => decisions.noteDecisionsRendererReady(ctx.webContentsId))
         .catch(() => {});
       // So does the notice explaining why this view just reloaded.
       if (ctx.event) releaseReloadNotice(ctx.event.sender);

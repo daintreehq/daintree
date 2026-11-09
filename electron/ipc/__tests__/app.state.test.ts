@@ -2712,7 +2712,7 @@ describe("app:first-interactive handler", () => {
       const ready = vi.fn();
       await loadDecisionsModule(async () => ({ noteDecisionsRendererReady: ready }) as never);
       await handler(makeInvokeEvent(7));
-      await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledExactlyOnceWith(7));
     } finally {
       cleanup();
       _resetDecisionsModuleForTesting();
