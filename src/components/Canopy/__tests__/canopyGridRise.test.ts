@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 import { gridRise, lastKeptRow, type ShownBuffer } from "../canopyGridRise";
 
 /** A buffer whose lines are `text` from the top of its history; `cursorY` counts from `baseY`. */
-function buffer(
-  text: string[],
-  { baseY = 0, viewportY = baseY, cursorY = 0 } = {}
-): ShownBuffer {
+function buffer(text: string[], { baseY = 0, viewportY = baseY, cursorY = 0 } = {}): ShownBuffer {
   return {
     baseY,
     viewportY,
@@ -45,7 +42,13 @@ describe("lastKeptRow", () => {
   });
 
   it("counts rows from the top of the screen shown, not of the history", () => {
-    const lines = [...Array(50).fill("history"), "screen top", "", "> prompt", ...Array(27).fill("")];
+    const lines = [
+      ...Array(50).fill("history"),
+      "screen top",
+      "",
+      "> prompt",
+      ...Array(27).fill(""),
+    ];
     expect(lastKeptRow(buffer(lines, { baseY: 50, cursorY: 2 }), 30, true)).toBe(2);
   });
 });

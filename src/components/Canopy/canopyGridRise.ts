@@ -17,7 +17,8 @@ export function lastKeptRow(buffer: ShownBuffer, rows: number, cursorShown: bool
   const cursorRow = buffer.baseY + buffer.cursorY - buffer.viewportY;
   const floor = cursorShown && cursorRow >= 0 && cursorRow < rows ? cursorRow : -1;
   for (let row = rows - 1; row > floor; row--) {
-    if (buffer.getLine(buffer.viewportY + row)?.translateToString(true).trim()) return row;
+    const text = buffer.getLine(buffer.viewportY + row)?.translateToString(true);
+    if (text?.trim()) return row;
   }
   return floor;
 }
