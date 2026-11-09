@@ -159,6 +159,15 @@ async function openObserved(
     fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
   );
   try {
+    // Windows has no O_NOFOLLOW. Refuse a leaf replaced by a link before any
+    // reads, even when that link leads back to the observed file.
+    if (!fsConstants.O_NOFOLLOW) {
+      const current = await lstat(rollout.path, { bigint: true });
+      if (!current.isFile() || !sameIdentity(current, rollout)) {
+        await handle.close();
+        return null;
+      }
+    }
     const stats = await handle.stat({ bigint: true });
     if (stats.isFile() && sameIdentity(stats, rollout)) {
       return { handle, size: Number(stats.size) };

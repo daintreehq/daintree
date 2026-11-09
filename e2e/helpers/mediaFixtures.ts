@@ -1,14 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
 import path from "node:path";
-import ffmpegPath from "ffmpeg-static";
+import { resolveFfmpeg } from "./ffmpeg";
 
 /**
  * Real media fixtures for the direct-streaming mechanism check (#12242).
  *
  * Generated rather than committed: the shapes that matter are container
  * layouts, and a binary blob in the repo would tell a reader nothing about why
- * it is shaped that way. `ffmpeg-static` is already a devDependency (the demo
+ * it is shaped that way. `ffmpeg-static` is already an optional dependency (the demo
  * reel probes recordings with it), so nothing new is installed.
  *
  * These are the shapes the experiment has to survive. A trailing-`moov` mp4 is
@@ -29,6 +29,7 @@ export interface MediaFixture {
 }
 
 function ffmpeg(): string {
+  const ffmpegPath = resolveFfmpeg();
   if (!ffmpegPath) {
     throw new Error(
       "ffmpeg-static did not resolve a binary — the media mechanism check cannot generate its fixtures."

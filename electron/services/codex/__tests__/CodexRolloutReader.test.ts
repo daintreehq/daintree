@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "fs";
+import { constants as fsConstants, readFileSync } from "fs";
 import { mkdtemp, rename, rm, stat, symlink, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
@@ -9,7 +9,21 @@ const fsHook = vi.hoisted(() => ({
   /** Bytes asked for by each read through an opened handle. */
   reads: [] as number[],
   beforeOpen: undefined as ((target: string) => Promise<void>) | undefined,
+  noFollow: true,
 }));
+
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  return {
+    ...actual,
+    constants: {
+      ...actual.constants,
+      get O_NOFOLLOW() {
+        return fsHook.noFollow ? actual.constants.O_NOFOLLOW : undefined;
+      },
+    },
+  };
+});
 
 vi.mock("fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("fs/promises")>();
@@ -94,6 +108,7 @@ beforeEach(async () => {
   fsHook.opened = [];
   fsHook.reads = [];
   fsHook.beforeOpen = undefined;
+  fsHook.noFollow = true;
 });
 
 afterEach(async () => {
@@ -350,19 +365,25 @@ describe("readCodexContextUsage file checks", () => {
     expect(fsHook.opened.map((handle) => handle.fd)).toEqual([-1]);
   });
 
-  // The link leads back to the very file the probe saw, so only refusing to
-  // follow it keeps the open off a path someone else controls.
-  it("refuses a symlink swapped in between its check and its open", async () => {
-    const rollout = await seed([tokenCount(info())]);
-    const moved = path.join(dir, "moved.jsonl");
-    fsHook.beforeOpen = async () => {
-      await rename(rollout.path, moved);
-      await symlink(moved, rollout.path);
-    };
+  // The link leads back to the observed file, so identity alone cannot
+  // reject it. Neither the native flag nor its fallback may read through it.
+  it.each([true, false])(
+    "refuses a symlink swapped before open (O_NOFOLLOW=%s)",
+    async (noFollow) => {
+      fsHook.noFollow = noFollow;
+      const rollout = await seed([tokenCount(info())]);
+      const moved = path.join(dir, "moved.jsonl");
+      fsHook.beforeOpen = async () => {
+        await rename(rollout.path, moved);
+        await symlink(moved, rollout.path);
+      };
 
-    expect(await readCodexContextUsage(rollout)).toMatchObject({ status: "unavailable" });
-    expect(fsHook.opened).toHaveLength(0);
-  });
+      expect(await readCodexContextUsage(rollout)).toMatchObject({ status: "unavailable" });
+      expect(fsHook.reads).toHaveLength(0);
+      if (fsConstants.O_NOFOLLOW) expect(fsHook.opened).toHaveLength(0);
+      else expect(fsHook.opened.map((handle) => handle.fd)).toEqual([-1]);
+    }
+  );
 
   it("refuses a symlink at the rollout's path", async () => {
     const real = await seed([tokenCount(info())]);

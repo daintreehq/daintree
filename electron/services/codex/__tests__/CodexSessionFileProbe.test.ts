@@ -100,7 +100,7 @@ async function lsofFor(files: OpenFile[]): Promise<string> {
   for (const [pid, held] of byPid) {
     lines.push(`p${pid}`);
     for (const file of held) {
-      const stats = await stat(file.name).catch(() => null);
+      const stats = await stat(file.name, { bigint: true }).catch(() => null);
       const device = file.device ?? `0x${(stats?.dev ?? 0).toString(16)}`;
       const inode = file.inode ?? String(stats?.ino ?? 0);
       lines.push(`f${file.fd}`, `a${file.access}`, `t${file.type ?? "REG"}`, `D${device}`);

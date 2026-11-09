@@ -20,7 +20,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync, existsSync, statSync } from "fs";
 import { execFileSync } from "child_process";
-import ffmpegPath from "ffmpeg-static";
+import { resolveFfmpeg } from "../helpers/ffmpeg";
 import path from "path";
 import { launchApp, closeApp, mockOpenDialog, refreshActiveWindow } from "../helpers/launch";
 import { dismissBlockingPalette } from "../helpers/overlays";
@@ -39,6 +39,7 @@ mkdirSync(OUTPUT_DIR, { recursive: true });
  * (so the caller can skip rather than fail the whole reel build).
  */
 function readVideoDimensions(filePath: string): { width: number; height: number } | null {
+  const ffmpegPath = resolveFfmpeg();
   if (!ffmpegPath) return null;
   let stderr = "";
   try {
@@ -338,7 +339,7 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
       const dims = readVideoDimensions(outputPath);
       // When ffmpeg is available the check is mandatory — a parse failure must
       // not silently skip the guard. Only skip when ffmpeg-static is absent.
-      if (ffmpegPath) {
+      if (resolveFfmpeg()) {
         expect(dims, "ffmpeg present but recorded dimensions could not be read").not.toBeNull();
       }
       if (dims) {

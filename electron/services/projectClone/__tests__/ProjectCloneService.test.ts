@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
 import type { Project, ProjectCloneState } from "../../../../shared/types/project.js";
 import type { PersistedCloneJob } from "../../ProjectStore.js";
 import type { ExecuteCloneOptions } from "../../../ipc/handlers/projectCrud/gitClone.js";
@@ -31,7 +32,7 @@ vi.mock("../../../ipc/handlers/projectCrud/gitClone.js", async () => {
       url: options.url,
       parentPath: options.parentPath,
       folderName: options.folderName.trim(),
-      targetPath: `${options.parentPath}/${options.folderName.trim()}`,
+      targetPath: path.join(options.parentPath, options.folderName.trim()),
     }),
     assertCloneDestination: vi.fn(async () => {
       if (h.control.destination) await h.control.destination;
@@ -69,7 +70,7 @@ vi.mock("../../ProjectStore.js", () => {
           const project: Project = {
             id,
             path: projectPath,
-            name: options.identity?.name ?? projectPath.split("/").pop()!,
+            name: options.identity?.name ?? path.basename(projectPath),
             emoji: options.identity?.emoji ?? "🌲",
             lastOpened: 1,
             status: "closed",
@@ -165,7 +166,7 @@ describe("ProjectCloneService", () => {
     const { project } = await service.start(request("widgets"));
 
     expect(project.cloneState).toBe("cloning");
-    expect(project.path).toBe("/work/widgets");
+    expect(project.path).toBe(path.join("/work", "widgets"));
     expect(h.calls).toHaveLength(1);
     expect(isCheckoutPendingProject(project.id)).toBe(true);
     expect(isCheckoutPendingPath("/work/widgets")).toBe(true);
@@ -223,7 +224,7 @@ describe("ProjectCloneService", () => {
     finishLoading();
     await flush();
 
-    expect(projectStore.classifyGitBacking).toHaveBeenCalledWith("/work/widgets");
+    expect(projectStore.classifyGitBacking).toHaveBeenCalledWith(path.join("/work", "widgets"));
     expect(h.events.at(-1)).toBe(`broadcast:${CHANNELS.PROJECT_UPDATED}:${project.id}:ready`);
     // Kept for a view that hydrated from an older row and asks afterwards.
     expect(service.getSnapshot(project.id)).toMatchObject({ status: "succeeded", canRetry: false });
@@ -277,7 +278,7 @@ describe("ProjectCloneService", () => {
     await service.retry(project.id);
 
     expect(h.calls).toHaveLength(2);
-    expect(h.calls[1]!.options.targetPath).toBe("/work/widgets");
+    expect(h.calls[1]!.options.targetPath).toBe(path.join("/work", "widgets"));
     expect(h.rows.get(project.id)!.project.cloneState).toBe("cloning");
     const retried = service.getSnapshot(project.id)!;
     expect(retried).toMatchObject({ status: "running", error: null, stages: [], output: [] });

@@ -333,9 +333,9 @@ export function classifySessionMeta(firstLine: string, fileThreadId: string): Se
 }
 
 /** `lsof` prints a device as hex, the way `stat` holds it. */
-function sameDevice(listed: string, dev: number): boolean {
+function sameDevice(listed: string, dev: bigint): boolean {
   if (!/^0x[0-9a-f]+$/i.test(listed)) return false;
-  return Number.parseInt(listed.slice(2), 16) === dev;
+  return BigInt(listed) === dev;
 }
 
 /**
@@ -345,7 +345,7 @@ function sameDevice(listed: string, dev: number): boolean {
  * end inside the read.
  */
 async function readFirstRecord(candidate: OpenFileRecord): Promise<string | null> {
-  const checked = await lstat(candidate.name);
+  const checked = await lstat(candidate.name, { bigint: true });
   if (
     !checked.isFile() ||
     String(checked.ino) !== candidate.inode ||
@@ -358,9 +358,9 @@ async function readFirstRecord(candidate: OpenFileRecord): Promise<string | null
     fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
   );
   try {
-    const stats = await handle.stat();
+    const stats = await handle.stat({ bigint: true });
     if (!stats.isFile() || stats.ino !== checked.ino || stats.dev !== checked.dev) return null;
-    const buffer = Buffer.alloc(Math.min(SESSION_META_MAX_BYTES, Math.max(stats.size, 0)));
+    const buffer = Buffer.alloc(Math.min(SESSION_META_MAX_BYTES, Math.max(Number(stats.size), 0)));
     let filled = 0;
     while (filled < buffer.length) {
       const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, filled);
