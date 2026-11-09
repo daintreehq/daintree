@@ -8,10 +8,10 @@ import ts from "typescript";
 // and hides it from assistive tech. Drawn by hand, the dot took the row's full
 // ink and its own spacing on every surface.
 //
-// Scope is markup: a dot in JSX text, or a string literal a JSX child slot can
-// render. A dot inside a string the code builds (a template with values, a
-// `.join(" · ")` that becomes an accessible name, a tooltip or a title) is text
-// and out of view.
+// Scope is markup: a dot in JSX text, or a string or template literal a JSX
+// child slot can render. A dot inside a string the code hands elsewhere (a
+// `.join(" · ")`, an accessible name, a tooltip or a title prop) is text and
+// out of view.
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
@@ -48,8 +48,10 @@ function isChildSlot(node: ts.Node): boolean {
   return ts.isJsxElement(node) || ts.isJsxFragment(node);
 }
 
-/** The string literals a JSX child expression can render as text. */
-function renderedLiterals(expr: ts.Expression): ts.StringLiteralLike[] {
+type RenderedLiteral = ts.StringLiteralLike | ts.TemplateExpression;
+
+/** The literals a JSX child expression can render as text. */
+function renderedLiterals(expr: ts.Expression): RenderedLiteral[] {
   if (
     ts.isParenthesizedExpression(expr) ||
     ts.isAsExpression(expr) ||
@@ -59,7 +61,7 @@ function renderedLiterals(expr: ts.Expression): ts.StringLiteralLike[] {
   ) {
     return renderedLiterals(expr.expression);
   }
-  if (ts.isStringLiteralLike(expr)) return [expr];
+  if (ts.isStringLiteralLike(expr) || ts.isTemplateExpression(expr)) return [expr];
   if (ts.isConditionalExpression(expr)) {
     return [...renderedLiterals(expr.whenTrue), ...renderedLiterals(expr.whenFalse)];
   }
@@ -74,6 +76,16 @@ function renderedLiterals(expr: ts.Expression): ts.StringLiteralLike[] {
   return [];
 }
 
+/** A JS literal's text is already unescaped; entity spelling in it renders as typed. */
+function literalHasDot(literal: RenderedLiteral): boolean {
+  if (ts.isTemplateExpression(literal)) {
+    return [literal.head, ...literal.templateSpans.map((span) => span.literal)].some((part) =>
+      part.text.includes(MIDDLE_DOT)
+    );
+  }
+  return literal.text.includes(MIDDLE_DOT);
+}
+
 function handRolledDots(rel: string, text: string): string[] {
   const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const hits: string[] = [];
@@ -84,9 +96,8 @@ function handRolledDots(rel: string, text: string): string[] {
   const visit = (node: ts.Node) => {
     if (ts.isJsxText(node) && jsxTextHasDot(node.getText(sf))) report(node);
     if (ts.isJsxExpression(node) && node.expression && isChildSlot(node.parent)) {
-      // A JS string's `.text` is already unescaped; entity spelling in it renders literally.
       for (const literal of renderedLiterals(node.expression)) {
-        if (literal.text.includes(MIDDLE_DOT)) report(literal);
+        if (literalHasDot(literal)) report(literal);
       }
     }
     ts.forEachChild(node, visit);
@@ -125,6 +136,8 @@ describe("fact separator contract", () => {
     ["a conditional string child", '<p>a{on && " \u00b7 b"}</p>'],
     ["a ternary string child", '<p>a{on ? " \u00b7 b" : null}</p>'],
     ["a fallback string child", '<p>a{label ?? " \u00b7 b"}</p>'],
+    ["a template child", "<span>{`${a} \u00b7 ${b}`}</span>"],
+    ["a conditional template child", "<span>a{n > 0 && ` \u00b7 ${n} waiting`}</span>"],
     ["JSX passed as a prop", "<Row description={<>a \u00b7 b</>} />"],
   ])("flags %s", (_, jsx) => {
     expect(scanSnippet(jsx)).toHaveLength(1);
@@ -134,7 +147,8 @@ describe("fact separator contract", () => {
     ["an attribute", '<span title="a \u00b7 b" />'],
     ["a joined name", '<span aria-label={[a, b].join(" \u00b7 ")} />'],
     ["a rendered join", '<span>{[a, b].join(" \u00b7 ")}</span>'],
-    ["a template built from values", "<span>{`${a} \u00b7 ${b}`}</span>"],
+    ["a template handed to a call", "<span>{format(`${a} \u00b7 ${b}`)}</span>"],
+    ["a template without a dot in its text", "<span>{`${a}${sep}${b}`}</span>"],
     ["a comment", "<span>{/* a \u00b7 b */}</span>"],
     ["entity spelling inside a JS string", '<span>{"&middot;"}</span>'],
     ["the condition of an &&", '<span>{" \u00b7 " && value}</span>'],
