@@ -5,6 +5,7 @@ import {
 } from "../config/agentRegistry.js";
 import { hasShellMetachar } from "./shellEscape.js";
 import { isAccountId } from "./agentAccountId.js";
+import { isPresetHexColor } from "./presetColor.js";
 import {
   combineDangerousModes,
   resolveDangerousMode,
@@ -145,11 +146,7 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
       typeof preset.customFlags === "string" && !hasShellMetachar(preset.customFlags)
         ? preset.customFlags.slice(0, 10000)
         : undefined,
-    color:
-      typeof preset.color === "string" &&
-      /^#[0-9a-fA-F]{3,4}$|^#[0-9a-fA-F]{6}$|^#[0-9a-fA-F]{8}$/.test(preset.color)
-        ? preset.color
-        : undefined,
+    color: isPresetHexColor(preset.color) ? preset.color : undefined,
     displayTitle: sanitizeDisplayTitle(preset.displayTitle),
     fallbacks: sanitizeFallbacks(preset.fallbacks, preset.id),
     fallbackOnRateLimit: preset.fallbackOnRateLimit === true ? true : undefined,

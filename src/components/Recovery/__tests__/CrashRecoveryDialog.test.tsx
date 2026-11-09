@@ -268,6 +268,66 @@ describe("CrashRecoveryDialog", () => {
     });
   });
 
+  describe("panel marks", () => {
+    const markedPanels = [
+      {
+        id: "claude",
+        kind: "terminal",
+        title: "Claude",
+        location: "grid" as const,
+        isSuspect: false,
+        launchAgentId: "claude",
+        agentPresetColor: "#123456",
+        // Restore relaunches the agent whatever it was last seen doing.
+        agentState: "exited",
+      },
+      {
+        id: "shell",
+        kind: "terminal",
+        title: "Shell",
+        location: "grid" as const,
+        isSuspect: false,
+      },
+      { id: "docs", kind: "browser", title: "Docs", location: "dock" as const, isSuspect: false },
+      { id: "legacy", kind: "agent", title: "Old", location: "grid" as const, isSuspect: false },
+    ];
+
+    function markOf(element: Element): { id: string | null; color: string | null } | null {
+      const mark = element.querySelector("[data-terminal-icon-id]");
+      if (!mark) return null;
+      return {
+        id: mark.getAttribute("data-terminal-icon-id"),
+        color: mark.getAttribute("data-terminal-icon-color"),
+      };
+    }
+
+    it("draws an agent panel with its agent's mark in its preset colour", () => {
+      setup({ crash: { panels: markedPanels } });
+      expect(markOf(screen.getByTestId("panel-row-claude"))).toEqual({
+        id: "claude",
+        color: "#123456",
+      });
+    });
+
+    it("leaves plain terminals, other kinds and an unnamed legacy agent on their generic glyphs", () => {
+      setup({ crash: { panels: markedPanels } });
+      for (const id of ["shell", "docs", "legacy"]) {
+        expect(markOf(screen.getByTestId(`panel-row-${id}`))).toBeNull();
+      }
+      expect(
+        screen.getByTestId("panel-row-shell").querySelector(".lucide-square-terminal")
+      ).not.toBeNull();
+      expect(screen.getByTestId("panel-row-docs").querySelector(".lucide-globe")).not.toBeNull();
+    });
+
+    it("names the agent in the reset preview too", () => {
+      setup({ crash: { panels: markedPanels } });
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      const marks = document.querySelectorAll('[data-terminal-icon-id="claude"]');
+      expect(marks.length).toBe(2);
+    });
+  });
+
   describe("with panels (selective restore)", () => {
     it("shows panel titles", () => {
       setup();

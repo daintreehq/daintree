@@ -762,6 +762,103 @@ describe("CrashRecoveryService", () => {
       expect(pending!.panels![1].lastStateChange).toBe(1700000000000);
     });
 
+    it("names the agent restore relaunches each panel under, with its preset colour", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const projectLayouts = {
+        "project-a": [
+          {
+            id: "claude",
+            kind: "terminal",
+            title: "Claude",
+            cwd: "/repo",
+            location: "grid",
+            launchAgentId: "claude",
+            agentPresetColor: "#d97757",
+          },
+          // Restore resumes an agent whatever state it was last seen in.
+          {
+            id: "exited",
+            kind: "terminal",
+            title: "Codex",
+            cwd: "/repo",
+            location: "grid",
+            launchAgentId: "codex",
+            agentState: "exited",
+          },
+          { id: "legacy-type", kind: "terminal", title: "Old", cwd: "/repo", type: "claude" },
+          { id: "legacy-id", kind: "terminal", title: "Old", cwd: "/repo", agentId: "gemini" },
+          { id: "shell", kind: "terminal", title: "Claude notes", cwd: "/repo", location: "grid" },
+          {
+            id: "browser",
+            kind: "browser",
+            title: "Docs",
+            browserUrl: "https://example.com",
+            location: "dock",
+            launchAgentId: "claude",
+          },
+          {
+            id: "junk",
+            kind: "terminal",
+            title: "Junk",
+            cwd: "/repo",
+            location: "dock",
+            launchAgentId: "   ",
+            agentPresetColor: "red; background: url(x)",
+          },
+          {
+            id: "malformed",
+            kind: { nested: true },
+            title: 7,
+            location: "grid",
+            launchAgentId: {},
+            agentPresetColor: 42,
+          },
+        ],
+      };
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({ capturedAt: Date.now(), appState: {}, projectLayouts })
+      );
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const panels = svc.getPendingCrash()!.panels!;
+      expect(panels.map((p) => p.id)).toEqual([
+        "claude",
+        "exited",
+        "legacy-type",
+        "legacy-id",
+        "shell",
+        "browser",
+        "junk",
+        "malformed",
+      ]);
+      const agentOf = Object.fromEntries(panels.map((p) => [p.id, p.launchAgentId]));
+      expect(agentOf).toEqual({
+        claude: "claude",
+        exited: "codex",
+        "legacy-type": "claude",
+        "legacy-id": "gemini",
+        shell: undefined,
+        browser: undefined,
+        junk: undefined,
+        malformed: undefined,
+      });
+      const colorOf = Object.fromEntries(panels.map((p) => [p.id, p.agentPresetColor]));
+      expect(colorOf).toMatchObject({ claude: "#d97757", junk: undefined, malformed: undefined });
+    });
+
     it("returns undefined panels when no backup exists", () => {
       const markerPath = path.join(userData, "running.lock");
       fs.writeFileSync(

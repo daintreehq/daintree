@@ -14,6 +14,13 @@ import type {
   WatchdogKillReason,
 } from "../../shared/types/ipc/crashRecovery.js";
 import { coerceAgentState } from "../../shared/types/agent.js";
+import {
+  panelKindHasPty,
+  type PersistedPanelKindRef,
+} from "../../shared/config/panelKindRegistry.js";
+import { isPresetHexColor } from "../../shared/utils/presetColor.js";
+import { inferKind } from "../../shared/utils/inferPanelKind.js";
+import { resolveRespawnAgentId } from "../../shared/utils/savedAgentIdentity.js";
 import { store, windowStatesStore } from "../store.js";
 import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
@@ -1192,6 +1199,8 @@ export class CrashRecoveryService {
           location: (t.location === "dock" ? "dock" : "grid") as "grid" | "dock",
           isSuspect,
           suspectReason: isSuspect ? "crash-window" : undefined,
+          launchAgentId: resolveRestoredAgentId(t, projectId),
+          agentPresetColor: isPresetHexColor(t.agentPresetColor) ? t.agentPresetColor : undefined,
           agentState: coerceAgentState(t.agentState),
           lastStateChange: typeof t.lastStateChange === "number" ? t.lastStateChange : undefined,
         });
@@ -1842,6 +1851,50 @@ function isValidMarker(value: unknown): value is MarkerFile {
 
 function isCrashCause(value: unknown): value is CrashCause {
   return typeof value === "string" && CRASH_CAUSES.has(value as CrashCause);
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * The agent restore relaunches a saved panel under, by the rule its respawn
+ * applies (`resolveRespawnAgentId` on the inferred kind), so the dialog's mark
+ * names what Restore brings back: a legacy `type`/`agentId` spelling counts,
+ * and a non-PTY panel carrying a stale launch id does not. Fields are narrowed
+ * to strings first, and a throw yields no id, because one malformed entry must
+ * not cost the whole list.
+ */
+function resolveRestoredAgentId(
+  panel: Record<string, unknown>,
+  projectId: string | undefined
+): string | undefined {
+  try {
+    const saved = {
+      kind: nonEmptyString(panel.kind),
+      kindRef: panel.kindRef as PersistedPanelKindRef | undefined,
+      pluginId: optionalString(panel.pluginId),
+      launchAgentId: nonEmptyString(panel.launchAgentId),
+      type: optionalString(panel.type),
+      agentId: nonEmptyString(panel.agentId),
+      title: optionalString(panel.title),
+      browserUrl: optionalString(panel.browserUrl),
+      devCommand: optionalString(panel.devCommand),
+      cwd: optionalString(panel.cwd),
+      command: optionalString(panel.command),
+    };
+    const kind = inferKind(saved, projectId);
+    if (kind === "assistant" || !panelKindHasPty(kind)) return undefined;
+    return resolveRespawnAgentId(saved, kind);
+  } catch {
+    return undefined;
+  }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
