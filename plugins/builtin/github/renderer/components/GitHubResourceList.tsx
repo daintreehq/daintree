@@ -15,15 +15,12 @@ import { isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors"
 import {
   Button,
   EmptyState,
-  FilterChip,
   Icon,
   IconButton,
   SearchField,
-  SegmentedControl,
   SkeletonHint,
   Spinner,
   SpinningIcon,
-  type SegmentedOption,
 } from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
@@ -50,8 +47,11 @@ import type { Worktree } from "@shared/types/worktree";
 import type { GitHubSortOrder } from "../../shared/types.js";
 import { looksLikeNumberList, MULTI_FETCH_CAP } from "@/lib/parseNumberQuery";
 import {
+  describeResourceFilter,
+  effectiveResourceScope,
   GitHubResourceRowsSkeleton,
   MAX_SKELETON_ITEMS,
+  RESOURCE_FILTER_SUMMARY,
   RESOURCE_ITEM_HEIGHT_PX,
   RESOURCE_LIST_GUTTER,
   RESOURCE_PANEL_FOOTER,
@@ -71,6 +71,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 // The host overlays, because the rows are a Virtuoso list the grid drives
@@ -88,6 +89,12 @@ import {
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
+
+const SCOPE_OPTIONS: { value: PRScopeFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "mine", label: "Mine" },
+  { value: "needs-review", label: "Needs my review" },
+];
 
 /** Stable empty snapshot for the views that have no worktree store to read. */
 const EMPTY_WORKTREES: ReadonlyMap<string, Worktree> = new Map();
@@ -277,12 +284,15 @@ export function GitHubResourceList({
   const setPrScope = useGitHubFilterStore((s) => s.setPrScope);
   const scope: PRScopeFilter = type === "pr" ? prScope : "all";
   const scopeActive = scope !== "all";
+  const clearFilters = useGitHubFilterStore((s) => s.clearFilters);
   const sortOrder = useGitHubFilterStore((s) =>
     type === "issue" ? s.issueSortOrder : s.prSortOrder
   );
   const setSortOrder = useGitHubFilterStore((s) =>
     type === "issue" ? s.setIssueSortOrder : s.setPrSortOrder
   ) as (o: GitHubSortOrder) => void;
+  const filtersActive = filterState !== "open" || scopeActive;
+  const viewCustomized = filtersActive || sortOrder !== "created";
   const githubConfigInitialized = useGitHubConfigStore((s) => s.isInitialized);
   const githubConfig = useGitHubConfigStore((s) => s.config);
   const showNoTokenEmptyState =
@@ -326,8 +336,15 @@ export function GitHubResourceList({
     onCountUpdate,
   });
 
+  // Exact number lookups cannot honor involvement (the notice below says so),
+  // so the filter line describes only what is actually narrowing the results.
+  const appliedScope = effectiveResourceScope(type, scope, numberQuery);
+  const filterLineShown = filterState !== "open" || appliedScope !== "all";
+  const filterSummary = describeResourceFilter(type, filterState, appliedScope);
+  const filterSummaryId = `github-${type}-filter-summary`;
+
   const [activeIndex, setActiveIndex] = useState(-1);
-  const [sortPopoverOpen, setSortPopoverOpen] = useState(false);
+  const [viewOptionsOpen, setViewOptionsOpen] = useState(false);
   const [selectionMenuOpen, setSelectionMenuOpen] = useState(false);
   /**
    * Which row's actions menu is open, if any.
@@ -430,7 +447,7 @@ export function GitHubResourceList({
     useIssueSelectionStore.getState().clear(`${type}:${prevProjectPath}`);
   }, [projectPath, type]);
 
-  const stateTabs = useMemo((): SegmentedOption[] => {
+  const stateTabs = useMemo((): { value: StateFilter; label: string }[] => {
     if (type === "pr") {
       return [
         { value: "open", label: "Open" },
@@ -661,7 +678,7 @@ export function GitHubResourceList({
   useEffect(() => {
     if (isDropdownOpen) return;
     // Closing — nothing of ours may stay portaled on `document.body`.
-    setSortPopoverOpen(false);
+    setViewOptionsOpen(false);
     setSelectionMenuOpen(false);
     setOpenRowMenuNumber(null);
   }, [isDropdownOpen]);
@@ -1188,6 +1205,8 @@ export function GitHubResourceList({
             aria-haspopup="grid"
             aria-controls={listId}
             aria-activedescendant={activeItemId}
+            // Focus lives in the field, so the narrowed view is read out from here.
+            aria-describedby={filterLineShown ? filterSummaryId : undefined}
             aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
             aria-keyshortcuts="ArrowDown ArrowUp Enter Meta+Enter Control+Enter Shift+Space Shift+F10"
             /* Claims Shift+F10 / ContextMenu for the row under the cursor.
@@ -1227,47 +1246,83 @@ export function GitHubResourceList({
             }
             className="shrink-0 aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary [&_svg]:size-3.5"
           />
-          <DropdownMenu open={sortPopoverOpen} onOpenChange={setSortPopoverOpen}>
+          {/* State, involvement and sort in one menu, as the file browser's
+              view options do. The state and involvement filters used to hold
+              two permanent rows above the list — a quarter of the panel spent
+              on controls that are rarely touched. What a narrowed view is
+              doing is said in words under the search row instead. */}
+          <DropdownMenu open={viewOptionsOpen} onOpenChange={setViewOptionsOpen}>
             <DropdownMenuTrigger asChild>
               <IconButton
                 variant="ghost"
                 size="default"
-                icon="sort"
-                aria-label={
-                  sortOrder === "created"
-                    ? `Sort ${type === "issue" ? "issues" : "pull requests"}`
-                    : `Sort ${type === "issue" ? "issues" : "pull requests"}, sorted by recently updated`
-                }
+                icon="sliders"
+                aria-label="View options"
                 tooltipSide="bottom"
-                tooltip={sortOrder === "created" ? "Sort" : "Sort: recently updated"}
+                tooltip="View options"
                 className={cn(
                   "shrink-0 [&_svg]:size-3.5",
-                  // A non-default sort is a neutral lifted state, not a badge.
-                  // The old blue dot read as unread activity and said nothing
-                  // about which order was in force.
-                  sortOrder !== "created" && "bg-overlay-soft text-text-primary"
+                  // A non-default view is a neutral lifted state, not a badge.
+                  // The old blue dot read as unread activity.
+                  viewCustomized && "bg-overlay-soft text-text-primary"
                 )}
               />
             </DropdownMenuTrigger>
-            {/* The app's menu, not a hand-built radio popover: the same rows,
-                marks, keys and motion as every other choice-of-one in the app. */}
             <DropdownMenuContent
               align="end"
-              className="w-48"
+              className="w-56"
               // Portaled out of the panel, so without these FixedDropdown reads
               // a click inside as an outside click and closes the panel.
               onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
               onTouchStart={(e: React.TouchEvent) => e.stopPropagation()}
               // Focus goes back to the search field, not the trigger: the grid's
               // keys live on the field, so a trigger holding focus leaves the
-              // arrows and Enter dead after every sort change.
+              // arrows and Enter dead after every change.
               onCloseAutoFocus={(event: Event) => {
                 event.preventDefault();
                 focusSearchInput();
               }}
             >
+              {/* Each group carries its own aria-label: Radix renders them as
+                  role="group" and the visible label is a sibling, not an
+                  association. */}
+              <DropdownMenuLabel>State</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                aria-label="State"
+                value={filterState}
+                onValueChange={(value: string) => setFilterState(value as StateFilter)}
+              >
+                {stateTabs.map((tab) => (
+                  <DropdownMenuRadioItem key={tab.value} value={tab.value}>
+                    {tab.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              {type === "pr" && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>Involvement</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    aria-label="Involvement"
+                    value={prScope}
+                    onValueChange={(value: string) => {
+                      if (value === "all" || value === "mine" || value === "needs-review") {
+                        setPrScope(value);
+                      }
+                    }}
+                  >
+                    {SCOPE_OPTIONS.map((option) => (
+                      <DropdownMenuRadioItem key={option.value} value={option.value}>
+                        {option.label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </>
+              )}
+              <DropdownMenuSeparator />
               <DropdownMenuLabel>Sort by</DropdownMenuLabel>
               <DropdownMenuRadioGroup
+                aria-label="Sort by"
                 value={sortOrder}
                 onValueChange={(value: string) => {
                   if (value === "created" || value === "updated") setSortOrder(value);
@@ -1391,32 +1446,25 @@ export function GitHubResourceList({
           </DropdownMenu>
         </div>
 
-        <SegmentedControl
-          aria-label="Filter by state"
-          fullWidth
-          options={stateTabs}
-          value={filterState}
-          onValueChange={(value) => setFilterState(value as StateFilter)}
-        />
-
-        {type === "pr" && (
-          <div
-            role="group"
-            aria-label="Filter by involvement"
-            className="flex items-center gap-1.5"
-          >
-            <FilterChip
-              selected={scope === "mine"}
-              onSelectedChange={(on) => setPrScope(on ? "mine" : "all")}
+        {/* Only while the view is narrowed: the controls live in a menu now,
+            so this line is what keeps a filtered list from passing for the
+            whole repo. Sort alone does not earn it; it hides nothing. */}
+        {filterLineShown && (
+          <div className={RESOURCE_FILTER_SUMMARY}>
+            <span id={filterSummaryId} className="min-w-0 flex-1 truncate">
+              Showing <span className="text-text-primary">{filterSummary}</span>
+            </span>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="shrink-0"
+              onClick={() => {
+                clearFilters(type);
+                focusSearchInput();
+              }}
             >
-              Mine
-            </FilterChip>
-            <FilterChip
-              selected={scope === "needs-review"}
-              onSelectedChange={(on) => setPrScope(on ? "needs-review" : "all")}
-            >
-              Needs my review
-            </FilterChip>
+              Clear filters
+            </Button>
           </div>
         )}
 
