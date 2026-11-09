@@ -2321,6 +2321,17 @@ describe("Decisions entry", () => {
         expect(toastsShown()).toHaveLength(0);
       });
 
+      it("tells a window that was still loading when the warning went out, once it is ready", async () => {
+        saved.value = { enabled: true, ...RELAY };
+        await startDecisionsIfEnabled();
+        // Registered, so it counts as an audience, but its toast listener isn't mounted yet.
+        connections[0]!.options.onStatus({ state: "not-connected", problem: "storage" });
+        expect(toastsShown()).toHaveLength(1);
+
+        noteDecisionsRendererReady(statusView.id);
+        expect(toldView()).toHaveLength(1);
+      });
+
       it("tells a ready window nothing once Decisions connected again, or with no outage", async () => {
         saved.value = { enabled: true, ...RELAY };
         await startDecisionsIfEnabled();
