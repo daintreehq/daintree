@@ -288,8 +288,7 @@ export function HostCard({
             )}
           </div>
           <span className="text-2xs text-text-secondary">
-            Last {span} <FactSeparator /> updated{" "}
-            <TimeAgo timestamp={summary.sampledAt} verbose />
+            Last {span} <FactSeparator /> updated <TimeAgo timestamp={summary.sampledAt} verbose />
           </span>
         </div>
       )}

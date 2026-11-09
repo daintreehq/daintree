@@ -527,8 +527,8 @@ export function DaintreeAssistantSettingsTab() {
               description={
                 modelCatalogFailed ? (
                   <>
-                    Couldn&apos;t load this agent&apos;s models, so only the saved choice is
-                    listed <FactSeparator />{" "}
+                    Couldn&apos;t load this agent&apos;s models, so only the saved choice is listed{" "}
+                    <FactSeparator />{" "}
                     <Button variant="link" onClick={retryModelCatalog}>
                       Retry
                     </Button>

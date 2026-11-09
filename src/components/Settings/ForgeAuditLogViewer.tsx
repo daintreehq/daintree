@@ -310,7 +310,8 @@ export function ForgeAuditLogViewer({
                         wrap never leaves it dangling at a line end. */}
                     {repo && (
                       <>
-                        <AuditId>{repo}</AuditId> <FactSeparator />{"\u00a0"}
+                        <AuditId>{repo}</AuditId> <FactSeparator />
+                        {"\u00a0"}
                       </>
                     )}
                     <AuditId>{record.providerId}</AuditId>

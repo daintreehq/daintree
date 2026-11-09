@@ -279,8 +279,7 @@ export function PluginPerformanceSection({
                     {" last "}
                     <TimeAgo timestamp={longFrames.lastAt} verbose />
                   </>
-                )}
-                {" "}
+                )}{" "}
                 <FactSeparator />
                 {" the plugin was active during these frames"}
               </>

@@ -133,8 +133,7 @@ function GrantActiveBanner({
                   <ToolId id={subject} />
                   <span className="text-text-secondary">
                     {" "}
-                    <FactSeparator />{" "}
-                    <GrantTimeLeft grant={grant} now={now} />
+                    <FactSeparator /> <GrantTimeLeft grant={grant} now={now} />
                   </span>
                 </span>
                 <Button

@@ -762,9 +762,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
               label="Input device"
               description={
                 <>
-                  {micDescription}
-                  {" "}
-                  <FactSeparator />{" "}
+                  {micDescription} <FactSeparator />{" "}
                   <Button variant="link" onClick={refreshDevices}>
                     Refresh list
                   </Button>

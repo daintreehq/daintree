@@ -57,8 +57,7 @@ function SessionIdentity({
       {name && (
         <>
           {" "}
-          <FactSeparator />{" "}
-          <span className="text-text-primary">{name}</span>
+          <FactSeparator /> <span className="text-text-primary">{name}</span>
         </>
       )}
       {agentId && (

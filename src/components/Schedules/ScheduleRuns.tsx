@@ -501,7 +501,11 @@ export function ScheduleRuns({
               {scheduleAgentName(schedule.launch.agentId)}
               {presetMissing ? (
                 <>
-                  <span aria-hidden="true">&nbsp;<FactSeparator />&nbsp;</span>
+                  <span aria-hidden="true">
+                    &nbsp;
+                    <FactSeparator />
+                    &nbsp;
+                  </span>
                   <MissingGlyph
                     className="mr-1 h-3 w-3 shrink-0 text-status-warning"
                     aria-hidden="true"
@@ -511,16 +515,28 @@ export function ScheduleRuns({
               ) : (
                 presetName && (
                   <>
-                    <span aria-hidden="true">&nbsp;<FactSeparator />&nbsp;</span>
+                    <span aria-hidden="true">
+                      &nbsp;
+                      <FactSeparator />
+                      &nbsp;
+                    </span>
                     {presetName}
                   </>
                 )
               )}
-              <span aria-hidden="true">&nbsp;<FactSeparator />&nbsp;</span>
+              <span aria-hidden="true">
+                &nbsp;
+                <FactSeparator />
+                &nbsp;
+              </span>
               {worktreeLabel ?? "Main checkout"}
               {foreignZone && (
                 <>
-                  <span aria-hidden="true">&nbsp;<FactSeparator />&nbsp;</span>
+                  <span aria-hidden="true">
+                    &nbsp;
+                    <FactSeparator />
+                    &nbsp;
+                  </span>
                   times in {timeZone}
                 </>
               )}

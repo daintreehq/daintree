@@ -210,7 +210,9 @@ export function PulseHealthSignals({
       }
     >
       {formatCompactCount(mergedInRange)} merged
-      <span className="text-text-secondary"><FactSeparator /> {rangeDays}d</span>
+      <span className="text-text-secondary">
+        <FactSeparator /> {rangeDays}d
+      </span>
       <span className="sr-only"> in the last {rangeDays} days</span>
     </HealthChip>
   );

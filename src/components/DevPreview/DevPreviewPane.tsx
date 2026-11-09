@@ -1069,8 +1069,7 @@ export function DevPreviewPane({
                 className="absolute top-1 left-1/2 z-10 -translate-x-1/2 bg-surface/90"
               >
                 {getViewportPreset(viewportPreset).label} <FactSeparator />{" "}
-                {effectiveViewport.width}×
-                {effectiveViewport.height}
+                {effectiveViewport.width}×{effectiveViewport.height}
                 {viewportFit && fitScale < 1 && (
                   <>
                     {" "}

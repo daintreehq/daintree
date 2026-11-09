@@ -451,8 +451,8 @@ export function ImportEnvDialog({
                   {duplicateInPasteCount > 0 ? (
                     <span className="text-text-primary">
                       {" "}
-                      <FactSeparator /> {pluralize(duplicateInPasteCount, "duplicate key")} in
-                      paste (last value kept)
+                      <FactSeparator /> {pluralize(duplicateInPasteCount, "duplicate key")} in paste
+                      (last value kept)
                     </span>
                   ) : null}
                 </p>

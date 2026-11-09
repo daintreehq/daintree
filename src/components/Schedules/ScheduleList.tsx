@@ -144,7 +144,9 @@ function LastRun({
       />
       {words.detail && (
         <TruncatedTooltip content={words.detail} focusable={false}>
-          <span className="min-w-0 truncate"><FactSeparator /> {words.detail}</span>
+          <span className="min-w-0 truncate">
+            <FactSeparator /> {words.detail}
+          </span>
         </TruncatedTooltip>
       )}
     </span>
@@ -235,8 +237,8 @@ function ScheduleRow({
             {worktreeLabel && <Badge size="xs">{worktreeLabel}</Badge>}
           </div>
           <p className="mt-1 truncate text-xs text-text-secondary">
-            {words ?? <span className="font-mono">{schedule.cadence.cron}</span>}{" "}
-            <FactSeparator /> {agentName}
+            {words ?? <span className="font-mono">{schedule.cadence.cron}</span>} <FactSeparator />{" "}
+            {agentName}
           </p>
           <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 text-xs text-text-secondary">
             <NextRun schedule={schedule} now={now} schedulesOn={schedulesOn} />

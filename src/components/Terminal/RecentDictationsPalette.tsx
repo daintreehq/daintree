@@ -468,8 +468,7 @@ function RecentDictationPreview({
             </dd>
             <dt className="text-text-secondary">Finished</dt>
             <dd className="text-text-primary">
-              <TimeAgo timestamp={dictation.endedAt} /> <FactSeparator />{" "}
-              {pluralize(words, "word")}
+              <TimeAgo timestamp={dictation.endedAt} /> <FactSeparator /> {pluralize(words, "word")}
             </dd>
           </dl>
           <VersionSection

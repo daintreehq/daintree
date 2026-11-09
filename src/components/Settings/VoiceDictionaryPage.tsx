@@ -327,10 +327,8 @@ export function VoiceDictionaryPage({
                       </>
                     ) : (
                       ""
-                    )}
-                    {" "}
-                    <FactSeparator />{" "}
-                    <TimeAgo timestamp={suggestion.suggestedAt} verbose />
+                    )}{" "}
+                    <FactSeparator /> <TimeAgo timestamp={suggestion.suggestedAt} verbose />
                   </>
                 }
                 control={

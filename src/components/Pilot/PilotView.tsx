@@ -564,7 +564,9 @@ function RunRow({
           className="flex max-w-[45%] min-w-0 shrink items-baseline gap-1 text-xs leading-tight text-text-secondary"
         >
           <span className="min-w-0 truncate">{row.canopyEvidence.claim}</span>
-          <span className="shrink-0"><FactSeparator /> {row.canopyEvidence.attribution}</span>
+          <span className="shrink-0">
+            <FactSeparator /> {row.canopyEvidence.attribution}
+          </span>
         </span>
       )}
 

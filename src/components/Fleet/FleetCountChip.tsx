@@ -294,7 +294,8 @@ export function FleetCountChip({
             </span>
             {hostScope && (
               <span className="max-w-40 truncate" data-testid="fleet-host-scope">
-                &nbsp;<FactSeparator /> {hostScope}
+                &nbsp;
+                <FactSeparator /> {hostScope}
               </span>
             )}
           </span>

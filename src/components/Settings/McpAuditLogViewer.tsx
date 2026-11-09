@@ -714,9 +714,8 @@ export function McpAuditLogViewer({
               heading={OUTCOME_LABEL[group.turnRecord.outcome] ?? group.turnRecord.outcome}
               summary={
                 <>
-                  <AuditRecordTime ts={group.turnRecord.timestamp} now={now} />
-                  {" "}
-                  <FactSeparator /> {pluralize(group.callCount, "call")}
+                  <AuditRecordTime ts={group.turnRecord.timestamp} now={now} /> <FactSeparator />{" "}
+                  {pluralize(group.callCount, "call")}
                   {group.unauthorizedCount > 0 && (
                     <>
                       {" "}
@@ -728,10 +727,8 @@ export function McpAuditLogViewer({
                       {" "}
                       <FactSeparator /> {pluralize(group.errorCount, "error")}
                     </>
-                  )}
-                  {" "}
-                  <FactSeparator />{" "}
-                  <AuditDuration ms={group.totalDurationMs} />
+                  )}{" "}
+                  <FactSeparator /> <AuditDuration ms={group.totalDurationMs} />
                 </>
               }
             >

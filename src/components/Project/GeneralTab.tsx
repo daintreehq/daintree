@@ -600,8 +600,7 @@ export function GeneralTab({
                         {iconPreview}
                       </div>
                       <p className="flex-1 min-w-0 text-xs text-text-secondary">
-                        Custom icon <FactSeparator />{" "}
-                        {formatBytes(new Blob([projectIconSvg]).size)}
+                        Custom icon <FactSeparator /> {formatBytes(new Blob([projectIconSvg]).size)}
                       </p>
                       <Button
                         variant="outline"

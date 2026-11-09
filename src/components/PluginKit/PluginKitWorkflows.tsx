@@ -356,7 +356,7 @@ function KitAttachmentList({
                       "Failed"
                     )
                   ) : (
-                    item.detail ?? (item.status === "pending" ? "Uploading" : null)
+                    (item.detail ?? (item.status === "pending" ? "Uploading" : null))
                   )}
                 </span>
                 {removeItem ? (
