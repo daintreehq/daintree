@@ -960,8 +960,8 @@ test.describe("Core: Settings", () => {
         // excludes the action being edited) must flag it.
         const { recordPrompt } = await openShortcutRecorder(
           window,
-          "Reopen last closed terminal",
-          "Reopen last closed terminal"
+          "Reopen last closed panel",
+          "Reopen last closed panel"
         );
         await recordPrompt.click();
         // The recorder reads event.code; Cmd maps to Meta on macOS, Ctrl elsewhere.

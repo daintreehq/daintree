@@ -752,13 +752,13 @@ export function WorktreeMenuItems({
 
   // -------------------------------------------------------------- Sessions
   // The `worktree.sessions.*` actions and fleet selection resolve a worktree id
-  // and silently no-op without one, so a workspace root gets no Sessions group
+  // and silently no-op without one, so a workspace root gets no Panels group
   // rather than a submenu of rows that report doing something and don't.
   const sessionsSub = worktree && counts && (
     <C.Sub key="sessions">
       <C.SubTrigger>
         <Layers className={ICON} />
-        Sessions
+        Panels
       </C.SubTrigger>
       <C.SubContent>
         {counts.active > 0 && (
@@ -855,7 +855,7 @@ export function WorktreeMenuItems({
         {(counts.active > 0 || counts.all > 0) && <C.Separator />}
 
         {/* Deletion, not repair: clearing history destroys journal records
-            permanently, so it sits with the destructive End all rather than
+            permanently, so it sits with the destructive Remove all rather than
             beside renderer maintenance. No count — availability isn't cached, and
             opening a menu must not go and read the journal to find out. */}
         <C.Item destructive onSelect={onClearHistory}>
@@ -865,20 +865,20 @@ export function WorktreeMenuItems({
         <C.Item
           onSelect={onCloseAll}
           disabled={counts.active === 0}
-          {...counted("Trash all sessions", counts.active)}
+          {...counted("Trash all panels", counts.active)}
         >
           <Trash2 className={ICON} />
-          Trash all sessions…
+          Trash all panels…
           <C.Meta>{counts.active}</C.Meta>
         </C.Item>
         <C.Item
           destructive
           onSelect={onTerminateAll}
           disabled={counts.active === 0}
-          {...counted("End all sessions", counts.active)}
+          {...counted("Remove all panels", counts.active)}
         >
           <OctagonX className={ICON} />
-          End all sessions…
+          Remove all panels…
           <C.Meta>{counts.active}</C.Meta>
         </C.Item>
       </C.SubContent>
@@ -1393,7 +1393,7 @@ export function WorktreeMenuItems({
     onOpenPanelPalette && (
       <C.Item key="new-session" onSelect={() => onOpenPanelPalette(source)}>
         <Plus className={ICON} />
-        New session…
+        New panel…
       </C.Item>
     ),
     worktree && onOpenReviewHub && (

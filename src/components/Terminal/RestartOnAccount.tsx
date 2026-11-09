@@ -58,7 +58,7 @@ export function buildRestartOnAccountCopy(
     title: `Restart ${quoted(terminalTitle, "terminal")} on ${quoted(accountName, "another account")}?`,
     lead: agentWorking ? "Its agent is working and will be interrupted." : undefined,
     description: keepConversation
-      ? "It keeps its preset and reopens this conversation on that account, and the scrollback is discarded. If the account can't find the conversation, the pane offers a new one or the way back."
+      ? "It keeps its preset and reopens this conversation on that account, and the scrollback is discarded. If the account can't find the conversation, the panel offers a new one or the way back."
       : "It keeps its preset and starts a new conversation on that account, and the scrollback is discarded.",
     confirmLabel: "Restart on account",
   };

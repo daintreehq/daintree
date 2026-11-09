@@ -2,7 +2,7 @@ import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
 import { getAgentInlineSupport } from "@/lib/agentInlineMode";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 
-const WHAT_IT_MEANS = "Daintree's scrollback and search don't apply to this pane";
+const WHAT_IT_MEANS = "Daintree's scrollback and search don't apply to this terminal";
 
 export interface AgentAltScreenBannerProps {
   agentId: string;

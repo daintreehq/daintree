@@ -214,9 +214,9 @@ export function registerTerminalSpawnActions(
 
   actions.set("terminal.reopenLast", () => ({
     id: "terminal.reopenLast",
-    title: "Reopen last closed",
+    title: "Reopen last closed panel",
     description:
-      "Restore the most recently trashed terminal, or resume the most recent journaled agent session once the trash window has lapsed",
+      "Restore the most recently trashed panel, or resume the most recent journaled agent session once the trash window has lapsed",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -290,7 +290,7 @@ export function registerTerminalSpawnActions(
     title: "Move to worktree",
     description:
       "Move a terminal panel to another worktree, reversibly. The process is never restarted: a " +
-      "live agent keeps running in its launch directory, and its pane offers to tell it to " +
+      "live agent keeps running in its launch directory, and its panel offers to tell it to " +
       "continue there. Panels in the same tab group move too. Name the target; an automated " +
       "caller cannot see focus.",
     category: "terminal",
@@ -357,7 +357,7 @@ export function registerTerminalSpawnActions(
   actions.set("terminal.moveToNewWorktree", () => ({
     id: "terminal.moveToNewWorktree",
     title: "Move to new worktree…",
-    description: "Create a new worktree and move this terminal panel to it",
+    description: "Create a new worktree and move this panel to it",
     category: "terminal",
     kind: "command",
     danger: "safe",

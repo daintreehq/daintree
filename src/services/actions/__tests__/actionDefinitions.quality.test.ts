@@ -1759,6 +1759,53 @@ describe("ActionService.list() snapshot", () => {
 
     expect(entries).toMatchSnapshot();
   });
+
+  // The grid object is a panel (component-contract.md, "Wording"); "pane" was
+  // the fourth name it went by, and the manifest is what the palette and every
+  // MCP client read.
+  // Read from every factory rather than `list()`, which drops an action whose
+  // `isVisible` is false in the test context.
+  it("never calls the grid object a pane", async () => {
+    const registry = await createActionRegistryWithRemoteHosts();
+    const offenders = [...registry.values()].flatMap((factory) => {
+      const { id, title, description, dangerRationale } = factory();
+      return [title, description, dangerRationale]
+        .filter((text): text is string => typeof text === "string" && /\bpanes?\b/i.test(text))
+        .map((text) => `${id}: ${text}`);
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  // The palette never scores ids, and a keyword only counts when it holds
+  // every word of the query, so a renamed action keeps its old title as a
+  // phrase keyword or the query people already type stops finding it.
+  it.each([
+    ["kill terminal", "terminal.kill"],
+    ["rename terminal", "terminal.rename"],
+    ["move terminal left", "terminal.moveLeft"],
+    ["focus next terminal", "terminal.focusNext"],
+    ["focus terminal 3", "terminal.focusIndex3"],
+    ["trash all sessions", "worktree.sessions.trashAll"],
+  ])("still finds %j in the palette after the rename", async (query, id) => {
+    const { scoreAction, extractAcronym } = await import("@/lib/actionPaletteSearch");
+    const registry = await createActionRegistryWithRemoteHosts();
+    const def = registry.get(id as ActionId)?.();
+    expect(def, id).toBeDefined();
+    const { title, category, description = "", keywords = [] } = def!;
+    const score = scoreAction(query, {
+      id,
+      title,
+      category,
+      description,
+      enabled: true,
+      titleLower: title.toLowerCase(),
+      categoryLower: category.toLowerCase(),
+      descriptionLower: description.toLowerCase(),
+      titleAcronym: extractAcronym(title),
+      keywordsLower: keywords.map((k) => k.toLowerCase()),
+    });
+    expect(score).toBeGreaterThan(0);
+  });
 });
 
 describe("main-process runners under the relay's drive rule (#13493)", () => {

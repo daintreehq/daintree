@@ -710,7 +710,7 @@ export function WorktreeFilterPopover({
           </FilterSection>
 
           <FilterSection
-            title="Sessions"
+            title="Terminals"
             defaultOpen={sessionFilters.size > 0}
             activeCount={sessionFilters.size}
             onClear={clearSessionFilters}

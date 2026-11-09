@@ -104,7 +104,7 @@ describe("WorktreeMenuItems — real Radix primitives", () => {
       "Launch",
       "Open",
       "Git",
-      "Sessions",
+      "Panels",
       "Runtime",
       "Copy",
       "Delete worktree…",

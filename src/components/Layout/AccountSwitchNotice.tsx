@@ -98,7 +98,7 @@ export function useAccountSwitchPaneIds(notice: AccountSwitchNoticeState | null)
 }
 
 export function limitedPanesLabel(count: number, agentName: string): string {
-  return `${pluralize(count, `${agentName} pane`)} stopped on a usage limit`;
+  return `${pluralize(count, `${agentName} terminal`)} stopped on a usage limit`;
 }
 
 export function switchPanesLabel(count: number, accountName: string): string {
@@ -239,7 +239,7 @@ function OpenAccountSwitchDialog({
             { terminalId: pane.id, accountId: request.account.id, confirmed: true },
             { source: "user" }
           ),
-        (restarted) => `Restarting ${pluralize(restarted, "pane")} on ${accountName}`
+        (restarted) => `Restarting ${pluralize(restarted, "terminal")} on ${accountName}`
       );
     })();
   };
@@ -248,7 +248,7 @@ function OpenAccountSwitchDialog({
     <ConfirmDialog
       isOpen
       onClose={onClose}
-      title={`Restart ${pluralize(count, "pane")} on '${accountName}'?`}
+      title={`Restart ${pluralize(count, "terminal")} on '${accountName}'?`}
       description={
         <>
           {working > 0 && (
@@ -264,7 +264,7 @@ function OpenAccountSwitchDialog({
           </span>
         </>
       }
-      confirmLabel={count === 1 ? "Restart pane" : `Restart ${pluralize(count, "pane")}`}
+      confirmLabel={count === 1 ? "Restart terminal" : `Restart ${pluralize(count, "terminal")}`}
       confirmDisabled={count === 0}
       variant="destructive"
       onConfirm={handleConfirm}

@@ -247,7 +247,7 @@ test.describe("Core: Terminal Layout Operations", () => {
     const panelIds = await getGridPanelIds(window);
     expect(panelIds).toHaveLength(2);
 
-    const divider = window.getByRole("separator", { name: "Resize left pane" });
+    const divider = window.getByRole("separator", { name: "Resize left panel" });
     await expect(divider).toBeVisible({ timeout: T_LONG });
 
     const baseline = await waitForConvergence(window, panelIds);

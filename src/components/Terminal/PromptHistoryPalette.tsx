@@ -75,7 +75,7 @@ export function PromptHistoryRow({
   // recall puts the text in this composer and nothing else.
   const counts = [
     item.lineCount > 1 ? `${item.lineCount} lines` : null,
-    targets > 1 ? `${targets} panes` : null,
+    targets > 1 ? `${targets} terminals` : null,
   ].filter(Boolean);
 
   return (

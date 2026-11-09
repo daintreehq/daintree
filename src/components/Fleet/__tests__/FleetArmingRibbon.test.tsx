@@ -1982,7 +1982,7 @@ describe("fleets with agents on other hosts", () => {
     };
     const save = () => screen.getByRole("button", { name: "Save fleet" });
 
-    expect(typeHint()).toContain("The 2 panes armed now.");
+    expect(typeHint()).toContain("The 2 terminals armed now.");
     expect(typeHint()).toContain("Claude t1 on studio-01");
     expect(save().getAttribute("aria-disabled")).toBeNull();
 
@@ -1992,7 +1992,7 @@ describe("fleets with agents on other hosts", () => {
     });
 
     expect(useFleetArmingStore.getState().crossHostTargets).toHaveLength(1);
-    expect(typeHint()).toContain("Only panes armed here go in a snapshot.");
+    expect(typeHint()).toContain("Only terminals armed here go in a snapshot.");
     expect(typeHint()).toContain("Left out, since a snapshot can't hold agents on other hosts");
     expect(typeHint()).toContain("Claude t1 on studio-01");
     expect(save().getAttribute("aria-disabled")).toBe("true");

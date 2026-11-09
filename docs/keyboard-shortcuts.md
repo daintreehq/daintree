@@ -29,54 +29,54 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
-| Close focused terminal | `⌘+W` | `Ctrl+W` |
+| Close focused panel | `⌘+W` | `Ctrl+W` |
 | Duplicate focused panel | `⌘+T` | `Ctrl+T` |
 | New terminal | `⌘+⌥+T` | `Ctrl+Alt+T` (Windows), `Ctrl+Shift+Alt+T` (Linux) |
-| Reopen last closed terminal | `⌘+⇧+T` | `Ctrl+Shift+T` |
+| Reopen last closed panel | `⌘+⇧+T` | `Ctrl+Shift+T` |
 | Resume a closed session | `⌘+K ⌘+R` | `Ctrl+K Ctrl+R` |
-| Close all terminals | `⌘+K ⌘+W` | `Ctrl+K Ctrl+W` |
+| Close all panels | `⌘+K ⌘+W` | `Ctrl+K Ctrl+W` |
 | Restart all terminals | `⌘+K ⌘+A` | `Ctrl+K Ctrl+A` |
-| Kill focused terminal | `⌘+K ⌘+Q` | `Ctrl+K Ctrl+Q` |
+| Remove focused panel | `⌘+K ⌘+Q` | `Ctrl+K Ctrl+Q` |
 | Restart focused terminal | `⌘+K ⌘+E` | `Ctrl+K Ctrl+E` |
 | Force resume focused terminal | `⌘+K ⌘+U` | `Ctrl+K Ctrl+U` |
 | Redraw focused terminal | `⌘+K ⌘+D` | `Ctrl+K Ctrl+D` |
-| Rename focused terminal | `⌘+K ⌘+L` | `Ctrl+K Ctrl+L` |
+| Rename focused panel | `⌘+K ⌘+L` | `Ctrl+K Ctrl+L` |
 | Toggle watch on focused terminal | `⌘+⇧+W` | `Ctrl+Shift+W` |
 | Scroll to last activity | `⌘+⌥+L` | `Ctrl+Alt+L` (Windows), `Ctrl+Shift+Alt+L` (Linux) |
 | Stash current input | `⌘+⇧+S` | `Ctrl+Shift+S` |
 | Restore stashed input | `⌘+⇧+X` | `Ctrl+Shift+X` |
-| Toggle focused terminal dock state | `⌘+⌥+M` | `Ctrl+Alt+M` |
-| Toggle all terminals dock state | `⌘+⇧+⌥+M` | `Ctrl+Shift+Alt+M` |
-| Focus next terminal | `⌃+Tab` | `Ctrl+Tab` |
-| Focus previous terminal | `⌃+⇧+Tab` | `Ctrl+Shift+Tab` |
+| Toggle focused panel dock state | `⌘+⌥+M` | `Ctrl+Alt+M` |
+| Toggle all panels dock state | `⌘+⇧+⌥+M` | `Ctrl+Shift+Alt+M` |
+| Focus next panel | `⌃+Tab` | `Ctrl+Tab` |
+| Focus previous panel | `⌃+⇧+Tab` | `Ctrl+Shift+Tab` |
 | Toggle focus between current and previously focused panel | `` ⌘+⌥+` `` | `` Ctrl+Alt+` `` |
 | Switch between hybrid input and terminal | `⌘+⌥+E` | `Ctrl+Alt+E` |
 | Switch to next tab in focused panel | `⌘+⇧+]` | `Ctrl+Shift+]` |
 | Switch to previous tab in focused panel | `⌘+⇧+[` | `Ctrl+Shift+[` |
-| Toggle maximize terminal | `⌃+⇧+F` | `Ctrl+Shift+F` |
-| Move terminal left in grid or dock | `⌘+⇧+⌥+←` | `Ctrl+Shift+Alt+Left` |
-| Move terminal right in grid or dock | `⌘+⇧+⌥+→` | `Ctrl+Shift+Alt+Right` |
-| Move terminal up in grid | `⌘+⇧+⌥+↑` | `Ctrl+Shift+Alt+Up` |
-| Move terminal down in grid | `⌘+⇧+⌥+↓` | `Ctrl+Shift+Alt+Down` |
-| Move terminal to dock | `⌘+⇧+⌥+D` | `Ctrl+Shift+Alt+D` |
-| Move terminal to grid | `⌘+⇧+⌥+G` | `Ctrl+Shift+Alt+G` |
+| Toggle maximize panel | `⌃+⇧+F` | `Ctrl+Shift+F` |
+| Move panel left in grid or dock | `⌘+⇧+⌥+←` | `Ctrl+Shift+Alt+Left` |
+| Move panel right in grid or dock | `⌘+⇧+⌥+→` | `Ctrl+Shift+Alt+Right` |
+| Move panel up in grid | `⌘+⇧+⌥+↑` | `Ctrl+Shift+Alt+Up` |
+| Move panel down in grid | `⌘+⇧+⌥+↓` | `Ctrl+Shift+Alt+Down` |
+| Move panel to dock | `⌘+⇧+⌥+D` | `Ctrl+Shift+Alt+D` |
+| Move panel to grid | `⌘+⇧+⌥+G` | `Ctrl+Shift+Alt+G` |
 | Inject context into focused terminal | `⌘+⇧+I` | `Ctrl+Shift+I` |
 | Send selection to another terminal | `⌘+K ⌘+I` | `Ctrl+K Ctrl+I` |
 | Arm all eligible terminals in the current worktree | `⌘+⇧+B` | `Ctrl+Shift+B` |
-| Focus terminal above | `⌘+⌥+↑` | `Ctrl+Alt+Up` (Windows), `Ctrl+Shift+Up` (Linux) |
-| Focus terminal below | `⌘+⌥+↓` | `Ctrl+Alt+Down` (Windows), `Ctrl+Shift+Down` (Linux) |
-| Focus terminal to the left | `⌘+⌥+←` | `Ctrl+Alt+Left` (Windows), `Ctrl+Shift+Left` (Linux) |
-| Focus terminal to the right | `⌘+⌥+→` | `Ctrl+Alt+Right` (Windows), `Ctrl+Shift+Right` (Linux) |
-| Focus terminal 1 | `⌘+1` | `Ctrl+1` |
-| Focus terminal 2 | `⌘+2` | `Ctrl+2` |
-| Focus terminal 3 | `⌘+3` | `Ctrl+3` |
-| Focus terminal 4 | `⌘+4` | `Ctrl+4` |
-| Focus terminal 5 | `⌘+5` | `Ctrl+5` |
-| Focus terminal 6 | `⌘+6` | `Ctrl+6` |
-| Focus terminal 7 | `⌘+7` | `Ctrl+7` |
-| Focus terminal 8 | `⌘+8` | `Ctrl+8` |
-| Focus terminal 9 | `⌘+9` | `Ctrl+9` |
-| Close focused terminal | — | `Ctrl+F4` (Windows only) |
+| Focus panel above | `⌘+⌥+↑` | `Ctrl+Alt+Up` (Windows), `Ctrl+Shift+Up` (Linux) |
+| Focus panel below | `⌘+⌥+↓` | `Ctrl+Alt+Down` (Windows), `Ctrl+Shift+Down` (Linux) |
+| Focus panel to the left | `⌘+⌥+←` | `Ctrl+Alt+Left` (Windows), `Ctrl+Shift+Left` (Linux) |
+| Focus panel to the right | `⌘+⌥+→` | `Ctrl+Alt+Right` (Windows), `Ctrl+Shift+Right` (Linux) |
+| Focus panel 1 | `⌘+1` | `Ctrl+1` |
+| Focus panel 2 | `⌘+2` | `Ctrl+2` |
+| Focus panel 3 | `⌘+3` | `Ctrl+3` |
+| Focus panel 4 | `⌘+4` | `Ctrl+4` |
+| Focus panel 5 | `⌘+5` | `Ctrl+5` |
+| Focus panel 6 | `⌘+6` | `Ctrl+6` |
+| Focus panel 7 | `⌘+7` | `Ctrl+7` |
+| Focus panel 8 | `⌘+8` | `Ctrl+8` |
+| Focus panel 9 | `⌘+9` | `Ctrl+9` |
+| Close focused panel | — | `Ctrl+F4` (Windows only) |
 
 ## Agents
 
@@ -98,8 +98,8 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
-| Toggle arm focused pane (Join the fleet) | `⌘+J` | `Ctrl+J` |
-| Toggle arm focused pane (no modifier, grid only) | `X` | `X` |
+| Toggle arm focused terminal (Join the fleet) | `⌘+J` | `Ctrl+J` |
+| Toggle arm focused terminal (no modifier, grid only) | `X` | `X` |
 | Arm all eligible terminals in current worktree | `⌘+⌥+A` | `Ctrl+Alt+A` |
 | Accept all armed waiting agents | `⌘+Y` | `Ctrl+Y` |
 | Reject all armed waiting agents | `⌘+⇧+Y` | `Ctrl+Shift+Y` |
@@ -129,13 +129,13 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Open changes for focused worktree | `⌘+⇧+D` | `Ctrl+Shift+D` |
 | Open file browser panel for focused worktree | `⌘+⌥+F` | `Ctrl+Alt+F` (Windows), `Ctrl+Shift+Alt+F` (Linux) |
 
-## Worktree sessions
+## Worktree panels
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
-| Dock all sessions in active worktree | `⌘+K ⌘+M` | `Ctrl+K Ctrl+M` |
-| Move all sessions to grid in active worktree | `⌘+K ⌘+X` | `Ctrl+K Ctrl+X` |
-| Reset renderers for all sessions in active worktree | `⌘+K ⌘+V` | `Ctrl+K Ctrl+V` |
+| Dock all panels in active worktree | `⌘+K ⌘+M` | `Ctrl+K Ctrl+M` |
+| Move all panels to grid in active worktree | `⌘+K ⌘+X` | `Ctrl+K Ctrl+X` |
+| Redraw all terminals in active worktree | `⌘+K ⌘+V` | `Ctrl+K Ctrl+V` |
 
 ## Panels
 

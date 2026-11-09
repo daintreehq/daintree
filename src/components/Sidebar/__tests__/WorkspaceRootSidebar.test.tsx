@@ -244,7 +244,7 @@ describe("WorkspaceRootSidebar", () => {
     // The regression this guards: keying the row on the workspace's own id
     // renders a permanently-empty row beside live agents.
     expect(useWorktreeTerminals).not.toHaveBeenCalledWith(SCRATCH.id);
-    expect(screen.getByRole("img", { name: /3 sessions/ })).toBeTruthy();
+    expect(screen.getByRole("img", { name: /3 terminals/ })).toBeTruthy();
   });
 
   it("names unread hand-backs in the session summary apart from waiting", () => {
@@ -254,7 +254,7 @@ describe("WorkspaceRootSidebar", () => {
       unread: 2,
     };
     render(<WorkspaceRootSidebar workspace={SCRATCH} />);
-    expect(screen.getByRole("img", { name: "3 sessions: 1 working, 2 unread" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "3 terminals: 1 working, 2 unread" })).toBeTruthy();
   });
 
   it("shows no session indicators when nothing is running", () => {
@@ -291,9 +291,9 @@ describe("WorkspaceRootSidebar", () => {
     // menu inert is a bigger lie than the dead toggle this replaces. Asserted as
     // an exact list so a git-shaped group can't be added back unnoticed.
     render(<WorkspaceRootSidebar workspace={SCRATCH} />);
-    // "New session…" is the menu's direct launcher row, which a workspace root
+    // "New panel…" is the menu's direct launcher row, which a workspace root
     // honours like Launch does; "Review worktree" needs a worktree and is absent.
-    expect(contextMenuRootRows()).toEqual(["New session…", "Launch", "Open", "Copy"]);
+    expect(contextMenuRootRows()).toEqual(["New panel…", "Launch", "Open", "Copy"]);
   });
 
   it("puts the more-actions button last in the row, after Browse files", () => {
@@ -354,7 +354,7 @@ describe("WorkspaceRootSidebar", () => {
     ];
     render(<WorkspaceRootSidebar workspace={PLAIN_FOLDER} />);
 
-    expect(contextMenuRootRows()).toEqual(["New session…", "Launch", "Open", "Recipes", "Copy"]);
+    expect(contextMenuRootRows()).toEqual(["New panel…", "Launch", "Open", "Recipes", "Copy"]);
     expect(screen.queryByText("Elsewhere")).toBeNull();
 
     await act(async () => {
@@ -404,7 +404,7 @@ describe("WorkspaceRootSidebar", () => {
     const rows = Array.from(dropdown.querySelectorAll("[role='menuitem']")).map(
       (el) => el.textContent?.trim() ?? ""
     );
-    expect(rows).toEqual(["New session…", "Launch", "Open", "Copy"]);
+    expect(rows).toEqual(["New panel…", "Launch", "Open", "Copy"]);
   });
 
   it("exposes no worktree-shaped control outside the menu either", () => {

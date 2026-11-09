@@ -210,7 +210,7 @@ function detailsButton(): HTMLElement {
 }
 
 function sessionsButton(): HTMLElement {
-  return screen.getByRole("button", { name: /^Active sessions for worktree/ });
+  return screen.getByRole("button", { name: /^Active terminals for worktree/ });
 }
 
 /** A real pointer click: `detail` counts presses, where Enter/Space give 0. */
@@ -422,7 +422,7 @@ describe.each(["comfortable", "compact"] as const)("WorktreeCard selection — %
 
     it("Review & commit opens the review without selecting", () => {
       const { onSelect } = renderCard({ isActive });
-      fireEvent.click(screen.getByRole("button", { name: "Open Review & commit" }));
+      fireEvent.click(screen.getByRole("button", { name: "Review & commit" }));
       expect(dispatch).toHaveBeenCalledWith("worktree.openReviewHub", { worktreeId: WORKTREE.id });
       expect(onSelect).not.toHaveBeenCalled();
     });

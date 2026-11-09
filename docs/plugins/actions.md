@@ -476,7 +476,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
 | `fleet.armAll` | Fleet: arm all eligible | safe | `scope?` |
-| `fleet.armFocused` | Fleet: toggle arm focused pane | safe | — |
+| `fleet.armFocused` | Fleet: toggle arm focused terminal | safe | — |
 | `fleet.armMatchingFilter` | Fleet: arm agents matching filter | safe | `worktreeIds` |
 | `fleet.deleteNamedFleet` | Fleet: delete named fleet | confirm | `id` |
 | `fleet.getRunStatus` | Fleet: get run status | safe | — |
@@ -501,9 +501,9 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.armDefault` | Arm current worktree | safe | — |
 | `terminal.background` | Send to background | safe | `terminalId?` |
 | `terminal.bulkCommand` | Fleet: broadcast | safe | — |
-| `terminal.close` | Close terminal | safe | `terminalId?` |
-| `terminal.closeAll` | Close all terminals | safe | — |
-| `terminal.closeOwned` | Close owned terminal | safe | `terminalId` |
+| `terminal.close` | Close panel | safe | `terminalId?` |
+| `terminal.closeAll` | Close all panels | safe | — |
+| `terminal.closeOwned` | Close owned panel | safe | `terminalId` |
 | `terminal.contextMenu` | Open context menu | safe | `terminalId?` |
 | `terminal.copyLink` | Copy link address | safe | `url` |
 | `terminal.disarm` | Disarm terminal | safe | `terminalId` |
@@ -511,21 +511,21 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.duplicate` | Duplicate panel | safe | `focusPolicy?`, `spawnedBy?`, `terminalId?` |
 | `terminal.focusAlternate` | Focus alternate panel | safe | — |
 | `terminal.focusDock` | Focus dock | safe | — |
-| `terminal.focusDown` | Focus terminal down | safe | — |
-| `terminal.focusIndex1` | Focus terminal 1 | safe | — |
-| `terminal.focusIndex2` | Focus terminal 2 | safe | — |
-| `terminal.focusIndex3` | Focus terminal 3 | safe | — |
-| `terminal.focusIndex4` | Focus terminal 4 | safe | — |
-| `terminal.focusIndex5` | Focus terminal 5 | safe | — |
-| `terminal.focusIndex6` | Focus terminal 6 | safe | — |
-| `terminal.focusIndex7` | Focus terminal 7 | safe | — |
-| `terminal.focusIndex8` | Focus terminal 8 | safe | — |
-| `terminal.focusIndex9` | Focus terminal 9 | safe | — |
-| `terminal.focusLeft` | Focus terminal left | safe | — |
-| `terminal.focusNext` | Focus next terminal | safe | — |
-| `terminal.focusPrevious` | Focus previous terminal | safe | — |
-| `terminal.focusRight` | Focus terminal right | safe | — |
-| `terminal.focusUp` | Focus terminal up | safe | — |
+| `terminal.focusDown` | Focus panel down | safe | — |
+| `terminal.focusIndex1` | Focus panel 1 | safe | — |
+| `terminal.focusIndex2` | Focus panel 2 | safe | — |
+| `terminal.focusIndex3` | Focus panel 3 | safe | — |
+| `terminal.focusIndex4` | Focus panel 4 | safe | — |
+| `terminal.focusIndex5` | Focus panel 5 | safe | — |
+| `terminal.focusIndex6` | Focus panel 6 | safe | — |
+| `terminal.focusIndex7` | Focus panel 7 | safe | — |
+| `terminal.focusIndex8` | Focus panel 8 | safe | — |
+| `terminal.focusIndex9` | Focus panel 9 | safe | — |
+| `terminal.focusLeft` | Focus panel left | safe | — |
+| `terminal.focusNext` | Focus next panel | safe | — |
+| `terminal.focusPrevious` | Focus previous panel | safe | — |
+| `terminal.focusRight` | Focus panel right | safe | — |
+| `terminal.focusUp` | Focus panel up | safe | — |
 | `terminal.forceResume` | Force resume | safe | `terminalId?` |
 | `terminal.getStatus` | Get terminal status | safe | `includeOutput?`, `location?`, `queuedSendToken?`, `submissionToken?`, `terminalIds?`, `worktreeId?` |
 | `terminal.gridLayout.setStrategy` | Set grid layout strategy | safe | `strategy` |
@@ -533,46 +533,46 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.info.get` | Get terminal info | safe | `terminalId?` |
 | `terminal.info.open` | Open terminal info | safe | `terminalId?` |
 | `terminal.inject` | Inject context | safe | `terminalId?` |
-| `terminal.kill` | Kill terminal | confirm | `confirmed?`, `terminalId?` |
-| `terminal.killAll` | Kill all terminals | confirm | `confirmed?` |
-| `terminal.killBatch` | Kill terminals | confirm | `terminalIds` |
-| `terminal.list` | List terminals | safe | `includeClientMetadata?`, `location?`, `owned?`, `terminalId?`, `worktreeId?` |
-| `terminal.maximize` | Maximize terminal | safe | — |
-| `terminal.moveDown` | Move terminal down | safe | — |
-| `terminal.moveLeft` | Move terminal left | safe | — |
-| `terminal.moveRight` | Move terminal right | safe | — |
+| `terminal.kill` | Remove panel | confirm | `confirmed?`, `terminalId?` |
+| `terminal.killAll` | Remove all panels in project | confirm | `confirmed?` |
+| `terminal.killBatch` | Remove panels | confirm | `terminalIds` |
+| `terminal.list` | List terminals and panels | safe | `includeClientMetadata?`, `location?`, `owned?`, `terminalId?`, `worktreeId?` |
+| `terminal.maximize` | Maximize panel | safe | — |
+| `terminal.moveDown` | Move panel down | safe | — |
+| `terminal.moveLeft` | Move panel left | safe | — |
+| `terminal.moveRight` | Move panel right | safe | — |
 | `terminal.moveToDock` | Move to dock | safe | `terminalId?` |
 | `terminal.moveToGrid` | Move to grid | safe | `terminalId?` |
 | `terminal.moveToNewWorktree` | Move to new worktree… | safe | `terminalId?` |
 | `terminal.moveToWorktree` | Move to worktree | safe | `worktreeId`, `terminalId?` |
-| `terminal.moveUp` | Move terminal up | safe | — |
+| `terminal.moveUp` | Move panel up | safe | — |
 | `terminal.new` | New terminal | safe | `command?`, `cwd?`, `focusPolicy?`, `spawnedBy?` |
-| `terminal.openWorktreeEditor` | Open focused terminal's worktree folder | safe | — |
-| `terminal.openWorktreeIssue` | Open focused terminal's worktree issue | safe | — |
-| `terminal.openWorktreePR` | Open focused terminal's worktree pull request | safe | — |
+| `terminal.openWorktreeEditor` | Open focused panel's worktree folder | safe | — |
+| `terminal.openWorktreeIssue` | Open focused panel's worktree issue | safe | — |
+| `terminal.openWorktreePR` | Open focused panel's worktree pull request | safe | — |
 | `terminal.popStash` | Restore stashed input | safe | — |
 | `terminal.redraw` | Redraw terminal | safe | `terminalId?` |
-| `terminal.rename` | Rename terminal | safe | `name?`, `terminalId?` |
-| `terminal.reopenLast` | Reopen last closed | safe | — |
+| `terminal.rename` | Rename panel | safe | `name?`, `terminalId?` |
+| `terminal.reopenLast` | Reopen last closed panel | safe | — |
 | `terminal.restart` | Restart terminal | confirm | `confirmed?`, `terminalId?` |
 | `terminal.restartAll` | Restart all terminals | confirm | `confirmed?` |
 | `terminal.restartOnAccount` | Restart agent on account | confirm | `accountId`, `confirmed?`, `keepConversation?`, `terminalId?` |
 | `terminal.restartOnPreset` | Restart agent on preset | confirm | `presetId`, `confirmed?`, `keepConversation?`, `terminalId?` |
 | `terminal.restartService` | Restart terminal service | safe | — |
 | `terminal.resumeSessions` | Resume session… | safe | — |
-| `terminal.revealOwned` | Reveal owned terminal | safe | `terminalId`, `generation?` |
+| `terminal.revealOwned` | Reveal owned panel | safe | `terminalId`, `generation?` |
 | `terminal.scrollToLastActivity` | Scroll to last activity | safe | — |
 | `terminal.sendToAgent` | Send to agent | safe | `terminalId?` |
 | `terminal.sessionFile.get` | Get agent session file | safe | `terminalId` |
 | `terminal.setHoldOnRestart` | Hold agent on restart | safe | `hold`, `terminalId` |
-| `terminal.startHeld` | Start held pane | confirm | `start`, `terminalId` |
+| `terminal.startHeld` | Start held panel | confirm | `start`, `terminalId` |
 | `terminal.stashInput` | Stash input | safe | — |
 | `terminal.toggleDock` | Toggle dock | safe | `terminalId?` |
 | `terminal.toggleDockAll` | Toggle all dock | safe | — |
 | `terminal.toggleInputLock` | Toggle input lock | safe | `terminalId?` |
 | `terminal.toggleInputSurface` | Switch between hybrid input and terminal | safe | — |
 | `terminal.toggleMaximize` | Toggle maximize | safe | `terminalId?` |
-| `terminal.trash` | Trash terminal | safe | `terminalId?` |
+| `terminal.trash` | Trash panel | safe | `terminalId?` |
 | `terminal.viewInfo` | View terminal info | safe | `terminalId?` |
 | `terminal.waitUntilIdle` | Wait until terminal idle | safe | `terminalId`, `timeoutMs?` |
 | `terminal.waitUntilIdleBatch` | Wait until terminals idle (batch) | safe | `terminalIds`, `mode?`, `timeoutMs?` |
@@ -624,7 +624,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `workflow.focusNextAttention` | Focus next attention | safe | — |
 | `workflow.prepBranchForReview` | Inspect branch for review | safe | `cwd?`, `projectId?`, `worktreeId?`, `worktreePath?` |
 | `workflow.startWorkOnIssue` | Start work on issue | safe | `agentId`, `issueNumber`, `assignToSelf?`, `baseBranch?`, `branchName?`, `focusPolicy?`, `injectContext?`, `recipeId?`, `spawnedBy?` |
-| `worktree.bulk.closeSessions` | Close sessions for selected worktrees | confirm | — |
+| `worktree.bulk.closeSessions` | Remove panels for selected worktrees | confirm | — |
 | `worktree.bulk.remove` | Delete selected worktrees | confirm | — |
 | `worktree.clearReviewMark` | Clear review mark | safe | `worktreeId?` |
 | `worktree.compareDiff` | Compare worktree diff | safe | `compareToWorktreeId`, `ignoreWhitespace?`, `limit?`, `offset?`, `useMergeBase?`, `worktreeId?` |
@@ -655,7 +655,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.openIssue` | Open worktree issue | safe | `worktreeId?` |
 | `worktree.openPalette` | Open worktree palette | safe | — |
 | `worktree.openPR` | Open worktree pull request | safe | `worktreeId?` |
-| `worktree.openReviewHub` | Open review hub | safe | `mode?`, `worktreeId?` |
+| `worktree.openReviewHub` | Open Review Hub | safe | `mode?`, `worktreeId?` |
 | `worktree.overview` | Toggle worktree overview | safe | — |
 | `worktree.overview.close` | Close worktree overview | safe | — |
 | `worktree.overview.open` | Open worktree overview | safe | — |
@@ -681,13 +681,13 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.select` | Select worktree | safe | `worktreeId?` |
 | `worktree.selectSpace` | Select worktree (Space) | safe | — |
 | `worktree.sessions.clearHistory` | Clear session history | confirm | `confirmed?`, `worktreeId?` |
-| `worktree.sessions.closeCompleted` | Close completed sessions | safe | `worktreeId?` |
-| `worktree.sessions.endAll` | End all sessions | confirm | `confirmed?`, `worktreeId?` |
-| `worktree.sessions.maximizeAll` | Move all sessions to grid | safe | `worktreeId?` |
-| `worktree.sessions.minimizeAll` | Dock all sessions | safe | `worktreeId?` |
-| `worktree.sessions.resetRenderers` | Reset session renderers | safe | `worktreeId?` |
-| `worktree.sessions.restartAll` | Restart all sessions | confirm | `confirmed?`, `worktreeId?` |
-| `worktree.sessions.trashAll` | Trash all sessions | confirm | `confirmed?`, `worktreeId?` |
+| `worktree.sessions.closeCompleted` | Close completed terminals | safe | `worktreeId?` |
+| `worktree.sessions.endAll` | Remove all panels | confirm | `confirmed?`, `worktreeId?` |
+| `worktree.sessions.maximizeAll` | Move all panels to grid | safe | `worktreeId?` |
+| `worktree.sessions.minimizeAll` | Dock all panels | safe | `worktreeId?` |
+| `worktree.sessions.resetRenderers` | Redraw all terminals | safe | `worktreeId?` |
+| `worktree.sessions.restartAll` | Restart all terminals in worktree | confirm | `confirmed?`, `worktreeId?` |
+| `worktree.sessions.trashAll` | Trash all panels | confirm | `confirmed?`, `worktreeId?` |
 | `worktree.setActive` | Set active worktree | safe | `worktreeId` |
 | `worktree.setCustomTitle` | Set worktree title | safe | `title`, `worktreeId` |
 | `worktree.setLabelColor` | Set worktree label colour | safe | `color`, `worktreeId` |

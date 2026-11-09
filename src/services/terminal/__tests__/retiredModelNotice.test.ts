@@ -53,7 +53,7 @@ describe("notifyRetiredModelDropped", () => {
     const [bar] = liveBars();
     expect(bar?.placement).toBe("grid-bar");
     expect(bar?.message).toContain("claude-opus-4.6");
-    expect(bar?.message).toContain("This GitHub Copilot pane");
+    expect(bar?.message).toContain("This GitHub Copilot terminal");
     expect(bar?.context).toMatchObject({ panelId: "p1", worktreeId: "w1" });
   });
 
@@ -65,7 +65,7 @@ describe("notifyRetiredModelDropped", () => {
 
     const bars = liveBars();
     expect(bars).toHaveLength(1);
-    expect(bars[0]?.message).toContain("3 GitHub Copilot panes");
+    expect(bars[0]?.message).toContain("3 GitHub Copilot terminals");
     expect(bars[0]?.context?.panelId).toBeUndefined();
     expect(inboxRows()).toHaveLength(1);
     // The bars it replaced are gone, not just hidden.
@@ -78,7 +78,7 @@ describe("notifyRetiredModelDropped", () => {
     notifyRetiredModelDropped("copilot", ["gpt-5.4"], { panelId: "p1" });
 
     const [bar] = liveBars();
-    expect(bar?.message).toContain("This GitHub Copilot pane");
+    expect(bar?.message).toContain("This GitHub Copilot terminal");
     expect(bar?.context?.panelId).toBe("p1");
   });
 
@@ -91,7 +91,7 @@ describe("notifyRetiredModelDropped", () => {
     expect(liveBars()).toHaveLength(3);
     expect(inboxRows()).toHaveLength(3);
     expect(
-      liveBars().every((bar) => String(bar.message).includes("This GitHub Copilot pane"))
+      liveBars().every((bar) => String(bar.message).includes("This GitHub Copilot terminal"))
     ).toBe(true);
   });
 

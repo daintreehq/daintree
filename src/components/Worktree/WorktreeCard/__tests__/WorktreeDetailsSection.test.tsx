@@ -324,7 +324,7 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
       reviewState: "has-changes",
       onOpenReviewHub,
     });
-    const button = screen.getByLabelText("Open Review & commit");
+    const button = screen.getByLabelText("Review & commit");
     expect(button).toBeDefined();
     fireEvent.click(button);
     expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
@@ -346,10 +346,10 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
         } as WorktreeChanges,
       },
     });
-    expect(screen.queryByLabelText("Open Review & commit")).toBeNull();
+    expect(screen.queryByLabelText("Review & commit")).toBeNull();
     expect(screen.queryByText("Conflicts need review")).toBeNull();
     expect(screen.getByText("fix: stuff")).toBeDefined();
-    const button = screen.getByLabelText("Open Review & push");
+    const button = screen.getByLabelText("Review & push");
     fireEvent.click(button);
     expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
   });
@@ -368,8 +368,8 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
         } as WorktreeChanges,
       },
     });
-    expect(screen.queryByLabelText("Open Review & commit")).toBeNull();
-    expect(screen.queryByLabelText("Open Review & push")).toBeNull();
+    expect(screen.queryByLabelText("Review & commit")).toBeNull();
+    expect(screen.queryByLabelText("Review & push")).toBeNull();
   });
 });
 
@@ -463,7 +463,7 @@ describe("WorktreeDetailsSection — quiet git detail (#13777)", () => {
       onOpenReviewHub: vi.fn(),
       quietGitDetail: quietDetail,
     });
-    expect(screen.queryByLabelText("Open Review & commit")).toBeNull();
+    expect(screen.queryByLabelText("Review & commit")).toBeNull();
   });
 
   it("keeps the shortcut while the worktree is conflicted, where it is the way out", () => {
@@ -477,7 +477,7 @@ describe("WorktreeDetailsSection — quiet git detail (#13777)", () => {
       }),
     });
     expect(screen.getByText("Conflicts need review")).not.toBeNull();
-    expect(screen.getByLabelText("Open Review & commit")).not.toBeNull();
+    expect(screen.getByLabelText("Review & commit")).not.toBeNull();
   });
 });
 

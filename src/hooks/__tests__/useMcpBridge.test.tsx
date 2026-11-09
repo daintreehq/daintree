@@ -3225,9 +3225,9 @@ describe("useMcpBridge", () => {
       const current = useMcpConfirmStore.getState().current;
       expect(current?.selectableTargets?.map((target) => target.id)).toEqual(["p1", "p2"]);
       expect(current?.selectionConfirmLabel).toEqual({
-        verb: "Kill",
-        one: "terminal",
-        many: "terminals",
+        verb: "Remove",
+        one: "panel",
+        many: "panels",
       });
       // Nothing is being fetched, so approval must not be held behind a preview
       // gate that would never clear.

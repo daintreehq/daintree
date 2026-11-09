@@ -332,7 +332,7 @@ export function FleetCountChip({
                   <EmptyState
                     variant="zero-data"
                     scale="popover"
-                    title="Add panes to the fleet"
+                    title="Add terminals to the fleet"
                     className="py-4"
                   />
                 </li>
@@ -533,7 +533,7 @@ export function FleetCountChip({
                 className="w-full justify-start gap-2 px-2 focus-visible:-outline-offset-2"
               >
                 <Plus aria-hidden="true" />
-                <span>Add panes…</span>
+                <span>Add terminals…</span>
               </Button>
             </div>
           </>
@@ -554,14 +554,14 @@ export function FleetCountChip({
                 <span>Back</span>
               </Button>
               <span id={headingId} className={POPOVER_TITLE_CLASS}>
-                Add panes
+                Add terminals
               </span>
             </div>
             <FleetPickerContent picker={picker} testIdPrefix="fleet-picker-add" autoFocusSearch />
             <div className="mt-1 flex items-center justify-between gap-2 border-t border-divider px-1 pt-2">
               <span className="text-2xs tabular-nums text-text-secondary">
                 {picker.confirmedIds.length === 0 ? (
-                  "Select panes to add"
+                  "Select terminals to add"
                 ) : (
                   <>
                     {picker.confirmedIds.length} selected

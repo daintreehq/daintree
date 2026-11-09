@@ -469,11 +469,11 @@ test.describe("Core: PTY stress", () => {
       // deleted one would never reach the trash. Only a trashed panel leaves
       // the grid and shows up as a trash row (the TTL outlasts this check).
       const trashPill = window.locator(SEL.trash.container);
-      await expect(trashPill).toHaveAttribute("aria-label", /^Trash: 1 terminal/, {
+      await expect(trashPill).toHaveAttribute("aria-label", /^Trash: 1 panel/, {
         timeout: T_LONG,
       });
       await trashPill.click();
-      const popover = window.getByRole("dialog", { name: "Recently closed terminals" });
+      const popover = window.getByRole("dialog", { name: "Recently closed panels" });
       await expect(popover.locator(`[data-trash-row][data-row-id="${floodPanelId}"]`)).toBeVisible({
         timeout: T_MEDIUM,
       });

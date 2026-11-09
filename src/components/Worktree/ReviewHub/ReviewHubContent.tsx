@@ -1573,13 +1573,13 @@ export function ReviewHubContent({
                 screen readers only and the chips step down before it has to. */}
             <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2">
               {/* The dialog host already draws the title in AppDialog.Header —
-                  drawing it again would stack two "Review & Commit" headings. */}
+                  drawing it again would stack two "Review Hub" headings. */}
               {!isDialog && (
                 <h2
                   id="review-hub-title"
                   className="shrink-0 text-xs font-medium text-text-primary @max-[520px]/header:sr-only"
                 >
-                  Review & commit
+                  Review Hub
                 </h2>
               )}
               {status?.currentBranch && (
@@ -1720,12 +1720,12 @@ export function ReviewHubContent({
                 <TooltipTrigger asChild>
                   <SurfaceHeaderCloseButton
                     onClick={onClose}
-                    aria-label="Close review & commit"
+                    aria-label="Close Review Hub"
                     data-testid="review-hub-close"
                     className="col-start-3 row-start-1 @max-[960px]/header:col-start-2"
                   />
                 </TooltipTrigger>
-                <TooltipContent side="bottom">Close review & commit</TooltipContent>
+                <TooltipContent side="bottom">Close Review Hub</TooltipContent>
               </Tooltip>
             )}
           </SurfaceHeader>

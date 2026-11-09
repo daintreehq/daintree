@@ -1207,7 +1207,7 @@ export function ProcessesDialog({
                   : ""
               }.${
                 target?.terminal.isTrashed
-                  ? " It's in the trash, so its pane is removed and can't be restored."
+                  ? " It's in the trash, so its panel is removed and can't be restored."
                   : ""
               }`
         }

@@ -1670,6 +1670,22 @@ describe("terminal.restartAll confirm gate", () => {
 
     expect(bulkRestartAll).toHaveBeenCalledTimes(1);
   });
+
+  it("counts only the terminals it restarts, leaving a browser panel out", async () => {
+    setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid", detectedAgentId: "claude", agentState: "working" },
+        { id: "web", location: "grid", kind: "browser" },
+      ],
+    });
+    const run = setupActions();
+
+    await expect(run("terminal.restartAll")).rejects.toThrow(/needs confirmation/);
+
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "restartAll", targetCount: 1 })
+    );
+  });
 });
 
 describe("terminal.rename DOM handoff", () => {

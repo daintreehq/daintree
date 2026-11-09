@@ -46,7 +46,7 @@ export function buildRestartOnPresetCopy(
     title: `Restart ${quoted(terminalTitle, "terminal")} on ${quoted(presetName, "another preset")}?`,
     lead: agentWorking ? "Its agent is working and will be interrupted." : undefined,
     description: keepConversation
-      ? "The agent reopens this conversation with that preset's settings, and the scrollback is discarded. If it can't find the conversation there, the pane offers a new one or the way back."
+      ? "The agent reopens this conversation with that preset's settings, and the scrollback is discarded. If it can't find the conversation there, the panel offers a new one or the way back."
       : "The agent starts a new conversation on that preset, and the scrollback is discarded.",
     confirmLabel: "Restart on preset",
   };

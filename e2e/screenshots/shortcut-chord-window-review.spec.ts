@@ -40,7 +40,7 @@ const KEYBOARD_PANEL = "#settings-panel-keyboard";
 const CAPTURE = '[data-testid="shortcut-capture"]';
 const FIELD = '[data-testid="shortcut-capture-field"]';
 const BAR = "[data-chord-window]";
-const ROW_NAME = "Close focused terminal";
+const ROW_NAME = "Close focused panel";
 // Mirrors CHORD_TIMEOUT_MS; the hold below only intercepts timers of this length.
 const CHORD_WINDOW_MS = 1000;
 

@@ -1151,7 +1151,7 @@ describe("McpConfirmDialog", () => {
 
       const box = screen.getByRole("checkbox", { name: "Allow for this session" });
       expect(box.getAttribute("aria-checked")).toBe("false");
-      expect(screen.getByText("Agent in a terminal pane")).toBeTruthy();
+      expect(screen.getByText("Agent in a terminal panel")).toBeTruthy();
     });
 
     it("renders no session option for any other requester", () => {
@@ -1232,7 +1232,7 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
       expect(requesterRow()).toContain("feature/moved");
       expect(requesterRow()).not.toContain("feature/auth");
-      expect(screen.getByRole("button", { name: "Show pane" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Show panel" })).toBeTruthy();
     });
 
     it("names the pane a session grant would cover", () => {
@@ -1270,7 +1270,7 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
 
       expect(requesterRow()).toContain("No longer open");
-      expect(screen.queryByRole("button", { name: "Show pane" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Show panel" })).toBeNull();
     });
 
     it("still names an unnamed pane as a pane when it can't offer the session grant", () => {
@@ -1278,7 +1278,7 @@ describe("McpConfirmDialog", () => {
       void enqueue({ danger: "safe", requester: { identity: PANE.identity } });
       render(<McpConfirmDialog />);
 
-      expect(requesterRow()).toContain("Agent in a terminal pane");
+      expect(requesterRow()).toContain("Agent in a terminal panel");
       expect(requesterRow()).not.toContain("Unidentified client");
       expect(requesterRow()).not.toContain("No longer open");
     });
@@ -1293,7 +1293,7 @@ describe("McpConfirmDialog", () => {
         render(<McpConfirmDialog />);
 
         act(() => {
-          fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+          fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
         });
         await act(async () => {
           await Promise.resolve();
@@ -1325,7 +1325,7 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
 
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+        fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
       });
       await act(async () => {
         await Promise.resolve();
@@ -1348,7 +1348,7 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
 
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+        fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
       });
       act(() => {
         fireEvent.click(screen.getByRole("button", { name: "Review request" }));
@@ -1394,7 +1394,7 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
 
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+        fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
       });
       await act(async () => {
         await Promise.resolve();
@@ -1418,7 +1418,7 @@ describe("McpConfirmDialog", () => {
         );
         render(<McpConfirmDialog />);
         act(() => {
-          fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+          fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
         });
 
         await act(async () => {
@@ -1450,7 +1450,7 @@ describe("McpConfirmDialog", () => {
       expect(promoted?.msg).toContain("The previous request, 'Push', timed out");
 
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+        fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
       });
       await act(async () => {
         await Promise.resolve();
@@ -1474,7 +1474,7 @@ describe("McpConfirmDialog", () => {
         );
         render(<McpConfirmDialog />);
         act(() => {
-          fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+          fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
         });
 
         await act(async () => {
@@ -1488,7 +1488,7 @@ describe("McpConfirmDialog", () => {
           fireEvent.click(screen.getByRole("button", { name: "Review request" }));
         });
         expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
-        expect(screen.queryByRole("button", { name: "Show pane" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Show panel" })).toBeNull();
       } finally {
         vi.useRealTimers();
       }

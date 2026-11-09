@@ -534,7 +534,7 @@ describe("DeletedWorktreeCard", () => {
 
     expect(screen.queryByText("binned")).toBeNull();
     expect(screen.queryByText("assistant")).toBeNull();
-    expect(screen.getByRole("button", { name: "Close 1 terminal" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Close 1 panel" })).toBeTruthy();
   });
 
   it("names the live terminal count on the dismiss button", () => {
@@ -545,7 +545,7 @@ describe("DeletedWorktreeCard", () => {
     ]);
     renderCard();
 
-    expect(screen.getByRole("button", { name: "Close 3 terminals" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Close 3 panels" })).toBeTruthy();
   });
 
   it("requests a confirmation rather than closing terminals immediately", () => {
@@ -555,7 +555,7 @@ describe("DeletedWorktreeCard", () => {
     ]);
     renderCard();
 
-    fireEvent.click(screen.getByRole("button", { name: "Close 2 terminals" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close 2 panels" }));
 
     // Destructive tier D1: the click must only stage a confirm, never trash.
     const pending = useTerminalPendingDestructiveActionStore.getState().pending;
@@ -573,7 +573,7 @@ describe("DeletedWorktreeCard", () => {
     useWorktreeSelectionStore.setState({ selectWorktree });
     renderCard();
 
-    fireEvent.click(screen.getByRole("button", { name: "Close 1 terminal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close 1 panel" }));
 
     expect(selectWorktree).not.toHaveBeenCalled();
   });
@@ -608,7 +608,7 @@ describe("DeletedWorktreeCard — grouped (#11260)", () => {
       </TooltipProvider>
     );
 
-    expect(screen.queryByRole("button", { name: "Close 2 terminals" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close 2 panels" })).toBeNull();
     // The rest of the card is unchanged — it still identifies its worktree.
     expect(screen.getByText("feature/login")).toBeTruthy();
   });

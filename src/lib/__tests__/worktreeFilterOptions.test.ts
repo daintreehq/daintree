@@ -42,7 +42,7 @@ describe("describeActiveFacets", () => {
         hasAgentFilter: true,
         sessionFilters: new Set(["waiting"] as const),
       })
-    ).toBe("Has an agent · Sessions: Waiting");
+    ).toBe("Has an agent · Terminals: Waiting");
   });
 
   it("joins several values within a facet, and several facets", () => {
@@ -104,7 +104,7 @@ describe("describeActiveFacets", () => {
       "Status",
       "Branch type",
       "Issues & PRs",
-      "Sessions",
+      "Terminals",
       "Activity",
       "Dev server",
     ]) {

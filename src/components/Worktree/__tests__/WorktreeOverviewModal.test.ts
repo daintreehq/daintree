@@ -153,7 +153,7 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(modalSource).toMatch(
         /data-testid="worktree-bulk-close-sessions"[\s\S]{0,400}|onClick=\{handleCloseSessionsClick\}/
       );
-      expect(modalSource).toContain("Close sessions");
+      expect(modalSource).toContain("Remove panels");
     });
 
     it("exposes a Delete worktrees button wired to the bulk-remove hook", () => {

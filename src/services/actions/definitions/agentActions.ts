@@ -506,7 +506,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agentSessionHistory.resume",
     title: "Resume agent session",
     description:
-      "Relaunch one closed agent session by exact id and return its pane. It relaunches in the worktree it was recorded in, so one recorded outside the named worktree is refused. A repeat call brings the live pane forward, not a second agent. Opens off-screen unless that worktree is active.",
+      "Relaunch one closed agent session by exact id and return its panel. It relaunches in the worktree it was recorded in, so one recorded outside the named worktree is refused. A repeat call brings the live panel forward, not a second agent. Opens off-screen unless that worktree is active.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -535,9 +535,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   // which is why `agentSessionHistory.resume` above can't take its place.
   actions.set("agent.resumeOwned", () => ({
     id: "agent.resumeOwned",
-    title: "Resume agent session as an owned pane",
+    title: "Resume agent session as an owned panel",
     description:
-      "Reopen a closed session as a new pane you own. `launched` means it is starting, not that the agent is ready. `existing`: a live pane holds it, so nothing launched and this call doesn't make it yours. `refused` gives the reason.",
+      "Reopen a closed session as a new panel you own. `launched` means it is starting, not that the agent is ready. `existing`: a live panel holds it, so nothing launched and this call doesn't make it yours. `refused` gives the reason.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -573,13 +573,13 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmarkAndClose",
     title: "Bookmark and close",
     description:
-      "Save a live agent pane's conversation as a durable bookmark, then close the pane. For a session that is already closed, promote it instead. Prepare-before-remove: if the capture fails the pane stays open and nothing is bookmarked. It interrupts a running agent and discards its scrollback — the conversation returns on resume, the process does not.",
+      "Save a live agent panel's conversation as a durable bookmark, then close the panel. For a session that is already closed, promote it instead. Prepare-before-remove: if the capture fails the panel stays open and nothing is bookmarked. It interrupts a running agent and discards its scrollback — the conversation returns on resume, the process does not.",
     category: "agent",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
     dangerRationale:
-      "Interrupts a running agent and removes its pane. The conversation is bookmarked and resumable, but the live process and terminal scrollback are discarded.",
+      "Interrupts a running agent and removes its panel. The conversation is bookmarked and resumable, but the live process and terminal scrollback are discarded.",
     // danger:"confirm" gates agent/plugin dispatch through ActionService (the
     // caller must attest confirmation via the dispatch option). Since #11908 put
     // this on the assistant's action tier, that attestation comes from the
@@ -599,7 +599,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmark.promote",
     title: "Add bookmark to session",
     description:
-      "Pin a session that is already in history as a durable bookmark, without launching it or touching any pane. Use this when the session is closed; the bookmark-and-close capability is the one that retires a still-open pane. Bookmarking exempts a session from retention and from the per-worktree cap, so it stops aging out until the bookmark is deleted. Returns the updated record.",
+      "Pin a session that is already in history as a durable bookmark, without launching it or touching any panel. Use this when the session is closed; the bookmark-and-close capability is the one that retires a still-open panel. Bookmarking exempts a session from retention and from the per-worktree cap, so it stops aging out until the bookmark is deleted. Returns the updated record.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -613,7 +613,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmark.rename",
     title: "Rename bookmark",
     description:
-      "Change the label on an existing bookmark. Only the bookmark's own label moves — the agent session, its recorded title, and any live pane are left alone, so this cannot be used to retitle a terminal. A session that was never bookmarked is rejected rather than bookmarked on the spot; promote it first. Returns the updated record.",
+      "Change the label on an existing bookmark. Only the bookmark's own label moves — the agent session, its recorded title, and any live panel are left alone, so this cannot be used to retitle a terminal. A session that was never bookmarked is rejected rather than bookmarked on the spot; promote it first. Returns the updated record.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -627,7 +627,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmark.delete",
     title: "Delete bookmark",
     description:
-      "Remove a bookmark, demoting its session back to ordinary time-limited history where retention can eventually age it out. The provider's own transcript and any open pane are untouched, so this deletes the pin rather than the conversation — but the pin itself does not come back, and the session may be gone by the time anyone looks again. Confirmation is enforced by the dispatch layer.",
+      "Remove a bookmark, demoting its session back to ordinary time-limited history where retention can eventually age it out. The provider's own transcript and any open panel are untouched, so this deletes the pin rather than the conversation — but the pin itself does not come back, and the session may be gone by the time anyone looks again. Confirmation is enforced by the dispatch layer.",
     category: "agent",
     kind: "command",
     danger: "confirm",

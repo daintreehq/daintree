@@ -211,7 +211,7 @@ export function registerWorktreeCreateActions(
       id: "worktree.deleteOwned",
       title: "Delete owned worktree",
       description:
-        "Delete a worktree this session created, and its directory, after the user confirms. Refuses any other, or while a terminal process runs in it, closed panes included. Never forces past uncommitted or untracked changes, deletes the branch, or closes terminals.",
+        "Delete a worktree this session created, and its directory, after the user confirms. Refuses any other, or while a terminal process runs in it, closed panels included. Never forces past uncommitted or untracked changes, deletes the branch, or closes terminals.",
       category: "worktree",
       kind: "command",
       danger: "confirm",
@@ -249,14 +249,14 @@ export function registerWorktreeCreateActions(
       id: "worktree.retireOwned",
       title: "Retire owned worktree",
       description:
-        "Delete a worktree this session created, after the user confirms, once it is clean, every commit is on a remote, and no terminal you don't own runs there. Closes your panes there and waits for their processes to exit first. Never forces or deletes the branch.",
+        "Delete a worktree this session created, after the user confirms, once it is clean, every commit is on a remote, and no terminal you don't own runs there. Closes your panels there and waits for their processes to exit first. Never forces or deletes the branch.",
       category: "worktree",
       kind: "command",
       danger: "confirm",
       denyPluginDispatch: true,
       scope: "renderer",
       dangerRationale:
-        "Closes the session's own panes in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
+        "Closes the session's own panels in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
       palette: { mode: "hidden" },
       argsSchema: WorktreeRetireOwnedArgsSchema,
       run: async () => {

@@ -22,8 +22,8 @@ export function registerTerminalWorktreeActions(
 
   actions.set("terminal.openWorktreeEditor", () => ({
     id: "terminal.openWorktreeEditor",
-    title: "Open focused terminal's worktree folder",
-    description: "Open the folder for the focused terminal's worktree in your editor",
+    title: "Open focused panel's worktree folder",
+    description: "Open the folder for the focused panel's worktree in your editor",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -32,10 +32,10 @@ export function registerTerminalWorktreeActions(
       return getTerminalWorktree(ctx) !== null;
     },
     disabledReason: (ctx: ActionContext) => {
-      if (!ctx.focusedTerminalId) return "No focused terminal";
+      if (!ctx.focusedTerminalId) return "No focused panel";
       const terminal = usePanelStore.getState().panelsById[ctx.focusedTerminalId!];
-      if (!terminal) return "Focused terminal no longer exists";
-      if (!terminal.worktreeId) return "Terminal has no associated worktree";
+      if (!terminal) return "Focused panel no longer exists";
+      if (!terminal.worktreeId) return "Panel has no associated worktree";
       const worktree = getCurrentViewStore().getState().worktrees.get(terminal.worktreeId);
       if (!worktree) return "Worktree no longer exists";
       return undefined;
@@ -57,8 +57,8 @@ export function registerTerminalWorktreeActions(
 
   actions.set("terminal.openWorktreeIssue", () => ({
     id: "terminal.openWorktreeIssue",
-    title: "Open focused terminal's worktree issue",
-    description: "Open the issue associated with the focused terminal's worktree",
+    title: "Open focused panel's worktree issue",
+    description: "Open the issue associated with the focused panel's worktree",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -68,10 +68,10 @@ export function registerTerminalWorktreeActions(
       return data !== null && !!data.worktree.issueNumber;
     },
     disabledReason: (ctx: ActionContext) => {
-      if (!ctx.focusedTerminalId) return "No focused terminal";
+      if (!ctx.focusedTerminalId) return "No focused panel";
       const terminal = usePanelStore.getState().panelsById[ctx.focusedTerminalId!];
-      if (!terminal) return "Focused terminal no longer exists";
-      if (!terminal.worktreeId) return "Terminal has no associated worktree";
+      if (!terminal) return "Focused panel no longer exists";
+      if (!terminal.worktreeId) return "Panel has no associated worktree";
       const worktree = getCurrentViewStore().getState().worktrees.get(terminal.worktreeId);
       if (!worktree) return "Worktree no longer exists";
       if (!worktree.issueNumber) return "Worktree has no associated issue";
@@ -94,8 +94,8 @@ export function registerTerminalWorktreeActions(
 
   actions.set("terminal.openWorktreePR", () => ({
     id: "terminal.openWorktreePR",
-    title: "Open focused terminal's worktree pull request",
-    description: "Open the pull request associated with the focused terminal's worktree",
+    title: "Open focused panel's worktree pull request",
+    description: "Open the pull request associated with the focused panel's worktree",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -105,10 +105,10 @@ export function registerTerminalWorktreeActions(
       return data !== null && !!data.worktree.linked?.pr?.url;
     },
     disabledReason: (ctx: ActionContext) => {
-      if (!ctx.focusedTerminalId) return "No focused terminal";
+      if (!ctx.focusedTerminalId) return "No focused panel";
       const terminal = usePanelStore.getState().panelsById[ctx.focusedTerminalId!];
-      if (!terminal) return "Focused terminal no longer exists";
-      if (!terminal.worktreeId) return "Terminal has no associated worktree";
+      if (!terminal) return "Focused panel no longer exists";
+      if (!terminal.worktreeId) return "Panel has no associated worktree";
       const worktree = getCurrentViewStore().getState().worktrees.get(terminal.worktreeId);
       if (!worktree) return "Worktree no longer exists";
       if (!worktree.linked?.pr?.url) return "Worktree has no associated pull request";

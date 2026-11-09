@@ -19,10 +19,10 @@ import { isPtyPanel } from "@shared/types/panel";
 const DROP_REASON: Record<ComposerHoldDropReason, string> = {
   typed: "input reached the terminal first",
   restarted: "the agent restarted",
-  closed: "the pane was closed",
+  closed: "the panel was closed",
   ended: "the agent's terminal ended",
   expired: "it waited an hour",
-  stopped: "the pane's notices were stopped",
+  stopped: "the panel's notices were stopped",
   "driven-elsewhere": "another screen took over driving this project",
   unconfirmed: "Daintree couldn't confirm it reached the agent",
 };

@@ -206,7 +206,7 @@ export async function sceneWorkflow(d: Director): Promise<void> {
   await d.beat(130.0, "open review", async () => {
     await d
       .moveTo(
-        `[data-worktree-row]:has([data-worktree-branch="${branch}"]) [aria-label^="Open Review &"]`,
+        `[data-worktree-row]:has([data-worktree-branch="${branch}"]) [aria-label^="Review &"]`,
         700
       )
       .catch(() => {});

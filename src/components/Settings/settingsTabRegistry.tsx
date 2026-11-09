@@ -428,7 +428,7 @@ export const SETTINGS_REGISTRY = [
         section: "Startup",
         title: "Resume agents after restart",
         description:
-          "Resume every agent pane after a restart, only when each is first focused, or never on its own.",
+          "Resume every agent panel after a restart, only when each is first focused, or never on its own.",
         keywords: [
           "resume",
           "restart",
@@ -926,7 +926,7 @@ export const SETTINGS_REGISTRY = [
     importer: LazyTerminalSettingsTab.preload,
     LazyComponent: LazyTerminalSettingsTab,
     needsSubtabs: true,
-    searchNavDescription: "Panel grid layout, scrollback, split pane, and performance settings",
+    searchNavDescription: "Panel grid layout, scrollback, panel split, and performance settings",
     searchNavKeywords: ["terminal", "panel", "grid", "layout", "panes"],
     sections: [
       {
@@ -1445,7 +1445,7 @@ export const SETTINGS_REGISTRY = [
         section: "Input",
         title: "Focus first",
         description:
-          "Switching to an agent pane focuses its hybrid input or its terminal, and a file dropped on another pane's terminal goes there too",
+          "Switching to an agent panel focuses its hybrid input or its terminal, and a file dropped on another panel's terminal goes there too",
         keywords: [
           "focus",
           "autofocus",
@@ -2211,7 +2211,7 @@ export const SETTINGS_REGISTRY = [
         section: "Questions",
         title: "Show agent status and recent terminal lines on my phone",
         description:
-          "For the pane that asked, only while its question is open, redacted on a best-effort basis",
+          "For the agent that asked, only while its question is open, redacted on a best-effort basis",
         keywords: [
           "terminal",
           "snapshot",

@@ -268,7 +268,7 @@ export function FallbackChainEditor({
           <SettingsDependents>
             <SettingsRow
               label="Keep the conversation"
-              description="On a usage limit, the next fallback preset reopens the same conversation instead of starting a new one. If it can't find it there, the pane offers a new one or the way back"
+              description="On a usage limit, the next fallback preset reopens the same conversation instead of starting a new one. If it can't find it there, the panel offers a new one or the way back"
               control={({ labelId, descriptionId, disabled }) => (
                 <SettingsSwitch
                   checked={selectedPreset.keepConversationOnRateLimit === true}

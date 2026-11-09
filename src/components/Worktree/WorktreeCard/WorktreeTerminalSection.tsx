@@ -360,10 +360,10 @@ export interface WorktreeTerminalSectionProps {
   /**
    * Opens the panel palette for this worktree. Drives the empty tray's row —
    * and the empty tray does not render without it. The tray presents itself as
-   * a `Start a session` button, so a caller that cannot start a session gets
+   * a `New panel` button, so a caller that cannot open a panel gets
    * no tray rather than a focusable control that silently does nothing.
    * `DeletedWorktreeCard` is that caller: its worktree's directory is gone, so
-   * there is nothing to start a session in.
+   * there is nothing to open a panel in.
    */
   onStartSession?: () => void;
   /** See {@link WorktreeDetailsSectionProps.variant} — same reasoning. */
@@ -422,8 +422,8 @@ export function WorktreeTerminalSection({
   const terminalsPanelId = `worktree-${worktreeId}-terminals-panel`;
   const summaryId = `${terminalsId}-summary`;
   const triggerName = worktreeLabel
-    ? `Active sessions for worktree ${worktreeLabel}`
-    : "Active sessions";
+    ? `Active terminals for worktree ${worktreeLabel}`
+    : "Active terminals";
 
   const [hintDismissed, setHintDismissed] = useState(
     () => localStorage.getItem(FLEET_HINT_DISMISSED_KEY) === "1"
@@ -438,10 +438,10 @@ export function WorktreeTerminalSection({
       counts.blocked
     );
     // The collapsed trigger names itself once. Left to name-from-content it
-    // read "3 active 3 sessions: 2 working, …" — the visible summary, then
+    // read "3 active 3 terminals: 2 working, …" — the visible summary, then
     // the cluster's own name repeating the total. Starts with the visible
     // "N active" so speech input can still target it by what is on screen.
-    const triggerLabel = `${pluralize(counts.total, "active session")}${breakdown ? `: ${breakdown}` : ""}`;
+    const triggerLabel = `${pluralize(counts.total, "active terminal")}${breakdown ? `: ${breakdown}` : ""}`;
     return {
       visibleTerminalStates: visibleStates,
       terminalSessionAriaLabel: label,
@@ -610,15 +610,15 @@ export function WorktreeTerminalSection({
     setMarqueeBox(null);
   }, []);
 
-  /* No sessions. The grid shows a quiet "Start a session" row: its cards sit
+  /* No terminals. The grid shows a quiet "New panel" row: its cards sit
      side by side in rows, and a card with no bottom slot broke the row's
-     baseline, and "no sessions" and "the sessions row did not render" looked
+     baseline, and "no terminals" and "the terminals row did not render" looked
      the same. The row names the next action rather than the absence.
 
      The sidebar card drops it in both densities. Repeated down a long list
      it was the same call to action on every idle card, the quietest cards
      carrying an extra row, and the list's largest single share of height.
-     Starting a session stays one step away in the card's menus. */
+     A new panel stays one step away in the card's menus. */
   if (!showMetaFooter) {
     // No tray without somewhere for its row to go: see `onStartSession`.
     if (!onStartSession || isSidebar) return null;
@@ -639,7 +639,7 @@ export function WorktreeTerminalSection({
           )}
         >
           <Plus className="h-3 w-3 shrink-0" aria-hidden="true" />
-          <span>Start a session</span>
+          <span>New panel</span>
         </button>
       </div>
     );
@@ -674,7 +674,7 @@ export function WorktreeTerminalSection({
           each. The closed row keeps it: there, it is the only thing on screen
           naming the agent. */}
       {isExpanded && !inline && (
-        <span className={SECTION_LABEL}>Active sessions ({counts.total})</span>
+        <span className={SECTION_LABEL}>Active terminals ({counts.total})</span>
       )}
     </button>
   );

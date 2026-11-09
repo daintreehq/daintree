@@ -35,7 +35,7 @@ const HOLD_DISPLAY: Record<HoldStatus, HoldDisplay> = {
   "paused-backpressure": {
     icon: Pause,
     label: "Output paused",
-    body: "This pane is catching up on queued output.",
+    body: "This terminal is catching up on queued output.",
     recovery: "The pause lifts on its own.",
     showsHeldDuration: true,
   },

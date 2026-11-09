@@ -229,7 +229,7 @@ export function ProjectSwitcherConfirmDialogs({
                   </Callout>
                 )
               : hasRunningProcesses && (
-                  <Callout severity="warning" title="Active sessions detected">
+                  <Callout severity="warning" title="Running terminals detected">
                     <div>
                       {removeConfirmProject.processCount > 0 && (
                         <div>

@@ -57,7 +57,7 @@ function renderBanner(agentId: string) {
   return { ...result, onDismiss, onPaneClick };
 }
 
-const MEANING = "Daintree's scrollback and search don't apply to this pane";
+const MEANING = "Daintree's scrollback and search don't apply to this terminal";
 const DISMISS = "Dismiss full-screen notice";
 
 describe("AgentAltScreenBanner", () => {

@@ -46,7 +46,7 @@ export function buildPresetSwitchRefusedCopy(args: {
     title: `${agentName} couldn't find this conversation on ${targetName}`,
     description:
       backUnavailable === "held-elsewhere"
-        ? `Another pane has this conversation open, so it can't reopen here.${instead}`
+        ? `Another panel has this conversation open, so it can't reopen here.${instead}`
         : backUnavailable === "unavailable"
           ? `The conversation couldn't reopen here.${instead}`
           : startNewUnavailable

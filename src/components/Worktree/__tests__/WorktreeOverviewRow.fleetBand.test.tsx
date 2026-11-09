@@ -175,9 +175,9 @@ describe("WorktreeOverviewRow sessions from the fleet band", () => {
     renderRow();
     const strip = screen
       .getAllByRole("button")
-      .find((b) => (b.getAttribute("aria-label") ?? "").startsWith("4 active sessions"));
+      .find((b) => (b.getAttribute("aria-label") ?? "").startsWith("4 active terminals"));
     expect(strip?.getAttribute("aria-label")).toBe(
-      "4 active sessions: 1 blocked, 1 waiting, 1 unread"
+      "4 active terminals: 1 blocked, 1 waiting, 1 unread"
     );
     const indicators = strip!.querySelector('[data-testid="collapsed-session-indicators"]')!;
     const segments = Array.from(indicators.querySelectorAll<HTMLElement>("[data-state]")).map(

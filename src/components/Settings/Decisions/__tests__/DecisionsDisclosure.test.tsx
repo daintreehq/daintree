@@ -38,7 +38,7 @@ describe("Decisions disclosure", () => {
     for (const promise of [
       "end-to-end encrypted",
       "saved unencrypted on the computer whose agent asked",
-      "on the Remote Host for a pane on one",
+      "on the Remote Host for a panel on one",
       "a .daintree/decisions folder Git ignores",
       "agents like Claude Code and Codex can open it",
       "Gemini CLI can't open a file Git ignores",
@@ -57,7 +57,7 @@ describe("Decisions disclosure", () => {
     for (const promise of [
       "only if you turn them on",
       "While a question is open",
-      "the title of the pane that asked it",
+      "the title of the panel that asked it",
       "the agent state Daintree observed there",
       "its last terminal lines",
       "end-to-end encrypted",

@@ -556,8 +556,8 @@ describe("WorktreeFilterPopover 'Has an agent' facet", () => {
   it("does not open or badge the Sessions section", () => {
     useWorktreeFilterStore.getState().setHasAgentFilter(true);
     renderWithCounts();
-    const sessions = screen.getByRole("button", { name: /^Sessions/ });
+    const sessions = screen.getByRole("button", { name: /^Terminals/ });
     expect(sessions.getAttribute("aria-expanded")).toBe("false");
-    expect(sessions.textContent).toBe("Sessions");
+    expect(sessions.textContent).toBe("Terminals");
   });
 });

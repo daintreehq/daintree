@@ -945,7 +945,7 @@ function scenarios(): Scenario[] {
           .click({ position: { x: 100, y: 10 } });
         await page.waitForTimeout(500);
       },
-      trigger: () => hoverClick('[aria-label^="Open Review &"]'),
+      trigger: () => hoverClick('[aria-label^="Review &"]'),
       cond: () => ({
         kind: "all",
         conds: [
@@ -1121,7 +1121,7 @@ function scenarios(): Scenario[] {
       id: "review-file-diff",
       label: "Open a file diff from Review hub",
       setup: async () => {
-        await hoverClick('[aria-label^="Open Review &"]');
+        await hoverClick('[aria-label^="Review &"]');
         await waitVisible('[aria-label^="View diff: "]');
       },
       trigger: (rep) => hoverClick(`[aria-label^="View diff: "] >> nth=${rep % 4}`),

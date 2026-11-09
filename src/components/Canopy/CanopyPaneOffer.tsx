@@ -193,7 +193,7 @@ export function CanopyPaneOffer({
       icon={Telescope}
       title={`${agentName}'s output looks like ${reason === "approval" ? "an approval prompt" : "a question"}`}
       description={keepWhole(
-        `Canopy picks out the agents waiting on you, across every pane and worktree. ${hostName ? canopyLocalOn(hostName) : CANOPY_LOCAL}`,
+        `Canopy picks out the agents waiting on you, across every panel and worktree. ${hostName ? canopyLocalOn(hostName) : CANOPY_LOCAL}`,
         hostName
       )}
       action={{

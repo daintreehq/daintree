@@ -51,7 +51,7 @@ const HANDBACK_ARG_SCHEMA = z
   .boolean()
   .optional()
   .describe(
-    "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only."
+    "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panels only."
   );
 
 /**
@@ -83,7 +83,7 @@ export function registerTerminalQueryActions(
 ): void {
   actions.set("terminal.list", () => ({
     id: "terminal.list",
-    title: "List terminals",
+    title: "List terminals and panels",
     description:
       "List open terminals and panels with enough metadata to pick one and learn its id. A cheap inventory, not a polling path: the status snapshot carries agent state for many in one call. Ephemeral and internal panels are omitted; empty means nothing matched.",
     category: "terminal",
@@ -104,7 +104,7 @@ export function registerTerminalQueryActions(
           .boolean()
           .optional()
           .describe(
-            "MCP only: true keeps only terminals you created or were handed; false or omitted, no filter. An agent pane keeps them across reconnects."
+            "MCP only: true keeps only terminals you created or were handed; false or omitted, no filter. An agent panel keeps them across reconnects."
           ),
         terminalId: z
           .string()
@@ -208,9 +208,9 @@ export function registerTerminalQueryActions(
 
   actions.set("terminal.closeMany", () => ({
     id: "terminal.closeMany",
-    title: "Close several terminals",
+    title: "Close several panels",
     description:
-      "Close several terminals in one call, each as a single close (owned for an agent pane), to the trash; results, in order, say if each process still runs.",
+      "Close several panels in one call, each as a single close (owned for an agent panel), to the trash; results, in order, say if each process still runs.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -248,7 +248,7 @@ export function registerTerminalQueryActions(
     examples: [
       {
         args: { terminalIds: ["term-abc123"], endGrace: true },
-        description: "You closed your panes and their processes must be gone before the delete.",
+        description: "You closed your panels and their processes must be gone before the delete.",
       },
     ],
     run: async () => {
@@ -493,7 +493,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommand",
     title: "Submit text to terminal",
     description:
-      "Queue text as one submission to a terminal: a shell runs it, an agent pane takes it as its next prompt. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
+      "Queue text as one submission to a terminal: a shell runs it, an agent panel takes it as its next prompt. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -552,7 +552,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommandOwned",
     title: "Submit text to owned terminal",
     description:
-      "Queue text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent pane takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
+      "Queue text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent panel takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
     category: "terminal",
     kind: "command",
     danger: "safe",

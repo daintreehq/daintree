@@ -193,8 +193,8 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
     // survive that is the inset ring (it sits flush inside a row, so a
     // positive offset would be clipped) and the SC 2.5.8 target size.
     const button = detailsSource.slice(
-      Math.max(0, detailsSource.indexOf("aria-label={`Open ${reviewHubButtonLabel}`}") - 1200),
-      detailsSource.indexOf("aria-label={`Open ${reviewHubButtonLabel}`}")
+      Math.max(0, detailsSource.indexOf("aria-label={reviewHubButtonLabel}") - 1200),
+      detailsSource.indexOf("aria-label={reviewHubButtonLabel}")
     );
     expect(button).toContain("focus-visible:outline-offset-[-2px]");
     expect(button).toMatch(/min-h-6[\s\S]*min-w-6|min-w-6[\s\S]*min-h-6/);

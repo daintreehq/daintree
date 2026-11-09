@@ -78,7 +78,7 @@ export function registerAssistantControlActions(actions: ActionRegistry): void {
     id: "agent.readQuota",
     title: "Read agent quota",
     description:
-      "Read this machine's Codex quota as Codex reports it, and the last Claude Code usage-limit message per limit its panes showed (not a live reading).",
+      "Read this machine's Codex quota as Codex reports it, and the last Claude Code usage-limit message per limit its terminals showed (not a live reading).",
     category: "agent",
     kind: "query",
     danger: "safe",

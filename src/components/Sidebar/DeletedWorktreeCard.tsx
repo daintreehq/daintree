@@ -162,7 +162,7 @@ export function DeletedWorktreeCard({
   // reach render. Bailing keeps a torn frame from showing a zero-terminal card.
   if (panels.length === 0) return null;
 
-  const noun = panels.length === 1 ? "terminal" : "terminals";
+  const noun = panels.length === 1 ? "panel" : "panels";
   const closeLabel = `Close ${panels.length} ${noun}`;
 
   return (

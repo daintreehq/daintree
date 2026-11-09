@@ -115,13 +115,13 @@ describe("WorktreeMenuItems — root hierarchy", () => {
     // The redesign put the two things a card menu is opened for most at the
     // root, ahead of the grouped long tail.
     expect(rootRowLabels(container)).toEqual([
-      "New session…",
+      "New panel…",
       "Review worktree",
       "Launch",
       "Open",
       "Review",
       "Git",
-      "Sessions",
+      "Panels",
       "Recipes",
       "Runtime",
       "Linked work",
@@ -148,13 +148,13 @@ describe("WorktreeMenuItems — root hierarchy", () => {
 
     // The hub alone leaves the Review submenu with nothing to hold, so only
     // the direct "Review worktree" row remains; with no panel palette there
-    // is no "New session…" row either.
+    // is no "New panel…" row either.
     expect(rootRowLabels(container)).toEqual([
       "Review worktree",
       "Launch",
       "Open",
       "Git",
-      "Sessions",
+      "Panels",
       "Copy",
       "Organize",
       "Delete worktree…",
@@ -168,7 +168,7 @@ describe("WorktreeMenuItems — root hierarchy", () => {
     const onOpenReviewHub = vi.fn();
     renderWorktreeMenu({ onOpenPanelPalette, onOpenReviewHub }, "context-menu");
 
-    fireEvent.click(screen.getByText("New session…"));
+    fireEvent.click(screen.getByText("New panel…"));
     fireEvent.click(screen.getByText("Review worktree"));
 
     expect(onOpenPanelPalette).toHaveBeenCalledWith("context-menu");
@@ -289,12 +289,12 @@ describe("WorktreeMenuItems — quiet git detail", () => {
     const { container } = renderWorktreeMenu({ ...fullyPopulated(), quietGit: true });
 
     expect(rootRowLabels(container)).toEqual([
-      "New session…",
+      "New panel…",
       "Review worktree",
       "Launch",
       "Open",
       "Git",
-      "Sessions",
+      "Panels",
       "Recipes",
       "Runtime",
       "Copy",
@@ -419,7 +419,7 @@ describe("WorktreeMenuItems — Sessions", () => {
     const { container } = renderWorktreeMenu(busy);
 
     const sessions = Array.from(container.querySelectorAll("[data-menu-sub]")).find(
-      (sub) => sub.firstElementChild?.textContent?.trim() === "Sessions"
+      (sub) => sub.firstElementChild?.textContent?.trim() === "Panels"
     );
     const labels = Array.from(sessions?.querySelectorAll("[data-menu-item]") ?? []).map(
       (el) => el.textContent?.replace(/\d+$/, "") ?? ""
@@ -433,8 +433,8 @@ describe("WorktreeMenuItems — Sessions", () => {
       "Select working agents",
       "Redraw all terminals",
       "Clear session history…",
-      "Trash all sessions…",
-      "End all sessions…",
+      "Trash all panels…",
+      "Remove all panels…",
     ]);
   });
 
@@ -1784,7 +1784,7 @@ describe("WorktreeMenuItems — workspace root", () => {
       "Review",
       "Git",
       "Fetch",
-      "Sessions",
+      "Panels",
       "Runtime",
       "Linked work",
       "Organize",

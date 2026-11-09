@@ -180,7 +180,7 @@ function refusalMessage(
 ): string {
   switch (reason) {
     case "self":
-      return "A pane can't be handed to itself.";
+      return "A panel can't be handed to itself.";
     case "assistant-terminal":
       return "Assistants can't be handed over. They're reached through Daintree's assistant tools.";
     case "not-orchestrator":
