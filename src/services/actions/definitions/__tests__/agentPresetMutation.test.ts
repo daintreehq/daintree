@@ -181,6 +181,27 @@ describe("agent.createPreset", () => {
     ).toContain(`up to ${FALLBACK_CHAIN_MAX} distinct preset ids`);
   });
 
+  it("lets an update set the cap's worth of fallbacks and refuses one more", () => {
+    const rotation: AgentPreset[] = Array.from({ length: FALLBACK_CHAIN_MAX + 1 }, (_, i) => ({
+      id: `user-account-${i}`,
+      name: `Account ${i}`,
+    }));
+    const from = sources({ customPresets: [WORK, ...rotation] });
+    const ids = rotation.map((p) => p.id);
+    expect(
+      updated(
+        plan(
+          "agent.updatePreset",
+          { agentId: "codex", presetId: WORK.id, fallbacks: ids.slice(1) },
+          from
+        )
+      ).fallbacks
+    ).toEqual(ids.slice(1));
+    expect(
+      refusal("agent.updatePreset", { agentId: "codex", presetId: WORK.id, fallbacks: ids }, from)
+    ).toContain(`up to ${FALLBACK_CHAIN_MAX} distinct preset ids`);
+  });
+
   it("refuses a fallback that names no preset of this agent", () => {
     const message = refusal(
       "agent.createPreset",

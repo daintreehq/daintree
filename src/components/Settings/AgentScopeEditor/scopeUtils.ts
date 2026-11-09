@@ -1,5 +1,9 @@
 import type { AgentPreset } from "@/config/agents";
-import { isPresetAbsenceSettled, type PresetInventoryState } from "@shared/utils/agentPresets";
+import {
+  isPresetAbsenceSettled,
+  sanitizePreset,
+  type PresetInventoryState,
+} from "@shared/utils/agentPresets";
 import {
   combineDangerousModes,
   resolveDangerousMode,
@@ -100,4 +104,17 @@ export function resolveSkipPermissions(
     preset ? resolveDangerousMode(preset) : undefined
   );
   return resolveEffectiveBypass({ dangerousMode: mode }, agentId, globalSkipPermissions);
+}
+
+/**
+ * The fallback list saved on the custom preset the merge picked for `presetId`,
+ * before the read capped it. The merge skips entries it rejects, so the first
+ * id match isn't always the one being edited.
+ */
+export function storedFallbacksFor(
+  customPresets: AgentPreset[] | undefined,
+  presetId: string
+): unknown {
+  return customPresets?.find((preset) => preset.id === presetId && sanitizePreset(preset) !== null)
+    ?.fallbacks;
 }

@@ -11,7 +11,7 @@ import { EnvBlock } from "./EnvBlock";
 import { FallbackChainEditor } from "./FallbackChainEditor";
 import { PresetAccountRow } from "./PresetAccountRow";
 import { ReadOnlyDetail } from "./ReadOnlyDetail";
-import { savedPresetStatus } from "./scopeUtils";
+import { savedPresetStatus, storedFallbacksFor } from "./scopeUtils";
 import type { AgentPreset } from "@/config/agents";
 import type { AgentSettingsEntry } from "@shared/types";
 import type { PresetInventoryState } from "@shared/utils/agentPresets";
@@ -184,9 +184,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
               <FallbackChainEditor
                 agentId={props.agentId}
                 selectedPreset={scope.selectedPreset}
-                storedFallbacks={
-                  scope.customPresets?.find((p) => p.id === scope.selectedPreset?.id)?.fallbacks
-                }
+                storedFallbacks={storedFallbacksFor(scope.customPresets, scope.selectedPreset.id)}
                 allPresets={scope.allPresets}
                 onUpdatePreset={scope.handleUpdatePreset}
               />

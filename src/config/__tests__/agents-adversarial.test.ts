@@ -399,10 +399,11 @@ describe("Preset fallback chain sanitization", () => {
     expect(p?.fallbacks).toEqual(["a", "b"]);
   });
 
-  it("caps fallbacks array at FALLBACK_CHAIN_MAX, keeping the first entries", () => {
+  it("caps fallbacks array at FALLBACK_CHAIN_MAX, counting only valid distinct entries", () => {
     const ids = Array.from({ length: FALLBACK_CHAIN_MAX + 2 }, (_, i) => `f${i}`);
     const long = [
-      { id: "p", name: "P", fallbacks: ids },
+      // Rejected entries ahead of the valid ones must not use up slots.
+      { id: "p", name: "P", fallbacks: ["p", "bad id", ids[0]!, ids[0]!, ...ids] },
       ...ids.map((id) => ({ id, name: id.toUpperCase() })),
     ];
     const result = getMergedPresets("claude", long);
@@ -410,9 +411,23 @@ describe("Preset fallback chain sanitization", () => {
     expect(p?.fallbacks).toEqual(ids.slice(0, FALLBACK_CHAIN_MAX));
   });
 
-  it("reports the uncapped chain so a cut can be shown", () => {
+  it("keeps the six-account rotation from #16587 whole", () => {
+    const accounts = ["acct-a", "acct-b", "acct-c", "acct-d", "acct-e", "endpoint"];
+    const result = getMergedPresets("claude", [
+      { id: "p", name: "P", fallbacks: accounts },
+      ...accounts.map((id) => ({ id, name: id })),
+    ]);
+    expect(result.find((x) => x.id === "p")?.fallbacks).toEqual(accounts);
+  });
+
+  it("reports the uncapped chain, trimmed, deduped and in saved order", () => {
+    expect(validFallbackIds([" z ", "b", "z", 7, "p", "bad id", "a"], "p")).toEqual([
+      "z",
+      "b",
+      "a",
+    ]);
     const ids = Array.from({ length: FALLBACK_CHAIN_MAX + 2 }, (_, i) => `f${i}`);
-    expect(validFallbackIds([" f0 ", "p", "f0", 7, "bad id", ...ids], "p")).toEqual(ids);
+    expect(validFallbackIds(ids)).toEqual(ids);
     expect(validFallbackIds("f0")).toEqual([]);
   });
 

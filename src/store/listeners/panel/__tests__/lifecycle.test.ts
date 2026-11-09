@@ -512,11 +512,7 @@ describe("handleFallbackTriggered — rate limits (#14370)", () => {
                   fallbacks: rotation,
                   fallbackOnRateLimit: true,
                 },
-                // The last account names a chain of its own, which the hop never reads.
-                ...rotation.map((id) =>
-                  id === last ? { id, name: id, fallbacks: ["extra"] } : { id, name: id }
-                ),
-                { id: "extra", name: "Extra" },
+                ...rotation.map((id) => ({ id, name: id })),
               ],
             },
           },
@@ -540,13 +536,51 @@ describe("handleFallbackTriggered — rate limits (#14370)", () => {
       expect(activate).toHaveBeenCalledWith("term-1", last, "preset-1");
     });
 
-    it("stops after it rather than following that preset's own chain", async () => {
+    it("stops after the last one", async () => {
       const activate = setupRotation({ agentPresetId: last, fallbackChainIndex: rotation.length });
 
       await trigger(last);
 
       expect(activate).not.toHaveBeenCalled();
     });
+  });
+
+  it("never walks into a fallback preset's own chain", async () => {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: {
+            customPresets: [
+              {
+                id: "preset-1",
+                name: "Primary",
+                fallbacks: ["preset-2", "preset-3"],
+                fallbackOnRateLimit: true,
+              },
+              { id: "preset-2", name: "Second account" },
+              // Its own chain is long enough that reading it at this index would hop.
+              {
+                id: "preset-3",
+                name: "Third account",
+                fallbacks: ["decoy-1", "decoy-2", "decoy-3"],
+                fallbackOnRateLimit: true,
+              },
+              { id: "decoy-1", name: "Decoy 1" },
+              { id: "decoy-2", name: "Decoy 2" },
+              { id: "decoy-3", name: "Decoy 3" },
+            ],
+          },
+        },
+      },
+    });
+    setupPanel({ agentPresetId: "preset-3", fallbackChainIndex: 2 });
+    const activate = vi.fn().mockResolvedValue({ success: true });
+    usePanelStore.setState({ activateFallbackPreset: activate });
+
+    await trigger("preset-3");
+
+    expect(activate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("ignores an opt-in that came from a team-shared project preset", async () => {

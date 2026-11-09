@@ -138,9 +138,7 @@ describe("FallbackChainEditor — chain length (#16587)", () => {
   }
 
   function addFallbackDescription(): string {
-    const label = screen.getByText("Fallback presets");
-    const row = label.closest("[data-settings-row]") as HTMLElement;
-    return row.textContent ?? "";
+    return screen.getByText("Fallback presets").closest("[data-settings-row]")?.textContent ?? "";
   }
 
   it("still offers a slot one short of the cap, and stops at it", () => {
@@ -162,11 +160,17 @@ describe("FallbackChainEditor — chain length (#16587)", () => {
     expect(addFallbackDescription()).toContain("own fallbacks aren't followed");
   });
 
-  it("flags a saved chain the read cut short, with how many were saved", () => {
-    const saved = ids.slice(0, FALLBACK_CHAIN_MAX + 2);
-    renderChain(saved.slice(0, FALLBACK_CHAIN_MAX), saved);
+  it.each([
+    ["one over the cap", [...ids.slice(0, FALLBACK_CHAIN_MAX + 1)], FALLBACK_CHAIN_MAX + 1],
+    [
+      "two over, with repeats and invalid entries mixed in",
+      [ids[0], "primary", ...ids.slice(0, FALLBACK_CHAIN_MAX + 2), "not valid", ids[1]],
+      FALLBACK_CHAIN_MAX + 2,
+    ],
+  ])("flags a saved chain the read cut short: %s", (_label, saved, count) => {
+    renderChain(ids.slice(0, FALLBACK_CHAIN_MAX), saved);
     const note = screen.getByTestId("fallback-chain-cut");
-    expect(note.textContent).toContain(`${saved.length} fallbacks are saved`);
+    expect(note.textContent).toContain(`${count} fallbacks are saved`);
     expect(note.textContent).toContain(`first ${FALLBACK_CHAIN_MAX}`);
   });
 
