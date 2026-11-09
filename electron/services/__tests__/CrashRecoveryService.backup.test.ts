@@ -859,6 +859,45 @@ describe("CrashRecoveryService", () => {
       expect(colorOf).toMatchObject({ claude: "#d97757", junk: undefined, malformed: undefined });
     });
 
+    it("skips a panel whose fields can't be read instead of dropping the whole list", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const terminals = [
+        {
+          id: "before",
+          kind: "terminal",
+          title: "Claude",
+          location: "grid",
+          launchAgentId: "claude",
+        },
+        // `String()` throws on an object whose `toString` isn't callable.
+        { id: "unreadable", kind: { toString: {} }, title: "Bad", location: "grid" },
+        { id: "after", kind: "terminal", title: "Shell", location: "dock" },
+      ];
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals } })
+      );
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const panels = svc.getPendingCrash()!.panels!;
+      expect(panels.map((p) => [p.id, p.launchAgentId])).toEqual([
+        ["before", "claude"],
+        ["after", undefined],
+      ]);
+    });
+
     it("returns undefined panels when no backup exists", () => {
       const markerPath = path.join(userData, "running.lock");
       fs.writeFileSync(

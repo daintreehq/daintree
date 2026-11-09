@@ -323,8 +323,12 @@ describe("CrashRecoveryDialog", () => {
     it("names the agent in the reset preview too", () => {
       setup({ crash: { panels: markedPanels } });
       fireEvent.click(screen.getByTestId("fresh-button"));
-      const marks = document.querySelectorAll('[data-terminal-icon-id="claude"]');
-      expect(marks.length).toBe(2);
+      const marks = [...document.querySelectorAll("[data-terminal-icon-id]")].map((mark) => ({
+        id: mark.getAttribute("data-terminal-icon-id"),
+        color: mark.getAttribute("data-terminal-icon-color"),
+      }));
+      const agentMark = { id: "claude", color: "#123456" };
+      expect(marks).toEqual([agentMark, agentMark]);
     });
   });
 

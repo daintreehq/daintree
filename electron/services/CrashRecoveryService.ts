@@ -1179,31 +1179,36 @@ export class CrashRecoveryService {
         const raw = fs.readFileSync(sourcePath, "utf8");
         snapshot = JSON.parse(raw) as SessionSnapshot;
       }
-      // collectSnapshotPanels guards per item, so one malformed entry (null,
-      // primitive, missing fields) cannot drop the entire panel list.
+      // collectSnapshotPanels guards per item, and each entry is read under
+      // its own catch (`String()` throws on an object whose `toString` isn't
+      // callable), so one malformed entry cannot drop the entire panel list.
       // Returning fewer summaries is acceptable; returning none when some
       // were valid is not.
       const summaries: PanelSummary[] = [];
       for (const { projectId, panel: t } of collectSnapshotPanels(snapshot)) {
-        const isSuspect =
-          typeof t.createdAt === "number"
-            ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
-            : false;
-        summaries.push({
-          id: String(t.id ?? ""),
-          ...(projectId !== undefined ? { projectId } : {}),
-          kind: String(t.kind ?? "terminal"),
-          title: String(t.title ?? ""),
-          cwd: t.cwd ? String(t.cwd) : undefined,
-          worktreeId: t.worktreeId ? String(t.worktreeId) : undefined,
-          location: (t.location === "dock" ? "dock" : "grid") as "grid" | "dock",
-          isSuspect,
-          suspectReason: isSuspect ? "crash-window" : undefined,
-          launchAgentId: resolveRestoredAgentId(t, projectId),
-          agentPresetColor: isPresetHexColor(t.agentPresetColor) ? t.agentPresetColor : undefined,
-          agentState: coerceAgentState(t.agentState),
-          lastStateChange: typeof t.lastStateChange === "number" ? t.lastStateChange : undefined,
-        });
+        try {
+          const isSuspect =
+            typeof t.createdAt === "number"
+              ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
+              : false;
+          summaries.push({
+            id: String(t.id ?? ""),
+            ...(projectId !== undefined ? { projectId } : {}),
+            kind: String(t.kind ?? "terminal"),
+            title: String(t.title ?? ""),
+            cwd: t.cwd ? String(t.cwd) : undefined,
+            worktreeId: t.worktreeId ? String(t.worktreeId) : undefined,
+            location: (t.location === "dock" ? "dock" : "grid") as "grid" | "dock",
+            isSuspect,
+            suspectReason: isSuspect ? "crash-window" : undefined,
+            launchAgentId: resolveRestoredAgentId(t, projectId),
+            agentPresetColor: isPresetHexColor(t.agentPresetColor) ? t.agentPresetColor : undefined,
+            agentState: coerceAgentState(t.agentState),
+            lastStateChange: typeof t.lastStateChange === "number" ? t.lastStateChange : undefined,
+          });
+        } catch {
+          // Skip the entry; the rest of the list still stands.
+        }
       }
       return summaries;
     } catch {
@@ -1868,33 +1873,28 @@ function optionalString(value: unknown): string | undefined {
  * applies (`resolveRespawnAgentId` on the inferred kind), so the dialog's mark
  * names what Restore brings back: a legacy `type`/`agentId` spelling counts,
  * and a non-PTY panel carrying a stale launch id does not. Fields are narrowed
- * to strings first, and a throw yields no id, because one malformed entry must
- * not cost the whole list.
+ * to strings first, since the snapshot is read straight off disk.
  */
 function resolveRestoredAgentId(
   panel: Record<string, unknown>,
   projectId: string | undefined
 ): string | undefined {
-  try {
-    const saved = {
-      kind: nonEmptyString(panel.kind),
-      kindRef: panel.kindRef as PersistedPanelKindRef | undefined,
-      pluginId: optionalString(panel.pluginId),
-      launchAgentId: nonEmptyString(panel.launchAgentId),
-      type: optionalString(panel.type),
-      agentId: nonEmptyString(panel.agentId),
-      title: optionalString(panel.title),
-      browserUrl: optionalString(panel.browserUrl),
-      devCommand: optionalString(panel.devCommand),
-      cwd: optionalString(panel.cwd),
-      command: optionalString(panel.command),
-    };
-    const kind = inferKind(saved, projectId);
-    if (kind === "assistant" || !panelKindHasPty(kind)) return undefined;
-    return resolveRespawnAgentId(saved, kind);
-  } catch {
-    return undefined;
-  }
+  const saved = {
+    kind: nonEmptyString(panel.kind),
+    kindRef: panel.kindRef as PersistedPanelKindRef | undefined,
+    pluginId: optionalString(panel.pluginId),
+    launchAgentId: nonEmptyString(panel.launchAgentId),
+    type: optionalString(panel.type),
+    agentId: nonEmptyString(panel.agentId),
+    title: optionalString(panel.title),
+    browserUrl: optionalString(panel.browserUrl),
+    devCommand: optionalString(panel.devCommand),
+    cwd: optionalString(panel.cwd),
+    command: optionalString(panel.command),
+  };
+  const kind = inferKind(saved, projectId);
+  if (kind === "assistant" || !panelKindHasPty(kind)) return undefined;
+  return resolveRespawnAgentId(saved, kind);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
