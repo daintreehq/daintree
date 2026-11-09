@@ -318,19 +318,38 @@ export function hostMenuRowHasTrouble(row: HostMenuRow): boolean {
 }
 
 /**
+ * A host this machine can't reach right now, and that isn't the window's own:
+ * unreachable, or dialled again after a failed attempt. A link only counts
+ * attempts until one gets through, so a second dial means the first failed.
+ * An announced restart is on its way back and doesn't count.
+ */
+export function isHostNotAnswering(row: HostMenuRow): boolean {
+  if (row.isCurrent || row.isLocal) return false;
+  const connection = row.connection;
+  if (!connection) return false;
+  if (connection.status === "unreachable") return !connection.restarting;
+  return connection.status === "connecting" && connection.attempt > 1 && !connection.restarting;
+}
+
+/**
  * A host that isn't answering and isn't the window's own: a laptop that went
- * to sleep, a box switched off, a Daintree not running there. Nothing about it
- * is the person's to fix from here, so the host menus list it apart and
- * quietly. A refused login and an incompatible build are blockers and stay
- * out; so does the window's own host, where typing goes nowhere.
+ * to sleep, a box switched off, a Daintree not running there, or a link gone
+ * silent. Nothing about it is the person's to fix from here, so the host
+ * menus list it apart and quietly. A refused login and an incompatible build
+ * are blockers and stay out; so does the window's own host, where typing goes
+ * nowhere.
  */
 export function isHostMenuRowAway(row: HostMenuRow): boolean {
   if (row.isCurrent || row.isLocal) return false;
   const connection = row.connection;
   if (!connection) return false;
   if (connection.status === "connected") return connection.quietSince !== undefined;
-  if (connection.status !== "unreachable" || connection.restarting) return false;
-  return connection.hostModeOff === true || !connection.stoppedRetrying;
+  if (!isHostNotAnswering(row)) return false;
+  return (
+    connection.status !== "unreachable" ||
+    connection.hostModeOff === true ||
+    !connection.stoppedRetrying
+  );
 }
 
 /**
@@ -348,8 +367,10 @@ export function describeAwayHost(row: HostMenuRow): {
   if (connection?.status === "connected" && connection.quietSince !== undefined) {
     return { state: "No reply", at: connection.quietSince };
   }
-  if (connection?.status === "unreachable") {
-    if (connection.hostModeOff) return { state: "Not listening", at: row.lastSeenAt };
+  if (connection?.status === "unreachable" || connection?.status === "connecting") {
+    if (connection.status === "unreachable" && connection.hostModeOff) {
+      return { state: "Not listening", at: row.lastSeenAt };
+    }
     if (row.lastSeenAt !== null) return { state: null, at: row.lastSeenAt };
     return { state: "Unreachable", at: null };
   }

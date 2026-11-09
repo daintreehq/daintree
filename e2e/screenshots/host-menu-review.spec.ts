@@ -145,7 +145,12 @@ function allAsleepHosts(): HostListEntry[] {
     host("greg-mbp", "Greg’s MacBook Pro", asleep(14)),
     host("studio-01", "studio-01", asleep(65)),
     host("studio-02", "studio-02", asleep(26 * 60)),
-    host("studio-05", "studio-05", { ...connected, quietSince: Date.now() - 2 * MIN }),
+    host("studio-05", "studio-05", {
+      status: "connected",
+      rttMs: 18,
+      handshake: HANDSHAKE,
+      quietSince: Date.now() - 2 * MIN,
+    }),
   ];
 }
 
@@ -361,7 +366,8 @@ test("host menu review — reachable and unreachable hosts", async () => {
       await broadcastHosts(app, reportedHosts());
       await settle(page, 800);
       const afterRecover = await focusedHost();
-      if (afterRecover !== "studio-01") throw new Error(`focus left the recovered row (${afterRecover})`);
+      if (afterRecover !== "studio-01")
+        throw new Error(`focus left the recovered row (${afterRecover})`);
       await closeMenu(page);
     });
 

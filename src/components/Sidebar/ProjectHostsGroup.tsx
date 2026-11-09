@@ -16,7 +16,7 @@ import { Server } from "@/components/icons";
 import { HostNameText } from "@/components/Hosts/HostNameText";
 import { PlatformGlyph } from "@/components/Hosts/PlatformGlyph";
 import { LinkMark } from "@/components/Hosts/LinkMark";
-import { hostLinkTone } from "@/components/Hosts/hostModel";
+import { hostLinkTone, isHostNotAnswering } from "@/components/Hosts/hostModel";
 import { openProjectOnHost } from "@/components/Hosts/OpenOnHostSubmenu";
 import { isNewWindowClick, switchToHost } from "@/components/Hosts/hostSwitching";
 import { isProjectThere, useProjectHosts, type ProjectHost } from "@/components/Hosts/projectHosts";
@@ -430,7 +430,10 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
   const patient = useOrderPatience();
   const allShownPreference = useProjectHostsAllShown();
 
-  const there = hosts.filter(isProjectThere);
+  // A host that can't be reached has nothing to show here, and one that comes
+  // and goes would only flicker: it leaves the section until it answers again,
+  // and its match is remembered for when it does.
+  const there = hosts.filter((host) => isProjectThere(host) && !isHostNotAnswering(host.row));
   const free = (isOrderSettled(there) || !patient) && pointerIn === false && !focusIn;
   // Who has a row is held like the order: a host that gains the project joins
   // at once, but one that loses it keeps its row, saying so, until the

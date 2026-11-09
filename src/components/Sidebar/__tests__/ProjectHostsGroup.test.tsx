@@ -360,6 +360,26 @@ describe("ProjectHostsGroup", () => {
     expect(countsShown(rowFor("linux"))).toBe("");
   });
 
+  it("drops a host it can't reach, and brings its row back once it answers", async () => {
+    const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
+    // Unreachable, then dialled again: no row either way, so a host that comes
+    // and goes doesn't flicker in and out. Only this machine is left.
+    hostList.hosts = [
+      host("linux", { status: "unreachable", lastSeenAt: 1, detail: null }),
+      host("away", false),
+    ];
+    rerender(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(section()).toBeNull());
+    hostList.hosts = [host("linux", { status: "connecting", attempt: 3 }), host("away", false)];
+    rerender(<ProjectHostsGroup projectId={PROJECT} />);
+    expect(section()).toBeNull();
+
+    hostList.hosts = [host("linux"), host("away", false)];
+    rerender(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
+  });
+
   it("reads a host again when it says its list changed, and only that host", async () => {
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
