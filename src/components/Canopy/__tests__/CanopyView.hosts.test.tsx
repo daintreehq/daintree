@@ -23,7 +23,6 @@ const state = vi.hoisted(() => ({
   release: vi.fn(async () => {}),
   dispatch: vi.fn(async () => ({ ok: true })),
   retryHostProjects: vi.fn(),
-  switchWindowHost: vi.fn(),
   reportError: vi.fn(),
   readWork: vi.fn(async (_hostId: string) => Promise.reject(new Error("no records"))),
 }));
@@ -78,8 +77,9 @@ vi.mock("@/utils/rendererGlobalErrorHandlers", () => ({
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CanopyView } from "../CanopyView";
 import { ALL_HOSTS_ID, useCanopyStore } from "@/store/canopyStore";
-import { usePanelStore } from "@/store/panelStore";
 import { allHostsKey } from "../canopyAllHosts";
+import type { CanopyFrame } from "../canopyFrame";
+import { canopyTestFrame } from "./canopyTestFrame";
 import { notify } from "@/lib/notify";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -264,7 +264,6 @@ function installElectron() {
   const canopy = {
     onSnapshotUpdated: vi.fn(() => () => {}),
     setActive: vi.fn(async () => canopySnapshot()),
-    setScope: vi.fn(async () => {}),
     setShown: vi.fn(async () => {}),
     setRead: vi.fn(async () => null),
     archive: vi.fn(async (): Promise<unknown> => null),
@@ -291,7 +290,6 @@ function installElectron() {
     value: {
       canopy,
       system: { openExternal: vi.fn() },
-      remoteHosts: { switchWindowHost: state.switchWindowHost },
     },
     configurable: true,
     writable: true,
@@ -332,7 +330,10 @@ beforeAll(() => {
   }
 });
 
+let frame: CanopyFrame;
+
 beforeEach(() => {
+  frame = canopyTestFrame();
   __resetCanopyPlaceForTests();
   __resetCanopySeenForTests();
   state.hosts = [host("studio", "studio-01")];
@@ -346,11 +347,6 @@ beforeEach(() => {
     if (channel === "canopy:trash") return 7;
     return null;
   });
-  state.switchWindowHost.mockResolvedValue({
-    outcome: "switched",
-    hostId: "studio",
-    projectId: "p1",
-  });
   useProjectStore.setState({
     projects: [{ id: "p1", path: "/repo", name: "local-app", emoji: "🌳", lastOpened: NOW }],
   });
@@ -360,8 +356,7 @@ beforeEach(() => {
     snapshot: canopySnapshot(),
     mode: "on",
     hostId: null,
-    scope: "all",
-    orders: {},
+    order: null,
     hostOrders: {},
   });
 });
@@ -376,7 +371,6 @@ afterEach(() => {
     hostId: null,
     readingOfferDismissed: false,
     roleFilter: "all",
-    popOutLanding: null,
   });
   window.localStorage.removeItem("daintree-canopy-order");
   window.localStorage.removeItem("daintree-canopy-reading-offer-dismissed");
@@ -387,14 +381,14 @@ describe("the Canopy host picker", () => {
   it("isn't there for anyone with no other host", async () => {
     state.hosts = [];
     installElectron();
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(screen.queryByTestId("canopy-host-picker")).toBeNull();
   });
 
   it("opens on the window's own host, and lists This Mac first with each host's agents", async () => {
     installElectron();
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const picker = screen.getByTestId("canopy-host-picker");
     expect(picker.getAttribute("data-host-id")).toBe("local");
@@ -416,7 +410,7 @@ describe("the Canopy host picker", () => {
 
   it("searches the picked host's terminals on that host, never this one's", async () => {
     const own = installElectron();
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     act(() => useCanopyStore.getState().setHostId("studio"));
     await settle();
@@ -437,7 +431,7 @@ describe("the Canopy host picker", () => {
   it("draws no counts for a host that isn't connected, rather than zero", async () => {
     state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
     installElectron();
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     fireEvent.keyDown(screen.getByTestId("canopy-host-picker"), { key: "Enter" });
     const menu = await screen.findByRole("menu");
@@ -448,7 +442,7 @@ describe("the Canopy host picker", () => {
 
   it("shows the picked host's agents, named from its own projects, and leaves this host's alone", async () => {
     const own = installElectron();
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     own.setActive.mockClear();
     own.setShown.mockClear();
@@ -470,15 +464,13 @@ describe("the Canopy host picker", () => {
     expect(document.body.textContent).toContain("remote-branch");
     // The toolbar still counts this host: its snapshot is untouched.
     expect(useCanopyStore.getState().snapshot?.refreshedAt).toBe(NOW);
-    // All projects only: "This project" means this window's.
-    expect(screen.queryByRole("radiogroup", { name: "Agents to show" })).toBeNull();
   });
 
   it("shows another host's run live and answers it there", async () => {
     const own = installElectron();
     remoteCanopy = canopySnapshot({ cards: [approvalCard("remote-run")] });
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const row = document.getElementById("canopy-card-remote-run")!;
     // Its live terminal, read from that host.
@@ -509,31 +501,26 @@ describe("the Canopy host picker", () => {
     expect(own.archive).not.toHaveBeenCalled();
   });
 
-  it("goes to another host's run by moving the window to its project, focusing its pane there", async () => {
+  it("goes to another host's run there, by its project and its id on that host", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
     });
     await settle();
-    expect(state.switchWindowHost).toHaveBeenCalledWith({
-      hostId: "studio",
+    // Never this host's own place: the run's terminal isn't here.
+    expect(frame.goToRun).toHaveBeenCalledWith({
+      place: { hostId: "studio", runId: "remote-run", workspaceId: "p1" },
       newWindow: false,
-      projectId: "p1",
-      focusIntent: { intent: "focus-panel", panelId: "remote-run" },
     });
-    // Never this host's own navigation: the run's terminal isn't here.
-    expect(state.dispatch).not.toHaveBeenCalled();
-    // Closed only once the switch landed.
-    expect(useCanopyStore.getState().isOpen).toBe(false);
   });
 
   it("opens another host's run in a new window on a modified click", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     // Both modifiers, so the platform's own new-window key is among them.
     await act(async () => {
@@ -543,90 +530,16 @@ describe("the Canopy host picker", () => {
       });
     });
     await settle();
-    expect(state.switchWindowHost).toHaveBeenCalledWith(
-      expect.objectContaining({ hostId: "studio", newWindow: true, projectId: "p1" })
-    );
-  });
-
-  it("stays open when going to another host's run didn't move anything", async () => {
-    installElectron();
-    useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
-    await settle();
-
-    state.switchWindowHost.mockResolvedValueOnce({ outcome: "superseded", hostId: "studio" });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
+    expect(frame.goToRun).toHaveBeenCalledWith({
+      place: { hostId: "studio", runId: "remote-run", workspaceId: "p1" },
+      newWindow: true,
     });
-    await settle();
-    expect(useCanopyStore.getState().isOpen).toBe(true);
-
-    vi.mocked(notify).mockClear();
-    state.switchWindowHost.mockRejectedValueOnce(new Error("The host went away"));
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
-    });
-    await settle();
-    expect(useCanopyStore.getState().isOpen).toBe(true);
-    // The host switch's own failure, with the same switch to try again.
-    const toast = vi.mocked(notify).mock.calls.at(-1)![0];
-    expect(toast.title).toBe("Couldn't switch to studio-01");
-    state.switchWindowHost.mockClear();
-    await act(async () => {
-      void toast.actions?.find((action) => action.label === "Retry")?.onClick();
-    });
-    expect(state.switchWindowHost).toHaveBeenCalledWith({
-      hostId: "studio",
-      newWindow: false,
-      projectId: "p1",
-      focusIntent: { intent: "focus-panel", panelId: "remote-run" },
-    });
-    // The retry landed: the panel closes as the first try would have.
-    await settle();
-    expect(useCanopyStore.getState().isOpen).toBe(false);
-  });
-
-  it("closes once the window already showing the run's project came forward", async () => {
-    installElectron();
-    useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
-    await settle();
-    state.switchWindowHost.mockResolvedValueOnce({
-      outcome: "focused-elsewhere",
-      hostId: "studio",
-      projectId: "p1",
-      targetWindowId: 2,
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
-    });
-    await settle();
-    expect(useCanopyStore.getState().isOpen).toBe(false);
-  });
-
-  it("leaves the panel open when the user moved to another host before the switch landed", async () => {
-    installElectron();
-    useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
-    await settle();
-    let land: (result: unknown) => void = () => {};
-    state.switchWindowHost.mockImplementationOnce(() => new Promise((resolve) => (land = resolve)));
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
-    });
-    act(() => useCanopyStore.getState().setHostId(null));
-    await settle();
-    await act(async () => {
-      land({ outcome: "focused-elsewhere", hostId: "studio", projectId: "p1", targetWindowId: 2 });
-    });
-    await settle();
-    expect(useCanopyStore.getState().isOpen).toBe(true);
   });
 
   it("renames another host's run on that host", async () => {
     const own = installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const row = document.getElementById("canopy-card-remote-run")!;
     act(() => row.focus());
@@ -652,7 +565,7 @@ describe("the Canopy host picker", () => {
   it("trashes another host's run there, and takes it back there", async () => {
     const own = installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const row = document.getElementById("canopy-card-remote-run")!;
     act(() => row.focus());
@@ -672,7 +585,7 @@ describe("the Canopy host picker", () => {
 
     // The receipt is the trashing host's: Z goes back there, and nowhere else.
     await act(async () => {
-      fireEvent.keyDown(document.querySelector('[data-testid="canopy-dialog"]')!, { key: "z" });
+      fireEvent.keyDown(document.querySelector("[data-canopy-standalone]")!, { key: "z" });
     });
     expect(state.invoke).toHaveBeenCalledWith("studio", "canopy:untrash", 7);
     expect(own.untrash).not.toHaveBeenCalled();
@@ -686,7 +599,7 @@ describe("the Canopy host picker", () => {
     // The same run id on the other host, under a run that ranks above it.
     remoteFleet = fleet(["remote-first", "shared"]);
     remoteCanopy = canopySnapshot({ cards: [approvalCard("remote-first")] });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const row = document.getElementById("canopy-card-local-run")!;
     act(() => row.focus());
@@ -719,55 +632,13 @@ describe("the Canopy host picker", () => {
     expect(channelsCalled()).not.toContain("studio canopy:unarchive");
   });
 
-  it("lands on Go to terminal's run on another host, not one there sharing the focused agent's id", async () => {
-    useFleetSnapshotStore.setState({ snapshot: fleet(["shared"]) });
-    remoteFleet = fleet(["remote-first", "remote-resume", "shared"]);
-    usePanelStore.setState({
-      panelsById: {
-        shared: { id: "shared", kind: "terminal", location: "grid", detectedAgentId: "claude" },
-      } as never,
-      focusedId: "shared",
-    });
-    try {
-      useCanopyStore.setState({
-        isOpen: false,
-        resume: {
-          at: Date.now(),
-          hostId: "studio",
-          query: "",
-          runId: "remote-resume",
-          order: ["remote-first", "remote-resume", "shared"],
-        },
-      });
-      act(() => useCanopyStore.getState().open());
-      installElectron();
-      render(<CanopyView />);
-      await settle();
-      await act(async () => {
-        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      });
-      expect(useCanopyStore.getState().hostId).toBe("studio");
-      expect(document.getElementById("canopy-card-shared")).not.toBeNull();
-      // Neither the list's default nor the focused agent's id: Go to terminal's run.
-      expect(document.querySelector("[data-canopy-card]")?.id).toBe("canopy-card-remote-first");
-      expect(
-        document
-          .querySelector('[data-canopy-card][aria-selected="true"]')
-          ?.id.replace(/^canopy-card-/, "")
-      ).toBe("remote-resume");
-    } finally {
-      usePanelStore.setState({ panelsById: {} as never, focusedId: null });
-      useCanopyStore.setState({ resume: null });
-    }
-  });
-
   it("presses no answer into another host's run while the link to it is down", async () => {
     installElectron();
     // Its agents were read; the link has dropped since.
     state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
     remoteCanopy = canopySnapshot({ cards: [approvalCard("remote-run")] });
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const row = document.getElementById("canopy-card-remote-run")!;
     act(() => row.focus());
@@ -780,7 +651,7 @@ describe("the Canopy host picker", () => {
   it("keeps the picked host's order apart from this host's", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const stored: unknown = JSON.parse(
       window.localStorage.getItem("daintree-canopy-order") ?? "{}"
@@ -792,7 +663,7 @@ describe("the Canopy host picker", () => {
     const own = installElectron();
     remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     // Its agents stay listed as it observed them, with the offer one press away.
     expect(document.body.textContent).not.toContain("Canopy is off on studio-01");
@@ -811,7 +682,7 @@ describe("the Canopy host picker", () => {
     installElectron();
     remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const callout = document.querySelector<HTMLElement>("[data-canopy-reading-offer]")!;
     expect(callout.textContent).toContain("on studio-01");
@@ -834,7 +705,7 @@ describe("the Canopy host picker", () => {
     installElectron();
     remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
     useCanopyStore.setState({ hostId: "studio" });
-    const { unmount } = render(<CanopyView />);
+    const { unmount } = render(<CanopyView frame={frame} />);
     await settle();
     const dismiss = within(
       document.querySelector<HTMLElement>("[data-canopy-reading-offer]")!
@@ -846,9 +717,11 @@ describe("the Canopy host picker", () => {
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Search agents");
     const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
     expect(within(bar).queryByRole("button", { name: "Turn on reading" })).not.toBeNull();
-    // Closed and opened again: still away.
+    // Closed and opened again, which lands on the window's own host, then picked again: still away.
     unmount();
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
+    await settle();
+    act(() => useCanopyStore.getState().setHostId("studio"));
     await settle();
     expect(document.getElementById("canopy-card-remote-run")).not.toBeNull();
     expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
@@ -859,7 +732,7 @@ describe("the Canopy host picker", () => {
     remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
     remoteFleet = fleet([]);
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).toContain("No agents are running on studio-01");
     expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
@@ -874,7 +747,7 @@ describe("the Canopy host picker", () => {
     installElectron();
     remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
     useCanopyStore.setState({ hostId: "studio", roleFilter: "assistants" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(document.getElementById("canopy-card-remote-run")).toBeNull();
     expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
@@ -889,7 +762,7 @@ describe("the Canopy host picker", () => {
     remoteFleet = workingFleet(["remote-run"]);
     remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(summaryWords()).toContain("No agent is waiting on you");
     expect(bandWords()).toBe("No agent is waiting on you");
@@ -901,7 +774,7 @@ describe("the Canopy host picker", () => {
     own.setActive.mockResolvedValue(off);
     useCanopyStore.setState({ snapshot: off });
     remoteCanopy = off;
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
     expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
@@ -931,7 +804,7 @@ describe("the Canopy host picker", () => {
     );
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).toContain("Can't reach studio-01");
     expect(document.body.textContent).toContain("Unreachable.");
@@ -952,9 +825,8 @@ describe("the Canopy host picker", () => {
     state.release.mockImplementation(refused);
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
-    expect(channelsCalled()).toContain("studio canopy:set-scope");
     expect(channelsCalled()).toContain("studio canopy:set-shown");
     act(() => useCanopyStore.getState().setHostId(null));
     await settle();
@@ -962,7 +834,7 @@ describe("the Canopy host picker", () => {
     expect(state.reportError).not.toHaveBeenCalled();
 
     state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
-      if (channel === "canopy:set-scope") throw new Error("[AppError|INTERNAL] scope refused");
+      if (channel === "canopy:set-shown") throw new Error("[AppError|INTERNAL] shown refused");
       return channel === "fleet:get-snapshot"
         ? remoteFleet
         : channel === "canopy:set-active"
@@ -982,84 +854,24 @@ describe("the Canopy host picker", () => {
     state.hosts = [host("studio", "studio-01"), host("lab", "lab-02")];
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    const { rerender } = render(<CanopyView />);
+    const { rerender } = render(<CanopyView frame={frame} />);
     await settle();
     state.hosts = [host("lab", "lab-02")];
-    rerender(<CanopyView />);
+    rerender(<CanopyView frame={frame} />);
     await settle();
     expect(useCanopyStore.getState().hostId).toBeNull();
     expect(screen.getByTestId("canopy-host-picker").getAttribute("data-host-id")).toBe("local");
     expect(state.release).toHaveBeenCalledWith("studio");
   });
 
-  it("keeps a popped-out dialog's host while the window's host list is still on its way (#16338)", async () => {
-    // A new window reads its host list as it boots, after the pop-out may land.
-    state.hosts = [];
-    remoteFleet = fleet(["remote-run", "remote-other"]);
-    installElectron();
-    useCanopyStore.getState().receivePopOut({
-      hostId: "studio",
-      query: "",
-      selection: { kind: "worker", runId: "remote-other" },
-      roleFilter: "all",
-      unreadOnly: false,
-      keptUnread: [],
-      archivedExpanded: false,
-      trashExpanded: false,
-      workOf: null,
-    });
-    const { rerender } = render(<CanopyView />);
-    await settle();
-    expect(useCanopyStore.getState().hostId).toBe("studio");
-
-    state.hosts = [host("studio", "studio-01")];
-    rerender(<CanopyView />);
-    await settle();
-
-    expect(useCanopyStore.getState().hostId).toBe("studio");
-    expect(document.querySelector("[data-canopy-card][aria-selected=true]")?.id).toBe(
-      "canopy-card-remote-other"
-    );
-    expect(useCanopyStore.getState().popOutLanding).toBeNull();
-  });
-
-  it("keeps a popped-out dialog's host through the user acting before the host list came (#16338)", async () => {
-    state.hosts = [];
-    installElectron();
-    useCanopyStore.getState().receivePopOut({
-      hostId: "studio",
-      query: "",
-      selection: { kind: "worker", runId: "remote-run" },
-      roleFilter: "all",
-      unreadOnly: false,
-      keptUnread: [],
-      archivedExpanded: false,
-      trashExpanded: false,
-      workOf: null,
-    });
-    const { rerender } = render(<CanopyView />);
-    await settle();
-    fireEvent.pointerDown(document.querySelector("[data-testid=canopy-dialog]")!);
-    rerender(<CanopyView />);
-    await settle();
-    expect(useCanopyStore.getState().hostId).toBe("studio");
-
-    state.hosts = [host("studio", "studio-01")];
-    rerender(<CanopyView />);
-    await settle();
-
-    expect(useCanopyStore.getState().hostId).toBe("studio");
-    expect(useCanopyStore.getState().popOutLanding).toBeNull();
-  });
-
   it("says the list is what the host last showed once its link drops", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    const { rerender } = render(<CanopyView />);
+    const { rerender } = render(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).not.toContain("Can't reach studio-01");
     state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
-    rerender(<CanopyView />);
+    rerender(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).toContain("Can't reach studio-01");
     expect(document.body.textContent).toContain("These are the agents it last showed.");
@@ -1071,12 +883,12 @@ describe("the Canopy host picker", () => {
     remoteCanopy = canopySnapshot({ cards: [calmCard("remote-run")] });
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    const { rerender } = render(<CanopyView />);
+    const { rerender } = render(<CanopyView frame={frame} />);
     await settle();
     expect(summaryWords()).toBe("Nothing needs you");
     expect(bandWords()).toBe("No action needed");
     state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
-    rerender(<CanopyView />);
+    rerender(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).toContain("These are the agents it last showed.");
     expect(document.getElementById("canopy-card-remote-run")).not.toBeNull();
@@ -1087,13 +899,13 @@ describe("the Canopy host picker", () => {
   it("drops the warning on held rows once the link is back, while their reread is owed", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    const { rerender } = render(<CanopyView />);
+    const { rerender } = render(<CanopyView frame={frame} />);
     await settle();
     state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
     state.invoke.mockRejectedValue(
       new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected")
     );
-    rerender(<CanopyView />);
+    rerender(<CanopyView frame={frame} />);
     await settle();
     // Read again while the link is down: refused, the rows kept.
     state.invoke.mockClear();
@@ -1103,7 +915,7 @@ describe("the Canopy host picker", () => {
     expect(document.body.textContent).toContain("These are the agents it last showed.");
 
     state.hosts = [host("studio", "studio-01")];
-    rerender(<CanopyView />);
+    rerender(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).not.toContain("These are the agents it last showed.");
     expect(document.querySelector('[data-callout="warning"]')).toBeNull();
@@ -1118,14 +930,14 @@ describe("the Canopy host picker", () => {
     );
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    const { rerender } = render(<CanopyView />);
+    const { rerender } = render(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).toContain("Connecting to studio-01…");
     expect(document.body.textContent).not.toContain("Can't reach studio-01");
 
     // The link is up a moment before the resync's reread lands.
     state.hosts = [host("studio", "studio-01")];
-    rerender(<CanopyView />);
+    rerender(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).toContain("Connecting to studio-01…");
     expect(document.body.textContent).not.toContain("Can't reach studio-01");
@@ -1144,7 +956,7 @@ describe("All hosts", () => {
 
   it("lists the runs of every host together, with the same run id on two hosts kept apart", async () => {
     installElectron();
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(cardOf("local", "shared-run")).not.toBeNull();
     expect(cardOf("studio", "shared-run")).not.toBeNull();
@@ -1155,58 +967,6 @@ describe("All hosts", () => {
       cardOf("studio", "shared-run")!.querySelector("[data-canopy-host]")?.textContent
     ).toContain("studio-01");
     expect(screen.getByTestId("canopy-host-picker").getAttribute("data-host-id")).toBe("*");
-    // A read scope: no "This project" switch.
-    expect(screen.queryByRole("radiogroup", { name: "Agents to show" })).toBeNull();
-  });
-
-  it("lands a popped-out dialog on its own host's run, never another's under the same id (#16338)", async () => {
-    installElectron();
-    for (const hostId of ["studio", "local"]) {
-      useCanopyStore.getState().receivePopOut({
-        hostId: ALL_HOSTS_ID,
-        query: "",
-        selection: { kind: "worker", runId: allHostsKey(hostId, "shared-run") },
-        roleFilter: "all",
-        unreadOnly: false,
-        keptUnread: [],
-        archivedExpanded: false,
-        trashExpanded: false,
-        workOf: null,
-      });
-      const view = render(<CanopyView />);
-      await settle();
-
-      expect(cardOf(hostId, "shared-run")!.getAttribute("aria-selected")).toBe("true");
-      expect(useCanopyStore.getState().popOutLanding).toBeNull();
-      view.unmount();
-    }
-  });
-
-  it("opens on this machine's run the main view has focused, never another host's under the same id", async () => {
-    useFleetSnapshotStore.setState({ snapshot: fleet(["local-first", "shared-run"]) });
-    remoteCanopy = canopySnapshot({ cards: [approvalCard("shared-run")] });
-    usePanelStore.setState({
-      panelsById: {
-        "shared-run": {
-          id: "shared-run",
-          kind: "terminal",
-          location: "grid",
-          detectedAgentId: "claude",
-        },
-      } as never,
-      focusedId: "shared-run",
-    });
-    try {
-      installElectron();
-      render(<CanopyView />);
-      await settle();
-      const selected = document.querySelector('[data-canopy-card][aria-selected="true"]');
-      expect(document.querySelector("[data-canopy-card]")).not.toBe(cardOf("local", "shared-run"));
-      expect(cardOf("studio", "shared-run")).not.toBeNull();
-      expect(selected).toBe(cardOf("local", "shared-run"));
-    } finally {
-      usePanelStore.setState({ panelsById: {} as never, focusedId: null });
-    }
   });
 
   it("names this machine on an assistant's place line, as on its workers', not in its name (#15370)", async () => {
@@ -1242,7 +1002,7 @@ describe("All hosts", () => {
         entry({ kind: "global" }, "g-1"),
       ],
     });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const [lane, global] = [...document.querySelectorAll<HTMLElement>("[data-canopy-assistant]")];
     const where = (row: HTMLElement) => row.querySelector("[data-canopy-where]")!;
@@ -1260,7 +1020,7 @@ describe("All hosts", () => {
 
   it("asks each host about its own terminals, by the id it knows", async () => {
     const own = installElectron();
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
     await act(async () => {
@@ -1280,7 +1040,7 @@ describe("All hosts", () => {
 
   it("says once, in the empty Assistants line, that only this machine's assistants are listed", async () => {
     installElectron();
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const line = [...document.querySelectorAll("[data-canopy-empty-line]")].find((candidate) =>
       candidate.textContent?.startsWith("Start an assistant from the Assistant panel")
@@ -1298,7 +1058,7 @@ describe("All hosts", () => {
     const settled = canopySnapshot({ cards: [calmCard("shared-run")] });
     useCanopyStore.setState({ snapshot: settled });
     installElectron().setActive.mockResolvedValue(settled);
-    const first = render(<CanopyView />);
+    const first = render(<CanopyView frame={frame} />);
     await settle();
     // Every host read and calm: the conclusion stands.
     expect(summaryWords()).toBe("Nothing needs you");
@@ -1308,7 +1068,7 @@ describe("All hosts", () => {
     useCanopyStore.setState({ isOpen: true, snapshot: settled, hostId: ALL_HOSTS_ID });
     installElectron().setActive.mockResolvedValue(settled);
     state.invoke.mockRejectedValue(new Error("offline"));
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(cardOf("local", "shared-run")).not.toBeNull();
     expect(summaryWords()).toBe("Not every host could be read");
@@ -1318,7 +1078,7 @@ describe("All hosts", () => {
   it("turns Canopy on nowhere, and says which host is off", async () => {
     const own = installElectron();
     remoteCanopy = canopySnapshot({ activated: false, mode: "unset", cards: [] });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).toContain("Canopy is off on studio-01");
     // A reader left off is a choice, not a failure: it stays out of the warning.
@@ -1335,7 +1095,7 @@ describe("All hosts", () => {
     installElectron().setActive.mockResolvedValue(off);
     useCanopyStore.setState({ snapshot: off });
     remoteCanopy = off;
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(cardOf("local", "shared-run")).not.toBeNull();
     expect(cardOf("studio", "shared-run")).not.toBeNull();
@@ -1345,7 +1105,7 @@ describe("All hosts", () => {
   it("names a host that can't be reached and keeps the others", async () => {
     installElectron();
     state.invoke.mockRejectedValue(new Error("offline"));
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).toContain("Can't reach studio-01");
     expect(cardOf("local", "shared-run")).not.toBeNull();
@@ -1359,7 +1119,7 @@ describe("All hosts", () => {
     state.invoke.mockRejectedValue(
       new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected")
     );
-    const { rerender } = render(<CanopyView />);
+    const { rerender } = render(<CanopyView frame={frame} />);
     await settle();
     const quiet = () => {
       expect(document.body.textContent).not.toContain("Connecting to studio-01");
@@ -1373,13 +1133,13 @@ describe("All hosts", () => {
     quiet();
 
     state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
-    rerender(<CanopyView />);
+    rerender(<CanopyView frame={frame} />);
     await settle();
     quiet();
 
     // The link is up before the resync's reread lands: the refusal is still the reading's.
     state.hosts = [host("studio", "studio-01")];
-    rerender(<CanopyView />);
+    rerender(<CanopyView frame={frame} />);
     await settle();
     quiet();
 
@@ -1441,7 +1201,7 @@ describe("All hosts", () => {
         ? Promise.reject(new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected"))
         : answers(hostId, ...rest)
     );
-    const { rerender } = render(<CanopyView />);
+    const { rerender } = render(<CanopyView frame={frame} />);
     await settle();
     expect(cardOf("local", "shared-run")).not.toBeNull();
     expect(cardOf("build", "shared-run")).not.toBeNull();
@@ -1455,7 +1215,7 @@ describe("All hosts", () => {
       host("studio", "studio-01", { status: "connecting", attempt: 2 }),
       host("build", "build-02"),
     ];
-    rerender(<CanopyView />);
+    rerender(<CanopyView frame={frame} />);
     await settle();
     saysNothingOf("studio-01");
     expect(summaryWords()).toBe("Nothing needs you");
@@ -1468,7 +1228,7 @@ describe("All hosts", () => {
     // Back: the link comes up and says `resync`, and its agents are read and listed.
     state.invoke.mockImplementation(answers);
     state.hosts = [host("studio", "studio-01"), host("build", "build-02")];
-    rerender(<CanopyView />);
+    rerender(<CanopyView frame={frame} />);
     act(() => {
       for (const listener of state.listeners) listener({ kind: "resync", hostId: "studio" });
     });
@@ -1489,7 +1249,7 @@ describe("All hosts", () => {
       }),
     ];
     state.invoke.mockImplementation(() => new Promise(() => {}));
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).toContain("Can't reach studio-01");
     expect(document.body.textContent).not.toContain("Connecting to studio-01");
@@ -1508,13 +1268,13 @@ describe("All hosts", () => {
         cards: [calmCard("shared-run")],
         model: { id: "m", status: "downloading", received: 1, total: 2 },
       });
-      const { rerender } = render(<CanopyView />);
+      const { rerender } = render(<CanopyView frame={frame} />);
       await settle();
       expect(cardOf("studio", "shared-run")).not.toBeNull();
       expect(document.body.textContent).toContain("Waiting for Canopy's model on studio-01");
 
       state.hosts = [host("studio", "studio-01", connection)];
-      rerender(<CanopyView />);
+      rerender(<CanopyView frame={frame} />);
       await settle();
       expect(cardOf("studio", "shared-run")).toBeNull();
       expect(cardOf("local", "shared-run")).not.toBeNull();
@@ -1524,7 +1284,7 @@ describe("All hosts", () => {
       // The link is back: what it last showed is listed again until its reread lands.
       remoteCanopy = canopySnapshot({ cards: [calmCard("shared-run")] });
       state.hosts = [host("studio", "studio-01")];
-      rerender(<CanopyView />);
+      rerender(<CanopyView frame={frame} />);
       await settle();
       expect(cardOf("studio", "shared-run")).not.toBeNull();
       act(() => {
@@ -1539,7 +1299,7 @@ describe("All hosts", () => {
 
   it("keeps a host's agents as last seen when its link is refused for another build", async () => {
     installElectron();
-    const { rerender } = render(<CanopyView />);
+    const { rerender } = render(<CanopyView frame={frame} />);
     await settle();
     expect(cardOf("studio", "shared-run")).not.toBeNull();
 
@@ -1550,7 +1310,7 @@ describe("All hosts", () => {
         remote: HANDSHAKE,
       }),
     ];
-    rerender(<CanopyView />);
+    rerender(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).toContain(
       "studio-01 isn't connected. Its agents are as last seen"
@@ -1560,7 +1320,7 @@ describe("All hosts", () => {
 
   it("hands a host over to the single-host panel without releasing it after it is read again", async () => {
     installElectron();
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     state.invoke.mockClear();
     state.release.mockClear();
@@ -1582,7 +1342,7 @@ describe("All hosts", () => {
       if (channel === "canopy:set-active") return remoteCanopy;
       return new Promise(() => {});
     });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(document.body.textContent).not.toContain("Connecting to studio-01");
     expect(document.querySelector("[data-callout]")).toBeNull();
@@ -1599,7 +1359,7 @@ describe("All hosts", () => {
     installElectron().setActive.mockResolvedValue(settled);
     state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
     state.invoke.mockImplementation(() => new Promise(() => {}));
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(cardOf("local", "shared-run")).not.toBeNull();
     expect(summaryWords()).toBe("Checking who needs you…");
@@ -1643,7 +1403,7 @@ describe("All hosts", () => {
     it("draws no box, and a spinner by the picker only once it is past the loading gate", async () => {
       state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
       state.invoke.mockImplementation(() => new Promise(() => {}));
-      render(<CanopyView />);
+      render(<CanopyView frame={frame} />);
       await settle();
       expect(spinner()).toBeNull();
 
@@ -1664,14 +1424,14 @@ describe("All hosts", () => {
     it("shows nothing at all when the reads land inside the gate", async () => {
       state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
       const answer = deferReads();
-      const { rerender } = render(<CanopyView />);
+      const { rerender } = render(<CanopyView frame={frame} />);
       await settle();
       await gate(300);
       expect(spinner()).toBeNull();
       expect(document.querySelector("[data-callout]")).toBeNull();
 
       state.hosts = [host("studio", "studio-01")];
-      rerender(<CanopyView />);
+      rerender(<CanopyView frame={frame} />);
       await act(async () => {
         answer.canopy();
         answer.fleet();
@@ -1686,13 +1446,13 @@ describe("All hosts", () => {
     it("takes the spinner away once the reads land", async () => {
       state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
       const answer = deferReads();
-      const { rerender } = render(<CanopyView />);
+      const { rerender } = render(<CanopyView frame={frame} />);
       await settle();
       await gate(400);
       expect(spinner()).not.toBeNull();
 
       state.hosts = [host("studio", "studio-01")];
-      rerender(<CanopyView />);
+      rerender(<CanopyView frame={frame} />);
       await act(async () => {
         answer.canopy();
         answer.fleet();
@@ -1705,7 +1465,7 @@ describe("All hosts", () => {
     it("starts the gate afresh on each open, however long the panel stood shut", async () => {
       state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
       state.invoke.mockImplementation(() => new Promise(() => {}));
-      render(<CanopyView />);
+      render(<CanopyView frame={frame} />);
       await settle();
       await gate(400);
       expect(spinner()).not.toBeNull();
@@ -1745,7 +1505,7 @@ describe("All hosts", () => {
       "keeps the spinner for a connected host until both its reads land, %s",
       async (_order, order) => {
         const answer = deferReads();
-        render(<CanopyView />);
+        render(<CanopyView frame={frame} />);
         await settle();
         await gate(400);
         expect(spinner()).not.toBeNull();
@@ -1764,7 +1524,7 @@ describe("All hosts", () => {
 
     it("keeps the spinner while this machine's own agents are still being read", async () => {
       useFleetSnapshotStore.setState({ snapshot: null });
-      render(<CanopyView />);
+      render(<CanopyView frame={frame} />);
       await settle();
       expect(cardOf("studio", "shared-run")).not.toBeNull();
       expect(document.body.textContent).not.toContain("Reading This Mac");
@@ -1792,7 +1552,7 @@ describe("All hosts", () => {
           ? Promise.reject(new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected"))
           : new Promise(() => {})
       );
-      render(<CanopyView />);
+      render(<CanopyView frame={frame} />);
       await settle();
       await gate(400);
       expect(document.body.textContent).toContain("Can't reach studio-01");
@@ -1812,7 +1572,7 @@ describe("All hosts", () => {
       state.invoke.mockRejectedValue(
         new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected")
       );
-      render(<CanopyView />);
+      render(<CanopyView frame={frame} />);
       await settle();
       await gate(1_000);
       expect(document.body.textContent).not.toContain("studio-01");
@@ -1824,7 +1584,7 @@ describe("All hosts", () => {
       remoteCanopy = canopySnapshot({
         model: { id: "m", status: "downloading", received: 1, total: 2 },
       });
-      render(<CanopyView />);
+      render(<CanopyView frame={frame} />);
       await settle();
       await gate(1_000);
       expect(document.body.textContent).toContain("Waiting for Canopy's model on studio-01…");
@@ -1836,7 +1596,7 @@ describe("All hosts", () => {
       remoteCanopy = canopySnapshot({
         model: { id: "m", status: "failed", error: "HTTP 503" },
       });
-      render(<CanopyView />);
+      render(<CanopyView frame={frame} />);
       await settle();
       await gate(1_000);
       expect(document.body.textContent).toContain("Canopy's model isn't available on studio-01");
@@ -1849,7 +1609,7 @@ describe("All hosts", () => {
 
   it("releases every host it opened when the panel closes", async () => {
     installElectron();
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(channelsCalled()).toContain("studio canopy:set-active");
     act(() => useCanopyStore.getState().close());

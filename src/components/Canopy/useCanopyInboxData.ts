@@ -20,11 +20,7 @@ import {
   mergeHostReadings,
   type HostReading,
 } from "./canopyAllHosts";
-import {
-  ALL_HOSTS_ID,
-  canopyOwnHostId,
-  useCanopyStore,
-} from "@/store/canopyStore";
+import { ALL_HOSTS_ID, canopyOwnHostId, useCanopyStore } from "@/store/canopyStore";
 import { retryHostProjects, useHostProjectLists } from "@/components/Hosts/hostProjects";
 import type { HostMenuRow } from "@/components/Hosts/hostModel";
 import type { HostId } from "@shared/types/remoteHosts";

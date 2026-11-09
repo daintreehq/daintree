@@ -76,9 +76,7 @@ export function CanopyToolbarButton({
   // On, Canopy opens in its own window; before then, the offer to turn it on
   // opens here as a dialog. A view on another host offers nothing: its way in
   // asks for this computer's window.
-  const opensOffer = useCanopyStore(
-    (s) => s.mode !== "on" && canopyOwnHostId() === LOCAL_HOST_ID
-  );
+  const opensOffer = useCanopyStore((s) => s.mode !== "on" && canopyOwnHostId() === LOCAL_HOST_ID);
 
   return (
     <ContextMenu>

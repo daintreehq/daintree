@@ -304,12 +304,7 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   if (hostId !== null && !allHosts) {
     const hostRow = hostRows?.find((row) => row.hostId === hostId) ?? null;
     return (
-      <CanopyInbox
-        hostId={hostId}
-        hostRow={hostRow}
-        hostRows={null}
-        hostPicker={hostPicker}
-      />
+      <CanopyInbox hostId={hostId} hostRow={hostRow} hostRows={null} hostPicker={hostPicker} />
     );
   }
 
@@ -359,14 +354,7 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
       </CanopySurface>
     );
   }
-  return (
-    <CanopyInbox
-      hostId={null}
-      hostRow={null}
-      hostRows={null}
-      hostPicker={hostPicker}
-    />
-  );
+  return <CanopyInbox hostId={null} hostRow={null} hostRows={null} hostPicker={hostPicker} />;
 }
 
 interface ShortcutRow {
@@ -1430,20 +1418,20 @@ function CanopyInbox({
   const listsOnlyPlugins = items.length === 0 && !listsAssistants && !listsTrash && !globalDocked;
   const listsNothing = listsOnlyPlugins && pluginViews.length === 0;
   const noAgentsWords = everyHost ? (
-      <p className="text-sm text-text-secondary">
-        {hostIssues.length > 0
-          ? "No agents on the hosts that answered."
-          : "No agents are running on any host. Each one shows up here once it starts."}
-      </p>
-    ) : otherHost ? (
-      <p className="text-sm text-text-secondary">
-        No agents are running on {hostName}. Each one shows up here once it starts.
-      </p>
-    ) : (
-      <p className="text-sm text-text-secondary">
-        Launch an agent from the toolbar and it shows up here.
-      </p>
-    );
+    <p className="text-sm text-text-secondary">
+      {hostIssues.length > 0
+        ? "No agents on the hosts that answered."
+        : "No agents are running on any host. Each one shows up here once it starts."}
+    </p>
+  ) : otherHost ? (
+    <p className="text-sm text-text-secondary">
+      No agents are running on {hostName}. Each one shows up here once it starts.
+    </p>
+  ) : (
+    <p className="text-sm text-text-secondary">
+      Launch an agent from the toolbar and it shows up here.
+    </p>
+  );
 
   return (
     <CanopySurface isOpen={isOpen}>
