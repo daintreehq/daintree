@@ -721,9 +721,7 @@ describe("RecipeEditor", () => {
       expect(document.getElementById("terminal-when-done-help-0")?.textContent).not.toContain(
         "filled-in"
       );
-      expect(document.getElementById("terminal-when-done-0")?.textContent).toBe(
-        "Keep open (default)"
-      );
+      expect(document.getElementById("terminal-when-done-0")?.textContent).toBe("Keep open");
 
       await pick("terminal-when-done-0", "Close, keeping the session");
       expect((await save())[0]?.whenDone).toBe("close");
@@ -731,7 +729,7 @@ describe("RecipeEditor", () => {
       await pick("terminal-when-done-0", "Move to background");
       expect((await save())[0]?.whenDone).toBe("background");
 
-      await pick("terminal-when-done-0", "Keep open (default)");
+      await pick("terminal-when-done-0", "Keep open");
       expect((await save())[0]?.whenDone).toBeUndefined();
     });
 
@@ -772,7 +770,7 @@ describe("RecipeEditor", () => {
       });
       const trigger = document.getElementById("terminal-when-done-0")!;
       expect(trigger.hasAttribute("disabled")).toBe(true);
-      expect(trigger.textContent).toBe("Keep open (default)");
+      expect(trigger.textContent).toBe("Keep open");
       expect(document.getElementById("terminal-when-done-help-0")?.textContent).toContain(
         "terminal menu"
       );

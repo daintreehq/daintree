@@ -61,7 +61,7 @@ const PATH_PATTERN_SECTION_ID = "worktree-path-pattern";
 
 const DELETED_WORKTREE_CLEANUP_OPTIONS = [
   { value: "30", label: "After 30 seconds" },
-  { value: "60", label: "After 1 minute (default)" },
+  { value: "60", label: "After 1 minute", isDefault: true },
   { value: "300", label: "After 5 minutes" },
   { value: "0", label: "Never — close manually" },
 ];

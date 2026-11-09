@@ -657,8 +657,12 @@ export function RecipeEditor({
           </SelectTrigger>
           <SelectContent>
             {ordered.map(([value, label]) => (
-              <SelectItem key={value} value={value}>
-                {value === defaultValue ? `${label} (default)` : label}
+              <SelectItem
+                key={value}
+                value={value}
+                meta={value === defaultValue ? "Default" : undefined}
+              >
+                {label}
               </SelectItem>
             ))}
           </SelectContent>
@@ -708,8 +712,8 @@ export function RecipeEditor({
           </SelectTrigger>
           <SelectContent>
             {WHEN_DONE_OPTIONS.map(([value, label]) => (
-              <SelectItem key={value} value={value}>
-                {value === "keep" ? `${label} (default)` : label}
+              <SelectItem key={value} value={value} meta={value === "keep" ? "Default" : undefined}>
+                {label}
               </SelectItem>
             ))}
           </SelectContent>

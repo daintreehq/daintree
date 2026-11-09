@@ -329,6 +329,12 @@ SelectLabel.displayName = "SelectLabel";
 interface SelectItemProps extends React.ComponentPropsWithoutRef<typeof SelectPrimitiveType.Item> {
   description?: React.ReactNode;
   /**
+   * A muted annotation at the row's trailing edge, such as "Default". It sits
+   * outside the option's text, so the trigger shows the plain label once the
+   * option is picked; it is announced as part of the option's description.
+   */
+  meta?: React.ReactNode;
+  /**
    * Listed and reachable by the arrow keys, but it can't be chosen; its
    * `description` says why. Unlike `disabled`, which Radix skips, so a
    * keyboard or screen reader user never learns the option exists.
@@ -349,9 +355,10 @@ function blockChoice(event: React.SyntheticEvent): void {
 const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitiveType.Item>,
   SelectItemProps
->(({ className, children, description, unavailable, onPointerMove, ...props }, ref) => {
+>(({ className, children, description, meta, unavailable, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   const descriptionId = React.useId();
+  const metaId = React.useId();
   if (!radix) return null;
   const Item = radix.SelectPrimitive.Item;
   const ItemIndicator = radix.SelectPrimitive.ItemIndicator;
@@ -367,7 +374,10 @@ const SelectItem = React.forwardRef<
         className
       )}
       {...props}
-      aria-describedby={description ? descriptionId : undefined}
+      aria-describedby={
+        [description ? descriptionId : null, meta ? metaId : null].filter(Boolean).join(" ") ||
+        undefined
+      }
       {...(unavailable && {
         "aria-disabled": true,
         "data-unavailable": "",
@@ -409,6 +419,14 @@ const SelectItem = React.forwardRef<
           <ItemText>{children}</ItemText>
         </span>
       )}
+      {meta ? (
+        <span
+          id={metaId}
+          className="ml-auto shrink-0 self-start pl-4 pt-0.5 text-2xs text-text-secondary"
+        >
+          {meta}
+        </span>
+      ) : null}
     </Item>
   );
 });

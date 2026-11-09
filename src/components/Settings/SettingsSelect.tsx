@@ -22,6 +22,8 @@ export interface SettingsSelectOption {
   label: string;
   description?: string;
   disabled?: boolean;
+  /** Marks the option the setting falls back to, drawn as a trailing "Default" beside its label. */
+  isDefault?: boolean;
   /** A brand mark shown beside the label in the list and, once picked, in the trigger. */
   icon?: ComponentType<{ size?: number; className?: string }>;
 }
@@ -100,6 +102,7 @@ export function SettingsSelect({
       value={option.value}
       description={option.description}
       disabled={option.disabled}
+      meta={option.isDefault ? "Default" : undefined}
     >
       {option.icon ? (
         <span className="inline-flex items-center gap-2 align-middle">
