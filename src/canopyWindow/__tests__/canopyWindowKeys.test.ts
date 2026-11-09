@@ -9,6 +9,7 @@ const voice = vi.hoisted(() => ({
 }));
 const when = vi.hoisted(() => ({ context: {} as WhenClauseContext }));
 const logError = vi.hoisted(() => vi.fn());
+const focusLastProjectWindow = vi.hoisted(() => vi.fn(async () => true));
 
 vi.mock("@/services/VoiceRecordingService", () => ({ voiceRecordingService: voice }));
 vi.mock("@/services/keybindingWhenContext", () => ({
@@ -17,7 +18,7 @@ vi.mock("@/services/keybindingWhenContext", () => ({
 vi.mock("@/utils/logger", () => ({ logError }));
 
 import { keybindingService } from "@/services/KeybindingService";
-import { startCanopyWindowDictation } from "../canopyWindowDictation";
+import { returnToLastProjectWindow, startCanopyWindowKeys } from "../canopyWindowKeys";
 
 let stop: (() => void) | null = null;
 let reply: HTMLDivElement;
@@ -56,7 +57,12 @@ beforeEach(() => {
   for (const element of [reply, terminalInput]) {
     element.addEventListener("keydown", (event) => reached.push(event));
   }
-  stop = startCanopyWindowDictation();
+  Object.defineProperty(window, "electron", {
+    value: { canopyWindow: { focusLastProjectWindow } },
+    configurable: true,
+    writable: true,
+  });
+  stop = startCanopyWindowKeys();
 });
 
 afterEach(() => {
@@ -97,7 +103,7 @@ describe("the Canopy window's dictation keys", () => {
   });
 
   it("leaves the key to the reply when another binding wins it", () => {
-    keybindingService.applyOverrides({ "canopy.toggle": ["Cmd+D"] });
+    keybindingService.applyOverrides({ "action.palette.open": ["Cmd+D"] });
 
     const event = press(reply, "d");
 
@@ -125,7 +131,7 @@ describe("the Canopy window's dictation keys", () => {
   });
 
   it("starts no chord of its own when the key it let through begins one", () => {
-    keybindingService.applyOverrides({ "canopy.toggle": ["Cmd+Shift+Enter Cmd+X"] });
+    keybindingService.applyOverrides({ "action.palette.open": ["Cmd+Shift+Enter Cmd+X"] });
 
     const idle = press(reply, "Enter", STOP_AND_SEND);
 
@@ -166,5 +172,101 @@ describe("the Canopy window's dictation keys", () => {
     when.context = { dictationActive: true };
     const live = new KeyboardEvent("keydown", { key: "Enter", code: "Enter", ...STOP_AND_SEND });
     expect(keybindingService.resolveKeybinding(live).match).toBeUndefined();
+  });
+});
+
+describe("Canopy's own key in its window (#16578)", () => {
+  beforeEach(() => {
+    focusLastProjectWindow.mockReset();
+    focusLastProjectWindow.mockResolvedValue(true);
+  });
+
+  it("goes back to the last project window from the reply and the list, once a press", () => {
+    for (const target of [reply, document.body]) {
+      const event = press(target, "e");
+      expect(event.defaultPrevented).toBe(true);
+    }
+
+    expect(focusLastProjectWindow).toHaveBeenCalledTimes(2);
+    expect(reached).toEqual([]);
+  });
+
+  it("leaves a key the terminal owns to the shell, as a project window does", () => {
+    // Ctrl+E is readline's end-of-line: off the Mac, Cmd+E folds to it.
+    const event = press(terminalInput, "e");
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(reached).toEqual([event]);
+    expect(focusLastProjectWindow).not.toHaveBeenCalled();
+  });
+
+  it("goes back from the terminal on a key the terminal doesn't own", () => {
+    // Windows' and Linux's default, which no terminal keeps.
+    keybindingService.applyOverrides({ "canopy.toggle": ["Ctrl+Shift+O"] });
+
+    const event = press(terminalInput, "O", { ctrlKey: true, shiftKey: true });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(focusLastProjectWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows a rebound shortcut, and leaves the old one alone", () => {
+    keybindingService.applyOverrides({ "canopy.toggle": ["Cmd+Alt+K"] });
+
+    const old = press(reply, "e");
+    expect(old.defaultPrevented).toBe(false);
+
+    press(reply, "k", { ctrlKey: true, altKey: true });
+    expect(focusLastProjectWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing while Canopy is hidden, and lets the key through", () => {
+    when.context = { canopyHidden: true };
+
+    const event = press(reply, "e");
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(reached).toEqual([event]);
+    expect(focusLastProjectWindow).not.toHaveBeenCalled();
+  });
+
+  it("ignores a held key's repeats, an IME's keys and a shortcut being recorded", () => {
+    press(reply, "e", { ctrlKey: true, repeat: true });
+    press(reply, "e", { ctrlKey: true, isComposing: true });
+    const capture = vi.spyOn(keybindingService, "isCapturingShortcut").mockReturnValue(true);
+    press(reply, "e");
+    capture.mockRestore();
+
+    expect(focusLastProjectWindow).not.toHaveBeenCalled();
+  });
+
+  it("closes nothing and logs nothing when no project window is open", async () => {
+    focusLastProjectWindow.mockResolvedValue(false);
+
+    press(reply, "e");
+    await vi.waitFor(() => expect(focusLastProjectWindow).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it("logs a refusal from main", async () => {
+    const failure = new Error("refused");
+    focusLastProjectWindow.mockRejectedValue(failure);
+
+    returnToLastProjectWindow();
+    await vi.waitFor(() => expect(logError).toHaveBeenCalledTimes(1));
+
+    expect(logError.mock.calls[0]![1]).toBe(failure);
+  });
+
+  it("answers no key once stopped", () => {
+    stop?.();
+    stop = null;
+
+    const event = press(reply, "e");
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(focusLastProjectWindow).not.toHaveBeenCalled();
   });
 });

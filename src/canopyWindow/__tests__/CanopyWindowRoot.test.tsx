@@ -11,7 +11,7 @@ const stops = vi.hoisted(() => ({
   keybindings: vi.fn(),
   fleet: vi.fn(),
   hostProjects: vi.fn(),
-  dictation: vi.fn(),
+  keys: vi.fn(),
 }));
 const shownFrames = vi.hoisted(() => [] as CanopyFrame[]);
 const notifyMock = vi.hoisted(() => vi.fn());
@@ -52,9 +52,13 @@ vi.mock("@/services/KeybindingService", () => ({ keybindingService: { loadOverri
 vi.mock("@/components/Hosts/installHostProjectsLoader", () => ({
   installHostProjectsLoader: () => stops.hostProjects,
 }));
-vi.mock("../canopyWindowDictation", () => ({
-  startCanopyWindowDictation: () => stops.dictation,
+const returnToLastProjectWindow = vi.hoisted(() => vi.fn());
+vi.mock("../canopyWindowKeys", () => ({
+  startCanopyWindowKeys: () => stops.keys,
+  returnToLastProjectWindow,
 }));
+const useCanopyDoubleShift = vi.hoisted(() => vi.fn());
+vi.mock("@/hooks/app/useCanopyDoubleShift", () => ({ useCanopyDoubleShift }));
 vi.mock("@/store/fleetSnapshotStore", () => ({
   setupFleetSnapshotListeners: () => stops.fleet,
 }));
@@ -144,6 +148,16 @@ describe("CanopyWindowRoot", () => {
     expect(CANOPY_WINDOW_FRAME.host).toBe("standalone");
     expect(CANOPY_WINDOW_FRAME.workspaceId()).toBeNull();
     expect(projectShell).not.toHaveBeenCalled();
+  });
+
+  it("sends double-Shift back to the last project window, as Canopy's key goes (#16578)", async () => {
+    render(<CanopyWindowRoot />);
+    await act(async () => {});
+
+    expect(useCanopyDoubleShift).toHaveBeenCalled();
+    for (const [onDoubleShift] of useCanopyDoubleShift.mock.calls) {
+      expect(onDoubleShift).toBe(returnToLastProjectWindow);
+    }
   });
 
   it("takes Canopy's snapshots like any other view: the first read, then each push", async () => {

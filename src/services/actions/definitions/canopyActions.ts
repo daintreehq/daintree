@@ -98,7 +98,7 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     id: "canopy.toggle",
     title: "Open Canopy",
     description:
-      "Open Canopy, the bird's-eye view of every agent across all projects, read off its screen and ordered by what it needs from the user, in its own window, or bring that window forward. Before Canopy is turned on, shows what it does and offers to turn it on",
+      "Open Canopy's window, the bird's-eye view of every agent across all projects, read off its screen and ordered by what it needs from the user, or bring it forward. Before Canopy is on, offers to turn it on",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -123,7 +123,7 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     id: "canopy.openWindow",
     title: "Open Canopy window",
     description:
-      "Open Canopy in its own window, with every agent of every project and host, or bring that window forward",
+      "Open Canopy in its own window, with every agent of every project and host, or bring that window forward, restoring it if minimized",
     category: "project",
     kind: "command",
     danger: "safe",

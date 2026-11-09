@@ -1195,7 +1195,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "project",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Open or close Canopy, the bird's-eye view of every agent across all projects, read off its screen and ordered by what it needs from the user. While Canopy has its own window, brings that window forward",
+    "description": "Open Canopy's window, the bird's-eye view of every agent across all projects, read off its screen and ordered by what it needs from the user, or bring it forward. Before Canopy is on, offers to turn it on",
     "examples": undefined,
     "id": "canopy.toggle",
     "keywords": [

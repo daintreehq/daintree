@@ -960,7 +960,7 @@ describe("McpServerService", () => {
       // On the full tool set alone (#16335), for the same reason as the next.
       createManifestEntry({
         id: "canopy.openWindow" as ActionId,
-        title: "Open Canopy in new window",
+        title: "Open Canopy window",
         description: "Open Canopy's own window",
       }),
       // On the full tool set, and externally (#12340). The fixture has to
