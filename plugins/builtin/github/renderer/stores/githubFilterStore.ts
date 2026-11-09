@@ -32,6 +32,8 @@ interface GitHubFilterState {
   setPrSearchQuery: (query: string) => void;
   setIssueSortOrder: (order: GitHubSortOrder) => void;
   setPrSortOrder: (order: GitHubSortOrder) => void;
+  /** Back to the open, unscoped view of one resource; leaves its query and sort alone. */
+  clearFilters: (type: "issue" | "pr") => void;
 }
 
 export const useGitHubFilterStore = create<GitHubFilterState>()((set) => ({
@@ -49,6 +51,8 @@ export const useGitHubFilterStore = create<GitHubFilterState>()((set) => ({
   setPrSearchQuery: (query) => set({ prSearchQuery: query }),
   setIssueSortOrder: (order) => set({ issueSortOrder: order }),
   setPrSortOrder: (order) => set({ prSortOrder: order }),
+  clearFilters: (type) =>
+    set(type === "issue" ? { issueFilter: "open" } : { prFilter: "open", prScope: "all" }),
 }));
 
 export function resetGitHubFilterStore() {

@@ -1,9 +1,15 @@
-import { Search, ExternalLink, Plus, ArrowUpDown, RefreshCw, X } from "lucide-react";
+import { Search, ExternalLink, Plus, SlidersHorizontal, RefreshCw, X } from "lucide-react";
 import { ListChecks } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { FORGE_DROPDOWN_PANEL_SIZE } from "@/components/Layout/forgeStatsDropdownContract";
-import { useGitHubFilterStore } from "../stores/githubFilterStore";
+import {
+  useGitHubFilterStore,
+  type IssueStateFilter,
+  type PRScopeFilter,
+  type PRStateFilter,
+} from "../stores/githubFilterStore";
+import { parseNumberQuery, type NumberQuery } from "@/lib/parseNumberQuery";
 
 /**
  * The virtualized row height, in px, and the only definition of it. This used
@@ -117,6 +123,48 @@ export const RESOURCE_LIST_GUTTER = "[scrollbar-gutter:stable]";
 const CONTROL_STAND_IN =
   "contrast-more:border-2 forced-colors:border forced-colors:border-[ButtonText]";
 
+/**
+ * The line under the search row while the state or involvement filter narrows
+ * the view. Shared so the skeleton draws the same box the loaded panel does.
+ */
+export const RESOURCE_FILTER_SUMMARY =
+  "flex items-center gap-2 bg-overlay-soft border border-[var(--border-divider)] rounded-[var(--radius-sm)] pl-2 pr-1 py-0.5 text-xs text-text-secondary";
+
+const SCOPE_PHRASE: Record<PRScopeFilter, string> = {
+  all: "",
+  mine: " by you",
+  "needs-review": " waiting on your review",
+};
+
+/**
+ * The involvement actually narrowing the results. Exact number lookups go by
+ * number and cannot honor it, so the filter line must not claim it then.
+ */
+export function effectiveResourceScope(
+  type: "issue" | "pr",
+  scope: PRScopeFilter,
+  numberQuery: NumberQuery | null
+): PRScopeFilter {
+  if (type !== "pr") return "all";
+  return numberQuery === null || numberQuery.kind === "open-ended" ? scope : "all";
+}
+
+/** "merged pull requests by you" — the narrowed view, finishing "Showing …". */
+export function describeResourceFilter(
+  type: "issue" | "pr",
+  state: IssueStateFilter | PRStateFilter,
+  scope: PRScopeFilter
+): string {
+  const noun = type === "issue" ? "issues" : "pull requests";
+  return `${state} ${noun}${type === "pr" ? SCOPE_PHRASE[scope] : ""}`;
+}
+
+/** The ghost `xs` `Button` that clears the filters, at rest. */
+const FILTER_CLEAR_STAND_IN = cn(
+  "inline-flex items-center justify-center whitespace-nowrap h-6 px-2.5 py-0.5 text-2xs leading-none font-medium rounded-[var(--radius-md)] shrink-0",
+  CONTROL_STAND_IN
+);
+
 /** A header icon slot: the `IconButton` at its default 32px size. */
 const HEADER_ICON_SLOT = cn(
   "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0 text-text-secondary",
@@ -167,11 +215,6 @@ interface ResourceRowsSkeletonProps extends SkeletonProps {
   type: "issue" | "pr";
 }
 
-const SCOPE_CHIPS = [
-  { id: "mine", label: "Mine" },
-  { id: "needs-review", label: "Needs my review" },
-] as const;
-
 export function GitHubResourceListSkeleton({
   count,
   immediate,
@@ -191,17 +234,11 @@ export function GitHubResourceListSkeleton({
     type === "issue" ? s.issueSearchQuery : s.prSearchQuery
   );
 
-  const stateTabs =
-    type === "pr"
-      ? [
-          { id: "open", label: "Open" },
-          { id: "merged", label: "Merged" },
-          { id: "closed", label: "Closed" },
-        ]
-      : [
-          { id: "open", label: "Open" },
-          { id: "closed", label: "Closed" },
-        ];
+  const viewCustomized =
+    filterState !== "open" || (type === "pr" && prScope !== "all") || sortOrder !== "created";
+  // The same rule the loaded header applies, so the line does not change on handoff.
+  const shownScope = effectiveResourceScope(type, prScope, parseNumberQuery(searchQuery));
+  const filtersActive = filterState !== "open" || shownScope !== "all";
 
   return (
     <div
@@ -246,15 +283,12 @@ export function GitHubResourceListSkeleton({
           <div data-header-slot="refresh" className={HEADER_ICON_SLOT}>
             <RefreshCw className="w-3.5 h-3.5" />
           </div>
-          {/* Lifted under a non-default sort, as the loaded trigger is. */}
+          {/* Lifted under a non-default view, as the loaded trigger is. */}
           <div
-            data-header-slot="sort"
-            className={cn(
-              HEADER_ICON_SLOT,
-              sortOrder !== "created" && "bg-overlay-soft text-text-primary"
-            )}
+            data-header-slot="view-options"
+            className={cn(HEADER_ICON_SLOT, viewCustomized && "bg-overlay-soft text-text-primary")}
           >
-            <ArrowUpDown className="w-3.5 h-3.5" />
+            <SlidersHorizontal className="w-3.5 h-3.5" />
           </div>
           {/* Dimmed: the loaded trigger is disabled until rows arrive, so it
               would otherwise dim and come back the moment the list mounted. */}
@@ -263,66 +297,17 @@ export function GitHubResourceListSkeleton({
           </div>
         </div>
 
-        {/* Drawn as the shared segmented control at rest (inset track, bordered
-            neutral thumb), so the filter does not change shape when the list loads. */}
-        <div
-          className="flex w-full p-0.5 bg-surface-inset rounded-[var(--radius-md)]"
-          aria-hidden="true"
-        >
-          {stateTabs.map((tab) => (
-            <div
-              key={tab.id}
-              data-segment={tab.id}
-              data-checked={tab.id === filterState ? "" : undefined}
-              className={cn(
-                "relative flex-1 min-w-0 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-sm)] text-center",
-                CONTROL_STAND_IN,
-                tab.id === filterState ? "text-text-primary" : "text-text-secondary"
-              )}
-            >
-              {/* The thumb as the live control draws it: its own layer under the
-                  label, so its border adds nothing to the segment's height. The
-                  live thumb spans the segment's whole border box, so it reaches
-                  out over the border the contrast modes add. Not the primitive's
-                  thumb slot, which only `SegmentedRadioGroup` may draw, so the
-                  two contrast treatments that slot gets from the host styles
-                  are restated here: a hairline outline under increased contrast
-                  and a 2px ButtonText border under forced colours. */}
-              {tab.id === filterState && (
-                <span
-                  data-skeleton-thumb=""
-                  className={cn(
-                    "absolute inset-0 rounded-[var(--radius-sm)] bg-overlay-medium border border-text-secondary shadow-[var(--theme-shadow-ambient)]",
-                    "contrast-more:-inset-0.5 contrast-more:outline contrast-more:outline-1 contrast-more:-outline-offset-1 contrast-more:outline-border-strong",
-                    "forced-colors:-inset-px forced-colors:border-2 forced-colors:border-[ButtonText]"
-                  )}
-                />
-              )}
-              <span className="relative block truncate">{tab.label}</span>
-            </div>
-          ))}
-        </div>
-
-        {/* The scope chips as the live panel draws them, selection weight
-            included, so the rows below do not move when the list lands. */}
-        {type === "pr" && (
-          <div className="flex items-center gap-1.5" aria-hidden="true">
-            {SCOPE_CHIPS.map((chip) => (
-              <div
-                key={chip.id}
-                data-scope-chip={chip.id}
-                data-checked={chip.id === prScope ? "" : undefined}
-                className={cn(
-                  "inline-flex items-center rounded-full border border-text-secondary px-2 py-0.5 text-2xs whitespace-nowrap",
-                  CONTROL_STAND_IN,
-                  chip.id === prScope
-                    ? "bg-filter-selected-bg-strong font-medium text-text-primary"
-                    : "bg-overlay-soft text-text-secondary"
-                )}
-              >
-                {chip.label}
-              </div>
-            ))}
+        {/* The filter line the loaded header shows while the view is
+            narrowed, at the same height, so the rows do not move on load. */}
+        {filtersActive && (
+          <div data-filter-summary="" className={RESOURCE_FILTER_SUMMARY} aria-hidden="true">
+            <span className="min-w-0 flex-1 truncate select-none">
+              Showing{" "}
+              <span className="text-text-primary">
+                {describeResourceFilter(type, filterState, shownScope)}
+              </span>
+            </span>
+            <span className={FILTER_CLEAR_STAND_IN}>Clear filters</span>
           </div>
         )}
       </div>

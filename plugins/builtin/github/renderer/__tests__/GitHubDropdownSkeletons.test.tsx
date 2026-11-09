@@ -93,7 +93,7 @@ describe("GitHubResourceListSkeleton", () => {
   });
 
   it("reserves every header icon slot the loaded list renders", () => {
-    // Refresh, sort and bulk-select. One slot short and the search field
+    // Refresh, view options and bulk-select. One slot short and the search field
     // jumps narrower the moment real content replaces this.
     const { container } = render(<GitHubResourceListSkeleton />);
     const header = container.querySelector(".border-b");
@@ -107,20 +107,19 @@ describe("GitHubResourceListSkeleton header state", () => {
     resetGitHubFilterStore();
   });
 
-  // Where the thumb actually sits, not just which segment is marked.
-  const thumbs = (type: "issue" | "pr") => {
+  // The filter line's text, or null when the skeleton draws none.
+  const filterLine = (type: "issue" | "pr") => {
     const { container, unmount } = render(<GitHubResourceListSkeleton type={type} />);
-    const owners = Array.from(container.querySelectorAll("[data-skeleton-thumb]")).map((thumb) =>
-      thumb.closest("[data-segment]")?.getAttribute("data-segment")
-    );
+    const line = container.querySelector("[data-filter-summary]");
+    const text = line ? line.textContent : null;
     unmount();
-    return owners;
+    return text;
   };
 
-  const sortLifted = (type: "issue" | "pr") => {
+  const optionsLifted = (type: "issue" | "pr") => {
     const { container, unmount } = render(<GitHubResourceListSkeleton type={type} />);
     const lifted = container
-      .querySelector('[data-header-slot="sort"]')!
+      .querySelector('[data-header-slot="view-options"]')!
       .classList.contains("bg-overlay-soft");
     unmount();
     return lifted;
@@ -137,51 +136,39 @@ describe("GitHubResourceListSkeleton header state", () => {
     return result;
   };
 
-  it("puts one thumb on Open for both types by default", () => {
-    expect(thumbs("issue")).toEqual(["open"]);
-    expect(thumbs("pr")).toEqual(["open"]);
+  it("draws no filter line for either type at the defaults", () => {
+    expect(filterLine("issue")).toBeNull();
+    expect(filterLine("pr")).toBeNull();
   });
 
-  it("puts the thumb on the state each type's panel was left on", () => {
-    // The loaded control reads the persisted filter, so a panel reopened on
-    // Closed would otherwise slide its thumb the moment the list landed.
+  it("draws the filter line each type's panel was left narrowed on", () => {
+    // The loaded header reads the persisted filters, so a panel reopened on
+    // Closed would otherwise grow a line and push the rows down on load.
     useGitHubFilterStore.setState({ issueFilter: "closed" });
-    expect(thumbs("issue")).toEqual(["closed"]);
-    expect(thumbs("pr")).toEqual(["open"]);
-    useGitHubFilterStore.setState({ issueFilter: "open", prFilter: "merged" });
-    expect(thumbs("issue")).toEqual(["open"]);
-    expect(thumbs("pr")).toEqual(["merged"]);
+    expect(filterLine("issue")).toBe("Showing closed issuesClear filters");
+    expect(filterLine("pr")).toBeNull();
+    useGitHubFilterStore.setState({ issueFilter: "open", prFilter: "merged", prScope: "mine" });
+    expect(filterLine("issue")).toBeNull();
+    expect(filterLine("pr")).toBe("Showing merged pull requests by youClear filters");
   });
 
-  it("draws the scope chips for PRs only, with the stored scope selected", () => {
-    const chips = (type: "issue" | "pr") => {
-      const { container, unmount } = render(<GitHubResourceListSkeleton type={type} />);
-      const found = Array.from(container.querySelectorAll("[data-scope-chip]")).map((el) => [
-        el.getAttribute("data-scope-chip"),
-        el.hasAttribute("data-checked"),
-      ]);
-      unmount();
-      return found;
-    };
-    expect(chips("issue")).toEqual([]);
-    expect(chips("pr")).toEqual([
-      ["mine", false],
-      ["needs-review", false],
-    ]);
+  it("leaves involvement out of the line when a number lookup cannot apply it", () => {
     useGitHubFilterStore.setState({ prScope: "needs-review" });
-    expect(chips("issue")).toEqual([]);
-    expect(chips("pr")).toEqual([
-      ["mine", false],
-      ["needs-review", true],
-    ]);
+    expect(filterLine("pr")).toBe("Showing open pull requests waiting on your reviewClear filters");
+    useGitHubFilterStore.setState({ prSearchQuery: "#123" });
+    expect(filterLine("pr")).toBeNull();
+    useGitHubFilterStore.setState({ prFilter: "closed" });
+    expect(filterLine("pr")).toBe("Showing closed pull requestsClear filters");
   });
 
-  it("lifts the sort slot only under its own type's non-default sort", () => {
-    expect([sortLifted("issue"), sortLifted("pr")]).toEqual([false, false]);
+  it("lifts the view options slot only under its own type's non-default view", () => {
+    expect([optionsLifted("issue"), optionsLifted("pr")]).toEqual([false, false]);
     useGitHubFilterStore.setState({ issueSortOrder: "updated" });
-    expect([sortLifted("issue"), sortLifted("pr")]).toEqual([true, false]);
-    useGitHubFilterStore.setState({ issueSortOrder: "created", prSortOrder: "updated" });
-    expect([sortLifted("issue"), sortLifted("pr")]).toEqual([false, true]);
+    expect([optionsLifted("issue"), optionsLifted("pr")]).toEqual([true, false]);
+    useGitHubFilterStore.setState({ issueSortOrder: "created", prScope: "mine" });
+    expect([optionsLifted("issue"), optionsLifted("pr")]).toEqual([false, true]);
+    useGitHubFilterStore.setState({ prScope: "all", issueFilter: "closed" });
+    expect([optionsLifted("issue"), optionsLifted("pr")]).toEqual([true, false]);
   });
 
   it("shows its own type's persisted query and clear button in place of the placeholder", () => {
