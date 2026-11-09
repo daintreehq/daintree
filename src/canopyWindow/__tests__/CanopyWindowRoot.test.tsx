@@ -10,6 +10,7 @@ const stops = vi.hoisted(() => ({
   keybindings: vi.fn(),
   fleet: vi.fn(),
   hostProjects: vi.fn(),
+  dictation: vi.fn(),
 }));
 const shownFrames = vi.hoisted(() => [] as CanopyFrame[]);
 const notifyMock = vi.hoisted(() => vi.fn());
@@ -49,6 +50,9 @@ vi.mock("@/services/keybindingOverridesSync", () => ({
 vi.mock("@/services/KeybindingService", () => ({ keybindingService: { loadOverrides } }));
 vi.mock("@/components/Hosts/installHostProjectsLoader", () => ({
   installHostProjectsLoader: () => stops.hostProjects,
+}));
+vi.mock("../canopyWindowDictation", () => ({
+  startCanopyWindowDictation: () => stops.dictation,
 }));
 vi.mock("@/store/fleetSnapshotStore", () => ({
   setupFleetSnapshotListeners: () => stops.fleet,

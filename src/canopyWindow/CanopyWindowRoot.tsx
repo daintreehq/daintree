@@ -19,6 +19,7 @@ import { useScratchStore } from "@/store/scratchStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_WINDOW_FRAME } from "./canopyWindowFrame";
 import { CanopyPluginSupport } from "./CanopyPluginSupport";
+import { startCanopyWindowDictation } from "./canopyWindowDictation";
 import { receiveCanopyPopOuts } from "./canopyWindowPopOut";
 
 /**
@@ -40,6 +41,7 @@ export function CanopyWindowRoot() {
       setupFleetSnapshotListeners(),
       installHostProjectsLoader(),
       receiveCanopyPopOuts(),
+      startCanopyWindowDictation(),
     ];
     // Project and scratch names label the rows; both stores follow their own pushes.
     safeFireAndForget(useProjectStore.getState().loadProjects(), {
