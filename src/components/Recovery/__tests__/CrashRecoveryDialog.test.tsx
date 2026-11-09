@@ -309,11 +309,11 @@ describe("CrashRecoveryDialog", () => {
       });
     });
 
-    it("leaves plain terminals, other kinds and an unnamed legacy agent on their generic glyphs", () => {
+    it("leaves plain terminals, other kinds and an unnamed legacy agent on their kind's glyph", () => {
       setup({ crash: { panels: markedPanels } });
-      for (const id of ["shell", "docs", "legacy"]) {
-        expect(markOf(screen.getByTestId(`panel-row-${id}`))).toBeNull();
-      }
+      expect(markOf(screen.getByTestId("panel-row-shell"))?.id).toBe("terminal");
+      expect(markOf(screen.getByTestId("panel-row-docs"))?.id).toBe("globe");
+      expect(markOf(screen.getByTestId("panel-row-legacy"))?.id).toBe("terminal");
       expect(
         screen.getByTestId("panel-row-shell").querySelector(".lucide-square-terminal")
       ).not.toBeNull();
@@ -323,12 +323,15 @@ describe("CrashRecoveryDialog", () => {
     it("names the agent in the reset preview too", () => {
       setup({ crash: { panels: markedPanels } });
       fireEvent.click(screen.getByTestId("fresh-button"));
-      const marks = [...document.querySelectorAll("[data-terminal-icon-id]")].map((mark) => ({
-        id: mark.getAttribute("data-terminal-icon-id"),
-        color: mark.getAttribute("data-terminal-icon-color"),
-      }));
+      const agentMarks = [...document.querySelectorAll('[data-terminal-icon-id="claude"]')].map(
+        (mark) => ({
+          id: mark.getAttribute("data-terminal-icon-id"),
+          color: mark.getAttribute("data-terminal-icon-color"),
+        })
+      );
       const agentMark = { id: "claude", color: "#123456" };
-      expect(marks).toEqual([agentMark, agentMark]);
+      // One in the panel list, one in the reset preview.
+      expect(agentMarks).toEqual([agentMark, agentMark]);
     });
   });
 
