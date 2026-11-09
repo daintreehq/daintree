@@ -67,6 +67,7 @@ import {
   type CanopyTerminalApi,
 } from "./canopyHostSource";
 import { CanopyTerminalMenu, type CanopyTerminalMenuHandle } from "./CanopyTerminalMenu";
+import { gridRise, lastKeptRow } from "./canopyGridRise";
 
 const SCROLLBACK = 2_000;
 /** The smallest grid worth handing an agent; a smaller measure is a pane mid-layout. */
@@ -176,9 +177,10 @@ interface CanopyTerminalProps {
  * PTY is held at the grid this pane fits, so the agent draws for the space it
  * is read in, and main hands it back to its own pane's size when the stream
  * ends. Until then — and if that pane resizes it meanwhile — the grid follows
- * the PTY's geometry: the bottom rows, where an agent asks, stay in view, and
- * a grid wider than the pane scrolls sideways. While the stream is open the
- * terminal's own pane in this view is frozen, so it doesn't take the PTY back.
+ * the PTY's geometry: one taller than the pane keeps the last rows the agent
+ * has drawn in view, and one wider than the pane scrolls sideways. While the
+ * stream is open the terminal's own pane in this view is frozen, so it doesn't
+ * take the PTY back.
  * With `sizesOnUse` the pane draws the PTY's grid from the start, and takes the
  * size only once the user clicks, types or replies in it.
  *
@@ -248,8 +250,6 @@ export function CanopyTerminal({
   // A full-screen TUI runs on the alternate buffer: like a grid pane, the view
   // then drops its inset and hides the scrollbar that buffer has no use for.
   const [altBuffer, setAltBuffer] = useState(false);
-  // The grid is taller than the pane.
-  const [overflowing, setOverflowing] = useState(false);
   // The terminal's own canvas colour, so the frame reads as the terminal itself.
   const background = useTerminalColorSchemeStore(selectWrapperBackground);
 
@@ -417,6 +417,8 @@ export function CanopyTerminal({
     let awaitingUse = false;
 
     let inset = FRAME_PADDING_PX;
+    // A new xterm starts on the normal buffer, whatever the last one was on.
+    setAltBuffer(false);
     const bufferChange = terminal.buffer.onBufferChange((buffer) => {
       const alternate = buffer.type === "alternate";
       inset = alternate ? 0 : FRAME_PADDING_PX;
@@ -472,10 +474,42 @@ export function CanopyTerminal({
         });
       }, SIZE_SETTLE_MS);
     };
+
+    // A grid that fits sits at the top of the pane, the way it does in the
+    // terminal's own pane. One taller than the pane rises out of its top just
+    // far enough to keep the last rows the agent has drawn in view: a full
+    // screen's bottom rows, where an agent asks, or a fresh agent's top ones.
+    // The pane's height the grid can use, its content box; null until laid out.
+    let available: number | null = null;
+    // The last row to keep, as of xterm's last paint.
+    let keptRow = -1;
+    let rise = 0;
+    const place = () => {
+      const css = terminal.dimensions?.css;
+      const next =
+        css === undefined || available === null
+          ? 0
+          : gridRise(
+              { gridHeight: css.canvas.height, rowHeight: css.cell.height },
+              available,
+              keptRow
+            );
+      if (next === rise) return;
+      rise = next;
+      host.style.marginTop = next === 0 ? "" : `${-next}px`;
+    };
+    // Read as xterm paints, not as output is parsed: so it moves in the same
+    // frame as the rows it keeps, never ahead of a screen held back by
+    // synchronized output, and with every scroll through the history.
+    const render = terminal.onRender(() => {
+      keptRow = lastKeptRow(terminal.buffer.active, terminal.rows, terminal.modes.showCursor);
+      place();
+    });
     // The cell size moves with the renderer (WebGL arriving or lost, a display
     // change) and with the user's font; either changes the grid the pane fits.
     const dimensionsChange = terminal.onDimensionsChange(() => {
       ensureImageAddon();
+      place();
       requestPanelSize();
     });
     // The pane took its new width while the list's or the dock's edge moved;
@@ -497,19 +531,21 @@ export function CanopyTerminal({
     const unsubscribeColors = useTerminalColorSchemeStore.subscribe(applyTheme);
     const unsubscribeAppTheme = useAppThemeStore.subscribe(applyTheme);
 
-    // A grid that fits sits at the top of the pane, the way it does in the
-    // terminal's own pane; one taller than the pane keeps its bottom rows,
-    // where an agent asks, in view.
-    const fit = () => {
+    // The content box is what's left inside the padding the buffer has, and
+    // it is measured after layout: a rise set here still lands before the paint.
+    const resizeObserver = new ResizeObserver((entries) => {
+      const box = entries.at(-1)?.contentRect;
+      if (box) available = box.height;
+      place();
       requestPanelSize();
-      const screen = host.querySelector<HTMLElement>(".xterm-screen");
-      if (!screen || frame.clientHeight <= 0) return;
-      const { height } = screen.getBoundingClientRect();
-      if (height <= 0) return;
-      setOverflowing(height > frame.clientHeight - inset + 1);
-    };
-    const resizeObserver = new ResizeObserver(() => fit());
+    });
     resizeObserver.observe(frame);
+    // The grid only rises, never scrolls: a focus or caret revealing a row
+    // below the pane would leave it scrolled out from under its rise.
+    const holdTop = () => {
+      if (frame.scrollTop !== 0) frame.scrollTop = 0;
+    };
+    frame.addEventListener("scroll", holdTop);
 
     // Whether the cursor line asks for a secret, so the composer — which keeps
     // history — is never offered for one.
@@ -534,9 +570,7 @@ export function CanopyTerminal({
         following = nowFollowing;
         ptySize = { cols: chunk.cols, rows: chunk.rows };
         terminal.resize(chunk.cols, chunk.rows);
-        requestAnimationFrame(() => {
-          if (!disposed) fit();
-        });
+        requestPanelSize();
         return;
       }
       if (chunk.kind === "ended") {
@@ -852,9 +886,6 @@ export function CanopyTerminal({
         linkSlots.commandLinksDisposable?.markRowsStale();
         checkSecret();
       });
-      requestAnimationFrame(() => {
-        if (!disposed) fit();
-      });
       // Without a fence nothing says which early chunks the snapshot already
       // holds; painting them could draw output twice, so they are dropped and
       // the next redraw brings the screen up to date.
@@ -905,6 +936,7 @@ export function CanopyTerminal({
       image?.dispose();
       searchAddon?.dispose();
       bufferChange.dispose();
+      render.dispose();
       dimensionsChange.dispose();
       unsubscribeFont();
       unsubscribeColors();
@@ -916,8 +948,11 @@ export function CanopyTerminal({
       frame.removeEventListener("mousemove", markHover, true);
       endDrag();
       frame.removeEventListener("wheel", sideways, true);
+      frame.removeEventListener("scroll", holdTop);
       if (gestureTimer !== null) clearTimeout(gestureTimer);
       resizeObserver.disconnect();
+      // The host outlives this xterm: the next one starts at the pane's top.
+      host.style.marginTop = "";
       if (sizeTimer !== null) clearTimeout(sizeTimer);
       webgl?.dispose();
       terminal.dispose();
@@ -993,10 +1028,10 @@ export function CanopyTerminal({
           // A grid pane's terminal body: the terminal's own background, inset p-3
           // on the normal buffer and flush on the alternate one.
           className={cn(
-            // Clipped at the top when too tall (the bottom is what matters), and
-            // scrollable sideways when too wide (a cut-off line would lose words).
+            // Clipped when too tall, the grid risen to keep what the agent drew
+            // in view, and scrollable sideways when too wide (a cut-off line
+            // would lose words).
             "relative flex min-h-0 flex-1 flex-col items-start overflow-x-auto overflow-y-hidden",
-            overflowing ? "justify-end" : "justify-start",
             altBuffer ? "terminal-alt-buffer" : "p-3"
           )}
         >
