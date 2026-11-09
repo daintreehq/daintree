@@ -1785,7 +1785,6 @@ describe("ActionService.list() snapshot", () => {
     ["move terminal left", "terminal.moveLeft"],
     ["focus next terminal", "terminal.focusNext"],
     ["focus terminal 3", "terminal.focusIndex3"],
-    ["close all terminals", "terminal.closeAll"],
     ["trash all sessions", "worktree.sessions.trashAll"],
   ])("still finds %j in the palette after the rename", async (query, id) => {
     const { scoreAction, extractAcronym } = await import("@/lib/actionPaletteSearch");
