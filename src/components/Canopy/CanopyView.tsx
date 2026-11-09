@@ -516,6 +516,8 @@ function CanopyShortcuts() {
   const canGoTo = frame.goToRun !== null;
   // Reaching Canopy again is for a project window; its own window is already here.
   const reachedByShortcut = frame.host === "dialog";
+  // Escape puts the dialog away; a window left open all day stays where it was put.
+  const escapeCloses = frame.host === "dialog";
   const step = isMac() ? "Cmd" : "Alt";
   // How to get here again: the user's own binding, and double-Shift while on.
   const toggle = useEffectiveCombo("canopy.toggle");
@@ -540,7 +542,10 @@ function CanopyShortcuts() {
         { keys: ["ArrowUp", "ArrowDown"], label: "Move" },
         ...(canGoTo ? [{ keys: ["Enter"], label: "Go to terminal" }] : []),
         { keys: ["Tab"], label: "Into the list, where the keys below act" },
-        { keys: ["Escape"], label: "Clear the search, then close" },
+        {
+          keys: ["Escape"],
+          label: escapeCloses ? "Clear the search, then close" : "Clear the search",
+        },
       ],
     },
     {
@@ -566,7 +571,7 @@ function CanopyShortcuts() {
         { keys: ["/"], label: "Search" },
         { keys: ["Cmd+Backspace"], label: "Trash, pressed twice; Z takes it back" },
         { keys: ["Cmd+A"], label: "With a search: review every result to trash" },
-        { keys: ["Escape"], label: "Close" },
+        ...(escapeCloses ? [{ keys: ["Escape"], label: "Close" }] : []),
         ...(closeCombo ? [{ keys: [closeCombo], label: "Close Canopy" }] : []),
       ],
     },

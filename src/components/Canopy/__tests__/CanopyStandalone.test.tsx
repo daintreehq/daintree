@@ -565,7 +565,24 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(surface()).not.toBeNull();
   });
 
-  it("hands closing to the host: the close button and Escape, and then only it decides", async () => {
+  it("stays open on Escape at the list, however often it is pressed", async () => {
+    const host = hostFrame();
+    render(<CanopyView frame={host.frame} />);
+    await settle();
+
+    act(() => card("first").focus());
+    await act(async () => {
+      fireEvent.keyDown(card("first"), { key: "Escape" });
+      fireEvent.keyDown(card("first"), { key: "Escape" });
+      fireEvent.keyDown(document.body, { key: "Escape" });
+    });
+
+    expect(host.close).not.toHaveBeenCalled();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(surface()).not.toBeNull();
+  });
+
+  it("hands its close button to the host, and then only it decides", async () => {
     const host = hostFrame();
     render(<CanopyView frame={host.frame} />);
     await settle();
@@ -575,16 +592,11 @@ describe("Canopy's inbox with no dialog and no project", () => {
     });
     expect(host.close).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
-      fireEvent.keyDown(card("first"), { key: "Escape" });
-    });
-    expect(host.close).toHaveBeenCalledTimes(2);
-
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(surface()).not.toBeNull();
   });
 
-  it("keeps Escape for a menu open in the inbox", async () => {
+  it("closes a menu open in the inbox on Escape, and stops at the list", async () => {
     const host = hostFrame();
     render(<CanopyView frame={host.frame} />);
     await settle();
@@ -600,10 +612,11 @@ describe("Canopy's inbox with no dialog and no project", () => {
     await act(async () => {
       fireEvent.keyDown(card("first"), { key: "Escape" });
     });
-    expect(host.close).toHaveBeenCalledTimes(1);
+    expect(host.close).not.toHaveBeenCalled();
+    expect(surface()).not.toBeNull();
   });
 
-  it("keeps Escape for a dialog open over the inbox, even past a new closer", async () => {
+  it("leaves Escape to a dialog open over the inbox, and to nothing once it closes", async () => {
     const host = hostFrame();
     const closeDialog = vi.fn();
     const shown = (frame: typeof host.frame, dialogOpen: boolean) => (
@@ -634,8 +647,10 @@ describe("Canopy's inbox with no dialog and no project", () => {
     await act(async () => {
       fireEvent.keyDown(document.body, { key: "Escape" });
     });
-    expect(replaced.close).toHaveBeenCalledTimes(1);
+    expect(closeDialog).toHaveBeenCalledTimes(1);
+    expect(replaced.close).not.toHaveBeenCalled();
     expect(host.close).not.toHaveBeenCalled();
+    expect(surface()).not.toBeNull();
   });
 
   it("leaves a held Escape, and one an input method took, alone", async () => {
@@ -665,7 +680,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(host.close).not.toHaveBeenCalled();
   });
 
-  it("keeps Escape for the search until it is empty", async () => {
+  it("clears the search on Escape, and stays open once it is empty", async () => {
     const host = hostFrame();
     render(<CanopyView frame={host.frame} />);
     await settle();
@@ -683,7 +698,27 @@ describe("Canopy's inbox with no dialog and no project", () => {
     await act(async () => {
       fireEvent.keyDown(search, { key: "Escape" });
     });
-    expect(host.close).toHaveBeenCalledTimes(1);
+    expect(host.close).not.toHaveBeenCalled();
+    expect(surface()).not.toBeNull();
+  });
+
+  it("lists Escape as unwinding what is open, never as closing the window", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+
+    await act(async () => {
+      fireEvent.click(within(surface()!).getByRole("button", { name: "Keyboard shortcuts" }));
+    });
+    const rows = (heading: string) => {
+      const group = [...document.querySelectorAll("section")].find(
+        (section) => section.querySelector(":scope > h3")?.textContent === heading
+      )!;
+      return [...group.querySelectorAll("dd")].map((dd) => dd.textContent);
+    };
+    expect(rows("In the search")).toContain("Clear the search");
+    expect(rows("In the search")).not.toContain("Clear the search, then close");
+    expect(rows("In the list")).not.toContain("Close");
+    expect(rows("In a reply or the terminal")).toContain("Back to the list from a reply");
   });
 
   it("stays up when a view around it is cached: there is no project view to follow", async () => {

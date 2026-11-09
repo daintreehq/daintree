@@ -597,10 +597,11 @@ export function useCanopyInboxFocus({
   }, []);
   // Escape from the pane lands on the run's row; a run folded away in
   // Archived has no row to land on, so the keyboard takes the fold instead
-  // — still in the list, where the next Escape closes the panel.
+  // — still in the list, where the next Escape closes the dialog.
   // With no row to land on (folded into Archived, or hidden by Unread),
   // the fold takes it, else the list's first row, else Refresh: always
-  // somewhere in the list, where the next Escape closes the panel.
+  // somewhere in the list, where the next Escape closes the dialog and a
+  // window stays open.
   const leavePane = useCallback(
     (item: CanopyItem) => {
       if (document.getElementById(canopyCardDomId(item.runId))) {
