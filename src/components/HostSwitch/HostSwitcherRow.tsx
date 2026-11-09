@@ -11,6 +11,7 @@ import { HostNameText } from "@/components/Hosts/HostNameText";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { LazyHostSparkline } from "@/components/Hosts/Overview/LazyHostOverviewParts";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { PaletteCurrentLabel } from "@/components/ui/PaletteCurrentLabel";
 import {
   busyCores,
   cpuSeries,
@@ -291,11 +292,9 @@ export function HostSwitcherRow({
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-2">
             <HostName name={row.name} dim={tone === "offline"} />
-            {row.isCurrent && (
-              <span className="shrink-0 rounded-sm border border-border-default px-1 text-2xs leading-4 text-text-secondary">
-                this window
-              </span>
-            )}
+            {/* In the name too: `aria-current` is often unannounced inside a listbox. */}
+            {row.isCurrent && <span className="sr-only">, current</span>}
+            {row.isCurrent && <PaletteCurrentLabel />}
           </span>
           {meta && (
             // A build warning shows its short form, so its full text is always on offer.

@@ -209,7 +209,7 @@ export function HostCard({
   // keep the band. Decided by the host, not the sample, so a missed read is a gap, not a new chart.
   const capacityChart = summary ? reportsMemoryCapacity(summary) : false;
   const clusters = summary ? describeCoreClusters(summary) : null;
-  const placeState = [row.isCurrent ? "This window" : null, state].filter(Boolean).join(" · ");
+  const placeState = [row.isCurrent ? "Current" : null, state].filter(Boolean).join(" · ");
   const chart = chartWindow(history.length);
   const span = chart.minutes === 1 ? "minute" : `${chart.minutes} minutes`;
 
