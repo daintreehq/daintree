@@ -114,7 +114,7 @@ export function LogFilters({
         value={searchValue}
         onChange={(e) => setSearchValue(e.target.value)}
         onClear={() => setSearchValue("")}
-        placeholder="Search logs"
+        placeholder="Search logs…"
         aria-label="Search logs"
       />
 

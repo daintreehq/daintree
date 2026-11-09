@@ -972,7 +972,7 @@ function ImageStage({
             <ImageOff className="h-8 w-8" aria-hidden="true" />
             <p className="text-sm">Couldn't load the image</p>
             <Button
-              variant="subtle"
+              variant="outline"
               size="sm"
               onClick={() => {
                 setRetry((n) => n + 1);

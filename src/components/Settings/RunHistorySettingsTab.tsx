@@ -11,6 +11,7 @@ import {
   SettingsActions,
   SettingsEmptyRow,
   SettingsGroup,
+  SettingsInlineError,
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
 import { SeverityMark } from "@/lib/statusSeverity";
@@ -192,11 +193,11 @@ export function RunHistorySettingsTab() {
             <>
               {loadFailed && (
                 <div className="flex items-center justify-between gap-3 px-4 py-3">
-                  <p role="alert" className="text-xs text-text-secondary">
+                  <SettingsInlineError role="alert">
                     {records.length === 0
                       ? "Run history couldn't be loaded."
                       : "Run history couldn't be refreshed. These runs may be out of date."}
-                  </p>
+                  </SettingsInlineError>
                   <Button size="sm" variant="outline" onClick={retry}>
                     Retry
                   </Button>

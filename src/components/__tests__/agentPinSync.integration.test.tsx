@@ -500,7 +500,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     tray.unmount();
 
     const settings = render(<ToolbarSettingsTab />);
-    const claudeSwitch = settings.getByLabelText("Show Claude agent on the toolbar");
+    const claudeSwitch = settings.getByLabelText("Show Claude on the toolbar");
     expect(claudeSwitch.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(claudeSwitch);
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
@@ -522,7 +522,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     // it yet, so it sits behind the uninstalled-agent disclosure.
     const settings = render(<ToolbarSettingsTab />);
     showUninstalledAgents(settings);
-    const geminiSwitchA = settings.getByLabelText("Show Gemini agent on the toolbar");
+    const geminiSwitchA = settings.getByLabelText("Show Gemini on the toolbar");
     expect(geminiSwitchA.getAttribute("aria-checked")).toBe("false");
     settings.unmount();
 
@@ -536,7 +536,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     // Re-render Settings — gemini is now checked because the shared store
     // picked up the tray's write.
     const settings2 = render(<ToolbarSettingsTab />);
-    const geminiSwitchB = settings2.getByLabelText("Show Gemini agent on the toolbar");
+    const geminiSwitchB = settings2.getByLabelText("Show Gemini on the toolbar");
     expect(geminiSwitchB.getAttribute("aria-checked")).toBe("true");
   });
 
@@ -546,7 +546,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     sharedAvailability = { claude: "ready" } as unknown as CliAvailability;
 
     const settings = render(<ToolbarSettingsTab />);
-    const claudeSwitch = settings.getByLabelText("Show Claude agent on the toolbar");
+    const claudeSwitch = settings.getByLabelText("Show Claude on the toolbar");
     expect(claudeSwitch.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(claudeSwitch);
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
@@ -558,7 +558,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
 
     const settings = render(<ToolbarSettingsTab />);
     showUninstalledAgents(settings);
-    const geminiSwitch = settings.getByLabelText("Show Gemini agent on the toolbar");
+    const geminiSwitch = settings.getByLabelText("Show Gemini on the toolbar");
     expect(geminiSwitch.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(geminiSwitch);
     expect(setAgentPinnedMock).toHaveBeenCalledWith("gemini", true);
@@ -566,7 +566,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
 
   it("Settings checkbox toggles for agent IDs never touch toolbarPreferencesStore.pinnedButtons", () => {
     const settings = render(<ToolbarSettingsTab />);
-    fireEvent.click(settings.getByLabelText("Show Claude agent on the toolbar"));
+    fireEvent.click(settings.getByLabelText("Show Claude on the toolbar"));
     fireEvent.click(settings.getByLabelText("Show Launcher on the toolbar"));
 
     // Agent -> setAgentPinned; plain built-in -> toggleButtonVisibility.

@@ -8,8 +8,8 @@ import { HiddenTabMenuItem } from "../HiddenTabMenuItem";
 import type { TabInfo } from "../TabButton";
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
-  DropdownMenuItem: ({ children }: { children: React.ReactNode }) => (
-    <div role="menuitem">{children}</div>
+  DropdownMenuRadioItem: ({ children }: { children: React.ReactNode }) => (
+    <div role="menuitemradio">{children}</div>
   ),
 }));
 

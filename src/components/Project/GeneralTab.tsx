@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { formatBytes } from "@/lib/formatBytes";
 import { InlineError } from "@/components/ui/field";
-import { Image, Upload, FolderInput, Palette } from "lucide-react";
+import { Check, Image, Upload, FolderInput, Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Input } from "@/components/ui/input";
@@ -21,6 +21,7 @@ import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { useNumberDraft } from "@/components/Settings/useNumberDraft";
 import { getProjectGradient, isValidHexColor } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
+import { contrastRatio } from "@shared/theme";
 import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
 import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
 import { ProjectThemeRows } from "./ProjectThemeSettings";
@@ -490,15 +491,32 @@ export function GeneralTab({
                           <button
                             type="button"
                             aria-label={`Set project color to ${PRESET_SWATCHES[i]!.label}`}
+                            aria-pressed={color === hex}
                             onClick={() => onColorChange(hex)}
                             className={cn(
-                              "h-7 w-7 rounded-full transition-[border-color,scale,box-shadow] border-2 shrink-0",
+                              "relative h-7 w-7 rounded-full transition-[border-color,scale,box-shadow] border-2 shrink-0",
                               color === hex
                                 ? "border-text-primary scale-110 shadow-[var(--theme-shadow-ambient)]"
                                 : "border-transparent hover:border-border-default hover:scale-105"
                             )}
                             style={{ backgroundColor: hex }}
-                          />
+                          >
+                            {color === hex && (
+                              <Check
+                                size={14}
+                                aria-hidden="true"
+                                className={cn(
+                                  "absolute inset-0 m-auto drop-shadow pointer-events-none",
+                                  // The check sits on the swatch's own colour, so it takes
+                                  // whichever ink contrasts more, as PresetColorPicker does.
+                                  contrastRatio("#ffffff", hex) >= contrastRatio("#000000", hex)
+                                    ? "text-white"
+                                    : "text-black"
+                                )}
+                                strokeWidth={3}
+                              />
+                            )}
+                          </button>
                         </TooltipTrigger>
                         <TooltipContent side="bottom">{PRESET_SWATCHES[i]!.label}</TooltipContent>
                       </Tooltip>
@@ -728,7 +746,11 @@ export function GeneralTab({
                 label={option.label}
                 description={option.description}
                 bare
-                className="w-full px-4 py-3"
+                className={cn(
+                  "w-full px-4 py-3 transition-colors",
+                  "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
+                  daintreeMcpTier === option.value ? "bg-overlay-selected" : "hover:bg-overlay-soft"
+                )}
               />
             ))}
           </fieldset>

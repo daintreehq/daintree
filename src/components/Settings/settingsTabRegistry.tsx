@@ -3,7 +3,6 @@ import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import {
   Blocks,
   FileCode,
-  GitBranch,
   GitBranchPlus,
   History,
   LayoutGrid,
@@ -28,6 +27,7 @@ import {
   DaintreeIcon,
   DecisionsIcon,
   FolderGit2,
+  GitPullRequest,
   Plug,
   McpServerIcon,
   Telescope,
@@ -915,7 +915,7 @@ export const SETTINGS_REGISTRY = [
     sectionSettings: {
       "Performance mode": SECTION_SETTINGS.performanceMode,
       "Panel limits": SECTION_SETTINGS.panelLimits,
-      "Two-pane split layout": SECTION_SETTINGS.twoPaneSplit,
+      "Two-panel split layout": SECTION_SETTINGS.twoPaneSplit,
       "Scrollback history": SECTION_SETTINGS.scrollback,
       "Grid layout": SECTION_SETTINGS.gridLayout,
       "Screen reader mode": SECTION_SETTINGS.assistiveTechnology,
@@ -973,10 +973,10 @@ export const SETTINGS_REGISTRY = [
         id: "terminal-two-pane-split",
         subtab: "layout",
         subtabLabel: "Layout",
-        section: "Two-pane split layout",
-        title: "Two-pane split layout",
+        section: "Two-panel split layout",
+        title: "Two-panel split layout",
         description: "When exactly two panels are open, display them with a resizable divider",
-        keywords: ["split", "two pane", "layout", "divider", "resize", "ratio"],
+        keywords: ["split", "two panel", "two pane", "layout", "divider", "resize", "ratio"],
       },
       {
         id: "terminal-scrollback",
@@ -1021,7 +1021,7 @@ export const SETTINGS_REGISTRY = [
         id: "terminal-preview-layout",
         subtab: "layout",
         subtabLabel: "Layout",
-        section: "Two-pane split layout",
+        section: "Two-panel split layout",
         title: "Preview-focused layout",
         description:
           "Give more space to browser or dev-preview panels (65/35 split) vs balanced layout (50/50)",
@@ -1031,16 +1031,16 @@ export const SETTINGS_REGISTRY = [
         id: "terminal-default-ratio",
         subtab: "layout",
         subtabLabel: "Layout",
-        section: "Two-pane split layout",
+        section: "Two-panel split layout",
         title: "Default split ratio",
-        description: "Set the default left/right split ratio for two-pane layout",
+        description: "Set the default left/right split ratio for the two-panel layout",
         keywords: ["ratio", "split", "default", "percentage", "slider", "two pane"],
       },
       {
         id: "terminal-reset-ratios",
         subtab: "layout",
         subtabLabel: "Layout",
-        section: "Two-pane split layout",
+        section: "Two-panel split layout",
         title: "Reset all worktree split ratios",
         description: "Clear all per-worktree split ratio overrides and return to the default ratio",
         keywords: ["reset", "worktree", "ratio", "split", "default", "clear"],
@@ -1258,7 +1258,7 @@ export const SETTINGS_REGISTRY = [
     importKind: "lazy",
     importer: LazyDaintreeAssistantSettingsTab.preload,
     LazyComponent: LazyDaintreeAssistantSettingsTab,
-    searchNavDescription: "Tools, security, and audit logging for the help assistant",
+    searchNavDescription: "Tools, security, and audit logging for the Daintree Assistant",
     searchNavKeywords: [
       "assistant",
       "daintree",
@@ -1405,7 +1405,7 @@ export const SETTINGS_REGISTRY = [
         section: "All agents",
         title: "Default agent",
         description:
-          'Agent used for the help dock button and automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Portal "Default new tab agent".',
+          'Agent used for the Daintree Assistant and automated workflows ("What\'s next?", onboarding, project explanations). Distinct from the Portal "Default new tab agent".',
         keywords: [
           "default",
           "agent",
@@ -1532,7 +1532,7 @@ export const SETTINGS_REGISTRY = [
     settings: ["forgeCredentials", "forgeDefaultProviderId"],
     label: "Code forge",
     headerTitle: "Code forge",
-    icon: <GitBranch className="w-4 h-4" />,
+    icon: <GitPullRequest className="w-4 h-4" />,
     importKind: "lazy",
     importer: LazyCodeForgeSettingsTab.preload,
     LazyComponent: LazyCodeForgeSettingsTab,
@@ -2486,8 +2486,7 @@ export const SETTINGS_REGISTRY = [
     group: "Project",
     settings: ["worktreeConfig"],
     label: "Worktree setup",
-    // Not GitBranch: project Code Forge already uses it, and two sections in the same
-    // nav list sharing one glyph makes the icon useless for telling them apart.
+    // Not GitBranch: that glyph names a checked-out branch, while this tab creates them.
     icon: <GitBranchPlus className="w-4 h-4" />,
     importKind: "lazy",
     importer: LazyProjectAutomationTab.preload,
@@ -2543,7 +2542,7 @@ export const SETTINGS_REGISTRY = [
     group: "Project",
     settings: ["forgeEnableDismissedPaths"],
     label: "Code forge",
-    icon: <GitBranch className="w-4 h-4" />,
+    icon: <GitPullRequest className="w-4 h-4" />,
     importKind: "lazy",
     importer: LazyProjectCodeForgeTab.preload,
     LazyComponent: LazyProjectCodeForgeTab,
@@ -2896,7 +2895,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   worktree: <FolderGit2 className="w-5 h-5 text-text-secondary" />,
   agents: <Plug className="w-5 h-5 text-text-secondary" />,
   assistant: <DaintreeIcon className="w-5 h-5 text-text-secondary" size={20} />,
-  "code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
+  "code-forge": <GitPullRequest className="w-5 h-5 text-text-secondary" />,
   portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
   toolbar: <PanelTop className="w-5 h-5 text-text-secondary" />,
   notifications: <Bell className="w-5 h-5 text-text-secondary" />,
@@ -2929,7 +2928,7 @@ export const projectTabIcons: Record<ProjectSettingsTab, ReactNode> = {
   "project:recipes": <Workflow className="w-5 h-5 text-text-secondary" />,
   "project:schedules": <CalendarClock className="w-5 h-5 text-text-secondary" />,
   "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
-  "project:code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
+  "project:code-forge": <GitPullRequest className="w-5 h-5 text-text-secondary" />,
   "project:plugins": <Package className="w-5 h-5 text-text-secondary" />,
 };
 

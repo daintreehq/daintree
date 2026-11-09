@@ -291,6 +291,7 @@ export function GlobalAssistantPane({
           </p>
           <Button
             type="button"
+            variant="contrast"
             onClick={() => void handleStart()}
             disabled={starting}
             data-testid="help-global-start"

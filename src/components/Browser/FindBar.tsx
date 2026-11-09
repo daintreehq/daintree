@@ -8,6 +8,8 @@ import {
   findBarCountClass,
 } from "@/components/ui/FindBarControls";
 import { SearchField } from "@/components/ui/SearchField";
+import { labelWithShortcut } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import type { FindInPageState } from "@/hooks/useFindInPage";
 
 interface FindBarProps {
@@ -87,7 +89,7 @@ export function FindBar({ find }: FindBarProps) {
           isComposingRef.current = false;
           setQuery(e.currentTarget.value);
         }}
-        placeholder="Find in page"
+        placeholder="Find in page…"
         aria-label="Find in page"
         aria-describedby={counterId}
         data-testid="find-bar-input"
@@ -111,7 +113,7 @@ export function FindBar({ find }: FindBarProps) {
       </span>
       <FindBarButton
         label="Previous match"
-        tooltip="Previous match (Shift+Enter)"
+        tooltip={labelWithShortcut("Previous match", "Shift+Enter", isMac())}
         onClick={goPrev}
         disabled={matchCount === 0}
         keepFieldFocus
@@ -120,14 +122,18 @@ export function FindBar({ find }: FindBarProps) {
       </FindBarButton>
       <FindBarButton
         label="Next match"
-        tooltip="Next match (Enter)"
+        tooltip={labelWithShortcut("Next match", "Enter", isMac())}
         onClick={goNext}
         disabled={matchCount === 0}
         keepFieldFocus
       >
         <ChevronDown className={FIND_BAR_ICON_CLASS} />
       </FindBarButton>
-      <FindBarButton label="Close find bar" tooltip="Close (Esc)" onClick={close}>
+      <FindBarButton
+        label="Close find bar"
+        tooltip={labelWithShortcut("Close find bar", "Escape", isMac())}
+        onClick={close}
+      >
         <X className={FIND_BAR_ICON_CLASS} />
       </FindBarButton>
     </div>

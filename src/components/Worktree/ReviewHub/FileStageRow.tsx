@@ -296,30 +296,28 @@ function FileStageRowComponent({
       {onViewedChange && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <label
+            <Checkbox
+              size="sm"
+              checked={viewed}
+              onCheckedChange={handleViewedChange}
               onClick={handleViewedClick}
+              // V toggles the cursor row's viewed mark from the listbox.
+              tabIndex={-1}
+              // Constant, as a toggle's name must be: the checked state is
+              // announced by the checkbox itself.
+              aria-label={`Mark ${file.path} as viewed`}
               className={cn(
-                "flex items-center gap-1 ml-2 shrink-0 cursor-pointer select-none rounded-[var(--radius-sm)] px-1.5 py-0.5",
-                "text-3xs font-medium uppercase tracking-wider transition-colors",
-                viewed ? "text-text-secondary" : "text-text-placeholder hover:text-text-secondary"
+                // A 14px box with a 24px hit area (WCAG 2.5.8), as in the diff
+                // sidebar; the pseudo-element stays inside the row's padding.
+                "ml-2.5 before:absolute before:-inset-[5px] before:content-['']",
+                // Unviewed boxes only show on the row being pointed at or on the
+                // cursor row, so a long list is not a column of empty squares.
+                !viewed &&
+                  "opacity-0 group-hover/stagerow:opacity-100 group-focus-within/stagerow:opacity-100 group-data-[focused]/stagerow:opacity-100 focus-visible:opacity-100"
               )}
-            >
-              <Checkbox
-                size="sm"
-                checked={viewed}
-                onCheckedChange={handleViewedChange}
-                // V toggles the cursor row's viewed mark from the listbox.
-                tabIndex={-1}
-                // Constant, as a toggle's name must be: the checked state is
-                // announced by the checkbox itself.
-                aria-label={`Mark ${file.path} as viewed`}
-              />
-              <span>Viewed</span>
-            </label>
+            />
           </TooltipTrigger>
-          <TooltipContent side="left">
-            {viewed ? "Mark as not viewed" : "Mark as viewed"}
-          </TooltipContent>
+          <TooltipContent side="left">Viewed</TooltipContent>
         </Tooltip>
       )}
 

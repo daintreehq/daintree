@@ -157,7 +157,7 @@ describe("WorktreeTerminalSection — a session row owns its menu", () => {
     fireEvent.contextMenu(row("two"));
     const menu = await screen.findByRole("menu");
 
-    expect(within(menu).getByRole("menuitem", { name: "Rename terminal" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "Rename" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: CARD_ITEM })).toBeNull();
     expect(screen.getAllByRole("menu")).toHaveLength(1);
   });
@@ -169,7 +169,7 @@ describe("WorktreeTerminalSection — a session row owns its menu", () => {
     fireEvent.contextMenu(row("two"));
     const menu = await screen.findByRole("menu");
     await act(async () => {
-      fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename terminal" }));
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename" }));
     });
 
     expect(dispatch).toHaveBeenCalledWith(

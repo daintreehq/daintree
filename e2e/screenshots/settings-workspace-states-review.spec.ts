@@ -222,7 +222,7 @@ test("settings workspace states — dependents, strategies, pattern and link edi
 
     // Toolbar — the move menu, the non-drag route to reordering.
     await openAt(page, "toolbar");
-    await page.getByRole("button", { name: "Move Gemini agent" }).click();
+    await page.getByRole("button", { name: "Move Gemini" }).click();
     await expect(page.getByRole("menuitem", { name: "Move to right side" })).toBeVisible();
     await capture(page, "toolbar.move-menu");
     await page.keyboard.press("Escape");

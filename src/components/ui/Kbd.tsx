@@ -42,7 +42,7 @@ export const KBD_BARE_CLASS = "font-mono tabular-nums leading-none text-xs text-
  * shrink to a speck, and an arrow draws at half the height of the letter beside
  * it. The system UI face draws them as a matched set.
  */
-const MODIFIER_GLYPH = /^[⌘⇧⌥⌃⏎⎋⇥⌫⌦↑↓←→]$/;
+const MODIFIER_GLYPH = /^[⌘⇧⌥⌃⏎↵⎋⇥⌫⌦↑↓←→]$/;
 
 export interface KbdProps {
   children: React.ReactNode;
@@ -52,8 +52,13 @@ export interface KbdProps {
 }
 
 export function Kbd({ children, className, rootAttributes }: KbdProps) {
+  // A single glyph key takes the sans face, as it does inside KbdChord.
+  const keyClass =
+    typeof children === "string" && MODIFIER_GLYPH.test(children)
+      ? KBD_CLASS.replace("font-mono", "font-sans")
+      : KBD_CLASS;
   return (
-    <kbd {...rootAttributes} className={cn(KBD_CLASS, className)}>
+    <kbd {...rootAttributes} className={cn(keyClass, className)}>
       {children}
     </kbd>
   );

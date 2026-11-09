@@ -126,13 +126,7 @@ function HostPickerItem({ row }: { row: HostMenuRow }) {
             long name clips from the middle and keeps the tail that tells
             build-east-01 from build-east-02. */}
         <span className="flex min-w-0 items-baseline gap-3">
-          <HostNameText
-            name={row.name}
-            className={cn(
-              "flex-1 text-text-primary",
-              row.isCurrent ? "font-semibold" : "font-medium"
-            )}
-          />
+          <HostNameText name={row.name} className="flex-1 font-medium text-text-primary" />
           {shownState && (
             <span
               data-host-trouble={trouble ? "" : undefined}

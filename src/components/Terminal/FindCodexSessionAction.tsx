@@ -551,7 +551,8 @@ export function FindCodexSessionAction({ panelId, onOpenSession }: FindCodexSess
             className="py-6"
             action={
               <Button
-                variant="link"
+                variant="outline"
+                size="sm"
                 // Retry goes away with the failure, so focus moves to the refresh
                 // button it stands in for rather than falling to the page; ringed
                 // only when the retry came from the keyboard.
@@ -562,7 +563,6 @@ export function FindCodexSessionAction({ panelId, onOpenSession }: FindCodexSess
                     focusVisible: event.detail === 0,
                   });
                 }}
-                className="text-xs"
               >
                 Retry
               </Button>

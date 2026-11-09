@@ -275,7 +275,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
                   Enable WSL git
                 </Button>
               ) : (
-                <Button size="sm" variant="subtle" loading={rechecking} onClick={handleRecheck}>
+                <Button size="sm" variant="outline" loading={rechecking} onClick={handleRecheck}>
                   {view === "stuck" ? "Retry" : "Re-check"}
                 </Button>
               )}

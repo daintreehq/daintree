@@ -246,9 +246,14 @@ async function clickMenuItem(page: Page, label: string): Promise<void> {
 }
 
 /** Pick a row from one of the context menu's submenus. */
-async function clickSubmenuItem(page: Page, submenu: string, label: string): Promise<void> {
+async function clickSubmenuItem(
+  page: Page,
+  submenu: string,
+  label: string,
+  role: "menuitem" | "menuitemcheckbox" = "menuitem"
+): Promise<void> {
   const menu = await openContextSubmenu(page, submenu);
-  await menu.getByRole("menuitem", { name: label, exact: true }).click();
+  await menu.getByRole(role, { name: label, exact: true }).click();
   await expect(page.locator(SEL.contextMenu.content)).toHaveCount(0, { timeout: T_SHORT });
 }
 
@@ -341,8 +346,8 @@ test.describe("Core: Terminal pane", () => {
         "Move",
         "Restart terminal",
         "Session",
-        "Rename terminal",
-        "Kill terminal",
+        "Rename",
+        "Kill terminal…",
       ]) {
         await expect(menuItem(window, name)).toBeVisible({ timeout: T_SHORT });
       }
@@ -362,7 +367,7 @@ test.describe("Core: Terminal pane", () => {
       await window.keyboard.press("Escape");
     });
 
-    test("Rename terminal opens the title editor and renames the pane", async () => {
+    test("Rename opens the title editor and renames the pane", async () => {
       const { window } = ctx;
       const panelId = await panelIdOf(panel);
 
@@ -381,7 +386,7 @@ test.describe("Core: Terminal pane", () => {
       });
 
       await openTerminalContextMenu(panel);
-      await clickTerminalContextMenuItem(panel, "Rename terminal");
+      await clickTerminalContextMenuItem(panel, "Rename");
 
       await expect(window.locator(SEL.contextMenu.content)).not.toBeVisible({ timeout: T_SHORT });
       await expect
@@ -534,10 +539,12 @@ test.describe("Core: Terminal pane", () => {
         );
 
         await rightClickPane(window, panel);
-        await clickSubmenuItem(window, "Session", "Lock input");
+        await clickSubmenuItem(window, "Session", "Lock input", "menuitemcheckbox");
         await rightClickPane(window, panel);
         await openContextSubmenu(window, "Session");
-        await expect(menuItem(window, "Unlock input")).toBeVisible({ timeout: T_SHORT });
+        await expect(
+          window.getByRole("menuitemcheckbox", { name: "Lock input", exact: true })
+        ).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
         await window.keyboard.press("Escape");
         await expect(window.locator(SEL.contextMenu.content)).toHaveCount(0, { timeout: T_SHORT });
         await rightClickPane(window, panel);
@@ -554,7 +561,7 @@ test.describe("Core: Terminal pane", () => {
         );
 
         await rightClickPane(window, panel);
-        await clickSubmenuItem(window, "Session", "Unlock input");
+        await clickSubmenuItem(window, "Session", "Lock input", "menuitemcheckbox");
         // Menu dispatch waits for focus restoration; closing the menu doesn't finish the action.
         await expect(panel.locator(".xterm-helper-textarea")).toHaveJSProperty("readOnly", false);
         await typeTerminalCommand(window, panelId, "open", { submit: false });

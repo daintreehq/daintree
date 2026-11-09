@@ -433,7 +433,11 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     isOpen ? <div data-testid="preset-restart-confirm">{title}</div> : null,
 }));
 
-vi.mock("lucide-react", () => ({
+// The worktree submenu draws each row's branch-type glyph through BranchLabel,
+// which reaches for many more icons than this file queries; the real module
+// fills those in and the stubs below stay queryable.
+vi.mock("lucide-react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("lucide-react")>()),
   Settings2: () => <span data-testid="settings-icon" />,
   ChevronDown: (props: Record<string, unknown>) => <span data-testid="chevron-icon" {...props} />,
   ExternalLink: () => <span data-testid="external-link-icon" />,
@@ -442,6 +446,10 @@ vi.mock("lucide-react", () => ({
   PinOff: () => <span data-testid="pin-off-icon" />,
   Bookmark: () => <span data-testid="bookmark-icon" />,
   FolderGit2: () => <span data-testid="folder-git-icon" />,
+  // The worktree rows lead with the sidebar card's glyph: the sprout for main,
+  // the branch type's mark otherwise (feat/ is a feature).
+  Sprout: () => <span data-testid="sprout-icon" />,
+  Sparkle: () => <span data-testid="sparkle-icon" />,
   PanelTop: () => <span data-testid="panel-top-icon" />,
   Plug: () => <span data-testid="plug-icon" />,
   // Check / Circle render the preset-row gutter affordance (issue #10720):

@@ -240,7 +240,7 @@ export function FigureLightbox({
                   <ImageOff className="w-8 h-8" aria-hidden="true" />
                   <p className="text-sm">Couldn't load figure {figure.figureNumber}</p>
                   <Button
-                    variant="subtle"
+                    variant="outline"
                     size="sm"
                     onClick={() => {
                       setRetryNonce((n) => n + 1);

@@ -212,10 +212,9 @@ export function SlottedInputField({
     <div
       className={cn(
         COMPOUND_FIELD,
-        // The error ring, not the accent one: an accent ring around a red
-        // border is two colour signals disagreeing, the louder one saying
-        // nothing is wrong.
-        invalid && "border-status-error has-[input:focus-visible]:outline-status-error"
+        // As the `Input` primitive's `invalid`: the error is on the border and
+        // the message, and focus keeps the one focus ring.
+        invalid && "border-status-error"
       )}
     >
       {leading}

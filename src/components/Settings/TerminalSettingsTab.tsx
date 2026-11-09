@@ -670,7 +670,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         {effectiveSubtab === "layout" && (
           <>
             <SettingsSection
-              title="Two-pane split"
+              title="Two-panel split"
               id="terminal-two-pane-split"
               settings={SECTION_SETTINGS.twoPaneSplit}
             >
@@ -686,7 +686,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
                 <SettingsDependents
                   disabled={!twoPaneSplitConfig.enabled}
-                  reason="Turn on the two-pane split to adjust it"
+                  reason="Turn on the two-panel split to adjust it"
                 >
                   <SettingsSwitchCard
                     id="terminal-preview-layout"

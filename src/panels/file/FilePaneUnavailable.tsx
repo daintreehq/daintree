@@ -168,7 +168,7 @@ export function FilePaneUnavailable({
             />
           )}
           {offersRetry && (
-            <Button variant="subtle" size="sm" onClick={onRetry}>
+            <Button variant="outline" size="sm" onClick={onRetry}>
               <RefreshCw />
               Retry
             </Button>

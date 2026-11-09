@@ -109,7 +109,7 @@ export function SavedFleetsDialog({
           Arm
         </Button>
         <Button
-          variant="ghost"
+          variant="ghost-danger"
           size="icon-sm"
           aria-label={`Delete fleet "${scope.name}"`}
           onClick={() => handleDelete(scope)}

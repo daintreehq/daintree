@@ -340,8 +340,7 @@ function PresetOption({
       }}
       className={cn(
         PALETTE_ROW_CLASS,
-        "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm text-text-primary",
-        isSelected && "font-medium"
+        "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm text-text-primary"
       )}
     >
       <span

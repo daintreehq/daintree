@@ -268,7 +268,7 @@ function TranscriptBody({
         <p className="text-xs text-text-secondary">
           {subagentUnavailableMessage(transcript.reason, SUBAGENT_PROVIDERS[provider].label)}
         </p>
-        <Button variant="link" onClick={onRetry} className="text-xs">
+        <Button variant="outline" size="sm" onClick={onRetry}>
           Retry
         </Button>
       </div>
@@ -733,7 +733,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
       <p className="flex-1 min-w-0 text-2xs text-text-secondary">
         Couldn't refresh: {refreshErrorMessage}. Showing what was last read.
       </p>
-      <Button variant="link" onClick={retryRefresh} className="shrink-0 text-2xs">
+      <Button variant="outline" size="xs" onClick={retryRefresh} className="shrink-0">
         Retry
       </Button>
     </div>

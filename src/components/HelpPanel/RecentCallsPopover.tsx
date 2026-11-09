@@ -6,6 +6,7 @@ import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { InlineError } from "@/components/ui/field";
 import {
   POPOVER_HEADER_CLASS,
   POPOVER_ROW_HOVER_CLASS,
@@ -170,14 +171,14 @@ export function RecentCallsPopover({
       <div className="min-h-0 flex-1 overflow-y-auto p-1">
         {error && records.length === 0 ? (
           // Checked before `loading` so a retry in flight keeps its button.
-          <div
+          <InlineError
             role="alert"
             aria-busy={busy || undefined}
-            className="flex items-center justify-between gap-2 px-2 py-1.5"
+            action={retry}
+            className="items-center gap-2 px-2 py-1.5"
           >
-            <span className="text-text-secondary">Couldn't load recent calls</span>
-            {retry}
-          </div>
+            Couldn't load recent calls
+          </InlineError>
         ) : loading ? (
           <>
             <Skeleton label="Loading recent calls" className="space-y-1.5 px-2 py-1.5">
@@ -198,14 +199,14 @@ export function RecentCallsPopover({
           <>
             {/* A failed refresh keeps what was already read on screen. */}
             {error && (
-              <div
+              <InlineError
                 role="alert"
                 aria-busy={busy || undefined}
-                className="flex items-center justify-between gap-2 px-2 py-1"
+                action={retry}
+                className="items-center gap-2 px-2 py-1"
               >
-                <span className="text-text-secondary">Couldn't refresh recent calls</span>
-                {retry}
-              </div>
+                Couldn't refresh recent calls
+              </InlineError>
             )}
             <ul className="divide-y divide-divider">
               {groups.map((group, index) => {

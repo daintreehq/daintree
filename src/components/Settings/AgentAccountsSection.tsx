@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { actionService } from "@/services/ActionService";
@@ -103,6 +103,7 @@ export function AgentAccountsSection({
 
   const addButton = (
     <Button size="sm" variant="outline" onClick={() => setIsAddOpen(true)}>
+      <Plus aria-hidden="true" />
       Add account
     </Button>
   );

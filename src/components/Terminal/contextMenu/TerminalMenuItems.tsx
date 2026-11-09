@@ -12,7 +12,9 @@ import type { WorktreeScope } from "@shared/utils/path";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import type { PluginPanelMenuItem } from "@/components/Panel/genericPanelMenu";
 import { pluginMenuCommandId } from "@/components/Panel/genericPanelMenu";
+import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks/useKeybinding";
 import {
+  ContextMenuCheckboxItem,
   ContextMenuItem,
   ContextMenuRadioGroup,
   ContextMenuRadioItem,
@@ -35,7 +37,6 @@ import { SelectedFileMenuItems } from "../SelectedFileMenuItems";
 import { TerminalHandOverMenuItems } from "../TerminalHandOver";
 import {
   Bell,
-  BellOff,
   Clipboard,
   Clock,
   Copy,
@@ -43,11 +44,9 @@ import {
   ExternalLink,
   Globe,
   Info,
-  Lock,
   Mail,
   MailOpen,
   Mic,
-  MicOff,
   OctagonX,
   Pencil,
   Play,
@@ -59,7 +58,6 @@ import {
   Send,
   SquareTerminal,
   Trash2,
-  Unlock,
 } from "lucide-react";
 import { CirclePause, FlagTriangleRight, FolderTree } from "@/components/icons";
 import { ICON_CLASS, type MenuActionHandler } from "./menuShared";
@@ -248,6 +246,8 @@ export function TerminalFleetMenuItems({
     handleUnpark,
     handleUnsnooze,
   } = fleetRun;
+  const watchShortcut = useEffectiveCombo("terminal.watch");
+  const watchAriaShortcut = useAriaKeyshortcuts("terminal.watch");
   const canSnooze = fleetEligible && isKnownRun;
   const hasReadMark = fleetEligible && handBackState !== "none";
   const hasRunItems = canSnooze || canPark || isParked || hasReadMark;
@@ -257,14 +257,14 @@ export function TerminalFleetMenuItems({
   return (
     <>
       {detectedAgentId && (
-        <ContextMenuItem onSelect={() => onAction("toggle-watch")} keybinding="terminal.watch">
-          {isWatched ? (
-            <BellOff className={ICON_CLASS} aria-hidden="true" />
-          ) : (
-            <Bell className={ICON_CLASS} aria-hidden="true" />
-          )}
-          {isWatched ? "Cancel watch" : "Watch terminal"}
-        </ContextMenuItem>
+        <ContextMenuCheckboxItem
+          checked={isWatched}
+          onSelect={() => onAction("toggle-watch")}
+          aria-keyshortcuts={watchAriaShortcut}
+        >
+          Watch
+          <ContextMenuShortcut shortcut={watchShortcut} />
+        </ContextMenuCheckboxItem>
       )}
       {hasFleetMenu && (
         <ContextMenuSub>
@@ -439,7 +439,7 @@ export function TerminalSessionMenuItems({
           {hasPty && (
             <ContextMenuItem onSelect={() => onAction("redraw")}>
               <RefreshCw className={ICON_CLASS} aria-hidden="true" />
-              Redraw terminal
+              Redraw
             </ContextMenuItem>
           )}
           {terminalPty?.launchAgentId && !terminalPty.restoreRecovery && (
@@ -475,27 +475,21 @@ export function TerminalSessionMenuItems({
           {/* Redraw always heads the group when there is a PTY; without one the
               preset row may draw nothing, so no separator to strand. */}
           {hasPty && <ContextMenuSeparator />}
-          <ContextMenuItem onSelect={() => onAction("toggle-input-lock")}>
-            {isInputLocked ? (
-              <Unlock className={ICON_CLASS} aria-hidden="true" />
-            ) : (
-              <Lock className={ICON_CLASS} aria-hidden="true" />
-            )}
-            {isInputLocked ? "Unlock input" : "Lock input"}
-          </ContextMenuItem>
+          <ContextMenuCheckboxItem
+            checked={isInputLocked ?? false}
+            onSelect={() => onAction("toggle-input-lock")}
+          >
+            Lock input
+          </ContextMenuCheckboxItem>
           {(isVoiceLockedHere || canDictateHere) && (
-            <ContextMenuItem
+            <ContextMenuCheckboxItem
+              checked={isVoiceLockedHere}
               onSelect={() =>
                 onAction(isVoiceLockedHere ? "voice-unlock-target" : "voice-lock-target")
               }
             >
-              {isVoiceLockedHere ? (
-                <MicOff className={ICON_CLASS} aria-hidden="true" />
-              ) : (
-                <Mic className={ICON_CLASS} aria-hidden="true" />
-              )}
-              {isVoiceLockedHere ? "Unlock dictation" : "Lock dictation to this panel"}
-            </ContextMenuItem>
+              Lock dictation to this panel
+            </ContextMenuCheckboxItem>
           )}
           {hasPty && liveRecentVoiceTargets.length > 0 && (
             <ContextMenuSub>
@@ -546,13 +540,13 @@ export function TerminalIdentityMenuItems({
     <>
       <ContextMenuItem onSelect={() => onAction("rename")}>
         <Pencil className={ICON_CLASS} aria-hidden="true" />
-        Rename terminal
+        Rename
       </ContextMenuItem>
       {/* A PTY-backed plugin kind has no duplicate recipe. */}
       {canDuplicate && (
         <ContextMenuItem onSelect={() => onAction("duplicate")}>
           <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-          Duplicate terminal
+          Duplicate
         </ContextMenuItem>
       )}
       <ContextMenuItem onSelect={() => onAction("view-info")}>
@@ -574,11 +568,11 @@ export function TerminalIdentityMenuItems({
       <ContextMenuSeparator />
       <ContextMenuItem onSelect={() => onAction("trash")}>
         <Trash2 className={ICON_CLASS} aria-hidden="true" />
-        Trash terminal
+        Trash
       </ContextMenuItem>
       <ContextMenuItem destructive onSelect={() => onAction("kill")}>
         <OctagonX className={ICON_CLASS} aria-hidden="true" />
-        Kill terminal
+        Kill terminal…
       </ContextMenuItem>
     </>
   );

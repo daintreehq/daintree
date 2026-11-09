@@ -3,8 +3,12 @@ import type React from "react";
 import { Button } from "@/components/ui/button";
 import { CircleDot, Ellipsis, GitCommit, GitPullRequest, TriangleAlert } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { GitBranch } from "@/components/icons";
-import { TOOLBAR_BUTTON_METADATA, type ToolbarButtonGroup } from "./toolbarButtonMetadata";
+import { BrandMark, GitBranch } from "@/components/icons";
+import {
+  TOOLBAR_BUTTON_METADATA,
+  getToolbarButtonBrandColor,
+  type ToolbarButtonGroup,
+} from "./toolbarButtonMetadata";
 import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "./toolbarMenuStrings";
 import { toolbarIconButtonClass } from "./toolbarItemClasses";
 import { PluginOverflowItem, type PluginTrayGroup } from "./PluginTrayButton";
@@ -24,15 +28,18 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   DropdownMenu,
   DropdownMenuActionItem,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuMeta,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useDohertyGate } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks/useKeybinding";
 import type { AnyToolbarButtonId } from "@shared/types/toolbar";
 import {
   agentStateDotColor,
@@ -285,6 +292,16 @@ export function OverflowMenu({
   const tooltipText = `More — ${n} hidden${observations.length > 0 ? ` · ${observations.join(" · ")}` : ""}`;
   const ariaLabel = `More toolbar items — ${n} hidden${observations.length > 0 ? `, ${observations.join(", ")}` : ""}`;
 
+  // Built-in buttons that toggle a surface which stays open beside the toolbar,
+  // so their row shows that state the way the menu's other checkbox rows do.
+  // The notification centre is left out: it is a popover off its own button,
+  // closed by the time this menu can be open, so its row could never be checked.
+  const toggleOpenState = (id: AnyToolbarButtonId): boolean | null => {
+    if (id === "canopy") return canopyOpen;
+    if (id === "problems") return diagnosticsOpen;
+    return null;
+  };
+
   // Counts follow their marks: a surface that is open is showing them itself.
   const overflowCount = (id: AnyToolbarButtonId) => {
     if (id === "problems" && errorCount > 0 && !diagnosticsOpen) return errorCount;
@@ -515,14 +532,32 @@ export function OverflowMenu({
     const copying = id === "copy-tree" && isCopyingTree;
     const count = overflowCount(id);
     const mark = signalMark(id);
-    return [
-      <DropdownMenuItem
-        key={id}
-        disabled={disabled}
-        onClick={() => overflowActions[id]?.()}
-        keybinding={keybindingById[id]}
-      >
-        {copying && showCopyingSpinner ? (
+    const brandColor = getToolbarButtonBrandColor(id);
+    const openState = toggleOpenState(id);
+    const isToggle = openState !== null;
+    const renderPip = (m: NonNullable<typeof mark>, placement: string) => (
+      <span
+        aria-hidden="true"
+        data-pip={m.pip === "waiting" ? "waiting" : undefined}
+        data-badge-color={m.pip === "error" ? "error" : m.pip === "warning" ? "warning" : undefined}
+        className={cn(
+          "toolbar-menu-pip h-1.5 w-1.5 rounded-full ring-1 ring-[var(--overlay-surface-solid,var(--color-surface-sidebar))]",
+          placement,
+          m.pip !== "waiting" && "status-mark",
+          m.pip === "error" && "bg-status-error",
+          m.pip === "warning" && "bg-status-warning",
+          m.pip === "waiting" && "bg-state-waiting",
+          m.pip === "unread" && "bg-text-secondary"
+        )}
+      />
+    );
+    const rowContent = (
+      <>
+        {/* A toggle row's leading column is its check, as in every mixed
+            menu: its label lines up with the plain rows' labels, so it
+            carries no glyph, and a mark it would have worn on the glyph
+            trails the label instead. */}
+        {isToggle ? null : copying && showCopyingSpinner ? (
           <Spinner size="sm" className="mr-2" rootAttributes={{ "data-menu-icon": "" }} />
         ) : mark ? (
           // The mark the button itself would wear, on the row's glyph.
@@ -530,25 +565,15 @@ export function OverflowMenu({
             data-menu-icon=""
             className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center"
           >
-            <Icon className="h-3.5 w-3.5" />
-            <span
-              aria-hidden="true"
-              data-pip={mark.pip === "waiting" ? "waiting" : undefined}
-              data-badge-color={
-                mark.pip === "error" ? "error" : mark.pip === "warning" ? "warning" : undefined
-              }
-              className={cn(
-                "toolbar-menu-pip absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-[var(--overlay-surface-solid,var(--color-surface-sidebar))]",
-                mark.pip !== "waiting" && "status-mark",
-                mark.pip === "error" && "bg-status-error",
-                mark.pip === "warning" && "bg-status-warning",
-                mark.pip === "waiting" && "bg-state-waiting",
-                mark.pip === "unread" && "bg-text-secondary"
-              )}
-            />
+            <BrandMark brandColor={brandColor}>
+              <Icon className="h-3.5 w-3.5" />
+            </BrandMark>
+            {renderPip(mark, "absolute -top-0.5 -right-0.5")}
           </span>
         ) : (
-          <Icon className="mr-2 h-3.5 w-3.5" />
+          <BrandMark brandColor={brandColor}>
+            <Icon className="mr-2 h-3.5 w-3.5" />
+          </BrandMark>
         )}
         {id === "copy-tree" ? (
           // Both labels share one grid cell so the row is always as wide
@@ -568,12 +593,36 @@ export function OverflowMenu({
             {mark && <span className="sr-only">{` — ${mark.spoken}`}</span>}
           </span>
         )}
+        {isToggle && mark && renderPip(mark, "ml-2 inline-block shrink-0")}
         {count !== null && (
           <DropdownMenuMeta aria-hidden={mark !== null ? true : false}>{count}</DropdownMenuMeta>
         )}
         {unavailableReason !== undefined && (
           <DropdownMenuMeta aria-hidden={false}>{unavailableReason}</DropdownMenuMeta>
         )}
+      </>
+    );
+    if (isToggle) {
+      return [
+        <OverflowToggleItem
+          key={id}
+          checked={openState}
+          disabled={disabled}
+          onSelect={() => overflowActions[id]?.()}
+          keybinding={keybindingById[id]}
+        >
+          {rowContent}
+        </OverflowToggleItem>,
+      ];
+    }
+    return [
+      <DropdownMenuItem
+        key={id}
+        disabled={disabled}
+        onClick={() => overflowActions[id]?.()}
+        keybinding={keybindingById[id]}
+      >
+        {rowContent}
       </DropdownMenuItem>,
     ];
   };
@@ -718,6 +767,36 @@ function joinOverflowBlocks(
   return out;
 }
 
+// A folded toggle button: the menu's checkbox row, with the check in the leading
+// gutter, plus the shortcut column the plain rows carry through `keybinding`.
+function OverflowToggleItem({
+  checked,
+  disabled,
+  onSelect,
+  keybinding,
+  children,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+  keybinding: string | undefined;
+  children: React.ReactNode;
+}) {
+  const combo = useEffectiveCombo(keybinding ?? "");
+  const ariaKeyshortcuts = useAriaKeyshortcuts(keybinding ?? "");
+  return (
+    <DropdownMenuCheckboxItem
+      checked={checked}
+      disabled={disabled}
+      onSelect={onSelect}
+      aria-keyshortcuts={keybinding ? ariaKeyshortcuts : undefined}
+    >
+      {children}
+      {keybinding && <DropdownMenuShortcut shortcut={combo} />}
+    </DropdownMenuCheckboxItem>
+  );
+}
+
 // Overflow menu item for a built-in agent. Restores the two signals the bare
 // overflow item dropped: the colored agent-state dot and the keyboard shortcut.
 function AgentOverflowItem({
@@ -727,7 +806,7 @@ function AgentOverflowItem({
   attentionState,
   onSelect,
 }: {
-  id: string;
+  id: AnyToolbarButtonId;
   label: string;
   Icon: React.ComponentType<{ className?: string }>;
   attentionState: AttentionAgentState | null;
@@ -740,7 +819,9 @@ function AgentOverflowItem({
         data-menu-icon=""
         className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center"
       >
-        <Icon className="h-3.5 w-3.5" />
+        <BrandMark brandColor={getToolbarButtonBrandColor(id)}>
+          <Icon className="h-3.5 w-3.5" />
+        </BrandMark>
         {dotColor && (
           <span
             aria-hidden="true"

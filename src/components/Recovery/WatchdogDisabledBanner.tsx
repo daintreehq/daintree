@@ -61,7 +61,7 @@ export function WatchdogDisabledBanner() {
             size="sm"
             onClick={() => useDiagnosticsStore.getState().openDock("logs")}
           >
-            Open Diagnostics
+            Open diagnostics
           </Button>
         ) : undefined
       }

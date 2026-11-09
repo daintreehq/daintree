@@ -818,7 +818,7 @@ export function createApplicationMenu(
         },
         { type: "separator" },
         {
-          label: "Launch Help Agent",
+          label: "Launch Daintree Assistant",
           accelerator: rendererMenuAccelerator("help.launchAgent"),
           click: (_item, browserWindow) =>
             sendAction("help.launchAgent", getTargetBrowserWindow(browserWindow)),

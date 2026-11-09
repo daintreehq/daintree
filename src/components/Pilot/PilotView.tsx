@@ -52,7 +52,7 @@ import {
   type PaletteTreeGroupInput,
 } from "@/hooks/usePaletteTreeNavigation";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
-import { FolderGit2 } from "@/components/icons";
+import { FolderGit2, Sprout } from "@/components/icons";
 import { TILE_BASE, WorkspaceTile } from "./WorkspaceTile";
 // Direction glyphs, not app concepts, so they come straight from Lucide the way
 // every other chevron in the app does rather than through the icon aliases.
@@ -323,7 +323,8 @@ function GroupHeader({
 
       {/*
         The shared section-label treatment every other palette gives this
-        element — 10px, tracked, uppercase, muted. A project is structure, and
+        element — 10px, muted — though not its uppercase, since a name is spelled
+        as its owner spells it. A project is structure, and
         structure has to weigh less than the content it organises; the 14px
         semibold name plus a second coloured line outweighed the very rows it
         was meant to be filing.
@@ -333,7 +334,9 @@ function GroupHeader({
         time on the way past.
       */}
       <div aria-hidden="true" className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span className={cn(PALETTE_SECTION_LABEL_CLASS, "truncate")}>{group.name}</span>
+        <span className={cn(PALETTE_SECTION_LABEL_CLASS, "normal-case tracking-normal truncate")}>
+          {group.name}
+        </span>
         {/*
           Which workspace you are already in decides whether opening a run is
           instant or swaps the whole view, so it is worth a word. Muted and
@@ -375,21 +378,34 @@ function GroupHeader({
  * exists for the one project a renderer owns. The question this answers is
  * which unit of work owns these agents, not whether that branch is safe to push.
  */
-function WorktreeGroupHeader({ group }: { group: PilotWorktreeGroup }) {
+function WorktreeGroupHeader({
+  group,
+  isMainWorktree,
+}: {
+  group: PilotWorktreeGroup;
+  /** Only ever true for this view's own project, where its store tagged the id main. */
+  isMainWorktree: boolean;
+}) {
+  // The sidebar's sprout for the root checkout. The snapshot carries no branch,
+  // so every other worktree keeps the plain worktree glyph rather than a type
+  // mark guessed from its folder name.
+  const Glyph = isMainWorktree ? Sprout : FolderGit2;
   return (
     <div
       data-testid="pilot-worktree-header"
       className="flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none"
     >
       <div className={cn(TILE_BASE, "bg-tint/[0.04] text-muted-foreground")}>
-        <FolderGit2 className="h-2.5 w-2.5" aria-hidden="true" />
+        <Glyph className="h-2.5 w-2.5" aria-hidden="true" />
       </div>
 
       {/* Hidden for the reason the project heading's name is: the enclosing
           `role="group"` already carries it as the label for every option
           inside, so announcing it here would say it twice. */}
       <div aria-hidden="true" className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span className={cn(PALETTE_SECTION_LABEL_CLASS, "truncate")}>{group.name}</span>
+        <span className={cn(PALETTE_SECTION_LABEL_CLASS, "normal-case tracking-normal truncate")}>
+          {group.name}
+        </span>
       </div>
 
       <GroupDemandChip group={group} />
@@ -2176,7 +2192,17 @@ export function PilotView() {
                 className={groupIndex > 0 ? "mt-2" : undefined}
               >
                 {group.axis === "worktree" ? (
-                  <WorktreeGroupHeader group={group} />
+                  <WorktreeGroupHeader
+                    group={group}
+                    // The same three conditions the lead position rests on
+                    // (`buildPilotWorktreeGroups`): this view's own project, an
+                    // id its store tagged main, and a miss that costs only the mark.
+                    isMainWorktree={
+                      scopedProject?.isCurrent === true &&
+                      viewMainWorktreeId !== null &&
+                      group.worktreeId === viewMainWorktreeId
+                    }
+                  />
                 ) : group.axis === "plugin" ? (
                   <PluginGroupHeader group={group} />
                 ) : (

@@ -35,7 +35,26 @@ vi.mock("@/components/ui/context-menu", () => {
     ),
     ContextMenuItem: Item,
     ContextMenuActionItem: Item,
-    ContextMenuCheckboxItem: Item,
+    ContextMenuCheckboxItem: ({
+      children,
+      onSelect,
+      disabled,
+      checked,
+    }: {
+      children?: React.ReactNode;
+      onSelect?: () => void;
+      disabled?: boolean;
+      checked?: boolean;
+    }) => (
+      <button
+        role="menuitemcheckbox"
+        aria-checked={checked ? "true" : "false"}
+        aria-disabled={disabled || undefined}
+        onClick={() => onSelect?.()}
+      >
+        {children}
+      </button>
+    ),
     ContextMenuRadioGroup: Passthrough,
     ContextMenuRadioItem: Item,
     ContextMenuSeparator: () => <hr />,
@@ -337,8 +356,8 @@ describe("TerminalContextMenu — a backgrounded panel", () => {
       expect(screen.queryByText("Move to grid")).toBeNull();
       expect(screen.queryByText("Move to dock")).toBeNull();
       expect(screen.queryByText("Move to worktree…")).toBeNull();
-      expect(screen.queryByText("Reload panel")).toBeNull();
-      expect(screen.getByText("Trash panel")).toBeTruthy();
+      expect(screen.queryByText("Reload")).toBeNull();
+      expect(screen.getByText("Trash")).toBeTruthy();
       expect(screen.getByText("Remove panel")).toBeTruthy();
 
       fireEvent.click(screen.getByText("Restore from background"));
@@ -355,7 +374,7 @@ describe("TerminalContextMenu — a backgrounded panel", () => {
       worktreeId: "wt-1",
       location: "background",
     });
-    fireEvent.click(screen.getByText("Trash panel"));
+    fireEvent.click(screen.getByText("Trash"));
     expect(dispatch).toHaveBeenCalledWith(
       "terminal.trash",
       { terminalId: "panel-1" },
@@ -388,7 +407,7 @@ describe("TerminalContextMenu — a backgrounded panel", () => {
     expect(screen.getByText(reload)).toBeTruthy();
   });
 
-  it("offers Reload panel only on a plugin's panel on screen", () => {
+  it("offers Reload only on a plugin's panel on screen", () => {
     renderMenu({
       id: "panel-1",
       title: "Panel",
@@ -396,7 +415,7 @@ describe("TerminalContextMenu — a backgrounded panel", () => {
       worktreeId: "wt-1",
       location: "grid",
     });
-    expect(screen.getByText("Reload panel")).toBeTruthy();
+    expect(screen.getByText("Reload")).toBeTruthy();
     cleanup();
 
     renderMenu({
@@ -406,7 +425,7 @@ describe("TerminalContextMenu — a backgrounded panel", () => {
       worktreeId: "wt-1",
       location: "grid",
     });
-    expect(screen.queryByText("Reload panel")).toBeNull();
+    expect(screen.queryByText("Reload")).toBeNull();
   });
 
   it("keeps the generic list's moves for a panel that is not backgrounded", () => {
@@ -1236,7 +1255,6 @@ describe("TerminalContextMenu — dictation lock and recent targets (#14955)", (
   ])("doesn't offer the lock on %s", (_n, panel) => {
     openOn(panel);
     expect(screen.queryByText("Lock dictation to this panel")).toBeNull();
-    expect(screen.queryByText("Unlock dictation")).toBeNull();
   });
 
   it("doesn't offer the lock on an agent pane while hybrid input is off", () => {
@@ -1245,10 +1263,12 @@ describe("TerminalContextMenu — dictation lock and recent targets (#14955)", (
     expect(screen.queryByText("Lock dictation to this panel")).toBeNull();
   });
 
-  it("still offers Unlock on a locked pane that has lost its composer", () => {
+  it("still offers the checked lock, which unlocks, on a locked pane that has lost its composer", () => {
     voiceState.lockedTarget = { panelId: "shell-1" };
     openOn(shell);
-    fireEvent.click(screen.getByText("Unlock dictation"));
+    const lock = screen.getByRole("menuitemcheckbox", { name: "Lock dictation to this panel" });
+    expect(lock.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(lock);
     expect(dispatch).toHaveBeenCalledWith("voiceInput.unlockTarget", undefined, expect.anything());
   });
 
@@ -1386,7 +1406,7 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
       "Paste",
       "Send to agent",
       "---",
-      "Watch terminal",
+      "Watch",
       "Fleet ›",
       "When done ›",
       "---",
@@ -1396,12 +1416,12 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
       "Restart terminal",
       "Session ›",
       "---",
-      "Rename terminal",
-      "Duplicate terminal",
+      "Rename",
+      "Duplicate",
       "View terminal info",
       "---",
-      "Trash terminal",
-      "Kill terminal",
+      "Trash",
+      "Kill terminal…",
     ]);
     expect(level(submenu(tree, "Fleet"))).toEqual([
       "Add to fleet",
@@ -1419,7 +1439,7 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
       "Send to background",
     ]);
     expect(level(submenu(tree, "Session"))).toEqual([
-      "Redraw terminal",
+      "Redraw",
       "---",
       "Lock input",
       "Lock dictation to this panel",
@@ -1450,7 +1470,7 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
 
     const tree = menuTree();
     expect(level(submenu(tree, "Session"))).toEqual([
-      "Redraw terminal",
+      "Redraw",
       "Restart on preset ›",
       "---",
       "Lock input",
@@ -1464,16 +1484,19 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
   });
 
   it.each([
-    ["an agent the user is watching", "Cancel watch", "Watch terminal"],
-    ["an agent nobody is watching", "Watch terminal", "Cancel watch"],
-  ])("draws the watch toggle for %s at the top level", (_name, shown, hidden) => {
+    ["an agent the user is watching", true],
+    ["an agent nobody is watching", false],
+  ])("draws the watch toggle for %s at the top level", (_name, watched) => {
     fleetEligible.current = true;
-    if (shown === "Cancel watch") watchedIds.current.add("panel-1");
+    if (watched) watchedIds.current.add("panel-1");
     renderMenu(agentPane);
 
     const root = level(menuTree());
-    expect(root.indexOf(shown)).toBe(root.indexOf("Fleet ›") - 1);
-    expect(root).not.toContain(hidden);
+    expect(root.indexOf("Watch")).toBe(root.indexOf("Fleet ›") - 1);
+    expect(root.filter((row) => row === "Watch")).toHaveLength(1);
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "Watch" }).getAttribute("aria-checked")
+    ).toBe(String(watched));
   });
 
   it("offers When done on a live agent pane and dispatches every pick, the current one too (#16171)", () => {
@@ -1516,7 +1539,7 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     collectEligibleIds.mockReturnValueOnce(["panel-1", "panel-3"]);
     renderMenu(agentPane);
 
-    fireEvent.click(screen.getByText("Watch terminal"));
+    fireEvent.click(screen.getByText("Watch"));
     expect(dispatch).toHaveBeenCalledWith(
       "terminal.watch",
       { terminalId: "panel-1" },
@@ -1616,7 +1639,7 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
 
     const tree = menuTree();
     expectTidy(tree);
-    expect(level(tree).slice(-2)).toEqual(["Trash terminal", "Kill terminal"]);
+    expect(level(tree).slice(-2)).toEqual(["Trash", "Kill terminal…"]);
   });
 
   it("offers no Fleet submenu when there is nothing to put in it", () => {

@@ -178,7 +178,7 @@ export const SEL = {
     zoomIndicator: '[data-testid="browser-zoom-indicator"]',
     moreActions: '[data-testid="browser-more-actions"]',
     promoteToPortal: '[data-testid="browser-promote-portal"]',
-    findInput: 'input[placeholder="Find in page"]',
+    findInput: 'input[placeholder="Find in page…"]',
     findPrev: '[aria-label="Previous match"]',
     findNext: '[aria-label="Next match"]',
     findClose: '[aria-label="Close find bar"]',
@@ -391,7 +391,7 @@ export const SEL = {
   },
   quickSwitcher: {
     dialog: '[role="dialog"][aria-label="Quick switcher"]',
-    searchInput: '[aria-label="Search panels, agents, and worktrees"]',
+    searchInput: '[aria-label="Find panels, agents, or worktrees"]',
     list: "#quick-switcher-list",
     options: '#quick-switcher-list [role="option"]',
   },

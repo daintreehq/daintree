@@ -746,7 +746,12 @@ export function SettingsShortcutCapture({
             Record again
           </Button>
         )}
-        <Button type="button" variant="ghost" size={compact ? "xs" : "sm"} onClick={handleCancel}>
+        <Button
+          type="button"
+          variant={compact ? "ghost" : "outline"}
+          size={compact ? "xs" : "sm"}
+          onClick={handleCancel}
+        >
           Cancel
         </Button>
         {/* Removes the binding in force, never just the draft, so it is only offered

@@ -937,7 +937,13 @@ function KitUnsavedChangesBar({
         >
           {nonEmpty(discardLabel) ?? "Discard"}
         </Button>
-        <Button size="sm" loading={busy} disabled={!save || count === 0} onClick={runSave}>
+        <Button
+          variant="contrast"
+          size="sm"
+          loading={busy}
+          disabled={!save || count === 0}
+          onClick={runSave}
+        >
           {nonEmpty(saveLabel) ?? "Save"}
         </Button>
       </div>

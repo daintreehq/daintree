@@ -32,7 +32,7 @@ export function describeRelayRemoval(observed: RelayRemovalObservation): RelayRe
       description:
         "Daintree didn't watch this terminal in this run, so it can't say what the removal did. Settings → Decisions shows the relay this computer records now.",
       settingsSection: "decisions-relay-remove",
-      actionLabel: "Open Settings",
+      actionLabel: "Open settings",
     };
   }
   const host = hostOf(observed.origin);
@@ -55,7 +55,7 @@ export function describeRelayRemoval(observed: RelayRemovalObservation): RelayRe
         title: "Relay removal didn't finish",
         description: `Daintree lost track of this removal before it said how it went, so part of the relay may still be in Cloudflare.${kept} ${RUN_AGAIN}.`,
         settingsSection: "decisions-relay-remove",
-        actionLabel: "Open Settings",
+        actionLabel: "Open settings",
       };
     case "exited":
       break;
@@ -67,7 +67,7 @@ export function describeRelayRemoval(observed: RelayRemovalObservation): RelayRe
       title: "Relay removal didn't finish",
       description: `The removal exited with status ${outcome.exitCode}, so part of the relay may still be in Cloudflare; the terminal says why.${kept}`,
       settingsSection: "decisions-relay-remove",
-      actionLabel: "Open Settings",
+      actionLabel: "Open settings",
     };
   }
   const finished = "The removal exited with status 0.";
@@ -112,7 +112,7 @@ export function describeRelayRemoval(observed: RelayRemovalObservation): RelayRe
         title: "Relay removal finished",
         description: `${finished} Daintree forgot ${host}, but deleting this computer's decision history didn't finish. Delete local data in Settings to try again.`,
         settingsSection: "decisions-data",
-        actionLabel: "Open Settings",
+        actionLabel: "Open settings",
       };
     case "changed":
       return {
@@ -128,7 +128,7 @@ export function describeRelayRemoval(observed: RelayRemovalObservation): RelayRe
         title: "Relay removal finished",
         description: `${finished} Decisions was off by then, so Daintree kept its record of ${host}. Turn Decisions on and disconnect it in Settings.`,
         settingsSection: "decisions-relay-remove",
-        actionLabel: "Open Settings",
+        actionLabel: "Open settings",
       };
     case "failed":
       return {
@@ -137,7 +137,7 @@ export function describeRelayRemoval(observed: RelayRemovalObservation): RelayRe
         title: "Couldn't forget the removed relay",
         description: `${finished} Daintree couldn't forget ${host}, so it kept its record. Disconnect it in Settings.`,
         settingsSection: "decisions-relay-remove",
-        actionLabel: "Open Settings",
+        actionLabel: "Open settings",
       };
   }
 }

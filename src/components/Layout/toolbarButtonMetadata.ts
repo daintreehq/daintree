@@ -46,13 +46,26 @@ const AGENT_METADATA: Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>>
       return [
         id,
         {
-          label: `${name} agent`,
+          label: name,
           icon: Icon,
           description: `Launch ${name} AI agent`,
         },
       ];
     })
   ) as Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>>;
+
+/**
+ * The brand colour an agent's toolbar button wears — built-in agents and pinned
+ * launcher agents alike — so every list derived from the toolbar draws the mark
+ * through `BrandMark` the way the toolbar and the launcher do. `undefined` for
+ * anything that isn't an agent.
+ */
+export function getToolbarButtonBrandColor(buttonId: AnyToolbarButtonId): string | undefined {
+  if (isBuiltInAgentId(buttonId)) return getAgentConfig(buttonId)?.color;
+  const launcherItem = decodeLauncherItemToolbarButtonId(buttonId);
+  if (launcherItem?.category === "agent") return getAgentConfig(launcherItem.sourceId)?.color;
+  return undefined;
+}
 
 export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>> = {
   launcher: {

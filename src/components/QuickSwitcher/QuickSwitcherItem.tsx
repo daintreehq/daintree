@@ -1,7 +1,8 @@
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { FolderGit2 } from "@/components/icons";
+import { FolderGit2, Sprout } from "@/components/icons";
+import { splitBranchType } from "@/components/Worktree/BranchLabel";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import { PaletteCurrentLabel } from "@/components/ui/PaletteCurrentLabel";
 import {
@@ -97,6 +98,13 @@ function AgentStateMark({ item }: { item: QuickSwitcherItemData }) {
   );
 }
 
+function WorktreeGlyph({ item }: { item: QuickSwitcherItemData }) {
+  const Glyph = item.isMainWorktree
+    ? Sprout
+    : ((item.branchLabel ? splitBranchType(item.branchLabel).Icon : null) ?? FolderGit2);
+  return <Glyph className="w-4 h-4" />;
+}
+
 /**
  * One row of the quick switcher, in the family's anatomy: a type glyph, the
  * name, the context that tells same-named rows apart beside it, a quieter detail
@@ -133,6 +141,18 @@ export function QuickSwitcherItem({
     ? [runtime, item.isBackground ? "Backgrounded" : null].filter(Boolean).join(" · ") || null
     : null;
   const shortened = item.type === "worktree" && item.subtitle ? shortenPath(item.subtitle) : null;
+  // A linked worktree is named by its branch, so its title is an identifier and
+  // set in mono as the sidebar sets it; main is named by its folder, which stays
+  // a name and carries its branch beside it, as the worktree palette does.
+  const isBranchTitled =
+    item.type === "worktree" && !item.isMainWorktree && item.title === item.branchLabel;
+  const worktreeQualifier =
+    item.type === "worktree" &&
+    item.isMainWorktree &&
+    item.branchLabel &&
+    item.branchLabel !== item.title
+      ? item.branchLabel
+      : null;
   const hasDetail = !!terminalDetail || (isPlugin && !!item.subtitle) || shortened !== null;
 
   return (
@@ -160,7 +180,9 @@ export function QuickSwitcherItem({
         ) : isPlugin ? (
           <PanelKindIcon iconId={item.pluginHit?.row.iconId ?? ""} size={16} />
         ) : (
-          <FolderGit2 className="w-4 h-4" />
+          // The sidebar's glyph for the same worktree; the worktree glyph only
+          // for an untyped branch.
+          <WorktreeGlyph item={item} />
         )}
       </span>
 
@@ -171,7 +193,12 @@ export function QuickSwitcherItem({
             <TailKeepingText
               text={item.title}
               indices={titleIndices}
-              className="text-sm font-medium text-text-primary"
+              className={cn(
+                // Only the family changes for a branch: the title keeps the
+                // row's title size so it stays above the text-xs path line.
+                "text-sm font-medium text-text-primary",
+                isBranchTitled && "font-mono"
+              )}
             />
           ) : (
             <span
@@ -185,8 +212,17 @@ export function QuickSwitcherItem({
               <HighlightedText text={item.title} indices={titleIndices} />
             </span>
           )}
+          {worktreeQualifier && (
+            <span className="shrink-0 font-mono text-xs text-text-secondary">
+              <span className="sr-only">, </span>
+              <HighlightedText
+                text={worktreeQualifier}
+                indices={wordMatchIndices(worktreeQualifier, query)}
+              />
+            </span>
+          )}
           {context && (
-            <span className="flex min-w-0 text-sm text-text-secondary">
+            <span className="flex min-w-0 font-mono text-xs text-text-secondary">
               <span className="sr-only">, in </span>
               <TailKeepingText
                 text={context}
@@ -221,7 +257,7 @@ export function QuickSwitcherItem({
             <TooltipTrigger asChild>
               <div className="mt-0.5 flex min-w-0 text-xs text-text-secondary">
                 <PathTail
-                  className="block min-w-0"
+                  className="block min-w-0 font-mono"
                   indices={remapPathRanges(findMatchIndices(matches, "subtitle"), shortened.start)}
                 >
                   {shortened.text}

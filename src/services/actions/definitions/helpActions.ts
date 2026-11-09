@@ -142,8 +142,8 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("help.launchAgent", () => ({
     id: "help.launchAgent",
-    title: "Launch help agent",
-    description: "Open an AI agent in the help workspace folder",
+    title: "Launch Daintree Assistant",
+    description: "Start a Daintree Assistant session with an AI agent",
     category: "help",
     kind: "command",
     danger: "safe",
@@ -241,7 +241,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("help.tour.show", () => ({
     id: "help.tour.show",
-    title: "Daintree Tour",
+    title: "Daintree tour",
     description: "Play the narrated tour of Daintree's essentials",
     category: "help",
     kind: "command",
@@ -293,8 +293,8 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("help.togglePanel", () => ({
     id: "help.togglePanel",
-    title: "Toggle help panel",
-    description: "Show or hide the help panel",
+    title: "Toggle Daintree Assistant",
+    description: "Show or hide the Daintree Assistant",
     category: "help",
     kind: "command",
     danger: "safe",

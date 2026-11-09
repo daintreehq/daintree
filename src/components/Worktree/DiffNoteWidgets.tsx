@@ -378,7 +378,7 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
               <TooltipTrigger asChild>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="ghost-danger"
                   size="icon-xs"
                   aria-label="Delete note"
                   onClick={handleDelete}

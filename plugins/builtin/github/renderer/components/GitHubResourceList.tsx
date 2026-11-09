@@ -1720,7 +1720,7 @@ export function GitHubResourceList({
                   : sanitizeIpcError(error)
               }
               action={
-                <Button variant="ghost" size="sm" onClick={handleRetry} icon="refresh">
+                <Button variant="outline" size="sm" onClick={handleRetry} icon="refresh">
                   Retry
                 </Button>
               }

@@ -528,10 +528,7 @@ function MoveOrRenameProjectDialogInner({
                     aria-describedby={folderNameError ? folderErrorId : undefined}
                     spellCheck={false}
                     autoComplete="off"
-                    className={cn(
-                      FIELD_INPUT,
-                      folderNameError && "border-status-error focus-visible:outline-status-error"
-                    )}
+                    className={cn(FIELD_INPUT, folderNameError && "border-status-error")}
                     placeholder="my-project"
                     data-testid="relocate-folder-input"
                   />

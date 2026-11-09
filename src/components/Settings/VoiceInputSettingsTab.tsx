@@ -1238,7 +1238,7 @@ function ApiKeyRow({
                   onClick={() => setShowKey((v) => !v)}
                   className="absolute right-1 top-1/2 -translate-y-1/2 [&_svg]:size-3.5"
                   aria-label="Show API key"
-                  pressed={showKey}
+                  aria-pressed={showKey}
                 >
                   {showKey ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
                 </Button>

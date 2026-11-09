@@ -399,7 +399,7 @@ function MoveToWorktreePickerBody({
         clearLabel="Clear"
         onClear={() => onQueryChange("")}
         onKeyDown={handleNavigationKeyDown}
-        placeholder="Search worktrees"
+        placeholder="Search worktrees…"
         aria-label="Search worktrees"
         role="combobox"
         aria-autocomplete="list"

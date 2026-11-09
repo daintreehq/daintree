@@ -527,7 +527,9 @@ export function WorktreeMenuItems({
   const reviewSub = reviewRows.length > 0 && (
     <C.Sub key="review">
       <C.SubTrigger>
-        <GitCommitHorizontal className={ICON} />
+        {/* The commit glyph belongs to the direct "Review worktree" row a few
+            rows up; this submenu holds the diff views, so it wears theirs. */}
+        <FileDiff className={ICON} />
         Review
       </C.SubTrigger>
       <C.SubContent>{reviewRows}</C.SubContent>

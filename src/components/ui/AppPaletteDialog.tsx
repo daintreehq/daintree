@@ -16,7 +16,7 @@ import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { SearchField } from "@/components/ui/SearchField";
-import { KBD_CLASS, KbdChord } from "@/components/ui/Kbd";
+import { KBD_CLASS, Kbd, KbdChord } from "@/components/ui/Kbd";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { PALETTE_HEADER_ATTR } from "./paletteHeaderAttr";
 import { useOverlayState } from "@/hooks/useOverlayState";
@@ -827,9 +827,13 @@ function HintChip({
         {hint.keys.map((key) => describeKeyCap(key, isMac())).join(" ")}
       </span>
       {hint.keys.map((key, i) => (
-        <kbd key={key} aria-hidden="true" className={cn(KBD_CLASS, "shrink-0", i > 0 && "ml-1")}>
+        <Kbd
+          key={key}
+          rootAttributes={{ "aria-hidden": "true" }}
+          className={cn("shrink-0", i > 0 && "ml-1")}
+        >
           {key}
-        </kbd>
+        </Kbd>
       ))}
       <span className={cn("ml-1.5", truncate && "min-w-0 truncate")}>{hint.label}</span>
     </span>

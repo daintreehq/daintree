@@ -2,6 +2,8 @@ import { useState, useCallback, useRef, useEffect, useId, useMemo } from "react"
 import type { SearchAddon } from "@xterm/addon-search";
 import { X, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { labelWithShortcut } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SearchField } from "@/components/ui/SearchField";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -440,7 +442,7 @@ export function TerminalSearchBar({
               inputRef={inputRef}
               value={searchTerm}
               onChange={handleInputChange}
-              placeholder="Find in terminal"
+              placeholder="Find in terminal…"
               aria-label="Find in terminal"
               invalid={searchStatus === "invalidRegex"}
               aria-describedby={describedBy}
@@ -515,7 +517,7 @@ export function TerminalSearchBar({
 
       <FindBarButton
         label="Previous match"
-        tooltip="Previous match (Shift+Enter)"
+        tooltip={labelWithShortcut("Previous match", "Shift+Enter", isMac())}
         onClick={() => step("prev")}
         disabled={!canStep}
         keepFieldFocus
@@ -525,7 +527,7 @@ export function TerminalSearchBar({
 
       <FindBarButton
         label="Next match"
-        tooltip="Next match (Enter)"
+        tooltip={labelWithShortcut("Next match", "Enter", isMac())}
         onClick={() => step("next")}
         disabled={!canStep}
         keepFieldFocus
@@ -533,7 +535,11 @@ export function TerminalSearchBar({
         <ChevronDown className={FIND_BAR_ICON_CLASS} />
       </FindBarButton>
 
-      <FindBarButton label="Close find bar" tooltip="Close (Esc)" onClick={handleClose}>
+      <FindBarButton
+        label="Close find bar"
+        tooltip={labelWithShortcut("Close find bar", "Escape", isMac())}
+        onClick={handleClose}
+      >
         <X className={FIND_BAR_ICON_CLASS} />
       </FindBarButton>
     </div>

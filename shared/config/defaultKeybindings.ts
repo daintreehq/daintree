@@ -317,7 +317,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Alt+C",
     scope: "global",
     priority: 0,
-    description: "Launch Claude Code agent",
+    description: "Launch Claude agent",
     category: "Agents",
   },
   {
@@ -1014,7 +1014,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+H",
     scope: "global",
     priority: 0,
-    description: "Launch help agent",
+    description: "Launch Daintree Assistant",
     category: "Help",
   },
   {

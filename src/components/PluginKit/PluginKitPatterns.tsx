@@ -274,7 +274,7 @@ function KitPaneState({
       {retry || extra !== undefined ? (
         <PaneStateActions>
           {retry ? (
-            <Button variant="subtle" size="sm" onClick={() => retry()}>
+            <Button variant="outline" size="sm" onClick={() => retry()}>
               <RefreshCw aria-hidden="true" />
               {nonEmpty(retryLabel) ?? "Retry"}
             </Button>

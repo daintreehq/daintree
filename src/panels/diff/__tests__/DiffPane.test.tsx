@@ -324,7 +324,7 @@ describe("DiffPane — current-file resolution", () => {
     );
 
     // The viewed marker follows the resolved entry, not the first path match.
-    fireEvent.click(screen.getByRole("button", { name: "Viewed" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Viewed" }));
     expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, "unstaged:a.ts");
   });
 

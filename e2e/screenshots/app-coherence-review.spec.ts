@@ -465,6 +465,22 @@ test("app coherence — whole window, floating surfaces, theme sweep", async () 
       await shoot("24-worktree-overview");
     });
 
+    await step("25-worktree-palette", async () => {
+      await overlay("25-worktree-palette", async () => {
+        await act(page, "worktree.openPalette");
+        return page.locator('[role="dialog"]').last();
+      });
+    });
+
+    // The toolbar's own right-click menu lists every toolbar button, agents
+    // included, so it shows how the toolbar names and draws them off-strip.
+    await step("26-toolbar-context-menu", async () => {
+      await overlay("26-toolbar-context-menu", async () => {
+        await page.mouse.click(1100, 24, { button: "right" });
+        return page.locator('[role="menu"]').last();
+      });
+    });
+
     // ---- Layout variants -------------------------------------------------
     await step("30-dock", async () => {
       if (!ids.shell) throw new Error("no plain terminal to dock");
@@ -636,6 +652,19 @@ test("app coherence — whole window, floating surfaces, theme sweep", async () 
       "mcp",
       "project:general",
       "project:recipes",
+      "general",
+      "terminal",
+      "toolbar",
+      "hosts",
+      "decisions",
+      "voice",
+      "assistant",
+      "code-forge",
+      "privacy",
+      "troubleshooting",
+      "project:automation",
+      "project:variables",
+      "project:code-forge",
     ] as const;
     if (want("60-settings")) {
       for (const tab of SETTINGS_PAGES) {

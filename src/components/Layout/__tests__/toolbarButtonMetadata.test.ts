@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { getAgentConfig } from "@/config/agents";
 import {
   TOOLBAR_BUTTON_GROUP_ORDER,
   TOOLBAR_BUTTON_METADATA,
@@ -52,11 +53,11 @@ describe("TOOLBAR_BUTTON_METADATA — registry coverage", () => {
   it("uses the canonical agent display name for built-in agent labels", () => {
     // Drift guard for the original issue (#7668): the launcher icon and
     // labels must come from the same source the AgentButton renders so the
-    // Settings list and the overflow dropdown stay in sync. Sentence-cased
-    // per #9825 (lowercase "agent" suffix).
+    // Settings list and the overflow dropdown stay in sync. The label is the
+    // agent's bare name, as the toolbar button names it, with no "agent" suffix.
     for (const id of BUILT_IN_AGENT_IDS) {
       const meta = TOOLBAR_BUTTON_METADATA[id as AnyToolbarButtonId];
-      expect(meta?.label, `agent "${id}" missing label`).toMatch(/agent$/);
+      expect(meta?.label, `agent "${id}" missing label`).toBe(getAgentConfig(id)?.name);
     }
   });
 });

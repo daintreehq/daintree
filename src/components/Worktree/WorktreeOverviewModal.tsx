@@ -893,7 +893,7 @@ export function WorktreeOverviewModal({
                     Close sessions
                   </Button>
                   <Button
-                    variant="destructive"
+                    variant="ghost-danger"
                     size="sm"
                     onClick={bulkRemove.handleRemoveClick}
                     disabled={bulkRemove.isExecuting}

@@ -178,20 +178,17 @@ function HostMenuItem({
         {/* The name keeps the whole row when it needs it and the state drops
             below it: "build-east-01" and "build-east-02" differ at the end. */}
         <span className="flex min-w-0 flex-wrap items-baseline gap-x-3">
-          <span
-            className={cn(
-              "max-w-full break-words text-text-primary",
-              row.isCurrent ? "font-semibold" : "font-medium"
-            )}
-          >
-            {row.name}
-          </span>
+          <span className="max-w-full break-words font-medium text-text-primary">{row.name}</span>
           {state && (
             <span
               data-host-trouble={trouble ? "" : undefined}
               className={cn(
                 "ml-auto flex shrink-0 items-baseline gap-1 text-2xs",
-                trouble || row.isCurrent ? "font-medium text-text-primary" : "text-text-secondary"
+                trouble
+                  ? "font-medium text-text-primary"
+                  : row.isCurrent
+                    ? "text-text-primary"
+                    : "text-text-secondary"
               )}
             >
               {trouble && (

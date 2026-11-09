@@ -2,6 +2,7 @@ import { Plus, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
@@ -354,7 +355,11 @@ export function AutomationTab({
                 label={label}
                 description={description}
                 bare
-                className="w-full px-4 py-3"
+                className={cn(
+                  "w-full px-4 py-3 transition-colors",
+                  "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
+                  branchPrefixMode === value ? "bg-overlay-selected" : "hover:bg-overlay-soft"
+                )}
               />
             ))}
             {branchPrefixMode === "custom" && (

@@ -316,13 +316,17 @@ test.describe("Core: Panel Tab Groups & Layout", () => {
 
         await test.step("Verify expected menu items are present and removed item is absent", async () => {
           // Verify expected menu items are visible (scoped to window since Radix portals to body)
-          const expectedItems = ["Restart terminal", "Rename", "Duplicate", "Lock input", "Trash"];
+          const expectedItems = ["Restart terminal", "Rename", "Duplicate", "Trash"];
 
           for (const itemName of expectedItems) {
             await expect(window.getByRole("menuitem", { name: itemName })).toBeVisible({
               timeout: T_SHORT,
             });
           }
+          // A checkbox row with a stable label: the lock state is aria-checked, not the name.
+          await expect(window.getByRole("menuitemcheckbox", { name: "Lock input" })).toBeVisible({
+            timeout: T_SHORT,
+          });
 
           // Removed in #5957 — guard against accidental re-introduction
           await expect(window.getByRole("menuitem", { name: "View Terminal Info" })).toHaveCount(0);

@@ -1193,7 +1193,7 @@ export function FileBrowserViewer({
           title="Can't show this folder"
           description="It couldn't be read. It may have been moved or deleted."
           action={
-            <Button variant="subtle" size="sm" onClick={onRefresh}>
+            <Button variant="outline" size="sm" onClick={onRefresh}>
               <RefreshCw />
               Retry
             </Button>
@@ -1374,7 +1374,7 @@ export function FileBrowserViewer({
               variant="subtle"
             />
           ) : copy.action === "retry" ? (
-            <Button variant="subtle" size="sm" onClick={onRefresh}>
+            <Button variant="outline" size="sm" onClick={onRefresh}>
               <RefreshCw />
               Retry
             </Button>
@@ -1385,7 +1385,7 @@ export function FileBrowserViewer({
           state.reason === "SVG_REJECTED" && wayOut !== undefined ? (
             <div className="flex flex-wrap items-center justify-center gap-2">
               {wayOut}
-              <Button variant="subtle" size="sm" onClick={onRefresh}>
+              <Button variant="outline" size="sm" onClick={onRefresh}>
                 <RefreshCw />
                 Retry
               </Button>

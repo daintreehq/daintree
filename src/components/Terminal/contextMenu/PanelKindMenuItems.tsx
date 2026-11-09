@@ -85,17 +85,17 @@ interface KindMenuItemsProps {
 const URL_PANEL_COPY = {
   browser: {
     reload: "Reload page",
-    duplicate: "Duplicate browser",
-    rename: "Rename browser",
-    trash: "Trash browser",
+    duplicate: "Duplicate",
+    rename: "Rename",
+    trash: "Trash",
     kill: "Remove browser",
     KillIcon: OctagonX,
   },
   "dev-preview": {
     reload: "Reload preview",
-    duplicate: "Duplicate dev preview",
-    rename: "Rename dev preview",
-    trash: "Trash dev preview",
+    duplicate: "Duplicate",
+    rename: "Rename",
+    trash: "Trash",
     kill: "Stop dev server",
     KillIcon: CircleStop,
   },
@@ -164,11 +164,11 @@ export function ReviewMenuItems({ kindOwnedItems, isBackgrounded, onAction }: Ki
     <>
       <ContextMenuItem onSelect={() => onAction("duplicate")}>
         <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-        Duplicate review
+        Duplicate
       </ContextMenuItem>
       <ContextMenuItem onSelect={() => onAction("rename")}>
         <Pencil className={ICON_CLASS} aria-hidden="true" />
-        Rename review
+        Rename
       </ContextMenuItem>
       {kindOwnedItems}
       <ContextMenuSeparator />
@@ -180,7 +180,7 @@ export function ReviewMenuItems({ kindOwnedItems, isBackgrounded, onAction }: Ki
       )}
       <ContextMenuItem onSelect={() => onAction("trash")}>
         <Trash2 className={ICON_CLASS} aria-hidden="true" />
-        Trash review
+        Trash
       </ContextMenuItem>
       <ContextMenuItem destructive onSelect={() => onAction("kill")}>
         <OctagonX className={ICON_CLASS} aria-hidden="true" />

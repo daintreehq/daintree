@@ -39,7 +39,7 @@ export function TabError({ children, onRetry }: { children: ReactNode; onRetry?:
       role="alert"
       action={
         onRetry && (
-          <Button variant="ghost" size="xs" onClick={onRetry} className="-my-1 shrink-0">
+          <Button variant="outline" size="xs" onClick={onRetry} className="-my-1 shrink-0">
             Retry
           </Button>
         )

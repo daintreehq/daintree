@@ -1,21 +1,22 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import {
-  KBD_CLASS,
-  PaletteFooterHints,
-  PaletteNoMatchHint,
-} from "@/components/ui/AppPaletteDialog";
+import { PaletteFooterHints, PaletteNoMatchHint } from "@/components/ui/AppPaletteDialog";
 import { PaletteScopeChip } from "@/components/ui/PaletteScopeChip";
 import { QuickSwitcherItem } from "./QuickSwitcherItem";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { UI_PALETTE_EXIT_DURATION } from "@/lib/animationUtils";
+import { parseChord } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type {
   QuickSwitcherItem as QuickSwitcherItemData,
   UseQuickSwitcherReturn,
 } from "@/hooks/useQuickSwitcher";
+
+// "⌫" on macOS, "Backspace" elsewhere: the platform can't change under a running renderer.
+const BACKSPACE_KEYS = parseChord("Backspace", isMac())[0] ?? [];
 
 function getQuickSwitcherActionLabel(item: QuickSwitcherItemData): string {
   switch (item.type) {
@@ -92,7 +93,10 @@ export function QuickSwitcher({
   // Inside a scope the way back is Backspace on an empty field, said where the
   // Tab that got the user in was taught.
   const scopeExitHint = useMemo(
-    () => (scopedProvider && query === "" ? { keys: ["⌫"], label: "to search everything" } : null),
+    () =>
+      scopedProvider && query === ""
+        ? { keys: BACKSPACE_KEYS, label: "to search everything" }
+        : null,
     [scopedProvider, query]
   );
   const secondaryHint = keywordHint ?? scopeExitHint;
@@ -188,12 +192,12 @@ export function QuickSwitcher({
   const backToEverything = (
     <p className="mt-2 text-xs text-text-secondary">
       {scopedFailure ? "Type to try again, or press " : "Press "}
-      <kbd className={KBD_CLASS}>Backspace</kbd> to search everything
+      <KbdChord shortcut="Backspace" /> to search everything
     </p>
   );
   const scopedNoMatch = scopedFailure ? (
     <p className="mt-2 text-xs text-text-secondary">
-      Type to try again, or press <kbd className={KBD_CLASS}>Esc</kbd> to clear the search
+      Type to try again, or press <KbdChord shortcut="Escape" /> to clear the search
     </p>
   ) : (
     <PaletteNoMatchHint />
@@ -239,10 +243,10 @@ export function QuickSwitcher({
       ariaLabel="Quick switcher"
       isLoading={isLoading}
       searchPlaceholder={
-        scopedProvider ? `Search ${scopedProvider.title}` : "Find panels, agents, or worktrees"
+        scopedProvider ? `Search ${scopedProvider.title}…` : "Find panels, agents, or worktrees…"
       }
       searchAriaLabel={
-        scopedProvider ? `Search ${scopedProvider.title}` : "Search panels, agents, and worktrees"
+        scopedProvider ? `Search ${scopedProvider.title}` : "Find panels, agents, or worktrees"
       }
       listId="quick-switcher-list"
       itemIdPrefix="qs-option"

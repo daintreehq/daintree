@@ -104,7 +104,7 @@ describe("VoiceMicNoticeBanner", () => {
 
     expect(text()).toContain("Using Greg's AirPods Pro instead of RØDE NT-USB Mini (19f7:0015)");
     expect(text()).toContain("RØDE NT-USB Mini (19f7:0015) isn't available");
-    fireEvent.click(screen.getByRole("button", { name: "Open Voice settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open voice settings" }));
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
       { tab: "voice" },
@@ -151,7 +151,7 @@ describe("VoiceMicNoticeBanner", () => {
       builtIn: null,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Open Voice settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open voice settings" }));
 
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
@@ -191,7 +191,7 @@ describe("VoiceMicNoticeBanner", () => {
       expect(text()).toContain("No audio from RØDE NT-USB Mini");
       expect(text()).toContain("Daintree was updated while running and needs a restart");
       expect(text()).not.toContain("Check that it's connected");
-      expect(screen.queryByRole("button", { name: "Open Voice settings" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Open voice settings" })).toBeNull();
     });
 
     it("restarts only once the restart is confirmed", async () => {

@@ -90,10 +90,9 @@ export function NewBranchInput({
               className={cn(
                 FIELD_INPUT,
                 "pr-9 font-mono text-xs",
-                // Focus now lands here on a failed Create, so the ring has to
-                // agree with the border: an accent ring around a red field is
-                // two signals disagreeing (as the shared slotted field notes).
-                hasError && "border-status-error focus-visible:outline-status-error"
+                // As the `Input` primitive's `invalid`: the error is on the border
+                // and the message, and focus keeps the one focus ring.
+                hasError && "border-status-error"
               )}
               disabled={isPending}
               aria-invalid={hasError ? true : undefined}

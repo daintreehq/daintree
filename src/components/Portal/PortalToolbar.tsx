@@ -13,7 +13,7 @@ import {
   PanelRight,
   Plus,
   RotateCw,
-  Server,
+  ServerCog,
   X,
 } from "lucide-react";
 import {
@@ -641,7 +641,7 @@ export function PortalToolbar({
               aria-pressed={showDevDashboard}
               className={iconButtonClass}
             >
-              <Server className={PANE_TOOLBAR_ICON_CLASS} />
+              <ServerCog className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">

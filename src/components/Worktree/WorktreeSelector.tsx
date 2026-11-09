@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { FolderGit2 } from "@/components/icons";
+import { FolderGit2, Sprout } from "@/components/icons";
 import {
   Select,
   SelectContent,
@@ -10,6 +10,7 @@ import {
 import type { WorktreeSnapshot } from "@/types";
 import { worktreeOptionLabel } from "./crossWorktreeDiffUtils";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { splitBranchType } from "./BranchLabel";
 
 interface WorktreeSelectorProps {
   label: string;
@@ -17,6 +18,23 @@ interface WorktreeSelectorProps {
   selectedId: string | null;
   disabledId?: string | null;
   onChange: (worktreeId: string) => void;
+}
+
+/**
+ * An option as the sidebar card draws the same worktree: the sprout for main,
+ * the branch's type mark otherwise, the branch in mono. The sprout says "main"
+ * on screen, so the words stay only in the accessible name.
+ */
+function WorktreeOption({ wt }: { wt: WorktreeSnapshot }) {
+  if (!wt.branch) return <>{worktreeOptionLabel(wt)}</>;
+  const Glyph = wt.isMainWorktree ? Sprout : (splitBranchType(wt.branch).Icon ?? FolderGit2);
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <Glyph className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+      <span className="truncate font-mono">{wt.branch}</span>
+      {wt.isMainWorktree && <span className="sr-only"> (main worktree)</span>}
+    </span>
+  );
 }
 
 export function WorktreeSelector({
@@ -35,13 +53,16 @@ export function WorktreeSelector({
       {/* "" is Radix's unset value: the trigger shows the placeholder. */}
       <Select value={selectedId ?? ""} onValueChange={onChange}>
         <SelectTrigger id={triggerId} className="justify-start">
-          <FolderGit2 aria-hidden="true" className="w-3.5 h-3.5 shrink-0 text-text-secondary" />
+          {/* A chosen option brings its own glyph into the trigger. */}
+          {!worktrees.some((wt) => wt.id === selectedId && wt.branch) && (
+            <FolderGit2 aria-hidden="true" className="w-3.5 h-3.5 shrink-0 text-text-secondary" />
+          )}
           <SelectValue placeholder="Choose a worktree…" className="flex-1" />
         </SelectTrigger>
         <SelectContent>
           {worktrees.map((wt) => (
             <SelectItem key={wt.id} value={wt.id} disabled={wt.id === disabledId || !wt.branch}>
-              {worktreeOptionLabel(wt)}
+              <WorktreeOption wt={wt} />
             </SelectItem>
           ))}
         </SelectContent>

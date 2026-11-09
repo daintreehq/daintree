@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useState, useRef } from "react";
-import { Filter, ChevronRight } from "lucide-react";
+import { Check, Filter, ChevronRight } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -613,9 +613,9 @@ export function WorktreeFilterPopover({
               own question without spending a quarter of the panel on four
               radios the user set once. */}
           <FilterSection title="Sort by" summary={sortSummary} plainBody>
-            {/* -mx-2 cancels the rows' own px-2, so the radio circles share a
-                column with the checkbox and chips while the hover fill keeps
-                its breathing room. */}
+            {/* -mx-2 cancels the rows' own px-2, so the check column lines up
+                with the checkbox and chips while the hover fill keeps its
+                breathing room. */}
             <div role="radiogroup" aria-label="Sort worktrees by" className="-mx-2 flex flex-col">
               {sortOptions.map((option, index) => (
                 <button
@@ -633,23 +633,17 @@ export function WorktreeFilterPopover({
                   className={cn(
                     "flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1 text-xs",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-                    // The dot carries selection. A selected-row fill on top of
-                    // it read the same as the hover fill, so a pointer resting
-                    // on another option showed two identical rows.
+                    // The leading check carries selection, as on every menu radio
+                    // row. A selected-row fill on top of it read the same as the
+                    // hover fill, so a pointer resting on another option showed
+                    // two identical rows.
                     "hover:bg-overlay-soft",
                     orderBy === option.value ? "text-text-primary" : "text-text-secondary"
                   )}
                 >
-                  <span
-                    className={cn(
-                      "flex h-3 w-3 shrink-0 items-center justify-center rounded-full border",
-                      orderBy === option.value
-                        ? "border-text-primary bg-text-primary"
-                        : "border-text-secondary"
-                    )}
-                  >
+                  <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
                     {orderBy === option.value && (
-                      <span className="status-mark h-1.5 w-1.5 rounded-full bg-text-inverse" />
+                      <Check className="h-3.5 w-3.5" aria-hidden="true" />
                     )}
                   </span>
                   {option.label}

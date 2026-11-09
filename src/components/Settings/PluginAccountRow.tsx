@@ -283,18 +283,10 @@ export function PluginAccountRow({
                   aria-describedby={descriptionId}
                   disabled={rowDisabled || busy}
                 />
-                <Button
-                  type="submit"
-                  variant="outline"
-                  size="sm"
-                  disabled={rowDisabled || busy || token.trim() === ""}
-                >
-                  {replacingToken ? "Replace" : "Connect"}
-                </Button>
                 {replacingToken && (
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
                     disabled={busy}
                     onClick={() => {
@@ -306,6 +298,14 @@ export function PluginAccountRow({
                     Cancel
                   </Button>
                 )}
+                <Button
+                  type="submit"
+                  variant="contrast"
+                  size="sm"
+                  disabled={rowDisabled || busy || token.trim() === ""}
+                >
+                  {replacingToken ? "Replace" : "Connect"}
+                </Button>
               </form>
             );
           }

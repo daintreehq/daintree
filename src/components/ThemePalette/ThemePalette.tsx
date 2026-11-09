@@ -297,7 +297,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       label="Theme switcher"
       shortcut={themePaletteShortcut}
       ariaLabel="Theme palette"
-      searchPlaceholder="Search themes"
+      searchPlaceholder="Search themes…"
       searchAriaLabel="Search themes"
       listId="theme-palette-list"
       itemIdPrefix="theme-option"

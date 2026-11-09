@@ -1219,7 +1219,7 @@ export function LocalCommitsDropdown({
               title="Couldn't load commits"
               description={error}
               action={
-                <Button variant="ghost" size="sm" onClick={handleRetry}>
+                <Button variant="outline" size="sm" onClick={handleRetry}>
                   <RefreshCw className="h-3.5 w-3.5" />
                   Retry
                 </Button>

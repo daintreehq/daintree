@@ -245,7 +245,7 @@ export function RendererCpuProfileSection() {
           </Button>
         ) : (
           <Button
-            variant="subtle"
+            variant="outline"
             size="sm"
             onClick={() => void handleRecord()}
             loading={phase === "starting" || phase === "saving"}

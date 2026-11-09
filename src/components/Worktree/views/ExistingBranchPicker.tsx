@@ -35,11 +35,7 @@ export function ExistingBranchPicker({
           aria-controls={controller.open ? "existing-branch-list" : undefined}
           aria-invalid={hasError ? true : undefined}
           aria-describedby={hasError ? "validation-error" : undefined}
-          className={cn(
-            FIELD_TRIGGER,
-            "gap-2",
-            hasError && "border-status-error focus-visible:outline-status-error"
-          )}
+          className={cn(FIELD_TRIGGER, "gap-2", hasError && "border-status-error")}
           disabled={disabled}
           onKeyDown={(event) => {
             if (!controller.open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {

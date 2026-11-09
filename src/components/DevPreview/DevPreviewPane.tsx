@@ -1244,7 +1244,7 @@ export function DevPreviewPane({
               id: "crash-loop-restart",
               label: "Restart dev server",
               icon: RotateCw,
-              variant: "danger",
+              variant: "dangerFilled",
               onClick: handleRestartDevServer,
               ariaLabel: "Restart dev server",
             }}

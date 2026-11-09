@@ -11,7 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { ArrowDown, ArrowRight, ChevronRight, Plus, X } from "lucide-react";
+import { ArrowDown, ArrowRight, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   SECTION_LABELS,
@@ -462,12 +462,12 @@ export function DiagnosticsReviewDialog({
                     <div className="w-7 shrink-0">
                       {replacements.length > 1 && (
                         <Button
-                          variant="ghost"
+                          variant="ghost-danger"
                           size="icon-sm"
                           onClick={() => removeReplacement(i)}
                           aria-label={`Remove rule ${i + 1}`}
                         >
-                          <X aria-hidden="true" />
+                          <Trash2 aria-hidden="true" />
                         </Button>
                       )}
                     </div>

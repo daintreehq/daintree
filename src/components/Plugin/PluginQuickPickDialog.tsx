@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
-import { KBD_CLASS } from "@/components/ui/Kbd";
+import { KbdChord } from "@/components/ui/Kbd";
 import { Button } from "@/components/ui/button";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { isMac } from "@/lib/platform";
@@ -12,7 +12,6 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
 import type { PluginQuickPickItem } from "@shared/types/plugin";
-import { describeKeyCap } from "@/lib/kbdShortcut";
 
 const EMPTY_ITEMS: PluginQuickPickItem[] = [];
 
@@ -200,19 +199,13 @@ export function PluginQuickPickDialog() {
         <div className="flex shrink-0 items-center gap-3">
           {/* Enter earns its chip here and only here: in a multi-select list
               it toggles the row instead of confirming. */}
-          <span className="inline-flex items-baseline">
-            <span className="sr-only">{describeKeyCap("↵", isMac())}</span>
-            <kbd aria-hidden="true" className={KBD_CLASS}>
-              ↵
-            </kbd>
+          <span className="inline-flex items-center">
+            <KbdChord shortcut="Enter" />
             <span className="ml-1.5">toggle</span>
           </span>
           <span className="inline-flex items-center gap-1.5">
-            {/* The palette's own ↵ glyph, not `KbdChord`'s ⏎, so the two chips
-                beside each other spell Enter the same way. */}
-            <span className="inline-flex items-center gap-1" aria-hidden="true">
-              <kbd className={KBD_CLASS}>{isMac() ? "⌘" : "Ctrl"}</kbd>
-              <kbd className={KBD_CLASS}>↵</kbd>
+            <span className="inline-flex items-center" aria-hidden="true">
+              <KbdChord shortcut="Cmd+Enter" />
             </span>
             <Button
               size="xs"

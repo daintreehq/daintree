@@ -75,7 +75,11 @@ import {
   PanelBottom,
   Plug,
   Settings2,
+  Sprout,
 } from "lucide-react";
+import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { splitBranchType } from "@/components/Worktree/BranchLabel";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentExternalLink } from "@shared/config/agentRegistry";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
@@ -165,13 +169,23 @@ interface WorktreeMenuItemsProps {
 // Radix from treating the icon press as the row's primary selection event.
 function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
   const { worktrees } = useWorktrees();
+  const customTitles = useWorktreeFilterStore((state) => state.worktreeCustomTitles);
   const locationRef = useRef<"grid" | "dock">("grid");
   const source = useMenuActionSource();
   const focusRestore = useOverlayFocusRestore();
   return (
     <>
       {worktrees.map((wt) => {
-        const label = wt.isMainWorktree ? wt.name : wt.branch?.trim() || wt.name;
+        // Named and marked as the sidebar card names and marks it: the
+        // headline, the sprout for main, the branch's type mark otherwise.
+        const headline = getWorktreeHeadline(wt, customTitles[wt.id]);
+        const label = headline.label;
+        // A branch-named headline is an identifier and set in mono, as the
+        // palettes set it; main's folder, a custom title and issue/PR prose stay sans.
+        const isBranchTitled = headline.kind === "branch" && headline.customTitle === undefined;
+        const Glyph = wt.isMainWorktree
+          ? Sprout
+          : (splitBranchType(getWorktreeBranchLabel(wt)).Icon ?? FolderGit2);
         return (
           <ContextMenuItem
             key={wt.id}
@@ -199,8 +213,8 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
               e.currentTarget.click();
             }}
           >
-            <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span className="flex-1 truncate">{label}</span>
+            <Glyph data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className={cn("flex-1 truncate", isBranchTitled && "font-mono")}>{label}</span>
             <span className="sr-only">, press D to launch in dock</span>
             {/* Shown on :focus-visible only, so a hover never suggests D; always
                 laid out so moving focus never resizes the menu. */}

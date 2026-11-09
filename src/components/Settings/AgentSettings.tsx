@@ -489,7 +489,7 @@ export function AgentSettings({
               label="Default agent"
               description={
                 <>
-                  Used by the help dock button{helpShortcut && ` (${helpShortcut})`} and automated
+                  Used by the Daintree Assistant{helpShortcut && ` (${helpShortcut})`} and automated
                   workflows such as "What's next?", onboarding and project explanations. The
                   portal's default new tab agent is set separately
                 </>

@@ -66,7 +66,7 @@ export function PluginPresetGrants({ pluginId }: { pluginId: string }) {
           <span className="text-2xs text-text-secondary">
             Couldn&rsquo;t read these permissions.
           </span>
-          <Button variant="ghost" size="xs" onClick={() => setReadNonce((n) => n + 1)}>
+          <Button variant="outline" size="xs" onClick={() => setReadNonce((n) => n + 1)}>
             Retry
           </Button>
         </div>
