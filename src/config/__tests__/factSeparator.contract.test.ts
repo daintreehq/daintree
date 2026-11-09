@@ -167,6 +167,7 @@ describe("fact separator contract", () => {
     ["the right of a ??", '<p>a{label ?? " \u00b7 b"}</p>'],
     ["a concatenation", '<p>{a + " \u00b7 " + b}</p>'],
     ["an array of strings", '<p>{[a, " \u00b7 ", b]}</p>'],
+    ["a spread array", '<p>{[...[a, " \u00b7 ", b]]}</p>'],
     ["the result of a comma", '<p>{(a, " \u00b7 ")}</p>'],
     ["a template's head", "<span>{` \u00b7 ${n} waiting`}</span>"],
     ["a template's middle", "<span>{`${a} \u00b7 ${b}`}</span>"],
