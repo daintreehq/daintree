@@ -1,4 +1,4 @@
-import { standaloneCanopyFrame, type CanopyGoToRun } from "@/components/Canopy/canopyFrame";
+import type { CanopyFrame, CanopyGoToRun } from "@/components/Canopy/canopyFrame";
 import { switchToHost } from "@/components/Hosts/hostSwitching";
 import { notify } from "@/lib/notify";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
@@ -55,7 +55,7 @@ function goToRun({ place }: CanopyGoToRun): void {
  * project and moves to none: a pane opens in the window that has it, and what
  * needs a project says which one to open.
  */
-export const CANOPY_WINDOW_FRAME = standaloneCanopyFrame({
+export const CANOPY_WINDOW_FRAME: CanopyFrame = {
   close: () => safeFireAndForget(window.electron.window.close(), { context: "Closing Canopy" }),
   goToRun,
   restoreElsewhere: () => {
@@ -70,4 +70,4 @@ export const CANOPY_WINDOW_FRAME = standaloneCanopyFrame({
   openAssistant: async () => "Open this assistant from its project's Assistant panel.",
   // Open all day beside the agents' own panes: a row left selected moves no PTY.
   takesTerminalSize: "on-use",
-});
+};

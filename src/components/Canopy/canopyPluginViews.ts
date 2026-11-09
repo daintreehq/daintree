@@ -4,7 +4,6 @@ import type {
   PluginHostedViewDescriptor,
 } from "@shared/types/plugin";
 import { usePluginHostedViewsStore } from "@/store/pluginHostedViewsStore";
-import { useCanopyFrame } from "./canopyFrame";
 
 const NO_PLUGIN_VIEWS: readonly PluginCanopyHostedViewDescriptor[] = [];
 
@@ -28,18 +27,10 @@ export function canopyPluginViews(
   );
 }
 
-/**
- * What the Canopy window offers of its app-wide plugins. The dialog in a
- * project window offers none: that window has its project's panels, and a view
- * there would follow that project rather than stand for none.
- */
+/** What the Canopy window offers of its app-wide plugins. */
 export function useCanopyPluginViews(): readonly PluginCanopyHostedViewDescriptor[] {
-  const standalone = useCanopyFrame().host === "standalone";
   const views = usePluginHostedViewsStore((state) => state.views);
-  return useMemo(
-    () => (standalone ? canopyPluginViews(views) : NO_PLUGIN_VIEWS),
-    [standalone, views]
-  );
+  return useMemo(() => canopyPluginViews(views), [views]);
 }
 
 export function canopyPluginRowDomId(viewId: string): string {

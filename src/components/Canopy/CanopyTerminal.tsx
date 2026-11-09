@@ -9,11 +9,9 @@ import type { SearchAddon } from "@xterm/addon-search";
 import type { CanopyTerminalData, CanopyTerminalView } from "@shared/types/ipc/canopy";
 import { LOCAL_HOST_ID, isLocalHostId, type HostId } from "@shared/types/remoteHosts";
 import { isPtyPanel } from "@shared/types/panel";
-import { resolveWorktreePathScope } from "@shared/utils/path";
 import { isSecretPrompt } from "@shared/utils/secretPrompt";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { isTerminalSubmission } from "@shared/utils/terminalSubmission";
-import { systemClient } from "@/clients/systemClient";
 import { getEffectiveScrollbarWidth, getXtermOptions } from "@/config/xtermConfig";
 import { keybindingService } from "@/services/KeybindingService";
 import { getXtermCellDimensions } from "@/services/terminal/TerminalResizeController";
@@ -24,7 +22,6 @@ import {
   createSearchAddon,
 } from "@/services/terminal/TerminalAddonManager";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
-import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 import { cleanTerminalSelection } from "@/services/terminal/cleanTerminalCopy";
 import { copyCleanSelection } from "@/services/terminal/copyCleanSelection";
 import { TerminalLinkHandler } from "@/services/terminal/TerminalLinkHandler";
@@ -41,7 +38,6 @@ import { hideTerminalLinkTooltip } from "@/services/terminal/terminalLinkTooltip
 import type { TerminalLink } from "@/services/terminal/types";
 import { loadXtermCore } from "@/services/terminal/xtermCore";
 import { hasUsableRenderer } from "@/services/terminal/xtermRendererProbe";
-import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isCanopyEdgeDragging, useCanopyStore } from "@/store/canopyStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
@@ -689,26 +685,10 @@ export function CanopyTerminal({
     const menu: CanopyTerminalMenuHandle = {
       read: () => {
         menuLink = hoveredLink;
-        const selection = terminal.getSelection();
-        const fileKind =
-          menuLink?.kind === "file" || menuLink?.kind === "directory" ? menuLink.kind : null;
-        const filePath = filesHere && fileKind !== null ? (menuLink?.absolutePath ?? null) : null;
-        const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
         return {
-          selection,
+          selection: terminal.getSelection(),
           hoveredUrl: menuLink?.text ?? null,
           hoveredUrlPluginName: hoveredUrlPluginName(links, menuLink),
-          hoveredFilePath: filePath,
-          hoveredFileKind: filePath !== null ? fileKind : null,
-          hoveredFileScope:
-            filePath !== null && worktrees
-              ? resolveWorktreePathScope(filePath, worktrees.values())
-              : null,
-          selectionFilePath:
-            filesHere && selection
-              ? (resolveSelectedFilePath(selection, links.getCwd(), systemClient.getCachedHomeDir())
-                  ?.absolutePath ?? null)
-              : null,
         };
       },
       openHoveredLink: () => {

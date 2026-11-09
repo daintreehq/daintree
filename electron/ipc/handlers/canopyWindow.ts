@@ -22,7 +22,9 @@ function refuseUnlessCanopyIsOn(): void {
     throw new AppError({
       code: "UNSUPPORTED",
       message: "Canopy isn't on",
-      userMessage: "Turn Canopy on before opening its window.",
+      // A view on another host asks too, whose own Canopy may be on: the
+      // window is this computer's.
+      userMessage: "Canopy is off on this computer. Turn it on before opening its window.",
     });
   }
 }

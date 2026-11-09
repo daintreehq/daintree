@@ -72,8 +72,6 @@ export function useCanopyInboxActions({
   leavePane,
   showsHost,
   isSelected,
-  captureFocusAfterClose,
-  closeForTerminal,
   reserveUndo,
   undoReads,
   menuOpenChanged,
@@ -98,8 +96,6 @@ export function useCanopyInboxActions({
   leavePane: (item: CanopyItem) => void;
   showsHost: (hostId: HostId | null) => boolean;
   isSelected: (runId: string) => boolean;
-  captureFocusAfterClose: () => void;
-  closeForTerminal: (runId: string) => void;
   reserveUndo: () => UndoReservation;
   undoReads: (before: CanopyReadMark[], after: CanopyReadMark[]) => void;
   menuOpenChanged: (open: boolean) => void;
@@ -123,14 +119,7 @@ export function useCanopyInboxActions({
     const openRun = (item: CanopyItem, newWindow = false) => {
       if (!frame.goToRun) return;
       readNow(item);
-      frame.goToRun(
-        { place: placeOf(item, hostId, ownHostId), listedRunId: item.runId, newWindow },
-        {
-          stillShows: () => showsHost(hostId) && useCanopyStore.getState().isOpen,
-          closeForTerminal,
-          captureFocusAfterClose,
-        }
-      );
+      frame.goToRun({ place: placeOf(item, hostId, ownHostId), newWindow });
     };
     // The incarnation on screen, so main refuses a terminal respawned since.
     const target = (item: CanopyItem) => ({ spawnedAt: item.row.run.spawnedAt });
@@ -313,8 +302,6 @@ export function useCanopyInboxActions({
     leavePane,
     showsHost,
     isSelected,
-    captureFocusAfterClose,
-    closeForTerminal,
     searchRef,
     detailRef,
     reserveUndo,

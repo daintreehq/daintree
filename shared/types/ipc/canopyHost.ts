@@ -29,6 +29,7 @@ export const CANOPY_HOST_CHANNELS = [
   "canopy:set-read",
   "canopy:mark-all-read",
   "canopy:restore-reads",
+  // Sent only by Shells on a build whose dialog offered "This project" (#16581).
   "canopy:set-scope",
   "canopy:set-shown",
   "canopy:run-branch",

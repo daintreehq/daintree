@@ -488,7 +488,6 @@ export function useTrashExpiryAnnouncer({
   entries,
   workspaces,
   scopeKey,
-  dockAnnounces,
   isBackInFleet,
 }: {
   /** The panel is open: a closed one says nothing. */
@@ -496,7 +495,6 @@ export function useTrashExpiryAnnouncer({
   entries: readonly CanopyTrashEntry[];
   workspaces: ReadonlyMap<string, PilotWorkspaceMeta>;
   scopeKey: string;
-  dockAnnounces: (workspaceId: string) => boolean;
   /** The run is in the fleet again: it left the trash restored, whatever its deadline. */
   isBackInFleet: (runId: string) => boolean;
 }): TrashActed {
@@ -535,7 +533,6 @@ export function useTrashExpiryAnnouncer({
       if (actedRef.current.delete(key)) continue;
       if (now < item.expiresAt - EXPIRY_SLACK_MS) continue;
       if (item.ended && now > item.expiresAt + EXPIRY_ANNOUNCE_WITHIN_MS) continue;
-      if (dockAnnounces(item.row.run.workspaceId)) continue;
       expired.push(item);
     }
     if (expired.length === 0) return;
@@ -547,7 +544,7 @@ export function useTrashExpiryAnnouncer({
       useAnnouncerStore.getState().announce(expiredAnnouncement(gone.map((item) => item.subject)));
     }, EXPIRY_CONFIRM_MS);
     timers.current.add(timer);
-  }, [active, items, scopeKey, dockAnnounces]);
+  }, [active, items, scopeKey]);
   return useMemo(
     () => ({
       mark: (item) => actedRef.current.add(trashKey(item)),
