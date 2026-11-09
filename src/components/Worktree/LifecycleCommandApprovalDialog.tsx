@@ -243,7 +243,7 @@ export function LifecycleCommandApprovalDialog({
             role="alert"
             action={
               <Button
-                variant="ghost"
+                variant="outline"
                 size="xs"
                 onClick={() => setLoadCount((count) => count + 1)}
                 className="-my-1 shrink-0"

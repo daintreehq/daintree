@@ -564,7 +564,13 @@ export function ResourceEnvironmentsSection({
                   label="Local"
                   description="Run worktrees directly on this machine"
                   bare
-                  className="w-full px-4 py-3"
+                  className={cn(
+                    "w-full px-4 py-3 transition-colors",
+                    "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
+                    effectiveDefaultMode === "local"
+                      ? "bg-overlay-selected"
+                      : "hover:bg-overlay-soft"
+                  )}
                 />
                 {usableEnvKeys.map((key) => (
                   <RadioChoiceRow
@@ -576,7 +582,11 @@ export function ResourceEnvironmentsSection({
                     label={key}
                     description="Run worktrees in this resource environment"
                     bare
-                    className="w-full px-4 py-3"
+                    className={cn(
+                      "w-full px-4 py-3 transition-colors",
+                      "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
+                      effectiveDefaultMode === key ? "bg-overlay-selected" : "hover:bg-overlay-soft"
+                    )}
                   />
                 ))}
               </div>

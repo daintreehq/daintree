@@ -24,6 +24,7 @@ vi.mock("@/services/ActionService", () => ({
 vi.mock("@/hooks", () => ({
   useAriaKeyshortcuts: () => undefined,
   useShortcutHintHover: () => ({}),
+  useEffectiveCombo: () => "",
 }));
 
 vi.mock("@/store/toolbarPreferencesStore", () => ({

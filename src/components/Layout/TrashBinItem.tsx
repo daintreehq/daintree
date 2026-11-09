@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { RotateCcw, Unlink, X } from "lucide-react";
+import { RotateCcw, Trash2, Unlink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { DOCK_POPOVER_ROW_HOVER_CLASS } from "./dockStatusPill";
@@ -182,7 +182,7 @@ export function TrashBinItem({
               onClick={handleKill}
               aria-label={`Remove ${terminalName} permanently`}
             >
-              <X aria-hidden="true" />
+              <Trash2 aria-hidden="true" />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>

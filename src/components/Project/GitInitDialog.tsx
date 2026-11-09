@@ -770,11 +770,7 @@ export function GitInitDialog({
                     aria-invalid={isCommitMessageMissing}
                     aria-describedby={isCommitMessageMissing ? commitMessageErrorId : undefined}
                     placeholder="Initial commit"
-                    className={cn(
-                      FIELD_INPUT,
-                      isCommitMessageMissing &&
-                        "border-status-error focus-visible:outline-status-error"
-                    )}
+                    className={cn(FIELD_INPUT, isCommitMessageMissing && "border-status-error")}
                   />
                 </FormRow>
               )}

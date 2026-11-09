@@ -320,7 +320,7 @@ describe("QuickSwitcher plugin search scope", () => {
     const close = vi.fn();
     renderScoped({ scopedProvider: notesProvider, scopedStatus: "done", exitScope, close });
     const input = screen.getByRole("combobox") as HTMLInputElement;
-    expect(input.placeholder).toBe("Search Notes");
+    expect(input.placeholder).toBe("Search Notes…");
 
     fireEvent.keyDown(input, { key: "Backspace" });
     expect(exitScope).toHaveBeenCalledTimes(1);

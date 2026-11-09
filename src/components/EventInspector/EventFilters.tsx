@@ -181,7 +181,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
         value={searchInput}
         onChange={(e) => handleSearchChange(e.target.value)}
         onClear={clearSearch}
-        placeholder="Search events"
+        placeholder="Search events…"
         aria-label="Search events"
       />
 

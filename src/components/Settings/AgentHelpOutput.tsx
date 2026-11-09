@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import type { ReactNode } from "react";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup, SettingsInlineError } from "./SettingsGroup";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { RefreshCw, TriangleAlert } from "lucide-react";
@@ -147,15 +147,9 @@ export function AgentHelpOutput({ agentId, agentName, availability }: AgentHelpO
     );
   } else if (error) {
     body = (
-      <SettingsEmptyRow>
-        <span className="flex items-start gap-1.5">
-          <TriangleAlert
-            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning"
-            aria-hidden="true"
-          />
-          <span>Couldn&apos;t run the help command: {error}</span>
-        </span>
-      </SettingsEmptyRow>
+      <div className="px-4 py-3">
+        <SettingsInlineError>Couldn&apos;t run the help command: {error}</SettingsInlineError>
+      </div>
     );
   } else if (helpResult) {
     body = renderOutput();

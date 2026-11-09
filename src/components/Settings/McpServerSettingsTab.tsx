@@ -1014,7 +1014,7 @@ export function McpServerSettingsTab() {
                           onClick={() => setShowApiKey((v) => !v)}
                           className="shrink-0 -mr-1 [&_svg]:size-3.5"
                           aria-label="Show API key"
-                          pressed={showApiKey}
+                          aria-pressed={showApiKey}
                         >
                           {showApiKey ? <EyeOff /> : <Eye />}
                         </Button>

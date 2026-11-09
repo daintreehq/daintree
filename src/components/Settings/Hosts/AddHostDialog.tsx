@@ -1204,9 +1204,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           <p className="mb-2 text-sm font-medium text-text-primary">WSL distributions</p>
           {discoverError !== null ? (
             <div className="flex items-start justify-between gap-3">
-              <p role="alert" className="text-sm text-text-secondary select-text">
+              <InlineError role="alert">
                 Couldn&apos;t list WSL distributions: {discoverError}
-              </p>
+              </InlineError>
               <Button variant="outline" size="sm" onClick={retryDiscover}>
                 Retry
               </Button>

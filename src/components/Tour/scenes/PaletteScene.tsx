@@ -104,7 +104,7 @@ export function PaletteScene() {
           },
           {
             icon: <Sparkles />,
-            label: "Launch Help Agent",
+            label: "Launch Daintree Assistant",
             hint: shortcuts.hint("help.launchAgent"),
             separator: true,
           },

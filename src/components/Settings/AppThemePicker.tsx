@@ -659,7 +659,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
               </Button>
             )}
             {onClose && (
-              <Button variant="contrast" size="sm" onClick={handleChangeTheme}>
+              <Button variant="outline" size="sm" onClick={handleChangeTheme}>
                 Change theme…
               </Button>
             )}

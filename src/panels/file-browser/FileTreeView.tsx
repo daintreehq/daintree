@@ -828,7 +828,7 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
           defaults to `min-width: auto` and would otherwise push the trailing
           status marker out of the row instead of ellipsing the name. */}
       <SymlinkTooltip description={symlinkDescription}>
-        <span className={cn("min-w-0 truncate", isSelected && "font-medium")}>{row.name}</span>
+        <span className="min-w-0 truncate">{row.name}</span>
       </SymlinkTooltip>
       {symlinkMarkerId && (
         // Screen-reader only, and layout-neutral (`sr-only` is absolutely

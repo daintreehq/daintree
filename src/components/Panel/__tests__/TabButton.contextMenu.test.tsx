@@ -123,7 +123,7 @@ describe("TabButton — the tab under the pointer owns the menu", () => {
     fireEvent.contextMenu(tabNode("back"));
     const menu = await screen.findByRole("menu");
     await act(async () => {
-      fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename browser" }));
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename" }));
     });
 
     expect(dispatch).toHaveBeenCalledWith(
@@ -185,7 +185,7 @@ describe("TabButton — the tab under the pointer owns the menu", () => {
     fireEvent.contextMenu(tabNode("back"));
     const menu = await screen.findByRole("menu");
     await act(async () => {
-      fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename browser" }));
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename" }));
     });
 
     expect(dispatch).toHaveBeenCalled();
@@ -221,7 +221,7 @@ describe("TabButton — inside a header-scoped panel trigger", () => {
     const menu = await screen.findByRole("menu");
     expect(screen.getAllByRole("menu")).toHaveLength(1);
     await act(async () => {
-      fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename browser" }));
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename" }));
     });
 
     expect(dispatch).toHaveBeenCalledWith(

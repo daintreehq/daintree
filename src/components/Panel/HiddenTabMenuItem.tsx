@@ -1,8 +1,7 @@
-import { Check } from "lucide-react";
 import { usePanelStore } from "@/store";
 import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 import { cn } from "@/lib/utils";
-import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { DropdownMenuRadioItem } from "@/components/ui/dropdown-menu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import {
   SESSION_COLORS,
@@ -29,13 +28,9 @@ export function HiddenTabMenuItem({ tab, onSelect }: { tab: TabInfo; onSelect: (
   const displayEmoji = usePanelStore((s) => s.panelsById[tab.id]?.displayEmoji);
 
   return (
-    <DropdownMenuItem
-      onSelect={onSelect}
-      aria-current={tab.isActive ? "true" : undefined}
-      // The tab on screen takes the committed-value check, as in the
-      // docked tab-group menu, not weight alone.
-      className={cn(tab.isActive && "font-medium")}
-    >
+    // A radio row of the menu's group: the current tab wears the leading-gutter
+    // check, and selecting any row (the current one included) activates it.
+    <DropdownMenuRadioItem value={tab.id} onSelect={onSelect}>
       <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
         <TerminalIcon
           kind={tab.kind}
@@ -46,20 +41,16 @@ export function HiddenTabMenuItem({ tab, onSelect }: { tab: TabInfo; onSelect: (
       </span>
       <span className="mr-3 truncate">{withDisplayEmoji(tab.title, displayEmoji)}</span>
       {state && <span className="sr-only">, {SESSION_LABELS[state]}</span>}
-      {tab.isActive && (
-        <Check className="ml-auto h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
-      )}
       {StateIcon && state && (
         <StateIcon
           className={cn(
-            tab.isActive ? "ml-1.5" : "ml-auto",
-            "h-3 w-3 shrink-0",
+            "ml-auto h-3 w-3 shrink-0",
             SESSION_COLORS[state],
             state === "working" && "animate-spin-slow motion-reduce:animate-none"
           )}
           aria-hidden="true"
         />
       )}
-    </DropdownMenuItem>
+    </DropdownMenuRadioItem>
   );
 }

@@ -53,7 +53,7 @@ function seed(): void {
     ...[1, 2, 3, 4].map((n) =>
       binding(`terminal.focusIndex${n}`, `Focus terminal ${n}`, "Terminal", `Cmd+${n}`)
     ),
-    binding("agent.claude", "Launch Claude Code agent", "Agents", "Cmd+Alt+C"),
+    binding("agent.claude", "Launch Claude agent", "Agents", "Cmd+Alt+C"),
     binding(
       "terminal.sendToAgent",
       "Send selection to another terminal",
@@ -199,14 +199,14 @@ describe("ShortcutReferenceDialog", () => {
     it("ranks a word match above a near miss from an earlier category", async () => {
       render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
       type("agent");
-      await waitFor(() => expect(rowNames()[0]).toBe("Launch Claude Code agent"));
+      await waitFor(() => expect(rowNames()[0]).toBe("Launch Claude agent"));
       expect(rowNames()).not.toContain("Send selection to another terminal");
     });
 
     it("labels each result with its category, since results lose their headings", async () => {
       render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
       type("agent");
-      await waitFor(() => expect(rowFor("Launch Claude Code agent").textContent).toMatch(/Agents/));
+      await waitFor(() => expect(rowFor("Launch Claude agent").textContent).toMatch(/Agents/));
       expect(screen.queryAllByRole("heading", { level: 3 })).toHaveLength(0);
     });
 

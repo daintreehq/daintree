@@ -45,6 +45,7 @@ vi.mock("@/store/pluginRuntimeStore", () => ({
 
 vi.mock("@/hooks", () => ({
   useAriaKeyshortcuts: () => undefined,
+  useEffectiveCombo: () => "",
   useShortcutHintHover: () => ({}),
 }));
 
@@ -118,6 +119,32 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     >
       {children}
     </div>
+  ),
+  DropdownMenuCheckboxItem: ({
+    children,
+    checked,
+    onSelect,
+    onKeyDown,
+    ...props
+  }: {
+    children: React.ReactNode;
+    onSelect?: (e: Event) => void;
+    onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
+    checked?: boolean;
+  } & React.HTMLAttributes<HTMLDivElement>) => (
+    <div
+      role="menuitemcheckbox"
+      aria-checked={checked}
+      tabIndex={0}
+      onClick={() => onSelect?.(new Event("select", { cancelable: true }))}
+      onKeyDown={onKeyDown}
+      {...props}
+    >
+      {children}
+    </div>
+  ),
+  DropdownMenuShortcut: ({ shortcut }: { shortcut?: string }) => (
+    <span data-testid="menu-shortcut">{shortcut}</span>
   ),
   DropdownMenuActionItem: ({
     actionId,

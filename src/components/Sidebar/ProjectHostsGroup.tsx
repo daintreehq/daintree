@@ -353,14 +353,11 @@ function HostRow({ host, summary, columns, newWindowKey: key, onOpen }: HostRowP
               // At the sidebar's minimum the tail, which tells hosts apart, outranks the head.
               headFloor="min-w-[2ch] @[15rem]/hosts:min-w-[4ch]"
               // Regular weight, so six names don't outweigh the worktree list above;
-              // the window's own host keeps the medium weight with its fill. A host
-              // whose link is down steps to secondary ink, still above the contrast
-              // floor and still a row you can click, so the live machines are the
-              // ones the eye lands on.
-              className={cn(
-                host.away ? "text-text-secondary" : "text-text-primary",
-                host.isCurrent ? "font-medium" : "font-normal"
-              )}
+              // the window's own host is marked by its fill alone. A host whose link
+              // is down steps to secondary ink, still above the contrast floor and
+              // still a row you can click, so the live machines are the ones the
+              // eye lands on.
+              className={cn("font-normal", host.away ? "text-text-secondary" : "text-text-primary")}
             />
           </span>
           {status.kind === "counts" && summary ? (

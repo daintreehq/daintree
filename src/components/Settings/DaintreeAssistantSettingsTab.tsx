@@ -254,10 +254,10 @@ export function DaintreeAssistantSettingsTab() {
   // description names the agent in use instead.
   const agentSelectValue = preferredAgentId ?? "";
   const agentDescription = preferredAgentId
-    ? "The CLI that runs the help assistant in the dock"
+    ? "The CLI that runs the assistant in the dock"
     : effectiveAgentId
       ? `Using ${getAgentConfig(effectiveAgentId)?.name ?? effectiveAgentId}, the only installed agent the assistant supports`
-      : "The help assistant can't start until you choose one";
+      : "The assistant can't start until you choose one";
 
   const globalSkipPermissions = useAgentSettingsStore(
     (state) => state.settings?.globalSkipPermissions === true

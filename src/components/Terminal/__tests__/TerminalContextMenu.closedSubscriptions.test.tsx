@@ -256,8 +256,12 @@ describe("TerminalContextMenu while closed", () => {
 
     openMenu(1);
     await openSubmenu("Session");
-    expect(screen.getByRole("menuitem", { name: "Lock input" })).toBeTruthy();
-    expect(screen.queryByRole("menuitem", { name: "Lock dictation to this panel" })).toBeNull();
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "Lock input" }).getAttribute("aria-checked")
+    ).toBe("false");
+    expect(
+      screen.queryByRole("menuitemcheckbox", { name: "Lock dictation to this panel" })
+    ).toBeNull();
   });
 
   it("still re-renders when the panel changes worktree", () => {
@@ -316,8 +320,12 @@ describe("TerminalContextMenu while closed", () => {
     await openSubmenu("Move");
     expect(screen.getByRole("menuitem", { name: "Move to worktree" })).toBeTruthy();
     await openSubmenu("Session");
-    expect(screen.getByRole("menuitem", { name: "Unlock input" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "Lock dictation to this panel" })).toBeTruthy();
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "Lock input" }).getAttribute("aria-checked")
+    ).toBe("true");
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "Lock dictation to this panel" })
+    ).toBeTruthy();
     await openSubmenu("Fleet");
     expect(screen.getByRole("menuitem", { name: /Snooze/ })).toBeTruthy();
     expect(counters.bodyRenders).toBe(1);
@@ -332,9 +340,10 @@ describe("TerminalContextMenu while closed", () => {
     setWorktree(1);
     expect(screen.getByRole("menuitem", { name: "Move to worktree" })).toBeTruthy();
     await openSubmenu("Session");
-    expect(screen.getByRole("menuitem", { name: "Lock input" })).toBeTruthy();
+    const lockInput = () => screen.getByRole("menuitemcheckbox", { name: "Lock input" });
+    expect(lockInput().getAttribute("aria-checked")).toBe("false");
     patchPanel("panel-1", { isInputLocked: true });
-    expect(screen.getByRole("menuitem", { name: "Unlock input" })).toBeTruthy();
+    expect(lockInput().getAttribute("aria-checked")).toBe("true");
 
     fireEvent.keyDown(screen.getByRole("menu", { name: "Session" }), { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();

@@ -127,7 +127,7 @@ function QuickRunFailure({
         </span>
       </TruncatedTooltip>
       <Button
-        variant="ghost"
+        variant="outline"
         size="xs"
         // Keep the field focused, as Run does, so the retry lands where the
         // command was given back.

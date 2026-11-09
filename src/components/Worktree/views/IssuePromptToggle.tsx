@@ -72,7 +72,7 @@ export function IssuePromptToggle({
               {ready ? readyStatus(ready) : showLoading ? `Loading ${issueRef}…` : null}
             </span>
             {ready?.comments === "failed" && (
-              <Button variant="ghost" size="xs" onClick={onRetry} className="-my-1 shrink-0">
+              <Button variant="outline" size="xs" onClick={onRetry} className="-my-1 shrink-0">
                 Retry
               </Button>
             )}
@@ -99,7 +99,7 @@ export function IssuePromptToggle({
           role="alert"
           data-testid="issue-prompt-error"
           action={
-            <Button variant="ghost" size="xs" onClick={onRetry} className="-my-1 shrink-0">
+            <Button variant="outline" size="xs" onClick={onRetry} className="-my-1 shrink-0">
               Retry
             </Button>
           }

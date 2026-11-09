@@ -1,5 +1,5 @@
 import { useState, useCallback, useSyncExternalStore } from "react";
-import { RotateCcw, X, Layers, ChevronRight, Unlink } from "lucide-react";
+import { RotateCcw, Trash2, Layers, ChevronRight, Unlink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DOCK_POPOVER_ROW_HOVER_CLASS } from "./dockStatusPill";
 import { Button } from "@/components/ui/button";
@@ -212,7 +212,7 @@ export function TrashGroupItem({
                 onClick={handleRemoveAll}
                 aria-label={`Remove all ${tabCount} tabs permanently`}
               >
-                <X aria-hidden="true" />
+                <Trash2 aria-hidden="true" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">{`Remove all ${tabCount} tabs permanently`}</TooltipContent>
@@ -306,7 +306,7 @@ export function TrashGroupItem({
                           }
                           aria-label={`Remove ${terminalName} permanently`}
                         >
-                          <X aria-hidden="true" />
+                          <Trash2 aria-hidden="true" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>

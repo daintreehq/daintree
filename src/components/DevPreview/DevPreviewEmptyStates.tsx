@@ -217,7 +217,7 @@ export function DevPreviewEmptyStates({
         description={error.message}
       >
         <PaneStateActions>
-          <Button onClick={handleRetry} variant="subtle" size="sm">
+          <Button onClick={handleRetry} variant="outline" size="sm">
             <RefreshCw />
             {error.type === "missing-dependencies" ? "Retry install" : "Retry"}
           </Button>
@@ -432,7 +432,7 @@ export function DevPreviewEmptyStates({
             description={settingsLoadError}
           >
             <PaneStateActions>
-              <Button onClick={handleRetrySettingsLoad} variant="subtle" size="sm">
+              <Button onClick={handleRetrySettingsLoad} variant="outline" size="sm">
                 <RefreshCw />
                 Retry
               </Button>

@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { AlertTriangle, Check, X } from "lucide-react";
+import { AlertTriangle, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
@@ -26,13 +26,14 @@ import {
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { SearchField } from "@/components/ui/SearchField";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   SegmentedRadioGroup,
   type SegmentedRadioOption,
 } from "@/components/ui/SegmentedRadioGroup";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
@@ -158,10 +159,8 @@ function ThemeRow({
       <PaletteStrip scheme={effectiveScheme} variant="compact" />
       <div className="w-11 shrink-0 flex items-center justify-end">
         {isCommitted ? (
-          <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-text-primary">
-            <Check className="w-3 h-3" />
-            Current
-          </span>
+          // The check alone: the row's `aria-current` already says it in words.
+          <Check className="w-3 h-3 text-text-primary" aria-hidden="true" />
         ) : (
           isActive && <span className="text-3xs text-text-secondary">Trying</span>
         )}
@@ -584,19 +583,14 @@ export function ThemeBrowser() {
             <PaletteStrip scheme={effectiveSchemes.get(activeScheme.id) ?? activeScheme} />
           </div>
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={handleCancel}
-              aria-label="Close theme browser"
-              className="absolute top-2 right-2 p-1 rounded-full bg-scrim-medium text-white hover:bg-scrim-strong transition-colors duration-150 ease-out"
-            >
-              <X className="w-4 h-4" aria-hidden="true" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Close theme browser</TooltipContent>
-        </Tooltip>
+        {/* On the scrim for the reason the caption below is: it sits over the
+            hero image, and `text-inverse` flips dark on dark themes. */}
+        <DismissButton
+          onClick={handleCancel}
+          aria-label="Close theme browser"
+          tooltip="Close"
+          className="absolute top-2 right-2 rounded-full bg-scrim-medium text-white hover:bg-scrim-strong hover:text-white focus-visible:text-white"
+        />
         {/* Media-overlay caption: sits on a guaranteed-dark scrim over the hero
             image, so the white label text is intentional and stays readable on
             every theme. `text-inverse` flips dark on dark themes — not usable here. */}
@@ -629,7 +623,7 @@ export function ThemeBrowser() {
           onClear={() => setQuery("")}
           clearLabel="Clear filter"
           onKeyDown={handleSearchKeyDown}
-          placeholder="Filter themes"
+          placeholder="Filter themes…"
           aria-label="Filter themes"
         />
         <SegmentedRadioGroup<"dark" | "light">
@@ -667,9 +661,13 @@ export function ThemeBrowser() {
         className="shrink min-h-0 overflow-y-auto p-2"
       >
         {isEmpty ? (
-          <p className="text-xs text-text-secondary text-center py-4">
-            No themes match your search
-          </p>
+          <EmptyState
+            variant="filtered-empty"
+            scale="popover"
+            instant
+            title="No themes match your search"
+            className="py-4"
+          />
         ) : (
           pluginRuns(filteredThemes).map((run) => (
             <Fragment key={run.plugin?.id ?? ""}>

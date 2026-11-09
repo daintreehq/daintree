@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { KbdChord } from "@/components/ui/Kbd";
-import { FolderGit2 } from "@/components/icons";
+import { FolderGit2, Sprout } from "@/components/icons";
 import { PaletteCurrentLabel } from "@/components/ui/PaletteCurrentLabel";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -11,6 +11,8 @@ import { remapPathRanges, shortenPath } from "@/lib/pathTail";
 import { TailKeepingText } from "@/components/ui/TailKeepingText";
 import { PathTail } from "@/components/ui/PathTail";
 import type { WorktreeState } from "@/types";
+import { getWorktreeBranchLabel } from "@/lib/worktreeHeadline";
+import { splitBranchType } from "./BranchLabel";
 
 interface WorktreeListItemProps {
   worktree: WorktreeState;
@@ -46,9 +48,18 @@ function WorktreeListItem({
   onHover,
 }: WorktreeListItemProps) {
   const qualifier = worktreeQualifier(worktree);
+  // A linked worktree is named by its branch, so its name is an identifier and
+  // set in mono as the sidebar sets it; main's folder name stays a name.
+  const isBranchTitled =
+    !worktree.isMainWorktree && !worktree.isDetached && worktree.name === worktree.branch;
   // The tail, as in the quick switcher: the prefix every worktree shares is
   // what an end-truncated path used to spend its whole line on.
   const path = shortenPath(worktree.path);
+  // The sidebar's glyph for the same worktree: the sprout for main, the
+  // branch's type mark otherwise, and the worktree glyph only for an untyped one.
+  const Glyph = worktree.isMainWorktree
+    ? Sprout
+    : (splitBranchType(getWorktreeBranchLabel(worktree)).Icon ?? FolderGit2);
 
   return (
     <button
@@ -73,13 +84,18 @@ function WorktreeListItem({
       aria-current={isActive ? "true" : undefined}
       role="option"
     >
-      <FolderGit2 className="w-4 h-4 shrink-0 text-text-secondary" aria-hidden="true" />
+      <Glyph className="w-4 h-4 shrink-0 text-text-secondary" aria-hidden="true" />
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2 min-w-0">
           <TailKeepingText
             text={worktree.name}
             indices={substringMatchIndices(worktree.name, query)}
-            className="text-sm font-medium text-text-primary"
+            className={cn(
+              // Only the family changes for a branch: the title keeps the
+              // row's title size so it stays above the text-xs path line.
+              "text-sm font-medium text-text-primary",
+              isBranchTitled && "font-mono"
+            )}
           />
           {qualifier && (
             <span className="shrink-0 font-mono text-xs text-text-secondary">
@@ -93,7 +109,7 @@ function WorktreeListItem({
           <TooltipTrigger asChild>
             <div className="mt-0.5 flex min-w-0 text-xs text-text-secondary">
               <PathTail
-                className="block min-w-0"
+                className="block min-w-0 font-mono"
                 indices={remapPathRanges(substringMatchIndices(worktree.path, query), path.start)}
               >
                 {path.text}
@@ -178,7 +194,7 @@ export function WorktreePalette({
       label="Switch worktree"
       shortcut={worktreePaletteShortcut}
       ariaLabel="Worktree palette"
-      searchPlaceholder="Search worktrees"
+      searchPlaceholder="Search worktrees…"
       searchAriaLabel="Search worktrees"
       listId="worktree-palette-list"
       itemIdPrefix="worktree-option"

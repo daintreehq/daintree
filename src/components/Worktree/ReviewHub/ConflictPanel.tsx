@@ -29,7 +29,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   REVIEW_HUB_COUNT_CHIP,
-  REVIEW_HUB_DISABLED_CTA,
   REVIEW_HUB_SECTION_BAND,
   REVIEW_HUB_STICKY_BAND,
 } from "./reviewHubUtils";
@@ -786,13 +785,13 @@ export function ConflictPanel({
       {!isWorklist && (
         <div ref={continueRef} className="p-3 border-t border-divider">
           <Button
-            variant="default"
+            variant="contrast"
             size="sm"
             onClick={() => void handleContinue()}
             aria-disabled={continueBlocked || undefined}
             aria-describedby={summaryId}
             loading={isContinuing}
-            className={cn("w-full", !isContinuing && REVIEW_HUB_DISABLED_CTA)}
+            className="w-full"
             data-testid="conflict-continue"
           >
             <Play aria-hidden />

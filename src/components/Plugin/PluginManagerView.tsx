@@ -858,7 +858,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onClear={clearSearch}
-              placeholder="Search plugins"
+              placeholder="Search plugins…"
               aria-label="Search plugins"
             />
             <div role="group" aria-label="Filter plugins" className="flex flex-wrap gap-1">

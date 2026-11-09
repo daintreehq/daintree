@@ -9,15 +9,12 @@ import React, {
   type ReactNode,
 } from "react";
 import {
-  Bell,
-  BellOff,
   ChevronDown,
   CirclePlay,
   CopyPlus,
   DatabaseBackup,
   Ellipsis,
   Grid2X2,
-  Lock,
   Maximize2,
   Minimize2,
   PanelBottomClose,
@@ -31,7 +28,6 @@ import {
   Settings,
   ShieldAlert,
   Trash2,
-  Unlock,
   X,
 } from "lucide-react";
 import {
@@ -92,9 +88,12 @@ import { usePanelStore } from "@/store/panelStore";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { PopoverAnchor } from "@/components/ui/popover";
@@ -465,10 +464,12 @@ function PanelHeaderComponent({
   const moveToDockShortcut = useEffectiveCombo("terminal.moveToDock");
   const maximizeShortcut = useEffectiveCombo("terminal.maximize");
   const closeShortcut = useEffectiveCombo("terminal.close");
+  const watchShortcut = useEffectiveCombo("terminal.watch");
   const duplicateAriaShortcut = useAriaKeyshortcuts("terminal.duplicate");
   const moveToDockAriaShortcut = useAriaKeyshortcuts("terminal.moveToDock");
   const maximizeAriaShortcut = useAriaKeyshortcuts("terminal.maximize");
   const closeAriaShortcut = useAriaKeyshortcuts("terminal.close");
+  const watchAriaShortcut = useAriaKeyshortcuts("terminal.watch");
   const addTabTooltipContent = createTooltipContent(
     "Duplicate panel as new tab",
     duplicateShortcut
@@ -1090,9 +1091,11 @@ function PanelHeaderComponent({
         align="end"
         className="min-w-[200px] max-w-[320px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
       >
-        {hiddenTabs.map((tab) => (
-          <HiddenTabMenuItem key={tab.id} tab={tab} onSelect={() => onTabClick?.(tab.id)} />
-        ))}
+        <DropdownMenuRadioGroup value={hiddenTabs.find((tab) => tab.isActive)?.id ?? ""}>
+          {hiddenTabs.map((tab) => (
+            <HiddenTabMenuItem key={tab.id} tab={tab} onSelect={() => onTabClick?.(tab.id)} />
+          ))}
+        </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -1647,7 +1650,7 @@ function PanelHeaderComponent({
             <Grid2X2 className="w-3 h-3 shrink-0" aria-hidden="true" />
             <span className="whitespace-pre">
               <AnimatedLabel label={String(activeCount)} textClassName="tabular-nums" />{" "}
-              {pluralNoun(activeCount, "other pane")}
+              {pluralNoun(activeCount, "other panel")}
             </span>
           </span>
           {workingCount > 0 && (
@@ -1915,7 +1918,8 @@ function PanelHeaderComponent({
                     </DropdownMenuItem>
                   )}
                   {hasPty && (
-                    <DropdownMenuItem
+                    <DropdownMenuCheckboxItem
+                      checked={isInputLocked}
                       onSelect={() =>
                         void actionService.dispatch(
                           "terminal.toggleInputLock",
@@ -1924,23 +1928,18 @@ function PanelHeaderComponent({
                         )
                       }
                     >
-                      {isInputLocked ? (
-                        <Unlock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      ) : (
-                        <Lock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      )}
-                      {isInputLocked ? "Unlock input" : "Lock input"}
-                    </DropdownMenuItem>
+                      Lock input
+                    </DropdownMenuCheckboxItem>
                   )}
                   {showWatchButton && (
-                    <DropdownMenuItem onSelect={handleWatchToggle}>
-                      {isWatched ? (
-                        <BellOff className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      ) : (
-                        <Bell className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      )}
-                      {isWatched ? "Cancel watch" : "Watch"}
-                    </DropdownMenuItem>
+                    <DropdownMenuCheckboxItem
+                      checked={isWatched}
+                      onSelect={handleWatchToggle}
+                      aria-keyshortcuts={watchAriaShortcut}
+                    >
+                      Watch
+                      <DropdownMenuShortcut shortcut={watchShortcut} />
+                    </DropdownMenuCheckboxItem>
                   )}
 
                   {/* Header actions slot */}

@@ -113,7 +113,7 @@ export function BrowserLoadErrorOverlay({
       description={loadError.message}
     >
       <PaneStateActions>
-        <Button onClick={onRetry} variant="subtle" size="sm">
+        <Button onClick={onRetry} variant="outline" size="sm">
           <RefreshCw />
           Retry
         </Button>

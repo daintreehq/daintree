@@ -1156,7 +1156,7 @@ export function BrowserPane({
                   id: "reload",
                   label: "Reload",
                   icon: RotateCw,
-                  variant: "danger",
+                  variant: "primary",
                   onClick: handleReload,
                   ariaLabel: "Reload page",
                 }}

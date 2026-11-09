@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactElement } from "react";
-import { TriangleAlert } from "lucide-react";
+import { InlineError } from "@/components/ui/field";
 import { AppDialog, type RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { FIELD_CONTROL_SIZE, FIELD_INPUT, FormGrid, FormRow } from "@/components/Worktree/views";
@@ -265,13 +265,9 @@ export function SaveFleetDialog({
         </FormGrid>
 
         {failed && (
-          <p role="alert" className="mt-3 flex items-start gap-1.5 text-xs text-text-secondary">
-            <TriangleAlert
-              className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
-              aria-hidden="true"
-            />
-            <span>Couldn&apos;t save the fleet. Try again.</span>
-          </p>
+          <InlineError role="alert" className="mt-3">
+            Couldn&apos;t save the fleet. Try again.
+          </InlineError>
         )}
       </AppDialog.Body>
 

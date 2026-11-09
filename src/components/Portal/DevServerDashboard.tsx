@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { CircleStop, Play, RotateCw, Server, X } from "lucide-react";
+import { CircleStop, Play, RotateCw, ServerCog, X } from "lucide-react";
 import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
 import { cn } from "@/lib/utils";
+import { SeverityMark } from "@/lib/statusSeverity";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -108,10 +109,19 @@ function DevServerRow({
 
   return (
     <li className="group flex items-center gap-2.5 pl-3 pr-2 py-1.5 hover:bg-overlay-subtle transition-colors duration-150">
-      <span
-        className={cn("status-mark flex-shrink-0 w-2 h-2 rounded-full", presentation.dotClass)}
-        aria-hidden="true"
-      />
+      {isError ? (
+        <SeverityMark
+          severity="error"
+          label={presentation.label}
+          className="h-3.5 w-3.5 shrink-0"
+          decorative
+        />
+      ) : (
+        <span
+          className={cn("status-mark flex-shrink-0 w-2 h-2 rounded-full", presentation.dotClass)}
+          aria-hidden="true"
+        />
+      )}
       <div className="flex flex-col min-w-0 flex-1">
         <TruncatedTooltip content={worktreeName}>
           <span className="truncate text-xs font-medium text-text-primary">{worktreeName}</span>
@@ -229,7 +239,7 @@ export function DevServerDashboard({ onHide }: { onHide?: () => void }) {
       className="flex flex-col flex-shrink-0 max-h-[40%] min-h-0 border-t border-divider bg-surface-canvas"
     >
       <header className="flex items-center gap-2 h-9 shrink-0 pl-3 pr-2">
-        <Server className="w-3.5 h-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+        <ServerCog className="w-3.5 h-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
         <h2 className="text-xs font-medium text-text-primary">Dev servers</h2>
         {summary && (
           <span className="min-w-0 truncate text-xs tabular-nums text-text-secondary">

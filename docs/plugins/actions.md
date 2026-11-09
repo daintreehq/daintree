@@ -243,14 +243,14 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | --- | --- | --- | --- |
 | `help.displayImage` | Display documentation image | safe | `url`, `altText?`, `caption?` |
 | `help.gettingStarted.show` | Getting started | safe | — |
-| `help.launchAgent` | Launch help agent | safe | `agentId?`, `greeting?`, `slot?`, `vacantOnly?` |
+| `help.launchAgent` | Launch Daintree Assistant | safe | `agentId?`, `greeting?`, `slot?`, `vacantOnly?` |
 | `help.newSessionWithAgent` | New assistant session with agent | safe | `agentId` |
 | `help.openCommandsFolder` | Open assistant commands folder | safe | — |
 | `help.resumePastSession` | Resume past assistant session | safe | `agentId`, `sessionId`, `slot?` |
 | `help.shortcuts` | Keyboard shortcuts | safe | — |
 | `help.shortcutsAlt` | Keyboard shortcuts (Alt) | safe | — |
-| `help.togglePanel` | Toggle help panel | safe | — |
-| `help.tour.show` | Daintree Tour | safe | `tourId?` |
+| `help.togglePanel` | Toggle Daintree Assistant | safe | — |
+| `help.tour.show` | Daintree tour | safe | `tourId?` |
 | `help.tour.status` | Tour status | safe | `tourId?` |
 
 ## introspection

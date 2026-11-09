@@ -745,7 +745,7 @@ export function NewWorktreeDialog({
       }
       action={
         <Button
-          variant="ghost"
+          variant="outline"
           size="xs"
           onClick={() => setBranchLoadAttempt((n) => n + 1)}
           className="-my-1 shrink-0"
@@ -2000,7 +2000,7 @@ export function NewWorktreeDialog({
                   title="Couldn't fetch the pull request's branch"
                   action={
                     <Button
-                      variant="ghost"
+                      variant="outline"
                       size="xs"
                       onClick={() => setBranchLoadAttempt((n) => n + 1)}
                     >

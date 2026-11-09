@@ -200,7 +200,7 @@ export function DevPreviewWebviewOverlays({
                 </DropdownMenu>
               </div>
             ) : (
-              <Button onClick={onRetryWebviewLoad} variant="subtle" size="sm">
+              <Button onClick={onRetryWebviewLoad} variant="outline" size="sm">
                 <RefreshCw />
                 Retry
               </Button>
@@ -268,7 +268,7 @@ export function DevPreviewWebviewOverlays({
               id: "hard-restart",
               label: "Hard restart",
               icon: RotateCw,
-              variant: "danger",
+              variant: "primary",
               onClick: onRestartDevServer,
               ariaLabel: "Hard restart preview",
             },

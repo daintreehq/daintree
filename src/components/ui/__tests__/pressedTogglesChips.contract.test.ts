@@ -26,6 +26,9 @@ const RAW_ARIA_PRESSED: Record<string, string> = {
   "src/components/Settings/AgentScopeEditor/ReadOnlyDetail.tsx": "reveal toggle",
   "src/components/Settings/EnvVarRow.tsx": "reveal toggle",
   "src/components/Settings/ImportEnvDialog.tsx": "reveal toggle",
+  "src/components/Settings/McpServerSettingsTab.tsx": "reveal toggle",
+  "src/components/Settings/PluginSettingsForm.tsx": "reveal toggle",
+  "src/components/Settings/VoiceInputSettingsTab.tsx": "reveal toggle",
   // Media transport: play/pause and mute carry state in the glyph.
   "src/components/Tour/TourControls.tsx": "transport control",
 };

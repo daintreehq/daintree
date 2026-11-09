@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { TriangleAlert } from "lucide-react";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldLabel, InlineError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import type { AgentAccount } from "@shared/types";
@@ -140,15 +139,7 @@ export function AddAccountDialog({
             </Field>
           )}
 
-          {error && (
-            <p role="alert" className="flex items-start gap-1.5 text-xs text-text-secondary">
-              <TriangleAlert
-                className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
-                aria-hidden="true"
-              />
-              <span className="select-text">{error}</span>
-            </p>
-          )}
+          {error && <InlineError role="alert">{error}</InlineError>}
         </form>
       </AppDialog.Body>
 

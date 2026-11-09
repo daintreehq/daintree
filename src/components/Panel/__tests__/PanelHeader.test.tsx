@@ -227,9 +227,67 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       )}
     </button>
   ),
+  // Radix's checkbox and radio rows: the role and aria-checked it renders, and
+  // the leading check only on a checked row.
+  DropdownMenuCheckboxItem: ({
+    children,
+    checked,
+    onSelect,
+    ...rest
+  }: {
+    children: React.ReactNode;
+    checked?: boolean;
+    onSelect?: (e: Event) => void;
+    [key: string]: unknown;
+  }) => (
+    <button
+      role="menuitemcheckbox"
+      aria-checked={checked === true}
+      data-state={checked ? "checked" : "unchecked"}
+      {...rest}
+      onClick={() => onSelect?.(new Event("select"))}
+    >
+      {checked && <span data-testid="menu-item-check" aria-hidden="true" />}
+      {children}
+    </button>
+  ),
+  DropdownMenuRadioGroup: ({ children, value }: { children: React.ReactNode; value?: string }) => (
+    <MockRadioGroupValue.Provider value={value}>
+      <div role="group">{children}</div>
+    </MockRadioGroupValue.Provider>
+  ),
+  DropdownMenuRadioItem: ({
+    children,
+    value,
+    onSelect,
+    ...rest
+  }: {
+    children: React.ReactNode;
+    value: string;
+    onSelect?: (e: Event) => void;
+    [key: string]: unknown;
+  }) => {
+    const checked = React.useContext(MockRadioGroupValue) === value;
+    return (
+      <button
+        role="menuitemradio"
+        aria-checked={checked}
+        data-state={checked ? "checked" : "unchecked"}
+        {...rest}
+        onClick={() => onSelect?.(new Event("select"))}
+      >
+        {checked && <span data-testid="menu-item-check" aria-hidden="true" />}
+        {children}
+      </button>
+    );
+  },
   DropdownMenuSeparator: () => <hr />,
-  DropdownMenuShortcut: ({ children }: { children: React.ReactNode }) => <kbd>{children}</kbd>,
+  // The real primitive draws the canonical combo and hides it from the name.
+  DropdownMenuShortcut: ({ shortcut }: { shortcut?: string | null }) =>
+    shortcut && shortcut.trim() ? <kbd aria-hidden="true">{shortcut}</kbd> : null,
 }));
+
+const MockRadioGroupValue = React.createContext<string | undefined>(undefined);
 
 // `null` stands for "no project view store mounted", which is where the
 // optional hook hands back its fallback.
@@ -699,7 +757,9 @@ describe("PanelHeader", () => {
       mockHasPty = true;
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      expect(findMenuButton(menu, "Lock input")).toBeDefined();
+      const lock = findMenuButton(menu, "Lock input");
+      expect(lock?.getAttribute("role")).toBe("menuitemcheckbox");
+      expect(lock?.getAttribute("aria-checked")).toBe("false");
     });
 
     it("does not render Lock input for non-PTY panels", () => {
@@ -719,11 +779,12 @@ describe("PanelHeader", () => {
         />
       );
       const menu = screen.getByTestId("overflow-menu");
-      expect(findMenuButton(menu, "Watch")).toBeDefined();
-      expect(findMenuButton(menu, "Cancel watch")).toBeUndefined();
+      const watch = findMenuButton(menu, "Watch");
+      expect(watch?.getAttribute("role")).toBe("menuitemcheckbox");
+      expect(watch?.getAttribute("aria-checked")).toBe("false");
     });
 
-    it("renders Cancel watch when agent panel is watched", () => {
+    it("keeps the Watch label and checks it when the agent panel is watched", () => {
       mockStoreState = {
         ...mockStoreState,
         watchedPanels: new Set(["test-panel"]),
@@ -737,8 +798,11 @@ describe("PanelHeader", () => {
         />
       );
       const menu = screen.getByTestId("overflow-menu");
-      expect(findMenuButton(menu, "Cancel watch")).toBeDefined();
-      expect(findMenuButton(menu, "Watch")).toBeUndefined();
+      // A toggle's label never changes with its state; the check carries it.
+      expect(findMenuButton(menu, "Cancel watch")).toBeUndefined();
+      const watch = findMenuButton(menu, "Watch");
+      expect(watch?.getAttribute("role")).toBe("menuitemcheckbox");
+      expect(watch?.getAttribute("aria-checked")).toBe("true");
     });
 
     it("does not render Watch for non-agent panels", () => {
@@ -815,7 +879,7 @@ describe("PanelHeader", () => {
       expect(mockWatchPanel).toHaveBeenCalledWith("test-panel");
     });
 
-    it("calls unwatchPanel when clicking Cancel watch on watched agent panel", () => {
+    it("calls unwatchPanel when clicking the checked Watch on a watched agent panel", () => {
       mockStoreState = {
         ...mockStoreState,
         watchedPanels: new Set(["test-panel"]),
@@ -829,11 +893,11 @@ describe("PanelHeader", () => {
         />
       );
       const menu = screen.getByTestId("overflow-menu");
-      findMenuButton(menu, "Cancel watch")?.click();
+      findMenuButton(menu, "Watch")?.click();
       expect(mockUnwatchPanel).toHaveBeenCalledWith("test-panel");
     });
 
-    it("shows Unlock input when terminal is input locked", () => {
+    it("checks Lock input, under the same label, when the terminal is input locked", () => {
       mockHasPty = true;
       mockStoreState = {
         ...mockStoreState,
@@ -842,8 +906,10 @@ describe("PanelHeader", () => {
       };
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      expect(findMenuButton(menu, "Unlock input")).toBeDefined();
-      expect(findMenuButton(menu, "Lock input")).toBeUndefined();
+      expect(findMenuButton(menu, "Unlock input")).toBeUndefined();
+      const lock = findMenuButton(menu, "Lock input");
+      expect(lock?.getAttribute("role")).toBe("menuitemcheckbox");
+      expect(lock?.getAttribute("aria-checked")).toBe("true");
     });
   });
 
@@ -1296,11 +1362,22 @@ describe("PanelHeader", () => {
       );
     });
 
-    it.each(["Duplicate", "Rename", "Trash"])("never offers the generic %s", (label) => {
+    it("never offers the terminal menu's Duplicate", () => {
       registerPluginKind(PLUGIN_KIND);
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
-      expect(findMenuButton(label)).toBeUndefined();
+      expect(findMenuButton("Duplicate")).toBeUndefined();
+    });
+
+    // The shared list's own Rename and Trash wear the terminal menu's labels,
+    // so the terminal menu leaking in shows as a second row of the same name.
+    it.each(["Rename", "Trash"])("offers %s once, from the shared list only", (label) => {
+      registerPluginKind(PLUGIN_KIND);
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      const rows = Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button"));
+      expect(rows.filter((row) => rowLabel(row) === label)).toHaveLength(1);
+      expect(sharedRows().filter((row) => row !== "---" && row.label === label)).toHaveLength(1);
     });
 
     it("leads with the worktree move and opens the picker from it", () => {
@@ -1401,12 +1478,12 @@ describe("PanelHeader", () => {
       expect(onToggleMaximize).not.toHaveBeenCalled();
     });
 
-    it("routes Reload panel to plugin.reloadPanel for this panel by id (#12611)", () => {
+    it("routes Reload to plugin.reloadPanel for this panel by id (#12611)", () => {
       registerPluginKind(PLUGIN_KIND);
       mockStoreState = { ...mockStoreState, focusedId: "other-panel" };
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
-      findMenuButton("Reload panel")!.click();
+      findMenuButton("Reload")!.click();
 
       expect(mockDispatch).toHaveBeenCalledTimes(1);
       expect(mockDispatch).toHaveBeenCalledWith(
@@ -1421,8 +1498,8 @@ describe("PanelHeader", () => {
       registerPlayableTour("acme.dashboard-intro");
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
-      expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
-      findMenuButton("Dashboard Welcome Tour")!.click();
+      expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard welcome tour" }));
+      findMenuButton("Dashboard welcome tour")!.click();
 
       expect(mockDispatch).toHaveBeenCalledTimes(1);
       expect(mockDispatch).toHaveBeenCalledWith(
@@ -1536,7 +1613,7 @@ describe("PanelHeader", () => {
 
       expect(menuRows()).toEqual(sharedRows());
       act(() => registerPlayableTour("acme.dashboard-intro"));
-      expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
+      expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard welcome tour" }));
     });
 
     it("offers no tour for a kind that declares none", () => {
@@ -1545,13 +1622,13 @@ describe("PanelHeader", () => {
 
       const rows = Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button"));
       expect(rows.length).toBeGreaterThan(0);
-      expect(rows.some((row) => rowLabel(row).endsWith("Welcome Tour"))).toBe(false);
+      expect(rows.some((row) => rowLabel(row).endsWith("welcome tour"))).toBe(false);
     });
 
-    it.each(["file", "file-browser", "diff"])("offers no Reload panel on %s panels", (kind) => {
+    it.each(["file", "file-browser", "diff"])("offers no Reload on %s panels", (kind) => {
       render(<PanelHeader {...makeProps({ kind })} />);
 
-      expect(findMenuButton("Reload panel")).toBeUndefined();
+      expect(findMenuButton("Reload")).toBeUndefined();
     });
 
     it("asks a panel holding unsaved work before removing it", async () => {
@@ -1601,7 +1678,7 @@ describe("PanelHeader", () => {
 
       expect(findMenuButton("Redraw")).toBeDefined();
       expect(findMenuButton("Lock input")).toBeDefined();
-      expect(findMenuButton("Rename panel")).toBeUndefined();
+      expect(findMenuButton("Remove panel")).toBeUndefined();
       expect(findMenuButton("Duplicate")).toBeUndefined();
     });
 
@@ -1616,7 +1693,7 @@ describe("PanelHeader", () => {
       storePanelKind(PTY_PLUGIN_KIND);
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
 
-      findMenuButton("Shell Welcome Tour")!.click();
+      findMenuButton("Shell welcome tour")!.click();
 
       expect(mockDispatch).toHaveBeenCalledWith(
         "help.tour.show",
@@ -1629,12 +1706,12 @@ describe("PanelHeader", () => {
       mockHasPty = true;
       storePanelKind(PTY_PLUGIN_KIND);
       render(<PanelHeader {...makeProps({ kind: PTY_PLUGIN_KIND })} />);
-      expect(findMenuButton("Rename panel")).toBeDefined();
+      expect(findMenuButton("Remove panel")).toBeDefined();
       expect(findMenuButton("Redraw")).toBeUndefined();
 
       act(() => registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true }));
 
-      expect(findMenuButton("Rename panel")).toBeUndefined();
+      expect(findMenuButton("Remove panel")).toBeUndefined();
       expect(findMenuButton("Redraw")).toBeDefined();
       expect(findMenuButton("Duplicate")).toBeUndefined();
     });
@@ -1646,7 +1723,7 @@ describe("PanelHeader", () => {
         render(<PanelHeader {...makeProps({ kind })} />);
 
         expect(findMenuButton("Duplicate")).toBeDefined();
-        expect(findMenuButton("Rename panel")).toBeUndefined();
+        expect(findMenuButton("Remove panel")).toBeUndefined();
       }
     );
   });
@@ -1731,17 +1808,18 @@ describe("PanelHeader", () => {
       expect(onTabClick).toHaveBeenCalledWith("t2");
     });
 
-    it("marks an active hidden tab with aria-current and font-medium", () => {
+    it("checks an active hidden tab as the radio group's value, and only that one", () => {
       mockHiddenTabIds = new Set(["t1", "t2"]);
       render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
       const menus = screen.getAllByTestId("overflow-menu");
       const tabsMenu = menus.find((m) => m.textContent?.includes("Tab 1"))!;
       const items = Array.from(tabsMenu.querySelectorAll("button"));
       const activeItem = items.find((b) => b.textContent?.includes("Tab 1"));
-      expect(activeItem?.getAttribute("aria-current")).toBe("true");
-      expect(activeItem?.className).toContain("font-medium");
+      expect(activeItem?.getAttribute("role")).toBe("menuitemradio");
+      expect(activeItem?.getAttribute("aria-checked")).toBe("true");
       const inactiveItem = items.find((b) => b.textContent?.includes("Tab 2"));
-      expect(inactiveItem?.getAttribute("aria-current")).toBeNull();
+      expect(inactiveItem?.getAttribute("role")).toBe("menuitemradio");
+      expect(inactiveItem?.getAttribute("aria-checked")).toBe("false");
     });
 
     describe("hidden waiting count", () => {

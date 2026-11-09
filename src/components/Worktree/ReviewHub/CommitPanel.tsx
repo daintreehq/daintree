@@ -12,7 +12,6 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { isMac } from "@/lib/platform";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
-import { REVIEW_HUB_DISABLED_CTA } from "./reviewHubUtils";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { CommitRows, RefChip, type PreviewCommit } from "@/components/Git/GitOperationPreview";
 import { PREVIEW_COMMIT_LIMIT } from "@/components/Git/gitRemoteOperationPreview";
@@ -22,15 +21,6 @@ import { PathTail } from "@/components/ui/PathTail";
 
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
-
-// Shared by both primary CTAs so the panel shows one disabled treatment
-// regardless of whether the worktree has a remote.
-const DISABLED_CTA_CLASSES = cn(
-  REVIEW_HUB_DISABLED_CTA,
-  // Forced colours repaint every button ButtonText-on-ButtonFace, which made an
-  // unavailable primary indistinguishable from a live one.
-  "forced-colors:aria-disabled:text-[GrayText] forced-colors:aria-disabled:outline-[GrayText]"
-);
 
 const PRIMARY_SHORTCUT = "Cmd+Enter";
 // How long a push can go without a progress event before the composer says so.
@@ -1059,7 +1049,7 @@ export function CommitPanel({
           </Button>
         )}
         <Button
-          variant="default"
+          variant="contrast"
           size="sm"
           data-testid="review-hub-commit-primary"
           data-staged-count={stagedCount}
@@ -1068,9 +1058,7 @@ export function CommitPanel({
           aria-describedby={statusId}
           aria-keyshortcuts={primaryKeyshortcuts}
           loading={primaryBusy}
-          // Busy keeps the CTA's own fill under the spinner; the inset treatment
-          // is for "can't commit", not "committing".
-          className={cn("flex-1", !primaryBusy && DISABLED_CTA_CLASSES)}
+          className="flex-1"
         >
           {hasRemote ? <ArrowUpFromLine aria-hidden="true" /> : <GitCommit aria-hidden="true" />}
           {primaryLabel}

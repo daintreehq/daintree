@@ -162,7 +162,7 @@ export function DictionaryLearnPrompt({
             Couldn&apos;t {failedAnswer === "acceptSuggestion" ? "add" : "dismiss"} &ldquo;
             {prompt.word}&rdquo;
           </span>
-          <Button size="xs" variant="ghost" onClick={() => resolve(failedAnswer)}>
+          <Button size="xs" variant="outline" onClick={() => resolve(failedAnswer)}>
             Retry
           </Button>
           <DismissButton

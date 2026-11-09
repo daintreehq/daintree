@@ -141,7 +141,7 @@ describe("WatchdogDisabledBanner", () => {
       mockedDispatch.mockResolvedValueOnce(refused);
       render(<WatchdogDisabledBanner />);
       expect(failureLine()).toBeNull();
-      expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Open diagnostics" })).toBeNull();
       await act(async () => {
         fireEvent.click(restartButton());
       });
@@ -167,7 +167,7 @@ describe("WatchdogDisabledBanner", () => {
       await act(async () => {
         fireEvent.click(restartButton());
       });
-      fireEvent.click(screen.getByRole("button", { name: "Open Diagnostics" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open diagnostics" }));
       expect(useDiagnosticsStore.getState().isOpen).toBe(true);
       expect(useDiagnosticsStore.getState().activeTab).toBe("logs");
     });
@@ -187,7 +187,7 @@ describe("WatchdogDisabledBanner", () => {
       });
       expect(mockedDispatch).toHaveBeenCalledTimes(2);
       expect(failureLine()).toBeNull();
-      expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Open diagnostics" })).toBeNull();
       expect(restartButton().getAttribute("aria-disabled")).toBe("true");
 
       await act(async () => settle({ ok: true, result: undefined }));

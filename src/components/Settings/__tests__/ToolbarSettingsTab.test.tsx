@@ -338,8 +338,8 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
 
-    expect(getByLabelText(switchName("Claude agent")).getAttribute("aria-checked")).toBe("true");
-    expect(getByLabelText(switchName("Gemini agent")).getAttribute("aria-checked")).toBe("false");
+    expect(getByLabelText(switchName("Claude")).getAttribute("aria-checked")).toBe("true");
+    expect(getByLabelText(switchName("Gemini")).getAttribute("aria-checked")).toBe("false");
   });
 
   it("ignores pinnedButtons for agent IDs (the agent pins win)", () => {
@@ -352,7 +352,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     };
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    expect(getByLabelText(switchName("Claude agent")).getAttribute("aria-checked")).toBe("true");
+    expect(getByLabelText(switchName("Claude")).getAttribute("aria-checked")).toBe("true");
   });
 
   it("routes agent switch toggle to setAgentPinned (not toggleButtonVisibility)", () => {
@@ -361,7 +361,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     };
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText(switchName("Claude agent")));
+    fireEvent.click(getByLabelText(switchName("Claude")));
 
     expect(setAgentPinnedMock).toHaveBeenCalledTimes(1);
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
@@ -374,7 +374,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     };
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText(switchName("Gemini agent")));
+    fireEvent.click(getByLabelText(switchName("Gemini")));
 
     expect(setAgentPinnedMock).toHaveBeenCalledWith("gemini", true);
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
@@ -470,7 +470,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     mockAgentPins = null;
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    expect(getByLabelText(switchName("Claude agent")).getAttribute("aria-checked")).toBe("false");
+    expect(getByLabelText(switchName("Claude")).getAttribute("aria-checked")).toBe("false");
   });
 
   it("handles a right-side agent correctly (routes through setAgentPinned)", () => {
@@ -485,7 +485,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     };
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText(switchName("Codex agent")));
+    fireEvent.click(getByLabelText(switchName("Codex")));
 
     expect(setAgentPinnedMock).toHaveBeenCalledWith("codex", false);
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
@@ -538,7 +538,7 @@ describe("ToolbarSettingsTab — one row per button", () => {
       ...switchNamesIn(leftColumn(container)),
       ...switchNamesIn(rightColumn(container)),
     ];
-    for (const agent of ["Claude agent", "Gemini agent", "Codex agent"]) {
+    for (const agent of ["Claude", "Gemini", "Codex"]) {
       expect(columns).not.toContain(switchName(agent));
       expect(switchNamesIn(poolGroup(container, "Agents"))).toContain(switchName(agent));
     }
@@ -558,7 +558,7 @@ describe("ToolbarSettingsTab — one row per button", () => {
     const { container, getByLabelText, rerender } = render(<ToolbarSettingsTab />);
 
     // Column row switched off: stays in its column, off, and not also in the pool.
-    const claudeSwitch = getByLabelText(switchName("Claude agent"));
+    const claudeSwitch = getByLabelText(switchName("Claude"));
     expect(leftColumn(container).contains(claudeSwitch)).toBe(true);
     fireEvent.click(claudeSwitch);
     mockAgentPins = {
@@ -570,10 +570,10 @@ describe("ToolbarSettingsTab — one row per button", () => {
     expect(claudeSwitch.isConnected).toBe(true);
     expect(leftColumn(container).contains(claudeSwitch)).toBe(true);
     expect(claudeSwitch.getAttribute("aria-checked")).toBe("false");
-    expect(switchNamesIn(poolSection(container))).not.toContain(switchName("Claude agent"));
+    expect(switchNamesIn(poolSection(container))).not.toContain(switchName("Claude"));
 
     // Pool row switched on: stays in the pool, on.
-    const codexSwitch = getByLabelText(switchName("Codex agent"));
+    const codexSwitch = getByLabelText(switchName("Codex"));
     expect(poolSection(container)!.contains(codexSwitch)).toBe(true);
     fireEvent.click(codexSwitch);
     expect(setAgentPinnedMock).toHaveBeenLastCalledWith("codex", true);
@@ -592,14 +592,14 @@ describe("ToolbarSettingsTab — one row per button", () => {
     expect(poolSection(container)!.contains(codexSwitch)).toBe(true);
     expect(codexSwitch.getAttribute("aria-checked")).toBe("true");
     // Still one switch for it while the user is working there.
-    expect(switchNamesIn(container).filter((n) => n === switchName("Codex agent"))).toHaveLength(1);
+    expect(switchNamesIn(container).filter((n) => n === switchName("Codex"))).toHaveLength(1);
 
     // Once the pointer leaves the section, it moves up to where it landed.
     act(() => {
       fireEvent.pointerLeave(poolSection(container)!.parentElement!);
     });
-    expect(switchNamesIn(leftColumn(container))).toContain(switchName("Codex agent"));
-    expect(switchNamesIn(container).filter((n) => n === switchName("Codex agent"))).toHaveLength(1);
+    expect(switchNamesIn(leftColumn(container))).toContain(switchName("Codex"));
+    expect(switchNamesIn(container).filter((n) => n === switchName("Codex"))).toHaveLength(1);
   });
 });
 
@@ -646,8 +646,8 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
 
     expect(switchNamesIn(leftColumn(container))).toEqual([
       switchName("Launcher"),
-      switchName("Claude agent"),
-      switchName("Gemini agent"),
+      switchName("Claude"),
+      switchName("Gemini"),
       switchName("Terminal"),
     ]);
   });
@@ -687,8 +687,8 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
     // button under the cursor outside both columns.
     expect(switchNamesIn(leftColumn(container))).toEqual([
       switchName("Launcher"),
-      switchName("Claude agent"),
-      switchName("Gemini agent"),
+      switchName("Claude"),
+      switchName("Gemini"),
       switchName("Terminal"),
     ]);
   });
@@ -868,12 +868,10 @@ describe("ToolbarSettingsTab — drag-source vs off-row opacity", () => {
   function switchGeminiOffInColumn() {
     mockAgentPins = { gemini: true };
     const view = render(<ToolbarSettingsTab />);
-    fireEvent.click(view.getByLabelText(switchName("Gemini agent")));
+    fireEvent.click(view.getByLabelText(switchName("Gemini")));
     mockAgentPins = { gemini: false };
     view.rerender(<ToolbarSettingsTab />);
-    expect(view.getByLabelText(switchName("Gemini agent")).getAttribute("aria-checked")).toBe(
-      "false"
-    );
+    expect(view.getByLabelText(switchName("Gemini")).getAttribute("aria-checked")).toBe("false");
     return view;
   }
 
@@ -901,7 +899,7 @@ describe("ToolbarSettingsTab — drag-source vs off-row opacity", () => {
     }));
 
     const { container } = switchGeminiOffInColumn();
-    const row = rowFor("Gemini agent", container);
+    const row = rowFor("Gemini", container);
     expect(row.style.opacity).toBe(String(DRAG_GHOST_OPACITY));
   });
 
@@ -909,7 +907,7 @@ describe("ToolbarSettingsTab — drag-source vs off-row opacity", () => {
     // gemini unpinned → not on the toolbar. The switch says so; dimming the
     // whole row would make an available setting read as a disabled one.
     const { container } = switchGeminiOffInColumn();
-    const row = rowFor("Gemini agent", container);
+    const row = rowFor("Gemini", container);
     expect(row.style.opacity).toBe("1");
   });
 
@@ -917,7 +915,7 @@ describe("ToolbarSettingsTab — drag-source vs off-row opacity", () => {
     mockAgentPins = { claude: true };
 
     const { container } = render(<ToolbarSettingsTab />);
-    const row = rowFor("Claude agent", container);
+    const row = rowFor("Claude", container);
     expect(row.style.opacity).toBe("1");
   });
 });
@@ -1318,7 +1316,7 @@ describe("ToolbarSettingsTab — move menu and agent inventory", () => {
   it("moves across sides through the menu, landing at the end of the other side", () => {
     const { getByLabelText } = render(<ToolbarSettingsTab />);
     fireEvent.click(
-      menuFor("Gemini agent", getByLabelText).getByRole("menuitem", { name: "Move to right side" })
+      menuFor("Gemini", getByLabelText).getByRole("menuitem", { name: "Move to right side" })
     );
 
     expect(moveButtonMock).toHaveBeenCalledWith(
@@ -1331,14 +1329,12 @@ describe("ToolbarSettingsTab — move menu and agent inventory", () => {
 
   it("offers no step up out of a button's own group", () => {
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    const up = menuFor("Claude agent", getByLabelText).getByRole("menuitem", {
+    const up = menuFor("Claude", getByLabelText).getByRole("menuitem", {
       name: "Move up",
     }) as HTMLButtonElement;
     expect(up.disabled).toBe(true);
 
-    fireEvent.click(
-      menuFor("Claude agent", getByLabelText).getByRole("menuitem", { name: "Move down" })
-    );
+    fireEvent.click(menuFor("Claude", getByLabelText).getByRole("menuitem", { name: "Move down" }));
     const written = setLeftButtonsMock.mock.calls[0]![0];
     expect(written.indexOf("gemini")).toBeLessThan(written.indexOf("claude"));
   });
@@ -1356,9 +1352,7 @@ describe("ToolbarSettingsTab — move menu and agent inventory", () => {
     };
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(
-      menuFor("Claude agent", getByLabelText).getByRole("menuitem", { name: "Move down" })
-    );
+    fireEvent.click(menuFor("Claude", getByLabelText).getByRole("menuitem", { name: "Move down" }));
 
     expect(setLeftButtonsMock).toHaveBeenCalledTimes(1);
     const written = setLeftButtonsMock.mock.calls[0]![0];
@@ -1371,7 +1365,7 @@ describe("ToolbarSettingsTab — move menu and agent inventory", () => {
   it("keeps an agent switched off in its column in view, switched off", () => {
     const { getByLabelText, container, rerender } = render(<ToolbarSettingsTab />);
 
-    fireEvent.click(getByLabelText(switchName("Gemini agent")));
+    fireEvent.click(getByLabelText(switchName("Gemini")));
     mockAgentPins = {
       claude: true,
       gemini: false,
@@ -1379,11 +1373,11 @@ describe("ToolbarSettingsTab — move menu and agent inventory", () => {
     };
     rerender(<ToolbarSettingsTab />);
 
-    const gemini = getByLabelText(switchName("Gemini agent"));
+    const gemini = getByLabelText(switchName("Gemini"));
     expect(gemini.getAttribute("aria-checked")).toBe("false");
     expect(leftColumn(container).contains(gemini)).toBe(true);
     // Off rows keep no move menu — there is no position to change.
-    expect(container.querySelector('[aria-label="Move Gemini agent"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Move Gemini"]')).toBeNull();
   });
 
   it("hides agents that aren't installed behind a disclosure", () => {
@@ -1396,14 +1390,14 @@ describe("ToolbarSettingsTab — move menu and agent inventory", () => {
     ).find((el) => el.textContent?.includes("that aren't installed"))!;
 
     // An installed agent is listed straight away; a missing one is not.
-    expect(getByLabelText(switchName("Claude agent"))).toBeTruthy();
+    expect(getByLabelText(switchName("Claude"))).toBeTruthy();
     expect(disclosure.getAttribute("aria-expanded")).toBe("false");
-    expect(queryByLabelText(switchName("Gemini agent"))).toBeNull();
+    expect(queryByLabelText(switchName("Gemini"))).toBeNull();
 
     fireEvent.click(disclosure);
 
     expect(disclosure.getAttribute("aria-expanded")).toBe("true");
-    const gemini = getByLabelText(switchName("Gemini agent"));
+    const gemini = getByLabelText(switchName("Gemini"));
     expect(poolGroup(container, "Agents")!.contains(gemini)).toBe(true);
   });
 });

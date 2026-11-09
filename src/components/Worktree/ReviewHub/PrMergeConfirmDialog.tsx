@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { GitPullRequest } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import type { PR, PRMergeIntent, PRMergeMethod } from "@shared/types/forge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
@@ -268,6 +270,12 @@ export function PrMergeConfirmDialog({
   const commits = loadedPr?.commits;
   const baseRef = loadedPr?.baseRef ?? request.baseRef;
   const prTitle = loadedPr?.title ?? request.title;
+  // The PR badges' mark once the PR is read; until then the plain PR glyph,
+  // since the request carries no state to draw.
+  const PrGlyph = loadedPr ? getPrStateGlyph(loadedPr.state, loadedPr.isDraft) : GitPullRequest;
+  const prGlyphColor = loadedPr
+    ? getPrStateColor(loadedPr.state, loadedPr.isDraft)
+    : "text-text-secondary";
   const intent = loadedPr ? (loadedPr.mergeIntent ?? null) : request.intent;
   const queuedIntent = intent?.kind === "queued";
   const nothingPending = mode === "cancel" && loadedPr !== null && !loadedPr.mergeIntent;
@@ -416,8 +424,8 @@ export function PrMergeConfirmDialog({
       // as an instruction from the dialog.
       description={
         <span className="flex items-start gap-2">
-          <GitPullRequest
-            className="w-3.5 h-3.5 mt-[3px] shrink-0 text-text-secondary"
+          <PrGlyph
+            className={cn("w-3.5 h-3.5 mt-[3px] shrink-0", prGlyphColor)}
             aria-hidden="true"
           />
           <span

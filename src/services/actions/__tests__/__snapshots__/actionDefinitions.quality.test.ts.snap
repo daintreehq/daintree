@@ -2860,7 +2860,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "help",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Open an AI agent in the help workspace folder",
+    "description": "Start a Daintree Assistant session with an AI agent",
     "examples": undefined,
     "id": "help.launchAgent",
     "keywords": [
@@ -2871,7 +2871,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Launch help agent",
+    "title": "Launch Daintree Assistant",
   },
   {
     "category": "help",
@@ -2967,7 +2967,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "help",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Show or hide the help panel",
+    "description": "Show or hide the Daintree Assistant",
     "examples": undefined,
     "id": "help.togglePanel",
     "keywords": [
@@ -2978,7 +2978,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle help panel",
+    "title": "Toggle Daintree Assistant",
   },
   {
     "category": "help",
@@ -2997,7 +2997,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Daintree Tour",
+    "title": "Daintree tour",
   },
   {
     "category": "help",

@@ -516,7 +516,7 @@ export function KeyboardShortcutsTab() {
             value={searchQuery}
             onChange={setSearchQuery}
             label="Search shortcuts"
-            placeholder="Search by action, key or category"
+            placeholder="Search by action, key or category…"
           />
           <SegmentedRadioGroup
             aria-label="Filter shortcuts"

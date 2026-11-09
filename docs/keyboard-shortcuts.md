@@ -82,7 +82,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
-| Launch Claude Code agent | `⌘+⌥+C` | `Ctrl+Alt+C` |
+| Launch Claude agent | `⌘+⌥+C` | `Ctrl+Alt+C` |
 | Launch Gemini agent | `⌘+⌥+G` | `Ctrl+Alt+G` |
 | Launch Codex agent | `⌘+⌥+X` | `Ctrl+Alt+X` |
 | Launch terminal in current worktree | `⌘+⌥+N` | `Ctrl+Alt+N` |
@@ -228,7 +228,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | --- | --- | --- |
 | Open keyboard shortcuts reference | `⌘+K ⌘+S` | `Ctrl+K Ctrl+S` |
 | Open keyboard shortcuts reference | `⌘+/` | `Ctrl+/` |
-| Launch help agent | `⌘+⇧+H` | `Ctrl+Shift+H` |
+| Launch Daintree Assistant | `⌘+⇧+H` | `Ctrl+Shift+H` |
 | Toggle Daintree Assistant panel | `⌘+L` | `Ctrl+L` |
 
 ## System

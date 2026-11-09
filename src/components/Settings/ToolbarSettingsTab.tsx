@@ -40,6 +40,7 @@ import {
   Ellipsis,
   GripVertical,
 } from "lucide-react";
+import { BrandMark } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -67,6 +68,7 @@ import { resolveLauncherItemMetadata } from "@/components/Layout/launcherToolbar
 import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
 import {
   TOOLBAR_BUTTON_METADATA,
+  getToolbarButtonBrandColor,
   getToolbarButtonGroup,
   type ToolbarButtonMetadata,
 } from "@/components/Layout/toolbarButtonMetadata";
@@ -241,7 +243,9 @@ function ToolbarButtonCard({
           ) : (
             <span className="-my-0.5 h-6 w-6 shrink-0" aria-hidden="true" />
           )}
-          <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <BrandMark brandColor={getToolbarButtonBrandColor(buttonId)}>
+            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+          </BrandMark>
           <span className="truncate">{metadata.label}</span>
         </span>
       }
@@ -343,7 +347,9 @@ function PoolButtonRow({
     <SettingsRow
       label={
         <span className="flex min-w-0 items-center gap-2.5">
-          <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <BrandMark brandColor={getToolbarButtonBrandColor(buttonId)}>
+            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+          </BrandMark>
           <span className="truncate">{metadata.label}</span>
         </span>
       }

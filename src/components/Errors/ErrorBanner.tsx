@@ -258,7 +258,7 @@ export function ErrorBanner({
       trailingSlot={
         recoveryFailed ? (
           <Button variant="ghost" size="sm" onClick={handleOpenDiagnostics}>
-            Open Diagnostics
+            Open diagnostics
           </Button>
         ) : undefined
       }

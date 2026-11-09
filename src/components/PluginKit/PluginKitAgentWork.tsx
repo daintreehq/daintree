@@ -13,6 +13,7 @@ import type {
   PluginSuggestedValueProps,
   PluginToolCallCardProps,
 } from "@shared/types/plugin-sdk-react";
+import { LinkMark } from "@/components/Hosts/LinkMark";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { InlineError } from "@/components/ui/field";
@@ -176,7 +177,7 @@ const CONNECTION_STATUSES = [
 
 const CONNECTION_WORD: Record<PluginConnectionStatus, string> = {
   connected: "Connected",
-  connecting: "Connecting",
+  connecting: "Connecting…",
   disconnected: "Not connected",
   expired: "Sign-in expired",
   limited: "Limited access",
@@ -185,12 +186,13 @@ const CONNECTION_WORD: Record<PluginConnectionStatus, string> = {
 
 function ConnectionGlyph({ status }: { status: PluginConnectionStatus }) {
   switch (status) {
+    // The host link's marks: filled while live, dashed while dialling, hollow while down.
     case "connected":
-      return <CircleCheck aria-hidden="true" className={cn(GLYPH, "text-text-secondary")} />;
+      return <LinkMark tone="live" className={GLYPH} />;
     case "connecting":
-      return <Spinner size="sm" className="text-text-secondary" />;
+      return <LinkMark tone="connecting" className={GLYPH} />;
     case "disconnected":
-      return <CircleDashed aria-hidden="true" className={cn(GLYPH, "text-text-secondary")} />;
+      return <LinkMark tone="offline" className={GLYPH} />;
     case "expired":
     case "limited":
       return <WarningGlyph aria-hidden="true" className={cn(GLYPH, "text-status-warning")} />;
@@ -645,6 +647,7 @@ function KitSuggestedValue({
       <div className="flex flex-wrap items-center gap-1.5">
         <Button
           size="xs"
+          variant="contrast"
           disabled={inert || outdated || !accept}
           onClick={() => accept && runPluginAction("SuggestedValue onAccept", accept)}
         >

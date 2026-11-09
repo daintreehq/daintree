@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "@/lib/animationUtils";
-import { ArrowLeftRight, FolderGit2 } from "@/components/icons";
+import { ArrowLeftRight, BrandMark, FolderGit2 } from "@/components/icons";
 import { PANE_STATUS_FOOTER_CLASS } from "@/components/ui/paneToolbarStyles";
 import { TerminalNotifyChip } from "@/components/Terminal/TerminalNotifyChip";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -262,7 +262,9 @@ export function HelpPanelFooter({
             </StatusItem>
           ))}
         <StatusItem tip={`Assistant agent: ${agentDescription}`} className="shrink-0 gap-1">
-          <AgentIcon aria-hidden className="w-3.5 h-3.5 shrink-0" />
+          <BrandMark brandColor={agentConfig.color}>
+            <AgentIcon aria-hidden className="w-3.5 h-3.5 shrink-0" />
+          </BrandMark>
           <span className={density < 2 ? undefined : "sr-only"}>{agentName}</span>
           {launchedModelLabel && (
             <span className={density < 1 ? undefined : "sr-only"}>· {launchedModelLabel}</span>

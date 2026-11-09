@@ -2,7 +2,6 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import {
   ChevronLeft,
   ChevronRight,
-  Check,
   ExternalLink,
   FolderTree,
   PanelLeftClose,
@@ -17,6 +16,7 @@ import type { DiffPanelData } from "@shared/types/panel";
 import { isAbsolute, join, resolveWorktreePathScope } from "@shared/utils/path";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
@@ -1617,16 +1617,16 @@ export function DiffPane({
             )}
           </div>
           {currentEntry && worktreePath && (
-            // The word is the name, so no tooltip repeats it.
-            <button
-              type="button"
-              aria-pressed={isViewed}
-              onClick={() => toggleViewed(worktreePath, currentEntry.viewedKey)}
-              className={PANE_TOOLBAR_TEXT_BUTTON_CLASS}
-            >
-              <Check className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
+            // The same checkbox the file lists draw for a viewed file. The word
+            // is the name, so no tooltip repeats it.
+            <label className={`${PANE_TOOLBAR_TEXT_BUTTON_CLASS} cursor-pointer select-none`}>
+              <Checkbox
+                size="sm"
+                checked={isViewed}
+                onCheckedChange={() => toggleViewed(worktreePath, currentEntry.viewedKey)}
+              />
               Viewed
-            </button>
+            </label>
           )}
         </div>
       )}

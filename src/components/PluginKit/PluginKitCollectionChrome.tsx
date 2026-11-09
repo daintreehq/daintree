@@ -206,7 +206,7 @@ export function KitLoadMoreFooter({
           <span className="min-w-0 truncate">{message}</span>
         </TruncatedTooltip>
         <Button
-          variant="ghost"
+          variant="outline"
           size="xs"
           disabled={!load}
           onClick={() => load?.()}

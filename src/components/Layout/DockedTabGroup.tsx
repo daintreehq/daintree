@@ -23,13 +23,14 @@ import {
   TOUCH_SENSOR_OPTIONS,
 } from "@/components/DragDrop/dragActivation";
 import { LayoutGroup, AnimatePresence, m } from "framer-motion";
-import { Check, ChevronDown, CopyPlus, PanelTopClose } from "lucide-react";
+import { ChevronDown, CopyPlus, PanelTopClose } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -1081,53 +1082,44 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                         align="end"
                         className="min-w-[200px] max-w-[320px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
                       >
-                        {hiddenPanels.map((panel) => {
-                          const tabChrome = deriveTerminalChrome({
-                            kind: panel.kind,
-                            launchAgentId: panel.launchAgentId,
-                            runtimeIdentity: panel.runtimeIdentity,
-                            detectedAgentId: panel.detectedAgentId,
-                            detectedProcessId: panel.detectedProcessId,
-                            agentState: panel.agentState,
-                            runtimeStatus: panel.runtimeStatus,
-                            exitCode: panel.exitCode,
-                            presetColor: panelPresetColors.get(panel.id),
-                          });
-                          const isActive = panel.id === activeTabId;
-                          return (
-                            <DropdownMenuItem
-                              key={panel.id}
-                              onSelect={() => handleTabClick(panel.id)}
-                              aria-current={isActive ? "true" : undefined}
-                              // The tab on screen is a committed value, so it
-                              // takes the check every picker gives one — not a
-                              // rail, which would read as the highlighted row.
-                              className={cn(isActive && "font-medium")}
-                            >
-                              <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
-                                <TerminalIcon
-                                  kind={panel.kind ?? "terminal"}
-                                  chrome={tabChrome}
-                                  className="w-3.5 h-3.5"
-                                />
-                              </span>
-                              <span className="mr-3 truncate">
-                                {withDisplayEmoji(
-                                  getTerminalDisplayTitle(panel, "compact", {
-                                    showTask: showAgentTaskTitles,
-                                  }),
-                                  panel.displayEmoji
-                                )}
-                              </span>
-                              {isActive && (
-                                <Check
-                                  className="ml-auto h-3.5 w-3.5 shrink-0 text-text-secondary"
-                                  aria-hidden="true"
-                                />
-                              )}
-                            </DropdownMenuItem>
-                          );
-                        })}
+                        <DropdownMenuRadioGroup value={activeTabId}>
+                          {hiddenPanels.map((panel) => {
+                            const tabChrome = deriveTerminalChrome({
+                              kind: panel.kind,
+                              launchAgentId: panel.launchAgentId,
+                              runtimeIdentity: panel.runtimeIdentity,
+                              detectedAgentId: panel.detectedAgentId,
+                              detectedProcessId: panel.detectedProcessId,
+                              agentState: panel.agentState,
+                              runtimeStatus: panel.runtimeStatus,
+                              exitCode: panel.exitCode,
+                              presetColor: panelPresetColors.get(panel.id),
+                            });
+                            return (
+                              <DropdownMenuRadioItem
+                                key={panel.id}
+                                value={panel.id}
+                                onSelect={() => handleTabClick(panel.id)}
+                              >
+                                <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
+                                  <TerminalIcon
+                                    kind={panel.kind ?? "terminal"}
+                                    chrome={tabChrome}
+                                    className="w-3.5 h-3.5"
+                                  />
+                                </span>
+                                <span className="mr-3 truncate">
+                                  {withDisplayEmoji(
+                                    getTerminalDisplayTitle(panel, "compact", {
+                                      showTask: showAgentTaskTitles,
+                                    }),
+                                    panel.displayEmoji
+                                  )}
+                                </span>
+                              </DropdownMenuRadioItem>
+                            );
+                          })}
+                        </DropdownMenuRadioGroup>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   )}

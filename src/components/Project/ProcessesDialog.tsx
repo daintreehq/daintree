@@ -1005,7 +1005,7 @@ export function ProcessesDialog({
                 size="compact"
                 role="status"
                 action={
-                  <Button variant="ghost" size="sm" onClick={() => void fetchRef.current()}>
+                  <Button variant="outline" size="sm" onClick={() => void fetchRef.current()}>
                     <RefreshCw aria-hidden="true" />
                     Retry
                   </Button>

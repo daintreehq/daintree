@@ -161,12 +161,12 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(modalSource).toMatch(/onClick=\{bulkRemove\.handleRemoveClick\}/);
     });
 
-    it("uses variant='destructive' on the Remove button so the styling matches the D3 classification", () => {
+    it("uses variant='ghost-danger' on the bar's Remove button, the inline destructive treatment matching the D3 classification", () => {
       const removeButtonSlice = modalSource.slice(
         modalSource.indexOf("worktree-bulk-remove") - 200,
         modalSource.indexOf("worktree-bulk-remove") + 200
       );
-      expect(removeButtonSlice).toMatch(/variant="destructive"/);
+      expect(removeButtonSlice).toMatch(/variant="ghost-danger"/);
     });
 
     it("hands the whole hook to the extracted bulk-remove dialog", () => {

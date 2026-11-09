@@ -47,10 +47,7 @@ export function BaseBranchCombobox({
             [hasError ? "validation-error" : null, describedBy].filter(Boolean).join(" ") ||
             undefined
           }
-          className={cn(
-            FIELD_TRIGGER,
-            hasError && "border-status-error focus-visible:outline-status-error"
-          )}
+          className={cn(FIELD_TRIGGER, hasError && "border-status-error")}
           disabled={disabled}
           // Down/Up open the list, as on every other combobox in the form; the
           // search field inside then takes focus and the arrow keys.

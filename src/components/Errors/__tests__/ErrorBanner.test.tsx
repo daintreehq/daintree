@@ -470,7 +470,7 @@ describe("ErrorBanner", () => {
         mockDispatch.mockReturnValueOnce(retry.promise);
         await clickRecovery();
         expect(screen.queryByText(/Recovery failed/)).toBeNull();
-        expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Open diagnostics" })).toBeNull();
         expect(screen.getByText("Pull the remote changes first")).toBeTruthy();
 
         await act(async () => retry.settle({ ok: true }));
@@ -513,7 +513,7 @@ describe("ErrorBanner", () => {
           />
         );
         await clickRecovery();
-        fireEvent.click(screen.getByRole("button", { name: "Open Diagnostics" }));
+        fireEvent.click(screen.getByRole("button", { name: "Open diagnostics" }));
         expect(useDiagnosticsStore.getState().isOpen).toBe(true);
         expect(useDiagnosticsStore.getState().activeTab).toBe("problems");
         expect(
@@ -523,7 +523,7 @@ describe("ErrorBanner", () => {
 
       it("offers no Diagnostics pointer before anything has failed", () => {
         render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
-        expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Open diagnostics" })).toBeNull();
       });
 
       it("drops the line when the same error recurs with a new occurrence", async () => {
@@ -619,11 +619,11 @@ describe("ErrorBanner", () => {
         const error = makeError(withHint);
         const { rerender } = render(<ErrorBanner error={error} onDismiss={onDismiss} />);
         await clickRecovery();
-        expect(screen.getByRole("button", { name: "Open Diagnostics" })).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Open diagnostics" })).toBeTruthy();
 
         rerender(<ErrorBanner error={{ ...error, promotedToDock: true }} onDismiss={onDismiss} />);
         expect(screen.queryByText(/Recovery failed/)).toBeNull();
-        expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Open diagnostics" })).toBeNull();
         expect(screen.getByRole("button", { name: "View errors" })).toBeTruthy();
       });
 
@@ -633,7 +633,7 @@ describe("ErrorBanner", () => {
         const { rerender } = render(<ErrorBanner error={error} onDismiss={onDismiss} />);
         await clickRecovery();
         expect(screen.getByText(/Recovery failed/)).toBeTruthy();
-        expect(screen.getByRole("button", { name: "Open Diagnostics" })).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Open diagnostics" })).toBeTruthy();
         rerender(
           <ErrorBanner
             error={{ ...error, retryProgress: { attempt: 1, maxAttempts: 3 } }}
@@ -641,7 +641,7 @@ describe("ErrorBanner", () => {
           />
         );
         expect(screen.queryByText(/Recovery failed/)).toBeNull();
-        expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Open diagnostics" })).toBeNull();
         expect(screen.getByText("Retrying 1 of 3…")).toBeTruthy();
       });
     });

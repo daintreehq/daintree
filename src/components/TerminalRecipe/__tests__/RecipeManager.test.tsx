@@ -44,6 +44,19 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       {children}
     </div>
   ),
+  DropdownMenuCheckboxItem: ({
+    children,
+    checked,
+    onSelect,
+  }: {
+    children: ReactNode;
+    checked?: boolean;
+    onSelect?: () => void;
+  }) => (
+    <div role="menuitemcheckbox" aria-checked={checked} onClick={onSelect}>
+      {children}
+    </div>
+  ),
   DropdownMenuSeparator: () => <hr />,
 }));
 

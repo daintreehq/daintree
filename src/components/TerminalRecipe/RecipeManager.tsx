@@ -14,7 +14,6 @@ import {
   GitBranch,
   MoreHorizontal,
   Pin,
-  PinOff,
   Clipboard,
 } from "lucide-react";
 import { Plug, Workflow } from "@/components/icons";
@@ -27,6 +26,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -456,20 +456,16 @@ export function RecipeManager({
               <TooltipContent side="bottom">More actions</TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end" sideOffset={4} className="min-w-[200px]">
-              <DropdownMenuItem
+              <DropdownMenuCheckboxItem
+                checked={isPinned}
                 onSelect={() =>
                   void updateRecipe(recipe.id, { showInEmptyState: !isPinned }).catch((err) =>
                     logError("Failed to update recipe pin", err)
                   )
                 }
               >
-                {isPinned ? (
-                  <PinOff data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                ) : (
-                  <Pin data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                )}
-                {isPinned ? "Unpin from canvas" : "Pin to canvas"}
-              </DropdownMenuItem>
+                Pin to canvas
+              </DropdownMenuCheckboxItem>
               <DropdownMenuItem onSelect={() => void handleDuplicateRecipe(recipe)}>
                 <CopyPlus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Duplicate recipe

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { AgentAvailabilityState } from "@shared/types";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup, SettingsInlineError } from "./SettingsGroup";
 import { getAgentHealth } from "./agentHealth";
 import { pluralize } from "@/lib/pluralize";
 import { useRemoteHostName } from "@/hooks/useSettingsOwner";
@@ -180,9 +180,9 @@ export function AgentInventorySection({
       {error ? (
         <SettingsGroup>
           <div className="flex items-center justify-between gap-3 px-4 py-3">
-            <p role="alert" className="text-xs text-text-secondary">
+            <SettingsInlineError role="alert">
               Couldn&apos;t check which agents are installed.
-            </p>
+            </SettingsInlineError>
             <Button size="sm" variant="outline" onClick={onRefresh} disabled={isRefreshing}>
               Retry
             </Button>

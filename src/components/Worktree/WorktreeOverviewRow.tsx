@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
 import {
-  AlertTriangle,
   ArrowDownWideNarrow,
   ChevronRight,
   CircleDot,
@@ -29,6 +28,7 @@ import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -75,7 +75,8 @@ import { useRunFleetBands } from "@/hooks/useRunSessionPresentation";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { ActivityLight } from "./ActivityLight";
 import { CollapsedSessionIndicators } from "./WorktreeCard/CollapsedSessionIndicators";
-import { Badge } from "@/components/ui/badge";
+import { PaletteCurrentLabel } from "@/components/ui/PaletteCurrentLabel";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { pluralize } from "@/lib/pluralize";
 import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
 import type { WorktreeDiskUsage } from "@/hooks/useWorktreeDiskUsage";
@@ -270,8 +271,13 @@ function leadLine(mark: SessionMark | undefined): { text: string; mono: boolean 
   if (!mark) return null;
   const { terminal, chrome } = mark;
   if (chrome.isAgent) {
-    const task = terminal.lastObservedTitle?.trim();
-    return { text: task || terminal.title, mono: false };
+    // Through the title pipeline every other surface uses, which strips the
+    // agent's own status glyph and identity echoes from the raw OSC title. A
+    // launched agent the detector hasn't confirmed yet still has a task to show.
+    const panel = terminal.detectedAgentId
+      ? terminal
+      : { ...terminal, detectedAgentId: chrome.agentId ?? undefined };
+    return { text: composeTitledPanel(panel, "compact"), mono: false };
   }
   const command = terminal.lastCommand?.trim();
   return command ? { text: command, mono: true } : { text: terminal.title, mono: false };
@@ -619,17 +625,16 @@ export function WorktreeOverviewRow({
                   <span
                     className={cn(
                       "truncate text-text-primary",
-                      isBranchTitled ? "font-mono text-xs" : "text-sm",
-                      isCurrent && "font-medium"
+                      isBranchTitled ? "font-mono text-xs" : "text-sm"
                     )}
                   >
                     {title}
                   </span>
                 </TruncatedTooltip>
-                {isCurrent && <Badge size="xs">Current</Badge>}
+                {isCurrent && <PaletteCurrentLabel />}
                 {exception && (
                   <span className="flex shrink-0 items-center gap-1 text-2xs font-medium text-status-error">
-                    <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                    <SEVERITY_GLYPH.error className="h-3.5 w-3.5" aria-hidden="true" />
                     {exception}
                   </span>
                 )}

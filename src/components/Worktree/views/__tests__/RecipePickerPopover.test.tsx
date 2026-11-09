@@ -112,8 +112,8 @@ describe("RecipePickerPopover — scope indicator (#11510)", () => {
     );
 
     const labels = recipeRows().map((row) => row.textContent ?? "");
-    expect(labels.filter((t) => t.includes("(default)"))).toHaveLength(1);
-    expect(labels[1]).toContain("(default)");
+    expect(labels.filter((t) => t.includes("Default"))).toHaveLength(1);
+    expect(labels[1]).toContain("Default");
   });
 });
 

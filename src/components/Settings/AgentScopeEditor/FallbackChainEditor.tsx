@@ -1,5 +1,5 @@
 import { useId, useMemo } from "react";
-import { ArrowDown, ArrowUp, X as XIcon } from "lucide-react";
+import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import { FALLBACK_CHAIN_MAX } from "../../../../shared/config/agentRegistry";
 import type { AgentPreset } from "@/config/agents";
 import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
@@ -219,7 +219,7 @@ export function FallbackChainEditor({
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          variant="ghost"
+                          variant="ghost-danger"
                           size="icon-sm"
                           disabled={disabled}
                           data-fallback-scope={scopeId}
@@ -227,7 +227,7 @@ export function FallbackChainEditor({
                           onClick={() => remove(id, idx)}
                           aria-label={`Remove ${name} from fallback chain`}
                         >
-                          <XIcon aria-hidden="true" />
+                          <Trash2 aria-hidden="true" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="bottom">Remove</TooltipContent>

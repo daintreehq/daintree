@@ -813,7 +813,7 @@ describe("DaintreeAssistantSettingsTab", () => {
 
   describe("the only installed agent (#14987)", () => {
     const SOLE_COPY = "Using Claude Code, the only installed agent the assistant supports";
-    const BLOCKER_COPY = "The help assistant can't start until you choose one";
+    const BLOCKER_COPY = "The assistant can't start until you choose one";
 
     function setCliAvailability(availability: Record<string, string>, hasRealData = true) {
       act(() => {
@@ -910,7 +910,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       const { container } = renderTab();
       await waitForContent(container, "Bypass Codex approvals and sandbox");
 
-      expect(container.textContent).toContain("The CLI that runs the help assistant in the dock");
+      expect(container.textContent).toContain("The CLI that runs the assistant in the dock");
       expect(container.textContent).not.toContain("the only installed agent");
     });
 

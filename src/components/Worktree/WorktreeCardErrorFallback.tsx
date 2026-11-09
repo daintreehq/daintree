@@ -44,7 +44,7 @@ export function WorktreeCardErrorFallback({
       </TruncatedTooltip>
       <Button
         type="button"
-        variant="subtle"
+        variant="outline"
         size="xs"
         onClick={retried ? reloadWindow : resetError}
         className="shrink-0"

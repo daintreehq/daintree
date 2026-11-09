@@ -17,7 +17,12 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
 import { InstallCommandRows } from "@/components/Setup/InstallCommandRows";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsEmptyRow,
+  SettingsGroup,
+  SettingsInlineError,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CountBadge } from "@/components/ui/badge";
 
@@ -297,16 +302,9 @@ export function AgentInstallSection({
     >
       <SettingsGroup>
         {cliError && (
-          <p
-            className="flex items-start gap-1.5 px-4 py-3 text-xs text-text-secondary"
-            role="alert"
-          >
-            <TriangleAlert
-              className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
-              aria-hidden="true"
-            />
-            <span>Re-check failed. Try again, or restart Daintree if it keeps failing.</span>
-          </p>
+          <SettingsInlineError role="alert" className="px-4 py-3">
+            Re-check failed. Try again, or restart Daintree if it keeps failing.
+          </SettingsInlineError>
         )}
 
         {detail && (location || detail.message) && (

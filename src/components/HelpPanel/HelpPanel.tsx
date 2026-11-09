@@ -9,7 +9,15 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Eraser, ExternalLink, History, MessageCircle, Settings2, Sparkles } from "lucide-react";
+import {
+  Eraser,
+  ExternalLink,
+  History,
+  MessageCircle,
+  RefreshCw,
+  Settings2,
+  Sparkles,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { reportCanopySent } from "@/lib/canopySeen";
 import { Button } from "@/components/ui/button";
@@ -1525,9 +1533,10 @@ export function HelpPanel({
                   {/* Recovery resume — the eviction/crash path killed the PTY on
                       switch-away, but the conversation can be picked back up.
                       Does not record auto-launch consent (#10699). This is the
-                      single load-bearing accent here. */}
+                      single primary here. */}
                   <Button
                     type="button"
+                    variant="contrast"
                     onClick={handleResumeAssistant}
                     data-testid="help-resume-assistant"
                   >
@@ -1554,9 +1563,10 @@ export function HelpPanel({
                 <div className="flex flex-col items-center gap-4 w-full max-w-[34ch]">
                   {/* Explicit start — opening the panel no longer auto-bills a
                       session (#10699); the user kicks it off here. This is the
-                      single load-bearing accent in the idle focus region. */}
+                      single primary in the idle focus region. */}
                   <Button
                     type="button"
+                    variant="contrast"
                     onClick={() => handleStartAssistant()}
                     data-testid="help-start-assistant"
                   >
@@ -1614,6 +1624,7 @@ export function HelpPanel({
                         )
                     }
                   >
+                    <RefreshCw aria-hidden="true" />
                     Retry
                   </Button>
                 </div>

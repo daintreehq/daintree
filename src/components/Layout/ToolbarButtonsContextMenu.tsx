@@ -10,7 +10,8 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
-import { GitBranch, PanelTop } from "@/components/icons";
+import { BrandMark, GitBranch, PanelTop } from "@/components/icons";
+import { getToolbarButtonBrandColor } from "./toolbarButtonMetadata";
 import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "./toolbarMenuStrings";
 import {
   isToolbarEmptySpaceTarget,
@@ -99,7 +100,9 @@ export function ToolbarButtonsContextMenu({
         disabled={row.disabled}
         onCheckedChange={(checked) => onToggle(row.id, row.side, checked)}
       >
-        <Icon className="mr-2 h-3.5 w-3.5 shrink-0" />
+        <BrandMark brandColor={getToolbarButtonBrandColor(row.id)}>
+          <Icon className="mr-2 h-3.5 w-3.5 shrink-0" />
+        </BrandMark>
         {row.label}
       </ContextMenuCheckboxItem>
     );

@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PresetSelector } from "../PresetSelector";
 import { SettingsSection } from "../SettingsSection";
@@ -65,6 +66,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
           data-testid="preset-add-button"
           onClick={scope.openAddDialog}
         >
+          <Plus aria-hidden="true" />
           Add preset
         </Button>
       }

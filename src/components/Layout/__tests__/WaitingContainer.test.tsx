@@ -296,7 +296,7 @@ describe("WaitingContainer", () => {
       ];
       render(<WaitingContainer />);
       const trigger = screen.getByRole("button", {
-        name: "Waiting: 3 agents across all worktrees, all in this one",
+        name: "Attention: 3 agents across all worktrees, all in this one",
       });
       expect(trigger).toBeTruthy();
     });
@@ -309,7 +309,7 @@ describe("WaitingContainer", () => {
       ];
       render(<WaitingContainer />);
       const trigger = screen.getByRole("button", {
-        name: "Waiting: 3 agents across all worktrees, 1 in this one",
+        name: "Attention: 3 agents across all worktrees, 1 in this one",
       });
       expect(trigger.querySelector("[data-dock-pill-local]")).not.toBeNull();
       expect(trigger.textContent).not.toContain("here");
@@ -321,7 +321,7 @@ describe("WaitingContainer", () => {
       mockTerminals = [makeTerminal({ id: "t1", worktreeId: "wt-2" })];
       render(<WaitingContainer />);
       const trigger = screen.getByRole("button", {
-        name: "Waiting: 1 agent across all worktrees, none in this one",
+        name: "Attention: 1 agent across all worktrees, none in this one",
       });
       expect(trigger.querySelector("[data-dock-pill-local]")).toBeNull();
       expect(trigger.textContent).not.toContain("here");
@@ -335,7 +335,7 @@ describe("WaitingContainer", () => {
         makeTerminal({ id: "near", title: "Near agent" }),
       ];
       render(<WaitingContainer />);
-      fireEvent.click(screen.getByRole("button", { name: /^Waiting:/ }));
+      fireEvent.click(screen.getByRole("button", { name: /^Attention:/ }));
       const here = screen.getByRole("group", { name: "This worktree" });
       const elsewhere = screen.getByRole("group", { name: "Other worktrees" });
       expect(here.textContent).toContain("Near agent");
@@ -768,7 +768,7 @@ describe("WaitingContainer plugin panel rows (#13821)", () => {
     expect(container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe("true");
     expect(
       screen.getByRole("button", {
-        name: "Waiting: 1 plugin panel across all worktrees, all in this one",
+        name: "Attention: 1 plugin panel across all worktrees, all in this one",
       })
     ).toBeTruthy();
   });
@@ -779,7 +779,7 @@ describe("WaitingContainer plugin panel rows (#13821)", () => {
     render(<WaitingContainer />);
     expect(
       screen.getByRole("button", {
-        name: "Waiting: 1 agent, 1 plugin panel across all worktrees, all in this one",
+        name: "Attention: 1 agent, 1 plugin panel across all worktrees, all in this one",
       })
     ).toBeTruthy();
   });
