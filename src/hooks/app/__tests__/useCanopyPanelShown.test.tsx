@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render } from "@testing-library/react";
 import { useEffect } from "react";
 
@@ -27,7 +27,13 @@ function Host() {
 
 const OPEN_WINDOW = ["canopy.openWindow", undefined, { source: "user" }];
 
+// jsdom reports no focus with nothing focused; the user is in this view unless a case says not.
+beforeEach(() => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+});
+
 afterEach(() => {
+  vi.restoreAllMocks();
   useCanopyStore.setState({ mode: "unset", isOpen: false });
   mounts = 0;
   dispatch.mockClear();
@@ -77,6 +83,17 @@ describe("useCanopyPanelShown (#16578)", () => {
     // Asked for while its code loaded, then the project switched away before it mounted.
     useCanopyStore.setState({ mode: "unset", isOpen: true });
     viewCached.current = true;
+    render(<Host />);
+
+    act(() => useCanopyStore.setState({ mode: "on" }));
+
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("only puts away the offer in a window the user has left, as Canopy turns on from another", () => {
+    useCanopyStore.setState({ mode: "unset", isOpen: true });
+    vi.mocked(document.hasFocus).mockReturnValue(false);
     render(<Host />);
 
     act(() => useCanopyStore.setState({ mode: "on" }));
