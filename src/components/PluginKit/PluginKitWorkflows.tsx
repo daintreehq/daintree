@@ -347,11 +347,17 @@ function KitAttachmentList({
                     item.status === "failed" ? "text-text-primary" : "text-text-secondary"
                   )}
                 >
-                  {item.status === "failed"
-                    ? item.detail
-                      ? `Failed · ${item.detail}`
-                      : "Failed"
-                    : (item.detail ?? (item.status === "pending" ? "Uploading" : null))}
+                  {item.status === "failed" ? (
+                    item.detail ? (
+                      <>
+                        Failed <FactSeparator /> {item.detail}
+                      </>
+                    ) : (
+                      "Failed"
+                    )
+                  ) : (
+                    item.detail ?? (item.status === "pending" ? "Uploading" : null)
+                  )}
                 </span>
                 {removeItem ? (
                   <button

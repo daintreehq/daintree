@@ -529,9 +529,13 @@ export function PluginDetailPane({
                 // says whether the running backend and the mounted view came
                 // out of the same build (#12277).
                 <Badge size="xs">
-                  {runtimeStatus?.viewGeneration != null
-                    ? `Dev · gen ${runtimeStatus.viewGeneration}`
-                    : "Dev"}
+                  {runtimeStatus?.viewGeneration != null ? (
+                    <>
+                      Dev <FactSeparator /> gen {runtimeStatus.viewGeneration}
+                    </>
+                  ) : (
+                    "Dev"
+                  )}
                 </Badge>
               )}
               {restartRequired && <Badge size="xs">Restart required</Badge>}

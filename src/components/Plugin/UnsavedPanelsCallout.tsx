@@ -1,4 +1,5 @@
 import { Callout } from "@/components/ui/Callout";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { pluralize } from "@/lib/pluralize";
 import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
 
@@ -29,7 +30,12 @@ export function UnsavedPanelsCallout({
         {panels.map((panel) => (
           <li key={`${panel.projectId ?? ""}\u0000${panel.panelId}`}>
             <span className="text-text-primary">{panel.title || "Untitled panel"}</span>
-            {panel.projectName && ` · ${panel.projectName}`}
+            {panel.projectName && (
+              <>
+                {" "}
+                <FactSeparator /> {panel.projectName}
+              </>
+            )}
           </li>
         ))}
       </ul>

@@ -61,7 +61,12 @@ function SessionIdentity({
           <span className="text-text-primary">{name}</span>
         </>
       )}
-      {agentId && ` · ${agentName(agentId)}`}
+      {agentId && (
+        <>
+          {" "}
+          <FactSeparator /> {agentName(agentId)}
+        </>
+      )}
     </div>
   );
 }

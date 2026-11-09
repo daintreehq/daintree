@@ -571,10 +571,15 @@ export function DiagnosticsReviewDialog({
                 className="text-xs text-text-secondary tabular-nums"
               >
                 {pluralize(previewLines, "line")}
-                {replacementCount > 0 &&
-                  (activeReplacement === null
-                    ? ` · ${replacementCount.toLocaleString()} replaced`
-                    : ` · replacement ${activeReplacement + 1} of ${replacementCount}`)}
+                {replacementCount > 0 && (
+                  <>
+                    {" "}
+                    <FactSeparator />{" "}
+                    {activeReplacement === null
+                      ? `${replacementCount.toLocaleString()} replaced`
+                      : `replacement ${activeReplacement + 1} of ${replacementCount}`}
+                  </>
+                )}
               </p>
               {replacementCount > 0 && (
                 <Button variant="ghost" size="sm" onClick={showNextReplacement}>

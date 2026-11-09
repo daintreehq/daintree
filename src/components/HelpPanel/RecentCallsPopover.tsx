@@ -6,6 +6,7 @@ import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { InlineError } from "@/components/ui/field";
 import {
   POPOVER_HEADER_CLASS,
@@ -346,7 +347,14 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
                 )}
               >
                 {RESULT_LABEL[record.result]}
-                {record.errorCode ? ` · ${record.errorCode}` : ""}
+                {record.errorCode ? (
+                  <>
+                    {" "}
+                    <FactSeparator /> {record.errorCode}
+                  </>
+                ) : (
+                  ""
+                )}
               </span>
               {detail && <span className="text-text-secondary">{detail}</span>}
             </div>

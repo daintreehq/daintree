@@ -6,6 +6,7 @@ import { getViewHostId } from "@/hooks/useHostConnection";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { cn } from "@/lib/utils";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { hasRemoteHosts, useHostList } from "../hostList";
 import { buildHostMenuRows, clientPlatform, type HostMenuRow } from "../hostModel";
 import { switchToHost, isNewWindowClick } from "../hostSwitching";
@@ -153,7 +154,14 @@ export function OtherHostsWorktrees({ onNavigate }: OtherHostsWorktreesProps) {
                           </span>
                           <span className="min-w-0 truncate text-text-secondary">
                             {entry.projectName}
-                            {entry.modifiedCount ? ` · ${entry.modifiedCount} changed` : ""}
+                            {entry.modifiedCount ? (
+                              <>
+                                {" "}
+                                <FactSeparator /> {entry.modifiedCount} changed
+                              </>
+                            ) : (
+                              ""
+                            )}
                           </span>
                         </button>
                       </li>

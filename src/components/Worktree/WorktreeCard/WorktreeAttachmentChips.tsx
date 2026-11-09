@@ -4,6 +4,7 @@ import { RefreshCw } from "lucide-react";
 import type { ProjectAttachmentObservation, WorktreeAttachment } from "@shared/types/worktree";
 import { cn } from "@/lib/utils";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "../../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
@@ -121,7 +122,9 @@ function AttachmentChip({
             </button>
           </PopoverTrigger>
         </TooltipTrigger>
-        <TooltipContent side="top">{`${attachment.name} · ${state.label}`}</TooltipContent>
+        <TooltipContent side="top">
+          {attachment.name} <FactSeparator /> {state.label}
+        </TooltipContent>
       </Tooltip>
       <PopoverContent
         side="top"

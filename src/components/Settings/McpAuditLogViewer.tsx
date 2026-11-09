@@ -306,10 +306,22 @@ function DispatchRow({
           {record.result !== "success" && (
             <span className="shrink-0 text-text-secondary">
               {RESULT_LABEL[record.result]}
-              {record.errorCode ? ` · ${record.errorCode}` : ""}
-              {record.result === "rate_limited" && record.resultMeta?.retryAfter
-                ? ` · retry in ${record.resultMeta.retryAfter}s`
-                : ""}
+              {record.errorCode ? (
+                <>
+                  {" "}
+                  <FactSeparator /> {record.errorCode}
+                </>
+              ) : (
+                ""
+              )}
+              {record.result === "rate_limited" && record.resultMeta?.retryAfter ? (
+                <>
+                  {" "}
+                  <FactSeparator /> retry in {record.resultMeta.retryAfter}s
+                </>
+              ) : (
+                ""
+              )}
             </span>
           )}
           {anomaly && <AuditAnomalyNote severity={anomaly.severity} kinds={anomaly.kinds} />}
@@ -703,9 +715,20 @@ export function McpAuditLogViewer({
               summary={
                 <>
                   <AuditRecordTime ts={group.turnRecord.timestamp} now={now} />
-                  {` · ${pluralize(group.callCount, "call")}`}
-                  {group.unauthorizedCount > 0 && ` · ${group.unauthorizedCount} unauthorized`}
-                  {group.errorCount > 0 && ` · ${pluralize(group.errorCount, "error")}`}
+                  {" "}
+                  <FactSeparator /> {pluralize(group.callCount, "call")}
+                  {group.unauthorizedCount > 0 && (
+                    <>
+                      {" "}
+                      <FactSeparator /> {group.unauthorizedCount} unauthorized
+                    </>
+                  )}
+                  {group.errorCount > 0 && (
+                    <>
+                      {" "}
+                      <FactSeparator /> {pluralize(group.errorCount, "error")}
+                    </>
+                  )}
                   {" "}
                   <FactSeparator />{" "}
                   <AuditDuration ms={group.totalDurationMs} />

@@ -4,6 +4,7 @@ import type { DraggableSyntheticListeners } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { cn } from "@/lib/utils";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
 import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -526,11 +527,17 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
                       </div>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
-                      {stateLabel
-                        ? isReinterpreted
-                          ? `Agent ${stateLabel} · Observed: ${observedStateLabel}`
-                          : `Agent ${stateLabel}`
-                        : "No agent state observed"}
+                      {stateLabel ? (
+                        isReinterpreted ? (
+                          <>
+                            Agent {stateLabel} <FactSeparator /> Observed: {observedStateLabel}
+                          </>
+                        ) : (
+                          `Agent ${stateLabel}`
+                        )
+                      ) : (
+                        "No agent state observed"
+                      )}
                     </TooltipContent>
                   </Tooltip>
                 )}

@@ -312,7 +312,12 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
       </div>
       <p className="text-xs text-text-secondary [text-wrap:pretty]">
         {pane}
-        {place !== null && ` · ${place}`}
+        {place !== null && (
+          <>
+            {" "}
+            <FactSeparator /> {place}
+          </>
+        )}
       </p>
       <p className="flex items-start gap-1.5 text-xs text-text-primary [text-wrap:pretty]">
         <TriangleAlert className="mt-0.5 size-3 shrink-0 text-status-warning" aria-hidden="true" />

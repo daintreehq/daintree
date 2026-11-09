@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { pluralize } from "@/lib/pluralize";
 import { TimeAgo } from "@/components/ui/TimeAgo";
@@ -63,8 +63,8 @@ function ProjectList({
 }: {
   hostName: string;
   projects: readonly HostProjectRef[];
-  /** "1 open · 2 worktrees", as the host last reported. */
-  counts: string | null;
+  /** ["1 open", "2 worktrees"], as the host last reported. */
+  counts: readonly string[] | null;
   onOpenProject?: (projectId: string, newWindow: boolean) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
@@ -77,7 +77,13 @@ function ProjectList({
   return (
     <section aria-label={`Projects on ${hostName}`} data-testid="host-overview-projects">
       <h4 className="mb-1 text-2xs font-medium text-text-secondary">
-        Projects{counts ? ` · ${counts}` : ""}
+        Projects
+        {counts?.map((part) => (
+          <Fragment key={part}>
+            {" "}
+            <FactSeparator /> {part}
+          </Fragment>
+        ))}
       </h4>
       {projects.length === 0 ? (
         <p className="text-xs text-text-secondary">No projects on {hostName} yet</p>

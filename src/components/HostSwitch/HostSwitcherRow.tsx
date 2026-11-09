@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import type { HostMetricsSummary } from "@shared/types/remoteHosts";
 import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
@@ -12,6 +12,7 @@ import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { LazyHostSparkline } from "@/components/Hosts/Overview/LazyHostOverviewParts";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { PaletteCurrentLabel } from "@/components/ui/PaletteCurrentLabel";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import {
   busyCores,
   cpuSeries,
@@ -208,14 +209,33 @@ function metaLine(row: HostMenuRow, summary: HostMetricsSummary | null, now: num
     if (row.lastSeenAt !== null) return `Last seen ${formatRelativeTime(row.lastSeenAt, now)}`;
     return null;
   }
-  if (warnings.length === 0) return facts.join(" · ") || null;
+  if (warnings.length === 0) return facts.length > 0 ? separated(facts) : null;
   return (
     <>
       {/* Machine names keep their own case, so only the build phrase is capitalised. */}
-      <span className="text-status-warning">{warnings.join(" · ")}</span>
-      {facts.length > 0 && ` · ${facts.join(" · ")}`}
+      <span className="text-status-warning">{separated(warnings)}</span>
+      {facts.map((fact) => (
+        <Fragment key={fact}>
+          {" "}
+          <FactSeparator /> {fact}
+        </Fragment>
+      ))}
     </>
   );
+}
+
+function separated(parts: readonly string[]): ReactNode {
+  return parts.map((part, index) => (
+    <Fragment key={part}>
+      {index > 0 && (
+        <>
+          {" "}
+          <FactSeparator />{" "}
+        </>
+      )}
+      {part}
+    </Fragment>
+  ));
 }
 
 function metaTitle(row: HostMenuRow): string | undefined {

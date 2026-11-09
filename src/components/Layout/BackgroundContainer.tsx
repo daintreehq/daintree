@@ -416,7 +416,12 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
               <span className="text-3xs font-medium text-text-secondary tabular-nums">
                 {pluralize(count, "panel")}
                 {worktreeCount > 1 && ` across ${worktreeCount} worktrees`}
-                {waitingCount > 0 && ` · ${waitingCount} waiting`}
+                {waitingCount > 0 && (
+                  <>
+                    {" "}
+                    <FactSeparator /> {waitingCount} waiting
+                  </>
+                )}
               </span>
             </div>
 

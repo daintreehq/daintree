@@ -283,11 +283,18 @@ export function FleetCountChip({
           {/* One run of text with the place in it, so the separator keeps the
               sentence's spacing rather than the chip's gap. */}
           <span className="flex min-w-0 text-text-secondary">
-            in fleet
-            {scope.worktreeCount > 1 ? ` · ${scope.worktreeCount} worktrees` : ""}
+            <span>
+              in fleet
+              {scope.worktreeCount > 1 && (
+                <>
+                  {" "}
+                  <FactSeparator /> {scope.worktreeCount} worktrees
+                </>
+              )}
+            </span>
             {hostScope && (
               <span className="max-w-40 truncate" data-testid="fleet-host-scope">
-                {`\u00a0· ${hostScope}`}
+                &nbsp;<FactSeparator /> {hostScope}
               </span>
             )}
           </span>
@@ -386,7 +393,13 @@ export function FleetCountChip({
                               <span className="truncate">{title}</span>
                             </TooltipTrigger>
                             <TooltipContent side="right">
-                              {worktreeName ? `${title} · ${worktreeName}` : title}
+                              {worktreeName ? (
+                                <>
+                                  {title} <FactSeparator /> {worktreeName}
+                                </>
+                              ) : (
+                                title
+                              )}
                             </TooltipContent>
                           </Tooltip>
                           {id === focusedId && (

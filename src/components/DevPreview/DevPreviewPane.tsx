@@ -1071,7 +1071,12 @@ export function DevPreviewPane({
                 {getViewportPreset(viewportPreset).label} <FactSeparator />{" "}
                 {effectiveViewport.width}×
                 {effectiveViewport.height}
-                {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}
+                {viewportFit && fitScale < 1 && (
+                  <>
+                    {" "}
+                    <FactSeparator /> {Math.round(fitScale * 100)}%
+                  </>
+                )}
               </Badge>
             )}
             {showEmptyState ? (

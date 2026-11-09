@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { BrandMark, Workflow } from "@/components/icons";
@@ -128,7 +129,8 @@ export function LauncherToolbarButton({
                     <span className="min-w-0 truncate">{item.name}</span>
                     {showScope && item.category === "recipe" && (
                       <span className="shrink-0 whitespace-pre text-text-secondary">
-                        {` · ${item.scopeLabel}`}
+                        {" "}
+                        <FactSeparator /> {item.scopeLabel}
                       </span>
                     )}
                   </span>

@@ -416,9 +416,30 @@ export function ImportEnvDialog({
               {incomingCount > 0 && (
                 <p className="text-xs text-text-secondary" data-testid="import-env-summary">
                   {pluralize(incomingCount, "variable")} detected
-                  {newCount > 0 && newCount !== incomingCount ? ` · ${newCount} new` : ""}
-                  {conflicts.length > 0 ? ` · ${pluralize(conflicts.length, "conflict")}` : ""}
-                  {unchangedCount > 0 ? ` · ${unchangedCount} already set` : ""}
+                  {newCount > 0 && newCount !== incomingCount ? (
+                    <>
+                      {" "}
+                      <FactSeparator /> {newCount} new
+                    </>
+                  ) : (
+                    ""
+                  )}
+                  {conflicts.length > 0 ? (
+                    <>
+                      {" "}
+                      <FactSeparator /> {pluralize(conflicts.length, "conflict")}
+                    </>
+                  ) : (
+                    ""
+                  )}
+                  {unchangedCount > 0 ? (
+                    <>
+                      {" "}
+                      <FactSeparator /> {unchangedCount} already set
+                    </>
+                  ) : (
+                    ""
+                  )}
                   {conflicts.length === 0 && newCount > 0 ? (
                     <>
                       {" "}

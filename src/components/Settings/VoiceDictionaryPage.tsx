@@ -320,7 +320,14 @@ export function VoiceDictionaryPage({
                     {suggestion.utterance
                       ? `Heard as "${suggestion.utterance}"`
                       : "Typed over a mishearing"}
-                    {suggestion.frequency > 1 ? ` · ${suggestion.frequency} times` : ""}
+                    {suggestion.frequency > 1 ? (
+                      <>
+                        {" "}
+                        <FactSeparator /> {suggestion.frequency} times
+                      </>
+                    ) : (
+                      ""
+                    )}
                     {" "}
                     <FactSeparator />{" "}
                     <TimeAgo timestamp={suggestion.suggestedAt} verbose />

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef } from "react";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -120,7 +120,6 @@ function ResumeSessionRow({
   // scheduled run's schedule follows it, behind the schedule mark.
   const scheduleLabel = item.schedule?.label;
   const lead = item.location ?? "";
-  const rest = [item.modelName, closedAt].filter(Boolean).join(" · ");
   const meta = [item.location, scheduleLabel, item.modelName, closedAt].filter(Boolean).join(" · ");
   const optionId = `resume-session-option-${item.id}`;
   return (
@@ -196,10 +195,26 @@ function ResumeSessionRow({
           <TruncatedTooltip content={meta} focusable={false}>
             <div id={`${optionId}-meta`} className="text-xs text-text-secondary truncate">
               {scheduleLabel === undefined ? (
-                meta
+                [item.location, item.modelName, closedAt]
+                  .filter((part): part is string => Boolean(part))
+                  .map((part, index) => (
+                    <Fragment key={part}>
+                      {index > 0 && (
+                        <>
+                          {" "}
+                          <FactSeparator />{" "}
+                        </>
+                      )}
+                      {part}
+                    </Fragment>
+                  ))
               ) : (
                 <>
-                  {lead && `${lead} · `}
+                  {lead && (
+                    <>
+                      {lead} <FactSeparator />{" "}
+                    </>
+                  )}
                   <CalendarClock
                     className="mr-1 inline-block h-3 w-3 align-[-0.125em]"
                     aria-hidden="true"
@@ -208,7 +223,18 @@ function ResumeSessionRow({
                     <span className="sr-only">Scheduled run of </span>
                   )}
                   {scheduleLabel}
-                  {rest && ` · ${rest}`}
+                  {item.modelName && (
+                    <>
+                      {" "}
+                      <FactSeparator /> {item.modelName}
+                    </>
+                  )}
+                  {closedAt && (
+                    <>
+                      {" "}
+                      <FactSeparator /> {closedAt}
+                    </>
+                  )}
                 </>
               )}
             </div>

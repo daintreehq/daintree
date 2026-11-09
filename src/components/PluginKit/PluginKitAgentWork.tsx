@@ -16,6 +16,7 @@ import type {
 import { LinkMark } from "@/components/Hosts/LinkMark";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { InlineError } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -733,7 +734,13 @@ function KitSourceCitation({
     <Tooltip>
       <TooltipTrigger asChild>{marker}</TooltipTrigger>
       <TooltipContent side="top" className={overlayZ}>
-        {where ? `${name} · ${where}` : name}
+        {where ? (
+          <>
+            {name} <FactSeparator /> {where}
+          </>
+        ) : (
+          name
+        )}
       </TooltipContent>
     </Tooltip>
   );

@@ -196,11 +196,12 @@ describe("describeObservedAgents / describeProjects", () => {
   it("shows failed reads as unknown, never 0", () => {
     const unknown = makeSummary({ agentsObserved: null, projectCount: null, worktreeCount: null });
     expect(describeObservedAgents(unknown)).toBe("Agent activity unknown");
-    expect(describeProjects(unknown)).toBe("Unknown");
-    expect(describeProjects(makeSummary({ worktreeCount: null }))).toBe(
-      "2 open · worktrees unknown"
-    );
-    expect(describeProjects(makeSummary())).toBe("2 open · 5 worktrees");
+    expect(describeProjects(unknown)).toEqual(["Unknown"]);
+    expect(describeProjects(makeSummary({ worktreeCount: null }))).toEqual([
+      "2 open",
+      "worktrees unknown",
+    ]);
+    expect(describeProjects(makeSummary())).toEqual(["2 open", "5 worktrees"]);
   });
 
   it("counts waiting and idle by the host's bands, so a prompt with no reading is idle (#16058)", () => {

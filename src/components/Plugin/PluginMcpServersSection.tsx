@@ -4,6 +4,7 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { InlineError } from "@/components/ui/field";
 import { Callout } from "@/components/ui/Callout";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { ChevronRight, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SeverityMark } from "@/lib/statusSeverity";
@@ -318,7 +319,12 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
                   <div className="text-sm text-text-primary truncate">{row.name}</div>
                   <div className="text-2xs text-text-secondary">
                     {STATUS_LABEL[status]}
-                    {row.info?.pid != null && status === "ready" && ` · pid ${row.info.pid}`}
+                    {row.info?.pid != null && status === "ready" && (
+                      <>
+                        {" "}
+                        <FactSeparator /> pid {row.info.pid}
+                      </>
+                    )}
                   </div>
                 </div>
                 <Button

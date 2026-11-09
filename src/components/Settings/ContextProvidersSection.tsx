@@ -3,6 +3,7 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { RowFailure } from "@/components/Settings/projectPluginsShared";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersStore";
 import type { ContextProviderEntry } from "@shared/types/pluginContextProvider";
 
@@ -71,7 +72,8 @@ export function ContextProvidersSection() {
                 description={
                   <>
                     <span className="block">
-                      {`${offered} · ${scope === "global" ? "Applies to every project" : "Applies to this project"}`}
+                      {offered} <FactSeparator />{" "}
+                      {scope === "global" ? "Applies to every project" : "Applies to this project"}
                     </span>
                     {providers.map((p) =>
                       p.status === "refused" && p.heldBy ? (
