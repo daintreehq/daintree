@@ -13,6 +13,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { InsetSurface } from "@/components/ui/insetSurface";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { SettingsSubpageProvider, type SettingsSubpage } from "./SettingsSubpage";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isPointerClaimed } from "@/lib/pointerClaim";
@@ -2235,9 +2236,7 @@ export function ScopeChip({
       <span className="shrink-0">{scopeWord}</span>
       {entity && (
         <>
-          <span aria-hidden="true" className="opacity-40">
-            ·
-          </span>
+          <FactSeparator />
           <span className="truncate">{entity}</span>
         </>
       )}

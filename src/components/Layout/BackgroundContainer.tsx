@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useExitLaggedCount } from "@/hooks/useExitLaggedCount";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { cn } from "@/lib/utils";
 import { BellDot } from "@/components/icons";
@@ -574,9 +575,7 @@ function BackgroundSingleItem({
           {hasMeta && (
             <div className="flex items-center gap-1.5 mt-0.5 text-2xs text-text-secondary">
               {worktreeName && <span className="truncate">{worktreeName}</span>}
-              {worktreeName && (stateLabel || activityHeadline) && (
-                <span aria-hidden="true">·</span>
-              )}
+              {worktreeName && (stateLabel || activityHeadline) && <FactSeparator />}
               {StateIcon && stateLabel && (
                 <span className="inline-flex items-center gap-1 shrink-0">
                   <StateIcon
@@ -591,15 +590,13 @@ function BackgroundSingleItem({
               )}
               {activityHeadline && (
                 <>
-                  {(worktreeName || stateLabel) && <span aria-hidden="true">·</span>}
+                  {(worktreeName || stateLabel) && <FactSeparator />}
                   <span className="truncate italic text-text-secondary">{activityHeadline}</span>
                 </>
               )}
               {lastStateChange != null && (
                 <>
-                  {(worktreeName || stateLabel || activityHeadline) && (
-                    <span aria-hidden="true">·</span>
-                  )}
+                  {(worktreeName || stateLabel || activityHeadline) && <FactSeparator />}
                   <LiveTimeAgo
                     timestamp={lastStateChange}
                     className="text-2xs text-text-secondary shrink-0 tabular-nums"
@@ -756,7 +753,7 @@ function BackgroundGroupItem({
             )}
             {groupWaiting > 0 && (
               <span className="ml-1.5 text-3xs text-text-secondary font-normal tabular-nums">
-                · {groupWaiting} waiting
+                <FactSeparator /> {groupWaiting} waiting
               </span>
             )}
           </div>

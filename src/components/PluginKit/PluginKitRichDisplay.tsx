@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import {
   PANE_STATUS_FOOTER_CLASS,
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
@@ -1030,7 +1031,7 @@ function ImageStage({
             <span className="whitespace-nowrap">
               {natural.width} × {natural.height}
               <span aria-hidden="true" className="px-1.5">
-                ·
+                <FactSeparator />
               </span>
             </span>
           ) : null}

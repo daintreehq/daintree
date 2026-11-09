@@ -2,6 +2,7 @@ import { Fragment, useId } from "react";
 import type { CdpStackFrame, CdpStackTrace } from "@shared/types/ipc/webviewConsole";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { DisclosureChevron } from "./DisclosureChevron";
 import {
   frameFileName,
@@ -170,7 +171,9 @@ export function StackTrace({
         <DisclosureChevron expanded={isExpanded} />
         Stack trace
         <span className="text-text-secondary">
-          <span aria-hidden="true">· </span>
+          <span aria-hidden="true">
+            <FactSeparator />{" "}
+          </span>
           <span className="sr-only">, </span>
           {pluralize(frames.length, "frame")}
         </span>

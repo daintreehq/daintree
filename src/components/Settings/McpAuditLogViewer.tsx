@@ -3,6 +3,7 @@ import { Check, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
@@ -705,7 +706,8 @@ export function McpAuditLogViewer({
                   {` · ${pluralize(group.callCount, "call")}`}
                   {group.unauthorizedCount > 0 && ` · ${group.unauthorizedCount} unauthorized`}
                   {group.errorCount > 0 && ` · ${pluralize(group.errorCount, "error")}`}
-                  {" · "}
+                  {" "}
+                  <FactSeparator />{" "}
                   <AuditDuration ms={group.totalDurationMs} />
                 </>
               }

@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -244,7 +245,7 @@ export function PerfContent({ className }: PerfContentProps) {
             {showRows ? (
               <span className="font-normal">
                 {" "}
-                · {sortedRows.length} scenarios
+                <FactSeparator /> {sortedRows.length} scenarios
                 {outsideCount > 0 ? `, ${outsideCount} outside reference` : ""}
               </span>
             ) : null}

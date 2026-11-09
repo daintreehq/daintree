@@ -30,6 +30,7 @@ import { describeExitStatus } from "./exitStatus";
 import { pluralize } from "@/lib/pluralize";
 import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { formatCores } from "@/components/Project/ProjectResourceBadge.utils";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 export interface TerminalHeaderContentProps {
   id: string;
@@ -325,7 +326,11 @@ export function TerminalHeaderContent({
             )}
             {sessionCost != null && (
               <span className="shrink-0 whitespace-pre" aria-hidden="true">
-                {noChanges && <span className="mr-1">·</span>}
+                {noChanges && (
+                  <span className="mr-1">
+                    <FactSeparator />
+                  </span>
+                )}
                 {formatSessionCost(sessionCost)}
               </span>
             )}
@@ -339,7 +344,11 @@ export function TerminalHeaderContent({
               >
                 {/* The chip's gap sits before the dot and mr-1 after it, so the
                     dot is centred rather than clinging to the value. */}
-                {(noChanges || sessionCost != null) && <span className="mr-1">·</span>}
+                {(noChanges || sessionCost != null) && (
+                  <span className="mr-1">
+                    <FactSeparator />
+                  </span>
+                )}
                 {formatTokenCount(sessionTokens)} tokens
               </span>
             )}
@@ -545,7 +554,9 @@ export function TerminalHeaderContent({
               >
                 <SeverityMark severity={cpuSeverity} />
                 <span>{formatCores(resourceState.cpuPercent / 100)}</span>
-                <span className="px-1">·</span>
+                <span className="px-1">
+                  <FactSeparator />
+                </span>
                 <SeverityMark severity={memorySeverity} />
                 <span>{formatMemory(resourceState.memoryKb)}</span>
               </span>
@@ -554,7 +565,7 @@ export function TerminalHeaderContent({
           <TooltipContent side="bottom" className="max-w-xs">
             <div className="flex flex-col gap-1">
               <div className="font-medium tabular-nums">
-                CPU {formatCores(resourceState.cpuPercent / 100)} · Memory{" "}
+                CPU {formatCores(resourceState.cpuPercent / 100)} <FactSeparator /> Memory{" "}
                 {formatMemory(resourceState.memoryKb)}
               </div>
               {resourceState.breakdown.length > 0 && (

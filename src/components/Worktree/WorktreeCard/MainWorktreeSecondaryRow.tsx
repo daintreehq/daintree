@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { STATE_ICONS, STATE_COLORS } from "../terminalStateConfig";
 import { BranchLabel } from "../BranchLabel";
 import { UpstreamSyncBadge } from "./UpstreamSyncBadge";
@@ -83,8 +84,8 @@ export function MainWorktreeSecondaryRow({
       {aggregateCounts && aggregateCounts.worktrees > 0 && (
         <>
           {hasLeading && (
-            <span className="text-text-muted text-3xs" aria-hidden="true">
-              ·
+            <span className="text-3xs" aria-hidden="true">
+              <FactSeparator />
             </span>
           )}
           <Tooltip>

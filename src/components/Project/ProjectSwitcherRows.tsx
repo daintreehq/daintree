@@ -60,6 +60,7 @@ import { CommandTile, ProjectTile } from "./paletteTiles";
 import { PaletteCurrentLabel as CurrentLabel } from "@/components/ui/PaletteCurrentLabel";
 import { type OtherHostOption } from "@/components/Hosts/OtherHostsSection";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 export interface ProjectListItemProps {
   project: ProjectSwitcherProjectRow;
@@ -350,9 +351,7 @@ export function RowStatusLine({ status }: { status: ProjectRowStatus }) {
           {index > 0 && (
             <>
               <span className="sr-only">, </span>
-              <span className="shrink-0 text-text-muted" aria-hidden="true">
-                ·
-              </span>
+              <FactSeparator />
             </>
           )}
           {part}
@@ -444,13 +443,14 @@ function ProjectFilingLabel({
       <span className="sr-only">, {spoken}</span>
       {groupName && (
         <span aria-hidden="true" className="min-w-0 truncate">
-          · {groupName}
+          <FactSeparator /> {groupName}
         </span>
       )}
       {isArchived && (
         <span aria-hidden="true" className={cn("shrink-0", groupName && "ml-1")}>
           {/* A real space for copy and text extraction; the margin draws it. */}
-          {groupName && " "}· Archived
+          {groupName && " "}
+          <FactSeparator /> Archived
         </span>
       )}
     </span>
@@ -737,8 +737,7 @@ export function ProjectListItem({
           {hostName && (
             <span className="ml-1.5 shrink-0 text-xs text-text-secondary">
               <span className="sr-only">, on </span>
-              <span aria-hidden="true">· </span>
-              {hostName}
+              <FactSeparator /> {hostName}
             </span>
           )}
           <ProjectFilingLabel
@@ -1043,8 +1042,10 @@ export function ScratchListItem({
               text={scratch.name}
               indices={queryMatchIndices(scratch.name, highlightQuery)}
             />
+          </span>{" "}
+          <span className="text-2xs leading-tight text-text-secondary shrink-0">
+            <FactSeparator /> Scratch
           </span>
-          <span className="text-2xs leading-tight text-text-secondary shrink-0">· Scratch</span>
           {scratch.isActive && <span className="sr-only">, current</span>}
           {showResumeDot && <ResumableAgentsLabel count={scratch.resumableAgentCount ?? 0} />}
         </div>

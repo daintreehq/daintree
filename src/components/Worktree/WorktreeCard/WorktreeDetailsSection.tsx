@@ -1,6 +1,7 @@
 import type React from "react";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { DiffStat } from "@/components/ui/DiffStat";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { prefetchStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
@@ -441,7 +442,9 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                         />
                       </span>
                       {reviewChangeLine && (
-                        <span className="truncate text-text-secondary">· {reviewChangeLine}</span>
+                        <span className="truncate text-text-secondary">
+                          <FactSeparator /> {reviewChangeLine}
+                        </span>
                       )}
                     </span>
                   ) : (
@@ -471,7 +474,9 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       )}
                       <span className="truncate">{computedSubtitle.text}</span>
                       {reviewChangeLine && (
-                        <span className="truncate text-text-secondary">· {reviewChangeLine}</span>
+                        <span className="truncate text-text-secondary">
+                          <FactSeparator /> {reviewChangeLine}
+                        </span>
                       )}
                     </span>
                   )}

@@ -8,6 +8,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import {
   SegmentedRadioGroup,
   type SegmentedRadioOption,
@@ -110,7 +111,9 @@ export function ViewportControls({
                 </button>
               </DropdownMenuTrigger>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Choose device · {active.label}</TooltipContent>
+            <TooltipContent side="bottom">
+              Choose device <FactSeparator /> {active.label}
+            </TooltipContent>
           </Tooltip>
           <DropdownMenuContent align="start" className="min-w-[200px]">
             <DropdownMenuRadioGroup

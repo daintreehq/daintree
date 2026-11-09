@@ -14,6 +14,7 @@ import { createPortal } from "react-dom";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -1205,7 +1206,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 pm.pendingUpdate.result.displayName !== pluginLabel(pm.pendingUpdate.plugin) && (
                   <span className="text-text-secondary">
                     {" "}
-                    · now named {pm.pendingUpdate.result.displayName}
+                    <FactSeparator /> now named {pm.pendingUpdate.result.displayName}
                   </span>
                 )}
             </div>

@@ -6,6 +6,7 @@ import type { GitPushCommitPreview, GitPushDestination } from "@shared/types/git
 import { cn } from "@/lib/utils";
 import { GitCommit, ArrowUpFromLine, AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { KbdChord } from "@/components/ui/Kbd";
@@ -658,7 +659,7 @@ export function CommitPanel({
     if (!destinationLabel) statusTone = "warning";
     statusContent = destinationLabel ? (
       <>
-        {stagedSummary} · pushes to{" "}
+        {stagedSummary} <FactSeparator /> pushes to{" "}
         <span className="font-mono text-text-primary">{destinationLabel}</span>
       </>
     ) : (
@@ -792,7 +793,7 @@ export function CommitPanel({
           // Its own slot, so a long destination truncating beside it can never
           // hide the one line explaining a pause.
           <span className="shrink-0 whitespace-nowrap">
-            · no new progress in the last {PUSH_QUIET_MS / 1000}s
+            <FactSeparator /> no new progress in the last {PUSH_QUIET_MS / 1000}s
           </span>
         )}
         {showShortcut && (

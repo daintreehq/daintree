@@ -26,6 +26,7 @@ import { keyBelongsToField } from "@/hooks/useListboxCursor";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { pluralize } from "@/lib/pluralize";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 let closedAtFormatter: Intl.DateTimeFormat | undefined;
 let closedAtSecondsFormatter: Intl.DateTimeFormat | undefined;
@@ -270,7 +271,7 @@ function RemovedHeading({
           aria-hidden="true"
         />
         <span>Worktree removed</span>
-        <span aria-hidden="true">·</span>
+        <FactSeparator />
         <span className="tabular-nums">{count}</span>
       </button>
     </div>

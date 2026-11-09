@@ -30,6 +30,7 @@ import {
   type RecentDictationDestination,
 } from "@/services/recentDictationRecovery";
 import { excerptPreview, findPreviewMatches, type MatchRange } from "@/utils/promptHistoryPreview";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 const PALETTE_ID: PaletteId = "recent-dictations";
 const PREVIEW_ID = "recent-dictation-preview";
@@ -302,8 +303,11 @@ function RecentDictationRow({
               </span>
               {item.place && (
                 <>
-                  {/* Spaces in the text, so the option's name reads "Codex · daintree". */}
-                  <span className="shrink-0 whitespace-pre"> · </span>
+                  {/* Spaces in the text, so the option's name reads "Codex daintree". */}
+                  <span className="shrink-0 whitespace-pre">
+                    {" "}
+                    <FactSeparator />{" "}
+                  </span>
                   <span className="min-w-0 truncate">
                     <HighlightedText text={place.text} indices={place.indices} />
                   </span>
@@ -464,7 +468,8 @@ function RecentDictationPreview({
             </dd>
             <dt className="text-text-secondary">Finished</dt>
             <dd className="text-text-primary">
-              <TimeAgo timestamp={dictation.endedAt} /> · {pluralize(words, "word")}
+              <TimeAgo timestamp={dictation.endedAt} /> <FactSeparator />{" "}
+              {pluralize(words, "word")}
             </dd>
           </dl>
           <VersionSection

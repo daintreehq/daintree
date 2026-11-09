@@ -3,6 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { LinkMark } from "@/components/Hosts/LinkMark";
 import { hostLinkTone } from "@/components/Hosts/hostModel";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { InlineError } from "@/components/ui/field";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -244,7 +245,7 @@ export default function HostsSettingsTab() {
                     label={descriptor.name}
                     description={
                       <>
-                        {formatHostConnection(descriptor.connection)} ·{" "}
+                        {formatHostConnection(descriptor.connection)} <FactSeparator />{" "}
                         {descriptor.platform
                           ? platformLabel(descriptor.platform, null)
                           : "Not seen yet"}
@@ -265,7 +266,12 @@ export default function HostsSettingsTab() {
                           />
                           <span className="min-w-0">
                             {connectionLabel(connection)}
-                            {wake && <> · {wake}</>}
+                            {wake && (
+                              <>
+                                {" "}
+                                <FactSeparator /> {wake}
+                              </>
+                            )}
                           </span>
                         </span>
                       </>

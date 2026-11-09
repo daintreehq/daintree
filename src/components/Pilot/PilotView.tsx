@@ -45,6 +45,7 @@ import { isMac } from "@/lib/platform";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import {
   usePaletteTreeNavigation,
@@ -563,7 +564,7 @@ function RunRow({
           className="flex max-w-[45%] min-w-0 shrink items-baseline gap-1 text-xs leading-tight text-text-secondary"
         >
           <span className="min-w-0 truncate">{row.canopyEvidence.claim}</span>
-          <span className="shrink-0">· {row.canopyEvidence.attribution}</span>
+          <span className="shrink-0"><FactSeparator /> {row.canopyEvidence.attribution}</span>
         </span>
       )}
 
@@ -698,7 +699,11 @@ function PluginPanelRow({
       >
         {plugin.reason !== null && <span className="min-w-0 truncate">{plugin.reason}</span>}
         <span className="shrink-0">
-          {plugin.reason !== null ? "· " : ""}
+          {plugin.reason !== null && (
+            <>
+              <FactSeparator />{" "}
+            </>
+          )}
           {`Reported by ${plugin.pluginName}`}
         </span>
       </span>

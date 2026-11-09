@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { KbdChord } from "@/components/ui/Kbd";
 import { SearchField } from "@/components/ui/SearchField";
 import { SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
@@ -398,7 +399,7 @@ function LocalCommitRow({
                 </span>
               )}
               <span className="inline-flex min-w-0 max-w-max shrink-0 grow basis-[6ch] items-center gap-1.5">
-                {isUnpushed && <span aria-hidden="true">&middot;</span>}
+                {isUnpushed && <FactSeparator />}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="min-w-0 truncate">{commit.author.name}</span>
@@ -407,7 +408,7 @@ function LocalCommitRow({
                 </Tooltip>
               </span>
               <span className="inline-flex shrink-0 items-center gap-1.5">
-                <span aria-hidden="true">&middot;</span>
+                <FactSeparator />
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="shrink-0">{formatTimeAgo(commit.date)}</span>
@@ -544,11 +545,20 @@ function PushSummary({ line }: { line: PushLine }) {
       {line.lead && (
         <span className="shrink-0 font-medium text-text-primary">
           {line.lead}
-          {line.detail.startsWith("to ") ? "" : " ·"}
+          {line.detail.startsWith("to ") ? null : (
+            <>
+              {" "}
+              <FactSeparator />
+            </>
+          )}
         </span>
       )}
       <span className="truncate">{line.detail}</span>
-      {line.caveat && <span className="shrink-0">&middot; {line.caveat}</span>}
+      {line.caveat && (
+        <span className="shrink-0">
+          <FactSeparator /> {line.caveat}
+        </span>
+      )}
     </span>
   );
 }
@@ -1096,7 +1106,7 @@ export function LocalCommitsDropdown({
                 {/* Wraps rather than clipping the cause, like the forge lists'
                     saved-results banners. */}
                 <p className="min-w-0 flex-1 text-xs">
-                  Couldn&apos;t refresh commits &middot; {error}
+                  Couldn&apos;t refresh commits <FactSeparator /> {error}
                 </p>
                 <Button
                   variant="outline"
@@ -1157,7 +1167,7 @@ export function LocalCommitsDropdown({
                               aria-hidden="true"
                             />
                             <p role="alert" className="flex-1 min-w-0 text-xs text-text-secondary">
-                              Couldn&apos;t load more commits &middot; {loadMoreError}
+                              Couldn&apos;t load more commits <FactSeparator /> {loadMoreError}
                             </p>
                             <Button
                               variant="outline"

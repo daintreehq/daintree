@@ -10,6 +10,7 @@ import type { BuiltInPluginCapability } from "@shared/types/plugin";
 import type { PluginMcpConsentDecision, PluginMcpDangerTier } from "@shared/types/pluginMcpConsent";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge, CountBadge } from "@/components/ui/badge";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { pluralize } from "@/lib/pluralize";
 
 const CONFIRM_COOLDOWN_MS = 1_200;
@@ -591,7 +592,7 @@ export function tierLabelFor(tier: PluginMcpDangerTier): string {
 function DangerTierBadge({ tier }: { tier: PluginMcpDangerTier }) {
   return (
     <Badge size="xs" tone="outline" className="font-mono">
-      {tier} · {tierLabelFor(tier)}
+      {tier} <FactSeparator /> {tierLabelFor(tier)}
     </Badge>
   );
 }

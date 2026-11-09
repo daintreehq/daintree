@@ -1,5 +1,6 @@
 import { PopoverContent } from "@/components/ui/popover";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
@@ -250,7 +251,7 @@ function BranchPickerRowItem({
               <span className="sr-only">by worktree {row.inUseWorktree.name}</span>
             ) : (
               <>
-                <span aria-hidden="true">·</span>
+                <FactSeparator />
                 <span className="sr-only">by worktree</span>{" "}
                 {/* Clamped rather than `truncate`: a nowrap ellipsis still
                     reports the whole name as its minimum width, which pins the

@@ -35,6 +35,7 @@ import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { findDevServerCandidate } from "@/utils/devServerDetection";
 import { PresentationFeaturesSection } from "./PresentationFeaturesSection";
 import { LauncherPresentationSection } from "./LauncherPresentationSection";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
   {
@@ -599,7 +600,8 @@ export function GeneralTab({
                         {iconPreview}
                       </div>
                       <p className="flex-1 min-w-0 text-xs text-text-secondary">
-                        Custom icon · {formatBytes(new Blob([projectIconSvg]).size)}
+                        Custom icon <FactSeparator />{" "}
+                        {formatBytes(new Blob([projectIconSvg]).size)}
                       </p>
                       <Button
                         variant="outline"

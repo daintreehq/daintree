@@ -23,6 +23,7 @@ import { PluginTerminalLinksSection } from "./PluginTerminalLinksSection";
 import { PluginGrantSwitch } from "./PluginGrantSwitch";
 import { PluginPresetGrants } from "./PluginPresetGrants";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import {
   SettingsSubtabBar,
   subtabPanelProps,
@@ -265,7 +266,12 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
             <li key={`${name}-${index}`} className="text-xs">
               <div className="text-text-primary">
                 {name}
-                {role && <span className="text-2xs text-text-secondary"> · {role}</span>}
+                {role && (
+                  <span className="text-2xs text-text-secondary">
+                    {" "}
+                    <FactSeparator /> {role}
+                  </span>
+                )}
               </div>
               {(url || email) && (
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
@@ -684,7 +690,7 @@ export function PluginDetailPane({
         <div className="mt-3 flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default">
           <ArrowUpCircle className="w-3.5 h-3.5 text-status-warning shrink-0" aria-hidden="true" />
           <p className="text-2xs text-text-primary min-w-0 flex-1">
-            Update available &middot; {updateAvailable.version}
+            Update available <FactSeparator /> {updateAvailable.version}
           </p>
           <Button variant="outline" size="xs" onClick={onCheckForUpdate} disabled={checkingUpdate}>
             Update plugin

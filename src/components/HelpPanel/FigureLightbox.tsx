@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type Ref } from "react";
 import { ChevronLeft, ChevronRight, ImageOff, RefreshCw } from "lucide-react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 import type { HelpFigure } from "@/store/helpPanelStore";
@@ -324,7 +325,9 @@ export function FigureLightbox({
                   {figure.caption}
                 </p>
               )}
-              <p className="text-2xs text-text-secondary">{figure.figureLabel} · Daintree docs</p>
+              <p className="text-2xs text-text-secondary">
+                {figure.figureLabel} <FactSeparator /> Daintree docs
+              </p>
             </div>
             <Button
               variant="ghost"

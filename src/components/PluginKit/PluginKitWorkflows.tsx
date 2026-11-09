@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { InlineError } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/Spinner";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { pluralize } from "@/lib/pluralize";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
@@ -430,7 +431,9 @@ function KitEntityChip({
         {name}
       </span>
       {available || state === "loading" ? null : (
-        <span className="shrink-0 text-text-secondary">· {UNAVAILABLE_WORD[state]}</span>
+        <span className="shrink-0 text-text-secondary">
+          <FactSeparator /> {UNAVAILABLE_WORD[state]}
+        </span>
       )}
     </>
   );

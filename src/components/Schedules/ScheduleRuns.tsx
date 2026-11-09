@@ -4,6 +4,7 @@ import { History, Play, SquareTerminal } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
@@ -243,8 +244,8 @@ function RunRow({
           {TRIGGER_WORDS[run.origin.trigger]}
           {dueAt !== null && (
             <>
-              <span aria-hidden="true"> · </span>
-              due{" "}
+              {" "}
+              <FactSeparator /> due{" "}
               <RunTime at={dueAt} timeZone={timeZone}>
                 {formatDueTime(dueAt, reference, timeZone)}
               </RunTime>
@@ -500,7 +501,7 @@ export function ScheduleRuns({
               {scheduleAgentName(schedule.launch.agentId)}
               {presetMissing ? (
                 <>
-                  <span aria-hidden="true">&nbsp;·&nbsp;</span>
+                  <span aria-hidden="true">&nbsp;<FactSeparator />&nbsp;</span>
                   <MissingGlyph
                     className="mr-1 h-3 w-3 shrink-0 text-status-warning"
                     aria-hidden="true"
@@ -510,16 +511,16 @@ export function ScheduleRuns({
               ) : (
                 presetName && (
                   <>
-                    <span aria-hidden="true">&nbsp;·&nbsp;</span>
+                    <span aria-hidden="true">&nbsp;<FactSeparator />&nbsp;</span>
                     {presetName}
                   </>
                 )
               )}
-              <span aria-hidden="true">&nbsp;·&nbsp;</span>
+              <span aria-hidden="true">&nbsp;<FactSeparator />&nbsp;</span>
               {worktreeLabel ?? "Main checkout"}
               {foreignZone && (
                 <>
-                  <span aria-hidden="true">&nbsp;·&nbsp;</span>
+                  <span aria-hidden="true">&nbsp;<FactSeparator />&nbsp;</span>
                   times in {timeZone}
                 </>
               )}

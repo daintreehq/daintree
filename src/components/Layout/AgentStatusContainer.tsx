@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useExitLaggedCount } from "@/hooks/useExitLaggedCount";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { cn } from "@/lib/utils";
@@ -617,7 +618,12 @@ function AgentSingleItem({
               >
                 <span className="min-w-16 flex-1 basis-0 truncate text-xs text-text-secondary">
                   {context}
-                  {context && headline && " · "}
+                  {context && headline && (
+                    <>
+                      {" "}
+                      <FactSeparator />{" "}
+                    </>
+                  )}
                   {headline && <span className="italic">{headline}</span>}
                 </span>
               </TruncatedTooltip>

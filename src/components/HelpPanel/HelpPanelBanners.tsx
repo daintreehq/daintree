@@ -5,6 +5,7 @@ import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { pluralize } from "@/lib/pluralize";
 import { Clock, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import type {
   ActiveGrantState,
@@ -53,7 +54,12 @@ function GrantTimeLeft({ grant, now }: { grant: ActiveGrantState; now: number })
   return (
     <span aria-live="off">
       <span className="tabular-nums">{formatCountdown(remainingSeconds)}</span> left
-      {atCeiling && " · 30-minute limit"}
+      {atCeiling && (
+        <>
+          {" "}
+          <FactSeparator /> 30-minute limit
+        </>
+      )}
     </span>
   );
 }
@@ -126,7 +132,8 @@ function GrantActiveBanner({
                 <span className="min-w-0 flex-1">
                   <ToolId id={subject} />
                   <span className="text-text-secondary">
-                    {" · "}
+                    {" "}
+                    <FactSeparator />{" "}
                     <GrantTimeLeft grant={grant} now={now} />
                   </span>
                 </span>

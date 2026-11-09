@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { pluralize } from "@/lib/pluralize";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import type { HostMetricsSummary } from "@shared/types/remoteHosts";
 import { cn } from "@/lib/utils";
 import { PlatformGlyph } from "../PlatformGlyph";
@@ -281,7 +282,8 @@ export function HostCard({
             )}
           </div>
           <span className="text-2xs text-text-secondary">
-            Last {span} · updated <TimeAgo timestamp={summary.sampledAt} verbose />
+            Last {span} <FactSeparator /> updated{" "}
+            <TimeAgo timestamp={summary.sampledAt} verbose />
           </span>
         </div>
       )}

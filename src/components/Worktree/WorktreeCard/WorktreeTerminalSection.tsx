@@ -42,6 +42,7 @@ import {
 } from "@/components/DragDrop/SortableWorktreeTerminal";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { DismissButton } from "@/components/ui/DismissButton";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
 import {
@@ -100,11 +101,11 @@ function CanopyEvidenceLine({ refinement, id, pointer }: CanopyEvidenceLineProps
         >
           {/* The quote truncates; who read it never does. */}
           <span className="min-w-0 truncate">{claim}</span>
-          <span className="shrink-0">· {attribution}</span>
+          <span className="shrink-0"><FactSeparator /> {attribution}</span>
         </span>
       </TooltipTrigger>
       <TooltipContent side="bottom">
-        {claim} · {attribution}
+        {claim} <FactSeparator /> {attribution}
       </TooltipContent>
     </Tooltip>
   );
@@ -700,7 +701,7 @@ export function WorktreeTerminalSection({
               two gestures that exist rather than a Shift variant that does
               the same thing as a plain click. The transparent border is the
               rows' own, so the text starts on their glyph column. */}
-          <span>Click or drag to select · Enter opens</span>
+          <span>Click or drag to select <FactSeparator /> Enter opens</span>
           <DismissButton
             className="-my-1 -mr-1.5"
             aria-label="Dismiss hint"

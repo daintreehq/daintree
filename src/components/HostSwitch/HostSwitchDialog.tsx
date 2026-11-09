@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/Spinner";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
@@ -1263,7 +1264,12 @@ export function HostSwitchDialog({
         <span className="min-w-0 [overflow-wrap:anywhere] [text-wrap:pretty]">
           {status?.message ?? running.label} on {running.hostName}
           {fraction}
-          {stillWorkingOp === running.opId && " · Still working…"}
+          {stillWorkingOp === running.opId && (
+            <>
+              {" "}
+              <FactSeparator /> Still working…
+            </>
+          )}
         </span>
       </span>
     ) : undefined

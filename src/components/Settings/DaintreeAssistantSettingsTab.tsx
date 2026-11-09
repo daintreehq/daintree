@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Callout } from "@/components/ui/Callout";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import type { ReactNode } from "react";
 import { AlertTriangle, ChevronRight, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -526,8 +527,8 @@ export function DaintreeAssistantSettingsTab() {
               description={
                 modelCatalogFailed ? (
                   <>
-                    Couldn&apos;t load this agent&apos;s models, so only the saved choice is listed
-                    ·{" "}
+                    Couldn&apos;t load this agent&apos;s models, so only the saved choice is
+                    listed <FactSeparator />{" "}
                     <Button variant="link" onClick={retryModelCatalog}>
                       Retry
                     </Button>
@@ -902,7 +903,7 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
             aria-hidden="true"
           />
           <span>
-            What this tool set allows · {totalCount} actions
+            What this tool set allows <FactSeparator /> {totalCount} actions
             {tier !== "core" && <span> ({newAtTier} more than core)</span>}
           </span>
         </span>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { cn } from "@/lib/utils";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CloudOff, KeyRound } from "@/components/icons";
@@ -294,7 +295,13 @@ export function UpstreamSyncBadge({
           would dangle, so it goes. */}
       {noUpstream && (
         <span className="text-text-secondary shrink-0" data-testid="upstream-sync-unpushed">
-          {showUpstreamDelta || showBaseSegment ? "· local" : "local"}
+          {showUpstreamDelta || showBaseSegment ? (
+            <>
+              <FactSeparator /> local
+            </>
+          ) : (
+            "local"
+          )}
         </span>
       )}
       {StatusIcon && status && (

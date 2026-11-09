@@ -14,6 +14,7 @@ import { getRecipeTerminalSummary } from "../utils/recipeUtils";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { isPluginRecipe } from "@shared/types/project";
 import type { TerminalRecipe } from "@/types";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 interface RecipeRunnerItemProps {
   recipe: TerminalRecipe;
@@ -328,7 +329,7 @@ function RecipeMeta({
     <>
       {parts.map((part, index) => (
         <Fragment key={index}>
-          {index > 0 && <span aria-hidden>·</span>}
+          {index > 0 && <FactSeparator />}
           {part}
         </Fragment>
       ))}

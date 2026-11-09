@@ -1541,7 +1541,8 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
 
     // Found through its origin label: the name itself is split by the match
     // emphasis on the query.
-    const nameLine = screen.getByText("· Scratch").parentElement!;
+    const row = document.getElementById("project-option-s1")!;
+    const nameLine = within(row).getByText("Scratch").parentElement!;
     expect(Array.from(nameLine.children).map((el) => el.textContent!.trim())).toEqual([
       "Spike notes",
       "· Scratch",
@@ -1558,7 +1559,7 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     expect(screen.queryByText(/^Opened /)).toBeNull();
     expect(screen.queryByTestId("workspace-status-dot")).toBeNull();
     // Provenance is identity, not status — it survives the collapse.
-    expect(screen.getByText("· Scratch")).toBeTruthy();
+    expect(document.getElementById("project-option-s1")!.textContent).toContain("· Scratch");
   });
 
   // The lone ranked result is also the cursor, so this is the both-at-once

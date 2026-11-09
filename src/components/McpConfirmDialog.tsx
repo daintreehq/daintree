@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from
 import { createPortal } from "react-dom";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Callout } from "@/components/ui/Callout";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import {
   AlertTriangle,
   ChevronRight,
@@ -774,7 +775,7 @@ function RequesterRow({
           {qualifiers.length > 0 && (
             // Gives way before the name does: the name is who is asking.
             <span className="min-w-0 shrink-[3] truncate text-xs text-text-secondary">
-              · {qualifiers.join(" · ")}
+              <FactSeparator /> {qualifiers.join(" · ")}
             </span>
           )}
         </span>
@@ -889,8 +890,8 @@ function SessionApprovalOption({
           Allow for this session
         </label>
         <span id={detailId} className="text-2xs text-text-secondary">
-          Later {actionTitle} calls from {requesterName ? `'${requesterName}'` : "this agent"} · any
-          arguments · up to 30 minutes
+          Later {actionTitle} calls from {requesterName ? `'${requesterName}'` : "this agent"}{" "}
+          <FactSeparator /> any arguments <FactSeparator /> up to 30 minutes
         </span>
       </span>
     </div>
@@ -1296,12 +1297,17 @@ function TargetChecklist({
                     long worktree name gives way instead. */}
                 <span className="flex min-w-0 items-baseline gap-1 text-2xs text-text-secondary">
                   {target.worktree && <span className="min-w-0 truncate">{target.worktree}</span>}
-                  {/* A bare text node, not inside either span: the name computation
-                      trims each element's text, so a separator inside one would
-                      fuse the worktree onto the kind in the checkbox's name. */}
-                  {target.worktree && " · "}
+                  {/* Bare spaces, not inside either span: the name computation
+                      trims each element's text and skips the hidden dot, so without
+                      them the worktree would fuse onto the kind in the checkbox's name. */}
+                  {target.worktree && (
+                    <>
+                      {" "}
+                      <FactSeparator />{" "}
+                    </>
+                  )}
                   <span className="shrink-0">
-                    {target.kindLabel} ·{" "}
+                    {target.kindLabel} <FactSeparator />{" "}
                     <span className="font-mono">{displayIds.get(target.id) ?? target.id}</span>
                   </span>
                 </span>

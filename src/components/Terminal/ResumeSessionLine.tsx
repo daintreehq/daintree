@@ -9,6 +9,7 @@ import { useResumeAgentSession } from "@/hooks/useResumeAgentSession";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { pluralNoun } from "@/lib/pluralize";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 /**
  * First-run-quiet resume affordance for the launcher: one line for the single
@@ -96,7 +97,7 @@ export function ResumeSessionLine() {
               // outright rather than truncating both halves of the row at once.
               <span className="-ml-1 min-w-0 flex-[1_1_0%] truncate text-xs text-text-secondary @max-[31rem]/launcher:hidden">
                 <span aria-hidden="true" className="mr-1.5">
-                  ·
+                  <FactSeparator />
                 </span>
                 {meta}
               </span>

@@ -3,6 +3,7 @@ import { ALargeSmall, Minus, Plus, RotateCcw } from "lucide-react";
 import { TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { ARIA_DISABLED_INERT_CLASSES } from "@/components/ui/ariaDisabled";
 import {
   POPOVER_HEADER_CLASS,
@@ -208,7 +209,7 @@ export function MarkdownTextSizeControl({
           >
             <RotateCcw aria-hidden="true" />
             {/* The destination is the label, so nobody has to press it to find out. */}
-            Reset to default · {STEP_LABEL[DEFAULT_MARKDOWN_FONT_SIZE]} px
+            Reset to default <FactSeparator /> {STEP_LABEL[DEFAULT_MARKDOWN_FONT_SIZE]} px
           </Button>
         </div>
       </PopoverContent>

@@ -81,6 +81,7 @@ import {
 } from "@/components/ui/popoverHeader";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { pluralize } from "@/lib/pluralize";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 // Replies are almost always markdown, and the renderer pulls react-markdown in,
 // so it loads the first time a child is opened rather than with the header.
@@ -396,7 +397,7 @@ function SubagentDetail({
           </span>
           {subagent.updatedAt > 0 && (
             <>
-              <span aria-hidden="true">·</span>
+              <FactSeparator />
               <span>
                 Updated <TimeAgo timestamp={subagent.updatedAt} />
               </span>

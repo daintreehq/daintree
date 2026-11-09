@@ -18,6 +18,7 @@ import { actionService } from "@/services/ActionService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Spinner } from "@/components/ui/Spinner";
 import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
@@ -816,9 +817,13 @@ export function AgentComposer({
                 {launchable.length > 0 ? (
                   <SelectGroup>
                     <SelectLabel>
-                      {availabilityKnown
-                        ? "Start a new session"
-                        : "Start a new session · not checked yet"}
+                      {availabilityKnown ? (
+                        "Start a new session"
+                      ) : (
+                        <>
+                          Start a new session <FactSeparator /> not checked yet
+                        </>
+                      )}
                     </SelectLabel>
                     {launchable.map((option) =>
                       option.kind === "launch" ? (

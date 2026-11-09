@@ -2,6 +2,7 @@ import { useId, useRef, useSyncExternalStore } from "react";
 import { isOwnPluginAction } from "@shared/utils/remotePluginContributions";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -270,7 +271,12 @@ function PluginPanelToolbarStatus({
       {/* Yields first on a narrow header: the glyph keeps the warning visible. */}
       <span className="min-w-0 max-w-[160px] truncate @max-[420px]/header:sr-only">
         {state.text}
-        {state.text !== undefined && updatedAt !== undefined ? " · " : null}
+        {state.text !== undefined && updatedAt !== undefined ? (
+          <>
+            {" "}
+            <FactSeparator />{" "}
+          </>
+        ) : null}
         {updatedAt !== undefined ? (
           <TimeAgo timestamp={updatedAt} now={now} prefix="Updated " />
         ) : null}

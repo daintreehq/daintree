@@ -3,6 +3,7 @@ import { isValidPastTimestamp } from "@/utils/timestamps";
 import { parseCommitBody } from "@/utils/commitMessage";
 import { useWallClock } from "@/hooks/useWallClock";
 import { CommitAuthorAvatar, type CommitAuthor } from "./CommitAuthorAvatar";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { pluralize } from "@/lib/pluralize";
 
 export interface CommitInfoTooltipProps {
@@ -194,7 +195,7 @@ export function CommitInfoTooltip({
               <span className="shrink-0">Committed {committed}</span>
               {shortSha && (
                 <>
-                  <span aria-hidden="true">·</span>
+                  <FactSeparator />
                   <span className="font-mono tabular-nums" title={commitSha}>
                     {shortSha}
                   </span>
@@ -216,7 +217,7 @@ export function CommitInfoTooltip({
           <div className="flex items-center gap-1.5 text-2xs text-text-secondary">
             <ActivityLight lastActivityTimestamp={lastActivityTimestamp} />
             <span>
-              Last active {activityPhrase} ·{" "}
+              Last active {activityPhrase} <FactSeparator />{" "}
               <time
                 dateTime={new Date(lastActivityTimestamp).toISOString()}
                 className="tabular-nums"

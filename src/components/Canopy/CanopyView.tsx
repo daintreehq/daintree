@@ -23,6 +23,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { KbdChord } from "@/components/ui/Kbd";
 import { SearchField } from "@/components/ui/SearchField";
 import { Spinner } from "@/components/ui/Spinner";
@@ -369,8 +370,8 @@ interface ShortcutRow {
 /** Sets the title bar's status apart from the title, as the status's own parts are. */
 function TitleDot() {
   return (
-    <span aria-hidden="true" className="mx-2 shrink-0 text-sm text-text-secondary">
-      ·
+    <span aria-hidden="true" className="mx-2 shrink-0 text-sm">
+      <FactSeparator />
     </span>
   );
 }
@@ -1749,7 +1750,7 @@ function CanopyInbox({
                       {workPartial && (
                         <span className="text-text-secondary">
                           {" "}
-                          · Some hosts couldn't be read, so this may be incomplete
+                          <FactSeparator /> Some hosts couldn't be read, so this may be incomplete
                         </span>
                       )}
                     </span>

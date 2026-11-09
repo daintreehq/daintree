@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { OctagonAlert, Gauge, Info, RefreshCw, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { systemClient } from "@/clients/systemClient";
@@ -485,7 +486,8 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
           title="Showing older data"
           description={
             <span data-testid="why-slow-stale-note">
-              Refresh failed · last updated <TimeAgo timestamp={snapshot.timestamp} now={now} />
+              Refresh failed <FactSeparator /> last updated{" "}
+              <TimeAgo timestamp={snapshot.timestamp} now={now} />
             </span>
           }
           onRetry={() => void refresh()}
@@ -503,7 +505,11 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
               <ul aria-label="Pressure contributions" className="contents">
                 {sortedReasons.map((r, index) => (
                   <li key={r.signal}>
-                    {index > 0 ? "· " : ""}
+                    {index > 0 && (
+                      <>
+                        <FactSeparator />{" "}
+                      </>
+                    )}
                     {r.detail} <span className="tabular-nums">(+{r.contribution})</span>
                   </li>
                 ))}
@@ -874,7 +880,7 @@ function TopWorkloadProjects({ projects }: { projects: WhySlowTerminalWorkloadPr
           >
             <span className="min-w-0 truncate text-text-primary">{name}</span>
             <span className="shrink-0 tabular-nums text-text-secondary">
-              {formatBytes(project.memoryMb * 1024 * 1024)} ·{" "}
+              {formatBytes(project.memoryMb * 1024 * 1024)} <FactSeparator />{" "}
               {pluralize(project.terminalCount, "terminal")}
             </span>
           </li>

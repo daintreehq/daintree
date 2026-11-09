@@ -135,7 +135,12 @@ describe("FigureRail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Figure 1: Caption 1" }));
 
     const lightbox = screen.getByTestId("figure-lightbox");
-    expect(within(lightbox).getByText("image #1 · Daintree docs")).toBeTruthy();
+    expect(
+      within(lightbox).getByText(
+        (_, element) =>
+          element?.tagName === "P" && element.textContent === "image #1 · Daintree docs"
+      )
+    ).toBeTruthy();
     expect(within(lightbox).getByText("Caption 1")).toBeTruthy();
     expect(within(lightbox).getByText("Figure 1, 1 of 2")).toBeTruthy();
   });

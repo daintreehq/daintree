@@ -27,6 +27,7 @@ import {
 } from "@/components/Settings/SettingsGroup";
 import { SettingsInput } from "@/components/Settings/SettingsInput";
 import { useRowFocus } from "@/components/Settings/useRowFocus";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 const LOCATION_OPTIONS = [
   { value: "grid", label: "Grid" },
@@ -405,7 +406,7 @@ export function AutomationTab({
               <>
                 {trimmedWorktreePathPattern === "" && (
                   <>
-                    Using global default ·{" "}
+                    Using global default <FactSeparator />{" "}
                     <code className="font-mono text-text-primary">{globalPathPattern}</code>
                     <br />
                   </>

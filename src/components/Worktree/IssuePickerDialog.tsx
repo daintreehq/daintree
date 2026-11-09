@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useId, useLayoutEffect, useRef } from
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { CircleDot, Link, Link2Off, CircleCheck, RefreshCw } from "lucide-react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { Spinner } from "@/components/ui/Spinner";
@@ -557,7 +558,7 @@ export function IssuePickerDialog({
               // One way on, not two: the row that failed is the row that retries.
               <>
                 <span>Couldn&apos;t load more issues</span>
-                <span aria-hidden="true">·</span>
+                <FactSeparator />
                 <span className="flex items-center gap-1.5 text-text-primary">
                   <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
                   Retry

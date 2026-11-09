@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { Check, CircleCheck } from "lucide-react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "@/components/ui/button";
 import { Callout, type CalloutSeverity } from "@/components/ui/Callout";
 import {
@@ -1261,7 +1262,14 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                         </span>
                         <span className="block truncate text-xs text-text-secondary">
                           {host.wsl?.version ? `WSL ${host.wsl.version}` : "WSL"}
-                          {host.wsl?.isDefault ? " · Default" : ""}
+                          {host.wsl?.isDefault ? (
+                            <>
+                              {" "}
+                              <FactSeparator /> Default
+                            </>
+                          ) : (
+                            ""
+                          )}
                         </span>
                       </span>
                       <span className="shrink-0 text-xs text-text-secondary">

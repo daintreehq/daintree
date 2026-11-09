@@ -28,6 +28,7 @@ import {
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { pluralize } from "@/lib/pluralize";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -479,7 +480,9 @@ export function HostChip() {
           ) : (
             <>
               {/* "SSH · " and the name's end never clip; only its middle gives way. */}
-              <span className="shrink-0 whitespace-pre font-normal">{via} · </span>
+              <span className="shrink-0 whitespace-pre font-normal">
+                {via} <FactSeparator />{" "}
+              </span>
               <span className="min-w-0 truncate">{nameHead}</span>
               <span className="shrink-0">{nameTail}</span>
               {nameDomain && (

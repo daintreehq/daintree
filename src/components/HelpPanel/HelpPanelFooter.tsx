@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "@/lib/animationUtils";
 import { ArrowLeftRight, BrandMark, FolderGit2 } from "@/components/icons";
 import { PANE_STATUS_FOOTER_CLASS } from "@/components/ui/paneToolbarStyles";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { TerminalNotifyChip } from "@/components/Terminal/TerminalNotifyChip";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AgentConfig } from "@/config/agents";
@@ -267,7 +268,9 @@ export function HelpPanelFooter({
           </BrandMark>
           <span className={density < 2 ? undefined : "sr-only"}>{agentName}</span>
           {launchedModelLabel && (
-            <span className={density < 1 ? undefined : "sr-only"}>· {launchedModelLabel}</span>
+            <span className={density < 1 ? undefined : "sr-only"}>
+              <FactSeparator /> {launchedModelLabel}
+            </span>
           )}
         </StatusItem>
       </div>

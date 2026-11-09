@@ -3,6 +3,7 @@ import { Checkbox, CheckboxGlyph } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "@/components/ui/button";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import { KbdChord } from "@/components/ui/Kbd";
@@ -287,7 +288,7 @@ export function FleetPickerFooterHint({
         </kbd>
         <span>Move</span>
       </span>
-      <span className="text-text-secondary">·</span>
+      <FactSeparator />
       <span className="inline-flex items-center gap-1">
         <kbd className={KBD_CLASS}>Space</kbd>
         <span>Toggle</span>
@@ -295,7 +296,7 @@ export function FleetPickerFooterHint({
       <ShortcutsPopover />
       {driftNotice && (
         <>
-          <span className="text-text-secondary">·</span>
+          <FactSeparator />
           {driftNotice}
         </>
       )}

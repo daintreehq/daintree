@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { PrChecksPopover } from "./PrChecksPopover";
@@ -175,16 +176,12 @@ export function PrStatusChip({
                 glyph. Every one stays in the trigger's description and the
                 checks popover. */}
             <span className="inline-flex items-center gap-1 @max-[640px]/header:hidden">
-              <span className="text-text-muted" aria-hidden="true">
-                ·
-              </span>
+              <FactSeparator />
               <span className="text-text-secondary">{prStateLabel}</span>
             </span>
             {ciVisual && (
               <>
-                <span className="text-text-muted" aria-hidden="true">
-                  ·
-                </span>
+                <FactSeparator />
                 <span className="inline-flex items-center gap-1">
                   <span
                     className="inline-flex items-center justify-center w-3 h-3 shrink-0"
@@ -209,9 +206,7 @@ export function PrStatusChip({
             )}
             {mergeIntent && (
               <>
-                <span className="text-text-muted" aria-hidden="true">
-                  ·
-                </span>
+                <FactSeparator />
                 <span className="inline-flex items-center gap-1" data-testid="pr-merge-intent">
                   {headMoved ? (
                     <AlertTriangle
@@ -229,9 +224,7 @@ export function PrStatusChip({
                 </span>
                 {mergeIntent.kind === "auto-merge" && mergeIntent.method && (
                   <span className="inline-flex items-center gap-1 @max-[1100px]/header:hidden">
-                    <span className="text-text-muted" aria-hidden="true">
-                      ·
-                    </span>
+                    <FactSeparator />
                     <span className="text-text-secondary" data-testid="pr-merge-intent-method">
                       {mergeMethodLabel(mergeIntent.method)}
                     </span>
@@ -293,9 +286,7 @@ function NoPrChip({
         <span>{badge}</span>
         {link.state === "unpushed" && (
           <>
-            <span className="text-text-muted" aria-hidden="true">
-              ·
-            </span>
+            <FactSeparator />
             <span>not pushed</span>
           </>
         )}

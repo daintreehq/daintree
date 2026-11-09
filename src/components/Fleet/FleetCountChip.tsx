@@ -20,6 +20,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { useFleetWorktreeScope } from "./useFleetWorktreeScope";
 import { FleetWorktreeDots } from "./FleetWorktreeDots";
 import { renderPaneStateBadge } from "./renderPaneStateBadge";
@@ -293,7 +294,7 @@ export function FleetCountChip({
           <FleetWorktreeDots scope={scope} />
           {scope.exitedCount > 0 ? (
             <span className="text-text-secondary tabular-nums" data-testid="fleet-exited-count">
-              · {scope.exitedCount} exited
+              <FactSeparator /> {scope.exitedCount} exited
             </span>
           ) : null}
           <ChevronDown className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />

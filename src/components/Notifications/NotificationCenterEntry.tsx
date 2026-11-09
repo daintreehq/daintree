@@ -63,6 +63,7 @@ import { pluginSilenceScope } from "@/lib/notificationSourceLabel";
 import { useUIStore } from "@/store/uiStore";
 import { CountBadge } from "@/components/ui/badge";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
@@ -469,7 +470,12 @@ export function NotificationCenterEntry({
                 that it no longer leads anywhere. */}
             {unavailableLabel && (
               <span data-testid="notification-destination-unavailable" className="shrink-0">
-                {metaSource && <span aria-hidden="true"> · </span>}
+                {metaSource && (
+                  <>
+                    {" "}
+                    <FactSeparator />{" "}
+                  </>
+                )}
                 {unavailableLabel}
               </span>
             )}

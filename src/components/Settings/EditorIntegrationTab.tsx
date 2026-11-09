@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useId } from "react";
 import { InlineError } from "@/components/ui/field";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { CheckCircle2, XCircle, RefreshCw, ExternalLink, ChevronRight } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -627,12 +628,22 @@ export function EditorIntegrationTab() {
             ) : isLoadingConfig ? null : preferredEditor ? (
               <span>
                 Saved: <span className="font-medium">{editorLabel(preferredEditor)}</span>
-                {hasPendingDraft && " · Unsaved changes"}
+                {hasPendingDraft && (
+                  <>
+                    {" "}
+                    <FactSeparator /> Unsaved changes
+                  </>
+                )}
               </span>
             ) : defaultEditor ? (
               <span>
                 Using default: <span className="font-medium">{editorLabel(defaultEditor)}</span>
-                {hasPendingDraft && " · Unsaved changes"}
+                {hasPendingDraft && (
+                  <>
+                    {" "}
+                    <FactSeparator /> Unsaved changes
+                  </>
+                )}
               </span>
             ) : (
               "Not saved yet — Daintree uses the first editor it finds"

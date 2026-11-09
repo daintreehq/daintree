@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { ChevronDown, RotateCcw } from "lucide-react";
 import { DecisionsIcon, TriangleAlert } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -138,7 +139,8 @@ function AnswerPreview({ item }: { item: DecisionsAttentionItem }) {
       <figcaption className="text-2xs text-text-secondary">
         {source}
         {answer.correction && ", correcting an earlier one"}
-        {" · "}
+        {" "}
+        <FactSeparator />{" "}
         <TimeAgo timestamp={answer.answeredAt} />
       </figcaption>
       {answer.choices.length > 0 && (
@@ -203,7 +205,8 @@ function FollowUpPreview({
       <figcaption className="text-2xs text-text-secondary">
         Your follow-up from your phone
         {followUp.status === "delivery-uncertain" && ", may or may not have been delivered"}
-        {" · "}
+        {" "}
+        <FactSeparator />{" "}
         <TimeAgo timestamp={followUp.sentAt} />
       </figcaption>
       {followUp.text !== null ? (
