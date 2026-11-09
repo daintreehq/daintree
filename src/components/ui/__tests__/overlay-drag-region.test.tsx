@@ -149,29 +149,37 @@ describe("a window dialog's header is the title bar", () => {
   // A window-placement AppDialog stamps the opt-out on its whole surface, which
   // `.app-no-drag *` carries into its header too. These rules hand the header
   // back to the window drag and keep its controls clickable; they must outrank
-  // the blanket rule, so both are scoped under `.app-no-drag`.
+  // the blanket rule, so both are scoped under `.app-no-drag`. A window with
+  // nothing beneath it to mask (the Canopy window) claims no opt-out at all,
+  // and its header is the title bar the same way, under `.app-window-surface`.
   const css = readIndexCss().replace(/\s+/g, " ");
+  const SCOPES = [`.${NO_DRAG}`, ".app-window-surface"];
+  // The `:is(...)` both of a rule's selectors are scoped under, and that scope again.
+  const SCOPE = ":is\\(([^)]*)\\)";
+  const SAME_SCOPE = ":is\\(\\1\\)";
 
-  function declarationsFor(selectorPattern: string): string | null {
-    return new RegExp(`(?:^|\\}|\\*/) ?${selectorPattern} ?\\{([^}]*)\\}`).exec(css)?.[1] ?? null;
+  function scopesOf(list: string | undefined): string[] {
+    return (list ?? "").split(",").map((scope) => scope.trim());
   }
 
   it("drags the window from the header and everything in it", () => {
-    const declarations = declarationsFor(
-      `\\.${NO_DRAG} \\.dialog-window-header, \\.${NO_DRAG} \\.dialog-window-header \\*`
-    );
-    expect(declarations, "header drag rule missing").not.toBeNull();
-    expect(declarations).toMatch(/-webkit-app-region:\s*drag/);
-    expect(declarations).toMatch(/(?<!-)\bapp-region:\s*drag/);
+    const rule = new RegExp(
+      `(?:^|\\}|\\*/) ?${SCOPE} \\.dialog-window-header, ${SAME_SCOPE} \\.dialog-window-header \\* ?\\{([^}]*)\\}`
+    ).exec(css);
+    expect(rule, "header drag rule missing").not.toBeNull();
+    expect(scopesOf(rule?.[1])).toEqual(expect.arrayContaining(SCOPES));
+    expect(rule?.[2]).toMatch(/-webkit-app-region:\s*drag/);
+    expect(rule?.[2]).toMatch(/(?<!-)\bapp-region:\s*drag/);
   });
 
   it("keeps every control in the header, and what is inside it, clickable", () => {
     const controls = /:is\(([^)]*)\)/;
     const rule = new RegExp(
-      `\\.${NO_DRAG} \\.dialog-window-header (:is\\([^)]*\\)), \\.${NO_DRAG} \\.dialog-window-header \\1 \\* ?\\{([^}]*)\\}`
+      `${SCOPE} \\.dialog-window-header (:is\\([^)]*\\)), ${SAME_SCOPE} \\.dialog-window-header \\2 \\* ?\\{([^}]*)\\}`
     ).exec(css);
     expect(rule, "header controls rule missing").not.toBeNull();
-    const list = controls.exec(rule?.[1] ?? "")?.[1] ?? "";
+    expect(scopesOf(rule?.[1])).toEqual(expect.arrayContaining(SCOPES));
+    const list = controls.exec(rule?.[2] ?? "")?.[1] ?? "";
     for (const control of [
       "button",
       '[role="button"]',
@@ -181,8 +189,8 @@ describe("a window dialog's header is the title bar", () => {
     ]) {
       expect(list).toContain(control);
     }
-    expect(rule?.[2]).toMatch(/-webkit-app-region:\s*no-drag/);
-    expect(rule?.[2]).toMatch(/(?<!-)\bapp-region:\s*no-drag/);
+    expect(rule?.[3]).toMatch(/-webkit-app-region:\s*no-drag/);
+    expect(rule?.[3]).toMatch(/(?<!-)\bapp-region:\s*no-drag/);
   });
 });
 
