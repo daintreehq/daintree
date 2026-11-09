@@ -3,6 +3,8 @@ import { ArrowDown, ArrowUp, X as XIcon } from "lucide-react";
 import { FALLBACK_CHAIN_MAX } from "../../../../shared/config/agentRegistry";
 import type { AgentPreset } from "@/config/agents";
 import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
+import { validFallbackIds } from "@shared/utils/agentPresets";
+import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { Button } from "@/components/ui/button";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -21,6 +23,12 @@ interface FallbackChainEditorProps {
   /** Gates the conversation-keeping option to agents whose refusal is recognised. */
   agentId?: string;
   selectedPreset: AgentPreset;
+  /**
+   * The chain as saved, before the read capped it at `FALLBACK_CHAIN_MAX`, so a
+   * longer list from config.json or an import is shown as cut, not passed off
+   * as the whole chain.
+   */
+  storedFallbacks?: unknown;
   allPresets: AgentPreset[];
   onUpdatePreset: (presetId: string, patch: Partial<AgentPreset>) => void;
 }
@@ -37,10 +45,13 @@ export function moveFallback(chain: string[], from: number, to: number): string[
 export function FallbackChainEditor({
   agentId,
   selectedPreset,
+  storedFallbacks,
   allPresets,
   onUpdatePreset,
 }: FallbackChainEditorProps) {
   const chain = useMemo(() => selectedPreset.fallbacks ?? [], [selectedPreset.fallbacks]);
+  const savedCount = validFallbackIds(storedFallbacks, selectedPreset.id).length;
+  const cutFrom = savedCount > FALLBACK_CHAIN_MAX ? savedCount : null;
 
   const candidates = useMemo(
     () => allPresets.filter((p) => p.id !== selectedPreset.id && !chain.includes(p.id)),
@@ -109,7 +120,14 @@ export function FallbackChainEditor({
     <>
       <SettingsRow
         label="Fallback presets"
-        description="Tried in order if this preset's provider is unreachable. Never for prompt errors, and for usage limits only when turned on below."
+        description={
+          <>
+            Up to {FALLBACK_CHAIN_MAX}, tried in order if this preset&apos;s provider is
+            unreachable. Never for prompt errors, and for usage limits only when turned on below. A
+            fallback&apos;s own fallbacks aren&apos;t followed, so list every preset to try here.
+            {cutFrom !== null && <CutChainNote saved={cutFrom} />}
+          </>
+        }
         control={({ labelId, descriptionId, disabled }) =>
           canAdd ? (
             // Controlled at "" so the trigger shows its placeholder again after each
@@ -268,5 +286,19 @@ export function FallbackChainEditor({
           </SettingsDependents>
         )}
     </>
+  );
+}
+
+/** The saved chain is longer than a launch walks; the editor shows the part it does. */
+function CutChainNote({ saved }: { saved: number }) {
+  const { Icon, toneClass } = SEVERITY_VISUAL.warning;
+  return (
+    <span className="mt-1 flex items-start gap-1.5" data-testid="fallback-chain-cut">
+      <Icon className={`w-3.5 h-3.5 mt-px shrink-0 ${toneClass}`} aria-hidden="true" />
+      <span>
+        {saved} fallbacks are saved, but only the first {FALLBACK_CHAIN_MAX} are tried. The rest are
+        dropped the next time this chain changes.
+      </span>
+    </span>
   );
 }

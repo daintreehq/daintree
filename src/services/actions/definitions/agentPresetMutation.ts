@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  FALLBACK_CHAIN_MAX,
   getAgentConfigFolderAccount,
   getEffectiveAgentConfig,
   isEffectivelyRegisteredAgent,
@@ -579,7 +580,9 @@ function presetProblems(
   if (patch.fallbacks !== undefined && patch.fallbacks.length > 0) {
     const kept = probe({ fallbacks: patch.fallbacks })?.fallbacks ?? [];
     if (canonical(kept) !== canonical(patch.fallbacks)) {
-      problems.push("fallbacks: up to 3 distinct preset ids, not this preset's own.");
+      problems.push(
+        `fallbacks: up to ${FALLBACK_CHAIN_MAX} distinct preset ids, not this preset's own.`
+      );
     } else {
       for (const id of patch.fallbacks) {
         if (!knownIds.has(id)) {

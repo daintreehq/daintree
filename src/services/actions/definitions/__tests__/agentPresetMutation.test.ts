@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentPreset } from "@shared/config/agentRegistry";
+import { FALLBACK_CHAIN_MAX, type AgentPreset } from "@shared/config/agentRegistry";
 import type { AgentSettings, AgentSettingsEntry } from "@shared/types/agentSettings";
 import {
   agentPresetMutationFingerprint,
@@ -160,6 +160,25 @@ describe("agent.createPreset", () => {
         from
       ).preset.fallbacks
     ).toEqual([WORK.id, OTHER.id]);
+  });
+
+  it("takes a chain as long as the cap and refuses a longer one, naming the cap", () => {
+    const rotation: AgentPreset[] = Array.from({ length: FALLBACK_CHAIN_MAX + 1 }, (_, i) => ({
+      id: `user-account-${i}`,
+      name: `Account ${i}`,
+    }));
+    const from = sources({ customPresets: rotation });
+    const ids = rotation.map((p) => p.id);
+    expect(
+      plan(
+        "agent.createPreset",
+        { agentId: "codex", name: "Rotation", fallbacks: ids.slice(1) },
+        from
+      ).preset.fallbacks
+    ).toEqual(ids.slice(1));
+    expect(
+      refusal("agent.createPreset", { agentId: "codex", name: "Rotation", fallbacks: ids }, from)
+    ).toContain(`up to ${FALLBACK_CHAIN_MAX} distinct preset ids`);
   });
 
   it("refuses a fallback that names no preset of this agent", () => {

@@ -276,8 +276,11 @@ export interface AgentPreset {
   accountId?: string;
 }
 
-/** Max fallback presets that can be chained after the primary. */
-export const FALLBACK_CHAIN_MAX = 3;
+/**
+ * Max fallback presets that can be chained after the primary. Sized for an
+ * account rotation on usage limits (#16587), not just a provider outage.
+ */
+export const FALLBACK_CHAIN_MAX = 8;
 
 export interface AgentProviderTemplate {
   id: string;
