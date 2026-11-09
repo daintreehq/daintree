@@ -200,7 +200,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     palette: { mode: "hidden" },
     title: "Fleet: retry failed broadcast",
     description:
-      "Re-fire the most recent broadcast against any panes that rejected it. No-op when no failures are recorded.",
+      "Re-fire the most recent broadcast against any terminals that rejected it. No-op when no failures are recorded.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -258,7 +258,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     id: "fleet.saveNamedFleet",
     title: "Fleet: save named fleet",
     description:
-      "Persist the armed local panes (snapshot) or a state filter (predicate) under a name for later recall.",
+      "Persist the armed local terminals (snapshot) or a state filter (predicate) under a name for later recall.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -271,7 +271,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     id: "fleet.recallNamedFleet",
     title: "Fleet: recall named fleet",
     description:
-      "Apply panes from a saved fleet. Snapshots drop missing IDs; predicates re-evaluate against current panes.",
+      "Apply terminals from a saved fleet. Snapshots drop missing IDs; predicates re-evaluate against current terminals.",
     category: "terminal",
     kind: "command",
     danger: "safe",

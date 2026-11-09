@@ -111,7 +111,7 @@ export function registerTerminalInputActions(
     id: "terminal.inject",
     title: "Inject context",
     description:
-      "Write the active worktree's prepared context into a terminal, to hand an agent a large codebase context. Name the target: focus can drift, and a mistarget types a large dump into the wrong pane. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal, to hand an agent a large codebase context. Name the target: focus can drift, and a mistarget types a large dump into the wrong terminal. Target an idle terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",

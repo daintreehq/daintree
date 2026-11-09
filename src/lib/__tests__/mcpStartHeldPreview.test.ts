@@ -57,7 +57,7 @@ describe("formatStartHeldPreviewLines (#15270)", () => {
   it("bounds a long title", () => {
     const lines = formatStartHeldPreviewLines("fresh", { ...HELD, title: "x".repeat(500) });
 
-    const pane = lines.find((line) => line.startsWith("Pane:"))!;
+    const pane = lines.find((line) => line.startsWith("Panel:"))!;
     expect(Array.from(pane).length).toBeLessThan(250);
     expect(pane.endsWith("…")).toBe(true);
   });

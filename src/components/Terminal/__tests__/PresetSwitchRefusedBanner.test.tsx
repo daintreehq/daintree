@@ -124,7 +124,7 @@ describe("PresetSwitchRefusedBanner (#16045)", () => {
     });
 
     expect(screen.queryByRole("button", { name: "Back to Personal" })).toBeNull();
-    expect(screen.getByText(/Another pane has this conversation open/)).toBeTruthy();
+    expect(screen.getByText(/Another panel has this conversation open/)).toBeTruthy();
   });
 
   it("goes back to a launch that had no preset without naming one", () => {

@@ -443,10 +443,10 @@ describe("AgentQuotaSection for Claude Code (#16370)", () => {
     readUsage.mockResolvedValue([claudeAccount()]);
     await renderFor("claude");
 
-    expect(document.body.textContent).toContain("as your panes showed them");
+    expect(document.body.textContent).toContain("as your terminals showed them");
     expect(document.body.textContent).toContain("Not a live account reading");
     expect(meters().map((m) => m.getAttribute("aria-valuenow"))).toEqual(["87"]);
-    expect(meters()[0]?.getAttribute("aria-valuetext")).toBe("87% used, as a pane showed it");
+    expect(meters()[0]?.getAttribute("aria-valuetext")).toBe("87% used, as a terminal showed it");
     expect(screen.getByText("Weekly limit")).toBeTruthy();
     expect(screen.getByText("87% used")).toBeTruthy();
     const description = document.body.textContent ?? "";
@@ -484,7 +484,7 @@ describe("AgentQuotaSection for Claude Code (#16370)", () => {
 
     expect(screen.getByText("Stale")).toBeTruthy();
     expect(meters()[0]?.getAttribute("aria-valuetext")).toBe(
-      "87% used, as a pane showed it, stale"
+      "87% used, as a terminal showed it, stale"
     );
     expect(document.body.textContent).toContain("Reset time has passed");
     expect(document.body.textContent).not.toContain("Resets at");
@@ -505,7 +505,7 @@ describe("AgentQuotaSection for Claude Code (#16370)", () => {
     ]);
     await renderFor("claude");
 
-    expect(document.body.textContent).toContain("Seen 5m ago in a pane");
+    expect(document.body.textContent).toContain("Seen 5m ago in a terminal");
     expect(document.body.textContent).not.toMatch(/closed|no longer open/);
   });
 

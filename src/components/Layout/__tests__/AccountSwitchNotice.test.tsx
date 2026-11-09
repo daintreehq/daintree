@@ -148,10 +148,10 @@ describe("AccountSwitchDialog (#16136)", () => {
 
     const boxes = screen.getAllByRole("checkbox");
     expect(boxes.map((box) => box.getAttribute("aria-checked"))).toEqual(["true", "true", "true"]);
-    expect(screen.getByText("Restart 3 panes on 'Company'?")).toBeTruthy();
+    expect(screen.getByText("Restart 3 terminals on 'Company'?")).toBeTruthy();
 
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Restart 3 panes" }));
+      fireEvent.click(screen.getByRole("button", { name: "Restart 3 terminals" }));
     });
 
     expect(onClose).toHaveBeenCalled();
@@ -173,7 +173,7 @@ describe("AccountSwitchDialog (#16136)", () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "Release" }));
     });
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Restart pane" }));
+      fireEvent.click(screen.getByRole("button", { name: "Restart terminal" }));
     });
 
     await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
@@ -191,7 +191,7 @@ describe("AccountSwitchDialog (#16136)", () => {
     }));
 
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Restart 3 panes" }));
+      fireEvent.click(screen.getByRole("button", { name: "Restart 3 terminals" }));
     });
 
     await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(2));
@@ -229,7 +229,7 @@ describe("AccountSwitchDialog (#16136)", () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "Release" }));
     });
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Restart pane" }));
+      fireEvent.click(screen.getByRole("button", { name: "Restart terminal" }));
     });
 
     reseed("b", { location: "trash" });
@@ -244,7 +244,7 @@ describe("AccountSwitchDialog (#16136)", () => {
     act(() => {
       for (const box of screen.getAllByRole("checkbox")) fireEvent.click(box);
     });
-    const confirm = screen.getByRole("button", { name: "Restart 0 panes" });
+    const confirm = screen.getByRole("button", { name: "Restart 0 terminals" });
     expect(
       confirm.hasAttribute("disabled") || confirm.getAttribute("aria-disabled") === "true"
     ).toBe(true);
@@ -264,7 +264,7 @@ describe("AccountSwitchDialog (#16136)", () => {
     render(<AccountSwitchDialog request={request} onClose={() => {}} />);
 
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Restart pane" }));
+      fireEvent.click(screen.getByRole("button", { name: "Restart terminal" }));
     });
 
     await waitFor(() =>

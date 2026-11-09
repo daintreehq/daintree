@@ -182,7 +182,7 @@ describe("WorktreeTerminalSection — a session row owns its menu", () => {
   it("leaves the card's menu to the card's own surface", async () => {
     renderInCard();
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: /sessions?/i, expanded: true }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /terminals?/i, expanded: true }));
 
     expect(await screen.findByRole("menuitem", { name: CARD_ITEM })).toBeTruthy();
   });

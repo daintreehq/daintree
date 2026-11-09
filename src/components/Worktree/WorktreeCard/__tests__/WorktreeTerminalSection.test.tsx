@@ -729,7 +729,7 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
     const indicators = screen.getByTestId("collapsed-session-indicators");
     expect(indicators.getAttribute("role")).toBe("img");
     expect(indicators.getAttribute("aria-label")).toBe(
-      "5 sessions: 2 working, 2 waiting, 1 finished"
+      "5 terminals: 2 working, 2 waiting, 1 finished"
     );
   });
 
@@ -744,7 +744,7 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
       },
     });
     expect(screen.getByTestId("collapsed-session-indicators").getAttribute("aria-label")).toBe(
-      "4 sessions: 1 working, 1 blocked, 1 waiting"
+      "4 terminals: 1 working, 1 blocked, 1 waiting"
     );
   });
 
@@ -836,7 +836,7 @@ describe("WorktreeTerminalSection disclosure control (#15864)", () => {
   it("names the worktree it belongs to", () => {
     renderSection({ isExpanded: false, terminals, counts, worktreeLabel: "feature/login" });
     const button = document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
-    expect(button.getAttribute("aria-label")).toBe("Active sessions for worktree feature/login");
+    expect(button.getAttribute("aria-label")).toBe("Active terminals for worktree feature/login");
   });
 
   it("leaves the count and the agent glyph outside the control, as card content", () => {

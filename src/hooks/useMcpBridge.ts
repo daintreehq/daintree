@@ -317,7 +317,7 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   recipe: "Recipe contents",
   // Unused: this kind renders a selectable checklist with its own heading
   // rather than the preview card. Present so the map stays exhaustive.
-  terminalKillBatch: "Terminals",
+  terminalKillBatch: "Panels",
   terminalClose: "Panels",
   forgeCreateIssue: "Issue to be filed",
   forgeAddIssueComment: "Comment to be posted",
@@ -1697,7 +1697,7 @@ export function useMcpBridge(): void {
                           selectionConfirmLabel:
                             previewTarget?.kind === "terminalClose"
                               ? { verb: "Close", one: "panel", many: "panels" }
-                              : { verb: "Kill", one: "terminal", many: "terminals" },
+                              : { verb: "Remove", one: "panel", many: "panels" },
                         }
                       : {}),
                   },

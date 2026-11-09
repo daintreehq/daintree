@@ -656,7 +656,7 @@ describe("WorktreeHeader collapsed session indicators", () => {
     });
     const container = screen.getByTestId("collapsed-session-indicators");
     expect(container).toBeDefined();
-    expect(container.getAttribute("aria-label")).toBe("3 sessions: 2 working, 1 waiting");
+    expect(container.getAttribute("aria-label")).toBe("3 terminals: 2 working, 1 waiting");
   });
 
   it("does not render session indicators when sessionTotal is 0", () => {

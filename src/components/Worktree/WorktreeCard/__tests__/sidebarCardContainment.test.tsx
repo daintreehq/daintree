@@ -261,7 +261,7 @@ describe("sidebar session well", () => {
     const grid = renderTerminals({ variant: "grid", total: 0 });
     expect(grid.container.firstElementChild, "grid empty tray did not render").not.toBeNull();
     expect(wellCount(grid.container)).toBe(0);
-    expect(grid.container.textContent).toContain("Start a session");
+    expect(grid.container.textContent).toContain("New panel");
     grid.unmount();
 
     const sidebar = renderTerminals({ variant: "sidebar", total: 0 });

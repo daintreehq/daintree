@@ -377,7 +377,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
-      "Read this machine's Codex quota as Codex reports it, and the last Claude Code usage-limit message per limit its panes showed (not a live reading).",
+      "Read this machine's Codex quota as Codex reports it, and the last Claude Code usage-limit message per limit its terminals showed (not a live reading).",
     enabled: true,
     id: "agent.readQuota",
     inputSchema: {
@@ -545,7 +545,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
-      "Reopen a closed session as a new pane you own. `launched` means it is starting, not that the agent is ready. `existing`: a live pane holds it, so nothing launched and this call doesn't make it yours. `refused` gives the reason.",
+      "Reopen a closed session as a new panel you own. `launched` means it is starting, not that the agent is ready. `existing`: a live panel holds it, so nothing launched and this call doesn't make it yours. `refused` gives the reason.",
     enabled: true,
     examples: [
       {
@@ -635,7 +635,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Resume agent session as an owned pane",
+    title: "Resume agent session as an owned panel",
   },
   {
     band: "reversible",
@@ -2553,7 +2553,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
       },
     },
-    keywords: ["trash", "hide", "dismiss", "remove"],
+    keywords: ["trash", "hide", "dismiss", "remove", "terminal"],
     kind: "command",
     name: "terminal.close",
     outputSchema: {
@@ -2595,7 +2595,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "Close terminal",
+    title: "Close panel",
   },
   {
     band: "reversible",
@@ -2725,7 +2725,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Queue text as one submission to a terminal: a shell runs it, an agent pane takes it as its next prompt. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
+      "Queue text as one submission to a terminal: a shell runs it, an agent panel takes it as its next prompt. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
     enabled: true,
     id: "terminal.sendCommand",
     inputSchema: {
@@ -2746,7 +2746,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         handback: {
           description:
-            "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only.",
+            "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panels only.",
           type: "boolean",
         },
         generation: {
@@ -2927,7 +2927,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           terminalIds: ["term-abc123"],
           endGrace: true,
         },
-        description: "You closed your panes and their processes must be gone before the delete.",
+        description: "You closed your panels and their processes must be gone before the delete.",
       },
     ],
     id: "terminal.waitForExit",
@@ -3127,9 +3127,9 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "worktree",
     danger: "confirm",
     dangerRationale:
-      "Closes the session's own panes in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
+      "Closes the session's own panels in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
     description:
-      "Delete a worktree this session created, after the user confirms, once it is clean, every commit is on a remote, and no terminal you don't own runs there. Closes your panes there and waits for their processes to exit first. Never forces or deletes the branch.",
+      "Delete a worktree this session created, after the user confirms, once it is clean, every commit is on a remote, and no terminal you don't own runs there. Closes your panels there and waits for their processes to exit first. Never forces or deletes the branch.",
     enabled: true,
     id: "worktree.retireOwned",
     inputSchema: {

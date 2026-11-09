@@ -279,14 +279,14 @@ describe("TerminalDestructiveActionConfirmDialog — deleted-worktree dismiss", 
     stage(3);
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    expect(screen.getByRole("button", { name: "Close 3 terminals" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Close 3 panels" })).toBeTruthy();
   });
 
   it("uses the singular noun for one terminal", () => {
     stage(1);
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    expect(screen.getByRole("button", { name: "Close 1 terminal" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Close 1 panel" })).toBeTruthy();
   });
 
   it("points at dragging as the alternative to closing", () => {
@@ -300,7 +300,7 @@ describe("TerminalDestructiveActionConfirmDialog — deleted-worktree dismiss", 
     stage(2);
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Close 2 terminals" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close 2 panels" }));
 
     expect(dispatch).toHaveBeenCalledWith(
       "worktree.sessions.trashAll",
@@ -362,14 +362,14 @@ describe("TerminalDestructiveActionConfirmDialog — grouped deleted-worktree cl
     stageGroup();
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    expect(screen.getByText("Close 3 terminals from 2 deleted worktrees?")).toBeTruthy();
+    expect(screen.getByText("Close 3 panels from 2 deleted worktrees?")).toBeTruthy();
   });
 
   it("fans the single-worktree executor over every previewed worktree on confirm", () => {
     stageGroup();
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Close 3 terminals" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close 3 panels" }));
 
     expect(dispatch).toHaveBeenCalledTimes(2);
     expect(dispatch).toHaveBeenCalledWith(
@@ -393,7 +393,7 @@ describe("TerminalDestructiveActionConfirmDialog — grouped deleted-worktree cl
     });
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Close 0 terminals" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close 0 panels" }));
 
     expect(dispatch).not.toHaveBeenCalled();
   });
@@ -420,14 +420,14 @@ describe("TerminalDestructiveActionConfirmDialog — worktree end-all (#11345)",
     stageEndAll(3);
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    expect(screen.getByRole("button", { name: "End 3 sessions" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove 3 panels" })).toBeTruthy();
   });
 
   it("uses the singular noun for one session", () => {
     stageEndAll(1);
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    expect(screen.getByRole("button", { name: "End 1 session" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove 1 panel" })).toBeTruthy();
   });
 
   it("frames the loss as permanent and unrecoverable, unlike trashing", () => {
@@ -455,7 +455,7 @@ describe("TerminalDestructiveActionConfirmDialog — worktree end-all (#11345)",
     stageEndAll(2);
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    fireEvent.click(screen.getByRole("button", { name: "End 2 sessions" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove 2 panels" }));
 
     expect(dispatch).toHaveBeenCalledWith(
       "worktree.sessions.endAll",
@@ -472,7 +472,7 @@ describe("TerminalDestructiveActionConfirmDialog — worktree end-all (#11345)",
     });
     render(<TerminalDestructiveActionConfirmDialog />);
 
-    fireEvent.click(screen.getByRole("button", { name: "End 2 sessions" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove 2 panels" }));
 
     expect(dispatch).not.toHaveBeenCalled();
   });
@@ -538,7 +538,7 @@ describe("TerminalDestructiveActionConfirmDialog — confirmed re-dispatch sourc
         dispatchSource: origin,
       });
       render(<TerminalDestructiveActionConfirmDialog />);
-      fireEvent.click(screen.getByRole("button", { name: "End 2 sessions" }));
+      fireEvent.click(screen.getByRole("button", { name: "Remove 2 panels" }));
 
       const opts = dispatch.mock.calls.at(-1)![2];
       // A human confirmed this, so it is never replayed as an agent dispatch.

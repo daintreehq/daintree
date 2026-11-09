@@ -75,7 +75,7 @@ describe("TerminalNotifyChip", () => {
 
     const chip = await screen.findByTestId("terminal-notify-chip");
     expect(chip.getAttribute("aria-label")).toBe(
-      "Waiting on 2 terminals; Daintree may type a notice into this pane"
+      "Waiting on 2 terminals; Daintree may type a notice into this terminal"
     );
 
     act(() => push?.(paneState({ pendingCount: 0, readyCount: 0, revision: 2 })));
@@ -113,7 +113,7 @@ describe("TerminalNotifyChip", () => {
     );
     render(<TerminalNotifyChip terminalId="t1" />);
 
-    expect(await screen.findByText("Not sent: this pane is waiting on an approval.")).toBeTruthy();
+    expect(await screen.findByText("Not sent: this terminal is waiting on an approval.")).toBeTruthy();
   });
 
   it("stays visible while a fired notice waits to be delivered", async () => {
@@ -122,7 +122,7 @@ describe("TerminalNotifyChip", () => {
 
     const chip = await screen.findByTestId("terminal-notify-chip");
     expect(chip.getAttribute("aria-label")).toBe(
-      "1 notice waiting to be delivered; Daintree may type a notice into this pane"
+      "1 notice waiting to be delivered; Daintree may type a notice into this terminal"
     );
   });
 

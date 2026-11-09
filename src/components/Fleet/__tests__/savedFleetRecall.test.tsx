@@ -192,7 +192,7 @@ describe("SavedFleetQuickRecall in Append mode counts only what it would add", (
       render(<SavedFleetQuickRecall mode="append" onManage={vi.fn()} onRecalled={vi.fn()} />);
       const chips = screen.getAllByTestId("fleet-picker-saved-fleet");
       expect(chips.map(chipName)).toEqual(["partly"]);
-      expect(chips[0]!.getAttribute("aria-label")).toMatch(/\b2 panes\b/);
+      expect(chips[0]!.getAttribute("aria-label")).toMatch(/\b2 terminals\b/);
     } finally {
       useFleetArmingStore.setState({ armedIds: new Set() });
     }
@@ -301,14 +301,14 @@ describe("SaveFleetDialog", () => {
 
   it("says only the panes armed here when no agent on another host is armed", () => {
     render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={2} />);
-    expect(typeHint()).toBe("The 2 panes armed now. Panes you close drop out of it.");
+    expect(typeHint()).toBe("The 2 terminals armed now. Terminals you close drop out of it.");
   });
 
   it("names the agent on another host a snapshot leaves out, beside the panes it keeps", () => {
     armRemote("t1", "studio-01");
     render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={2} />);
     expect(typeHint()).toBe(
-      "The 2 panes armed now. Panes you close drop out of it." +
+      "The 2 terminals armed now. Terminals you close drop out of it." +
         "Left out, since a snapshot can't hold agents on other hosts: Claude t1 on studio-01."
     );
   });
@@ -318,22 +318,22 @@ describe("SaveFleetDialog", () => {
     armRemote("t2", "studio-02");
     render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={0} />);
     expect(typeHint()).toBe(
-      "Only panes armed here go in a snapshot. Panes you close drop out of it." +
+      "Only terminals armed here go in a snapshot. Terminals you close drop out of it." +
         "Left out, since a snapshot can't hold agents on other hosts: " +
         "Claude t1 on studio-01 and Claude t2 on studio-02."
     );
     await submitNamed("Remote triage");
     expect(saveButton().getAttribute("aria-disabled")).toBe("true");
-    expect(saveBlockedBy()).toBe("Arm panes here to save a snapshot");
+    expect(saveBlockedBy()).toBe("Arm terminals here to save a snapshot");
     expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 
   it("with nothing armed anywhere, says what a snapshot holds and leaves no one out", () => {
     render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={0} />);
     expect(typeHint()).toBe(
-      "Only panes armed here go in a snapshot. Panes you close drop out of it."
+      "Only terminals armed here go in a snapshot. Terminals you close drop out of it."
     );
-    expect(saveBlockedBy()).toBe("Arm panes here to save a snapshot");
+    expect(saveBlockedBy()).toBe("Arm terminals here to save a snapshot");
   });
 
   it("counts the left-out agents past a few names rather than listing every one", () => {
@@ -374,6 +374,6 @@ describe("SaveFleetDialog", () => {
     act(() => armRemote("t1", "studio-01"));
     expect(typeHint()).toContain("Claude t1 on studio-01");
     act(() => useFleetArmingStore.getState().disarmCrossHostTarget("host-fleet:id-studio-01:t1"));
-    expect(typeHint()).toBe("The 1 pane armed now. Panes you close drop out of it.");
+    expect(typeHint()).toBe("The 1 terminal armed now. Terminals you close drop out of it.");
   });
 });

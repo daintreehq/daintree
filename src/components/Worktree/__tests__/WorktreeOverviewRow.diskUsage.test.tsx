@@ -139,7 +139,7 @@ describe("WorktreeOverviewColumnHeaders size ordering", () => {
     );
     expect(labels.map((el) => el.textContent)).toEqual([
       "Worktree",
-      "Sessions",
+      "Terminals",
       "Changes",
       "Active",
     ]);

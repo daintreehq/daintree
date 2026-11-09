@@ -28,7 +28,7 @@ import {
 import type { TerminalLifecycleActionRunId } from "./terminalLifecycleActions.impl";
 
 const RestartOnPresetResultSchema = z.object({
-  terminalId: z.string().describe("The pane, respawned in place."),
+  terminalId: z.string().describe("The panel, respawned in place."),
   agentPresetId: z.string().describe("Preset it now runs on."),
   agentSessionIdCleared: z
     .boolean()
@@ -132,12 +132,12 @@ export function registerTerminalLifecycleActions(
     id: "terminal.close",
     title: "Close panel",
     description:
-      "Close a panel of any kind, usually to the trash, where it stays briefly recoverable; remove-on-exit and dialog panels are discarded outright. Name the panel: the wrong one discards someone's work. An untracked panel is rejected; the result names what closed.",
+      "Close a terminal or any other panel, usually to the trash, where it stays briefly recoverable; remove-on-exit and dialog panels are discarded outright. Name the panel: the wrong one discards someone's work. An untracked panel is rejected; the result names what closed.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["trash", "hide", "dismiss", "remove"],
+    keywords: ["trash", "hide", "dismiss", "remove", "terminal"],
     argsSchema: z
       .object({
         terminalId: z
@@ -322,7 +322,7 @@ export function registerTerminalLifecycleActions(
     danger: "confirm",
     scope: "renderer",
     dangerRationale: "Permanently kills the PTY process. Scrollback and session state are lost.",
-    keywords: ["terminate", "stop", "remove", "delete"],
+    keywords: ["kill", "terminate", "stop", "remove", "delete"],
     argsSchema: z.object({
       terminalId: z.string().optional(),
       confirmed: z
@@ -452,7 +452,7 @@ export function registerTerminalLifecycleActions(
     palette: { mode: "hidden" },
     argsSchema: RestartOnAccountArgsSchema,
     resultSchema: z.object({
-      terminalId: z.string().describe("The pane, respawned in place."),
+      terminalId: z.string().describe("The panel, respawned in place."),
       agentAccountId: z
         .string()
         .nullable()
@@ -791,7 +791,7 @@ export function registerTerminalLifecycleActions(
     scope: "renderer",
     dangerRationale:
       "Permanently removes every user-facing panel. All scrollback and session state are lost.",
-    keywords: ["terminate", "stop", "remove", "delete"],
+    keywords: ["kill", "terminate", "stop", "remove", "delete"],
     argsSchema: z
       .object({
         confirmed: z

@@ -1759,6 +1759,26 @@ describe("ActionService.list() snapshot", () => {
 
     expect(entries).toMatchSnapshot();
   });
+
+  // The grid object is a panel (component-contract.md, "Wording"); "pane" was
+  // the fourth name it went by, and the manifest is what the palette and every
+  // MCP client read.
+  it("never calls the grid object a pane", async () => {
+    const { ActionService } = await import("../../ActionService");
+    const registry = await createActionRegistryWithRemoteHosts();
+    const service = new ActionService();
+    for (const [_key, factory] of registry) {
+      service.register(factory());
+    }
+    const offenders = service
+      .list()
+      .flatMap(({ id, title, description, dangerRationale }) =>
+        [title, description, dangerRationale]
+          .filter((text): text is string => typeof text === "string" && /\bpanes?\b/i.test(text))
+          .map((text) => `${id}: ${text}`)
+      );
+    expect(offenders).toEqual([]);
+  });
 });
 
 describe("main-process runners under the relay's drive rule (#13493)", () => {
