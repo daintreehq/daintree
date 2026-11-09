@@ -271,6 +271,21 @@ export async function handleDiscardGlobalAssistant(
   return globalAssistantView(instance);
 }
 
+/**
+ * Stop the launch the person watched start, keeping the conversation it was
+ * picking up. A launch that has become the run by now is left running.
+ */
+export async function handleCancelGlobalAssistantLaunch(
+  ctx: IpcContext,
+  expectedGeneration?: number
+): Promise<GlobalAssistantView> {
+  requireWindow(ctx);
+  const instance = service();
+  requireGeneration(instance, expectedGeneration);
+  await instance.cancelLaunch();
+  return globalAssistantView(instance);
+}
+
 const WindowGlobalAssistantPanelSchema = z.object({
   showing: z.boolean(),
   target: AgentDirectorySubjectSchema.nullable(),

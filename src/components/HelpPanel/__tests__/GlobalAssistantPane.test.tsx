@@ -137,6 +137,7 @@ function makeHelp(initial: GlobalAssistantView, attachmentId: string) {
     setGlobalAssistantInputEligible: vi.fn(async () => {}),
     restartGlobalAssistant: vi.fn(),
     discardGlobalAssistant: vi.fn(),
+    cancelGlobalAssistantLaunch: vi.fn(async () => viewOf()),
     onGlobalAssistantChanged: vi.fn((callback: (state: GlobalAssistantView) => void) => {
       listeners.add(callback);
       return () => listeners.delete(callback);
@@ -593,6 +594,79 @@ describe("GlobalAssistantPane (#14454)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Stop global assistant" }));
     await flush();
     expect(help.discardGlobalAssistant).toHaveBeenCalledWith(7);
+  });
+
+  describe("while it starts (#16603)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const cancelButton = () => screen.queryByRole("button", { name: "Cancel" });
+
+    it("offers Cancel once the wait runs long, and stops that launch without forgetting the conversation", async () => {
+      vi.useFakeTimers();
+      installHelp(viewOf({ phase: "launching", generation: 4, agentId: "claude" }));
+      renderPane();
+      await flush();
+      expect(cancelButton()).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      fireEvent.click(cancelButton()!);
+      await flush();
+      expect(help.cancelGlobalAssistantLaunch).toHaveBeenCalledWith(4);
+      expect(help.discardGlobalAssistant).not.toHaveBeenCalled();
+      expect(help.restartGlobalAssistant).not.toHaveBeenCalled();
+      expect(screen.getByTestId("help-global-start")).toBeTruthy();
+    });
+
+    it("says nothing went wrong when the launch it asked for is cancelled, but says why one failed", async () => {
+      installHelp(viewOf());
+      help.ensureGlobalAssistant.mockRejectedValueOnce(
+        new Error("[AppError|CANCELLED] The global assistant was stopped while starting.")
+      );
+      renderPane();
+      await flush();
+      fireEvent.click(screen.getByTestId("help-global-start"));
+      await flush();
+      expect(screen.queryByText(/stopped while starting|didn't start/)).toBeNull();
+      expect(screen.getByTestId("help-global-start")).toBeTruthy();
+
+      help.ensureGlobalAssistant.mockRejectedValueOnce(
+        refusedBy("INTERNAL", "Its agent couldn't be found.")
+      );
+      fireEvent.click(screen.getByTestId("help-global-start"));
+      await flush();
+      expect(screen.getByText("Its agent couldn't be found.")).toBeTruthy();
+    });
+
+    it("offers Start again once a launch is cancelled anywhere, before that launch has wound down", async () => {
+      installHelp(viewOf({ generation: 2 }));
+      const first = holdNext(help.ensureGlobalAssistant);
+      renderPane();
+      await flush();
+      const startButton = () => screen.getByTestId("help-global-start") as HTMLButtonElement;
+      fireEvent.click(startButton());
+      await flush();
+      expect(startButton().disabled).toBe(true);
+      push(viewOf({ phase: "launching", generation: 2, agentId: "claude" }));
+      expect(screen.queryByTestId("help-global-start")).toBeNull();
+
+      // Cancelled from another window: main moves on while this Start is still answering.
+      push(viewOf({ generation: 3 }));
+      expect(startButton().disabled).toBe(false);
+      fireEvent.click(startButton());
+      await flush();
+      expect(help.ensureGlobalAssistant).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId("global-terminal")).toBeTruthy();
+
+      await first.refuse(
+        new Error("[AppError|CANCELLED] The global assistant was stopped while starting.")
+      );
+      expect(screen.queryByText(/stopped while starting|didn't start/)).toBeNull();
+      expect(screen.getByTestId("global-terminal")).toBeTruthy();
+    });
   });
 
   describe("a refused send or key (#14977)", () => {

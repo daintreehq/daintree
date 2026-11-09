@@ -695,6 +695,7 @@ export const CHANNELS = {
   HELP_GLOBAL_ASSISTANT_INPUT_ELIGIBLE: "help:global-assistant-input-eligible",
   HELP_GLOBAL_ASSISTANT_RESTART: "help:global-assistant-restart",
   HELP_GLOBAL_ASSISTANT_DISCARD: "help:global-assistant-discard",
+  HELP_GLOBAL_ASSISTANT_CANCEL_LAUNCH: "help:global-assistant-cancel-launch",
   HELP_GLOBAL_ASSISTANT_CHANGED: "help:global-assistant-changed",
   HELP_WINDOW_GLOBAL_ASSISTANT_PANEL: "help:window-global-assistant-panel",
   HELP_REPORT_WINDOW_GLOBAL_ASSISTANT_PANEL: "help:report-window-global-assistant-panel",

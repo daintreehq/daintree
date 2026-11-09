@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GlobalAssistantView } from "@shared/types/ipc/help";
+import { clientErrorCode, isClientAppError } from "@/utils/clientAppError";
 import { logWarn } from "@/utils/logger";
 
 export interface GlobalAssistantHandle {
@@ -18,6 +19,8 @@ export interface GlobalAssistantHandle {
   restart: (generation: number) => Promise<boolean>;
   /** End the run the person confirmed and forget its conversation. */
   discard: (generation: number) => Promise<boolean>;
+  /** Stop the launch the person watched start; the conversation it was picking up is kept. */
+  cancelLaunch: (generation: number) => Promise<boolean>;
 }
 
 /**
@@ -38,6 +41,8 @@ function runOf(view: GlobalAssistantView | null): string | null {
 }
 
 function messageOf(error: unknown, fallback: string): string {
+  // A refusal from main arrives packed into its message; decoding it puts its words back.
+  if (isClientAppError(error) && error.userMessage) return error.userMessage;
   if (
     typeof error === "object" &&
     error !== null &&
@@ -177,6 +182,9 @@ export function useGlobalAssistant(
         setView(await action());
         return true;
       } catch (err) {
+        // Stopped while starting, by a person here or in another window, or by
+        // quitting: nothing went wrong, and the state main sends says so.
+        if (clientErrorCode(err) === "CANCELLED") return false;
         logWarn("[GlobalAssistant] action failed", { error: err });
         setError(messageOf(err, fallback));
         return false;
@@ -217,6 +225,15 @@ export function useGlobalAssistant(
     [run]
   );
 
+  const cancelLaunch = useCallback(
+    (generation: number) =>
+      run(
+        () => window.electron.help.cancelGlobalAssistantLaunch(generation),
+        "Daintree couldn't stop the global assistant from starting."
+      ),
+    [run]
+  );
+
   // Held by another surface of this view, it is this window's already: taken
   // without asking, as typing here is all the person can do in it now.
   const inputOwner = view?.inputOwner ?? null;
@@ -234,5 +251,15 @@ export function useGlobalAssistant(
 
   const clearError = useCallback(() => setError(null), []);
 
-  return { view, attachmentId, error, clearError, start, claimInput, restart, discard };
+  return {
+    view,
+    attachmentId,
+    error,
+    clearError,
+    start,
+    claimInput,
+    restart,
+    discard,
+    cancelLaunch,
+  };
 }
