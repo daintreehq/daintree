@@ -837,19 +837,25 @@ function HintChip({
   );
 }
 
-// Width-priority drop classes for secondary chips, matched by index from the
-// trailing edge. Index 0 is the rightmost chip (drops first), index 1 is the
-// next-to-rightmost, etc. Tailwind needs each variant present in source for the
-// JIT compiler — keep as a static array.
+// Width-priority drop classes for secondary chips: one row per number of
+// secondaries the footer carries, then matched by index from the trailing edge.
+// Index 0 is the rightmost chip (drops first), index 1 the next-to-rightmost,
+// etc. Tailwind needs each variant present in source for the JIT compiler —
+// keep as static strings.
 //
 // Sized for the widest chips: Windows and Linux spell keys out ("Shift + F10",
-// "Backspace"), and the worktree overview's three "to …" chips need about 530px.
-// Every surface that carries secondaries opens at least 584px wide, so these
-// only bite in a narrower Linux window, where a tiling manager may size it.
-const SECONDARY_DROP_CLASSES = [
-  "@max-[560px]/palette-footer:hidden",
-  "@max-[380px]/palette-footer:hidden",
-  "@max-[260px]/palette-footer:hidden",
+// "Backspace"), and the worktree overview's three "to …" chips need about 530px,
+// while one chip beside the primary fits in about 320px. Every surface that
+// carries secondaries opens at least 580px wide, so these only bite in a
+// narrower Linux window, where a tiling manager may size it.
+const SECONDARY_DROP_CLASSES: readonly (readonly string[])[] = [
+  ["@max-[380px]/palette-footer:hidden"],
+  ["@max-[420px]/palette-footer:hidden", "@max-[260px]/palette-footer:hidden"],
+  [
+    "@max-[560px]/palette-footer:hidden",
+    "@max-[380px]/palette-footer:hidden",
+    "@max-[260px]/palette-footer:hidden",
+  ],
 ];
 
 /**
@@ -875,10 +881,10 @@ export function PaletteFooterHints({ primaryHint, hints = [] }: PaletteFooterHin
           {hints.map((hint, i) => {
             // Map render index → drop priority: rightmost chip (last in array) gets
             // index 0 from the trailing edge, hiding first. Clamp to the table.
+            const row =
+              SECONDARY_DROP_CLASSES[Math.min(hints.length, SECONDARY_DROP_CLASSES.length) - 1]!;
             const fromEnd = hints.length - 1 - i;
-            const dropClass =
-              SECONDARY_DROP_CLASSES[fromEnd] ??
-              SECONDARY_DROP_CLASSES[SECONDARY_DROP_CLASSES.length - 1]!;
+            const dropClass = row[fromEnd] ?? row[row.length - 1]!;
             return <HintChip key={`${i}-${hint.label}`} hint={hint} className={dropClass} />;
           })}
         </div>

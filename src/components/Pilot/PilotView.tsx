@@ -750,7 +750,7 @@ function PilotFooter({
   onShowSummary: (() => void) | null;
 }) {
   return (
-    <div className="flex w-full items-center justify-between gap-3">
+    <div className="@container/pilot-footer flex w-full items-center justify-between gap-3">
       <div className="-ml-1 flex min-w-0 items-center gap-2">
         {actionLabel !== null && (
           <PilotFooterHint
@@ -769,12 +769,16 @@ function PilotFooter({
           />
         )}
         {drillLabel !== null && (
-          <PilotFooterHint
-            keys={PILOT_DRILL_COMBO}
-            label={drillLabel}
-            onClick={onDrill}
-            testId="pilot-drill-hint"
-          />
+          // First to go in a narrow window, where three spelled-out chords no
+          // longer fit beside the summary: the heading still drills by mouse.
+          <span className="contents @max-[520px]/pilot-footer:hidden">
+            <PilotFooterHint
+              keys={PILOT_DRILL_COMBO}
+              label={drillLabel}
+              onClick={onDrill}
+              testId="pilot-drill-hint"
+            />
+          </span>
         )}
       </div>
       {summary &&

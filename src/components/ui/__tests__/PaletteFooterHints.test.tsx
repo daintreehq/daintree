@@ -126,4 +126,20 @@ describe("PaletteFooterHints", () => {
     // The variants query the wrapper by name; without it none would ever fire.
     expect((container.firstChild as HTMLElement).className).toMatch(/@container\/palette-footer\b/);
   });
+
+  it("keeps a lone secondary longer than the last of a crowded row", () => {
+    const secondaries = [
+      { keys: "Space", label: "to select" },
+      { keys: "F2", label: "to browse sessions" },
+      { keys: "Shift+F10", label: "to open actions" },
+    ];
+    const primaryHint = { keys: "Enter", label: "to switch" };
+    render(<PaletteFooterHints primaryHint={primaryHint} hints={secondaries} />);
+    const crowded = dropWidthOf("to open actions");
+    cleanup();
+    render(<PaletteFooterHints primaryHint={primaryHint} hints={secondaries.slice(2)} />);
+    // One chip beside the primary needs far less room than three, so it should
+    // not drop at the width that sheds the third of three.
+    expect(dropWidthOf("to open actions")).toBeLessThan(crowded);
+  });
 });
