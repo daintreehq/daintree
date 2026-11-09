@@ -16,6 +16,7 @@ const addAgentMock = vi.hoisted(() => vi.fn(() => ({ success: true })));
 const updateAgentMock = vi.hoisted(() => vi.fn(() => ({ success: true })));
 const removeAgentMock = vi.hoisted(() => vi.fn(() => ({ success: true })));
 const reloadMock = vi.hoisted(() => vi.fn());
+const invalidateStoreValueCacheMock = vi.hoisted(() => vi.fn());
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const createApplicationMenuMock = vi.hoisted(() => vi.fn());
 const eventsEmitMock = vi.hoisted(() => vi.fn());
@@ -26,6 +27,7 @@ vi.mock("electron", () => ({
 
 vi.mock("../../../store.js", () => ({
   store: storeMock,
+  invalidateStoreValueCache: invalidateStoreValueCacheMock,
 }));
 
 vi.mock("../../../services/AgentHelpService.js", () => ({
@@ -443,7 +445,10 @@ describe("APP_RELOAD_CONFIG handler", () => {
     const handler = getInvokeHandler(CHANNELS.APP_RELOAD_CONFIG);
     const result = await handler();
 
-    expect(reloadMock).toHaveBeenCalled();
+    expect(invalidateStoreValueCacheMock).toHaveBeenCalledTimes(1);
+    expect(invalidateStoreValueCacheMock.mock.invocationCallOrder[0]).toBeLessThan(
+      reloadMock.mock.invocationCallOrder[0]
+    );
     expect(createApplicationMenuMock).toHaveBeenCalledWith(mainWindow, cliAvailabilityService);
     expect(eventsEmitMock).toHaveBeenCalledWith("sys:config:reload");
     expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.APP_CONFIG_RELOADED);

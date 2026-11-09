@@ -1,6 +1,6 @@
 // eager-import-allow: reads AI provider settings via store.get synchronously in the IPC handler
 import { CHANNELS } from "../channels.js";
-import { store } from "../../store.js";
+import { invalidateStoreValueCache, store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import {
   DEFAULT_AGENT_SETTINGS,
@@ -306,6 +306,9 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
   );
 
   const handleReloadConfig = async () => {
+    // Pick up edits made outside the app: the store serves a cached snapshot,
+    // and the next write would otherwise save that snapshot over them.
+    invalidateStoreValueCache();
     userAgentRegistryService.reload();
 
     if (deps.mainWindow && !deps.mainWindow.isDestroyed()) {
