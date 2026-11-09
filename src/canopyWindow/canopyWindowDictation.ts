@@ -37,7 +37,9 @@ async function runDictationKey(actionId: DictationKey): Promise<void> {
  * a held key's release and the words main sends back.
  */
 export function startCanopyWindowDictation(): () => void {
-  // Started once per renderer and torn down with its module, as in a project window.
+  // Started once per renderer and torn down with its module, as in a project
+  // window. Its keydown listener goes first, so a press is on record before the
+  // start below claims it for a hold.
   voiceRecordingService.initialize();
   // Stop-and-send takes its key only while there is a dictation or a send to stop.
   keybindingService.setWhenContextProvider(buildKeybindingWhenContext);

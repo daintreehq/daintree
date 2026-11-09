@@ -4,6 +4,8 @@ import { act, cleanup, render } from "@testing-library/react";
 import type { CanopyPendingPopOut, CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { CanopyFrame } from "@/components/Canopy/canopyFrame";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { NO_CANOPY_REPLY } from "@/services/canopyReplyDictation";
 
 const stops = vi.hoisted(() => ({
   terminalConfig: vi.fn(),
@@ -234,6 +236,31 @@ describe("CanopyWindowRoot", () => {
 
     act(() => usePluginHostedViewsStore.setState({ views: [] }));
     expect(view.queryByTestId("plugin-support")).toBeNull();
+  });
+
+  it("says why the dictation key started nothing, as the voice service tells it", async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    try {
+      const view = render(<CanopyWindowRoot />);
+      await act(async () => {});
+
+      act(() => useVoiceRecordingStore.getState().announce(NO_CANOPY_REPLY.message));
+      act(() => {
+        for (const frame of frames.splice(0)) frame(performance.now());
+      });
+
+      const said = Array.from(view.baseElement.querySelectorAll('[role="status"]')).map(
+        (region) => region.textContent
+      );
+      expect(said).toContain(NO_CANOPY_REPLY.message);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("stops everything it started when it goes", async () => {
