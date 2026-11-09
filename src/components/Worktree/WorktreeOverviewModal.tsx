@@ -908,11 +908,11 @@ export function WorktreeOverviewModal({
           ) : filteredWorktrees.length > 0 ? (
             <AppPaletteDialog.Footer className="shrink-0">
               <PaletteFooterHints
-                primaryHint={{ keys: ["↵"], label: "to switch" }}
+                primaryHint={{ keys: "Enter", label: "to switch" }}
                 hints={[
-                  { keys: ["Space"], label: "select" },
-                  { keys: ["F2"], label: "sessions" },
-                  { keys: ["⇧", "F10"], label: "actions" },
+                  { keys: "Space", label: "to select" },
+                  { keys: "F2", label: "to browse sessions" },
+                  { keys: "Shift+F10", label: "to open actions" },
                 ]}
               />
             </AppPaletteDialog.Footer>

@@ -239,7 +239,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       if (!scheme) return null;
       const onSaved = scheme.id === savedScheme?.id;
       const primaryHint = {
-        keys: ["↵"],
+        keys: "Enter",
         label: onSaved ? `to keep ${scheme.name}` : `to switch to ${scheme.name}`,
       };
       // Secondary chips never shrink, so an imported theme's long name is
@@ -247,10 +247,10 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       const savedName = savedScheme ? clampName(savedScheme.name) : null;
       const hints: PaletteFooterHint[] = [];
       if (query !== "") {
-        hints.push({ keys: ["Esc"], label: "to clear search" });
-        if (!onSaved && savedName) hints.push({ keys: [], label: `Saved: ${savedName}` });
+        hints.push({ keys: "Escape", label: "to clear search" });
+        if (!onSaved && savedName) hints.push({ label: `Saved: ${savedName}` });
       } else if (!onSaved && savedName) {
-        hints.push({ keys: ["Esc"], label: `to go back to ${savedName}` });
+        hints.push({ keys: "Escape", label: `to go back to ${savedName}` });
       }
       return <PaletteFooterHints primaryHint={primaryHint} hints={hints} />;
     },

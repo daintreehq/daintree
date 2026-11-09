@@ -395,6 +395,9 @@ describe("HostSwitcherPalette", () => {
       localSummary: null,
     };
     openPalette();
+    // The footer teaches the chord the keydown takes, in this platform's keys.
+    const chip = screen.getByText("to open in a new window").parentElement!;
+    expect(Array.from(chip.querySelectorAll("kbd"), (kbd) => kbd.textContent)).toEqual(["⌘", "⏎"]);
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", metaKey: true });
     await waitFor(() =>
       expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: true })

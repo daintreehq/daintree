@@ -367,7 +367,7 @@ export function ChordIndicator() {
             band out of the glass. */}
         {results[selectedIndex]?.enabled === true && (
           <div className="border-t border-[var(--border-overlay)] px-4 py-2 text-xs text-text-secondary select-none">
-            <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to run command" }} />
+            <PaletteFooterHints primaryHint={{ keys: "Enter", label: "to run command" }} />
           </div>
         )}
       </div>

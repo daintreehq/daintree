@@ -371,7 +371,7 @@ export function PanelPalette({
       </AppPaletteDialog.Body>
 
       <AppPaletteDialog.Footer>
-        {enterLabel && <PaletteFooterHints primaryHint={{ keys: ["↵"], label: enterLabel }} />}
+        {enterLabel && <PaletteFooterHints primaryHint={{ keys: "Enter", label: enterLabel }} />}
       </AppPaletteDialog.Footer>
     </AppPaletteDialog>
   );

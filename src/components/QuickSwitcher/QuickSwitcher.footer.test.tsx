@@ -269,7 +269,9 @@ describe("QuickSwitcher plugin search scope", () => {
       enterScope,
       selectNext,
     });
-    expect(screen.getByText("to search Notes")).toBeTruthy();
+    // jsdom reports no Mac platform, so Tab is spelled out rather than drawn ⇥.
+    const chip = screen.getByText("to search Notes").parentElement!;
+    expect(Array.from(chip.querySelectorAll("kbd"), (kbd) => kbd.textContent)).toEqual(["Tab"]);
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" });
     expect(enterScope).toHaveBeenCalledWith("acme.notes.notes");
     expect(selectNext).not.toHaveBeenCalled();
@@ -321,6 +323,10 @@ describe("QuickSwitcher plugin search scope", () => {
     renderScoped({ scopedProvider: notesProvider, scopedStatus: "done", exitScope, close });
     const input = screen.getByRole("combobox") as HTMLInputElement;
     expect(input.placeholder).toBe("Search Notes…");
+    const chip = screen.getByText("to search everything").parentElement!;
+    expect(Array.from(chip.querySelectorAll("kbd"), (kbd) => kbd.textContent)).toEqual([
+      "Backspace",
+    ]);
 
     fireEvent.keyDown(input, { key: "Backspace" });
     expect(exitScope).toHaveBeenCalledTimes(1);

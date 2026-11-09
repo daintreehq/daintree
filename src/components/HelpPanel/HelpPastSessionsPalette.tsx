@@ -358,7 +358,7 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
       footer={
         // Only while Enter retries: beside rows it resumes, as it always has.
         enterRetries ? (
-          <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to retry" }} />
+          <PaletteFooterHints primaryHint={{ keys: "Enter", label: "to retry" }} />
         ) : undefined
       }
     />

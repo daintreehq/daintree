@@ -7,16 +7,11 @@ import { QuickSwitcherItem } from "./QuickSwitcherItem";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { UI_PALETTE_EXIT_DURATION } from "@/lib/animationUtils";
-import { parseChord } from "@/lib/kbdShortcut";
-import { isMac } from "@/lib/platform";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type {
   QuickSwitcherItem as QuickSwitcherItemData,
   UseQuickSwitcherReturn,
 } from "@/hooks/useQuickSwitcher";
-
-// "⌫" on macOS, "Backspace" elsewhere: the platform can't change under a running renderer.
-const BACKSPACE_KEYS = parseChord("Backspace", isMac())[0] ?? [];
 
 function getQuickSwitcherActionLabel(item: QuickSwitcherItemData): string {
   switch (item.type) {
@@ -87,16 +82,14 @@ export function QuickSwitcher({
   // While the query spells a provider's keyword, the footer says Tab scopes to
   // it — the one place the keyword grammar is taught.
   const keywordHint = useMemo(
-    () => (keywordProvider ? { keys: ["Tab"], label: `to search ${keywordProvider.title}` } : null),
+    () => (keywordProvider ? { keys: "Tab", label: `to search ${keywordProvider.title}` } : null),
     [keywordProvider]
   );
   // Inside a scope the way back is Backspace on an empty field, said where the
   // Tab that got the user in was taught.
   const scopeExitHint = useMemo(
     () =>
-      scopedProvider && query === ""
-        ? { keys: BACKSPACE_KEYS, label: "to search everything" }
-        : null,
+      scopedProvider && query === "" ? { keys: "Backspace", label: "to search everything" } : null,
     [scopedProvider, query]
   );
   const secondaryHint = keywordHint ?? scopeExitHint;
@@ -107,7 +100,7 @@ export function QuickSwitcher({
         <div id={footerHintId} className="w-full">
           {item ? (
             <PaletteFooterHints
-              primaryHint={{ keys: ["↵"], label: getQuickSwitcherActionLabel(item) }}
+              primaryHint={{ keys: "Enter", label: getQuickSwitcherActionLabel(item) }}
               hints={secondaryHint ? [secondaryHint] : []}
             />
           ) : (

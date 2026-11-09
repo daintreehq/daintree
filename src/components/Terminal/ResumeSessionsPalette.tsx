@@ -634,12 +634,12 @@ export function ResumeSessionsPalette() {
             screen — empty, no match, every worktree gone — the band would be
             promising an action, and the footer primitive drops itself. */}
         {!selected && loadFailed && !isLoading && results.length === 0 && (
-          <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to retry" }} />
+          <PaletteFooterHints primaryHint={{ keys: "Enter", label: "to retry" }} />
         )}
         {selected && (
           <PaletteFooterHints
             primaryHint={{
-              keys: ["↵"],
+              keys: "Enter",
               // The title keeps its own case: these are sentences with names in
               // them, not the noun a sibling palette lowercases.
               label: `to resume ${selected.title}`,

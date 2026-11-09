@@ -223,7 +223,11 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
         // Nothing to name when the list is empty: Enter has no row to act on.
         palette.results.length > 0 || palette.isPending ? (
           <PaletteFooterHints
-            primaryHint={{ keys: ["↵"], label: palette.isPending ? "creating…" : "to create" }}
+            primaryHint={
+              // Enter does nothing while a create is in flight, so the chip
+              // states progress instead of naming the key.
+              palette.isPending ? { label: "Creating…" } : { keys: "Enter", label: "to create" }
+            }
           />
         ) : null
       }

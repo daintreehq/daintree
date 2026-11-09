@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LOCAL_HOST_ID, type HostRecentUse } from "@shared/types/remoteHosts";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
-import { isMac } from "@/lib/platform";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
@@ -41,7 +40,7 @@ function footerFor(row: HostMenuRow | null) {
   return (
     <PaletteFooterHints
       primaryHint={{
-        keys: ["↵"],
+        keys: "Enter",
         label: isStayingPut(row)
           ? "to stay here"
           : row.isCurrent
@@ -50,7 +49,7 @@ function footerFor(row: HostMenuRow | null) {
               ? "to connect and switch"
               : "to switch",
       }}
-      hints={[{ keys: [isMac() ? "⌘" : "Ctrl", "↵"], label: "in a new window" }]}
+      hints={[{ keys: "Cmd+Enter", label: "to open in a new window" }]}
     />
   );
 }
