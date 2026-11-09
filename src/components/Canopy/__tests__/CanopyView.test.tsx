@@ -757,7 +757,7 @@ describe("CanopyView", () => {
     expect(listWidth()).toBe("600px");
   });
 
-  it("closes from the pitch with reading still off, and shows the pitch on the next opening", async () => {
+  it("leaves reading off when the window closes on the pitch, and shows it on the next opening", async () => {
     const off = { ...canopySnapshot, mode: "unset" as const, activated: false };
     const canopy = installElectron(off);
     useCanopyStore.setState({ snapshot: off, mode: "unset" });

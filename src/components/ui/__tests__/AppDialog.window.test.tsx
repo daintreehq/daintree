@@ -5,6 +5,7 @@ import { AppDialog, AppDialogWindowChrome, type DialogPlacement } from "../AppDi
 import { _resetForTests } from "@/lib/escapeStack";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 import { UI_ENTER_EASING, UI_EXIT_EASING } from "@/lib/animationUtils";
+import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 
 const PORTAL_WIDTH = 320;
 
@@ -320,7 +321,10 @@ describe("AppDialogWindowChrome", () => {
       </AppDialogWindowChrome>
     );
     expect(header().className).toContain("dialog-window-header");
-    expect(header().style.paddingRight).not.toBe("");
+    // Its controls stay clear of the caption buttons, the window's own close among them.
+    expect(Number.parseInt(header().style.paddingRight, 10)).toBeGreaterThanOrEqual(
+      WINDOWS_CAPTION_WIDTH_PX
+    );
     // Nothing here closes the window: a close button composed in anyway says so.
     const close = screen.getByRole<HTMLButtonElement>("button", { name: "Close dialog" });
     expect(close.disabled).toBe(true);

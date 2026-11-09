@@ -719,7 +719,13 @@ test.describe("Core: Settings", () => {
         await expect(inbox.locator("[data-canopy-standalone]")).toBeVisible();
         await expect(canopyDialog).toHaveCount(0);
         await expect(owned).toHaveAttribute("data-presses", "0");
-        await inbox.getByRole("button", { name: "Close Daintree Canopy", exact: true }).click();
+        // Its header draws no close of its own: the window closes as its OS control does.
+        const closing = await ctx.app.evaluate(({ BrowserWindow }) => {
+          const canopy = BrowserWindow.getAllWindows().find((win) => win.getTitle() === "Canopy");
+          canopy?.close();
+          return canopy !== undefined;
+        });
+        expect(closing, "the Canopy window is found by its title").toBe(true);
         await expect.poll(() => inbox?.isClosed(), { timeout: T_SHORT }).toBe(true);
         await window.bringToFront();
 
