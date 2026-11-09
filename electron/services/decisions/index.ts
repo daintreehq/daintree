@@ -4,7 +4,9 @@ import { hostname } from "node:os";
 import { basename, dirname } from "node:path";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
-import { broadcastToProjectRenderers } from "../../ipc/utils.js";
+import { broadcastToProjectRenderers, broadcastToRenderer } from "../../ipc/utils.js";
+import type { MainProcessToastPayload } from "../../../shared/types/ipc/maps.js";
+import { isDiskSpaceFault } from "./storageRecovery.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import {
   getDecisionsHostsPort,
@@ -339,6 +341,47 @@ function sendStatus(status: DecisionsStatus): void {
   sendToLocalViews("decisions:status-changed", status);
 }
 
+/** The person was told Decisions stopped for storage; cleared once it connects or turns off (#16605). */
+let storageOutageNoticed = false;
+
+/**
+ * Agents lose `ask_human` while Decisions is stopped for storage, and nothing
+ * outside Settings showed it (#16605): the first time it stops for that, a
+ * warning says so, once, until it connects again or turns off.
+ */
+function noticeStorageOutage(running: DecisionsService, status: DecisionsStatus): void {
+  if (status.state === "connected" || status.state === "off") {
+    storageOutageNoticed = false;
+    return;
+  }
+  if (shutDown || storageOutageNoticed) return;
+  if (status.state !== "not-connected" || status.problem !== "storage") return;
+  storageOutageNoticed = true;
+  const forSpace = isDiskSpaceFault(running.getStore()?.faultReason() ?? null);
+  const toast: MainProcessToastPayload = {
+    type: "warning",
+    title: "Decisions disconnected",
+    message: forSpace
+      ? "The local Decisions database stopped accepting writes while disk space ran low, so agents can't ask you questions through Decisions. It reconnects by itself once there is space again."
+      : "The local Decisions database isn't accepting writes, so agents can't ask you questions through Decisions. Turn Decisions off and on in Settings to try again.",
+    rateLimitKey: "decisions-storage",
+    rateLimitLabel: "Decisions",
+    replaceKey: "decisions-storage",
+  };
+  try {
+    broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, toast);
+  } catch (error) {
+    console.warn("[Decisions] The storage warning couldn't be shown:", error);
+  }
+}
+
+/** Reads free space now: whether there is room to write again, null when it couldn't be read. */
+async function checkDiskSpace(): Promise<boolean | null> {
+  const { checkDiskSpaceNow } = await import("../DiskSpaceMonitor.js");
+  const status = await checkDiskSpaceNow();
+  return status === null ? null : !status.writesSuppressed;
+}
+
 /**
  * The relay's devices changed (#16010): a device was revoked or the key
  * rotated, here or as the ledger reports it. Settings reads the list again;
@@ -532,10 +575,12 @@ export function getDecisionsService(): Promise<DecisionsService> {
         onDevicesChanged: publishDevicesChanged,
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
+        checkDiskSpace,
       });
       next.onStatusChanged((event) => {
         // A Host enrolls no Hosts: only an owner's lifetime does.
         hostEnrollerFollows(next.getRole() === "host" ? "off" : event.status.state);
+        noticeStorageOutage(next, event.status);
         publishStatus();
         publishHostRuntime();
       });
@@ -549,6 +594,15 @@ export function getDecisionsService(): Promise<DecisionsService> {
     });
   }
   return creating;
+}
+
+/**
+ * Disk space is no longer critical (#16605): a store that stopped for it is
+ * replaced and its connection made again. Never makes or starts the service.
+ */
+export async function decisionsDiskSpaceRecovered(): Promise<void> {
+  if (shutDown) return;
+  await (await settledService())?.diskSpaceRecovered();
 }
 
 async function settledService(): Promise<DecisionsService | null> {
@@ -2305,6 +2359,7 @@ export function _resetDecisionsForTesting(): void {
   transitions = Promise.resolve();
   statusRevision = 0;
   statusPushes = Promise.resolve();
+  storageOutageNoticed = false;
   policyRevision = 0;
   modelRevision = 0;
   hostEnroller.dispose();

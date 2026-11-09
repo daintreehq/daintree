@@ -11,7 +11,7 @@ import type { AnswerDelivery, AnswerDeliveryDeps } from "./answerDelivery.js";
 import { createWorktreeAttachmentResolver } from "./attachmentResolver.js";
 import { DecisionsAttachments } from "./attachmentSpool.js";
 import { readHandledAnswers, withoutHandled, type HandledAnswers } from "./attentionList.js";
-import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
+import type { DaintreeLocalStore, DecisionsStoreUnavailableReason } from "./daintreeLocalStore.js";
 import {
   DecisionModelRuntime,
   decisionModelFiles,
@@ -47,6 +47,9 @@ import {
 } from "./relayConnection.js";
 import type { SetupDiagnostics } from "./setupDiagnostic.js";
 import { createTrustedPolicy } from "./workflowGates.js";
+import { isDiskSpaceFault, StorageRecovery } from "./storageRecovery.js";
+import { getWritesSuppressed } from "../diskPressureState.js";
+import { logInfo, logWarn } from "../../utils/logger.js";
 
 export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
 
@@ -169,6 +172,12 @@ export interface DecisionsServiceOptions {
   onModelChanged?: () => void;
   /** Deletes the model's files with none running; the model package's files unless a test says otherwise. */
   deleteModelFiles?: (files: DecisionModelFiles) => Promise<void>;
+  /**
+   * Reads free space now (#16605): true when there is room to write again,
+   * false while space is critical, null when it couldn't be read. A store
+   * that ran out of room is replaced after it says so.
+   */
+  checkDiskSpace?: () => Promise<boolean | null>;
 }
 
 /**
@@ -228,6 +237,11 @@ export class DecisionsService {
   /** Feeds the panes' state from the lifetime's store, for as long as it is open. */
   private feed: QuestionRowsFeed | null = null;
   private offCommit: (() => void) | null = null;
+  private offFault: (() => void) | null = null;
+  /** When the attached store stopped writing; null while it writes. */
+  private faultedAt: number | null = null;
+  /** Replaces a store the database ran out of room for (#16605). */
+  private readonly storageRecovery: StorageRecovery;
   /** Connections stopped but still settling: the store closes only after them. */
   private readonly stopping = new Set<Promise<void>>();
   /**
@@ -294,6 +308,11 @@ export class DecisionsService {
     this.modelOptions = options.model;
     this.onModelChanged = options.onModelChanged ?? (() => {});
     this.deleteModelFiles = options.deleteModelFiles ?? deleteDecisionModelFiles;
+    const checkDiskSpace = options.checkDiskSpace ?? (async () => null);
+    this.storageRecovery = new StorageRecovery({
+      checkDiskSpace,
+      restart: () => this.restartStore(),
+    });
   }
 
   getStatus(): DecisionsStatus {
@@ -524,6 +543,69 @@ export class DecisionsService {
   }
 
   /**
+   * Disk space is no longer critical (#16605): a store that stopped for disk
+   * space is replaced. Resolves true when it was.
+   */
+  diskSpaceRecovered(): Promise<boolean> {
+    return this.restartStore();
+  }
+
+  /**
+   * Replaces the lifetime's store, and everything bound to it, once it has
+   * stopped for disk space and writes are allowed again (#16605): as turning
+   * Decisions off and on would, without showing it off meanwhile. The old
+   * store never writes again, so a library step it refused can't be recorded
+   * as done after it; the fresh one reads on from the last commit, and the
+   * connection that stopped on the old one is made again. The settings,
+   * role, policy and keys carry on, and the panes keep what they show until
+   * the fresh store's first read replaces it. True when it was replaced.
+   */
+  private restartStore(): Promise<boolean> {
+    return this.enqueue(async () => {
+      const store = this.store;
+      const reason = store?.faultReason() ?? null;
+      if (this.disposed || this.settings === null || store === null) return false;
+      if (!isDiskSpaceFault(reason) || getWritesSuppressed()) return false;
+      const keyFilePath = this.keyFilePath();
+      logInfo("[Decisions] Opening a fresh local store after it stopped for disk space", {
+        reason,
+        ...(this.faultedAt !== null ? { stoppedForMs: Date.now() - this.faultedAt } : {}),
+      });
+      this.dropConnection();
+      // With no store attached, nothing connects or makes a model on the old one meanwhile.
+      this.detachStore();
+      // An answer being typed settles before the store stops taking its result.
+      await this.settledConnections();
+      await this.questionsClosing;
+      await this.closeAttachments();
+      await this.closePhoneImages();
+      await this.closeModel();
+      await store.close();
+      if (this.disposed || this.settings === null) return false;
+      let opened: DaintreeLocalStore | null;
+      try {
+        opened = await this.openStore(() => this.disposed);
+      } catch (error) {
+        this.storeFailed = true;
+        logWarn("[Decisions] The local store didn't reopen after disk space came back", {
+          error: error instanceof Error ? error.name : "error",
+        });
+        this.reconcileConnection();
+        return false;
+      }
+      if (this.disposed) {
+        await opened?.close();
+        return false;
+      }
+      this.storeFailed = false;
+      await this.adoptStore(opened, keyFilePath);
+      this.applyModel();
+      this.reconcileConnection();
+      return opened !== null;
+    });
+  }
+
+  /**
    * Begins, or carries on, an enabled lifetime with these settings, as
    * `role`. Settings that are off start nothing. A lifetime of the other role
    * ends first, as a stop would. Rejects when the store can't be opened; the
@@ -692,6 +774,7 @@ export class DecisionsService {
   /** App shutdown: ends the lifetime for good, and no later start is honoured. */
   dispose(): Promise<void> {
     this.disposed = true;
+    this.storageRecovery.dispose();
     return this.enqueue(async () => {
       await this.release(false);
       this.listeners.clear();
@@ -917,15 +1000,31 @@ export class DecisionsService {
   /** Makes `opened` the lifetime's store, and shows each pane what it holds before anything new arrives. */
   private async adoptStore(opened: DaintreeLocalStore | null, keyFilePath: string): Promise<void> {
     this.store = opened;
+    this.faultedAt = null;
     if (opened) {
+      this.offFault = opened.onFault((reason) => this.storeFaulted(opened, reason));
       this.openAttachments(opened, keyFilePath);
       this.openPhoneImages(opened, keyFilePath);
     }
     await this.feedFrom(opened);
   }
 
+  /**
+   * The attached store stopped writing. One that ran out of room is replaced
+   * once there is room; while space is critical, the disk-space monitor's
+   * exit replaces it (`diskSpaceRecovered`). Any other fault stays until the
+   * next start.
+   */
+  private storeFaulted(store: DaintreeLocalStore, reason: DecisionsStoreUnavailableReason): void {
+    if (this.store !== store) return;
+    this.faultedAt = Date.now();
+    if (reason === "disk-full") this.storageRecovery.diskFull();
+  }
+
   /** Lets go of the lifetime's store, and stops feeding the panes from it; the caller closes it. */
   private detachStore(): DaintreeLocalStore | null {
+    this.offFault?.();
+    this.offFault = null;
     void this.feedFrom(null);
     const store = this.store;
     this.store = null;
