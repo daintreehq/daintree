@@ -14,7 +14,9 @@ const inputVariants = cva(
     variants: {
       density: {
         compact: "px-2 py-1 text-xs",
-        default: "px-3 py-1.5 text-sm",
+        // h-8: the default button's 32px, so a field and the button beside it
+        // share one edge.
+        default: "h-8 px-3 py-1.5 text-sm",
       },
       invalid: {
         true: "border-status-error",

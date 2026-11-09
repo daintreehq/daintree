@@ -38,7 +38,7 @@ export function SidebarFooter({ projectId }: { projectId: string | null }) {
   return (
     <div
       data-sidebar-footer=""
-      className="@container/footer flex shrink-0 flex-col border-t border-divider surface-chrome"
+      className="@container/footer flex shrink-0 flex-col border-t border-divider"
     >
       <SidebarMemoryNotice />
       <ProjectPluginIndicator />

@@ -111,7 +111,7 @@ function ThemeRow({
       onClick={() => onSelect(scheme.id)}
       className={cn(
         PALETTE_ROW_CLASS,
-        "w-full flex items-center gap-2.5 px-3 py-2 text-left cursor-pointer",
+        "w-full flex items-center gap-2.5 px-3 py-2 text-left cursor-pointer rounded-[var(--radius-md)]",
         "duration-150 ease-out",
         // The cursor here repaints the whole app, so only a click or an arrow
         // key may move it — a hover that previewed would retarget "Set theme"
@@ -555,7 +555,7 @@ export function ThemeBrowser() {
   return (
     <div
       className={cn(
-        "flex flex-col h-full bg-surface-canvas border-l border-border-default",
+        "flex flex-col h-full bg-surface-canvas border-l border-divider",
         OVERLAY_SHEET_SHADOW_CLASS
       )}
       style={{ width: PANEL_WIDTH }}
@@ -662,7 +662,9 @@ export function ThemeBrowser() {
         aria-label="Theme list"
         tabIndex={-1}
         onKeyDown={handleListKeyDown}
-        className="shrink min-h-0 overflow-y-auto"
+        // The palettes' list inset, so the highlighted row is an inset rounded
+        // row rather than a band that runs into the sheet's edges.
+        className="shrink min-h-0 overflow-y-auto p-2"
       >
         {isEmpty ? (
           <p className="text-xs text-text-secondary text-center py-4">

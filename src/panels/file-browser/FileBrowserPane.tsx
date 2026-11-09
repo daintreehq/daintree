@@ -1310,11 +1310,11 @@ export function FileBrowserPane({
             // since there is nothing on the other side of it.
             className={cn(
               "relative flex min-h-0 flex-col self-stretch bg-surface-sidebar",
-              viewerCollapsed ? "min-w-0 flex-1" : "shrink-0 border-r border-border-default"
+              viewerCollapsed ? "min-w-0 flex-1" : "shrink-0 border-r border-divider"
             )}
             style={viewerCollapsed ? undefined : { width: sidebarWidth }}
           >
-            {/* py-1.5 + border-overlay + TOOLBAR_ICON_CLASS icons match FileViewerToolbar.Root
+            {/* py-1.5 + border-divider + TOOLBAR_ICON_CLASS icons match FileViewerToolbar.Root
                 so the two header bars share one height and border token, and the
                 line under them reads continuous across the divider (#11328). */}
             <div
@@ -1328,7 +1328,7 @@ export function FileBrowserPane({
               role="toolbar"
               aria-label="File tree controls"
               onKeyDown={handleTreeHeaderKeyDown}
-              className="flex shrink-0 items-center gap-0.5 border-b border-overlay px-1.5 py-1.5"
+              className="flex shrink-0 items-center gap-0.5 border-b border-divider px-1.5 py-1.5"
             >
               {/* Root anchor mirrors the diff sidebar's header: where am I
                 rooted, then the controls that reshape the view. The root icon

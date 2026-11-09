@@ -11,7 +11,7 @@ export function HelpIntroBanner({ onDismiss }: HelpIntroBannerProps) {
     <div
       className={cn(
         "flex items-center gap-2 px-3 py-1.5 shrink-0",
-        "bg-overlay-subtle border-b border-border-default text-2xs text-text-secondary"
+        "bg-overlay-subtle border-b border-divider text-2xs text-text-secondary"
       )}
     >
       <span className="flex-1 min-w-0 truncate">

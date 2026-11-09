@@ -1246,7 +1246,7 @@ function ProjectPaletteInner({
               ? "max-h-[min(60vh,calc(85vh-12rem))]"
               : undefined
         }
-        scrollClassName="space-y-0"
+        scrollClassName="p-2 space-y-0"
         // The short fade: at the full 32px a live row sliding under the edge
         // read as disabled rather than as more list.
         compactFade

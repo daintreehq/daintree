@@ -186,7 +186,7 @@ function TerminalRow({ term, onClick, onOpen, padY, canArm }: TerminalRowProps) 
           glyph still lands under the trigger's label. Trailing, it was a
           fourth mark in a cluster of three, 34px of permanent chrome taken
           from the title. */}
-        <div className="worktree-section-button group/termrow flex items-center rounded-[var(--radius-lg)] border border-transparent">
+        <div className="worktree-section-button group/termrow flex items-center rounded-[var(--radius-md)] border border-transparent">
           <button
             ref={dragHandle?.setActivatorNodeRef}
             type="button"

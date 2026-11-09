@@ -5,7 +5,11 @@
   );
   background-image: var(--chrome-noise, var(--chrome-noise-texture));
   background-blend-mode: soft-light;
-  box-shadow: var(--chrome-shadow, inset 0 1px 0 var(--theme-overlay-soft));
+  /* No default top highlight: the sidebar sits directly under the toolbar's
+     bottom rule, and a lip on the next pixel row turned that one hairline into
+     a two-tone band that stopped at the sidebar's edge. A theme can still opt
+     in through the extension key. */
+  box-shadow: var(--chrome-shadow, none);
   -webkit-backdrop-filter: blur(var(--theme-material-blur))
     saturate(var(--theme-material-saturation));
   backdrop-filter: blur(var(--theme-material-blur)) saturate(var(--theme-material-saturation));

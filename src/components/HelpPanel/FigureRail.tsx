@@ -119,7 +119,7 @@ export function FigureRail({
 
   return (
     <div
-      className="shrink-0 h-[88px] overflow-hidden border-t border-border-default"
+      className="shrink-0 h-[88px] overflow-hidden border-t border-divider"
       data-testid="figure-rail"
     >
       <div

@@ -57,7 +57,7 @@ import {
 } from "./WorktreeCard/WorktreePluginStatusChips";
 import { getAgentConfig } from "@/config/agents";
 import type { ChipState } from "./utils/computeChipState";
-import { BranchLabel } from "./BranchLabel";
+import { BranchLabel, splitBranchType } from "./BranchLabel";
 import { LiveTimeAgo } from "./LiveTimeAgo";
 import { SECTION_ROW } from "./WorktreeCard/sectionChrome";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
@@ -414,7 +414,9 @@ export function WorktreeOverviewRow({
       ? CircleDot
       : headline.kind === "pr"
         ? getPrStateGlyph(headlinePr?.state)
-        : GitBranch;
+        : // The branch's type mark, as the sidebar card draws it, so a row
+          // carries the same glyph in both lists.
+          (isBranchTitled ? splitBranchType(branchLabel).Icon : undefined) ?? GitBranch;
   const typeIconColor =
     headline.kind === "issue"
       ? "text-pr-open"

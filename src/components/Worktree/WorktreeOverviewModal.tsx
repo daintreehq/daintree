@@ -773,7 +773,7 @@ export function WorktreeOverviewModal({
                 like the agent overview's, so the header's rule closes the
                 narrowing block. */}
             {hasNonMainWorktrees && (
-              <div className="-mx-3 -mb-2 mt-2 border-t border-border-default">
+              <div className="-mx-3 -mb-2 mt-2 border-t border-divider">
                 <QuickStateFilterBar
                   className="border-b-0"
                   value={quickStateFilter}
@@ -910,11 +910,9 @@ export function WorktreeOverviewModal({
               <PaletteFooterHints
                 primaryHint={{ keys: ["↵"], label: "to switch" }}
                 hints={[
-                  { keys: ["↑", "↓"], label: "navigate" },
                   { keys: ["Space"], label: "select" },
                   { keys: ["F2"], label: "sessions" },
                   { keys: ["⇧", "F10"], label: "actions" },
-                  { keys: ["Esc"], label: "close" },
                 ]}
               />
             </AppPaletteDialog.Footer>

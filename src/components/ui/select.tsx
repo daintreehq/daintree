@@ -114,7 +114,8 @@ const selectTriggerVariants = cva(
       density: {
         /** Filter bars, beside a compact `SearchField` — the same 28px. */
         compact: "h-7 px-2 text-xs",
-        default: "px-3 py-1.5 text-sm",
+        /** The default button's 32px, beside which most forms set it. */
+        default: "h-8 px-3 py-1.5 text-sm",
       },
     },
     defaultVariants: { density: "default" },

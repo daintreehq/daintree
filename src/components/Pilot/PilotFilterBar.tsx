@@ -324,7 +324,7 @@ export function PilotFilterBar({
               // and still fills the bar edge to edge.
               "inline-flex min-w-0 grow items-center justify-center gap-1 px-1.5 py-1.5 transition-colors",
               "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-              idx > 0 && "border-l border-border-default",
+              idx > 0 && "border-l border-divider",
               isActive
                 ? // Fallback keeps themes without the var byte-identical.
                   "bg-[var(--worktree-quick-state-active-bg,var(--color-overlay-subtle))] shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"

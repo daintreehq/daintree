@@ -1072,9 +1072,10 @@ interface AppDialogBodyProps {
 
 /**
  * Claims the header and footer rules for this body: none on the first paint,
- * then whichever edges its content actually runs past.
+ * then whichever edges its content actually runs past. Exported for a dialog
+ * that scrolls its own column instead of composing `AppDialog.Body`.
  */
-function useBodyEdgesReport(): ((edges: BodyEdges) => void) | undefined {
+export function useBodyEdgesReport(): ((edges: BodyEdges) => void) | undefined {
   const report = useContext(AppDialogContext)?.reportBodyEdges;
   useLayoutEffect(() => {
     if (!report) return;

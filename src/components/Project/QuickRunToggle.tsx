@@ -76,10 +76,11 @@ export function QuickRunToggle({ expanded, onToggle }: QuickRunToggleProps) {
       aria-controls={QUICK_RUN_PANEL_ID}
       aria-label="Run command"
       className={cn(
-        "flex shrink-0 items-center gap-1 self-stretch px-3 text-2xs font-medium transition-colors",
-        expanded
-          ? "bg-overlay-soft text-text-primary"
-          : "text-text-secondary hover:bg-overlay-soft hover:text-text-primary",
+        "flex h-7 shrink-0 items-center gap-1 rounded-[var(--radius-md)] px-2 text-2xs font-medium transition-colors",
+        // Open reads from the panel above it and the turned chevron; a resting
+        // fill made the toggle the one filled box on the bottom rail.
+        expanded ? "text-text-primary" : "text-text-secondary",
+        "hover:bg-overlay-soft hover:text-text-primary",
         "focus-visible:bg-overlay-medium focus-visible:text-text-primary",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
       )}

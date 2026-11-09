@@ -153,7 +153,10 @@ const PLACEMENT_CONFIG = {
     tooltipSide: "top",
     triggerVariant: "pill",
     triggerSize: "sm",
-    triggerClassName: "px-2",
+    // The chips' box, not a 28px circle: the launcher sits in the chip row and
+    // shares its height and corner.
+    triggerClassName:
+      "h-[var(--dock-item-height)] w-[var(--dock-item-height)] px-0 rounded-[var(--radius-md)] ring-inset",
     iconClassName: "w-3.5 h-3.5",
     label: "Open launcher",
     surface: "dock",

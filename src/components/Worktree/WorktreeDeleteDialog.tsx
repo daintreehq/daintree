@@ -1031,7 +1031,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           {verifyFailedBanner}
 
           {/* 1. WHAT — the entity, named once, concretely. */}
-          <dl className="rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-2.5 text-xs">
+          <dl className="rounded-[var(--radius-lg)] border border-border-default bg-surface-canvas px-3 py-2.5 text-xs">
             {worktree.branch && (
               <div className="flex gap-2">
                 <dt className="w-14 shrink-0 text-text-secondary">Branch</dt>
@@ -1080,7 +1080,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 data-testid="delete-worktree-file-list"
                 aria-labelledby={changesHeadingId}
                 tabIndex={0}
-                className="mt-2 max-h-32 overflow-auto text-xs text-text-secondary bg-surface-canvas p-3 rounded-[var(--radius-md)] border border-border-strong font-mono space-y-0.5"
+                className="mt-2 max-h-32 overflow-auto text-xs text-text-secondary bg-surface-canvas p-3 rounded-[var(--radius-lg)] border border-border-default font-mono space-y-0.5"
               >
                 {previewChangeRows.map((row) => {
                   const isSubmoduleRow = !row.isOverflow && submodulePathSet.has(row.label);
@@ -1149,7 +1149,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   data-testid="delete-worktree-submodule-file-list"
                   aria-labelledby={submodulesHeadingId}
                   tabIndex={0}
-                  className="mt-2 max-h-32 overflow-auto text-xs text-text-secondary bg-surface-canvas p-3 rounded-[var(--radius-md)] border border-border-strong font-mono space-y-0.5"
+                  className="mt-2 max-h-32 overflow-auto text-xs text-text-secondary bg-surface-canvas p-3 rounded-[var(--radius-lg)] border border-border-default font-mono space-y-0.5"
                 >
                   {submoduleFileRows.map((row) => (
                     <li
@@ -1192,7 +1192,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   <ul
                     data-testid="delete-worktree-submodule-commit-list"
                     aria-labelledby={submoduleCommitsHeadingId}
-                    className="mt-1.5 text-xs text-text-secondary bg-surface-canvas p-3 rounded-[var(--radius-md)] border border-border-strong font-mono space-y-0.5"
+                    className="mt-1.5 text-xs text-text-secondary bg-surface-canvas p-3 rounded-[var(--radius-lg)] border border-border-default font-mono space-y-0.5"
                   >
                     {submoduleCommitGroups.map((group) => (
                       <Fragment key={group.path ?? "__unbound"}>
