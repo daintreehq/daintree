@@ -278,10 +278,6 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./canopy.js").CanopyTerminalView;
   };
-  "canopy-window:acknowledge-pop-out": {
-    args: [__1: { id: number }];
-    result: boolean;
-  };
   "canopy-window:focus": {
     args: [];
     result: boolean;
@@ -296,14 +292,6 @@ export interface GeneratedIpcInvokeMap {
   };
   "canopy-window:open": {
     args: [];
-    result: void;
-  };
-  "canopy-window:peek-pop-out": {
-    args: [];
-    result: import("./canopy.js").CanopyPendingPopOut | null;
-  };
-  "canopy-window:pop-out": {
-    args: [popOut: import("./canopy.js").CanopyPopOut];
     result: void;
   };
   "canopy:answer": {
@@ -360,7 +348,7 @@ export interface GeneratedIpcInvokeMap {
       entries: (
         | {
             state: "live";
-            role: "assistant" | "worker";
+            role: "worker" | "assistant";
             subject: {
               hostId: string;
               scope: { kind: "project"; projectId: string } | { kind: "global" };
@@ -1519,7 +1507,7 @@ export interface GeneratedIpcInvokeMap {
               sourceMap: {
                 mapUrl: string | null;
                 mapRevision: string;
-                sourceCheck: "matches" | "unchecked" | "differs";
+                sourceCheck: "matches" | "differs" | "unchecked";
               };
               candidateId: string;
               claim:
@@ -1554,7 +1542,7 @@ export interface GeneratedIpcInvokeMap {
                 | {
                     mapUrl: string | null;
                     mapRevision: string;
-                    sourceCheck: "matches" | "unchecked" | "differs";
+                    sourceCheck: "matches" | "differs" | "unchecked";
                   }
                 | undefined;
               placedBy?: "structure" | undefined;
@@ -1600,7 +1588,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "matches" | "unchecked" | "differs";
+                      sourceCheck: "matches" | "differs" | "unchecked";
                     };
                   }
                 | {
@@ -1621,7 +1609,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "matches" | "unchecked" | "differs";
+                          sourceCheck: "matches" | "differs" | "unchecked";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1670,7 +1658,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "matches" | "unchecked" | "differs";
+                      sourceCheck: "matches" | "differs" | "unchecked";
                     };
                   }
                 | {
@@ -1691,7 +1679,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "matches" | "unchecked" | "differs";
+                          sourceCheck: "matches" | "differs" | "unchecked";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1711,10 +1699,10 @@ export interface GeneratedIpcInvokeMap {
               reason:
                 | "cancelled"
                 | "unsupported"
-                | "mismatch"
                 | "file-missing"
                 | "outside-workspace"
                 | "map-missing"
+                | "mismatch"
                 | "budget-exhausted";
               candidateId: string;
               claim:
@@ -3735,9 +3723,9 @@ export interface GeneratedIpcInvokeMap {
       status:
         | "cancelled"
         | "unreachable"
-        | "started"
         | "connected"
         | "woken"
+        | "started"
         | "not_wakeable"
         | "not_startable"
         | "version_mismatch"
@@ -3916,17 +3904,17 @@ export interface GeneratedIpcInvokeMap {
             | {
                 kind: "unverifiable";
                 reason:
-                  "unreadable" | "file-too-large" | "byte-limit" | "deadline" | "special-file";
+                  "file-too-large" | "byte-limit" | "deadline" | "unreadable" | "special-file";
               };
           path: string;
           pathBytes?: string | undefined;
         }[];
         incomplete: {
           reasons: (
-            | "unreadable"
             | "file-too-large"
             | "byte-limit"
             | "deadline"
+            | "unreadable"
             | "special-file"
             | "path-limit"
             | "nested-repository"
@@ -3937,10 +3925,10 @@ export interface GeneratedIpcInvokeMap {
           )[];
           uncovered: {
             reason:
-              | "unreadable"
               | "file-too-large"
               | "byte-limit"
               | "deadline"
+              | "unreadable"
               | "special-file"
               | "path-limit"
               | "nested-repository"
@@ -4024,7 +4012,7 @@ export interface GeneratedIpcInvokeMap {
                 }
               | {
                   kind: "exit";
-                  process: "pty" | "agent";
+                  process: "agent" | "pty";
                   exitCode: number | null;
                   signal: number | null;
                 }
@@ -4146,7 +4134,7 @@ export interface GeneratedIpcInvokeMap {
                 }
               | {
                   kind: "exit";
-                  process: "pty" | "agent";
+                  process: "agent" | "pty";
                   exitCode: number | null;
                   signal: number | null;
                 }
@@ -4986,9 +4974,9 @@ export interface GeneratedIpcInvokeMap {
           sourcePrNumber?: number | undefined;
           sourcePrTitle?: string | undefined;
           sourcePrUrl?: string | undefined;
-          sourcePrState?: "open" | "merged" | "closed" | undefined;
+          sourcePrState?: "open" | "closed" | "merged" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
-          submoduleInit?: "all" | "none" | "inherit" | undefined;
+          submoduleInit?: "none" | "inherit" | "all" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;
           fetchBase?: boolean | undefined;
         };

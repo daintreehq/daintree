@@ -22,8 +22,6 @@ import { formatTypingLocatorMessage, useTypingLocatorStore } from "@/store/typin
 
 /** How long a row asked for waits on its host's runs before it is taken as not there. */
 const REPLY_REVEAL_WAIT_MS = 10_000;
-/** How long a popped-out dialog's row waits on its host's rows here before the inbox lands as usual. */
-const POP_OUT_LANDING_WAIT_MS = 10_000;
 
 /** The dictation keeps writing to the reply's draft: only going there failed. */
 function reportReplyHidden(why: string): void {
@@ -61,9 +59,6 @@ export function useCanopyInboxFocus({
   roleFilter,
   seeAssistantHandback,
   pluginViewIds,
-  assistantsLoaded,
-  hostKnown,
-  rowsSettled,
 }: {
   isOpen: boolean;
   /** The other host the panel shows, or null for the window's own. */
@@ -91,12 +86,6 @@ export function useCanopyInboxFocus({
   seeAssistantHandback: (assistantId: string, observedAt: number) => void;
   /** The plugin views the window offers, by hosted id; none in the dialog. */
   pluginViewIds: readonly string[];
-  /** The assistants have been listed, or can't be here: one not among them isn't there. */
-  assistantsLoaded: boolean;
-  /** The host list names the host shown: until then, an unlisted one may only not be read yet. */
-  hostKnown: boolean;
-  /** The host's rows are in, and the terminals' matches and work links they're filtered by. */
-  rowsSettled: boolean;
 }) {
   const frame = useCanopyFrame();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -263,8 +252,6 @@ export function useCanopyInboxFocus({
   // The user pressed something in the panel since it opened, header included:
   // where they put the keyboard stands, and the landing gives way to it.
   const touchedRef = useRef(false);
-  // The same, since a dialog popped out here last asked to land.
-  const landingTouchedRef = useRef(false);
   useEffect(() => {
     if (!isOpen) return;
     touchedRef.current = false;
@@ -272,7 +259,6 @@ export function useCanopyInboxFocus({
       const target = event.target;
       if (target instanceof Element && target.closest(CANOPY_SURFACE)) {
         touchedRef.current = true;
-        landingTouchedRef.current = true;
       }
     };
     window.addEventListener("pointerdown", touch, { capture: true, passive: true });
@@ -292,8 +278,6 @@ export function useCanopyInboxFocus({
   // A dictated reply asked for is where this opening lands, once it is found;
   // only one that can't be shown leaves the opening to land as it would.
   const replyReveal = useCanopyStore((s) => s.replyReveal);
-  // A dialog popped out into this window lands where it stood instead.
-  const popOutLanding = useCanopyStore((s) => s.popOutLanding);
   useEffect(() => {
     if (!isOpen) {
       landedRef.current = false;
@@ -304,9 +288,7 @@ export function useCanopyInboxFocus({
       return;
     }
     focusAfterCloseRef.current = null;
-    if (landedRef.current || items.length === 0 || replyReveal !== null || popOutLanding !== null) {
-      return;
-    }
+    if (landedRef.current || items.length === 0 || replyReveal !== null) return;
     // The search it was left with is in force before the run is picked from it.
     const restore = restoreRef.current;
     if (restore !== null && appliedQuery !== restore.query) return;
@@ -373,7 +355,6 @@ export function useCanopyInboxFocus({
     appliedQuery,
     firstAssistant,
     replyReveal,
-    popOutLanding,
     hostId,
     ownHostId,
   ]);
@@ -716,106 +697,6 @@ export function useCanopyInboxFocus({
     setAssistantId(null);
     setAssistantRefusal(null);
   }, [isOpen, roleFilter]);
-
-  // A dialog popped out into this window (#16338): its search goes in at once,
-  // and its row is selected once the host it was listed under shows here,
-  // named in the host list, with its rows in. Last of the effects, so no reset
-  // above (a host or a role changed with it) takes the row back in the same
-  // pass. A host picked here first ends it; the user acting here first leaves
-  // the row to them, though the host stays held until the host list names it.
-  const landingSearchedRef = useRef<number | null>(null);
-  // The search a landing put back, until its arrival is seen. Its own: once
-  // the landing is gone, settled, timed out, replaced or cancelled from
-  // elsewhere, it never blocks a later search from selecting its top match.
-  const landingRestoredRef = useRef<{ id: number; query: string } | null>(null);
-  useEffect(() => {
-    if (!isOpen || popOutLanding === null || landingSearchedRef.current === popOutLanding.id) {
-      return;
-    }
-    landingSearchedRef.current = popOutLanding.id;
-    landingTouchedRef.current = false;
-    restoreRef.current = null;
-    // Its arrival is the search being put back, not a new one to select the top of.
-    const restored = popOutLanding.query !== appliedQuery ? popOutLanding.query : null;
-    restoredQueryRef.current = restored;
-    landingRestoredRef.current =
-      restored === null ? null : { id: popOutLanding.id, query: restored };
-    if (popOutLanding.query !== query) setQuery(popOutLanding.query);
-  }, [isOpen, popOutLanding, query, appliedQuery, setQuery]);
-  const popOutLandingId = popOutLanding?.id ?? null;
-  useEffect(() => {
-    const owned = landingRestoredRef.current;
-    if (owned === null || owned.id === popOutLandingId) return;
-    landingRestoredRef.current = null;
-    if (restoredQueryRef.current === owned.query) restoredQueryRef.current = null;
-  }, [popOutLandingId]);
-  const shownStoreHostId = useCanopyStore((s) => s.hostId);
-  useEffect(() => {
-    if (!isOpen || popOutLanding === null) return;
-    const settle = () => useCanopyStore.getState().settlePopOutLanding(popOutLanding.id);
-    if (shownStoreHostId !== popOutLanding.hostId) {
-      settle();
-      return;
-    }
-    if (hostId !== popOutLanding.hostId || !hostKnown) return;
-    const selection = popOutLanding.selection;
-    // Nothing selected, or the user went first: the inbox lands as any opening does.
-    if (selection === null || landingTouchedRef.current) {
-      settle();
-      return;
-    }
-    if (appliedQuery !== popOutLanding.query) return;
-    let domId: string;
-    if (selection.kind === "worker") {
-      const shown =
-        visible.some((item) => item.runId === selection.runId) ||
-        (!searching && items.some((item) => item.runId === selection.runId && inWork(item)));
-      // Not listed yet is not gone until the host's rows, the terminals'
-      // matches and the assistants' work links are in.
-      if (!shown && !rowsSettled) return;
-      settle();
-      if (!shown) return;
-      setAssistantId(null);
-      setFocusedId(selection.runId);
-      domId = canopyCardDomId(selection.runId);
-    } else {
-      const shown = shownAssistants.some((item) => item.id === selection.assistantId);
-      if (!shown && !assistantsLoaded) return;
-      settle();
-      if (!shown) return;
-      setAssistantId(selection.assistantId);
-      domId = canopyAssistantDomId(selection.assistantId);
-    }
-    landedRef.current = true;
-    setPaneFocus(null);
-    setReplyFocus(null);
-    document.getElementById(domId)?.scrollIntoView({ block: "nearest" });
-    searchRef.current?.focus({ preventScroll: true });
-  }, [
-    isOpen,
-    popOutLanding,
-    shownStoreHostId,
-    hostId,
-    hostKnown,
-    appliedQuery,
-    rowsSettled,
-    visible,
-    searching,
-    items,
-    inWork,
-    shownAssistants,
-    assistantsLoaded,
-  ]);
-  // A host that never lists its rows here doesn't hold the landing forever.
-  useEffect(() => {
-    if (!isOpen || popOutLanding === null) return;
-    const id = popOutLanding.id;
-    const timer = setTimeout(
-      () => useCanopyStore.getState().settlePopOutLanding(id),
-      POP_OUT_LANDING_WAIT_MS
-    );
-    return () => clearTimeout(timer);
-  }, [isOpen, popOutLanding]);
 
   return {
     searchRef,

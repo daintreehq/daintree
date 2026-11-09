@@ -22,7 +22,6 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_WINDOW_FRAME } from "./canopyWindowFrame";
 import { CanopyPluginSupport } from "./CanopyPluginSupport";
 import { returnToLastProjectWindow, startCanopyWindowKeys } from "./canopyWindowKeys";
-import { receiveCanopyPopOuts } from "./canopyWindowPopOut";
 
 /**
  * The Canopy window's whole renderer: the inbox and only what it reads, with
@@ -44,7 +43,6 @@ export function CanopyWindowRoot() {
       initKeybindingOverridesSync(),
       setupFleetSnapshotListeners(),
       installHostProjectsLoader(),
-      receiveCanopyPopOuts(),
       startCanopyWindowKeys(),
     ];
     // Project and scratch names label the rows; both stores follow their own pushes.

@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { AppWindow, Globe, Keyboard, RefreshCw, Trash2 } from "lucide-react";
+import { Globe, Keyboard, RefreshCw, Trash2 } from "lucide-react";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { Telescope } from "@/components/icons";
 import { useCanopyStore } from "@/store/canopyStore";
@@ -63,7 +63,6 @@ import {
   type CanopyFrame,
 } from "./canopyFrame";
 import { CanopyCloseButton, CanopySurface } from "./CanopySurface";
-import { registerCanopyInboxPlace, type CanopyInboxPlace } from "./canopyPopOut";
 import { CanopyHostOffer, CanopyHostOutdated } from "./CanopyHostOffer";
 import { useCanopyInboxData } from "./useCanopyInboxData";
 import { useCanopyInboxOrder } from "./useCanopyInboxOrder";
@@ -317,16 +316,8 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   ) : null;
   // The host shown was removed, or hosts can't be shown here at all: the panel
   // goes back to the window's own host, and the picker says so.
-  // A dialog popped out here on another host waits for the host list, which a
-  // new window reads as it boots, before that host is taken as removed.
-  const landingHere = useCanopyStore(
-    (s) => s.popOutLanding !== null && s.popOutLanding.hostId === hostId
-  );
   const hostListed =
-    hostId === null ||
-    allHosts ||
-    landingHere ||
-    (hostRows?.some((row) => row.hostId === hostId) ?? false);
+    hostId === null || allHosts || (hostRows?.some((row) => row.hostId === hostId) ?? false);
   useEffect(() => {
     if (!hostListed) setHostId(null);
   }, [hostListed, setHostId]);
@@ -772,7 +763,6 @@ function CanopyInbox({
     workOf,
     showWorkOf,
     workPartial,
-    workRead,
     workLabelOf,
     shownAssistants,
     bandAssistants,
@@ -782,7 +772,6 @@ function CanopyInbox({
     shownInbox,
     unreadOnly,
     setUnreadOnly,
-    keptUnread,
     listed,
     bandSize,
     archivedExpanded,
@@ -825,12 +814,7 @@ function CanopyInbox({
   const bandShown = bandSize > 0 || bandAssistants.length > 0;
   // A row asked for from the recording indicator is looked for once its
   // host's runs are in, or its host has failed: in All hosts, that host's own.
-  // A row asked for from the recording indicator, or by a dialog popped out here.
-  const revealRunId = useCanopyStore(
-    (s) =>
-      s.replyReveal?.runId ??
-      (s.popOutLanding?.selection?.kind === "worker" ? s.popOutLanding.selection.runId : null)
-  );
+  const revealRunId = useCanopyStore((s) => s.replyReveal?.runId ?? null);
   const revealHost =
     everyHost && revealRunId !== null ? (parseAllHostsKey(revealRunId)?.hostId ?? null) : null;
   const revealReading =
@@ -892,34 +876,8 @@ function CanopyInbox({
     roleFilter,
     seeAssistantHandback,
     pluginViewIds: pluginViews.map((view) => view.id),
-    assistantsLoaded: !assistantsReadable || directory !== null,
-    hostKnown: hostId === null || everyHost || hostRow !== null,
-    rowsSettled: revealRunsLoaded && (screenAsk === null || onScreen !== null) && workRead,
   });
   const shownPluginView = pluginViews.find((view) => view.id === shownPluginViewId) ?? null;
-
-  // Where the dialog stands, for popping it out into the Canopy window (#16338).
-  const inboxPlaceRef = useRef<CanopyInboxPlace | null>(null);
-  useLayoutEffect(() => {
-    inboxPlaceRef.current = {
-      hostId: hostId ?? ownHostId,
-      query,
-      selection:
-        selectedAssistant !== null
-          ? { kind: "assistant", assistantId: selectedAssistant.id }
-          : focusedItem !== null
-            ? { kind: "worker", runId: focusedItem.runId }
-            : null,
-      keptUnread,
-    };
-  });
-  const inDialog = frame.host === "dialog";
-  useLayoutEffect(() => {
-    if (!inDialog) return;
-    return registerCanopyInboxPlace(() => inboxPlaceRef.current!);
-  }, [inDialog]);
-  // Only an on Canopy has a window to move into.
-  const windowOffered = useCanopyStore((s) => inDialog && s.mode === "on");
 
   useLayoutEffect(() => placeOrder(), [placeOrder, orderWake]);
   const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
@@ -1650,24 +1608,6 @@ function CanopyInbox({
           </Tooltip>
         )}
       </span>
-      {windowOffered && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Open in new window"
-              data-testid="canopy-pop-out"
-              onClick={() =>
-                void actionService.dispatch("canopy.openWindow", undefined, { source: "user" })
-              }
-            >
-              <AppWindow />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Open in new window</TooltipContent>
-        </Tooltip>
-      )}
       <CanopyCloseButton />
     </>
   );

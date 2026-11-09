@@ -2962,12 +2962,7 @@ function buildElectronApi(): ElectronAPI {
       onEvent: (callback: (event: IpcEventMap["canopy-host:event"]) => void) =>
         _typedOn("canopy-host:event", callback),
     },
-    canopyWindow: {
-      ...buildCanopyWindowPreloadBindings(_unwrappingInvoke),
-      onPopOutWaiting: (callback: () => void) =>
-        _typedOn(CHANNELS.CANOPY_WINDOW_POP_OUT_WAITING, callback),
-      onPoppedOut: (callback: () => void) => _typedOn(CHANNELS.CANOPY_WINDOW_POPPED_OUT, callback),
-    },
+    canopyWindow: buildCanopyWindowPreloadBindings(_unwrappingInvoke),
     portForwards: {
       ...buildPortForwardsPreloadBindings(_unwrappingInvoke),
       onEvent: (callback: (event: IpcEventMap["port-forwards:event"]) => void) =>
