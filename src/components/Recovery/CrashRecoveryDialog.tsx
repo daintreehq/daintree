@@ -10,6 +10,7 @@ import { InlineError } from "@/components/ui/field";
 import { AlertTriangle, ChevronRight, Copy, Download, ExternalLink, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
 import { ARIA_DISABLED_CLASSES } from "../ui/ariaDisabled";
@@ -57,10 +58,23 @@ interface CrashRecoveryDialogProps {
   initialError?: string;
 }
 
-// The dock's and the quick switcher's glyph for the same kind, so a pane is
-// recognisable here by the mark it wore before the crash.
-function PanelSummaryIcon({ kind }: { kind: string }) {
-  return <TerminalIcon kind={kind} className="h-3.5 w-3.5" />;
+/**
+ * The dock's and the quick switcher's glyph for the same kind, so a pane is
+ * recognisable here by the mark it wore before the crash, and an agent panel
+ * wears its agent's mark. The saved state is left out of the chrome on purpose:
+ * restore relaunches the agent whatever it was last seen doing, so an exited
+ * one still comes back as that agent.
+ */
+function PanelIcon({ panel }: { panel: PanelSummary }) {
+  const chrome = deriveTerminalChrome({
+    kind: panel.kind,
+    launchAgentId: panel.launchAgentId,
+    agentPresetColor: panel.agentPresetColor,
+  });
+  if (chrome.isAgent) {
+    return <TerminalIcon kind={panel.kind} chrome={chrome} className="h-3.5 w-3.5" />;
+  }
+  return <TerminalIcon kind={panel.kind} className="h-3.5 w-3.5" />;
 }
 
 export function CrashRecoveryDialog({
@@ -675,7 +689,7 @@ export function CrashRecoveryDialog({
             {panels.map((panel) => (
               <li key={panel.id} className="flex items-center gap-2 text-sm text-text-primary">
                 <span className="shrink-0 text-text-secondary">
-                  <PanelSummaryIcon kind={panel.kind} />
+                  <PanelIcon panel={panel} />
                 </span>
                 <span className="truncate">{panel.title || panel.kind}</span>
               </li>
@@ -709,7 +723,7 @@ function PanelRow({
         data-testid={`panel-checkbox-${panel.id}`}
       />
       <span className="text-text-secondary shrink-0">
-        <PanelSummaryIcon kind={panel.kind} />
+        <PanelIcon panel={panel} />
       </span>
       <div className="flex-1 min-w-0">
         <div className="text-sm text-text-primary truncate">{panel.title || panel.kind}</div>
