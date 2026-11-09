@@ -24,6 +24,8 @@ import type { GlobalAssistantInputStamp, GlobalAssistantView } from "@shared/typ
 import { useGlobalAssistant } from "./useGlobalAssistant";
 import { useAssistantSendFailure } from "./useAssistantSendFailure";
 import { GlobalAssistantTerminal } from "./GlobalAssistantTerminal";
+import { HelpLaunchingState } from "./HelpLaunchingState";
+import { refocusStartAfterCancel } from "./refocusStartAfterCancel";
 import { HEADER_ACTION_CLASS } from "./HelpPanelHeader";
 import { TabAgentMark } from "./HelpSessionTabs";
 
@@ -97,19 +99,20 @@ export function GlobalAssistantPane({
   const active = isOpen && isVisible && !viewCached && !boundElsewhere;
   // Attached behind Canopy or an ended run, the pane can't type, so input
   // nobody holds passes it over.
-  const { view, attachmentId, error, start, claimInput, restart, discard } = useGlobalAssistant(
-    active,
-    (shown) => canTypeTo(canopyOpen, target, shown)
-  );
+  const { view, attachmentId, error, start, claimInput, restart, discard, cancelLaunch } =
+    useGlobalAssistant(active, (shown) => canTypeTo(canopyOpen, target, shown));
   const [pendingConfirm, setPendingConfirm] = useState<{
     kind: "restart" | "discard";
     generation: number;
   } | null>(null);
-  const [starting, setStarting] = useState(false);
+  // The generation a Start was pressed at. A Cancel moves the generation on,
+  // so Start is offered again at once, before the stopped launch has wound down.
+  const [startedAt, setStartedAt] = useState<number | null>(null);
   // As the header's own menu: Escape closes the open menu, not the panel.
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   useEscapeStack(isMenuOpen, () => setIsMenuOpen(false));
   const rootRef = useRef<HTMLDivElement>(null);
+  const startRef = useRef<HTMLButtonElement>(null);
 
   const subject = runningSubject(view);
   // The run "Open in Assistant" chose, gone by now: said, and its successor
@@ -169,20 +172,29 @@ export function GlobalAssistantPane({
     return () => cancelAnimationFrame(frame);
   }, [isVisible, isOpen, focusRequest, paneKey, passiveFocusHandledThrough]);
 
-  const handleStart = async () => {
-    if (starting) return;
-    setStarting(true);
-    try {
-      await start();
-    } finally {
-      setStarting(false);
-    }
-  };
-
   // Restart and stop act on the run this pane shows, never on a successor it
   // is hiding behind "ended".
   const controllable = view?.phase === "running" && !targetEnded;
   const generation = view?.generation ?? 0;
+  const starting = startedAt === generation;
+
+  const handleStart = async () => {
+    if (starting) return;
+    const at = generation;
+    setStartedAt(at);
+    try {
+      await start();
+    } finally {
+      setStartedAt((current) => (current === at ? null : current));
+    }
+  };
+
+  const handleCancelLaunch = () => {
+    refocusStartAfterCancel(
+      () => cancelLaunch(generation),
+      () => startRef.current
+    );
+  };
 
   return (
     <div
@@ -290,6 +302,7 @@ export function GlobalAssistantPane({
             is one.
           </p>
           <Button
+            ref={startRef}
             type="button"
             variant="contrast"
             onClick={() => void handleStart()}
@@ -302,12 +315,13 @@ export function GlobalAssistantPane({
           </Button>
         </div>
       ) : view.phase === "launching" ? (
-        <p
-          role="status"
-          className="animate-pulse-delayed px-6 py-8 text-center text-xs text-text-secondary"
-        >
-          Starting the global assistant…
-        </p>
+        // Keyed by the launch, so a new one counts its wait afresh.
+        <HelpLaunchingState
+          key={view.generation}
+          phase="launching"
+          isLoading
+          onCancel={handleCancelLaunch}
+        />
       ) : !shown || paneKey === null ? (
         // Running with no terminal to watch: its PTY is being brought back, or
         // couldn't be. Clear conversation stays in the menu above either way.

@@ -178,6 +178,77 @@ describe("global assistant IPC handlers", () => {
     expect(discarded.phase).toBe("absent");
   });
 
+  it("stops a launch from any window, only the launch it was asked about, and never a run (#16603)", async () => {
+    let spawned: ((started: boolean) => void) | null = null;
+    const discardResume = vi.fn(async () => {});
+    service = new GlobalAssistantService({
+      agentId: async () => "claude",
+      provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "secret", mcpUrl: null }),
+      takeResume: async () => null,
+      releaseResume: async () => {},
+      discardResume,
+      spawn: vi
+        .fn<() => Promise<boolean>>()
+        .mockImplementationOnce(() => new Promise((resolve) => (spawned = resolve)))
+        .mockResolvedValue(true),
+      revoke: async () => {},
+      kill: () => {},
+      focusedWindows: () => [],
+    });
+    const launch = handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+    await vi.waitFor(() => expect(spawned).not.toBeNull());
+    const { generation } = await handlers.handleGetGlobalAssistantState();
+
+    await expect(handlers.handleCancelGlobalAssistantLaunch(ctx(20, null))).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    await expect(
+      handlers.handleCancelGlobalAssistantLaunch(ctx(20, 2), generation - 1)
+    ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+    expect((await handlers.handleGetGlobalAssistantState()).phase).toBe("launching");
+
+    const cancelled = await handlers.handleCancelGlobalAssistantLaunch(ctx(20, 2), generation);
+    expect(cancelled.phase).toBe("absent");
+    expect(broadcast.mock.calls.at(-1)?.[1]).toMatchObject({ phase: "absent" });
+    spawned!(true);
+    await expect(launch).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(discardResume).not.toHaveBeenCalled();
+
+    const running = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+    const after = await handlers.handleCancelGlobalAssistantLaunch(ctx(20, 2), running.generation);
+    expect(after).toMatchObject({ phase: "running", terminalId: running.terminalId });
+  });
+
+  it("refuses a Cancel meant for a launch that failed, leaving the next one going (#16603)", async () => {
+    let spawned: ((started: boolean) => void) | null = null;
+    service = new GlobalAssistantService({
+      agentId: async () => "claude",
+      provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "secret", mcpUrl: null }),
+      takeResume: async () => null,
+      releaseResume: async () => {},
+      discardResume: async () => {},
+      spawn: vi
+        .fn<() => Promise<boolean>>()
+        .mockResolvedValueOnce(false)
+        .mockImplementationOnce(() => new Promise((resolve) => (spawned = resolve))),
+      revoke: async () => {},
+      kill: () => {},
+      focusedWindows: () => [],
+    });
+    const failing = handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+    const { generation } = await handlers.handleGetGlobalAssistantState();
+    await expect(failing).rejects.toMatchObject({ code: "INTERNAL" });
+
+    const next = handlers.handleEnsureGlobalAssistant(ctx(20, 2));
+    await vi.waitFor(() => expect(spawned).not.toBeNull());
+    await expect(
+      handlers.handleCancelGlobalAssistantLaunch(ctx(30, 3), generation)
+    ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+    expect((await handlers.handleGetGlobalAssistantState()).phase).toBe("launching");
+    spawned!(true);
+    expect((await next).phase).toBe("running");
+  });
+
   it("returns state without the session's credentials", async () => {
     const state = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
     expect(state.phase).toBe("running");

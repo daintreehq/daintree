@@ -25,7 +25,7 @@ import type { GlobalAssistantState } from "../../shared/types/ipc/help.js";
 
 /** Why a run ended; decides whether its conversation is kept for the next one. */
 export type GlobalAssistantEndReason =
-  "restart" | "discard" | "agent-change" | "launch-failed" | "exited" | "shutdown";
+  "restart" | "discard" | "cancel" | "agent-change" | "launch-failed" | "exited" | "shutdown";
 
 export interface GlobalAssistantProvision {
   sessionId: string;
@@ -100,6 +100,9 @@ function refuse(
   return new AppError({ code, message });
 }
 
+const stoppedWhileStarting = () =>
+  refuse("CANCELLED", "The global assistant was stopped while starting.");
+
 export class GlobalAssistantService {
   private generation = 0;
   private launch: Promise<GlobalAssistantState> | null = null;
@@ -121,7 +124,7 @@ export class GlobalAssistantService {
 
   getState(): GlobalAssistantState {
     return {
-      phase: this.run ? "running" : this.launch ? "launching" : "absent",
+      phase: this.run ? "running" : this.launchInFlight() ? "launching" : "absent",
       generation: this.generation,
       agentId: this.run?.agentId ?? this.starting?.agentId ?? null,
       terminalId: this.run?.terminalId ?? null,
@@ -132,6 +135,14 @@ export class GlobalAssistantService {
       inputOwner: this.inputOwner,
       inputEpoch: this.inputEpoch,
     };
+  }
+
+  /**
+   * Whether a launch that can still become the run is under way. One stopped
+   * while starting may take a while yet to wind down, but nothing comes of it.
+   */
+  private launchInFlight(): boolean {
+    return this.launch !== null && this.launchGeneration === this.generation;
   }
 
   /** The live run's session and PTY, or null while none is confirmed running. */
@@ -171,64 +182,79 @@ export class GlobalAssistantService {
       return Promise.reject(refuse("CANCELLED", "The app is shutting down."));
     }
     if (this.run) return Promise.resolve(this.getState());
-    if (this.launch) {
-      if (this.launchGeneration === this.generation) return this.launch;
-      // Stopped while starting: let it clean up, then start the one asked for.
-      return this.launch.catch(() => undefined).then(() => this.ensureSession(options));
-    }
+    if (this.launch && this.launchInFlight()) return this.launch;
+    // One stopped while starting may still be winding down: this one is shown
+    // at once and waits for it, so the conversation it held is back first.
+    const predecessor = this.launch;
     const generation = this.generation;
     this.launchGeneration = generation;
     const launch: Promise<GlobalAssistantState> = this.runLaunch(
       generation,
-      options?.fresh === true
-    ).finally(() => {
-      if (this.launch === launch) {
-        this.launch = null;
-        this.launchAgentId = null;
-      }
-      this.emit();
-    });
+      options?.fresh === true,
+      predecessor
+    )
+      .catch((err: unknown) => {
+        // Stopped while starting, whatever it ran into on the way down.
+        if (generation !== this.generation || this.closed) throw stoppedWhileStarting();
+        // Failed by itself, it is over too: a Cancel still on its way for it
+        // must not stop the next launch, which would otherwise share its generation.
+        this.generation += 1;
+        throw err;
+      })
+      .finally(() => {
+        if (this.launch === launch) {
+          this.launch = null;
+          this.launchAgentId = null;
+        }
+        this.emit();
+      });
     this.launch = launch;
     // Every window shows the launch, not only the one that asked for it.
     this.emit();
     return launch;
   }
 
-  private async runLaunch(generation: number, fresh: boolean): Promise<GlobalAssistantState> {
+  private async runLaunch(
+    generation: number,
+    fresh: boolean,
+    predecessor: Promise<unknown> | null
+  ): Promise<GlobalAssistantState> {
     const superseded = () => generation !== this.generation || this.closed;
-    const cancelled = () => refuse("CANCELLED", "The global assistant was stopped while starting.");
 
-    // A run being torn down may still be revoking: never provision beside it,
-    // or its cleanup could remove what this launch writes.
+    // A launch stopped while starting hands its conversation back on its way
+    // down, and a run being torn down may still be revoking: never provision
+    // beside either, or its cleanup could remove what this launch writes.
+    if (predecessor) await predecessor.catch(() => undefined);
     await this.teardownTail;
-    if (superseded()) throw cancelled();
+    if (superseded()) throw stoppedWhileStarting();
 
     const agentId = await this.deps.agentId();
+    if (superseded()) throw stoppedWhileStarting();
     if (!agentId) throw refuse("UNSUPPORTED", "No agent is available to run the global assistant.");
     this.launchAgentId = agentId;
     this.startingExited = false;
-    if (superseded()) throw cancelled();
 
     const pending = fresh ? null : await this.deps.takeResume();
     const resume =
       pending && pending.agentId === agentId && pending.agentSessionId ? pending : null;
-    const releaseResume = () => {
-      if (pending) void this.deps.releaseResume(pending.claimId).catch(() => {});
+    // Awaited, so a Start right after a Cancel finds the conversation free to take.
+    const releaseResume = async () => {
+      if (pending) await this.deps.releaseResume(pending.claimId).catch(() => {});
     };
     if (superseded()) {
-      releaseResume();
-      throw cancelled();
+      await releaseResume();
+      throw stoppedWhileStarting();
     }
 
     let session: GlobalAssistantProvision | null;
     try {
       session = await this.deps.provision(agentId);
     } catch (err) {
-      releaseResume();
+      await releaseResume();
       throw err;
     }
     if (!session) {
-      releaseResume();
+      await releaseResume();
       throw refuse("INTERNAL", "The global assistant could not be provisioned.");
     }
 
@@ -238,8 +264,8 @@ export class GlobalAssistantService {
 
     if (superseded()) {
       await this.abandon(run, "launch-failed");
-      releaseResume();
-      throw cancelled();
+      await releaseResume();
+      throw stoppedWhileStarting();
     }
 
     let spawned = false;
@@ -262,9 +288,9 @@ export class GlobalAssistantService {
     // revoked this session, and a PTY it could not yet see is ours to end.
     if (!spawned || this.startingExited || superseded()) {
       await this.abandon(run, "launch-failed");
-      releaseResume();
-      throw spawned && !this.startingExited
-        ? cancelled()
+      await releaseResume();
+      throw superseded()
+        ? stoppedWhileStarting()
         : refuse("INTERNAL", "The global assistant failed to start.");
     }
 
@@ -298,6 +324,9 @@ export class GlobalAssistantService {
     const run = this.run ?? this.starting;
     this.run = null;
     this.starting = null;
+    // The agent a launch it stopped chose: a Start queued behind that launch
+    // chooses its own, and an agent change must not stop it for this one's.
+    this.launchAgentId = null;
     this.releaseInputOwner();
     const work = this.teardownTail.then(async () => {
       if (run) {
@@ -323,13 +352,27 @@ export class GlobalAssistantService {
   /** Start over on a new conversation. */
   async restart(): Promise<GlobalAssistantState> {
     if (this.closed) throw refuse("CANCELLED", "The app is shutting down.");
-    await this.teardown("restart");
+    const torn = this.teardown("restart");
+    const generation = this.generation;
+    await torn;
+    // A Cancel or a stop while the old run was going ends the restart with it.
+    if (this.generation !== generation) throw stoppedWhileStarting();
     return this.ensureSession({ fresh: true });
   }
 
   /** End the run and forget its conversation; nothing starts it again until asked. */
   discard(): Promise<void> {
     return this.teardown("discard");
+  }
+
+  /**
+   * Stop the launch under way and keep the conversation it was picking up.
+   * One that has already become the run is left alone: Cancel ends only what
+   * was still starting.
+   */
+  cancelLaunch(): Promise<void> {
+    if (this.run || !this.launchInFlight()) return Promise.resolve();
+    return this.teardown("cancel");
   }
 
   /** The assistant agent changed: the run belongs to the old one. Nothing starts until asked. */

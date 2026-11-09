@@ -206,6 +206,7 @@ function makeHelp() {
       return globalView;
     }),
     ensureGlobalAssistant: vi.fn(async () => globalView),
+    cancelGlobalAssistantLaunch: vi.fn(async () => globalView),
   };
 }
 
@@ -1106,6 +1107,33 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     expect(electronHelp().ensureGlobalAssistant).not.toHaveBeenCalled();
     await act(async () => fireEvent.click(start));
     expect(electronHelp().ensureGlobalAssistant).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits on a launch as the Assistant panel does, and its Cancel stops that launch (#16603)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const absent = { phase: "absent" as const, subject: null, terminalId: null };
+      globalView = globalRunning({ ...absent, phase: "launching", generation: 3 });
+      directory.entries = [assistant(0)];
+      electronHelp().cancelGlobalAssistantLaunch.mockImplementation(async () => {
+        globalView = globalRunning({ ...absent, generation: 4 });
+        return globalView;
+      });
+      useCanopyStore.setState({ globalDocked: true });
+      render(<CanopyView frame={frame} />);
+      await settle();
+      expect(buttonIn(dock()!, "Cancel")).toBeUndefined();
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      await act(async () => fireEvent.click(buttonIn(dock()!, "Cancel")!));
+      expect(electronHelp().cancelGlobalAssistantLaunch).toHaveBeenCalledWith(3);
+      expect(electronHelp().ensureGlobalAssistant).not.toHaveBeenCalled();
+      expect(dock()!.querySelector("[data-testid=canopy-global-start]")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the dock up with no agent running, its start offer in reach", async () => {
