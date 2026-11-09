@@ -6,7 +6,6 @@ import { isCanopyUnread } from "@shared/types/ipc/canopy";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
-import { popOutCanopyDialog } from "@/components/Canopy/canopyPopOut";
 import { actionService } from "@/services/ActionService";
 import { clientErrorText } from "@/utils/clientAppError";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -55,7 +54,7 @@ function projectRunsInScope(): ReadonlySet<string> | null | undefined {
   );
 }
 
-/** The window didn't open, or didn't take the dialog up: whatever was open here still is. */
+/** The window didn't open. */
 function notifyWindowFailed(error: unknown): void {
   notify({
     type: "error",
@@ -76,13 +75,30 @@ function notifyWindowFailed(error: unknown): void {
   });
 }
 
+/**
+ * Open the one Canopy window, or bring it forward, restored if minimized:
+ * Canopy's only home once it is on (#16578), whatever was opened before. A
+ * panel this view still holds is put away, as nothing shows it while Canopy
+ * is on.
+ */
+async function openCanopyWindow(): Promise<void> {
+  const { isOpen, close } = useCanopyStore.getState();
+  if (isOpen) close();
+  try {
+    await window.electron.canopyWindow.open();
+  } catch (error) {
+    notifyWindowFailed(error);
+    throw error;
+  }
+}
+
 /** The canopy panel: every agent, read off its screen and laid out by what it needs. */
 export function registerCanopyActions(actions: ActionRegistry): void {
   actions.set("canopy.toggle", () => ({
     id: "canopy.toggle",
     title: "Open Canopy",
     description:
-      "Open or close Canopy, the bird's-eye view of every agent across all projects, read off its screen and ordered by what it needs from the user. While Canopy has its own window, brings that window forward",
+      "Open Canopy, the bird's-eye view of every agent across all projects, read off its screen and ordered by what it needs from the user, in its own window, or bring that window forward. Before Canopy is turned on, shows what it does and offers to turn it on",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -92,19 +108,22 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     isEnabled: canopyShown,
     disabledReason: () => (canopyShown() ? undefined : CANOPY_HIDDEN_REASON),
     keywords: ["canopy", "inbox", "agents", "waiting", "summary", "overview", "fleet"],
+    selfNotifiesOnExecutionError: true,
     run: async () => {
-      const { mode, isOpen } = useCanopyStore.getState();
-      // Only an on Canopy can have a window, and a panel open here closes as ever.
-      if (mode === "on" && !isOpen && (await window.electron.canopyWindow.focus())) return;
+      if (useCanopyStore.getState().mode === "on") {
+        await openCanopyWindow();
+        return;
+      }
+      // Before Canopy is on there is no window: the panel here offers to turn it on.
       useCanopyStore.getState().toggle();
     },
   }));
 
   actions.set("canopy.openWindow", () => ({
     id: "canopy.openWindow",
-    title: "Open Canopy in new window",
+    title: "Open Canopy window",
     description:
-      "Open Canopy in its own window, with every agent of every project and host, or bring it forward. A panel open here moves into it as it stands",
+      "Open Canopy in its own window, with every agent of every project and host, or bring that window forward",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -115,21 +134,7 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     disabledReason: () => (canopyOn() ? undefined : CANOPY_OFF_REASON),
     keywords: ["canopy", "inbox", "agents", "window", "monitor", "detach"],
     selfNotifiesOnExecutionError: true,
-    run: async () => {
-      // A panel open here moves into the window where it stood, closing once
-      // the window has its place: the window shows what it would, and both
-      // would size a terminal.
-      if (useCanopyStore.getState().isOpen && window.__DAINTREE_CANOPY_WINDOW__ !== true) {
-        await popOutCanopyDialog(notifyWindowFailed);
-        return;
-      }
-      try {
-        await window.electron.canopyWindow.open();
-      } catch (error) {
-        notifyWindowFailed(error);
-        throw error;
-      }
-    },
+    run: openCanopyWindow,
   }));
 
   actions.set("canopy.markAllRead", () => ({

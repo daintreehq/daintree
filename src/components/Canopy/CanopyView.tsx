@@ -473,7 +473,16 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
     return (
       <CanopyPitch
         isOpen={isOpen}
-        onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
+        onTurnOn={() =>
+          window.electron.canopy.setMode("on").then((snapshot) => {
+            applySnapshot(snapshot);
+            // Turned on from a project view's offer, which is put away now:
+            // Canopy opens in its own window, its one home once on (#16578).
+            if (inDialog) {
+              void actionService.dispatch("canopy.openWindow", undefined, { source: "user" });
+            }
+          })
+        }
         onHide={hideCanopy}
         restoreFocusTo={restoreOnReplace}
         hostPicker={hostPicker}
