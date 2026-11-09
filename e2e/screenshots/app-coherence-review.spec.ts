@@ -59,7 +59,7 @@ import {
   worktreeIdFor,
   ensureWindowSize,
   parkPointer,
-} from "../helpers/atlasLedgerShowcase";
+} from "./atlasLedgerShowcase";
 
 const ENABLED = process.env.DAINTREE_SHOT_COHERENCE === "1";
 const OUT = process.env.DESIGN_CAPTURE_DIR ?? "";
@@ -280,7 +280,7 @@ test("app coherence — whole window, floating surfaces, theme sweep", async () 
           );
           const age = ages[ages.length - 1];
           const chain: string[] = [];
-          for (let el = age; el && el !== row; el = el.parentElement)
+          for (let el: Element | null = age ?? null; el && el !== row; el = el.parentElement)
             chain.push(`${el.tagName.toLowerCase()}.${String(el.className).slice(0, 160)}`);
           const r = age?.getBoundingClientRect();
           return {

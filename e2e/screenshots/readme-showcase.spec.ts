@@ -55,7 +55,7 @@ import {
   ensureZoom,
   fleetFits,
   parkPointer,
-} from "../helpers/atlasLedgerShowcase";
+} from "./atlasLedgerShowcase";
 
 const ENABLED = process.env.DAINTREE_README_SHOTS === "1";
 const OUT = process.env.DAINTREE_CAPTURE_DIR ?? "";

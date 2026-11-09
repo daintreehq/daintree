@@ -11,9 +11,9 @@ import { execFileSync } from "child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
-import { pathRestoreProfile, type AppContext } from "./launch";
-import { dispatchAction } from "./actions";
-import { T_LONG } from "./timeouts";
+import { pathRestoreProfile, type AppContext } from "../helpers/launch";
+import { dispatchAction } from "../helpers/actions";
+import { T_LONG } from "../helpers/timeouts";
 
 export const WINDOW = { width: 1600, height: 1000 };
 const POLISH_ID = "readme-showcase-polish";
