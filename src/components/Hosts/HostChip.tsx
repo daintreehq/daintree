@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import {
   DropdownMenu,
   DropdownMenuActionItem,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuMeta,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -47,11 +49,13 @@ import {
   HOSTS_OVERVIEW_ACTION_ID,
   buildHostMenuRows,
   clientPlatform,
+  describeAwayHost,
   describeHostMenuState,
   hostChipStatus,
   hostMenuNoteAge,
   hostMenuRowHasTrouble,
   hostChipStatusText,
+  isHostMenuRowAway,
   localHostLabel,
   splitHostName,
   updateActionLabel,
@@ -125,6 +129,7 @@ function HostMark({ row }: { row: HostMenuRow }) {
 function HostSubmenuLabel({ row }: { row: HostMenuRow }) {
   const { state } = describeHostMenuState(row);
   const trouble = hostMenuRowHasTrouble(row);
+  const TroubleGlyph = SEVERITY_GLYPH.warning;
   return (
     <>
       <span className="mr-2 flex shrink-0">
@@ -136,15 +141,86 @@ function HostSubmenuLabel({ row }: { row: HostMenuRow }) {
         <HostNameText name={row.name} className="flex-1" />
         {state && (
           <span
+            data-host-trouble={trouble ? "" : undefined}
             className={cn(
-              "shrink-0 whitespace-nowrap text-2xs",
-              trouble ? "text-text-primary" : "text-text-secondary"
+              "flex shrink-0 items-baseline gap-1 whitespace-nowrap text-2xs",
+              trouble ? "font-medium text-text-primary" : "text-text-secondary"
             )}
           >
+            {trouble && (
+              <TroubleGlyph
+                className="h-3 w-3 shrink-0 translate-y-0.5 text-status-warning"
+                aria-hidden="true"
+              />
+            )}
             {state}
           </span>
         )}
       </span>
+    </>
+  );
+}
+
+/**
+ * An away host's name and its one quiet line: when it was last seen, or what
+ * it said instead of answering. Secondary ink throughout and no warning mark;
+ * the exact time is on the age's own hover.
+ */
+function AwayHostLabel({ row }: { row: HostMenuRow }) {
+  const { state, at } = describeAwayHost(row);
+  return (
+    <span className="flex min-w-0 flex-1 items-baseline">
+      {/* Full ink under the pointer or keyboard: quiet, never disabled-looking. */}
+      <HostNameText
+        name={row.name}
+        className="flex-1 text-text-secondary group-data-[highlighted]/host:text-text-primary"
+      />
+      <DropdownMenuMeta aria-hidden={false} className="whitespace-nowrap">
+        {at !== null ? <TimeAgo prefix={state ? `${state} · ` : "Seen "} timestamp={at} /> : state}
+      </DropdownMenuMeta>
+    </span>
+  );
+}
+
+/**
+ * A submenu destination in the treatment its link calls for now: a host that
+ * wakes while the menu is open says so in place, without changing section.
+ */
+function SubmenuHostLabel({ row }: { row: HostMenuRow }) {
+  if (!isHostMenuRowAway(row)) return <HostSubmenuLabel row={row} />;
+  return (
+    <>
+      <span className="mr-2 flex shrink-0">
+        <HostMark row={row} />
+      </span>
+      <AwayHostLabel row={row} />
+    </>
+  );
+}
+
+/**
+ * The hosts that aren't answering, after the ones you can go to: their own
+ * labelled group, still pickable, since picking one tries to connect.
+ */
+function AwayHostsGroup({
+  rows,
+  renderRow,
+  separated = true,
+}: {
+  rows: readonly HostMenuRow[];
+  renderRow: (row: HostMenuRow) => ReactNode;
+  /** False when nothing sits above it to separate from. */
+  separated?: boolean;
+}) {
+  const labelId = useId();
+  if (rows.length === 0) return null;
+  return (
+    <>
+      {separated && <DropdownMenuSeparator />}
+      <DropdownMenuGroup aria-labelledby={labelId}>
+        <DropdownMenuLabel id={labelId}>Unavailable</DropdownMenuLabel>
+        {rows.map(renderRow)}
+      </DropdownMenuGroup>
     </>
   );
 }
@@ -156,6 +232,9 @@ function HostMenuItem({
   row: HostMenuRow;
   onPick: (row: HostMenuRow, newWindow: boolean) => void;
 }) {
+  // Drawn by what the link says now; which section it sits in was fixed when
+  // the menu opened. One item either way, so a row that changes keeps focus.
+  const away = isHostMenuRowAway(row);
   const { state, note } = describeHostMenuState(row);
   // A link that has gone wrong carries the chip's own warning mark and full
   // ink; connecting and not connected stay quiet, and connected never goes green.
@@ -164,8 +243,9 @@ function HostMenuItem({
   const TroubleGlyph = SEVERITY_GLYPH.warning;
   return (
     <DropdownMenuItem
-      className="items-start gap-2"
+      className={cn("group/host gap-2", !away && "items-start")}
       data-host-id={row.hostId}
+      data-host-away={away ? "" : undefined}
       aria-current={row.isCurrent ? "true" : undefined}
       textValue={row.name}
       onClick={(event) => onPick(row, isNewWindowClick(event))}
@@ -174,44 +254,48 @@ function HostMenuItem({
         {row.isCurrent && <Check className="h-3.5 w-3.5 text-text-primary" />}
       </span>
       <HostMark row={row} />
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        {/* The name keeps the whole row when it needs it and the state drops
-            below it: "build-east-01" and "build-east-02" differ at the end. */}
-        <span className="flex min-w-0 flex-wrap items-baseline gap-x-3">
-          <span className="max-w-full break-words font-medium text-text-primary">{row.name}</span>
-          {state && (
-            <span
-              data-host-trouble={trouble ? "" : undefined}
-              className={cn(
-                "ml-auto flex shrink-0 items-baseline gap-1 text-2xs",
-                trouble
-                  ? "font-medium text-text-primary"
-                  : row.isCurrent
-                    ? "text-text-primary"
-                    : "text-text-secondary"
-              )}
-            >
-              {trouble && (
-                <TroubleGlyph
-                  className="h-3 w-3 shrink-0 translate-y-0.5 text-status-warning"
-                  aria-hidden="true"
-                />
-              )}
-              {state}
-            </span>
+      {away ? (
+        <AwayHostLabel row={row} />
+      ) : (
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          {/* The name keeps the whole row when it needs it and the state drops
+              below it: "build-east-01" and "build-east-02" differ at the end. */}
+          <span className="flex min-w-0 flex-wrap items-baseline gap-x-3">
+            <span className="max-w-full break-words font-medium text-text-primary">{row.name}</span>
+            {state && (
+              <span
+                data-host-trouble={trouble ? "" : undefined}
+                className={cn(
+                  "ml-auto flex shrink-0 items-baseline gap-1 text-2xs",
+                  trouble
+                    ? "font-medium text-text-primary"
+                    : row.isCurrent
+                      ? "text-text-primary"
+                      : "text-text-secondary"
+                )}
+              >
+                {trouble && (
+                  <TroubleGlyph
+                    className="h-3 w-3 shrink-0 translate-y-0.5 text-status-warning"
+                    aria-hidden="true"
+                  />
+                )}
+                {state}
+              </span>
+            )}
+          </span>
+          {noteAge ? (
+            <TimeAgo
+              verbose
+              prefix={noteAge.prefix}
+              timestamp={noteAge.at}
+              className="text-2xs text-text-secondary"
+            />
+          ) : (
+            note && <span className="text-2xs text-text-secondary">{note}</span>
           )}
         </span>
-        {noteAge ? (
-          <TimeAgo
-            verbose
-            prefix={noteAge.prefix}
-            timestamp={noteAge.at}
-            className="text-2xs text-text-secondary"
-          />
-        ) : (
-          note && <span className="text-2xs text-text-secondary">{note}</span>
-        )}
-      </span>
+      )}
     </DropdownMenuItem>
   );
 }
@@ -259,6 +343,11 @@ export function HostChip() {
   const lease = useDriveLeaseView();
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
   const [open, setOpen] = useState(false);
+  // Which hosts were away when the menu opened: a host that wakes or drops
+  // while it is open changes its words in place and changes section next time,
+  // so no row moves under the pointer.
+  const [awayAtOpen, setAwayAtOpen] = useState<ReadonlySet<string> | null>(null);
+  const workingOnLabelId = useId();
   // Forwards riding on the link when Disconnect asked first; null while not asking.
   const [disconnectAsk, setDisconnectAsk] = useState<number | null>(null);
   const visible = supported && hasRemoteHosts(hostList);
@@ -337,7 +426,16 @@ export function HostChip() {
     if (row.isCurrent && !newWindow) return;
     void switchToHost(row.hostId, newWindow);
   };
+  const isAway = (row: HostMenuRow) => awayAtOpen?.has(row.hostId) ?? isHostMenuRowAway(row);
+  const hereRows = rows.filter((row) => !isAway(row));
+  const awayRows = rows.filter(isAway);
   const otherHosts = rows.filter((row) => !row.isCurrent);
+  const otherHereRows = otherHosts.filter((row) => !isAway(row));
+  const otherAwayRows = otherHosts.filter(isAway);
+  const onOpenChange = (next: boolean) => {
+    setAwayAtOpen(next ? new Set(rows.filter(isHostMenuRowAway).map((row) => row.hostId)) : null);
+    setOpen(next);
+  };
   // Only this device's link to the window's host: remote work keeps running,
   // and the window stays on the host to reconnect from.
   const canDisconnect =
@@ -428,7 +526,7 @@ export function HostChip() {
 
   return (
     <>
-      <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenu open={open} onOpenChange={onOpenChange}>
         <Tooltip>
           <TooltipTrigger asChild>{trigger}</TooltipTrigger>
           <TooltipContent side="bottom">
@@ -440,10 +538,16 @@ export function HostChip() {
           </TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="center" pointer className="w-72">
-          <DropdownMenuLabel>Working on</DropdownMenuLabel>
-          {rows.map((row) => (
-            <HostMenuItem key={row.hostId} row={row} onPick={pick} />
-          ))}
+          <DropdownMenuGroup aria-labelledby={workingOnLabelId}>
+            <DropdownMenuLabel id={workingOnLabelId}>Working on</DropdownMenuLabel>
+            {hereRows.map((row) => (
+              <HostMenuItem key={row.hostId} row={row} onPick={pick} />
+            ))}
+          </DropdownMenuGroup>
+          <AwayHostsGroup
+            rows={awayRows}
+            renderRow={(row) => <HostMenuItem key={row.hostId} row={row} onPick={pick} />}
+          />
           <DropdownMenuSeparator />
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
@@ -452,16 +556,31 @@ export function HostChip() {
               Open in new window
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="w-72">
-              {rows.map((row) => (
+              {hereRows.map((row) => (
                 <DropdownMenuItem
                   key={row.hostId}
                   textValue={row.name}
+                  className="group/host"
                   data-new-window-host-id={row.hostId}
                   onSelect={() => void switchToHost(row.hostId, true)}
                 >
-                  <HostSubmenuLabel row={row} />
+                  <SubmenuHostLabel row={row} />
                 </DropdownMenuItem>
               ))}
+              <AwayHostsGroup
+                rows={awayRows}
+                renderRow={(row) => (
+                  <DropdownMenuItem
+                    key={row.hostId}
+                    textValue={row.name}
+                    className="group/host"
+                    data-new-window-host-id={row.hostId}
+                    onSelect={() => void switchToHost(row.hostId, true)}
+                  >
+                    <SubmenuHostLabel row={row} />
+                  </DropdownMenuItem>
+                )}
+              />
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           {projectId && otherHosts.length > 0 && (
@@ -472,16 +591,32 @@ export function HostChip() {
                 Continue this branch on…
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="w-72">
-                {otherHosts.map((row) => (
+                {otherHereRows.map((row) => (
                   <DropdownMenuItem
                     key={row.hostId}
                     textValue={row.name}
+                    className="group/host"
                     data-continue-host-id={row.hostId}
                     onSelect={() => void openProjectOnHost(row.hostId, projectId)}
                   >
-                    <HostSubmenuLabel row={row} />
+                    <SubmenuHostLabel row={row} />
                   </DropdownMenuItem>
                 ))}
+                <AwayHostsGroup
+                  rows={otherAwayRows}
+                  separated={otherHereRows.length > 0}
+                  renderRow={(row) => (
+                    <DropdownMenuItem
+                      key={row.hostId}
+                      textValue={row.name}
+                      className="group/host"
+                      data-continue-host-id={row.hostId}
+                      onSelect={() => void openProjectOnHost(row.hostId, projectId)}
+                    >
+                      <SubmenuHostLabel row={row} />
+                    </DropdownMenuItem>
+                  )}
+                />
               </DropdownMenuSubContent>
             </DropdownMenuSub>
           )}

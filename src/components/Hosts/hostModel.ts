@@ -317,6 +317,45 @@ export function hostMenuRowHasTrouble(row: HostMenuRow): boolean {
   return connection.status === "version-mismatch";
 }
 
+/**
+ * A host that isn't answering and isn't the window's own: a laptop that went
+ * to sleep, a box switched off, a Daintree not running there. Nothing about it
+ * is the person's to fix from here, so the host menus list it apart and
+ * quietly. A refused login and an incompatible build are blockers and stay
+ * out; so does the window's own host, where typing goes nowhere.
+ */
+export function isHostMenuRowAway(row: HostMenuRow): boolean {
+  if (row.isCurrent || row.isLocal) return false;
+  const connection = row.connection;
+  if (!connection) return false;
+  if (connection.status === "connected") return connection.quietSince !== undefined;
+  if (connection.status !== "unreachable" || connection.restarting) return false;
+  return connection.hostModeOff === true || !connection.stoppedRetrying;
+}
+
+/**
+ * What an away host says beside its name, in one short line: what it said
+ * instead of answering, and when it was last heard from when that is known.
+ * A plain unreachable host says only the age ("Seen 14m ago"); its section
+ * already says it can't be reached. Never a guessed cause.
+ */
+export function describeAwayHost(row: HostMenuRow): {
+  state: string | null;
+  /** The age's moment, drawn after `state` (or after "Seen" without one). */
+  at: number | null;
+} {
+  const connection = row.connection;
+  if (connection?.status === "connected" && connection.quietSince !== undefined) {
+    return { state: "No reply", at: connection.quietSince };
+  }
+  if (connection?.status === "unreachable") {
+    if (connection.hostModeOff) return { state: "Not listening", at: row.lastSeenAt };
+    if (row.lastSeenAt !== null) return { state: null, at: row.lastSeenAt };
+    return { state: "Unreachable", at: null };
+  }
+  return { state: describeHostMenuState(row).state, at: null };
+}
+
 /** The host's installed agent CLIs, as its own detection reported them. */
 export function describeHostAgentClis(row: HostMenuRow): string | null {
   const clis = hostAgentCliNames(row);
