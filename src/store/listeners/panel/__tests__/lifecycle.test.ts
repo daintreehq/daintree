@@ -7,6 +7,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import type { TerminalStatusPayload } from "@shared/types";
 import { HIDDEN_VIEW_SKIP_REASON } from "@shared/types/pty-host";
+import { FALLBACK_CHAIN_MAX } from "@shared/config/agentRegistry";
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 vi.mock("@/services/ActionService", () => ({
@@ -493,6 +494,59 @@ describe("handleFallbackTriggered — rate limits (#14370)", () => {
 
     expect(activate).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  describe("an account rotation as long as the cap (#16587)", () => {
+    const rotation = Array.from({ length: FALLBACK_CHAIN_MAX }, (_, i) => `account-${i}`);
+    const last = rotation[rotation.length - 1]!;
+
+    function setupRotation(panel: Record<string, unknown>) {
+      useAgentSettingsStore.setState({
+        settings: {
+          agents: {
+            testAgent: {
+              customPresets: [
+                {
+                  id: "preset-1",
+                  name: "Primary",
+                  fallbacks: rotation,
+                  fallbackOnRateLimit: true,
+                },
+                // The last account names a chain of its own, which the hop never reads.
+                ...rotation.map((id) =>
+                  id === last ? { id, name: id, fallbacks: ["extra"] } : { id, name: id }
+                ),
+                { id: "extra", name: "Extra" },
+              ],
+            },
+          },
+        },
+      });
+      setupPanel(panel);
+      const activate = vi.fn().mockResolvedValue({ success: true });
+      usePanelStore.setState({ activateFallbackPreset: activate });
+      return activate;
+    }
+
+    it("reaches the last fallback", async () => {
+      const from = rotation[rotation.length - 2]!;
+      const activate = setupRotation({
+        agentPresetId: from,
+        fallbackChainIndex: rotation.length - 1,
+      });
+
+      await trigger(from);
+
+      expect(activate).toHaveBeenCalledWith("term-1", last, "preset-1");
+    });
+
+    it("stops after it rather than following that preset's own chain", async () => {
+      const activate = setupRotation({ agentPresetId: last, fallbackChainIndex: rotation.length });
+
+      await trigger(last);
+
+      expect(activate).not.toHaveBeenCalled();
+    });
   });
 
   it("ignores an opt-in that came from a team-shared project preset", async () => {
