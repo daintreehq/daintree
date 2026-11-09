@@ -270,7 +270,11 @@ describe("ActionPalette", () => {
   it("offers no Enter hint on a row Enter won't run", () => {
     const disabled = { ...makeItem("d.action", "Delta"), enabled: false };
     render(<ActionPalette {...baseProps} query="del" results={[disabled]} totalResults={1} />);
-    expect(screen.queryByText(/^to /)).toBeNull();
+    // Every hint reads "to …", so the row's own pin chord still does; what must
+    // be missing is the Enter key and the verb it would have named.
+    expect(screen.queryByText("to delta")).toBeNull();
+    const caps = Array.from(document.querySelectorAll("kbd"), (kbd) => kbd.textContent);
+    expect(caps).not.toContain("Enter");
   });
 
   it("names the selected command in commands mode rather than a generic verb", () => {
@@ -283,7 +287,7 @@ describe("ActionPalette", () => {
     );
     fireKey(">");
     expect(screen.getByText("to alpha run")).toBeTruthy();
-    expect(screen.getByText("exit scope")).toBeTruthy();
+    expect(screen.getByText("to exit scope")).toBeTruthy();
   });
 
   it("offers Backspace to exit the scope only while Backspace would do that", () => {
@@ -295,7 +299,7 @@ describe("ActionPalette", () => {
       />
     );
     fireKey(">");
-    expect(screen.getByText("exit scope")).toBeTruthy();
+    expect(screen.getByText("to exit scope")).toBeTruthy();
     rerender(
       <ActionPalette
         {...baseProps}
@@ -304,7 +308,7 @@ describe("ActionPalette", () => {
         totalResults={1}
       />
     );
-    expect(screen.queryByText("exit scope")).toBeNull();
+    expect(screen.queryByText("to exit scope")).toBeNull();
   });
 
   it("does not surface the projects hint when results exist", () => {
@@ -488,7 +492,7 @@ describe("ActionPalette", () => {
     it("keeps the scope-exit hint but not the close convention in commands mode", () => {
       render(<ActionPalette {...baseProps} />);
       fireKey(">");
-      expect(screen.getByText("exit scope")).toBeTruthy();
+      expect(screen.getByText("to exit scope")).toBeTruthy();
       expect(screen.queryByText("close")).toBeNull();
     });
   });
@@ -713,20 +717,27 @@ describe("ActionPalette", () => {
 
     it("surfaces both chords in the footer while the active row offers them", () => {
       renderRows();
-      expect(screen.getByText("pin")).toBeTruthy();
-      expect(screen.getByText("hide")).toBeTruthy();
+      const capsOf = (label: string) =>
+        Array.from(
+          screen.getByText(label).parentElement!.querySelectorAll("kbd"),
+          (kbd) => kbd.textContent
+        );
+      // jsdom reports no Mac platform: the chords are named the way Windows and
+      // Linux name them, not as the ⌥ glyph.
+      expect(capsOf("to pin")).toEqual(["Alt", "P"]);
+      expect(capsOf("to hide")).toEqual(["Alt", "H"]);
     });
 
     it("drops the hide hint when the active row can't be hidden", () => {
       renderRows({ query: "", sections: SECTIONED });
-      expect(screen.getByText("pin")).toBeTruthy();
-      expect(screen.queryByText("hide")).toBeNull();
+      expect(screen.getByText("to pin")).toBeTruthy();
+      expect(screen.queryByText("to hide")).toBeNull();
     });
 
     it("names the inverse once the active row is pinned", () => {
       useActionPrefsStore.setState({ pinnedActionIds: ["b.beta"] });
       renderRows();
-      expect(screen.getByText("unpin")).toBeTruthy();
+      expect(screen.getByText("to unpin")).toBeTruthy();
     });
   });
   describe("collecting plugin command arguments", () => {

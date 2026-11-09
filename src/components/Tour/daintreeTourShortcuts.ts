@@ -1,6 +1,6 @@
 import type { TourShortcuts } from "@daintreehq/tour/kit";
 import { fleetExitChordLabel } from "@/components/Fleet/fleetKeys";
-import { pilotParkKeys } from "@/components/Pilot/pilotKeys";
+import { PILOT_PARK_COMBO } from "@/components/Pilot/pilotKeys";
 import type { KeyLabels } from "@/lib/keyboardLayout";
 import { tourKeycaps, tourShortcutHint, type TourKeyboard } from "./tourKeys";
 
@@ -10,11 +10,23 @@ import { tourKeycaps, tourShortcutHint, type TourKeyboard } from "./tourKeys";
  */
 const APP_LABELS: Readonly<Record<string, (mac: boolean) => string>> = {
   "fleet.exit": fleetExitChordLabel,
-  "pilot.park": pilotParkKeys,
+};
+
+/**
+ * Chrome chords the app names by a fixed combo rather than a keybinding. They
+ * draw through the same keycaps as every other shortcut, so the scene follows
+ * the platform and the keyboard layout the way the real footer does.
+ */
+const APP_COMBOS: Readonly<Record<string, string>> = {
+  "pilot.park": PILOT_PARK_COMBO,
 };
 
 function appLabel(shortcut: string, mac: boolean): string | undefined {
   return Object.hasOwn(APP_LABELS, shortcut) ? APP_LABELS[shortcut]!(mac) : undefined;
+}
+
+function appCombo(shortcut: string): string {
+  return Object.hasOwn(APP_COMBOS, shortcut) ? APP_COMBOS[shortcut]! : shortcut;
 }
 
 /**
@@ -29,12 +41,8 @@ export function daintreeTourShortcuts(
   const mac = keyboard === "mac";
   return {
     keyboard,
-    hint: (shortcut) => appLabel(shortcut, mac) ?? tourShortcutHint(shortcut, keyboard, keyLabels),
-    keycaps: (shortcut) => {
-      const label = appLabel(shortcut, mac);
-      if (label === undefined) return tourKeycaps(shortcut, keyboard, keyLabels);
-      // The label's own keys ("⌥↵", "Alt+↵"), one cap each.
-      return mac ? Array.from(label) : label.split("+");
-    },
+    hint: (shortcut) =>
+      appLabel(shortcut, mac) ?? tourShortcutHint(appCombo(shortcut), keyboard, keyLabels),
+    keycaps: (shortcut) => tourKeycaps(appCombo(shortcut), keyboard, keyLabels),
   };
 }

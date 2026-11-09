@@ -39,7 +39,7 @@ import {
 import { BAND_GLYPH, BAND_GLYPH_TONE, PilotRunState } from "./PilotRunState";
 import { PilotFilterBar } from "./PilotFilterBar";
 import { PilotFooterHint } from "./PilotFooterHint";
-import { pilotDrillKeys, pilotParkKeys } from "./pilotKeys";
+import { PILOT_DRILL_COMBO, PILOT_PARK_COMBO } from "./pilotKeys";
 import { PilotParkEditor, type PilotGateCandidate, type PilotParkTarget } from "./PilotParkEditor";
 import { isMac } from "@/lib/platform";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -627,8 +627,8 @@ function RunRow({
  * lift in one key, so the verb names the inverse once one is in force.
  */
 const PLUGIN_SHELF_VERB: Partial<Record<FleetBand, string>> = {
-  parked: "Unpark",
-  snoozed: "Wake now",
+  parked: "to unpark",
+  snoozed: "to wake now",
 };
 
 /**
@@ -708,7 +708,7 @@ function PluginPanelRow({
 
 /**
  * `actionLabel` is null when nothing is listed, and the hint goes with it — a
- * footer offering "↵ Open" over a loading or empty list is chrome promising a
+ * footer offering "to open" over a loading or empty list is chrome promising a
  * key that visibly does nothing.
  *
  * What Enter does to the highlighted row is the whole of the left edge. Arrow
@@ -753,11 +753,11 @@ function PilotFooter({
     <div className="flex w-full items-center justify-between gap-3">
       <div className="-ml-1 flex items-center gap-2">
         {actionLabel !== null && (
-          <PilotFooterHint keys="↵" label={actionLabel} onClick={onOpen} testId="pilot-open-hint" />
+          <PilotFooterHint keys="Enter" label={actionLabel} onClick={onOpen} testId="pilot-open-hint" />
         )}
         {parkLabel !== null && (
           <PilotFooterHint
-            keys={pilotParkKeys(isMac())}
+            keys={PILOT_PARK_COMBO}
             label={parkLabel}
             onClick={onPark}
             testId="pilot-park-hint"
@@ -765,7 +765,7 @@ function PilotFooter({
         )}
         {drillLabel !== null && (
           <PilotFooterHint
-            keys={pilotDrillKeys(isMac())}
+            keys={PILOT_DRILL_COMBO}
             label={drillLabel}
             onClick={onDrill}
             testId="pilot-drill-hint"
@@ -1842,7 +1842,7 @@ export function PilotView() {
   // something else. Gated on the bar still being here as well, because a bar
   // that unmounts while focused — the fleet drains, or the dialog closes —
   // never gets its blur, and the flag alone would suppress the hints for good.
-  const actionLabel = selectedRow === null || (isFilterFocused && showFilterBar) ? null : "Open";
+  const actionLabel = selectedRow === null || (isFilterFocused && showFilterBar) ? null : "to open";
 
   // The second verb rides the same gating as the first — no selection or a
   // focused filter segment drops both hints — plus one of its own: parking
@@ -1852,18 +1852,18 @@ export function PilotView() {
     actionLabel === null || selectedRow === null || selectedRow.kind !== "item"
       ? null
       : selectedRow.item.run === undefined
-        ? (PLUGIN_SHELF_VERB[selectedRow.item.band] ?? "Park")
+        ? (PLUGIN_SHELF_VERB[selectedRow.item.band] ?? "to park")
         : status.kind !== "live"
           ? null
           : selectedRow.item.band === "parked"
-            ? "Edit park"
-            : "Park";
+            ? "to edit park"
+            : "to park";
 
   // The drill verb rides the same "is a row actually actionable" gating as the
   // other two, and disappears with the target itself — a hint naming a chord
-  // that would do nothing is the same false promise as an "↵ Open" over an
+  // that would do nothing is the same false promise as "to open" over an
   // empty list.
-  const drillLabel = actionLabel === null || drillTarget === null ? null : "Worktrees";
+  const drillLabel = actionLabel === null || drillTarget === null ? null : "to show worktrees";
 
   return (
     // The park editor is the one thing Escape has to get past before the

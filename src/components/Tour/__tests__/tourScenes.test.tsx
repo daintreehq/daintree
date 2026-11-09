@@ -204,8 +204,8 @@ describe("tour scenes on each keyboard", () => {
 
   it("draws the park keys the narration names, on the keycaps and the footer", () => {
     for (const [keyboard, caps, footer] of [
-      ["mac", ["⌥", "↵"], "⌥↵ Park"],
-      ["pc", ["Alt", "↵"], "Alt+↵ Park"],
+      ["mac", ["⌥", "⏎"], "⌥⏎ to park"],
+      ["pc", ["Alt", "Enter"], "Alt+Enter to park"],
     ] as const) {
       const chapter = TOUR_CHAPTERS.find((c) => c.id === "pilot")!;
       const at = resolveChapterTiming(chapter, keyboard).cues.park! + 0.3;

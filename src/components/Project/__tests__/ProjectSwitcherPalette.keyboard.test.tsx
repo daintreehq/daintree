@@ -389,7 +389,7 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     render(<ProjectSwitcherPalette {...defaultProps} />);
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).not.toContain("Background");
-    expect(footer.textContent).not.toContain("⌥↵");
+    expect(footer.textContent).not.toContain("Alt+Enter");
     expect(footer.textContent).toContain("to switch");
   });
 
@@ -398,7 +398,7 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     render(<ProjectSwitcherPalette {...defaultProps} mode="dropdown" />);
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).not.toContain("Background");
-    expect(footer.textContent).not.toContain("⌥↵");
+    expect(footer.textContent).not.toContain("Alt+Enter");
     expect(footer.textContent).toContain("to switch");
   });
 
@@ -639,7 +639,8 @@ describe("ProjectSwitcherPalette with a project open in another window (#12597)"
     const footer = screen.getByTestId("palette-footer");
     // jsdom reports no Mac platform, so the modifier is the one Windows and
     // Linux press — never a literal ⌘.
-    expect(footer.textContent).toContain("Ctrl+↵");
+    const caps = Array.from(footer.querySelectorAll("kbd"), (kbd) => kbd.textContent);
+    expect(caps.slice(0, 2)).toEqual(["Ctrl", "Enter"]);
     expect(footer.textContent).not.toContain("⌘");
     expect(footer.textContent).toContain("to go to window");
     expect(footer.textContent).not.toContain("new window");
@@ -980,12 +981,12 @@ describe("getNewWindowMenuLabel (#12597)", () => {
       getNewWindowMenuLabel(projectRow({ isOpenInThisWindow: true, openInOtherWindow: "cached" }))
     ).toBeNull();
     const row = projectRow({ isOpenInThisWindow: true, openInOtherWindow: "cached" });
-    expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
-      keys: "↵",
+    expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({
+      keys: "Enter",
       label: "to switch",
     });
     expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
-      keys: "↵",
+      keys: "Enter",
       label: "to switch",
     });
   });
@@ -1018,33 +1019,41 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
 
   it("keeps Switch and New window for a project nobody holds", () => {
     expect(getProjectSwitcherEnterHint(projectRow(), false, true)).toEqual({
-      keys: "↵",
+      keys: "Enter",
       label: "to switch",
     });
-    expect(getProjectSwitcherEnterHint(projectRow(), true, true, true)).toEqual({
-      keys: "⌘↵",
+    expect(getProjectSwitcherEnterHint(projectRow(), true, true)).toEqual({
+      keys: "Cmd+Enter",
       label: "to open in new window",
     });
   });
 
-  it("names the modifier each platform actually has", () => {
-    const row = projectRow();
-    expect(getProjectSwitcherEnterHint(row, true, true, true)?.keys).toBe("⌘↵");
-    const other = getProjectSwitcherEnterHint(row, true, true, false)?.keys;
-    expect(other).toBe("Ctrl+↵");
-    expect(other).not.toContain("⌘");
-    const elsewhere = projectRow({ openInOtherWindow: "cached" });
-    expect(getProjectSwitcherEnterHint(elsewhere, true, true, false)?.keys).not.toContain("⌘");
+  // The footer draws the keys with KbdChord, which names them for the platform
+  // it runs on; a glyph here would be drawn as itself on Windows and Linux.
+  it("hands the footer a canonical combo, never a key glyph", () => {
+    const rows = [
+      projectRow(),
+      projectRow({ openInOtherWindow: "cached" }),
+      projectRow({ openInOtherWindow: "foreground" }),
+      projectRow({ isActive: true }),
+      projectRow({ isMissing: true }),
+    ];
+    for (const row of rows) {
+      for (const held of [false, true]) {
+        const keys = getProjectSwitcherEnterHint(row, held, true)?.keys;
+        expect(keys).toMatch(/^(Cmd\+)?Enter$/);
+      }
+    }
   });
 
   it("says Go to window on either key for a project another window shows", () => {
     const row = projectRow({ openInOtherWindow: "foreground" });
     expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
-      keys: "↵",
+      keys: "Enter",
       label: "to go to window",
     });
-    expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
-      keys: "⌘↵",
+    expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({
+      keys: "Cmd+Enter",
       label: "to go to window",
     });
   });
@@ -1052,28 +1061,28 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
   it("switches here to a project another window only keeps cached, or takes it to a new one (#13291)", () => {
     const row = projectRow({ openInOtherWindow: "cached" });
     expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
-      keys: "↵",
+      keys: "Enter",
       label: "to switch",
     });
-    expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
-      keys: "⌘↵",
+    expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({
+      keys: "Cmd+Enter",
       label: "to open in new window",
     });
   });
 
   it("says Switch on either key for a project this window shows or is activating", () => {
     const row = projectRow({ isOpenInThisWindow: true });
-    expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({ keys: "↵", label: "to switch" });
+    expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({ keys: "Enter", label: "to switch" });
   });
 
   it("switches here, or takes it to a new window, for a project this window keeps cached", () => {
     const row = projectRow({ isOpenInThisWindow: true, isCachedInThisWindow: true });
     expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
-      keys: "↵",
+      keys: "Enter",
       label: "to switch",
     });
-    expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
-      keys: "⌘↵",
+    expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({
+      keys: "Cmd+Enter",
       label: "to open in new window",
     });
   });
@@ -1081,21 +1090,21 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
   it("never promises a new window the keypress can't open", () => {
     // Each of these falls through to the plain switch in the keyboard handler.
     expect(getProjectSwitcherEnterHint(projectRow(), true, false)).toEqual({
-      keys: "↵",
+      keys: "Enter",
       label: "to switch",
     });
     // Enter on the current project closes the palette, on either key.
     expect(getProjectSwitcherEnterHint(projectRow({ isActive: true }), true, true)).toEqual({
-      keys: "↵",
+      keys: "Enter",
       label: "to close",
     });
     // A missing project's Enter opens the relocation dialog, and says so.
     expect(getProjectSwitcherEnterHint(projectRow({ isMissing: true }), true, true)).toEqual({
-      keys: "↵",
+      keys: "Enter",
       label: "to locate",
     });
     expect(getProjectSwitcherEnterHint(presenceScratchRow, true, true)).toEqual({
-      keys: "↵",
+      keys: "Enter",
       label: "to switch",
     });
   });
@@ -1103,15 +1112,15 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
   it("never marks the current row as elsewhere, whatever presence says", () => {
     const row = projectRow({ isActive: true, openInOtherWindow: "foreground" });
     expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
-      keys: "↵",
+      keys: "Enter",
       label: "to close",
     });
   });
 
-  it("keeps ↵ for an owned row when there is no new-window handler", () => {
+  it("keeps plain Enter for an owned row when there is no new-window handler", () => {
     const row = projectRow({ openInOtherWindow: "foreground" });
     expect(getProjectSwitcherEnterHint(row, true, false)).toEqual({
-      keys: "↵",
+      keys: "Enter",
       label: "to go to window",
     });
   });

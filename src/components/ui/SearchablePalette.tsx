@@ -533,7 +533,7 @@ export function SearchablePalette<T>({
     // One chip, not three. `getActionLabel` names what Enter does for the
     // current selection, which is the only thing a footer is for now — the
     // `↑↓` and `Esc` chips this used to compose were restating conventions.
-    return <PaletteFooterHints primaryHint={{ keys: ["↵"], label: phrase }} />;
+    return <PaletteFooterHints primaryHint={{ keys: "Enter", label: phrase }} />;
   }, [rawActionLabel]);
 
   let footerContent: React.ReactNode;

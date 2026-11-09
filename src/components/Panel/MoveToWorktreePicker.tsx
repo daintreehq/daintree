@@ -454,7 +454,7 @@ function MoveToWorktreePickerBody({
       </div>
 
       <AppPaletteDialog.Footer>
-        <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to move" }} />
+        <PaletteFooterHints primaryHint={{ keys: "Enter", label: "to move" }} />
       </AppPaletteDialog.Footer>
     </>
   );

@@ -6,6 +6,7 @@ import {
   PaletteFooterHints,
   PaletteNoMatchHint,
   toHintPhrase,
+  type PaletteFooterHint,
 } from "@/components/ui/AppPaletteDialog";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
@@ -15,8 +16,6 @@ import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { UI_PALETTE_EXIT_DURATION } from "@/lib/animationUtils";
 import { PaletteScopeChip } from "@/components/ui/PaletteScopeChip";
-import { isMac } from "@/lib/platform";
-import { parseChord } from "@/lib/kbdShortcut";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { ActionPaletteItem, HIDE_SHORTCUT, PIN_SHORTCUT } from "./ActionPaletteItem";
 import {
@@ -55,11 +54,6 @@ const PREFIX_MAP: Record<string, PrefixRouteSpec> = {
 
 const COMMANDS_LABEL = PREFIX_MAP[">"]!.label;
 
-// Display tokens for the row-control chords, resolved once: the platform can't
-// change under a running renderer.
-const PIN_CHORD_KEYS = parseChord(PIN_SHORTCUT, isMac())[0] ?? [];
-const HIDE_CHORD_KEYS = parseChord(HIDE_SHORTCUT, isMac())[0] ?? [];
-const BACKSPACE_KEYS = parseChord("Backspace", isMac())[0] ?? [];
 
 /**
  * Which row command an Alt chord names, or null.
@@ -477,11 +471,11 @@ export function ActionPalette({
       // The row controls have no other discoverable surface — they're
       // presentational spans with a mouse tooltip — so the chord that reaches
       // them rides the footer, and only while the row actually offers it.
-      const rowHints: { keys: string[]; label: string }[] = [];
+      const rowHints: PaletteFooterHint[] = [];
       if (!argPrompt && activeItem && activeItem.danger !== "confirm") {
-        rowHints.push({ keys: PIN_CHORD_KEYS, label: activeIsPinned ? "unpin" : "pin" });
+        rowHints.push({ keys: PIN_SHORTCUT, label: activeIsPinned ? "to unpin" : "to pin" });
         if (!activeIsPinned && canHideIndex(selectedIndex)) {
-          rowHints.push({ keys: HIDE_CHORD_KEYS, label: "hide" });
+          rowHints.push({ keys: HIDE_SHORTCUT, label: "to hide" });
         }
       }
 
@@ -494,7 +488,7 @@ export function ActionPalette({
       // footer otherwise trailed off on some rows and not on others.
       const enterHint =
         selectedItem && selectedItem.enabled
-          ? { keys: ["↵"], label: `to ${toHintPhrase(selectedItem.title.replace(/…$/, ""))}` }
+          ? { keys: "Enter", label: `to ${toHintPhrase(selectedItem.title.replace(/…$/, ""))}` }
           : null;
 
       if (argPrompt) {
@@ -502,11 +496,11 @@ export function ActionPalette({
           <PaletteFooterHints
             primaryHint={
               enterHint ?? {
-                keys: ["↵"],
+                keys: "Enter",
                 label: argPrompt.kind === "string" ? "to continue" : "to choose",
               }
             }
-            hints={[{ keys: ["Esc"], label: "back" }]}
+            hints={[{ keys: "Escape", label: "to go back" }]}
           />
         );
       } else if (activeMode === "commands") {
@@ -515,7 +509,7 @@ export function ActionPalette({
         // from every other list they've used. Only while the field is empty,
         // though: with text in it Backspace pops the scope only from the very
         // start, so after typing it deletes a character like anywhere else.
-        const scopeHints = query === "" ? [{ keys: BACKSPACE_KEYS, label: "exit scope" }] : [];
+        const scopeHints = query === "" ? [{ keys: "Backspace", label: "to exit scope" }] : [];
         const secondary = [...scopeHints, ...rowHints];
         if (enterHint) {
           body = <PaletteFooterHints primaryHint={enterHint} hints={secondary} />;
@@ -527,7 +521,7 @@ export function ActionPalette({
         // Enter hands it to the project switcher (see `handleKeyDown`). This
         // used to show a `/` chip, but the prefix only routes from an empty
         // field, so pressing it here typed a slash.
-        body = <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to search projects" }} />;
+        body = <PaletteFooterHints primaryHint={{ keys: "Enter", label: "to search projects" }} />;
       } else if (enterHint) {
         // Mirrors SearchablePalette's getActionLabel composition so we keep
         // that affordance while still owning the wrapper id used by

@@ -198,7 +198,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
     <div className="flex items-center gap-3 w-full">
       <div className="flex-1 min-w-0">
         {/* Only while Enter would recall something. */}
-        {hasSelection && <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to recall" }} />}
+        {hasSelection && <PaletteFooterHints primaryHint={{ keys: "Enter", label: "to recall" }} />}
       </div>
       {/* Pointer-down is held so a click switches scope without taking focus
           out of the search field — the list keys live there. */}

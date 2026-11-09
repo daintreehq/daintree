@@ -613,8 +613,10 @@ describe("SearchablePalette footer", () => {
     // The footer names what Enter does and stops there. `↑↓` and `Esc` are
     // conventions every picker in the app shares, so restating them per surface
     // is chrome that teaches nothing.
+    // jsdom reports no Mac platform, so Enter is spelled out the way Windows
+    // and Linux name it.
     const keys = Array.from(document.body.querySelectorAll("kbd"), (el) => el.textContent);
-    expect(keys).toEqual(["↵"]);
+    expect(keys).toEqual(["Enter"]);
     expect(document.body.textContent).not.toContain("navigate");
     expect(document.body.textContent).not.toContain("close");
   });
@@ -767,8 +769,8 @@ describe("SearchablePalette footer", () => {
       const initialDialog = document.body.querySelector("[role='dialog']");
       expect(initialDialog).not.toBeNull();
       const initialKbds = Array.from(initialDialog!.querySelectorAll("kbd"));
-      // The footer carries exactly one chip now — the "↵" action.
-      const initialPrimaryKbd = initialKbds.find((kbd) => kbd.textContent === "↵");
+      // The footer carries exactly one chip now — the Enter action.
+      const initialPrimaryKbd = initialKbds.find((kbd) => kbd.textContent === "Enter");
       expect(initialPrimaryKbd).toBeDefined();
 
       rerender(renderWithSelectedIndex(1, stableLabel));
@@ -776,7 +778,7 @@ describe("SearchablePalette footer", () => {
 
       const finalDialog = document.body.querySelector("[role='dialog']");
       const finalPrimaryKbd = Array.from(finalDialog!.querySelectorAll("kbd")).find(
-        (kbd) => kbd.textContent === "↵"
+        (kbd) => kbd.textContent === "Enter"
       );
       // Same DOM node identity proves React's reconciler bailed out — the
       // memoized JSX element kept the same reference so no remount occurred.

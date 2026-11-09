@@ -4,7 +4,6 @@ import { FolderOpen, FolderPlus, Settings } from "lucide-react";
 import { FolderDown } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
-import { describeKeyCap } from "@/lib/kbdShortcut";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -252,17 +251,16 @@ function ProjectSwitcherFooter({
     <div className="@container/switcher-footer w-full flex items-center justify-between gap-3">
       {hint ? (
         <span className="flex min-w-0 items-center">
-          <span className="sr-only">{describeKeyCap(hint.keys, isMac())}</span>
-          <kbd aria-hidden="true" className={cn(KBD_CLASS, "shrink-0")}>
-            {hint.keys}
-          </kbd>
+          <KbdChord shortcut={hint.keys} className="shrink-0" />
           {hint.host ? (
             <span className="ml-1.5 flex min-w-0">
               <span className="shrink-0 whitespace-pre">{`${hint.label} `}</span>
               <HostNameText name={hint.host} />
             </span>
           ) : (
-            <span className="ml-1.5 whitespace-nowrap">{hint.label}</span>
+            // Gives way with an ellipsis, as the palette footers' primary chip
+            // does: off a Mac the keys are spelled out and take more room.
+            <span className="ml-1.5 min-w-0 truncate">{hint.label}</span>
           )}
         </span>
       ) : (
@@ -1402,9 +1400,9 @@ function ProjectPaletteInner({
           inBrowse={!isRankedSearch && query === "" && stops.length > 1}
           hintOverride={
             cursor?.kind === "band"
-              ? { keys: "↵", label: isFoldedBand(cursor.bandKey) ? "to expand" : "to collapse" }
+              ? { keys: "Enter", label: isFoldedBand(cursor.bandKey) ? "to expand" : "to collapse" }
               : cursor?.kind === "scratch-create"
-                ? { keys: "↵", label: "to create" }
+                ? { keys: "Enter", label: "to create" }
                 : undefined
           }
           canOpenWindow={onSelectNewWindow !== undefined}

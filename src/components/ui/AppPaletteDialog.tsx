@@ -10,13 +10,11 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
-import { describeKeyCap } from "@/lib/kbdShortcut";
-import { isMac } from "@/lib/platform";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { SearchField } from "@/components/ui/SearchField";
-import { KBD_CLASS, Kbd, KbdChord } from "@/components/ui/Kbd";
+import { KBD_CLASS, KbdChord } from "@/components/ui/Kbd";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { PALETTE_HEADER_ATTR } from "./paletteHeaderAttr";
 import { useOverlayState } from "@/hooks/useOverlayState";
@@ -784,7 +782,17 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
 };
 
 export interface PaletteFooterHint {
-  keys: string[];
+  /**
+   * The canonical combo the hint teaches ("Enter", "Cmd+Enter", "Shift+F10"),
+   * drawn by `KbdChord` in the platform's own key names. Never a glyph: a
+   * literal "↵" or "⌘" names a Mac key on every platform. Omitted for a chip
+   * that states a fact rather than teaching a key ("Saved: Nord").
+   */
+  keys?: string;
+  /**
+   * What the key does, read after it: "to switch", "to go back". Every hint in
+   * a footer, primary or secondary, takes the same lowercase "to …" phrase.
+   */
   label: string;
 }
 
@@ -821,21 +829,10 @@ function HintChip({
     <span
       className={cn("inline-flex items-baseline", truncate ? "min-w-0" : "shrink-0", className)}
     >
-      {/* The caps are glyphs ("↵", "↑"), which a screen reader names as symbols
-          or skips; the keys are spoken by name instead. */}
-      <span className="sr-only">
-        {hint.keys.map((key) => describeKeyCap(key, isMac())).join(" ")}
+      {hint.keys && <KbdChord shortcut={hint.keys} className="shrink-0" />}
+      <span className={cn(hint.keys && "ml-1.5", truncate && "min-w-0 truncate")}>
+        {hint.label}
       </span>
-      {hint.keys.map((key, i) => (
-        <Kbd
-          key={key}
-          rootAttributes={{ "aria-hidden": "true" }}
-          className={cn("shrink-0", i > 0 && "ml-1")}
-        >
-          {key}
-        </Kbd>
-      ))}
-      <span className={cn("ml-1.5", truncate && "min-w-0 truncate")}>{hint.label}</span>
     </span>
   );
 }

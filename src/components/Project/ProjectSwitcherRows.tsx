@@ -16,8 +16,6 @@ import {
 import { AlarmClockOff, Moon } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
-import { isMac } from "@/lib/platform";
-import { formatChordText } from "@/lib/kbdShortcut";
 import { PALETTE_ROW_CLASS, ROW_MENU_TARGET_CLASS } from "@/components/ui/paletteRowStyles";
 import {
   HighlightedText,
@@ -569,6 +567,13 @@ export function modEnterOpensWindow(
 }
 
 /**
+ * The footer's new-window chord. The keydown takes Meta or Control, and
+ * `KbdChord` draws `Cmd` as whichever this platform calls primary, so Windows
+ * and Linux are never told to press a ⌘ they don't have.
+ */
+const MOD_ENTER = "Cmd+Enter";
+
+/**
  * The footer's Enter hint for the highlighted row (#12597). A row another
  * window shows or is activating goes there on either key, so both say where it
  * goes rather than "Switch" or "New window". A row this window shows or is
@@ -580,32 +585,27 @@ export function modEnterOpensWindow(
 export function getProjectSwitcherEnterHint(
   row: ProjectSwitcherRow | undefined,
   modifierHeld: boolean,
-  canOpenWindow: boolean,
-  mac: boolean = isMac()
+  canOpenWindow: boolean
 ): { keys: string; label: string } | null {
   if (!row) return null;
   // A missing project's Enter opens the relocation dialog, not a switch.
-  if (row.kind === "project" && row.isMissing) return { keys: "↵", label: "to locate" };
+  if (row.kind === "project" && row.isMissing) return { keys: "Enter", label: "to locate" };
   // Enter on the workspace you're in is a "never mind": the palette closes and
   // nothing switches, so the hint says that rather than promising a switch.
-  if (row.isActive) return { keys: "↵", label: "to close" };
+  if (row.isActive) return { keys: "Enter", label: "to close" };
   const opensWindow = modifierHeld && modEnterOpensWindow(row, canOpenWindow);
-  // The keydown takes Meta or Control, so the modifier is whichever this
-  // platform calls primary — a literal ⌘ tells Windows and Linux to press a key
-  // they don't have. The Enter glyph stays the footer family's ↵.
-  const modEnter = `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`;
   if (opensWindow && row.kind === "project" && movesCachedView(row)) {
-    return { keys: modEnter, label: "to open in new window" };
+    return { keys: MOD_ENTER, label: "to open in new window" };
   }
   // A row this window is already bringing in front switches here, whatever
   // another window still caches.
   if (row.kind === "project" && isOpenElsewhere(row) && !row.isOpenInThisWindow) {
-    return { keys: opensWindow ? modEnter : "↵", label: "to go to window" };
+    return { keys: opensWindow ? MOD_ENTER : "Enter", label: "to go to window" };
   }
   if (opensWindow && !row.isOpenInThisWindow) {
-    return { keys: modEnter, label: "to open in new window" };
+    return { keys: MOD_ENTER, label: "to open in new window" };
   }
-  return { keys: "↵", label: "to switch" };
+  return { keys: "Enter", label: "to switch" };
 }
 
 /**
@@ -617,21 +617,17 @@ export function getProjectSwitcherEnterHint(
  */
 export function getOtherHostEnterHint(
   option: OtherHostOption,
-  modifierHeld: boolean,
-  mac: boolean = isMac()
+  modifierHeld: boolean
 ): { keys: string; label: string; host?: string } | null {
-  if (option.kind === "retry") return option.busy ? null : { keys: "↵", label: "to retry" };
+  if (option.kind === "retry") return option.busy ? null : { keys: "Enter", label: "to retry" };
   if (modifierHeld) {
-    return {
-      keys: `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`,
-      label: "to open in new window",
-    };
+    return { keys: MOD_ENTER, label: "to open in new window" };
   }
-  if (option.kind === "connect") return { keys: "↵", label: "to connect" };
-  if (option.kind === "host") return { keys: "↵", label: "to switch" };
+  if (option.kind === "connect") return { keys: "Enter", label: "to connect" };
+  if (option.kind === "host") return { keys: "Enter", label: "to switch" };
   // The host apart from the words, so the footer can clip a long name the way
   // the band does — keeping the part that tells two machines apart.
-  return { keys: "↵", label: "to open on", host: option.hostName };
+  return { keys: "Enter", label: "to open on", host: option.hostName };
 }
 
 export function ProjectListItem({

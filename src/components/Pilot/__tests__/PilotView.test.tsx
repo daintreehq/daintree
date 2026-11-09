@@ -727,7 +727,7 @@ describe("PilotView", () => {
       const search = screen.getByTestId("pilot-search");
       expect(fireEvent.keyDown(search, { key: "ArrowDown" })).toBe(true);
       expect(fireEvent.keyDown(search, { key: "Enter" })).toBe(true);
-      expect(screen.queryByText("Open")).toBeNull();
+      expect(screen.queryByText("to open")).toBeNull();
     });
 
     it("keeps the highlight on its row when the list shrinks underneath it", async () => {
@@ -964,21 +964,21 @@ describe("PilotView", () => {
 
     it("keeps the footer honest about whose keys are whose", () => {
       // The hints describe the LIST's keys. On a filter segment those keys move
-      // between segments instead, so leaving "↵ Open" up is the same false
+      // between segments instead, so leaving "to open" up is the same false
       // promise the footer already drops over an empty list.
       seedMixedFleet();
       render(<PilotView />);
-      expect(screen.getByText("Open")).toBeTruthy();
+      expect(screen.getByText("to open")).toBeTruthy();
 
       act(() => {
         segment(/^All/).focus();
       });
-      expect(screen.queryByText("Open")).toBeNull();
+      expect(screen.queryByText("to open")).toBeNull();
 
       act(() => {
         screen.getByTestId("pilot-search").focus();
       });
-      expect(screen.getByText("Open")).toBeTruthy();
+      expect(screen.getByText("to open")).toBeTruthy();
     });
 
     it("restores the hints after the bar disappears under the cursor", () => {
@@ -990,7 +990,7 @@ describe("PilotView", () => {
       act(() => {
         segment(/^All/).focus();
       });
-      expect(screen.queryByText("Open")).toBeNull();
+      expect(screen.queryByText("to open")).toBeNull();
 
       act(() => {
         seed([]);
@@ -1003,7 +1003,7 @@ describe("PilotView", () => {
       });
       view.rerender(<PilotView />);
 
-      expect(screen.getByText("Open")).toBeTruthy();
+      expect(screen.getByText("to open")).toBeTruthy();
     });
 
     it("hands focus back when the clear control removes itself", () => {
@@ -1799,7 +1799,13 @@ describe("PilotView", () => {
       ]);
       render(<PilotView />);
 
-      expect(screen.getByTestId("pilot-park-hint").textContent).toContain("Park");
+      const hint = screen.getByTestId("pilot-park-hint");
+      expect(hint.textContent).toContain("to park");
+      // The chord is drawn in this platform's own key names (jsdom reports no
+      // Mac), and the button's name reads the keys aloud before the verb.
+      const caps = Array.from(hint.querySelectorAll("kbd"), (kbd) => kbd.textContent);
+      expect(caps).toEqual(["Alt", "Enter"]);
+      expect(screen.getByRole("button", { name: "Alt Enter to park" })).toBe(hint);
     });
 
     it("renames the verb when the highlighted row is already parked", () => {
@@ -1814,7 +1820,7 @@ describe("PilotView", () => {
       ]);
       render(<PilotView />);
 
-      expect(screen.getByTestId("pilot-park-hint").textContent).toContain("Edit park");
+      expect(screen.getByTestId("pilot-park-hint").textContent).toContain("to edit park");
     });
 
     it("shows the park note on the row itself", () => {
@@ -2605,7 +2611,13 @@ describe("PilotView worktree scope", () => {
     it("advertises the chord only while the highlighted run can use it", () => {
       seedSpread();
       render(<PilotView />);
-      expect(screen.getByTestId("pilot-drill-hint")).toBeTruthy();
+      const drill = screen.getByTestId("pilot-drill-hint");
+      expect(drill.textContent).toContain("to show worktrees");
+      // Ctrl off a Mac, which is the modifier the drill's keydown checks there.
+      expect(Array.from(drill.querySelectorAll("kbd"), (kbd) => kbd.textContent)).toEqual([
+        "Ctrl",
+        "Enter",
+      ]);
 
       fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
       expect(screen.queryByTestId("pilot-drill-hint")).toBeNull();

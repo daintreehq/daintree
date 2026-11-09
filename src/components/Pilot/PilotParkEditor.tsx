@@ -69,7 +69,7 @@ function toParkGateCandidate({ row, group }: PilotGateCandidate): ParkGateCandid
  *
  * The fields themselves are `RunParkFields`, shared with the sidebar's park
  * dialog. Its verbs live in the dialog footer in the footer's own key-hint
- * grammar (`PilotFooterHint`), the same "↵ Open" / "⌥↵ Park" the list shows
+ * grammar (`PilotFooterHint`), the same "to open" / "to park" the list shows
  * there.
  */
 export function PilotParkEditor({
@@ -201,7 +201,7 @@ export function PilotParkEditor({
   );
 
   const isReparking = target.existingPark !== undefined;
-  const primaryLabel = isReparking ? "Update park" : "Park";
+  const primaryLabel = isReparking ? "to update park" : "to park";
 
   return (
     <div
@@ -262,7 +262,7 @@ export function PilotParkEditor({
         createPortal(
           <div className="-ml-1 flex w-full items-center gap-2">
             <PilotFooterHint
-              keys="↵"
+              keys="Enter"
               label={primaryLabel}
               onClick={confirm}
               disabled={busy && pending !== "park"}
@@ -283,8 +283,8 @@ export function PilotParkEditor({
             )}
             <span className="ml-auto">
               <PilotFooterHint
-                keys="esc"
-                label="Cancel"
+                keys="Escape"
+                label="to cancel"
                 onClick={() => onClose(false)}
                 disabled={busy}
                 noSubmit
