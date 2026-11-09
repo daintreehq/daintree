@@ -5,7 +5,6 @@ import type { CanopyPendingPopOut, CanopySnapshot } from "@shared/types/ipc/cano
 import type { CanopyFrame } from "@/components/Canopy/canopyFrame";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
-import { NO_CANOPY_REPLY } from "@/services/canopyReplyDictation";
 
 const stops = vi.hoisted(() => ({
   terminalConfig: vi.fn(),
@@ -238,28 +237,30 @@ describe("CanopyWindowRoot", () => {
     expect(view.queryByTestId("plugin-support")).toBeNull();
   });
 
-  it("says why the dictation key started nothing, as the voice service tells it", async () => {
+  it("says what the voice service announces, such as why the dictation key started nothing", async () => {
+    const said = "Select an agent in Canopy to dictate a reply to it.";
     const frames: FrameRequestCallback[] = [];
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const request = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       frames.push(callback);
       return frames.length;
     });
-    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const view = render(<CanopyWindowRoot />);
     try {
-      const view = render(<CanopyWindowRoot />);
       await act(async () => {});
 
-      act(() => useVoiceRecordingStore.getState().announce(NO_CANOPY_REPLY.message));
+      act(() => useVoiceRecordingStore.getState().announce(said));
       act(() => {
         for (const frame of frames.splice(0)) frame(performance.now());
       });
 
-      const said = Array.from(view.baseElement.querySelectorAll('[role="status"]')).map(
-        (region) => region.textContent
-      );
-      expect(said).toContain(NO_CANOPY_REPLY.message);
+      const regions = Array.from(view.baseElement.querySelectorAll('[role="status"]'));
+      expect(regions.map((region) => region.textContent)).toContain(said);
     } finally {
-      vi.unstubAllGlobals();
+      view.unmount();
+      request.mockRestore();
+      cancel.mockRestore();
+      useVoiceRecordingStore.setState({ announcement: null });
     }
   });
 
