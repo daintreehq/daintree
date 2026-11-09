@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useCanopyStore, type CanopyScope } from "@/store/canopyStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import { CANOPY_URGENT_PRIORITY, type CanopySnapshot } from "@shared/types/ipc/canopy";
 import {
   itemArchived,
@@ -39,7 +39,6 @@ export function useCanopyInboxOrder({
   isOpen,
   hostId,
   otherHost,
-  scope,
   canopy,
   baseItems,
   nowMs,
@@ -49,7 +48,6 @@ export function useCanopyInboxOrder({
   /** The other host the panel shows, or null for the window's own. */
   hostId: HostId | null;
   otherHost: boolean;
-  scope: CanopyScope;
   canopy: CanopySnapshot | null;
   baseItems: CanopyItem[];
   nowMs: number;
@@ -107,12 +105,12 @@ export function useCanopyInboxOrder({
   // The list moves only at moments the user can expect it to; see `nextCanopyOrder`.
   // Each host keeps its own order: the same run ids mean other runs elsewhere.
   const refreshedAt = observedAt ?? canopy?.refreshedAt ?? null;
-  const ownOrder = useCanopyStore((s) => s.orders[scope]);
+  const ownOrder = useCanopyStore((s) => s.order);
   const hostOrder = useCanopyStore((s) => (hostId === null ? undefined : s.hostOrders[hostId]));
   const order = (otherHost ? hostOrder : ownOrder) ?? null;
   const setOrder = useCanopyStore((s) => s.setOrder);
   const setHostOrder = useCanopyStore((s) => s.setHostOrder);
-  const orderKey = `${hostId ?? ""}|${scope}`;
+  const orderKey = hostId ?? "";
   const [pointerInList, setPointerInList] = useState(false);
   const lastInteractionRef = useRef(0);
   const pressingRef = useRef(false);
@@ -175,7 +173,7 @@ export function useCanopyInboxOrder({
         lastRankRef.current = now;
         rankRequestSeenRef.current = rankRequest;
       }
-      if (hostId === null) setOrder(scope, step.order);
+      if (hostId === null) setOrder(step.order);
       else setHostOrder(hostId, step.order);
       return;
     }
@@ -184,7 +182,6 @@ export function useCanopyInboxOrder({
     return () => clearTimeout(timer);
   }, [
     isOpen,
-    scope,
     hostId,
     orderKey,
     baseItems,

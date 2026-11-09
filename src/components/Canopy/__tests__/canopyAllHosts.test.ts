@@ -8,7 +8,6 @@ const onEvent = vi.hoisted(() => vi.fn((_handler: (event: unknown) => void) => (
 const ownCalls = vi.hoisted(() => ({
   archive: vi.fn(() => Promise.resolve()),
   setShown: vi.fn(() => Promise.resolve()),
-  setScope: vi.fn(() => Promise.resolve()),
   searchScreens: vi.fn((_targets: unknown[]) => Promise.resolve(["t1"])),
   watchTerminal: vi.fn(() => Promise.resolve({ watchId: 1, snapshot: null })),
   unwatchTerminal: vi.fn(() => Promise.resolve()),

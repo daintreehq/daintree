@@ -658,7 +658,7 @@ The Canopy window watches every project at once, so it is where a tool that span
 }
 ```
 
-`viewId` names a `location: "panel"` view whose panel is not `hasPty` (`canopy_view_unknown`, `canopy_view_not_panel` and `canopy_view_pty` otherwise), each at most once (`canopy_view_duplicate`), five at most. The same view stays a panel in every project window. Canopy lists it under Plugins, below its inbox, by the panel's `name` and `iconId` with your plugin's name beneath, and choosing it fills Canopy's pane with your view; picking an agent or searching gives the pane back to the inbox. Only the Canopy window offers it: the Canopy dialog inside a project window doesn't.
+`viewId` names a `location: "panel"` view whose panel is not `hasPty` (`canopy_view_unknown`, `canopy_view_not_panel` and `canopy_view_pty` otherwise), each at most once (`canopy_view_duplicate`), five at most. The same view stays a panel in every project window. Canopy lists it under Plugins, below its inbox, by the panel's `name` and `iconId` with your plugin's name beneath, and choosing it fills Canopy's pane with your view; picking an agent or searching gives the pane back to the inbox. Canopy shows its inbox only in its own window, so that is where the view is offered.
 
 Naming a view is your word that it works with no project around it, because Canopy gives it none:
 

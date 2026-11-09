@@ -47,7 +47,6 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AgentStateChip } from "@/components/Terminal/TerminalAgentIndicator";
 import { SESSION_LABELS } from "@/components/Worktree/terminalStateConfig";
 import { resolvePaneSessionPresentation } from "@/lib/paneSessionPresentation";
-import { usePaneObservation } from "@/hooks/useRunSessionPresentation";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
@@ -617,15 +616,13 @@ export function CanopyCard({
   const frame = useCanopyFrame();
   const canGoTo = frame.goToRun !== null;
   // Its own dictation, apart from the grid pane's composer on the same terminal.
-  // Main reads keyterms, vocabulary and file links from the terminal only when
-  // this view's project owns it: another project's or host's gives it none.
-  const ownsContext = otherHostId === undefined && run.workspaceId === frame.workspaceId();
+  // Main reads keyterms, vocabulary and file links from a terminal only for the
+  // project window that owns it, which the Canopy window never is.
   const voiceTarget: VoiceRecordingTarget = {
     panelId: canopyReplyVoiceId(item.runId, otherHostId),
     panelTitle: `Reply to ${row.title}`,
     surface: "canopy-reply",
     ...(otherHostId !== undefined ? { otherHostId } : {}),
-    ...(ownsContext ? { terminalId: item.runId } : {}),
     canopyRow: { runId: item.runId, hostScope },
   };
   const voiceMicNotice = useVoiceRecordingStore((s) =>
@@ -684,26 +681,12 @@ export function CanopyCard({
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
   // The grid pane's own glyph: its display state through the run's fleet band.
   // Amber is a run in Needs you, a hand-back is unread or finished, and a
-  // prompt that asks nothing draws nothing. The pane's newer observation
-  // speaks for the run when this view holds it, as on the pane, and the row's
-  // otherwise: another project's or host's terminal id names no pane here.
-  // Display state, exit and observation come from the same one, so a pane
-  // already back at work draws its spinner rather than a wait or an exit the
-  // row still holds. An exit is `runtimeStatus: "exited"`, as the pane reads
-  // its own.
-  const ownPane = usePaneObservation(ownsContext ? item.runId : null);
-  const observed = ownPane ?? run;
-  const displayChrome =
-    ownPane === undefined
-      ? row.chrome
-      : {
-          isAgent: row.chrome.isAgent,
-          hasExited: ownPane.runtimeStatus === "exited" || ownPane.agentState === "exited",
-        };
+  // prompt that asks nothing draws nothing. The Canopy window holds no pane,
+  // so the row's own observation speaks for the run.
   const agentState = resolvePaneSessionPresentation(
-    getTerminalAgentDisplayState(displayChrome, observed.agentState),
+    getTerminalAgentDisplayState(row.chrome, run.agentState),
     row.band,
-    observed
+    run
   );
   const { detail, action, progress, facts, contextWarning, readerWritten } = itemDetail(item);
   // An open question is the pane's anchor, whole and in the screen's words: the

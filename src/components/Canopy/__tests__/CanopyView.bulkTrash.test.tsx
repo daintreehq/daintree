@@ -48,6 +48,7 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
 }));
 
 import { CanopyView } from "../CanopyView";
+import { canopyTestFrame } from "./canopyTestFrame";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -122,7 +123,6 @@ function installElectron() {
     setShown: vi.fn(async () => {}),
     archive: vi.fn(async () => null),
     unarchive: vi.fn(async () => {}),
-    setScope: vi.fn(async () => {}),
     markSeen: vi.fn(async () => {}),
     setRead: vi.fn(async () => null),
     markAllRead: vi.fn(async () => []),
@@ -169,15 +169,13 @@ async function open(runs: Run[]) {
   });
   useCanopyStore.setState({ isOpen: true, snapshot: baseSnapshot, mode: "on" });
   const canopy = installElectron();
-  render(<CanopyView />);
+  render(<CanopyView frame={canopyTestFrame()} />);
   await frames();
   return canopy;
 }
 
 function searchInput(): HTMLInputElement {
-  return document.querySelector<HTMLInputElement>(
-    "[data-testid=canopy-dialog] input[role=combobox]"
-  )!;
+  return document.querySelector<HTMLInputElement>("[data-canopy-standalone] input[role=combobox]")!;
 }
 
 async function search(text: string) {
@@ -232,8 +230,7 @@ afterEach(() => {
     isOpen: false,
     snapshot: null,
     mode: "unset",
-    scope: "all",
-    orders: {},
+    order: null,
     unreadOnly: false,
     trashExpanded: false,
   });

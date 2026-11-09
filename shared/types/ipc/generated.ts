@@ -278,10 +278,6 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./canopy.js").CanopyTerminalView;
   };
-  "canopy-window:acknowledge-pop-out": {
-    args: [__1: { id: number }];
-    result: boolean;
-  };
   "canopy-window:focus": {
     args: [];
     result: boolean;
@@ -296,14 +292,6 @@ export interface GeneratedIpcInvokeMap {
   };
   "canopy-window:open": {
     args: [];
-    result: void;
-  };
-  "canopy-window:peek-pop-out": {
-    args: [];
-    result: import("./canopy.js").CanopyPendingPopOut | null;
-  };
-  "canopy-window:pop-out": {
-    args: [popOut: import("./canopy.js").CanopyPopOut];
     result: void;
   };
   "canopy:answer": {
@@ -4988,7 +4976,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrUrl?: string | undefined;
           sourcePrState?: "open" | "merged" | "closed" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
-          submoduleInit?: "all" | "none" | "inherit" | undefined;
+          submoduleInit?: "none" | "inherit" | "all" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;
           fetchBase?: boolean | undefined;
         };

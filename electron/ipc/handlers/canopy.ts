@@ -2715,7 +2715,12 @@ export const canopyNamespace = defineIpcNamespace({
       { withContext: true }
     ),
 
-    /** Read only this workspace's agents (its id), or every workspace's (null). */
+    /**
+     * Read only this workspace's agents (its id), or every workspace's (null).
+     * Only a renderer on an older build asks: its project dialog offered "This
+     * project", which no view has offered since the inbox moved to the Canopy
+     * window (#16581), so it is kept for a Shell that still does.
+     */
     setScope: op(
       CANOPY_METHOD_CHANNELS.setScope,
       async (ctx, workspaceId: string | null): Promise<void> => {

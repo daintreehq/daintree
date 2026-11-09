@@ -11,7 +11,7 @@ import { CANOPY_DEMO_FRAME_COUNT, canopyDemoItems } from "./canopyDemo";
 import { itemNeedsAttention } from "./canopyModel";
 import { useListReorderMotion } from "./useListReorderMotion";
 import { CanopyHeaderCenter } from "./CanopyHostPicker";
-import { CanopyCloseButton, CanopySurface } from "./CanopySurface";
+import { CanopyCloseButton } from "./CanopySurface";
 import { canopyListStyle } from "./canopyListWidth";
 import { CANOPY_LOCAL, CANOPY_STOP, CANOPY_TITLE } from "./canopyTerms";
 
@@ -42,8 +42,6 @@ interface CanopyPitchProps {
   onTurnOn: () => Promise<void>;
   /** The user doesn't want Canopy: its ways in go, all but Settings. */
   onHide: () => Promise<void>;
-  /** Where the keyboard goes when the offer closes: what had it when the panel opened. */
-  restoreFocusTo?: () => HTMLElement | null;
   /** The host picker, when there is another host to show: the offer is this host's alone. */
   hostPicker?: React.ReactNode;
 }
@@ -57,19 +55,15 @@ const FAILED: Record<"on" | "hide", string> = {
  * What Canopy shows until the user turns it on: what it does, beside its inbox
  * playing a made-up fleet through the moments it is for, and what turning it on
  * does. Nothing here reads a terminal; nothing is read until they turn it on.
+ * Its header and body only: the offer in a project window draws it in a
+ * dialog, and the Canopy window in its own surface.
  */
-export function CanopyPitch({
-  isOpen,
-  onTurnOn,
-  onHide,
-  restoreFocusTo,
-  hostPicker,
-}: CanopyPitchProps) {
+export function CanopyPitch({ isOpen, onTurnOn, onHide, hostPicker }: CanopyPitchProps) {
   const [pending, setPending] = useState<"on" | "hide" | null>(null);
   const [failed, setFailed] = useState<"on" | "hide" | null>(null);
   // The keyboard lands on the offer's heading, not on Turn on: a reflexive
-  // Enter after the shortcut must not turn reading on. The dialog
-  // is told to place no focus of its own, so this is the only move.
+  // Enter after the shortcut must not turn reading on. The surface around it
+  // places no focus of its own, so this is the only move.
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     if (!isOpen) return;
@@ -91,11 +85,7 @@ export function CanopyPitch({
   };
 
   return (
-    <CanopySurface
-      isOpen={isOpen}
-      initialFocus="none"
-      {...(restoreFocusTo ? { restoreFocusTo, preferRestoreFocusTo: true } : {})}
-    >
+    <>
       <AppDialog.Header>
         <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
         <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
@@ -166,7 +156,7 @@ export function CanopyPitch({
           </div>
         </section>
       </div>
-    </CanopySurface>
+    </>
   );
 }
 

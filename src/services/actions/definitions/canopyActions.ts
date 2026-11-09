@@ -1,13 +1,11 @@
 import type { ActionRegistry } from "../actionTypes";
 import { canopyOwnHostId, useCanopyStore } from "@/store/canopyStore";
-import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { isCanopyUnread } from "@shared/types/ipc/canopy";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { actionService } from "@/services/ActionService";
-import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
+import { clientErrorText } from "@/utils/clientAppError";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
@@ -30,29 +28,11 @@ function showingOtherHost(): boolean {
   return isOpen && hostId !== null;
 }
 
-const AGENTS_UNKNOWN_REASON = "Canopy hasn't listed this project's agents yet.";
 const CANOPY_OFF_REASON = "Canopy isn't on. Turn it on from its panel or Settings > Canopy.";
 
 /** Turned on: until then Canopy has read nothing, so nothing is unread. */
 function canopyOn(): boolean {
   return useCanopyStore.getState().mode === "on";
-}
-
-/**
- * Which runs, by incarnation, are this project's — known only once the fleet
- * has been read, and trusted only while it is current. Null with Canopy set to
- * all projects, where every run counts; undefined while it can't be told.
- */
-function projectRunsInScope(): ReadonlySet<string> | null | undefined {
-  if (useCanopyStore.getState().scope !== "project") return null;
-  const fleet = useFleetSnapshotStore.getState().snapshot;
-  if (!fleet || fleet.degraded) return undefined;
-  const here = getViewWorkspaceId();
-  return new Set(
-    fleet.runs
-      .filter((run) => run.workspaceId === here)
-      .map((run) => `${run.runId}:${run.spawnedAt}`)
-  );
 }
 
 /** The window didn't open. */
@@ -79,7 +59,8 @@ function notifyWindowFailed(error: unknown): void {
 /**
  * A view on a remote host reads that host's Canopy, while the window is this
  * machine's and opens only while this machine's Canopy is on, which the view
- * can't read.
+ * can't read. Canopy's inbox opens in no project window (#16581), so such a
+ * view has the window or main's word on why not.
  */
 function onRemoteHost(): boolean {
   return canopyOwnHostId() !== LOCAL_HOST_ID;
@@ -96,22 +77,18 @@ function windowOffered(): boolean {
 
 /**
  * Open the one Canopy window, or bring it forward, restored if minimized:
- * Canopy's only home once it is on (#16578), whatever was opened before. A
- * panel this view still holds is put away once the window stands. False when
- * main refused because this machine's Canopy isn't on and `fallsBackWhenOff`
- * asked to hear it rather than tell the user.
+ * Canopy's only home once it is on (#16578), whatever was opened before. An
+ * offer this view still holds is put away once the window stands.
  */
-async function openCanopyWindow({ fallsBackWhenOff = false } = {}): Promise<boolean> {
+async function openCanopyWindow(): Promise<void> {
   try {
     await window.electron.canopyWindow.open();
   } catch (error) {
-    if (fallsBackWhenOff && clientErrorCode(error) === "UNSUPPORTED") return false;
     notifyWindowFailed(error);
     throw error;
   }
   const { isOpen, close } = useCanopyStore.getState();
   if (isOpen) close();
-  return true;
 }
 
 /** The canopy panel: every agent, read off its screen and laid out by what it needs. */
@@ -132,15 +109,11 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     keywords: ["canopy", "inbox", "agents", "waiting", "summary", "overview", "fleet"],
     selfNotifiesOnExecutionError: true,
     run: async () => {
-      if (onRemoteHost()) {
-        // While this machine's Canopy is off there is no window: the host's
-        // own panel opens here, as it did before the window.
-        if (await openCanopyWindow({ fallsBackWhenOff: true })) return;
-      } else if (useCanopyStore.getState().mode === "on") {
+      if (onRemoteHost() || useCanopyStore.getState().mode === "on") {
         await openCanopyWindow();
         return;
       }
-      // Before Canopy is on there is no window: the panel here offers to turn it on.
+      // Before Canopy is on there is no window: the offer here asks to turn it on.
       useCanopyStore.getState().toggle();
     },
   }));
@@ -169,14 +142,14 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     id: "canopy.markAllRead",
     title: "Mark all Canopy agents as read",
     description:
-      "Mark every agent Canopy lists as unread as read — this project's alone when Canopy is set to This project — through what it had done when the panel last showed it; anything an agent does after that stays unread",
+      "Mark every agent Canopy lists as unread as read, through what it had done when the panel last showed it; anything an agent does after that stays unread",
     category: "project",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     nonRepeatable: true,
     isVisible: canopyShown,
-    isEnabled: () => canopyOn() && !showingOtherHost() && projectRunsInScope() !== undefined,
+    isEnabled: () => canopyOn() && !showingOtherHost(),
     disabledReason: () =>
       !canopyShown()
         ? CANOPY_HIDDEN_REASON
@@ -184,9 +157,7 @@ export function registerCanopyActions(actions: ActionRegistry): void {
           ? CANOPY_OFF_REASON
           : showingOtherHost()
             ? OTHER_HOST_REASON
-            : projectRunsInScope() === undefined
-              ? AGENTS_UNKNOWN_REASON
-              : undefined,
+            : undefined,
     keywords: ["canopy", "inbox", "read", "unread", "clear", "agents"],
     run: async () => {
       if (showingOtherHost()) return;
@@ -197,15 +168,9 @@ export function registerCanopyActions(actions: ActionRegistry): void {
           .filter((entry) => entry.kind === "archived")
           .map((entry) => `${entry.runId}:${entry.spawnedAt}`)
       );
-      // The runs the panel would list, as its own Mark all read takes them:
-      // with This project chosen, another project's unread stay unread.
-      const inScope = projectRunsInScope();
-      if (inScope === undefined) return;
+      // The runs the panel would list, as its own Mark all read takes them.
       const unread = snapshot.reads.filter(
-        (mark) =>
-          isCanopyUnread(mark) &&
-          !archived.has(`${mark.runId}:${mark.spawnedAt}`) &&
-          (inScope === null || inScope.has(`${mark.runId}:${mark.spawnedAt}`))
+        (mark) => isCanopyUnread(mark) && !archived.has(`${mark.runId}:${mark.spawnedAt}`)
       );
       if (unread.length === 0) return;
       const after = await window.electron.canopy.markAllRead(

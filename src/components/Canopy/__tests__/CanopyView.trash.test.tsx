@@ -49,6 +49,8 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 import { notify } from "@/lib/notify";
 import { CanopyView } from "../CanopyView";
+import type { CanopyFrame } from "../canopyFrame";
+import { canopyTestFrame } from "./canopyTestFrame";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
@@ -127,7 +129,6 @@ function installElectron(snapshot: CanopySnapshot) {
     setShown: vi.fn(async () => {}),
     archive: vi.fn(async () => null),
     unarchive: vi.fn(async () => {}),
-    setScope: vi.fn(async () => {}),
     markSeen: vi.fn(async () => {}),
     setRead: vi.fn(async () => null),
     markAllRead: vi.fn(async () => []),
@@ -162,13 +163,15 @@ function installElectron(snapshot: CanopySnapshot) {
   return canopy;
 }
 
+let frame: CanopyFrame;
+
 /** Shows the panel over `trash`, with the given runs in the inbox. */
 async function open(trash: CanopyTrashEntry[], runIds: string[] = ["live"]) {
   const snapshot = { ...baseSnapshot, trash };
   useFleetSnapshotStore.setState({ snapshot: fleet(runIds) });
   useCanopyStore.setState({ isOpen: true, snapshot, mode: "on" });
   const canopy = installElectron(snapshot);
-  render(<CanopyView />);
+  render(<CanopyView frame={frame} />);
   await frames();
   return canopy;
 }
@@ -192,6 +195,7 @@ function dialogButton(name: string): HTMLElement {
 }
 
 beforeEach(() => {
+  frame = canopyTestFrame();
   vi.stubGlobal("IntersectionObserver", IntersectionObserverStub);
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
   __resetCanopySeenForTests();
@@ -210,8 +214,7 @@ afterEach(() => {
     isOpen: false,
     snapshot: null,
     mode: "unset",
-    scope: "all",
-    orders: {},
+    order: null,
     unreadOnly: false,
     trashExpanded: false,
   });
@@ -257,7 +260,7 @@ describe("CanopyView Trash", () => {
   it("shows a search's matching trash rows open, without unfolding the Trash for good", async () => {
     await open(TRASH);
     const input = document.querySelector<HTMLInputElement>(
-      "[data-testid=canopy-dialog] input[role=combobox]"
+      "[data-canopy-standalone] input[role=combobox]"
     )!;
     await act(async () => {
       fireEvent.change(input, { target: { value: "api" } });
@@ -272,7 +275,7 @@ describe("CanopyView Trash", () => {
   it("shows the trash rows matching any item of a list", async () => {
     await open(TRASH);
     const input = document.querySelector<HTMLInputElement>(
-      "[data-testid=canopy-dialog] input[role=combobox]"
+      "[data-canopy-standalone] input[role=combobox]"
     )!;
     const searchFor = async (value: string) => {
       await act(async () => {
@@ -416,7 +419,7 @@ describe("CanopyView Trash", () => {
   it("goes down from a search that matches only the trash onto its first match, and back up", async () => {
     await open(TRASH);
     const input = document.querySelector<HTMLInputElement>(
-      "[data-testid=canopy-dialog] input[role=combobox]"
+      "[data-canopy-standalone] input[role=combobox]"
     )!;
     act(() => input.focus());
     await act(async () => {
@@ -531,10 +534,7 @@ describe("CanopyView Trash", () => {
       expect(vi.mocked(notify)).not.toHaveBeenCalled();
     });
 
-    it("opens the run's project to resume it there when no view of it is open", async () => {
-      const switchProject = vi
-        .spyOn(useProjectStore.getState(), "switchProject")
-        .mockResolvedValue(undefined);
+    it("hands a run only its project can resume to the frame, when no view of it is open", async () => {
       const canopy = await open([ended("older", 3_600_000)]);
       canopy.restoreTrashed.mockResolvedValueOnce({ open: { workspaceId: "p1" } });
       fireEvent.click(trashBar()!);
@@ -544,38 +544,15 @@ describe("CanopyView Trash", () => {
       await act(async () => {
         fireEvent.keyDown(trashRows()[0]!, { key: "Enter" });
       });
-      expect(switchProject).toHaveBeenCalledWith("p1", {
-        focusIntent: {
-          intent: "restore-trashed",
+      expect(frame.restoreElsewhere).toHaveBeenCalledTimes(1);
+      expect(frame.restoreElsewhere).toHaveBeenCalledWith(
+        expect.objectContaining({
           runId: "older",
           spawnedAt: NOW - 3_600_000,
           expiresAt: NOW - 3_600_000 + 20_000,
-        },
-      });
-      expect(useCanopyStore.getState().isOpen).toBe(false);
-    });
-
-    it("goes nowhere when the panel closed before main said where the run is", async () => {
-      const switchProject = vi
-        .spyOn(useProjectStore.getState(), "switchProject")
-        .mockResolvedValue(undefined);
-      const canopy = await open([ended("older", 3_600_000)]);
-      let answer: () => void = () => {};
-      canopy.restoreTrashed.mockImplementationOnce(
-        () =>
-          new Promise<CanopyRestoreOutcome>(
-            (resolve) => (answer = () => resolve({ open: { workspaceId: "p1" } }))
-          )
+        }),
+        { hostId: null, runId: "older", workspaceId: "p1" }
       );
-      fireEvent.click(trashBar()!);
-      await act(async () => {
-        fireEvent.click(trashRows()[0]!.querySelector<HTMLElement>("[data-canopy-trash-restore]")!);
-      });
-      await act(async () => {
-        useCanopyStore.setState({ isOpen: false });
-      });
-      await act(async () => answer());
-      expect(switchProject).not.toHaveBeenCalled();
     });
 
     it("takes the keyboard to a resumed run that reached the inbox before main answered", async () => {
@@ -712,7 +689,7 @@ describe("CanopyView Trash", () => {
     });
   });
 
-  it("says the last run's expiry even as the Trash goes with it, the panel scoped to another project", async () => {
+  it("says the last run's expiry even as the Trash goes with it, over an inbox with no agent running", async () => {
     const announce = vi
       .spyOn(useAnnouncerStore.getState(), "announce")
       .mockImplementation(() => {});
@@ -720,13 +697,12 @@ describe("CanopyView Trash", () => {
       ...trashed(runId, "p2", 20_000),
       expiresAt: Date.now(),
     });
-    // "This project" shows none of these runs: the inbox is empty, only the Trash is up.
-    useCanopyStore.setState({ scope: "project" });
+    // No agent is running: the inbox is empty, only the Trash is up.
     await open([due("expired"), due("restored")], []);
     expect(trashBar()).not.toBeNull();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await act(async () => {
-      // Restored elsewhere at its time: back in the fleet, outside the panel's scope.
+      // Restored elsewhere at its time: back in the fleet.
       useFleetSnapshotStore.setState({ snapshot: fleet(["restored"]) });
       useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [] } });
     });

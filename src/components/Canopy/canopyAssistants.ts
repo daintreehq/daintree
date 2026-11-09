@@ -152,12 +152,6 @@ export function buildAssistantItems(
     /** This machine's name, when the list spans hosts; nothing otherwise. */
     hostName?: string | null;
     seen: AssistantHandbacksSeen;
-    /**
-     * Only this project's, when the panel shows one project. The global
-     * assistant stays: it belongs to no project, and is the one that acts on
-     * any of them.
-     */
-    projectId?: string | null;
     /** Epoch ms to hold confirmations against; the read's own time when not given. */
     now?: number;
   }
@@ -172,9 +166,6 @@ export function buildAssistantItems(
     if (entry.state !== "live" || entry.role !== "assistant") continue;
     const { subject } = entry;
     const projectId = subject.scope.kind === "project" ? subject.scope.projectId : null;
-    if (options.projectId != null && projectId !== null && projectId !== options.projectId) {
-      continue;
-    }
     const id = canopyAssistantId(subject);
     const session = assistantSessionLabel(subject.lane);
     const projectName =

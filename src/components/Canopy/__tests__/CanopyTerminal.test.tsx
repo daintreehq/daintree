@@ -166,7 +166,6 @@ import {
 import type { CanopyTerminalApi } from "../canopyHostSource";
 import { ownCanopyTerminalApi } from "../canopyHostSource";
 import { TerminalLinkHandler } from "@/services/terminal/TerminalLinkHandler";
-import { actionService } from "@/services/ActionService";
 import { useCanopyStore } from "@/store/canopyStore";
 
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -1335,30 +1334,15 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     });
   });
 
-  it("views a selected path in the viewer dialog, over the panel rather than behind it", async () => {
-    const dispatch = vi
-      .spyOn(actionService, "dispatch")
-      .mockResolvedValue({ ok: true, result: undefined });
-    const { frame } = mount();
+  it("offers no file to open for a selected path, this machine's run or another host's", () => {
+    // Files open in a project window's viewer and panels, which the Canopy window has none of.
+    const own = mount();
     xterm.current!.selection = "/repo/src/app.ts";
-    openMenu(frame);
-    await act(async () => screen.getByText("View file").click());
-    // Once the menu has closed and handed the keyboard back to the terminal.
-    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
-    expect(dispatch).toHaveBeenCalledWith(
-      "file.view",
-      { path: "/repo/src/app.ts" },
-      expect.anything()
-    );
-    expect(dispatch).not.toHaveBeenCalledWith(
-      "file.openPanel",
-      expect.anything(),
-      expect.anything()
-    );
-    dispatch.mockRestore();
-  });
+    openMenu(own.frame);
+    expect(screen.getByText("Copy")).toBeTruthy();
+    expect(screen.queryByText("View file")).toBeNull();
+    own.unmount();
 
-  it("offers nothing to open for another host's selected path", () => {
     const { container } = render(<CanopyTerminal runId="r" spawnedAt={1} api={otherHostApi()} />);
     xterm.current!.selection = "/repo/src/app.ts";
     openMenu(container.querySelector("[data-canopy-terminal]")!);

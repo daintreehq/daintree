@@ -21,7 +21,6 @@ type ElectronCanopy = Window["electron"]["canopy"];
  */
 export type CanopyApi = Pick<
   ElectronCanopy,
-  | "setScope"
   | "setShown"
   | "setRead"
   | "archive"
@@ -46,7 +45,6 @@ export type CanopyApi = Pick<
 
 /** The window's own host, looked up at each call as the panel always has. */
 export const ownCanopyApi: CanopyApi = {
-  setScope: (...args) => window.electron.canopy.setScope(...args),
   setShown: (...args) => window.electron.canopy.setShown(...args),
   setRead: (...args) => window.electron.canopy.setRead(...args),
   archive: (...args) => window.electron.canopy.archive(...args),
@@ -76,7 +74,6 @@ export function remoteCanopyApi(hostId: HostId): CanopyApi {
     (...args: IpcInvokeMap[C]["args"]) =>
       canopyHostClient.invoke(hostId, channel, ...args);
   return {
-    setScope: on("canopy:set-scope"),
     setShown: on("canopy:set-shown"),
     setRead: on("canopy:set-read"),
     archive: on("canopy:archive"),

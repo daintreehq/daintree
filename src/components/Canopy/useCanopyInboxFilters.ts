@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Project } from "@shared/types";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import { isLocalHostId, type HostId } from "@shared/types/remoteHosts";
-import { ALL_HOSTS_ID, useCanopyStore, type CanopyScope } from "@/store/canopyStore";
+import { ALL_HOSTS_ID, useCanopyStore } from "@/store/canopyStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { pluralize } from "@/lib/pluralize";
@@ -10,7 +10,6 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useAgentDirectory } from "@/hooks/useAgentDirectory";
 import { useAssistantWork } from "@/hooks/useAssistantWork";
 import type { HostMenuRow } from "@/components/Hosts/hostModel";
-import { useCanopyFrame } from "./canopyFrame";
 import type { CanopyInbox, CanopyItem } from "./canopyModel";
 import { unmatchedAlternatives, type CanopySearchAlternatives } from "./canopySearch";
 import {
@@ -53,9 +52,6 @@ export function useCanopyInboxFilters({
   hasHostPicker,
   participants,
   projects,
-  storedScope,
-  scope,
-  setScope,
   api,
   recoveries,
   fleet,
@@ -82,9 +78,6 @@ export function useCanopyInboxFilters({
   hasHostPicker: boolean;
   participants: readonly HostId[];
   projects: Project[];
-  storedScope: CanopyScope;
-  scope: CanopyScope;
-  setScope: (scope: CanopyScope) => void;
   api: CanopyApi;
   recoveries: number;
   fleet: FleetSnapshot | null;
@@ -113,7 +106,6 @@ export function useCanopyInboxFilters({
   // whichever host they run on, so its row is read while it is docked.
   const globalDocked = useCanopyStore((s) => s.globalDocked);
   const directory = useAgentDirectory(isOpen && (assistantsReadable || globalDocked));
-  const frame = useCanopyFrame();
   const handbacksSeen = useCanopyStore((s) => s.assistantHandbacksSeen);
   const seeAssistantHandback = useCanopyStore((s) => s.seeAssistantHandback);
   const ownHostName = everyHost
@@ -127,11 +119,10 @@ export function useCanopyInboxFilters({
       projectEmoji: (id) => byId.get(id)?.emoji || null,
       hostName: ownHostName,
       seen: handbacksSeen,
-      projectId: scope === "project" ? frame.workspaceId() : null,
     });
-  }, [assistantsReadable, directory, projects, ownHostName, handbacksSeen, scope, frame]);
+  }, [assistantsReadable, directory, projects, ownHostName, handbacksSeen]);
   const assistantAsks = assistantItems.filter((item) => item.ask !== null).length;
-  // Its row, whatever the list shows: no filter, scope or host hides the dock.
+  // Its row, whatever the list shows: no filter or host hides the dock.
   const globalItem = useMemo(() => {
     if (!assistantsReadable) {
       return (
@@ -165,8 +156,6 @@ export function useCanopyInboxFilters({
     [workReadings, everyHost]
   );
   const workPartial = workOf !== null && hostsWithPartialWork(workReadings, workHosts).length > 0;
-  // Every host's work has been read once: a worker missing from the narrowed list now isn't in it.
-  const workRead = workOf === null || workHosts.every((id) => workReadings.has(id));
   const assistantNames = useMemo(
     () =>
       new Map(assistantItems.map((item) => [item.id, `Daintree Assistant · ${item.scopeLabel}`])),
@@ -199,7 +188,6 @@ export function useCanopyInboxFilters({
     useAnnouncerStore.getState().announce(`Showing the work of ${name}`, "polite");
     // Its workers can be anywhere it reaches: every project, and every host when there are others.
     if (roleFilter === "assistants") setRoleFilter("all");
-    if (storedScope === "project") setScope("all");
     if (!everyHost && hasHostPicker) useCanopyStore.getState().setHostId(ALL_HOSTS_ID);
   };
   const inWork = useCallback(
@@ -220,13 +208,13 @@ export function useCanopyInboxFilters({
   const unreadOnly = useCanopyStore((s) => s.unreadOnly);
   const setUnreadOnly = useCanopyStore((s) => s.setUnreadOnly);
   // A run read while the Unread filter is on stays listed until the filter is
-  // turned off — or the panel closes, or shows another scope: reading the row
+  // turned off — or the panel closes, or shows another host: reading the row
   // in front of you must not pull it out from under you, nor shift every row
   // beneath it, but a fresh look starts from what is unread now.
   const [keptUnread, setKeptUnread] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => {
     setKeptUnread((kept) => (kept.size === 0 ? kept : new Set()));
-  }, [isOpen, scope, hostId]);
+  }, [isOpen, hostId]);
   useEffect(() => {
     setKeptUnread((kept) => {
       if (!unreadOnly) return kept.size === 0 ? kept : new Set();
@@ -234,18 +222,6 @@ export function useCanopyInboxFilters({
       return added.length === 0 ? kept : new Set([...kept, ...added.map((item) => item.runId)]);
     });
   }, [unreadOnly, inbox]);
-  // A dialog popped out here (#16338) keeps listing what it had read, once
-  // this list shows its host: after the resets above, never merged with what
-  // this window kept for another list.
-  const popOutLanding = useCanopyStore((s) => s.popOutLanding);
-  const landingKept =
-    popOutLanding !== null && popOutLanding.hostId === hostId ? popOutLanding.keptUnread : null;
-  useEffect(() => {
-    if (landingKept === null) return;
-    setKeptUnread((kept) =>
-      landingKept.length === 0 && kept.size === 0 ? kept : new Set(landingKept)
-    );
-  }, [landingKept]);
   // The inbox as listed: every run in it, or with the filter on, the unread.
   const filtered = useMemo(
     () =>
@@ -384,7 +360,6 @@ export function useCanopyInboxFilters({
     workOf,
     showWorkOf,
     workPartial,
-    workRead,
     workLabelOf,
     shownAssistants,
     bandAssistants,
@@ -394,7 +369,6 @@ export function useCanopyInboxFilters({
     shownInbox,
     unreadOnly,
     setUnreadOnly,
-    keptUnread,
     listed,
     bandSize,
     archivedExpanded,

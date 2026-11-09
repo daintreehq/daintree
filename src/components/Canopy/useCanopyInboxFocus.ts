@@ -14,16 +14,12 @@ import type { CanopyAssistantItem, CanopyRoleFilter } from "./canopyAssistants";
 import { canopyAssistantDomId } from "./openAssistantItem";
 import { CANOPY_SURFACE, useCanopyFrame } from "./canopyFrame";
 import { placeOf } from "./canopyInboxPlace";
-import { mainViewFocusedAgentId } from "./canopyMainViewFocus";
-import { canopyResumeTarget, type CanopyResume } from "./canopyResume";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { formatTypingLocatorMessage, useTypingLocatorStore } from "@/store/typingLocatorStore";
 
 /** How long a row asked for waits on its host's runs before it is taken as not there. */
 const REPLY_REVEAL_WAIT_MS = 10_000;
-/** How long a popped-out dialog's row waits on its host's rows here before the inbox lands as usual. */
-const POP_OUT_LANDING_WAIT_MS = 10_000;
 
 /** The dictation keeps writing to the reply's draft: only going there failed. */
 function reportReplyHidden(why: string): void {
@@ -55,15 +51,11 @@ export function useCanopyInboxFocus({
   firstAssistant,
   inWork,
   searching,
-  query,
   appliedQuery,
   setQuery,
   roleFilter,
   seeAssistantHandback,
   pluginViewIds,
-  assistantsLoaded,
-  hostKnown,
-  rowsSettled,
 }: {
   isOpen: boolean;
   /** The other host the panel shows, or null for the window's own. */
@@ -84,19 +76,12 @@ export function useCanopyInboxFocus({
   firstAssistant: CanopyAssistantItem | null;
   inWork: (item: CanopyItem) => boolean;
   searching: boolean;
-  query: string;
   appliedQuery: string;
   setQuery: (query: string) => void;
   roleFilter: CanopyRoleFilter;
   seeAssistantHandback: (assistantId: string, observedAt: number) => void;
   /** The plugin views the window offers, by hosted id; none in the dialog. */
   pluginViewIds: readonly string[];
-  /** The assistants have been listed, or can't be here: one not among them isn't there. */
-  assistantsLoaded: boolean;
-  /** The host list names the host shown: until then, an unlisted one may only not be read yet. */
-  hostKnown: boolean;
-  /** The host's rows are in, and the terminals' matches and work links they're filtered by. */
-  rowsSettled: boolean;
 }) {
   const frame = useCanopyFrame();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -168,9 +153,6 @@ export function useCanopyInboxFocus({
   });
   const detailRef = useRef<CanopyCardHandle>(null);
 
-  // Where the keyboard goes when the panel closes: the terminal "Go to
-  // terminal" just focused, rather than whatever opened the panel.
-  const focusAfterCloseRef = useRef<HTMLElement | null>(null);
   // The run selected, its row brought into view, the keyboard left where it is.
   const selectRun = useCallback((runId: string) => {
     setPaneFocus(null);
@@ -235,36 +217,16 @@ export function useCanopyInboxFocus({
     };
   }, [shownRunId]);
 
-  // Land the keyboard in the search on open, with the agent the main view had
-  // focused selected, else the top of the list — at once when the search is there, so nothing typed goes astray. Otherwise
-  // two frames, so it lands after the palette's own first-tabbable focus rather
-  // than racing it, and cancelled on cleanup so a StrictMode replay schedules it afresh.
+  // Land the keyboard in the search on open, with the top of the list
+  // selected — at once when the search is there, so nothing typed goes astray.
+  // Otherwise two frames, so it lands after the palette's own first-tabbable
+  // focus rather than racing it, and cancelled on cleanup so a StrictMode
+  // replay schedules it afresh.
   const landedRef = useRef(false);
-  // Where "Go to terminal" left the panel, held until the opening that returns
-  // there has landed on it.
-  const restoreRef = useRef<CanopyResume | null>(null);
   const searchedRef = useRef(appliedQuery);
-  // The restored search, until the deferred query has caught up to it: that
-  // arrival is the search being put back, not a new search to select the top of.
-  const restoredQueryRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!isOpen) {
-      restoreRef.current = null;
-      restoredQueryRef.current = null;
-      return;
-    }
-    const { resume } = useCanopyStore.getState();
-    if (resume === null) return;
-    useCanopyStore.setState({ resume: null });
-    restoreRef.current = resume;
-    restoredQueryRef.current = resume.query;
-    setQuery(resume.query);
-  }, [isOpen, setQuery]);
   // The user pressed something in the panel since it opened, header included:
   // where they put the keyboard stands, and the landing gives way to it.
   const touchedRef = useRef(false);
-  // The same, since a dialog popped out here last asked to land.
-  const landingTouchedRef = useRef(false);
   useEffect(() => {
     if (!isOpen) return;
     touchedRef.current = false;
@@ -272,7 +234,6 @@ export function useCanopyInboxFocus({
       const target = event.target;
       if (target instanceof Element && target.closest(CANOPY_SURFACE)) {
         touchedRef.current = true;
-        landingTouchedRef.current = true;
       }
     };
     window.addEventListener("pointerdown", touch, { capture: true, passive: true });
@@ -282,18 +243,9 @@ export function useCanopyInboxFocus({
       window.removeEventListener("keydown", touch, { capture: true });
     };
   }, [isOpen]);
-  // The agent the main view had focused as this opening began, read once: the
-  // landing goes to it while the list shows it, ahead of "Go to terminal"'s run
-  // and an assistant leading the list. Focus moving afterwards moves nothing.
-  const mainViewAgentRef = useRef<string | null>(null);
-  useEffect(() => {
-    mainViewAgentRef.current = isOpen ? mainViewFocusedAgentId() : null;
-  }, [isOpen]);
   // A dictated reply asked for is where this opening lands, once it is found;
   // only one that can't be shown leaves the opening to land as it would.
   const replyReveal = useCanopyStore((s) => s.replyReveal);
-  // A dialog popped out into this window lands where it stood instead.
-  const popOutLanding = useCanopyStore((s) => s.popOutLanding);
   useEffect(() => {
     if (!isOpen) {
       landedRef.current = false;
@@ -303,50 +255,17 @@ export function useCanopyInboxFocus({
       setQuery("");
       return;
     }
-    focusAfterCloseRef.current = null;
-    if (landedRef.current || items.length === 0 || replyReveal !== null || popOutLanding !== null) {
-      return;
-    }
-    // The search it was left with is in force before the run is picked from it.
-    const restore = restoreRef.current;
-    if (restore !== null && appliedQuery !== restore.query) return;
-    // Only a row of this window's own host is that terminal: another host's
-    // runs can carry the same id.
-    const mainViewAgent = mainViewAgentRef.current;
-    const agentRow =
-      mainViewAgent === null
-        ? undefined
-        : visible.find((item) => {
-            const place = placeOf(item, hostId, ownHostId);
-            return place.hostId === null && place.runId === mainViewAgent;
-          });
-    const target = agentRow
-      ? agentRow.runId
-      : restore
-        ? canopyResumeTarget(
-            restore,
-            visible.map((item) => item.runId)
-          )
-        : // An assistant leading the list is the default pane: no worker is picked over it.
-          firstAssistant !== null
-          ? null
-          : (visible[0]?.runId ?? null);
-    // Anything but the top of the list may be scrolled out of view.
-    const scrollTo = agentRow !== undefined || restore !== null;
+    if (landedRef.current || items.length === 0 || replyReveal !== null) return;
+    // An assistant leading the list is the default pane: no worker is picked over it.
+    const target = firstAssistant !== null ? null : (visible[0]?.runId ?? null);
     const land = () => {
       landedRef.current = true;
-      restoreRef.current = null;
       // The user got there first — clicked a row, a control or into a
       // terminal while the frames were held back: their place stands.
       if (touchedRef.current) return;
       const search = searchRef.current;
       if (search) {
-        if (target !== null) {
-          setFocusedId(target);
-          if (scrollTo) {
-            document.getElementById(canopyCardDomId(target))?.scrollIntoView({ block: "nearest" });
-          }
-        }
+        if (target !== null) setFocusedId(target);
         search.focus();
       } else if (target !== null) {
         focusCardNow(target);
@@ -364,19 +283,7 @@ export function useCanopyInboxFocus({
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
     };
-  }, [
-    isOpen,
-    items,
-    visible,
-    focusCardNow,
-    setQuery,
-    appliedQuery,
-    firstAssistant,
-    replyReveal,
-    popOutLanding,
-    hostId,
-    ownHostId,
-  ]);
+  }, [isOpen, items, visible, focusCardNow, setQuery, firstAssistant, replyReveal]);
 
   // The focused card left (trashed, answered into another section, exited):
   // put the keyboard on the card that took its place instead of dropping it on
@@ -450,12 +357,6 @@ export function useCanopyInboxFocus({
     if (!isOpen) {
       searchedRef.current = "";
       topOwedRef.current = false;
-      return;
-    }
-    if (restoredQueryRef.current !== null) {
-      if (appliedQuery !== restoredQueryRef.current) return;
-      restoredQueryRef.current = null;
-      searchedRef.current = appliedQuery;
       return;
     }
     if (searchedRef.current !== appliedQuery) {
@@ -546,7 +447,6 @@ export function useCanopyInboxFocus({
       return;
     }
     landedRef.current = true;
-    restoreRef.current = null;
     setPluginViewId(null);
     setAssistantId(null);
     setPaneFocus(null);
@@ -665,28 +565,6 @@ export function useCanopyInboxFocus({
     []
   );
   const isSelected = useCallback((runId: string) => selectedRef.current === runId, []);
-  // The terminal "Go to terminal" just focused takes the keyboard back on close.
-  const captureFocusAfterClose = useCallback(() => {
-    focusAfterCloseRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  }, []);
-  // Closing for the terminal remembers the panel's place for the next opening.
-  const queryRef = useRef(query);
-  useEffect(() => {
-    queryRef.current = query;
-  });
-  const closeForTerminal = useCallback(
-    (runId: string) =>
-      useCanopyStore.getState().closeForTerminal({
-        at: Date.now(),
-        hostId: listHostRef.current,
-        query: queryRef.current,
-        runId,
-        order: visibleRef.current.map((item) => item.runId),
-      }),
-    []
-  );
-  const focusAfterClose = useCallback(() => focusAfterCloseRef.current, []);
   // The assistant in the pane has had its handback in front of the person.
   // An assistant the person chose has had its handback in front of them. One
   // shown only because nothing else is listed hasn't: seeing it there would
@@ -717,106 +595,6 @@ export function useCanopyInboxFocus({
     setAssistantRefusal(null);
   }, [isOpen, roleFilter]);
 
-  // A dialog popped out into this window (#16338): its search goes in at once,
-  // and its row is selected once the host it was listed under shows here,
-  // named in the host list, with its rows in. Last of the effects, so no reset
-  // above (a host or a role changed with it) takes the row back in the same
-  // pass. A host picked here first ends it; the user acting here first leaves
-  // the row to them, though the host stays held until the host list names it.
-  const landingSearchedRef = useRef<number | null>(null);
-  // The search a landing put back, until its arrival is seen. Its own: once
-  // the landing is gone, settled, timed out, replaced or cancelled from
-  // elsewhere, it never blocks a later search from selecting its top match.
-  const landingRestoredRef = useRef<{ id: number; query: string } | null>(null);
-  useEffect(() => {
-    if (!isOpen || popOutLanding === null || landingSearchedRef.current === popOutLanding.id) {
-      return;
-    }
-    landingSearchedRef.current = popOutLanding.id;
-    landingTouchedRef.current = false;
-    restoreRef.current = null;
-    // Its arrival is the search being put back, not a new one to select the top of.
-    const restored = popOutLanding.query !== appliedQuery ? popOutLanding.query : null;
-    restoredQueryRef.current = restored;
-    landingRestoredRef.current =
-      restored === null ? null : { id: popOutLanding.id, query: restored };
-    if (popOutLanding.query !== query) setQuery(popOutLanding.query);
-  }, [isOpen, popOutLanding, query, appliedQuery, setQuery]);
-  const popOutLandingId = popOutLanding?.id ?? null;
-  useEffect(() => {
-    const owned = landingRestoredRef.current;
-    if (owned === null || owned.id === popOutLandingId) return;
-    landingRestoredRef.current = null;
-    if (restoredQueryRef.current === owned.query) restoredQueryRef.current = null;
-  }, [popOutLandingId]);
-  const shownStoreHostId = useCanopyStore((s) => s.hostId);
-  useEffect(() => {
-    if (!isOpen || popOutLanding === null) return;
-    const settle = () => useCanopyStore.getState().settlePopOutLanding(popOutLanding.id);
-    if (shownStoreHostId !== popOutLanding.hostId) {
-      settle();
-      return;
-    }
-    if (hostId !== popOutLanding.hostId || !hostKnown) return;
-    const selection = popOutLanding.selection;
-    // Nothing selected, or the user went first: the inbox lands as any opening does.
-    if (selection === null || landingTouchedRef.current) {
-      settle();
-      return;
-    }
-    if (appliedQuery !== popOutLanding.query) return;
-    let domId: string;
-    if (selection.kind === "worker") {
-      const shown =
-        visible.some((item) => item.runId === selection.runId) ||
-        (!searching && items.some((item) => item.runId === selection.runId && inWork(item)));
-      // Not listed yet is not gone until the host's rows, the terminals'
-      // matches and the assistants' work links are in.
-      if (!shown && !rowsSettled) return;
-      settle();
-      if (!shown) return;
-      setAssistantId(null);
-      setFocusedId(selection.runId);
-      domId = canopyCardDomId(selection.runId);
-    } else {
-      const shown = shownAssistants.some((item) => item.id === selection.assistantId);
-      if (!shown && !assistantsLoaded) return;
-      settle();
-      if (!shown) return;
-      setAssistantId(selection.assistantId);
-      domId = canopyAssistantDomId(selection.assistantId);
-    }
-    landedRef.current = true;
-    setPaneFocus(null);
-    setReplyFocus(null);
-    document.getElementById(domId)?.scrollIntoView({ block: "nearest" });
-    searchRef.current?.focus({ preventScroll: true });
-  }, [
-    isOpen,
-    popOutLanding,
-    shownStoreHostId,
-    hostId,
-    hostKnown,
-    appliedQuery,
-    rowsSettled,
-    visible,
-    searching,
-    items,
-    inWork,
-    shownAssistants,
-    assistantsLoaded,
-  ]);
-  // A host that never lists its rows here doesn't hold the landing forever.
-  useEffect(() => {
-    if (!isOpen || popOutLanding === null) return;
-    const id = popOutLanding.id;
-    const timer = setTimeout(
-      () => useCanopyStore.getState().settlePopOutLanding(id),
-      POP_OUT_LANDING_WAIT_MS
-    );
-    return () => clearTimeout(timer);
-  }, [isOpen, popOutLanding]);
-
   return {
     searchRef,
     refreshRef,
@@ -845,8 +623,5 @@ export function useCanopyInboxFocus({
     leavePane,
     showsHost,
     isSelected,
-    captureFocusAfterClose,
-    closeForTerminal,
-    focusAfterClose,
   };
 }

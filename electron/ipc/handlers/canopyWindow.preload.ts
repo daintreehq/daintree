@@ -5,9 +5,6 @@ export const CANOPY_WINDOW_METHOD_CHANNELS = {
   focus: "canopy-window:focus",
   focusLastProjectWindow: "canopy-window:focus-last-project-window",
   goToRun: "canopy-window:go-to-run",
-  popOut: "canopy-window:pop-out",
-  peekPopOut: "canopy-window:peek-pop-out",
-  acknowledgePopOut: "canopy-window:acknowledge-pop-out",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CANOPY_WINDOW_METHOD_CHANNELS;

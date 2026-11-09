@@ -1,27 +1,17 @@
 import { useRef, useState, type ReactNode, type RefObject } from "react";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { useMenuActionSource, type MenuActionSourceValue } from "@/components/ui/menu-source";
+import { useMenuActionSource } from "@/components/ui/menu-source";
 import { TerminalSelectionMenuItems } from "@/components/Terminal/contextMenu/TerminalMenuItems";
 import {
-  openTerminalPathInFileBrowser,
   runTerminalOutputMenuAction,
   type TerminalOutputMenuTarget,
 } from "@/components/Terminal/contextMenu/terminalOutputMenuActions";
-import { actionService } from "@/services/ActionService";
-import { useCanopyFrame } from "./canopyFrame";
-import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
-import { grantClickedHostFile } from "@/services/terminal/clickedHostFile";
-import type { WorktreeScope } from "@shared/utils/path";
 
 /** What the pointer and the selection held when the menu opened. */
 export interface CanopyTerminalMenuState {
   selection: string;
   hoveredUrl: string | null;
   hoveredUrlPluginName: string | null;
-  hoveredFilePath: string | null;
-  hoveredFileKind: "file" | "directory" | null;
-  hoveredFileScope: WorktreeScope | null;
-  selectionFilePath: string | null;
 }
 
 /** The live view's side of its menu, for the xterm it has now. */
@@ -38,17 +28,6 @@ export interface CanopyTerminalMenuHandle extends TerminalOutputMenuTarget {
    * would otherwise hand it to whatever had it before, a row of the list.
    */
   refocus(): void;
-}
-
-/** In the viewer dialog, over the panel, rather than a grid panel behind it. */
-function viewFile(absolutePath: string, source: MenuActionSourceValue): void {
-  void grantClickedHostFile(absolutePath)
-    .then(() => actionService.dispatch("file.view", { path: absolutePath }, { source }))
-    .then((result) => {
-      if (!result.ok) {
-        reportFileLinkFailure("Failed to view file", result.error.details, absolutePath);
-      }
-    });
 }
 
 /**
@@ -107,14 +86,11 @@ function CanopyTerminalMenuItems({
   defer: (run: () => void) => void;
 }) {
   const source = useMenuActionSource();
-  // Files open in the viewer and panels of a project window, which only the
-  // dialog stands in; a link's own copy needs neither.
-  const inProjectWindow = useCanopyFrame().host === "dialog";
-  const fileState = inProjectWindow ? state : null;
   const onAction = (actionId: string) => {
     const current = handle.current;
     if (!current) return;
-    if (!inProjectWindow && actionId.startsWith("copy-link:")) {
+    // A link's own copy needs no project window, which the Canopy window isn't.
+    if (actionId.startsWith("copy-link:")) {
       current.copy(actionId.slice("copy-link:".length));
       return;
     }
@@ -137,16 +113,17 @@ function CanopyTerminalMenuItems({
       hasSelection={Boolean(state?.selection)}
       hoveredUrl={state?.hoveredUrl ?? null}
       hoveredUrlPluginName={state?.hoveredUrlPluginName ?? null}
-      hoveredFilePath={fileState?.hoveredFilePath ?? null}
-      hoveredFileKind={fileState?.hoveredFileKind ?? null}
-      hoveredFileScope={fileState?.hoveredFileScope ?? null}
-      selectionFilePath={fileState?.selectionFilePath ?? null}
-      onViewSelectedFile={(path) => defer(() => viewFile(path, source))}
+      // Files open in the viewer and panels of a project window: the Canopy
+      // window has neither, so no file is offered.
+      hoveredFilePath={null}
+      hoveredFileKind={null}
+      hoveredFileScope={null}
+      selectionFilePath={null}
       separatorAfter={false}
-      onOpenInFileBrowser={(scope, path, kind) =>
-        defer(() => openTerminalPathInFileBrowser(scope, path, kind, source))
-      }
+      onOpenInFileBrowser={noFileBrowser}
       onAction={onAction}
     />
   );
 }
+
+function noFileBrowser() {}

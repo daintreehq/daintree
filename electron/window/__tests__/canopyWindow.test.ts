@@ -15,18 +15,13 @@ vi.mock("../openWindowsTracker.js", async (importOriginal) => ({
 }));
 
 import {
-  acknowledgePopOut,
-  CANOPY_POP_OUT_TIMEOUT_MS,
   closeCanopyWindow,
   focusCanopyWindow,
   focusLastProjectWindow,
   isCanopyWindowView,
   openCanopyWindow,
-  peekPendingPopOut,
-  popOutToCanopyWindow,
   setCanopyBrowserWindowFactory,
 } from "../canopyWindow.js";
-import type { CanopyPopOut } from "../../../shared/types/ipc/canopy.js";
 import { WindowRegistry } from "../WindowRegistry.js";
 import { setWindowRegistry } from "../windowRef.js";
 import { snapshotOpenWorld } from "../windowOpenState.js";
@@ -470,216 +465,8 @@ describe("the Canopy window beside project targeting", () => {
   });
 });
 
-describe("popping a dialog out into the window (#16338)", () => {
-  const place: CanopyPopOut = {
-    hostId: "local",
-    query: "deploy",
-    selection: { kind: "worker", runId: "run-2" },
-    roleFilter: "workers",
-    unreadOnly: true,
-    keptUnread: ["run-2"],
-    archivedExpanded: true,
-    trashExpanded: false,
-    workOf: null,
-  };
-
-  /** Settles to "taken" or the refusal's words, without awaiting a pending one. */
-  function outcome(promise: Promise<void>): { value: string | null } {
-    const seen: { value: string | null } = { value: null };
-    promise.then(
-      () => (seen.value = "taken"),
-      (error: { userMessage?: string }) => (seen.value = error.userMessage ?? "refused")
-    );
-    return seen;
-  }
-
-  afterEach(() => vi.useRealTimers());
-
-  it("opens a new window with the place waiting, and settles once the window says it has it", async () => {
-    const seen = outcome(popOutToCanopyWindow(place, noWatch));
-
-    expect(made).toHaveLength(1);
-    expect(loadRenderer).toHaveBeenCalledTimes(1);
-    // A new window asks as it boots: nothing is pushed to a page not yet there.
-    expect(made[0]!.view.webContents.send).not.toHaveBeenCalled();
-    const pending = peekPendingPopOut();
-    expect(pending?.popOut).toEqual(place);
-    // Asking doesn't take it: a reload, or a second ask, still finds it.
-    expect(peekPendingPopOut()?.id).toBe(pending!.id);
-    // Another pop-out's answer settles nothing.
-    expect(acknowledgePopOut(pending!.id + 1)).toBe(false);
-    await Promise.resolve();
-    expect(seen.value).toBeNull();
-    expect(peekPendingPopOut()?.id).toBe(pending!.id);
-
-    expect(acknowledgePopOut(pending!.id)).toBe(true);
-    await Promise.resolve();
-    expect(seen.value).toBe("taken");
-    expect(peekPendingPopOut()).toBeNull();
-    expect(acknowledgePopOut(pending!.id)).toBe(false);
-  });
-
-  it("brings a window already open forward and tells it, rather than opening another", async () => {
-    openCanopyWindow(noWatch);
-    const win = made[0]!;
-
-    const seen = outcome(popOutToCanopyWindow(place, noWatch));
-
-    expect(made).toHaveLength(1);
-    expect(win.focus).toHaveBeenCalledTimes(1);
-    expect(win.view.webContents.send).toHaveBeenCalledWith("canopy-window:pop-out-waiting");
-    acknowledgePopOut(peekPendingPopOut()!.id);
-    await Promise.resolve();
-    expect(seen.value).toBe("taken");
-  });
-
-  it("fails when the window closes before taking it, and nothing waits on", async () => {
-    const seen = outcome(popOutToCanopyWindow(place, noWatch));
-
-    closeCanopyWindow();
-    await Promise.resolve();
-
-    expect(seen.value).toMatch(/closed/);
-    expect(peekPendingPopOut()).toBeNull();
-  });
-
-  it("fails when the window's page is gone before taking it", async () => {
-    const seen = outcome(popOutToCanopyWindow(place, noWatch));
-
-    made[0]!.view.webContents.emit("render-process-gone", {}, { reason: "crashed" });
-    await Promise.resolve();
-
-    expect(seen.value).toMatch(/stopped/);
-    expect(peekPendingPopOut()).toBeNull();
-  });
-
-  it("fails when the window never takes it up in time, and a late answer changes nothing", async () => {
-    vi.useFakeTimers();
-    const seen = outcome(popOutToCanopyWindow(place, noWatch));
-    const id = peekPendingPopOut()!.id;
-
-    await vi.advanceTimersByTimeAsync(CANOPY_POP_OUT_TIMEOUT_MS - 1);
-    expect(seen.value).toBeNull();
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(seen.value).toMatch(/in time/);
-    expect(peekPendingPopOut()).toBeNull();
-    expect(acknowledgePopOut(id)).toBe(false);
-  });
-
-  it("refuses a second pop-out while one is under way, keeping the first", async () => {
-    const first = outcome(popOutToCanopyWindow(place, noWatch));
-    const id = peekPendingPopOut()!.id;
-
-    const second = outcome(popOutToCanopyWindow({ ...place, query: "other" }, noWatch));
-    await Promise.resolve();
-
-    expect(second.value).toMatch(/already/);
-    expect(peekPendingPopOut()).toEqual({ id, popOut: place });
-    acknowledgePopOut(id);
-    await Promise.resolve();
-    expect(first.value).toBe("taken");
-  });
-});
-
-describe("a popped-out place across the window's own changes (#16338)", () => {
-  const place: CanopyPopOut = {
-    hostId: "local",
-    query: "",
-    selection: null,
-    roleFilter: "all",
-    unreadOnly: false,
-    keptUnread: [],
-    archivedExpanded: false,
-    trashExpanded: false,
-    workOf: null,
-  };
-
-  afterEach(() => vi.useRealTimers());
-
-  it("lets no earlier pop-out's deadline fail the next", async () => {
-    vi.useFakeTimers();
-    const first = popOutToCanopyWindow(place, noWatch);
-    acknowledgePopOut(peekPendingPopOut()!.id);
-    await first;
-    await vi.advanceTimersByTimeAsync(CANOPY_POP_OUT_TIMEOUT_MS / 2);
-    let failed = false;
-    popOutToCanopyWindow(place, noWatch).catch(() => (failed = true));
-
-    await vi.advanceTimersByTimeAsync(CANOPY_POP_OUT_TIMEOUT_MS / 2 + 1);
-
-    expect(failed).toBe(false);
-    expect(peekPendingPopOut()).not.toBeNull();
-  });
-
-  /** A main-frame navigation to a new document: a reload. */
-  const reload = (view: EventEmitter) =>
-    view.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
-
-  it("takes no answer from a page reloaded since it took the place up: the new page asks again", async () => {
-    let taken = false;
-    void popOutToCanopyWindow(place, noWatch).then(() => (taken = true));
-    const view = made[0]!.view.webContents;
-    // The window's own first load is done before its page asks.
-    reload(view);
-    view.emit("did-stop-loading");
-    const { id } = peekPendingPopOut()!;
-
-    // The page that took it up is replaced before its answer lands, and while
-    // it leaves it can't take the place up again either.
-    reload(view);
-    expect(peekPendingPopOut()).toBeNull();
-    expect(acknowledgePopOut(id)).toBe(false);
-    await Promise.resolve();
-    expect(taken).toBe(false);
-
-    // The new page is told once loading stops, and its answer counts.
-    view.send.mockClear();
-    view.emit("did-stop-loading");
-    expect(view.send).toHaveBeenCalledWith("canopy-window:pop-out-waiting");
-    expect(peekPendingPopOut()?.id).toBe(id);
-    // A navigation within the page changes nothing.
-    view.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
-    expect(acknowledgePopOut(id)).toBe(true);
-    await Promise.resolve();
-    expect(taken).toBe(true);
-  });
-
-  it("keeps a page whose commit a second reload is queued behind from taking the place up", () => {
-    void popOutToCanopyWindow(place, noWatch).catch(() => {});
-    const view = made[0]!.view.webContents;
-
-    reload(view);
-    reload(view);
-    // The first reload commits, or fails; the second still replaces that page.
-    view.emit("did-navigate");
-    view.emit("did-fail-load", {}, -3, "ERR_ABORTED", "app://", true);
-    expect(peekPendingPopOut()).toBeNull();
-
-    view.emit("did-stop-loading");
-    expect(peekPendingPopOut()).not.toBeNull();
-  });
-
-  it("lets the page a cancelled reload left in place take the place up again", async () => {
-    let taken = false;
-    void popOutToCanopyWindow(place, noWatch).then(() => (taken = true));
-    const view = made[0]!.view.webContents;
-    const { id } = peekPendingPopOut()!;
-
-    reload(view);
-    expect(acknowledgePopOut(id)).toBe(false);
-    view.send.mockClear();
-    // Cancelled before it committed: loading stops with no failure reported.
-    view.emit("did-stop-loading");
-
-    expect(view.send).toHaveBeenCalledWith("canopy-window:pop-out-waiting");
-    expect(peekPendingPopOut()?.id).toBe(id);
-    expect(acknowledgePopOut(id)).toBe(true);
-    await Promise.resolve();
-    expect(taken).toBe(true);
-  });
-
-  it("lets a window replaced before its close was told fail nothing of the next one's", async () => {
+describe("a Canopy window replaced before its close was told", () => {
+  it("leaves the next window standing, and stops watching only the old one's mode", () => {
     const stops: Array<ReturnType<typeof vi.fn>> = [];
     const watch = () => {
       const stop = vi.fn();
@@ -690,18 +477,20 @@ describe("a popped-out place across the window's own changes (#16338)", () => {
     const old = made[0]!;
     // Gone, but its closed event not yet delivered.
     old.isDestroyed.mockReturnValue(true);
-    let failed = false;
-    popOutToCanopyWindow(place, watch).catch(() => (failed = true));
+    openCanopyWindow(watch);
     expect(made).toHaveLength(2);
+    setCanopyWindowOpen.mockClear();
 
     old.emit("closed");
-    old.view.webContents.emit("render-process-gone", {}, { reason: "crashed" });
-    await Promise.resolve();
 
-    expect(failed).toBe(false);
-    expect(peekPendingPopOut()).not.toBeNull();
     expect(stops[0]).toHaveBeenCalledTimes(1);
     expect(stops[1]).not.toHaveBeenCalled();
     expect(isCanopyWindowView(made[1]!.view.webContents.id)).toBe(true);
+    expect(focusCanopyWindow()).toBe(true);
+    // The manifest still has the window standing for the next launch.
+    expect(setCanopyWindowOpen).not.toHaveBeenCalledWith(false);
+
+    made[1]!.emit("closed");
+    expect(setCanopyWindowOpen).toHaveBeenCalledWith(false);
   });
 });

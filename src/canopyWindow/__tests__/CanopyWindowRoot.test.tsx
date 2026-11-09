@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
-import type { CanopyPendingPopOut, CanopySnapshot } from "@shared/types/ipc/canopy";
+import type { CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { CanopyFrame } from "@/components/Canopy/canopyFrame";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -84,9 +84,6 @@ let pushSnapshot: (snapshot: CanopySnapshot) => void = () => {};
 const offSnapshot = vi.fn();
 const closeWindow = vi.fn(async () => {});
 const goToRun = vi.fn(async (_target: { workspaceId: string; runId: string }) => {});
-const offPopOutWaiting = vi.fn();
-const peekPopOut = vi.fn(async (): Promise<CanopyPendingPopOut | null> => null);
-const acknowledgePopOut = vi.fn(async (_ack: { id: number }) => true);
 
 function snapshot(mode: CanopySnapshot["mode"]): CanopySnapshot {
   return {
@@ -121,12 +118,7 @@ beforeEach(() => {
         getSnapshot: vi.fn(async () => snapshot("on")),
       },
       window: { close: closeWindow },
-      canopyWindow: {
-        goToRun,
-        peekPopOut,
-        acknowledgePopOut,
-        onPopOutWaiting: () => offPopOutWaiting,
-      },
+      canopyWindow: { goToRun },
     },
     configurable: true,
     writable: true,
@@ -145,8 +137,6 @@ describe("CanopyWindowRoot", () => {
 
     expect(view.getByTestId("inbox")).toBeTruthy();
     expect(shownFrames[0]).toBe(CANOPY_WINDOW_FRAME);
-    expect(CANOPY_WINDOW_FRAME.host).toBe("standalone");
-    expect(CANOPY_WINDOW_FRAME.workspaceId()).toBeNull();
     expect(projectShell).not.toHaveBeenCalled();
   });
 
@@ -168,30 +158,6 @@ describe("CanopyWindowRoot", () => {
     const next = { ...snapshot("on"), busy: true };
     act(() => pushSnapshot(next));
     expect(useCanopyStore.getState().snapshot?.busy).toBe(true);
-  });
-
-  it("takes up a dialog popped out before it booted, and says so", async () => {
-    peekPopOut.mockResolvedValueOnce({
-      id: 21,
-      popOut: {
-        hostId: "studio",
-        query: "deploy",
-        selection: { kind: "worker", runId: "run-2" },
-        roleFilter: "workers",
-        unreadOnly: false,
-        keptUnread: [],
-        archivedExpanded: false,
-        trashExpanded: false,
-        workOf: null,
-      },
-    });
-    render(<CanopyWindowRoot />);
-    await act(async () => {});
-
-    expect(useCanopyStore.getState().hostId).toBe("studio");
-    expect(useCanopyStore.getState().popOutLanding?.query).toBe("deploy");
-    expect(acknowledgePopOut).toHaveBeenCalledWith({ id: 21 });
-    useCanopyStore.setState({ hostId: null, roleFilter: "all", popOutLanding: null });
   });
 
   it("reads what labels the rows and the shortcuts it shows", async () => {
@@ -285,7 +251,6 @@ describe("CanopyWindowRoot", () => {
     view.unmount();
 
     expect(offSnapshot).toHaveBeenCalledTimes(1);
-    expect(offPopOutWaiting).toHaveBeenCalledTimes(1);
     for (const stop of Object.values(stops)) expect(stop).toHaveBeenCalledTimes(1);
   });
 });
@@ -297,37 +262,25 @@ describe("the Canopy window's frame", () => {
   });
 
   describe("Go to pane (#16337)", () => {
-    const panel = () => ({
-      stillShows: vi.fn(() => true),
-      closeForTerminal: vi.fn(),
-      captureFocusAfterClose: vi.fn(),
-    });
     const go = (
       place: { hostId: string | null; runId: string; workspaceId: string },
-      hold: ReturnType<typeof panel>,
       newWindow = false
-    ) => CANOPY_WINDOW_FRAME.goToRun!({ place, listedRunId: place.runId, newWindow }, hold);
+    ) => CANOPY_WINDOW_FRAME.goToRun!({ place, newWindow });
 
     it.each([false, true])(
       "asks main for a run on this machine, and stays open on it (new window: %s)",
       async (newWindow) => {
-        const hold = panel();
-
-        go({ hostId: null, runId: "agent-1", workspaceId: "project-a" }, hold, newWindow);
+        go({ hostId: null, runId: "agent-1", workspaceId: "project-a" }, newWindow);
         await act(async () => {});
 
         expect(goToRun).toHaveBeenCalledWith({ workspaceId: "project-a", runId: "agent-1" });
         expect(switchToHost).not.toHaveBeenCalled();
-        expect(hold.closeForTerminal).not.toHaveBeenCalled();
-        expect(hold.captureFocusAfterClose).not.toHaveBeenCalled();
         expect(closeWindow).not.toHaveBeenCalled();
       }
     );
 
     it("sends another host's run to a window on that host, never this one", async () => {
-      const hold = panel();
-
-      go({ hostId: "host-1", runId: "agent-2", workspaceId: "project-b" }, hold);
+      go({ hostId: "host-1", runId: "agent-2", workspaceId: "project-b" });
       await act(async () => {});
 
       expect(switchToHost).toHaveBeenCalledWith("host-1", true, "project-b", {
@@ -335,14 +288,13 @@ describe("the Canopy window's frame", () => {
         standalone: true,
       });
       expect(goToRun).not.toHaveBeenCalled();
-      expect(hold.closeForTerminal).not.toHaveBeenCalled();
       expect(closeWindow).not.toHaveBeenCalled();
     });
 
     it("says why a run on this machine wasn't reached, and tries again from there", async () => {
       goToRun.mockRejectedValueOnce(new Error("The window for Alpha didn't come up in time."));
 
-      go({ hostId: null, runId: "agent-1", workspaceId: "project-a" }, panel());
+      go({ hostId: null, runId: "agent-1", workspaceId: "project-a" });
       await act(async () => {});
 
       expect(notifyMock).toHaveBeenCalledTimes(1);
@@ -373,7 +325,7 @@ describe("the Canopy window's frame", () => {
         )
       );
 
-      go({ hostId: null, runId: "agent-1", workspaceId: "project-a" }, panel());
+      go({ hostId: null, runId: "agent-1", workspaceId: "project-a" });
       await act(async () => {});
 
       const toast = notifyMock.mock.calls[0]![0] as { message: string; actions?: unknown };

@@ -30,7 +30,7 @@ import {
   useScheduleRunConfirmStore,
 } from "@/store/scheduleRunConfirmStore";
 import { usePilotStore } from "@/store/pilotStore";
-import { useCanopyPanelShown } from "@/hooks/app/useCanopyPanelShown";
+import { useCanopyOfferShown } from "@/hooks/app/useCanopyOfferShown";
 import { useScratchStore } from "@/store/scratchStore";
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
@@ -57,7 +57,7 @@ import {
   LazyActionPalette,
   LazyWorktreeOverviewModal,
   LazyPilotView,
-  LazyCanopyView,
+  LazyCanopyOffer,
   LazyCrossWorktreeDiff,
   LazySettingsDialog,
   LazyShortcutReferenceDialog,
@@ -297,7 +297,7 @@ export function ModalHostLayer({
   // path into this layer.
   const isPilotOpen = usePilotStore((s) => s.isOpen);
   const hasProjectGroupDialog = useProjectGroupsStore((s) => s.dialog !== null);
-  const isCanopyOpen = useCanopyPanelShown();
+  const isCanopyOfferShown = useCanopyOfferShown();
   const hasScratch = useScratchStore((s) => s.currentScratch !== null);
   // Each Run now question retries a dialog that failed, so none waits on a fallback.
   const scheduleRunConfirmKey = useScheduleRunConfirmStore((s) => s.current?.requestId ?? "");
@@ -1111,12 +1111,12 @@ export function ModalHostLayer({
       </ErrorBoundary>
       <ErrorBoundary
         variant="component"
-        componentName="CanopyView"
-        resetKeys={[Number(isCanopyOpen)]}
+        componentName="CanopyOffer"
+        resetKeys={[Number(isCanopyOfferShown)]}
       >
-        {isCanopyOpen && (
+        {isCanopyOfferShown && (
           <Suspense fallback={null}>
-            <LazyCanopyView />
+            <LazyCanopyOffer />
           </Suspense>
         )}
       </ErrorBoundary>

@@ -80,9 +80,9 @@ vi.mock("@/components/Terminal/HybridInputBar", async () => {
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 import { CanopyView } from "../CanopyView";
+import { canopyTestFrame } from "./canopyTestFrame";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -154,7 +154,6 @@ function installElectron(
       })
     ),
     unarchive: vi.fn(async () => {}),
-    setScope: vi.fn(async () => {}),
     markSeen: vi.fn(async (_runId: string, _looking?: boolean, _place?: string) => {}),
     // Each read change answers with the mark it left, as main does.
     setRead: vi.fn(
@@ -238,8 +237,7 @@ afterEach(() => {
     isOpen: false,
     snapshot: null,
     mode: "unset",
-    scope: "all",
-    orders: {},
+    order: null,
     unreadOnly: false,
     replyReveal: null,
     hostId: null,
@@ -258,12 +256,12 @@ async function frames(count = 2) {
   }
 }
 
-/** Longer than the dialog's exit, after which what it held unmounts. */
-const DIALOG_EXIT_SETTLE_MS = 400;
+/** Longer than any exit of the inbox closing, after which what it held unmounts. */
+const CLOSE_SETTLE_MS = 400;
 
 async function settle() {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, DIALOG_EXIT_SETTLE_MS));
+    await new Promise((resolve) => setTimeout(resolve, CLOSE_SETTLE_MS));
   });
 }
 
@@ -306,7 +304,7 @@ async function goBackTo(target: VoiceRecordingTarget) {
 
 describe("CanopyView — a reply's dictation outlives its screen (#14778)", () => {
   it("keeps writing the reply's draft with Canopy closed, and reopens on its row from the indicator", async () => {
-    render(<CanopyView />);
+    render(<CanopyView frame={canopyTestFrame()} />);
     await frames();
     await select("asking");
     const target = await replyTarget("asking");
@@ -337,36 +335,8 @@ describe("CanopyView — a reply's dictation outlives its screen (#14778)", () =
     expect(useCanopyStore.getState().replyReveal).toBeNull();
   });
 
-  it("goes back to the reply's row over the agent the main view has focused", async () => {
-    render(<CanopyView />);
-    await frames();
-    await select("asking");
-    const target = await replyTarget("asking");
-    startDictation(target);
-    act(() => useCanopyStore.getState().close());
-    await settle();
-    usePanelStore.setState({
-      panelsById: {
-        working: { id: "working", kind: "terminal", location: "grid", detectedAgentId: "claude" },
-      } as never,
-      focusedId: "working",
-    });
-    try {
-      const scrolled = vi.mocked(Element.prototype.scrollIntoView);
-      scrolled.mockClear();
-      await goBackTo(target);
-      expect(selectedRun()).toBe("asking");
-      // The opening waited on the reply: it never went to the focused agent first.
-      expect(scrolled.mock.contexts).toContain(row("asking"));
-      expect(scrolled.mock.contexts).not.toContain(row("working"));
-      await vi.waitFor(() => expect(dictationFocus).toHaveBeenCalledWith("asking"));
-    } finally {
-      usePanelStore.setState({ panelsById: {} as never, focusedId: null });
-    }
-  });
-
   it("hands the keyboard back to the row the panel opens on by itself", async () => {
-    render(<CanopyView />);
+    render(<CanopyView frame={canopyTestFrame()} />);
     await frames();
     const first = selectedRun()!;
     const target = await replyTarget(first);
@@ -384,7 +354,7 @@ describe("CanopyView — a reply's dictation outlives its screen (#14778)", () =
   });
 
   it("leaves the session with its row when another is selected, marks that row, and goes back to it", async () => {
-    render(<CanopyView />);
+    render(<CanopyView frame={canopyTestFrame()} />);
     await frames();
     await select("asking");
     const target = await replyTarget("asking");
@@ -417,7 +387,7 @@ describe("CanopyView — a reply's dictation outlives its screen (#14778)", () =
   });
 
   it("says so when the row has gone, and opens as it would have", async () => {
-    render(<CanopyView />);
+    render(<CanopyView frame={canopyTestFrame()} />);
     await frames();
     await select("asking");
     const target = await replyTarget("asking");
@@ -450,7 +420,7 @@ describe("CanopyView — a reply's dictation outlives its screen (#14778)", () =
     await frames();
     expect(selectedRun()).toBe("waiting");
     expect(document.activeElement).toBe(
-      document.querySelector("[data-testid=canopy-dialog] input[role=combobox]")
+      document.querySelector("[data-canopy-standalone] input[role=combobox]")
     );
     expect(dictationFocus).not.toHaveBeenCalled();
     // The dictation itself is untouched: its words stay in its draft.
@@ -458,14 +428,14 @@ describe("CanopyView — a reply's dictation outlives its screen (#14778)", () =
   });
 
   it("keeps Canopy's search, and says it hides the row, rather than clearing it", async () => {
-    render(<CanopyView />);
+    render(<CanopyView frame={canopyTestFrame()} />);
     await frames();
     await select("asking");
     const target = await replyTarget("asking");
     startDictation(target);
     await select("working");
     const search = document.querySelector<HTMLInputElement>(
-      "[data-testid=canopy-dialog] input[role=combobox]"
+      "[data-canopy-standalone] input[role=combobox]"
     )!;
     await act(async () => {
       fireEvent.change(search, { target: { value: "working" } });

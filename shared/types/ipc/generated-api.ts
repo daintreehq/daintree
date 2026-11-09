@@ -246,9 +246,6 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["canopy-host:watch-assistant"]["result"]>;
   };
   canopyWindow: {
-    acknowledgePopOut(
-      ...args: IpcInvokeMap["canopy-window:acknowledge-pop-out"]["args"]
-    ): Promise<IpcInvokeMap["canopy-window:acknowledge-pop-out"]["result"]>;
     focus(
       ...args: IpcInvokeMap["canopy-window:focus"]["args"]
     ): Promise<IpcInvokeMap["canopy-window:focus"]["result"]>;
@@ -261,12 +258,6 @@ export interface GeneratedElectronAPI {
     open(
       ...args: IpcInvokeMap["canopy-window:open"]["args"]
     ): Promise<IpcInvokeMap["canopy-window:open"]["result"]>;
-    peekPopOut(
-      ...args: IpcInvokeMap["canopy-window:peek-pop-out"]["args"]
-    ): Promise<IpcInvokeMap["canopy-window:peek-pop-out"]["result"]>;
-    popOut(
-      ...args: IpcInvokeMap["canopy-window:pop-out"]["args"]
-    ): Promise<IpcInvokeMap["canopy-window:pop-out"]["result"]>;
   };
   claude: {
     findReplySpan(

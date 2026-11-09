@@ -279,4 +279,17 @@ describe("where the button opens Canopy (#16578)", () => {
     expect(offButton.getAttribute("aria-expanded")).toBe("true");
     act(() => useCanopyStore.setState({ isOpen: false }));
   });
+
+  it("says it opens no dialog in a view on a remote host, which asks for the window (#16581)", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "host-1" };
+    try {
+      const off = renderButton(false);
+      await act(async () => {});
+      const button = off.container.querySelector("button")!;
+      expect(button.hasAttribute("aria-haspopup")).toBe(false);
+      expect(button.hasAttribute("aria-expanded")).toBe(false);
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
+  });
 });

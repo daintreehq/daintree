@@ -298,10 +298,6 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
   const trashed = new Map<number, { hostId: HostId; receipt: number }>();
 
   const api: CanopyApi = {
-    // Every host reads all of its projects here.
-    setScope: async () => {
-      await Promise.allSettled(hostIds.map((hostId) => apiFor(hostId).setScope(null)));
-    },
     setShown: async (runIds) => {
       const groups = groupByHost(runIds, (key) => key);
       await Promise.allSettled(

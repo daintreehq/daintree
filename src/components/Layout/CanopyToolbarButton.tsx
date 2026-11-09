@@ -5,14 +5,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
-import { useCanopyStore } from "@/store/canopyStore";
+import { canopyOwnHostId, useCanopyStore } from "@/store/canopyStore";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import { runUnseenAsk } from "@shared/utils/fleetBands";
 import { agentStateDotColor } from "@/components/Worktree/terminalStateConfig";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
-import { preloadCanopyView } from "@/lazyPanels";
+import { preloadCanopyOffer } from "@/lazyPanels";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { toolbarIconButtonClass } from "./toolbarItemClasses";
 
@@ -73,8 +74,9 @@ export function CanopyToolbarButton({
     void actionService.dispatch(CANOPY_ACTION_ID, undefined, { source: "user" });
   }, []);
   // On, Canopy opens in its own window; before then, the offer to turn it on
-  // opens here as a dialog.
-  const opensWindow = useCanopyStore((s) => s.mode === "on");
+  // opens here as a dialog. A view on another host offers nothing: its way in
+  // asks for this computer's window.
+  const opensOffer = useCanopyStore((s) => s.mode !== "on" && canopyOwnHostId() === LOCAL_HOST_ID);
 
   return (
     <ContextMenu>
@@ -84,15 +86,15 @@ export function CanopyToolbarButton({
             <TooltipTrigger asChild>
               <Button
                 onPointerEnter={(event) => {
-                  // Warm the panel's chunk on intent rather than at boot, so the
+                  // Warm the offer's chunk on intent rather than at boot, so the
                   // first click doesn't flash a frame of nothing.
-                  void preloadCanopyView();
+                  if (opensOffer) void preloadCanopyOffer();
                   hover.onPointerEnter(event);
                 }}
                 onPointerLeave={hover.onPointerLeave}
                 onPointerDown={hover.onPointerDown}
                 onFocus={(event) => {
-                  void preloadCanopyView();
+                  if (opensOffer) void preloadCanopyOffer();
                   hover.onFocus(event);
                 }}
                 onBlur={hover.onBlur}
@@ -103,8 +105,8 @@ export function CanopyToolbarButton({
                 className={toolbarIconButtonClass}
                 aria-label={label}
                 aria-keyshortcuts={ariaShortcut}
-                aria-expanded={opensWindow ? undefined : isOpen}
-                aria-haspopup={opensWindow ? undefined : "dialog"}
+                aria-expanded={opensOffer ? isOpen : undefined}
+                aria-haspopup={opensOffer ? "dialog" : undefined}
               >
                 <span className="relative inline-flex">
                   <Telescope />
