@@ -6,6 +6,7 @@ import { getViewHostId } from "@/hooks/useHostConnection";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { GlobalAssistantTerminal } from "@/components/HelpPanel/GlobalAssistantTerminal";
 import { HelpLaunchingState } from "@/components/HelpPanel/HelpLaunchingState";
+import { refocusStartAfterCancel } from "@/components/HelpPanel/refocusStartAfterCancel";
 import { useAssistantSendFailure } from "@/components/HelpPanel/useAssistantSendFailure";
 import { useGlobalAssistant } from "@/components/HelpPanel/useGlobalAssistant";
 import { useGlobalAssistantIdentity } from "@/store/assistantIdentityStore";
@@ -114,16 +115,10 @@ export function CanopyGlobalAssistant({
   };
 
   const handleCancelLaunch = () => {
-    void cancelLaunch(generation).then(() => {
-      // Cancel went with the launch: the keyboard it held moves to Start,
-      // unless something else has taken it since.
-      requestAnimationFrame(() => {
-        const focused = document.activeElement;
-        if (focused === null || focused === document.body) {
-          startRef.current?.focus({ preventScroll: true });
-        }
-      });
-    });
+    refocusStartAfterCancel(
+      () => cancelLaunch(generation),
+      () => startRef.current
+    );
   };
 
   const terminal =

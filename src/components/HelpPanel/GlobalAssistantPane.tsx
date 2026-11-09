@@ -25,6 +25,7 @@ import { useGlobalAssistant } from "./useGlobalAssistant";
 import { useAssistantSendFailure } from "./useAssistantSendFailure";
 import { GlobalAssistantTerminal } from "./GlobalAssistantTerminal";
 import { HelpLaunchingState } from "./HelpLaunchingState";
+import { refocusStartAfterCancel } from "./refocusStartAfterCancel";
 import { HEADER_ACTION_CLASS } from "./HelpPanelHeader";
 import { TabAgentMark } from "./HelpSessionTabs";
 
@@ -111,6 +112,7 @@ export function GlobalAssistantPane({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   useEscapeStack(isMenuOpen, () => setIsMenuOpen(false));
   const rootRef = useRef<HTMLDivElement>(null);
+  const startRef = useRef<HTMLButtonElement>(null);
 
   const subject = runningSubject(view);
   // The run "Open in Assistant" chose, gone by now: said, and its successor
@@ -188,13 +190,10 @@ export function GlobalAssistantPane({
   };
 
   const handleCancelLaunch = () => {
-    void cancelLaunch(generation).then(() => {
-      // Cancel went with the launch: the keyboard it held moves to Start,
-      // unless something else has taken it since.
-      if (document.activeElement === null || document.activeElement === document.body) {
-        useHelpPanelStore.getState().requestFocus();
-      }
-    });
+    refocusStartAfterCancel(
+      () => cancelLaunch(generation),
+      () => startRef.current
+    );
   };
 
   return (
@@ -303,6 +302,7 @@ export function GlobalAssistantPane({
             is one.
           </p>
           <Button
+            ref={startRef}
             type="button"
             variant="contrast"
             onClick={() => void handleStart()}

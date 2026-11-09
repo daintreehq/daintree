@@ -195,7 +195,11 @@ export class GlobalAssistantService {
     )
       .catch((err: unknown) => {
         // Stopped while starting, whatever it ran into on the way down.
-        throw generation !== this.generation ? stoppedWhileStarting() : err;
+        if (generation !== this.generation) throw stoppedWhileStarting();
+        // Failed by itself, it is over too: a Cancel still on its way for it
+        // must not stop the next launch, which would otherwise share its generation.
+        this.generation += 1;
+        throw err;
       })
       .finally(() => {
         if (this.launch === launch) {
@@ -348,7 +352,11 @@ export class GlobalAssistantService {
   /** Start over on a new conversation. */
   async restart(): Promise<GlobalAssistantState> {
     if (this.closed) throw refuse("CANCELLED", "The app is shutting down.");
-    await this.teardown("restart");
+    const torn = this.teardown("restart");
+    const generation = this.generation;
+    await torn;
+    // A Cancel or a stop while the old run was going ends the restart with it.
+    if (this.generation !== generation) throw stoppedWhileStarting();
     return this.ensureSession({ fresh: true });
   }
 
