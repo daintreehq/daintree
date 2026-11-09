@@ -348,7 +348,7 @@ export interface GeneratedIpcInvokeMap {
       entries: (
         | {
             state: "live";
-            role: "worker" | "assistant";
+            role: "assistant" | "worker";
             subject: {
               hostId: string;
               scope: { kind: "project"; projectId: string } | { kind: "global" };
@@ -1507,7 +1507,7 @@ export interface GeneratedIpcInvokeMap {
               sourceMap: {
                 mapUrl: string | null;
                 mapRevision: string;
-                sourceCheck: "matches" | "differs" | "unchecked";
+                sourceCheck: "matches" | "unchecked" | "differs";
               };
               candidateId: string;
               claim:
@@ -1542,7 +1542,7 @@ export interface GeneratedIpcInvokeMap {
                 | {
                     mapUrl: string | null;
                     mapRevision: string;
-                    sourceCheck: "matches" | "differs" | "unchecked";
+                    sourceCheck: "matches" | "unchecked" | "differs";
                   }
                 | undefined;
               placedBy?: "structure" | undefined;
@@ -1588,7 +1588,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "matches" | "differs" | "unchecked";
+                      sourceCheck: "matches" | "unchecked" | "differs";
                     };
                   }
                 | {
@@ -1609,7 +1609,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "matches" | "differs" | "unchecked";
+                          sourceCheck: "matches" | "unchecked" | "differs";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1658,7 +1658,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "matches" | "differs" | "unchecked";
+                      sourceCheck: "matches" | "unchecked" | "differs";
                     };
                   }
                 | {
@@ -1679,7 +1679,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "matches" | "differs" | "unchecked";
+                          sourceCheck: "matches" | "unchecked" | "differs";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1699,10 +1699,10 @@ export interface GeneratedIpcInvokeMap {
               reason:
                 | "cancelled"
                 | "unsupported"
+                | "mismatch"
                 | "file-missing"
                 | "outside-workspace"
                 | "map-missing"
-                | "mismatch"
                 | "budget-exhausted";
               candidateId: string;
               claim:
@@ -3723,9 +3723,9 @@ export interface GeneratedIpcInvokeMap {
       status:
         | "cancelled"
         | "unreachable"
+        | "started"
         | "connected"
         | "woken"
-        | "started"
         | "not_wakeable"
         | "not_startable"
         | "version_mismatch"
@@ -3904,17 +3904,17 @@ export interface GeneratedIpcInvokeMap {
             | {
                 kind: "unverifiable";
                 reason:
-                  "file-too-large" | "byte-limit" | "deadline" | "unreadable" | "special-file";
+                  "unreadable" | "file-too-large" | "byte-limit" | "deadline" | "special-file";
               };
           path: string;
           pathBytes?: string | undefined;
         }[];
         incomplete: {
           reasons: (
+            | "unreadable"
             | "file-too-large"
             | "byte-limit"
             | "deadline"
-            | "unreadable"
             | "special-file"
             | "path-limit"
             | "nested-repository"
@@ -3925,10 +3925,10 @@ export interface GeneratedIpcInvokeMap {
           )[];
           uncovered: {
             reason:
+              | "unreadable"
               | "file-too-large"
               | "byte-limit"
               | "deadline"
-              | "unreadable"
               | "special-file"
               | "path-limit"
               | "nested-repository"
@@ -4012,7 +4012,7 @@ export interface GeneratedIpcInvokeMap {
                 }
               | {
                   kind: "exit";
-                  process: "agent" | "pty";
+                  process: "pty" | "agent";
                   exitCode: number | null;
                   signal: number | null;
                 }
@@ -4134,7 +4134,7 @@ export interface GeneratedIpcInvokeMap {
                 }
               | {
                   kind: "exit";
-                  process: "agent" | "pty";
+                  process: "pty" | "agent";
                   exitCode: number | null;
                   signal: number | null;
                 }
@@ -4974,7 +4974,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrNumber?: number | undefined;
           sourcePrTitle?: string | undefined;
           sourcePrUrl?: string | undefined;
-          sourcePrState?: "open" | "closed" | "merged" | undefined;
+          sourcePrState?: "open" | "merged" | "closed" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
           submoduleInit?: "none" | "inherit" | "all" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;
