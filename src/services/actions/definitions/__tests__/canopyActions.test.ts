@@ -259,9 +259,9 @@ describe("canopy actions", () => {
       id: "p1",
     } as typeof window.__DAINTREE_INITIAL_PROJECT__;
     vi.resetModules();
+    const { useCanopyStore: store } = await import("@/store/canopyStore");
+    const { useFleetSnapshotStore } = await import("@/store/fleetSnapshotStore");
     try {
-      const { useCanopyStore: store } = await import("@/store/canopyStore");
-      const { useFleetSnapshotStore } = await import("@/store/fleetSnapshotStore");
       const { registerCanopyActions } = await import("../canopyActions");
       const loaded: ActionRegistry = new Map();
       registerCanopyActions(loaded);
@@ -295,6 +295,10 @@ describe("canopy actions", () => {
     } finally {
       window.localStorage.removeItem("daintree-canopy-scope");
       delete window.__DAINTREE_INITIAL_PROJECT__;
+      // The reloaded stores hold this case's state: none of it reaches a later import.
+      store.setState({ mode: "unset", snapshot: null });
+      useFleetSnapshotStore.setState({ snapshot: null });
+      vi.resetModules();
     }
   });
 
