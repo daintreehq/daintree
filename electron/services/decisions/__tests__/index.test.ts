@@ -482,6 +482,7 @@ import {
   onDecisionsHostRuntimeChanged,
   peekDecisionsService,
   decisionsDiskSpaceRecovered,
+  noteDecisionsRendererReady,
   restoreIdentity,
   setAutoEnrollHosts,
   setDecisionsEnabled,
@@ -2290,21 +2291,35 @@ describe("Decisions entry", () => {
         expect(toastsShown()).toHaveLength(2);
       });
 
-      it("tries the warning again at the next stop when no window could show it", async () => {
+      it("holds the warning for the next window ready for toasts when none could show it", async () => {
         saved.value = { enabled: true, ...RELAY };
         await startDecisionsIfEnabled();
         const [connection] = connections;
         toastAudience.present = false;
         connection!.options.onStatus({ state: "not-connected", problem: "storage" });
+        noteDecisionsRendererReady();
         expect(toastsShown()).toHaveLength(0);
 
         toastAudience.present = true;
-        connection!.options.onStatus({ state: "connecting" });
-        connection!.options.onStatus({ state: "not-connected", problem: "storage" });
+        noteDecisionsRendererReady();
+        noteDecisionsRendererReady();
         expect(toastsShown()).toHaveLength(1);
       });
 
-      it("ends a setup check holding the old store when the store is replaced", async () => {
+      it("drops a held warning once Decisions connected again", async () => {
+        saved.value = { enabled: true, ...RELAY };
+        await startDecisionsIfEnabled();
+        const [connection] = connections;
+        toastAudience.present = false;
+        connection!.options.onStatus({ state: "not-connected", problem: "storage" });
+        connection!.options.onStatus({ state: "connected" });
+
+        toastAudience.present = true;
+        noteDecisionsRendererReady();
+        expect(toastsShown()).toHaveLength(0);
+      });
+
+      it("calls off a setup check holding the old store when the store is replaced, and shows it cancelled", async () => {
         saved.value = { enabled: true, ...RELAY };
         await startSetupCheck();
         expect(getSetupCheck()).toMatchObject({ state: "running" });
@@ -2313,7 +2328,16 @@ describe("Decisions entry", () => {
         await decisionsDiskSpaceRecovered();
 
         expect(setupChecks.made[0]!.cancelled).toBe(1);
-        expect(getSetupCheck()).toBeNull();
+        await vi.waitFor(() => expect(getSetupCheck()).toMatchObject({ state: "cancelled" }));
+        // Settings is pushed the cancelled run, so it stops showing it running.
+        const runs = statusView.send.mock.calls
+          .filter(
+            ([channel, event]) =>
+              channel === CHANNELS.EVENTS_PUSH &&
+              (event as { name: string }).name === "decisions:setup-check-changed"
+          )
+          .map(([, event]) => (event as { payload: { state: string } }).payload);
+        expect(runs.at(-1)).toMatchObject({ state: "cancelled" });
       });
 
       it("warns of no other connection problem", async () => {

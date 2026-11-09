@@ -50,6 +50,8 @@ const event = (seq: number) => ({
 
 let dir: string;
 let sqlite: Database.Database;
+/** Every service a test made, disposed before the database closes, however the test ended. */
+const services: DecisionsService[] = [];
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-decisions-recovery-"));
@@ -57,9 +59,10 @@ beforeEach(() => {
   logWarn.mockClear();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   resetWritesSuppressedForTesting();
+  await Promise.all(services.splice(0).map((made) => made.dispose()));
   if (sqlite.open) sqlite.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -76,6 +79,7 @@ function service(checkDiskSpace?: () => Promise<boolean | null>) {
     },
     ...(checkDiskSpace ? { checkDiskSpace } : {}),
   });
+  services.push(running);
   return { running, made };
 }
 
@@ -109,7 +113,6 @@ describe("DecisionsService over real stores, after a disk-space fault (#16605)",
     await fresh.markEventProcessed(1, 5);
     expect(await fresh.unprocessedEvents(10)).toEqual([]);
     await expect(old.setMeta("late", "1")).rejects.toMatchObject({ reason: "closed" });
-    await running.dispose();
   });
 
   it("replaces a store the database ran out of room for, once free space reads fine", async () => {
@@ -132,14 +135,17 @@ describe("DecisionsService over real stores, after a disk-space fault (#16605)",
     sqlite.pragma(`max_page_count = ${pages * 1000}`);
     await vi.advanceTimersByTimeAsync(DISK_FULL_RESTART_DELAYS_MS[0]!);
 
-    await vi.waitFor(() => expect(running.getStore()).not.toBe(old));
+    // Detached (null) mid-restart isn't replaced yet: wait for the fresh store and its connection.
+    await vi.waitFor(() => {
+      expect(running.getStore()).not.toBeNull();
+      expect(running.getStore()).not.toBe(old);
+      expect(made).toHaveLength(2);
+    });
     expect(checks).toEqual(["check"]);
-    expect(made).toHaveLength(2);
     const fresh = running.getStore()!;
     await fresh.setMeta("small", "1");
     expect(await fresh.getMeta("small")).toBe("1");
     warn.mockRestore();
-    await running.dispose();
   });
 
   it("keeps a store stopped by any other database failure stopped", async () => {
@@ -157,6 +163,5 @@ describe("DecisionsService over real stores, after a disk-space fault (#16605)",
     expect(await running.diskSpaceRecovered()).toBe(false);
     expect(running.getStore()).toBe(old);
     expect(made).toHaveLength(1);
-    await running.dispose();
   });
 });

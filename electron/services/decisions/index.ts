@@ -347,16 +347,19 @@ function sendStatus(status: DecisionsStatus): void {
 
 /** The person was told Decisions stopped for storage; cleared once it connects or turns off (#16605). */
 let storageOutageNoticed = false;
+/** Decisions stopped for storage with no window to say so in; the next window ready for toasts is told. */
+let storageOutageUntold = false;
 
 /**
  * Agents lose `ask_human` while Decisions is stopped for storage, and nothing
  * outside Settings showed it (#16605): the first time it stops for that, a
  * warning says so, once, until it connects again or turns off. With no window
- * to show it in, the outage stays unnoticed, so the next stop tries again.
+ * to show it in, it waits for the next window that is ready for toasts.
  */
 function noticeStorageOutage(running: DecisionsService, status: DecisionsStatus): void {
   if (status.state === "connected" || status.state === "off") {
     storageOutageNoticed = false;
+    storageOutageUntold = false;
     return;
   }
   if (shutDown || storageOutageNoticed) return;
@@ -372,13 +375,37 @@ function noticeStorageOutage(running: DecisionsService, status: DecisionsStatus)
     rateLimitLabel: "Decisions",
     replaceKey: "decisions-storage",
   };
-  if (!hasBroadcastAudience(CHANNELS.NOTIFICATION_SHOW_TOAST, toast)) return;
+  if (!hasBroadcastAudience(CHANNELS.NOTIFICATION_SHOW_TOAST, toast)) {
+    storageOutageUntold = true;
+    return;
+  }
   storageOutageNoticed = true;
+  storageOutageUntold = false;
   try {
     broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, toast);
   } catch (error) {
     console.warn("[Decisions] The storage warning couldn't be shown:", error);
   }
+}
+
+/**
+ * A window's renderer reported first-interactive, so its toast listener is
+ * mounted: a storage outage no window could be told about is told now, if
+ * Decisions is still stopped for it.
+ */
+export function noteDecisionsRendererReady(): void {
+  const running = service;
+  if (!storageOutageUntold || shutDown || running === null) return;
+  noticeStorageOutage(running, running.getStatus());
+}
+
+/**
+ * The store is being replaced (#16605). A setup check mid-question holds the
+ * old store and connection, so it is called off as Cancel would: Settings
+ * shows it cancelled, and nothing is recorded.
+ */
+function cancelSetupCheckForStore(): void {
+  void setupCheck?.cancel().catch(() => {});
 }
 
 /** Reads free space now: whether there is room to write again, null when it couldn't be read. */
@@ -582,8 +609,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
         checkDiskSpace,
-        // A check mid-question holds the old store and connection; it ends as off and on would end it.
-        onStoreReplacing: () => void endSetupCheck(),
+        onStoreReplacing: cancelSetupCheckForStore,
       });
       next.onStatusChanged((event) => {
         // A Host enrolls no Hosts: only an owner's lifetime does.
@@ -2368,6 +2394,7 @@ export function _resetDecisionsForTesting(): void {
   statusRevision = 0;
   statusPushes = Promise.resolve();
   storageOutageNoticed = false;
+  storageOutageUntold = false;
   policyRevision = 0;
   modelRevision = 0;
   hostEnroller.dispose();

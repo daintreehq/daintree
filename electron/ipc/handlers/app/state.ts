@@ -61,6 +61,7 @@ import {
   isGpuAngleFallbackApplied,
 } from "../../../services/GpuCrashMonitorService.js";
 import { readGpuDisabledFlagData } from "../../../services/gpuDisabledFlag.js";
+import { peekDecisionsModule } from "../../../window/serviceRefs.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerService.js";
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
@@ -1323,6 +1324,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       endStartupTracking(ctx.webContentsId);
       // A backup suspension raised while no window could show it waits for this one.
       noteDatabaseNoticeRendererReady(ctx.webContentsId);
+      // So does a Decisions storage outage (#16605), only if Decisions is already loaded.
+      peekDecisionsModule()
+        ?.then((decisions) => decisions.noteDecisionsRendererReady())
+        .catch(() => {});
       // So does the notice explaining why this view just reloaded.
       if (ctx.event) releaseReloadNotice(ctx.event.sender);
       // Close the cold-start timeline for a view this window's manager
