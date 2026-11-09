@@ -190,12 +190,7 @@ export function PilotScene() {
         </div>
       </div>
       <MockKeys keys={parkKeycaps} x={320} y={300} visible={parkCue && !parkKeys} />
-      <MockKeys
-        keys={shortcuts.keycaps("Enter")}
-        x={320}
-        y={300}
-        visible={enterKey && !parked}
-      />
+      <MockKeys keys={shortcuts.keycaps("Enter")} x={320} y={300} visible={enterKey && !parked} />
       {/* "Whatever is waiting on you" — the top of each group, then the Park hint. */}
       <MockSpotlight
         targets={parkCue ? ["pilot-park"] : ["pilot-row-0-0", "pilot-row-1-0"]}

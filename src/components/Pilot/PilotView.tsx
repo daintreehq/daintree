@@ -753,7 +753,12 @@ function PilotFooter({
     <div className="flex w-full items-center justify-between gap-3">
       <div className="-ml-1 flex items-center gap-2">
         {actionLabel !== null && (
-          <PilotFooterHint keys="Enter" label={actionLabel} onClick={onOpen} testId="pilot-open-hint" />
+          <PilotFooterHint
+            keys="Enter"
+            label={actionLabel}
+            onClick={onOpen}
+            testId="pilot-open-hint"
+          />
         )}
         {parkLabel !== null && (
           <PilotFooterHint

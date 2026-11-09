@@ -88,7 +88,8 @@ export function QuickSwitcher({
   // Inside a scope the way back is Backspace on an empty field, said where the
   // Tab that got the user in was taught.
   const scopeExitHint = useMemo(
-    () => (scopedProvider && query === "" ? { keys: "Backspace", label: "to search everything" } : null),
+    () =>
+      scopedProvider && query === "" ? { keys: "Backspace", label: "to search everything" } : null,
     [scopedProvider, query]
   );
   const secondaryHint = keywordHint ?? scopeExitHint;

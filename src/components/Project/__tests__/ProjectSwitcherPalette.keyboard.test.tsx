@@ -1072,7 +1072,10 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
 
   it("says Switch on either key for a project this window shows or is activating", () => {
     const row = projectRow({ isOpenInThisWindow: true });
-    expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({ keys: "Enter", label: "to switch" });
+    expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({
+      keys: "Enter",
+      label: "to switch",
+    });
   });
 
   it("switches here, or takes it to a new window, for a project this window keeps cached", () => {

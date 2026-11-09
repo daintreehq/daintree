@@ -54,7 +54,6 @@ const PREFIX_MAP: Record<string, PrefixRouteSpec> = {
 
 const COMMANDS_LABEL = PREFIX_MAP[">"]!.label;
 
-
 /**
  * Which row command an Alt chord names, or null.
  *
