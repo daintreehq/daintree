@@ -24,11 +24,35 @@ describe("SettingsSelect default annotation (#16598)", () => {
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
     const alpha = await screen.findByRole("option", { name: "Alpha" });
     expect(alpha.textContent).toContain("Default");
-    expect(alpha.getAttribute("aria-describedby")?.split(" ")).toHaveLength(2);
+    const describedBy = (alpha.getAttribute("aria-describedby") ?? "").split(" ");
+    const described = describedBy.map((id) => document.getElementById(id)?.textContent);
+    expect(describedBy).toHaveLength(2);
+    expect(described).toContain("First option");
+    expect(described).toContain("Default");
 
     const beta = screen.getByRole("option", { name: "Beta" });
     expect(beta.textContent).toBe("Beta");
     expect(beta.getAttribute("aria-describedby")).toBeNull();
     expect(trigger.textContent).toBe("Alpha");
+  });
+
+  it("announces the default on an option that has no description", async () => {
+    render(
+      <SettingsGroup>
+        <SettingsSelect
+          label="Account"
+          value="b"
+          onValueChange={() => {}}
+          options={[
+            { value: "a", label: "Alpha" },
+            { value: "b", label: "Beta", isDefault: true },
+          ]}
+        />
+      </SettingsGroup>
+    );
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Account" }), { key: "ArrowDown" });
+    const beta = await screen.findByRole("option", { name: "Beta" });
+    const id = beta.getAttribute("aria-describedby");
+    expect(document.getElementById(id ?? "")?.textContent).toBe("Default");
   });
 });
