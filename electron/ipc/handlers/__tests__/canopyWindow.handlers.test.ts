@@ -142,9 +142,9 @@ describe("back to a project window from the Canopy window (#16578)", () => {
   );
 
   it("refuses a project view, which is already in a project window", async () => {
-    expect(
-      await refused(invokeFrom(3, CANOPY_WINDOW_METHOD_CHANNELS.focusLastProjectWindow))
-    ).toBe(true);
+    expect(await refused(invokeFrom(3, CANOPY_WINDOW_METHOD_CHANNELS.focusLastProjectWindow))).toBe(
+      true
+    );
     expect(windowMock.focusLastProjectWindow).not.toHaveBeenCalled();
   });
 });

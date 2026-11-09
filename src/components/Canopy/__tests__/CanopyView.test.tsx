@@ -766,9 +766,7 @@ describe("CanopyView", () => {
       fireEvent.click(screenButton(dialog, "Turn on Canopy"));
     });
 
-    expect(dispatchMock.mock.calls).toEqual([
-      ["canopy.openWindow", undefined, { source: "user" }],
-    ]);
+    expect(dispatchMock.mock.calls).toEqual([["canopy.openWindow", undefined, { source: "user" }]]);
     // Asked once Canopy is on, which is when the window may open.
     expect(modeWhenAsked).toBe("on");
   });
