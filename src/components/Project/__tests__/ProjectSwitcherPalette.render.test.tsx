@@ -141,11 +141,15 @@ vi.mock("@/components/ui/popover", () => ({
   PopoverContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+// Tooltip content renders only where a suite opts in, so its text can't leak
+// into the names and text queries everywhere else.
+const tooltipMock = vi.hoisted(() => ({ renderContent: false }));
 vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipContent: () => null,
+  TooltipContent: ({ children }: { children: React.ReactNode }) =>
+    tooltipMock.renderContent ? <span data-testid="tooltip-content">{children}</span> : null,
 }));
 
 vi.mock("@/components/ui/ConfirmDialog", () => ({
@@ -2417,6 +2421,11 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
   });
 
   const control = () => screen.queryAllByTestId("project-open-elsewhere-marker");
+  const theControl = () => screen.getByTestId("project-open-elsewhere-marker");
+
+  afterEach(() => {
+    tooltipMock.renderContent = false;
+  });
 
   it("says a project another window owns in its accessible name", () => {
     render(
@@ -2444,26 +2453,45 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
       />
     );
 
-    const [button] = control();
+    const button = theControl();
     const option = screen.getByRole("option", { name: /Payments/ });
-    // At the row's end, after the name column, not inline beside the name.
-    expect(button.closest('[role="option"]')).toBe(option);
-    expect(option.lastElementChild?.contains(button)).toBe(true);
+    const name = within(option).getByText("Payments");
+    // At the row's end, in its own slot after the name column, not inline beside the name.
+    const slot = Array.from(option.children).find((child) => child.contains(button));
+    expect(slot).toBeDefined();
+    expect(slot!.contains(name)).toBe(false);
+    expect(slot!.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
     // Neutral, never accent — several rows can carry it. Kept out of the
     // option's name, which already says it, and out of the tab order.
     expect(button.getAttribute("class") ?? "").not.toMatch(/accent/);
     expect(button.closest('[aria-hidden="true"]')).not.toBeNull();
-    expect(button.querySelector("button, [tabindex]")).toBeNull();
-    expect(button.hasAttribute("tabindex")).toBe(false);
+    expect(button.tabIndex).toBeLessThan(0);
+    expect(button.querySelector("button, a, input, [tabindex]")).toBeNull();
     expect(screen.queryByRole("option", { name: /Go to window/ })).toBeNull();
 
-    // A press leaves focus in the search input, which drives the list.
-    expect(fireEvent.pointerDown(button)).toBe(false);
+    // A mouse press leaves focus in the search input, which drives the list;
+    // a touch press stays live for the row's long-press context menu.
+    expect(fireEvent.pointerDown(button, { pointerType: "mouse" })).toBe(false);
+    expect(fireEvent.pointerDown(button, { pointerType: "touch" })).toBe(true);
 
     fireEvent.click(button);
     expect(onSelectNewWindow).toHaveBeenCalledTimes(1);
     expect(onSelectNewWindow).toHaveBeenCalledWith(project);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("names its action in a tooltip", () => {
+    tooltipMock.renderContent = true;
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        onSelectNewWindow={vi.fn()}
+        results={[makeProject({ name: "Payments", openInOtherWindow: "foreground" })]}
+      />
+    );
+
+    const tip = within(theControl().parentElement!).getByTestId("tooltip-content");
+    expect(tip.textContent).toBe("Go to window");
   });
 
   it("goes to the window once on a modifier-click of the control, never through the row", () => {
@@ -2478,7 +2506,7 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
       />
     );
 
-    fireEvent.click(control()[0], { metaKey: true, ctrlKey: true });
+    fireEvent.click(theControl(), { metaKey: true, ctrlKey: true });
     expect(onSelectNewWindow).toHaveBeenCalledTimes(1);
     expect(onSelect).not.toHaveBeenCalled();
   });
@@ -2508,6 +2536,9 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
     );
 
     expect(control()).toHaveLength(0);
+    // Still said: only the control follows the menu's action.
+    expect(screen.getByRole("option", { name: /Here,\s*Open in another window/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /Kept,\s*Open in another window/ })).toBeTruthy();
   });
 
   it("offers the control on owners showing the project and still-activating ones alike", () => {
@@ -2548,7 +2579,8 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
             id: "gone",
             name: "Gone",
             isMissing: true,
-            openInOtherWindow: "cached",
+            // Owned outright, so only the missing guard keeps it unmarked.
+            openInOtherWindow: "foreground",
           }),
         ]}
       />

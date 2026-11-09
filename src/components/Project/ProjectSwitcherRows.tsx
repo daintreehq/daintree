@@ -816,7 +816,12 @@ export function ProjectListItem({
             <span
               role="presentation"
               data-testid="project-open-elsewhere-marker"
-              onPointerDown={(e) => e.preventDefault()}
+              // A mouse press would otherwise take focus from the search input.
+              // Touch and pen are left alone: the row's context menu arms its
+              // long-press from that same pointerdown.
+              onPointerDown={(e) => {
+                if (e.pointerType === "mouse") e.preventDefault();
+              }}
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
