@@ -72,6 +72,11 @@ interface WindowStateEntry {
   height: number;
   isMaximized: boolean;
   isFullScreen?: boolean;
+  /**
+   * The display a maximized or full-screen window's frame was on: its id and
+   * its bounds. The normal bounds can sit on another display (#16579).
+   */
+  display?: { id?: number; x: number; y: number; width: number; height: number };
 }
 
 export interface WindowStatesStoreSchema {

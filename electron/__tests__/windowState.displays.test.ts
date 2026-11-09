@@ -272,6 +272,58 @@ describe("a window maximized or full screen on another display than its normal b
 
     expect(win.isFullScreen()).toBe(true);
     expect(displayOf(win.getBounds())).toBe(IPAD.id);
+    win.setFullScreen(false);
+    expect(within(win.getBounds(), IPAD.workArea)).toBe(true);
+  });
+
+  it("keeps normal bounds that already sit on that display where they were", async () => {
+    fakes.store.state = {
+      [CANOPY_BOUNDS_KEY]: {
+        x: -1200,
+        y: 100,
+        width: 1000,
+        height: 700,
+        isMaximized: true,
+        isFullScreen: false,
+        display: { id: IPAD.id, ...IPAD.bounds },
+      },
+    };
+
+    const win = await launch();
+
+    expect(win.getNormalBounds()).toEqual({ x: -1200, y: 100, width: 1000, height: 700 });
+    expect(displayOf(win.getBounds())).toBe(IPAD.id);
+  });
+
+  it("sizes the window against that display, not the one it is moved off", async () => {
+    const small: Display = {
+      id: 3,
+      bounds: { x: 0, y: 0, width: 1280, height: 800 },
+      workArea: { x: 0, y: 25, width: 1280, height: 775 },
+    };
+    const large: Display = {
+      id: 4,
+      bounds: { x: 1280, y: 0, width: 2560, height: 1440 },
+      workArea: { x: 1280, y: 25, width: 2560, height: 1415 },
+    };
+    connect(small, large);
+    fakes.store.state = {
+      [CANOPY_BOUNDS_KEY]: {
+        x: 100,
+        y: 50,
+        width: 1600,
+        height: 1000,
+        isMaximized: true,
+        isFullScreen: false,
+        display: { id: large.id, ...large.bounds },
+      },
+    };
+
+    const win = await launch();
+    win.unmaximize();
+
+    expect(win.getBounds()).toEqual(expect.objectContaining({ width: 1600, height: 1000 }));
+    expect(within(win.getBounds(), large.workArea)).toBe(true);
   });
 
   it("brings a project window back the same way", async () => {
@@ -305,6 +357,55 @@ describe("a window maximized or full screen on another display than its normal b
 
     expect(displayOf(win.getBounds())).toBe(IPAD.id);
     expect(within(win.getBounds(), moved.workArea)).toBe(true);
+  });
+
+  it("steps a second window moved there off the first", async () => {
+    await leftOnIpad("maximized", "project");
+    const first = await launch("project");
+    vi.resetModules();
+    windowState = await import("../windowState.js");
+
+    const second = windowState.createWindowWithState({ show: false }, PROJECT, {
+      getShownBoundsKey: () => PROJECT,
+      getOccupiedBounds: () => [first.getNormalBounds()],
+    }) as unknown as FakeWindow;
+
+    expect(second.getNormalBounds()).not.toEqual(first.getNormalBounds());
+    expect(displayOf(second.getNormalBounds())).toBe(IPAD.id);
+    expect(displayOf(second.getBounds())).toBe(IPAD.id);
+  });
+
+  it("gives a new workspace's window neither the mode nor the display it borrows bounds from", async () => {
+    await leftOnIpad("maximized", "project");
+    vi.resetModules();
+    windowState = await import("../windowState.js");
+
+    const win = windowState.createWindowWithState(
+      { show: false },
+      "/projects/other"
+    ) as unknown as FakeWindow;
+
+    expect(win.isMaximized()).toBe(false);
+    expect(displayOf(win.getBounds())).toBe(MAC.id);
+  });
+
+  it("ignores a saved display it can't read", async () => {
+    fakes.store.state = {
+      [CANOPY_BOUNDS_KEY]: {
+        x: 862,
+        y: 477,
+        width: 1376,
+        height: 974,
+        isMaximized: true,
+        isFullScreen: false,
+        display: { id: "ipad", x: -1366, y: 0, width: 0, height: 1024 },
+      },
+    };
+
+    const win = await launch();
+
+    expect(win.getNormalBounds()).toEqual({ x: 862, y: 477, width: 1376, height: 974 });
+    expect(displayOf(win.getBounds())).toBe(MAC.id);
   });
 
   it("on Linux still maximizes a hidden window only once it is revealed", async () => {
@@ -351,6 +452,40 @@ describe("when that display is absent at launch", () => {
     expect(displayOf(win.getBounds())).toBe(IPAD.id);
   });
 
+  it("saves the state it was restored from, unchanged", async () => {
+    await leftOnIpad("maximized");
+    const saved = structuredClone(fakes.store.state[CANOPY_BOUNDS_KEY]);
+    expect(saved).toEqual(
+      expect.objectContaining({ display: { id: IPAD.id, ...IPAD.bounds }, isMaximized: true })
+    );
+    connect(MAC);
+
+    quit(await launch());
+
+    expect(fakes.store.state[CANOPY_BOUNDS_KEY]).toEqual(saved);
+  });
+
+  it("keeps it through a save before the window is revealed", async () => {
+    await leftOnIpad("full screen");
+    connect(MAC);
+    vi.resetModules();
+    windowState = await import("../windowState.js");
+    const win = windowState.createSeparateWindowWithState(
+      { show: false },
+      CANOPY_BOUNDS_KEY,
+      CANOPY_SIZE
+    ) as unknown as FakeWindow;
+    win.moveTo(win.getNormalBounds());
+    vi.runOnlyPendingTimers();
+    quit(win);
+    connect(MAC, IPAD);
+
+    const next = await launch();
+
+    expect(next.isFullScreen()).toBe(true);
+    expect(displayOf(next.getBounds())).toBe(IPAD.id);
+  });
+
   it("keeps the placement through full screen too", async () => {
     await leftOnIpad("full screen");
     connect(MAC);
@@ -391,6 +526,39 @@ describe("when that display is absent at launch", () => {
     expect(displayOf(next.getBounds())).toBe(MAC.id);
   });
 
+  it("lets go of it once the user un-maximizes the window, even without moving it", async () => {
+    await leftOnIpad("maximized");
+    connect(MAC);
+    const win = await launch();
+    win.unmaximize();
+    vi.runOnlyPendingTimers();
+    win.maximize();
+    quit(win);
+    connect(MAC, IPAD);
+
+    const next = await launch();
+
+    expect(displayOf(next.getBounds())).toBe(MAC.id);
+  });
+
+  it("lets go of it once the user moves the maximized window to another display", async () => {
+    const other: Display = {
+      id: 5,
+      bounds: { x: 3008, y: 0, width: 1920, height: 1080 },
+      workArea: { x: 3008, y: 25, width: 1920, height: 1055 },
+    };
+    await leftOnIpad("maximized");
+    connect(MAC, other);
+    const win = await launch();
+    win.zoomOnto(other);
+    quit(win);
+    connect(MAC, IPAD, other);
+
+    const next = await launch();
+
+    expect(displayOf(next.getBounds())).toBe(other.id);
+  });
+
   it("never moves the open window when the display connects", async () => {
     await leftOnIpad("maximized");
     connect(MAC);
@@ -407,6 +575,43 @@ describe("when that display is absent at launch", () => {
     quit(win);
     const next = await launch();
     expect(displayOf(next.getBounds())).toBe(IPAD.id);
+  });
+});
+
+describe("a save before the window is revealed", () => {
+  it("keeps a full-screen window's mode and display", async () => {
+    await leftOnIpad("full screen");
+    vi.resetModules();
+    windowState = await import("../windowState.js");
+    const win = windowState.createSeparateWindowWithState(
+      { show: false },
+      CANOPY_BOUNDS_KEY,
+      CANOPY_SIZE
+    ) as unknown as FakeWindow;
+
+    quit(win);
+
+    expect(fakes.store.state[CANOPY_BOUNDS_KEY]).toEqual(
+      expect.objectContaining({ isFullScreen: true, display: { id: IPAD.id, ...IPAD.bounds } })
+    );
+  });
+
+  it("keeps a maximized window's display on Linux, where the maximize waits for it", async () => {
+    await leftOnIpad("maximized");
+    setPlatform("linux");
+    vi.resetModules();
+    windowState = await import("../windowState.js");
+    const win = windowState.createSeparateWindowWithState(
+      { show: false },
+      CANOPY_BOUNDS_KEY,
+      CANOPY_SIZE
+    ) as unknown as FakeWindow;
+
+    quit(win);
+
+    expect(fakes.store.state[CANOPY_BOUNDS_KEY]).toEqual(
+      expect.objectContaining({ isMaximized: true, display: { id: IPAD.id, ...IPAD.bounds } })
+    );
   });
 });
 
