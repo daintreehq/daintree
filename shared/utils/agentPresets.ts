@@ -49,6 +49,28 @@ export function sanitizeAgentEnv(
 }
 
 /**
+ * The well-formed, distinct fallback ids a stored list names, in order and
+ * uncapped. `sanitizePreset` keeps the first `FALLBACK_CHAIN_MAX` of these, so
+ * a longer result is a chain the read cut short.
+ */
+export function validFallbackIds(fallbacks: unknown, selfId?: string): string[] {
+  if (!Array.isArray(fallbacks)) return [];
+  const seen = new Set<string>();
+  const safe: string[] = [];
+  for (const entry of fallbacks) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (!trimmed || trimmed.length > 100) continue;
+    if (!/^[a-zA-Z0-9_.-]+$/.test(trimmed)) continue;
+    if (trimmed === selfId) continue;
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    safe.push(trimmed);
+  }
+  return safe;
+}
+
+/**
  * Sanitizes a preset's free-form display title: coerces non-strings to
  * undefined, strips control characters, blocks XSS-relevant angle brackets,
  * caps length, and treats empty/whitespace-only values as "no custom title".
@@ -102,20 +124,7 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
   };
 
   const sanitizeFallbacks = (fallbacks?: string[], selfId?: string): string[] | undefined => {
-    if (!Array.isArray(fallbacks)) return undefined;
-    const seen = new Set<string>();
-    const safe: string[] = [];
-    for (const entry of fallbacks) {
-      if (typeof entry !== "string") continue;
-      const trimmed = entry.trim();
-      if (!trimmed || trimmed.length > 100) continue;
-      if (!/^[a-zA-Z0-9_.-]+$/.test(trimmed)) continue;
-      if (trimmed === selfId) continue;
-      if (seen.has(trimmed)) continue;
-      seen.add(trimmed);
-      safe.push(trimmed);
-      if (safe.length >= FALLBACK_CHAIN_MAX) break;
-    }
+    const safe = validFallbackIds(fallbacks, selfId).slice(0, FALLBACK_CHAIN_MAX);
     return safe.length > 0 ? safe : undefined;
   };
 
