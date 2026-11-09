@@ -36,6 +36,10 @@ const xterm = vi.hoisted(() => ({
     draw: (screen: string[], cursorRow: number, cursorShown?: boolean) => void;
     /** xterm painting the rows, as it does in its own animation frame. */
     render: () => void;
+    /** The program entering or leaving the alternate screen. */
+    switchBuffer: (type: "normal" | "alternate") => void;
+    /** The renderer measuring a new cell size, as after a font change. */
+    remeasure: () => void;
   },
 }));
 
@@ -50,10 +54,15 @@ vi.mock("@xterm/xterm", () => ({
         cursorY: 0,
         getLine: (y: number) => ({ translateToString: () => this.screen[y] ?? "" }),
       },
-      onBufferChange: () => ({ dispose() {} }),
+      onBufferChange: (listener: (buffer: { type: "normal" | "alternate" }) => void) => {
+        this.bufferListeners.add(listener);
+        return { dispose: () => this.bufferListeners.delete(listener) };
+      },
     };
     private onDataListener: ((data: string) => void) | null = null;
     private renderListeners = new Set<(rows: { start: number; end: number }) => void>();
+    private bufferListeners = new Set<(buffer: { type: "normal" | "alternate" }) => void>();
+    private dimensionListeners = new Set<() => void>();
     unicode = { activeVersion: "6" };
     modes = { bracketedPasteMode: false, showCursor: true };
     cols = 80;
@@ -85,6 +94,12 @@ vi.mock("@xterm/xterm", () => ({
         },
         render: () => {
           for (const listener of this.renderListeners) listener({ start: 0, end: this.rows - 1 });
+        },
+        switchBuffer: (type) => {
+          for (const listener of this.bufferListeners) listener({ type });
+        },
+        remeasure: () => {
+          for (const listener of this.dimensionListeners) listener();
         },
       };
     }
@@ -127,8 +142,9 @@ vi.mock("@xterm/xterm", () => ({
       this.rows = rows;
       xterm.current!.resizes.push([cols, rows]);
     }
-    onDimensionsChange() {
-      return { dispose() {} };
+    onDimensionsChange(listener: () => void) {
+      this.dimensionListeners.add(listener);
+      return { dispose: () => this.dimensionListeners.delete(listener) };
     }
     onRender(listener: (rows: { start: number; end: number }) => void) {
       this.renderListeners.add(listener);
@@ -942,19 +958,25 @@ describe("CanopyTerminal", () => {
       vi.useRealTimers();
     });
 
-    /** A stream opened on the laid-out pane that follows the PTY's taller grid, and xterm's first paint of it. */
-    async function openFollowed(screen: string[], cursorRow: number, cursorShown = true) {
-      const view = mount();
-      const frame = view.frame as HTMLElement;
-      frame.getBoundingClientRect = paneRect;
-      act(() => layOut());
+    /** A stream opening on the PTY's taller grid, which xterm then paints. */
+    async function paintFollowed(screen: string[], cursorRow: number, cursorShown = true) {
       xterm.current!.draw(screen, cursorRow, cursorShown);
       await open({
         watchId: 7,
         snapshot: { data: "SCREEN", cols: 200, rows: ROWS },
         following: true,
       });
+      // The grid the PTY's own pane gave it, not one this pane fits.
+      expect(xterm.current!.resizes.at(-1)).toEqual([200, ROWS]);
       xterm.current!.render();
+    }
+    /** The pane laid out, then a followed stream opened and painted in it. */
+    async function openFollowed(screen: string[], cursorRow: number, cursorShown = true) {
+      const view = mount();
+      const frame = view.frame as HTMLElement;
+      frame.getBoundingClientRect = paneRect;
+      act(() => layOut());
+      await paintFollowed(screen, cursorRow, cursorShown);
       return { ...view, frame };
     }
     const settle = () =>
@@ -965,13 +987,12 @@ describe("CanopyTerminal", () => {
     /** The rows wholly inside the pane: the grid sits at its top, moved by its own top margin. */
     function shownRows(
       frame: HTMLElement,
-      rows = ROWS,
-      available = AVAILABLE
+      { rows = ROWS, available = AVAILABLE, rowHeight = ROW_HEIGHT } = {}
     ): { first: number; last: number } {
       const top = Number.parseFloat((frame.firstElementChild as HTMLElement).style.marginTop) || 0;
       return {
-        first: Math.max(0, Math.ceil(-top / ROW_HEIGHT)),
-        last: Math.min(rows - 1, Math.floor((available - top) / ROW_HEIGHT) - 1),
+        first: Math.max(0, Math.ceil(-top / rowHeight)),
+        last: Math.min(rows - 1, Math.floor((available - top) / rowHeight) - 1),
       };
     }
 
@@ -994,13 +1015,14 @@ describe("CanopyTerminal", () => {
       expect(shownRows(frame)).toEqual({ first: ROWS - SHOWN, last: ROWS - 1 });
     });
 
-    it("keeps a shown cursor's row in view below the last row with text, but not a hidden one's", async () => {
-      const shown = await openFollowed(FRESH, 40);
-      expect(shownRows(shown.frame)).toEqual({ first: 41 - SHOWN, last: 40 });
-      shown.unmount();
+    it("keeps a shown cursor's row in view below the last row with text", async () => {
+      const { frame } = await openFollowed(FRESH, 40);
+      expect(shownRows(frame)).toEqual({ first: 41 - SHOWN, last: 40 });
+    });
 
-      const hidden = await openFollowed(FRESH, 40, false);
-      expect(shownRows(hidden.frame)).toEqual({ first: 0, last: SHOWN - 1 });
+    it("keeps nothing for a hidden cursor below the last row with text", async () => {
+      const { frame } = await openFollowed(FRESH, 40, false);
+      expect(shownRows(frame)).toEqual({ first: 0, last: SHOWN - 1 });
     });
 
     it("follows the agent's drawing down the screen, and back up when it clears", async () => {
@@ -1018,18 +1040,33 @@ describe("CanopyTerminal", () => {
 
     it("moves only with what xterm has painted, as the pane resizes under output it holds back", async () => {
       const { frame } = await openFollowed(FULL, ROWS - 1);
+      const shorter = AVAILABLE - 2 * ROW_HEIGHT;
       // Parsed, not painted: synchronized output holds the full screen on view.
       xterm.current!.draw(FRESH, 11);
-      act(() => layOut(AVAILABLE - 2 * ROW_HEIGHT));
-      expect(shownRows(frame, ROWS, AVAILABLE - 2 * ROW_HEIGHT)).toEqual({
+      act(() => layOut(shorter));
+      expect(shownRows(frame, { available: shorter })).toEqual({
         first: ROWS - SHOWN + 2,
         last: ROWS - 1,
       });
 
       xterm.current!.render();
-      expect(shownRows(frame, ROWS, AVAILABLE - 2 * ROW_HEIGHT)).toEqual({
-        first: 0,
-        last: SHOWN - 3,
+      expect(shownRows(frame, { available: shorter })).toEqual({ first: 0, last: SHOWN - 3 });
+    });
+
+    it("places a grid xterm painted before the pane was laid out, as the layout arrives", async () => {
+      const frame = mount().frame as HTMLElement;
+      await paintFollowed(FULL, ROWS - 1);
+      act(() => layOut());
+      expect(shownRows(frame)).toEqual({ first: ROWS - SHOWN, last: ROWS - 1 });
+    });
+
+    it("rises again for a cell the renderer measures afresh, as after a font change", async () => {
+      const { frame } = await openFollowed(FULL, ROWS - 1);
+      cell.current = { width: 10, height: 20 };
+      xterm.current!.remeasure();
+      expect(shownRows(frame, { rowHeight: 20 })).toEqual({
+        first: ROWS - AVAILABLE / 20,
+        last: ROWS - 1,
       });
     });
 
@@ -1040,7 +1077,40 @@ describe("CanopyTerminal", () => {
       );
       xterm.current!.render();
       await settle();
-      expect(shownRows(frame, SHOWN)).toEqual({ first: 0, last: SHOWN - 1 });
+      expect(shownRows(frame, { rows: SHOWN })).toEqual({ first: 0, last: SHOWN - 1 });
+    });
+
+    it("starts the terminal it reopens at the pane's top, on the normal buffer's padding", async () => {
+      let resync: () => void = () => {};
+      const api: CanopyTerminalApi = {
+        ...ownCanopyTerminalApi,
+        onResync: (callback) => {
+          resync = callback;
+          return () => {};
+        },
+      };
+      const view = render(<CanopyTerminal runId="run-1" spawnedAt={100} api={api} />);
+      const frame = view.container.querySelector<HTMLElement>("[data-canopy-terminal]")!;
+      frame.getBoundingClientRect = paneRect;
+      const host = frame.firstElementChild;
+      act(() => layOut());
+      await paintFollowed(FULL, ROWS - 1);
+      // A full-screen program, flush to the pane's edges on the alternate screen.
+      act(() => xterm.current!.switchBuffer("alternate"));
+      act(() => layOut(AVAILABLE + 24));
+      xterm.current!.render();
+      expect(frame.classList.contains("terminal-alt-buffer")).toBe(true);
+      expect(shownRows(frame, { available: AVAILABLE + 24 })).toEqual({
+        first: Math.ceil((ROWS * ROW_HEIGHT - AVAILABLE - 24) / ROW_HEIGHT),
+        last: ROWS - 1,
+      });
+
+      const reopened = xterm.current;
+      act(() => resync());
+      expect(xterm.current).not.toBe(reopened);
+      expect(frame.firstElementChild).toBe(host);
+      expect(frame.classList.contains("terminal-alt-buffer")).toBe(false);
+      expect(shownRows(frame)).toEqual({ first: 0, last: SHOWN - 1 });
     });
 
     it("never scrolls the grid in the pane, so a focus can't move it off its rise", async () => {
