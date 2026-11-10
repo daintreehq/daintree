@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { keybindingService } from "@/services/KeybindingService";
-import { combosFieldsEqual } from "@/services/keybindingUtils";
 import { isMac } from "@/lib/platform";
 import { parseChord } from "@/lib/kbdShortcut";
 import { useKeyLabels, type KeyLabels } from "@/lib/keyboardLayout";
@@ -25,11 +24,13 @@ import { FIXED_SHORTCUTS } from "@/components/KeyboardShortcuts/fixedShortcuts";
 import { pluralize } from "@/lib/pluralize";
 import {
   buildShortcutRows,
+  comboOverlap,
   findShortcutRow,
   replaceCombo,
+  sameCombos,
   type ShortcutRowModel,
   type ShortcutRowWidening,
-} from "./shortcutRows";
+} from "@/components/KeyboardShortcuts/shortcutRows";
 
 // One action can have several rows (`fleet.armFocused` is bound both globally
 // and in the worktree grid), so editor and error state are keyed by `rowId`:
@@ -45,14 +46,16 @@ interface ShortcutBinding extends ShortcutRowModel {
 // success: hold the editor open and offer the retry, rather than closing and
 // reloading as if the edit had landed.
 //
-// A save carries the whole key list it sent, so Retry resends exactly that
-// rather than redoing the edit against whatever the action holds by then.
+// A save is kept as the row's edit (this key becomes that one), not as the key
+// list it sent: Retry redoes the edit against the keys the action holds by
+// then, so a key another window added in between is not written over.
 interface SaveAttempt {
   rowId: string;
   actionId: string;
-  combos: string[];
-  /** The key whose row takes focus once the save lands: the one captured, or what a removal left. */
-  focusKey: string;
+  /** The row's key, `""` for a row with none. */
+  rowKey: string;
+  /** What the user captured, `""` for Remove shortcut. */
+  combo: string;
 }
 
 type ShortcutError =
@@ -156,12 +159,16 @@ function ShortcutRow({
 }: ShortcutRowProps) {
   const name = binding.description || binding.actionId;
   const editRef = useRef<HTMLButtonElement>(null);
-  // The action's other keys stay when this row saves, so recording one of them
-  // here would only fold the two rows into one.
-  const validateCombo = (combo: string) =>
-    binding.otherKeys.some((key) => combosFieldsEqual(key, combo))
-      ? "Already a shortcut for this action"
-      : null;
+  // The action's other keys stay when this row saves. Recording one of them here
+  // would only fold the two rows into one, and a chord that starts with one of
+  // them (or the reverse) would never fire past the standalone key.
+  const validateCombo = (combo: string) => {
+    const overlaps = binding.otherKeys.map((key) => comboOverlap(combo, key, isMac()));
+    if (overlaps.includes("same")) return "Already a shortcut for this action";
+    if (overlaps.includes("prefix"))
+      return "Shares its first key with another shortcut for this action";
+    return null;
+  };
 
   useEffect(() => {
     if (!restoreFocus || isEditing) return;
@@ -184,7 +191,7 @@ function ShortcutRow({
             )
           }
           isModified={binding.isOverridden}
-          control={
+          control={({ descriptionId }) => (
             <div className="grid gap-3">
               <SettingsShortcutCapture
                 onCapture={onSave}
@@ -193,13 +200,14 @@ function ShortcutRow({
                 scope={binding.editScope}
                 currentCombo={binding.key}
                 validateCombo={validateCombo}
+                describedBy={descriptionId}
                 autoStart
               />
               {error && (
                 <ShortcutRowError error={error} onRetry={onRetry} onDismissError={onDismissError} />
               )}
             </div>
-          }
+          )}
         />
       </div>
     );
@@ -394,16 +402,34 @@ export function KeyboardShortcutsTab() {
     setFocusRowId(findShortcutRow(rows, actionId, key, isMac())?.rowId ?? rowId);
   };
 
-  const submitShortcut = async (attempt: SaveAttempt) => {
+  // An override is one key list for the whole action, so a row's save sends
+  // every key the action has with only this row's swapped out (or dropped, for
+  // Remove shortcut): saving the captured key alone would replace the others.
+  const handleSaveShortcut = async (attempt: SaveAttempt) => {
+    const { actionId } = attempt;
+    const mac = isMac();
+    const combos = replaceCombo(
+      keybindingService.getTriggerCombos(actionId),
+      attempt.rowKey,
+      attempt.combo,
+      mac
+    );
     const epoch = bindingsEpochRef.current;
     const result = await actionService.dispatch(
       "keybinding.setOverride",
-      { actionId: attempt.actionId, combo: attempt.combos },
+      { actionId, combo: combos },
       { source: "user" }
     );
     if (epoch !== bindingsEpochRef.current) return;
 
-    if (!result.ok) {
+    // Main saves and pushes the keys before it rebuilds the menu, so a failure
+    // can arrive after they landed, and the row it was made from is already
+    // gone. Keys that are in force are a save, whatever the reply said.
+    const landed =
+      result.ok ||
+      (keybindingService.hasOverride(actionId) &&
+        sameCombos(keybindingService.getTriggerCombos(actionId), combos, mac));
+    if (!landed) {
       logError("Failed to save keybinding override", undefined, { error: result.error });
       // Hold the editor open on the failing row. Closing here would show the old
       // binding with no hint that the capture was thrown away.
@@ -412,25 +438,7 @@ export function KeyboardShortcutsTab() {
     }
     setShortcutError(null);
     setEditingRowId(null);
-    focusActionRow(loadBindings(), attempt.actionId, attempt.focusKey, attempt.rowId);
-  };
-
-  // An override is one key list for the whole action, so a row's save sends
-  // every key the action has with only this row's swapped out (or dropped, for
-  // Remove shortcut): saving the captured key alone would replace the others.
-  const handleSaveShortcut = (binding: ShortcutBinding, combo: string) => {
-    const combos = replaceCombo(
-      keybindingService.getTriggerCombos(binding.actionId),
-      binding.key,
-      combo,
-      isMac()
-    );
-    void submitShortcut({
-      rowId: binding.rowId,
-      actionId: binding.actionId,
-      combos,
-      focusKey: combo || (combos[0] ?? ""),
-    });
+    focusActionRow(loadBindings(), actionId, attempt.combo || (combos[0] ?? ""), attempt.rowId);
   };
 
   const handleResetShortcut = async (rowId: string, actionId: string, key: string) => {
@@ -501,8 +509,8 @@ export function KeyboardShortcutsTab() {
 
   const handleRetryRow = (error: RowError) => {
     if (error.kind === "save") {
-      const { rowId, actionId, combos, focusKey } = error;
-      void submitShortcut({ rowId, actionId, combos, focusKey });
+      const { rowId, actionId, rowKey, combo } = error;
+      void handleSaveShortcut({ rowId, actionId, rowKey, combo });
       return;
     }
     void handleResetShortcut(error.rowId, error.actionId, error.key);
@@ -583,7 +591,14 @@ export function KeyboardShortcutsTab() {
                     setShortcutError(null);
                     setEditingRowId(binding.rowId);
                   }}
-                  onSave={(combo) => handleSaveShortcut(binding, combo)}
+                  onSave={(combo) =>
+                    void handleSaveShortcut({
+                      rowId: binding.rowId,
+                      actionId: binding.actionId,
+                      rowKey: binding.key,
+                      combo,
+                    })
+                  }
                   onCancel={() => {
                     setShortcutError(null);
                     closeEditor(binding.rowId);

@@ -2,10 +2,12 @@ import { describe, it, expect } from "vitest";
 import type { KeyScope } from "@shared/types/keybinding";
 import {
   buildShortcutRows,
+  comboOverlap,
   distinctCombos,
   findShortcutRow,
   overrideScopes,
   replaceCombo,
+  sameCombos,
   scopeNote,
   type ShortcutRowSource,
 } from "../shortcutRows";
@@ -80,6 +82,28 @@ describe("replaceCombo", () => {
   });
 });
 
+describe("comboOverlap", () => {
+  it("tells the same key from a chord that starts with the other, in either order", () => {
+    expect(comboOverlap("Ctrl+J", "Cmd+J", false)).toBe("same");
+    expect(comboOverlap("Cmd+J Y", "Cmd+J", true)).toBe("prefix");
+    expect(comboOverlap("Cmd+K", "Cmd+K Cmd+R", true)).toBe("prefix");
+  });
+
+  it("finds no overlap between unrelated keys or chords of the same length", () => {
+    expect(comboOverlap("Cmd+K Cmd+R", "Cmd+K Cmd+S", true)).toBeNull();
+    expect(comboOverlap("Cmd+L Y", "Cmd+J", true)).toBeNull();
+    expect(comboOverlap("Ctrl+J Y", "Cmd+J", true)).toBeNull();
+  });
+});
+
+describe("sameCombos", () => {
+  it("matches equivalent spellings in the same order, ignoring repeats and blanks", () => {
+    expect(sameCombos(["Cmd+J", "X", "", "Ctrl+J"], ["Ctrl+J", "X"], false)).toBe(true);
+    expect(sameCombos(["X", "Cmd+J"], ["Cmd+J", "X"], false)).toBe(false);
+    expect(sameCombos(["Cmd+J"], ["Cmd+J", "X"], false)).toBe(false);
+  });
+});
+
 describe("overrideScopes and scopeNote", () => {
   it("collapses to global once any registration is global", () => {
     expect(overrideScopes(["worktreeGrid", "global"])).toEqual(["global"]);
@@ -145,11 +169,53 @@ describe("buildShortcutRows", () => {
 
   it("shows an imported override's repeated keys once", () => {
     const rows = buildShortcutRows(
-      [source("app.save", "Cmd+S", "global", "Save", ["Cmd+S", "", "Ctrl+S", "Cmd+S"])],
+      [source("app.save", "Cmd+S", "global", "Save", ["Cmd+S", "", "Ctrl+S", "Cmd+O", "Cmd+S"])],
       () => true,
       false
     );
-    expect(rows.map((row) => row.key)).toEqual(["Cmd+S"]);
+    expect(rows.map((row) => row.key)).toEqual(["Cmd+S", "Cmd+O"]);
+  });
+
+  it("notes an override's scope from every registration, whichever comes first", () => {
+    const reversed = [...fleet(["Y", "Z"])].reverse();
+    expect(buildShortcutRows(reversed, () => true, true).map((row) => row.scopeNote)).toEqual([
+      "Across the app",
+      "Across the app",
+    ]);
+
+    const scoped = [
+      source("preview.reload", "Cmd+R", "portal", "Reload", ["Y", "Z"]),
+      source("preview.reload", "F5", "dev-preview", "Reload", ["Y", "Z"]),
+    ];
+    expect(buildShortcutRows(scoped, () => true, true).map((row) => row.scopeNote)).toEqual([
+      "In the portal and in dev preview",
+      "In the portal and in dev preview",
+    ]);
+  });
+
+  it("before an override with no global scope, says both the edited and the kept key widen", () => {
+    const rows = buildShortcutRows(
+      [source("preview.reload", "Cmd+R", "portal"), source("preview.reload", "F5", "dev-preview")],
+      () => false,
+      true
+    );
+    expect(rows.map((row) => [row.scopeNote, row.widening])).toEqual([
+      ["In the portal", { self: true, keys: ["F5"], where: "in the portal and in dev preview" }],
+      [
+        "In dev preview",
+        { self: true, keys: ["Cmd+R"], where: "in the portal and in dev preview" },
+      ],
+    ]);
+  });
+
+  it("checks conflicts in the action's own scope when it has only one", () => {
+    const [row] = buildShortcutRows(
+      [source("portal.closeTab", "Cmd+W", "portal")],
+      () => false,
+      true
+    );
+    expect(row!.editScope).toBe("portal");
+    expect(row!.widening).toBeUndefined();
   });
 
   it("leaves other actions' rows where they were", () => {
@@ -163,7 +229,10 @@ describe("buildShortcutRows", () => {
 
   it("keeps a plugin's exact duplicate registration on its own row", () => {
     const rows = buildShortcutRows(
-      [source("app.save", "Cmd+S", "global"), source("app.save", "Cmd+S", "global")],
+      [
+        source("app.save", "Cmd+S", "global"),
+        { ...source("app.save", "Cmd+S", "global"), pluginId: "acme" },
+      ],
       () => false,
       true
     );
@@ -178,6 +247,20 @@ describe("findShortcutRow", () => {
 
   it("finds the row holding the key", () => {
     expect(findShortcutRow(rows, "fleet.armFocused", "Y", true)?.key).toBe("Y");
+  });
+
+  it("finds a key by its equivalent spelling off macOS", () => {
+    const offMac = buildShortcutRows(fleet(["Cmd+J", "Y"]), () => true, false);
+    expect(findShortcutRow(offMac, "fleet.armFocused", "Ctrl+J", false)?.key).toBe("Cmd+J");
+  });
+
+  it("finds the keyless row when asked for no key", () => {
+    const withAdd = buildShortcutRows(
+      [source("a", "Cmd+A", "global"), source("a", "", "worktreeGrid")],
+      () => false,
+      true
+    );
+    expect(findShortcutRow(withAdd, "a", "", true)?.rowId).toBe(withAdd[1]!.rowId);
   });
 
   it("falls back to the action's first row", () => {

@@ -3,6 +3,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { SettingsShortcutCapture } from "../SettingsShortcutCapture";
+import { keybindingService, type RegisteredKeybindingConfig } from "@/services/KeybindingService";
+import { actionService } from "@/services/ActionService";
 
 // Mock dependencies
 vi.mock("@/services/KeybindingService", async () => {
@@ -16,8 +18,14 @@ vi.mock("@/services/KeybindingService", async () => {
       findConflicts: vi.fn(() => []),
       beginShortcutCapture: vi.fn(() => () => {}),
       formatComboForDisplay: vi.fn((combo: string) => combo),
-      getOverride: vi.fn(() => undefined),
+      getOverride: vi.fn((): string[] | undefined => undefined),
       getTriggerCombos: vi.fn((): string[] => []),
+      getAllBindingsWithEffectiveCombos: vi.fn(
+        (): Array<
+          RegisteredKeybindingConfig & { effectiveCombo: string; effectiveCombos: string[] }
+        > => []
+      ),
+      hasOverride: vi.fn(() => false),
     },
     normalizeKeyForBinding: vi.fn((e: KeyboardEvent) => e.key),
   };
@@ -48,6 +56,13 @@ describe("SettingsShortcutCapture", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    // clearAllMocks keeps configured return values, and the Unbind tests each set their own.
+    vi.mocked(keybindingService.findConflicts).mockReturnValue([]);
+    vi.mocked(keybindingService.getOverride).mockReturnValue(undefined);
+    vi.mocked(keybindingService.getTriggerCombos).mockReturnValue([]);
+    vi.mocked(keybindingService.getAllBindingsWithEffectiveCombos).mockReturnValue([]);
+    vi.mocked(keybindingService.hasOverride).mockReturnValue(false);
+    vi.mocked(actionService.dispatch).mockResolvedValue({ ok: true, result: undefined });
   });
 
   afterEach(() => {
@@ -843,10 +858,74 @@ describe("SettingsShortcutCapture", () => {
       expect(notifyMock).toHaveBeenCalledTimes(2);
     });
 
-    it("unbinds only the clashing key of an action that has two, and Undo restores both", async () => {
-      const { keybindingService } = await import("@/services/KeybindingService");
+    function captureKey(init: KeyboardEventInit) {
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }));
+        vi.advanceTimersByTime(1100);
+      });
+    }
+
+    const lastToast = () =>
+      notifyMock.mock.calls.at(-1)?.[0] as { action: { onClick: () => Promise<void> } };
+
+    it("unbinds only the clashing default of a two-key action, and Undo drops the override", async () => {
       const { actionService } = await import("@/services/ActionService");
-      vi.mocked(keybindingService.getOverride).mockReturnValue(undefined);
+      let freed = false;
+      vi.mocked(keybindingService.getTriggerCombos).mockReturnValue(["Cmd+=", "Cmd+Shift+="]);
+      vi.mocked(keybindingService.findConflicts).mockImplementation(() =>
+        freed
+          ? []
+          : [
+              {
+                actionId: "window.zoomIn",
+                description: "Zoom in",
+                combo: "Cmd+Shift+=",
+                scope: "global",
+                priority: 0,
+                kind: "conflict",
+              },
+            ]
+      );
+      vi.mocked(actionService.dispatch).mockImplementation(async () => {
+        freed = true;
+        return { ok: true, result: undefined };
+      });
+
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+      captureKey({ key: "=", code: "Equal", ctrlKey: true, shiftKey: true });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Unbind Zoom in" }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(keybindingService.getTriggerCombos).toHaveBeenCalledWith("window.zoomIn");
+      expect(actionService.dispatch).toHaveBeenCalledWith(
+        "keybinding.setOverride",
+        { actionId: "window.zoomIn", combo: ["Cmd+="] },
+        { source: "user" }
+      );
+      expect(screen.queryByRole("button", { name: "Unbind Zoom in" })).toBeNull();
+
+      await act(async () => {
+        await lastToast().action.onClick();
+      });
+      expect(actionService.dispatch).toHaveBeenLastCalledWith(
+        "keybinding.removeOverride",
+        { actionId: "window.zoomIn" },
+        { source: "user" }
+      );
+    });
+
+    it("frees one key of an override, and Undo puts back the exact list it had", async () => {
+      const { actionService } = await import("@/services/ActionService");
+      vi.mocked(keybindingService.getOverride).mockReturnValue(["Cmd+=", "Cmd+K"]);
       vi.mocked(keybindingService.getTriggerCombos).mockReturnValue(["Cmd+=", "Cmd+K"]);
       vi.mocked(keybindingService.findConflicts).mockReturnValue([
         {
@@ -867,12 +946,7 @@ describe("SettingsShortcutCapture", () => {
           autoStart
         />
       );
-      act(() => {
-        window.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "k", code: "KeyK", ctrlKey: true, bubbles: true })
-        );
-        vi.advanceTimersByTime(1100);
-      });
+      captureKey({ key: "k", code: "KeyK", ctrlKey: true });
 
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "Unbind Zoom in" }));
@@ -884,17 +958,138 @@ describe("SettingsShortcutCapture", () => {
         { source: "user" }
       );
 
-      const toast = notifyMock.mock.calls.at(-1)?.[0] as {
-        action: { onClick: () => Promise<void> };
-      };
       await act(async () => {
-        await toast.action.onClick();
+        await lastToast().action.onClick();
       });
       expect(actionService.dispatch).toHaveBeenLastCalledWith(
-        "keybinding.removeOverride",
-        { actionId: "window.zoomIn" },
+        "keybinding.setOverride",
+        { actionId: "window.zoomIn", combo: ["Cmd+=", "Cmd+K"] },
         { source: "user" }
       );
+    });
+
+    it("says before Unbind which of the other action's keys will apply more widely", () => {
+      const fleet = (combo: string, scope: "global" | "worktreeGrid") => ({
+        actionId: "fleet.armFocused",
+        description: "Toggle arm focused terminal",
+        combo,
+        scope,
+        priority: 0,
+        effectiveCombo: combo,
+        effectiveCombos: [combo],
+      });
+      vi.mocked(keybindingService.getAllBindingsWithEffectiveCombos).mockReturnValue([
+        fleet("Cmd+J", "global"),
+        fleet("X", "worktreeGrid"),
+      ]);
+      vi.mocked(keybindingService.findConflicts).mockReturnValue([
+        { ...fleet("Cmd+J", "global"), kind: "conflict" },
+      ]);
+
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+      captureKey({ key: "j", code: "KeyJ", ctrlKey: true });
+
+      const unbind = screen.getByRole("button", { name: "Unbind Toggle arm focused terminal" });
+      const note = document.getElementById(unbind.getAttribute("aria-describedby") ?? "");
+      expect(note?.textContent).toMatch(/^After unbinding, .*X.* applies across the app$/);
+    });
+
+    it("says nothing extra when the other action's remaining keys keep their scope", () => {
+      vi.mocked(keybindingService.getAllBindingsWithEffectiveCombos).mockReturnValue([
+        {
+          actionId: "window.zoomIn",
+          description: "Zoom in",
+          combo: "Cmd+=",
+          scope: "global",
+          priority: 0,
+          effectiveCombo: "Cmd+=",
+          effectiveCombos: ["Cmd+="],
+        },
+        {
+          actionId: "window.zoomIn",
+          description: "Zoom in",
+          combo: "Cmd+K",
+          scope: "global",
+          priority: 0,
+          effectiveCombo: "Cmd+K",
+          effectiveCombos: ["Cmd+K"],
+        },
+      ]);
+      vi.mocked(keybindingService.findConflicts).mockReturnValue([
+        {
+          actionId: "window.zoomIn",
+          description: "Zoom in",
+          combo: "Cmd+K",
+          scope: "global",
+          priority: 0,
+          kind: "conflict",
+        },
+      ]);
+
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+      captureKey({ key: "k", code: "KeyK", ctrlKey: true });
+
+      const unbind = screen.getByRole("button", { name: "Unbind Zoom in" });
+      expect(unbind.getAttribute("aria-describedby")).toBeNull();
+      expect(screen.queryByText(/After unbinding/)).toBeNull();
+    });
+
+    it("redraws the list and moves focus on when the key was already freed elsewhere", async () => {
+      const { actionService } = await import("@/services/ActionService");
+      let freed = false;
+      vi.mocked(keybindingService.findConflicts).mockImplementation(() =>
+        freed
+          ? []
+          : [
+              {
+                actionId: "window.zoomIn",
+                description: "Zoom in",
+                combo: "Cmd+K",
+                scope: "global",
+                priority: 0,
+                kind: "conflict",
+              },
+            ]
+      );
+
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+      captureKey({ key: "k", code: "KeyK", ctrlKey: true });
+
+      // Another window took Cmd+K off Zoom in after the list was drawn.
+      freed = true;
+      vi.mocked(keybindingService.getTriggerCombos).mockReturnValue(["Cmd+="]);
+      const unbind = screen.getByRole("button", { name: "Unbind Zoom in" });
+      unbind.focus();
+      await act(async () => {
+        fireEvent.click(unbind);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(actionService.dispatch).not.toHaveBeenCalled();
+      expect(notifyMock).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: "Unbind Zoom in" })).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Save" }));
     });
   });
 

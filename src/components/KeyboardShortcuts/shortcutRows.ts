@@ -77,6 +77,34 @@ export function distinctCombos(combos: readonly string[], mac: boolean): string[
 }
 
 /**
+ * How `candidate` meets `existing` when both trigger one action: the same key,
+ * or a chord that starts with the other (or the other way round). Only the
+ * standalone key of such a pair ever fires, so the chord would be dead.
+ */
+export function comboOverlap(
+  candidate: string,
+  existing: string,
+  mac: boolean
+): "same" | "prefix" | null {
+  if (combosFieldsEqual(candidate, existing, mac)) return "same";
+  const a = candidate.trim().split(/\s+/).filter(Boolean);
+  const b = existing.trim().split(/\s+/).filter(Boolean);
+  const [shorter, longer] = a.length < b.length ? [a, b] : [b, a];
+  if (shorter.length === 0 || shorter.length === longer.length) return null;
+  return shorter.every((step, i) => combosFieldsEqual(step, longer[i]!, mac)) ? "prefix" : null;
+}
+
+/** The same keys in the same order, compared the way the keybinding engine matches them. */
+export function sameCombos(a: readonly string[], b: readonly string[], mac: boolean): boolean {
+  const left = distinctCombos(a, mac);
+  const right = distinctCombos(b, mac);
+  return (
+    left.length === right.length &&
+    left.every((combo, i) => combosFieldsEqual(combo, right[i]!, mac))
+  );
+}
+
+/**
  * The action's keys after one row's edit: `current` (the row's key, `""` for a
  * row with none) replaced in place by `next`, or dropped when `next` is `""`.
  * Every other key stays. A `current` the action no longer holds removes nothing.
