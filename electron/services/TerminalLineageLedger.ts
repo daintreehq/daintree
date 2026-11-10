@@ -1041,9 +1041,10 @@ export class TerminalLineageLedger {
         // Not durable: this runs on the pty-host thread that pumps every
         // terminal's output, at nearly every census while agents work, and the
         // two syncs only survive power loss or a kernel panic. That means a
-        // reboot, and a previous boot's ledger is deleted unread because its
-        // pids now name unrelated processes. An app or host crash keeps
-        // whatever reached the page cache, and the rename stays atomic.
+        // reboot, and a previous boot's ledger is discarded on load without
+        // acting on any entry, because its pids now name unrelated processes.
+        // An app or host crash keeps whatever reached the page cache, and the
+        // rename stays atomic.
         resilientAtomicWriteFileSync(this.filePath, JSON.stringify(payload), "utf-8", {
           durable: false,
         });

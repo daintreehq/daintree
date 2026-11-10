@@ -9,7 +9,7 @@ const { mockedOpen, mockedSync, mockedClose, syncTap } = vi.hoisted(() => ({
   mockedOpen: vi.fn(),
   mockedSync: vi.fn(),
   mockedClose: vi.fn(),
-  syncTap: { writeFileSync: vi.fn(), openSync: vi.fn(), fsyncSync: vi.fn() },
+  syncTap: { writeFileSync: vi.fn(), chmodSync: vi.fn(), openSync: vi.fn(), fsyncSync: vi.fn() },
 }));
 
 vi.mock("fs/promises", async (importOriginal) => {
@@ -27,6 +27,10 @@ vi.mock("fs", async (importOriginal) => {
     writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
       syncTap.writeFileSync(...args);
       return actual.writeFileSync(...args);
+    },
+    chmodSync: (...args: Parameters<typeof actual.chmodSync>) => {
+      syncTap.chmodSync(...args);
+      return actual.chmodSync(...args);
     },
     openSync: (...args: Parameters<typeof actual.openSync>) => {
       syncTap.openSync(...args);
@@ -208,6 +212,19 @@ describe("resilientAtomicWriteFileSync durability", () => {
     expect(readdirSync(tmpDir)).toEqual(["test.json"]);
   });
 
+  // chmod and creation modes are POSIX-only; Windows ignores the mode option.
+  it.skipIf(isWindows)("keeps the creation mode and the chmod when not durable", () => {
+    resilientAtomicWriteFileSync(target, "data", "utf-8", { mode: 0o600, durable: false });
+
+    const [tempPath, , writeOptions] = syncTap.writeFileSync.mock.calls[0] as [
+      string,
+      string,
+      { mode?: number; flush?: boolean },
+    ];
+    expect(writeOptions).toMatchObject({ mode: 0o600, flush: false });
+    expect(syncTap.chmodSync).toHaveBeenCalledWith(tempPath, 0o600);
+  });
+
   it("renames through the resilient retry on both paths", () => {
     const renameSpy = vi.spyOn(stubbornFs.retry, "renameSync");
 
@@ -232,8 +249,10 @@ describe("resilientAtomicWriteFileSync durability", () => {
     expect(readdirSync(tmpDir)).toEqual(["test.json"]);
   });
 
-  it("removes the temp file and rethrows when a non-durable write fails", () => {
-    syncTap.writeFileSync.mockImplementationOnce(() => {
+  it("removes a partly written temp file and rethrows when a non-durable write fails", async () => {
+    const realFs = await vi.importActual<typeof import("fs")>("fs");
+    syncTap.writeFileSync.mockImplementationOnce((tempPath: string) => {
+      realFs.writeFileSync(tempPath, "da");
       throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
     });
 
