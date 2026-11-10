@@ -874,8 +874,30 @@ describe("HostSwitchDialog placed worktree", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Couldn't create feature/placed on studio-01");
     expect(alert.textContent).toContain("invalid reference: develop");
+    // A later step failing leaves what the look saw standing.
+    expect(screen.getByRole("heading", { name: "Open daintree on studio-01" })).toBeTruthy();
     expect(onComplete).not.toHaveBeenCalled();
     expect(switchToHost).not.toHaveBeenCalled();
+  });
+
+  it("says the project is on the host once its clone landed and the worktree didn't", async () => {
+    prepare.mockResolvedValue(preparation());
+    execute.mockResolvedValueOnce(openedOn("host-p9")).mockResolvedValueOnce({
+      kind: "git-failed",
+      step: "worktree",
+      hostId: "studio-01",
+      reason: "unknown",
+      message: "fatal: invalid reference: develop",
+    });
+    render(<HostSwitchDialog request={{ ...request, worktree }} onClose={() => {}} />);
+    expect(
+      await screen.findByRole("heading", { name: "daintree isn't on studio-01 yet" })
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clone and create worktree" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Couldn't create feature/placed on studio-01"
+    );
+    expect(screen.getByRole("heading", { name: "daintree is on studio-01 now" })).toBeTruthy();
   });
 });
 
@@ -954,8 +976,11 @@ describe("HostSwitchDialog when looking at the project fails", () => {
     fireEvent.click(await screen.findByRole("radio", { name: PUSH_CHOICE }));
     fireEvent.click(screen.getByRole("button", { name: "Push, then open" }));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByRole("heading", { name: "Open project on studio-01" })).toBeTruthy();
+    fireEvent.click(retry);
     expect(await screen.findByRole("button", { name: "Open on studio-01" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Open daintree on studio-01" })).toBeTruthy();
     expect(prepare).toHaveBeenCalledTimes(3);
     expect(execute).toHaveBeenCalledTimes(1);
     expect(switchToHost).not.toHaveBeenCalled();
