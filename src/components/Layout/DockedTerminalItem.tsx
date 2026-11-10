@@ -51,11 +51,7 @@ import {
 } from "./dockChipStyles";
 import { useDockPopoverResize } from "./useDockPopoverResize";
 import { DockPopoverResizeHandle } from "./DockPopoverResizeHandle";
-import {
-  getDockDisplayAgentState,
-  isDockAgentStateDeprioritized,
-  useDockBlockedState,
-} from "./useDockBlockedState";
+import { getDockDisplayAgentState, useDockBlockedState } from "./useDockBlockedState";
 import { getDockDisplayActivityState, useTransientDockFinishedCue } from "./useDockActivityState";
 import {
   handleDockInteractOutside,
@@ -399,7 +395,16 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
     isReinterpreted && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
   const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
   const pluginActive = pluginActivity?.shown === "working" || pluginActivity?.shown === "waiting";
-  const isDeprioritized = !isOpen && !pluginActive && isDockAgentStateDeprioritized(agentState);
+  // An agent rests by what its chip draws: a wait the band chose not to draw is
+  // no more live on the rail than an idle one.
+  const drawnState = displayAgentState ? shownAgentState : agentState;
+  const isDeprioritized =
+    !isOpen &&
+    !pluginActive &&
+    (drawnState === undefined ||
+      drawnState === "idle" ||
+      drawnState === "completed" ||
+      drawnState === "exited");
 
   // Re-fit the terminal once a resize gesture settles on a new popover height.
   const {
@@ -434,6 +439,10 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
                 onBlur={() => titleTip.onOpenChange(false)}
                 {...dragPointerListeners}
                 data-dock-item=""
+                // Read by the rail to say which edge a scrolled-off ask is past.
+                data-dock-attention={
+                  isWaiting || pluginActivity?.shown === "waiting" ? "" : undefined
+                }
                 className={cn(
                   DOCK_CHIP_CLASS,
                   isOpen && DOCK_CHIP_OPEN_CLASS,
@@ -459,7 +468,7 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${fullTitle}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : plainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${fullTitle}${displayAgentState ? (stateLabel ? (shownAgentState ? ` — agent ${stateLabel}` : ` — observed: agent ${stateLabel}`) : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : plainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
@@ -540,6 +549,14 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
                       )}
                     </TooltipContent>
                   </Tooltip>
+                )}
+                {/* An agent the band draws no glyph for keeps the glyph's room,
+                    so the chips after it don't shift as its state comes and goes. */}
+                {displayAgentState && !shownAgentState && (
+                  <span
+                    aria-hidden="true"
+                    className={cn("ml-1.5 shrink-0", DOCK_STATE_GLYPH_CLASS)}
+                  />
                 )}
               </button>
             </PopoverTrigger>

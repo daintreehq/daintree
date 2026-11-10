@@ -154,9 +154,11 @@ const PLACEMENT_CONFIG = {
     triggerVariant: "pill",
     triggerSize: "sm",
     // The chips' box, not a 28px circle: the launcher sits in the chip row and
-    // shares its height and corner.
+    // shares its height and corner. It rests on the chips' own surface and edge
+    // (the pill variant's panel fill paints white on light themes, where white
+    // is the dock's open state), and open wears the chips' neutral open lift.
     triggerClassName:
-      "h-[var(--dock-item-height)] w-[var(--dock-item-height)] px-0 rounded-[var(--radius-md)] ring-inset",
+      "h-[var(--dock-item-height)] w-[var(--dock-item-height)] px-0 rounded-[var(--radius-md)] ring-inset bg-[var(--dock-item-bg)] ring-[var(--dock-item-border)] hover:bg-[var(--dock-item-bg-hover)] hover:ring-[var(--dock-item-border)] aria-expanded:bg-[var(--dock-item-bg-active)] aria-expanded:ring-[var(--dock-item-border-active)] aria-expanded:text-text-primary",
     iconClassName: "w-3.5 h-3.5",
     label: "Open launcher",
     surface: "dock",
