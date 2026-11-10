@@ -104,6 +104,9 @@ export function DevPreviewWebviewOverlays({
   onDialogRespond,
   children,
 }: DevPreviewWebviewOverlaysProps) {
+  const restartLabel = onRequestRestartAndClearCache
+    ? "Restart dev server"
+    : "Pause and resume resource environment";
   return (
     <>
       {reconnectAttempt > 0 && !webviewLoadError && (
@@ -244,11 +247,11 @@ export function DevPreviewWebviewOverlays({
               ariaLabel="More preview recovery options"
               actions={[
                 {
-                  id: "hard-restart",
-                  label: "Hard restart",
+                  id: "restart-dev-server",
+                  label: restartLabel,
                   icon: RotateCw,
                   onClick: onRestartDevServer,
-                  ariaLabel: "Hard restart preview",
+                  ariaLabel: restartLabel,
                 },
               ]}
             />
@@ -265,12 +268,12 @@ export function DevPreviewWebviewOverlays({
           animated={false}
           actions={[
             {
-              id: "hard-restart",
-              label: "Hard restart",
+              id: "restart-dev-server",
+              label: restartLabel,
               icon: RotateCw,
               variant: "primary",
               onClick: onRestartDevServer,
-              ariaLabel: "Hard restart preview",
+              ariaLabel: restartLabel,
             },
           ]}
           onClose={onCloseUnresponsive}
