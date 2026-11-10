@@ -722,7 +722,8 @@ async function confirmHandled(page: Page, alias: string): Promise<void> {
   await expect(confirm).toBeVisible({ timeout: 8000 });
   await confirm.getByRole("button", { name: "Mark handled" }).click();
   // Focus is handed on as the confirmation finishes leaving, so wait for that before reading it.
-  await expect(confirm).toHaveCount(0, { timeout: 8000 });
+  // Not the filtered locator: its title is cleared the moment it is confirmed.
+  await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 8000 });
 }
 
 async function daintreeStates(run: Run): Promise<void> {
