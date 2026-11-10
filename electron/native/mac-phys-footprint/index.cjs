@@ -39,8 +39,9 @@ function readPhysFootprints(pids) {
  * Makes reads of online-only File Provider placeholders fail with EDEADLK
  * instead of blocking, on each of this process's libuv worker threads only, so
  * nothing it spawns inherits it. Resolves to { requested, applied, errors,
- * processPolicy }: `applied` distinct threads confirmed, an errno per refusal,
- * and the untouched process-wide policy children inherit. Returns null
+ * processPolicyBefore, processPolicy }: `applied` distinct threads confirmed,
+ * an errno per refusal, and the process-wide policy children inherit, before
+ * and after (the call must leave it unchanged). Returns null
  * when the addon is unavailable in this process.
  */
 function disableThreadPoolDatalessMaterialization(threads, timeoutMs) {

@@ -40,12 +40,15 @@ constexpr double kMaxThreads = 1024;  // libuv's MAX_THREADPOOL_SIZE
 constexpr double kMaxTimeoutMs = 60000;
 
 struct Rendezvous {
-  Rendezvous(Napi::Env env, uint32_t requested, std::chrono::milliseconds timeout)
+  Rendezvous(Napi::Env env, uint32_t requested, std::chrono::milliseconds timeout,
+             int process_policy_before)
       : requested(requested),
+        process_policy_before(process_policy_before),
         deadline(std::chrono::steady_clock::now() + timeout),
         deferred(Napi::Promise::Deferred::New(env)) {}
 
   const uint32_t requested;
+  const int process_policy_before;
   const std::chrono::steady_clock::time_point deadline;
   Napi::Promise::Deferred deferred;
 
@@ -108,7 +111,10 @@ class PolicyWork : public Napi::AsyncWorker {
       errors.Set(i, Napi::Number::New(env, r.errors[i]));
     }
     result.Set("errors", errors);
-    // What children inherit; this function must never change it.
+    // What children inherit; this function must never change it. The value
+    // itself is whatever this process inherited (a launchd-started parent can
+    // hand down OFF), so only before and after together show a change.
+    result.Set("processPolicyBefore", Napi::Number::New(env, r.process_policy_before));
     result.Set("processPolicy",
                Napi::Number::New(env, getiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES,
                                                      IOPOL_SCOPE_PROCESS)));
@@ -119,12 +125,14 @@ class PolicyWork : public Napi::AsyncWorker {
 };
 
 // disableThreadPoolDatalessMaterialization(threads: number, timeoutMs: number):
-//   Promise<{ requested: number; applied: number; errors: number[]; processPolicy: number }>
+//   Promise<{ requested: number; applied: number; errors: number[]; processPolicyBefore: number;
+//             processPolicy: number }>
 //
 // `applied` counts distinct threads confirmed OFF, so it falls short of
 // `requested` when the pool is smaller, a thread was busy past the barrier, or
-// the kernel refused the policy (its errno is in `errors`). `processPolicy` is
-// the process-wide setting afterwards (-1 when unreadable).
+// the kernel refused the policy (its errno is in `errors`). `processPolicyBefore`
+// and `processPolicy` are the process-wide setting before and after (-1 when
+// unreadable).
 Napi::Value DisableThreadPoolDatalessMaterialization(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
 
@@ -148,7 +156,8 @@ Napi::Value DisableThreadPoolDatalessMaterialization(const Napi::CallbackInfo& i
 
   auto rendezvous = std::make_shared<Rendezvous>(
       env, static_cast<uint32_t>(threads),
-      std::chrono::milliseconds(static_cast<int64_t>(timeout_ms)));
+      std::chrono::milliseconds(static_cast<int64_t>(timeout_ms)),
+      getiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_PROCESS));
   Napi::Promise promise = rendezvous->deferred.Promise();
   for (uint32_t i = 0; i < rendezvous->requested; i++) {
     (new PolicyWork(env, rendezvous))->Queue();
