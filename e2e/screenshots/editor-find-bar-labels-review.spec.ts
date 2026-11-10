@@ -335,7 +335,14 @@ async function fill(page: Page, input: Locator, value: string): Promise<void> {
   await settle(page, 250);
 }
 
+/** An option: a pressed-state toggle since #16640, CodeMirror's checkbox before. */
 async function setOption(searchPanel: Locator, name: string, on: boolean): Promise<void> {
+  const toggle = searchPanel.locator(`button[name=${name}]`);
+  if ((await toggle.count()) > 0) {
+    if (((await toggle.getAttribute("aria-pressed")) === "true") !== on) await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", String(on));
+    return;
+  }
   const box = searchPanel.locator(`input[name=${name}]`);
   if ((await box.isChecked()) !== on) await box.click();
   await expect(box).toBeChecked({ checked: on });

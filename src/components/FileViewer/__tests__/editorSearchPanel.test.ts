@@ -177,46 +177,36 @@ describe("editorSearchPanel (#12755)", () => {
       accessibleName: node.getAttribute("aria-label") ?? node.textContent,
     }));
     expect(buttons).toEqual([
-      { name: "prev", text: "Previous", accessibleName: "Previous match" },
-      { name: "next", text: "Next", accessibleName: "Next match" },
-      { name: "select", text: "Select all matches", accessibleName: "Select all matches" },
+      { name: "case", text: "Aa", accessibleName: "Match case" },
+      { name: "word", text: "ab", accessibleName: "Match whole word" },
+      { name: "re", text: ".*", accessibleName: "Use regular expression" },
+      { name: "prev", text: "", accessibleName: "Previous match" },
+      { name: "next", text: "", accessibleName: "Next match" },
+      { name: "select", text: "Select all", accessibleName: "Select all matches" },
       { name: "replace", text: "Replace", accessibleName: "Replace" },
       { name: "replaceAll", text: "Replace all", accessibleName: "Replace all" },
-      { name: "close", text: "×", accessibleName: "Close find bar" },
-    ]);
-    const options = [...panel().querySelectorAll("label")].map((label) => {
-      const box = label.querySelector("input")!;
-      return {
-        name: box.name,
-        text: label.textContent,
-        accessibleName: box.getAttribute("aria-label") ?? label.textContent,
-      };
-    });
-    expect(options).toEqual([
-      { name: "case", text: "Match case", accessibleName: "Match case" },
-      { name: "word", text: "Whole word", accessibleName: "Match whole word" },
-      { name: "re", text: "Regex", accessibleName: "Regex" },
+      { name: "", text: "", accessibleName: "Close find bar" },
     ]);
     expect(field("replace").getAttribute("aria-label")).toBe("Replace with");
   });
 
   it("names each worded control with its visible words intact (WCAG 2.5.3)", () => {
     mounted = mount("alpha", { readOnly: false });
-    const worded = [
-      ...[...panel().querySelectorAll<HTMLButtonElement>("button")]
-        .filter((node) => node.name !== "close")
-        .map((node) => ({ visible: node.textContent!, name: node.getAttribute("aria-label") })),
-      ...[...panel().querySelectorAll("label")].map((label) => ({
-        visible: label.textContent!,
-        name: label.querySelector("input")!.getAttribute("aria-label"),
-      })),
-    ];
-    for (const { visible, name } of worded) {
-      expect((name ?? visible).toLowerCase()).toContain(visible.toLowerCase());
+    // The options' Aa, ab and .* are glyphs, as in the terminal and Browser
+    // find bars, and stepping and close are icons; the rest carry words.
+    const worded = [...panel().querySelectorAll<HTMLButtonElement>("button")].filter(
+      (node) => !node.hasAttribute("aria-pressed") && node.textContent !== ""
+    );
+    expect(worded.length).toBeGreaterThan(0);
+    for (const node of worded) {
+      const visible = node.textContent!;
+      const name = node.getAttribute("aria-label") ?? visible;
+      expect(name.toLowerCase()).toContain(visible.toLowerCase());
     }
-    // The close glyph is not read out as "multiplication sign".
-    const glyph = panel().querySelector("button[name=close] span")!;
-    expect(glyph.getAttribute("aria-hidden")).toBe("true");
+    // An icon is never read out on top of its button's name.
+    for (const icon of panel().querySelectorAll("button svg")) {
+      expect(icon.getAttribute("aria-hidden")).toBe("true");
+    }
   });
 
   it("the previous, next and select-all-matches buttons drive the editor's matches", () => {
