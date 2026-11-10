@@ -233,12 +233,13 @@ describe.runIf(process.platform === "linux")("daintree-cli.sh --status", () => {
 
   it("counts a process running a binary named daintree", async () => {
     const { spawn } = await import("node:child_process");
-    const sleeper = execFileSync("bash", ["-c", "command -v sleep"], { encoding: "utf8" }).trim();
     fs.mkdirSync(path.join(root, "app"));
     const binary = path.join(root, "app", "daintree");
-    fs.copyFileSync(sleeper, binary);
+    // Node, not `sleep`: Ubuntu 26.04's sleep is a uutils multicall binary
+    // that dispatches on its own name, so a copy named daintree exits at once.
+    fs.copyFileSync(process.execPath, binary);
     fs.chmodSync(binary, 0o755);
-    app = spawn(binary, ["30"], { stdio: "ignore" });
+    app = spawn(binary, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(status(false)).toBe("Daintree is running");
   });
