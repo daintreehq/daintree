@@ -9,6 +9,7 @@ import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
@@ -87,6 +88,8 @@ function duplicateKeys(targets: readonly HostFleetTarget[]): Set<string> {
 export function HostFleetTargets({ hostId, hostName }: HostFleetTargetsProps) {
   const [state, setState] = useState<LoadState>({ kind: "idle" });
   const [expanded, setExpanded] = useState(false);
+  // The "Observed" label is the one cue for how stale the list is, so it ticks.
+  const now = useGlobalMinuteClock();
   const armed = useArmedCrossHostTargets();
   const armedHere = armed.filter((target) => target.hostId === hostId);
   const regionId = useId();
@@ -354,7 +357,7 @@ export function HostFleetTargets({ hostId, hostName }: HostFleetTargetsProps) {
                 </span>
               )}
               <span className="shrink-0 text-2xs text-text-secondary">
-                <TimeAgo timestamp={listed.readAt} prefix="Observed " />
+                <TimeAgo timestamp={listed.readAt} now={now} prefix="Observed " />
               </span>
               {listed.complete && refresh}
             </div>
