@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type PQueueType from "p-queue";
 import type { Worktree } from "../../../shared/types/worktree.js";
 
 const mockGetWorktreeChangesWithStats = vi.fn();
@@ -23,6 +24,15 @@ vi.mock("../../utils/hardenedGit.js", () => ({
   createHardenedGit: mockCreateHardenedGit,
   createWslHardenedGit: mockCreateWslHardenedGit,
   validateCwd: vi.fn(),
+}));
+
+const { mockRefreshWorktreeIndex } = vi.hoisted(() => ({
+  mockRefreshWorktreeIndex: vi.fn(),
+}));
+
+vi.mock("../indexRefresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../indexRefresh.js")>()),
+  refreshWorktreeIndex: mockRefreshWorktreeIndex,
 }));
 
 vi.mock("../../utils/git.js", () => ({
@@ -2836,6 +2846,166 @@ describe("WorktreeMonitor", () => {
       const { monitor } = startedMonitor();
       await monitor.getFreshChanges();
       expect((monitor as unknown as { passAbandons: Set<unknown> }).passAbandons.size).toBe(0);
+    });
+  });
+
+  describe("index refresh after create (#16679)", () => {
+    const DELAY_MS = 1_000;
+    const owned = () => true;
+
+    beforeEach(() => {
+      mockRefreshWorktreeIndex.mockReset().mockResolvedValue(undefined);
+      mockGetWorktreeChangesWithStats.mockReset().mockResolvedValue({
+        worktreeId: TEST_WORKTREE.id,
+        rootPath: TEST_WORKTREE.path,
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+    });
+
+    function startedMonitor(queue?: PQueueType) {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main", queue);
+      monitor.startWithoutGitStatus();
+      return monitor;
+    }
+
+    it("refreshes the worktree's own index once, after the delay", async () => {
+      const monitor = startedMonitor();
+      monitor.scheduleIndexRefresh(owned, DELAY_MS);
+
+      await vi.advanceTimersByTimeAsync(DELAY_MS - 1);
+      expect(mockRefreshWorktreeIndex).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockRefreshWorktreeIndex).toHaveBeenCalledTimes(1);
+      expect(mockRefreshWorktreeIndex).toHaveBeenCalledWith(TEST_WORKTREE.path, undefined);
+
+      monitor.scheduleIndexRefresh(owned, DELAY_MS);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockRefreshWorktreeIndex).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
+    it("is dropped by stop, and a restart does not bring it back", async () => {
+      const monitor = startedMonitor();
+      monitor.scheduleIndexRefresh(owned, DELAY_MS);
+
+      monitor.stop();
+      await vi.advanceTimersByTimeAsync(DELAY_MS);
+      monitor.startWithoutGitStatus();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mockRefreshWorktreeIndex).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("skips a worktree whose monitor the service no longer holds", async () => {
+      const monitor = startedMonitor();
+      monitor.scheduleIndexRefresh(() => false, DELAY_MS);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      monitor.pausePolling();
+      monitor.resumePolling();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mockRefreshWorktreeIndex).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("waits out a pause and runs once the worktree resumes", async () => {
+      const monitor = startedMonitor();
+      monitor.scheduleIndexRefresh(owned, DELAY_MS);
+
+      monitor.pausePolling();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockRefreshWorktreeIndex).not.toHaveBeenCalled();
+
+      monitor.resumePolling();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(mockRefreshWorktreeIndex).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
+    it("keeps running through a pause while an agent works in the worktree", async () => {
+      const monitor = startedMonitor();
+      monitor.agentActive = true;
+      monitor.scheduleIndexRefresh(owned, DELAY_MS);
+
+      monitor.pausePolling();
+      await vi.advanceTimersByTimeAsync(DELAY_MS);
+
+      expect(mockRefreshWorktreeIndex).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
+    it("waits while the download gate is closed and runs when it opens", async () => {
+      const monitor = startedMonitor();
+      monitor.scheduleIndexRefresh(owned, DELAY_MS);
+
+      monitor.setStatusDownloadGate("held");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockRefreshWorktreeIndex).not.toHaveBeenCalled();
+
+      monitor.setStatusDownloadGate("open");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(mockRefreshWorktreeIndex).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
+    it("spends a failed refresh rather than retrying it", async () => {
+      mockRefreshWorktreeIndex.mockRejectedValue(
+        new Error("fatal: Unable to create '/test/.git/worktrees/x/index.lock': File exists.")
+      );
+      const monitor = startedMonitor();
+      monitor.scheduleIndexRefresh(owned, DELAY_MS);
+
+      await vi.advanceTimersByTimeAsync(DELAY_MS);
+      monitor.pausePolling();
+      monitor.resumePolling();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mockRefreshWorktreeIndex).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
+    it("stays owed when a pause lands while it waits in the queue, and runs after the resume", async () => {
+      const { default: PQueue } = await import("p-queue");
+      const queue = new PQueue({ concurrency: 1 });
+      let releaseBlocker!: () => void;
+      void queue.add(() => new Promise<void>((resolve) => (releaseBlocker = resolve)));
+      const monitor = startedMonitor(queue);
+      monitor.scheduleIndexRefresh(owned, DELAY_MS);
+
+      await vi.advanceTimersByTimeAsync(DELAY_MS);
+      expect(queue.size).toBe(1);
+      monitor.pausePolling();
+      releaseBlocker();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockRefreshWorktreeIndex).not.toHaveBeenCalled();
+
+      monitor.resumePolling();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(mockRefreshWorktreeIndex).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
+    it("spends a refresh whose git started before a pause landed", async () => {
+      let finish!: () => void;
+      mockRefreshWorktreeIndex.mockImplementation(
+        () => new Promise<void>((resolve) => (finish = resolve))
+      );
+      const monitor = startedMonitor();
+      monitor.scheduleIndexRefresh(owned, DELAY_MS);
+      await vi.advanceTimersByTimeAsync(DELAY_MS);
+      expect(mockRefreshWorktreeIndex).toHaveBeenCalledTimes(1);
+
+      monitor.pausePolling();
+      monitor.resumePolling();
+      finish();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mockRefreshWorktreeIndex).toHaveBeenCalledTimes(1);
+      monitor.stop();
     });
   });
 });
