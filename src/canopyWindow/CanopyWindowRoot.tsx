@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { CanopyView } from "@/components/Canopy/CanopyView";
+import { DecisionsAttentionHost } from "@/components/Decisions/DecisionsAttentionHost";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { installHostProjectsLoader } from "@/components/Hosts/installHostProjectsLoader";
 import { VoiceRecordingAnnouncer } from "@/components/Terminal/VoiceRecordingAnnouncer";
@@ -70,6 +71,9 @@ export function CanopyWindowRoot() {
           <CanopyView frame={CANOPY_WINDOW_FRAME} />
         </ErrorBoundary>
       </div>
+      {/* A run's notice opens the answers that need a person here, rather
+          than sending the user to find its pane's chip in a project window. */}
+      <DecisionsAttentionHost />
       <Toaster standalone />
       <AccessibilityAnnouncer />
       {/* Why the dictation key started nothing, or what it did, is said here. */}
