@@ -1,5 +1,7 @@
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/ui/field";
 import { pluralize } from "@/lib/pluralize";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { FactSeparator } from "@/components/ui/FactSeparator";
@@ -48,6 +50,8 @@ interface HostCardProps {
   projects?: readonly HostProjectRef[] | null;
   /** Open one of the host's projects on the host (Cmd/Ctrl-click: a new window). */
   onOpenProject?: (projectId: string, newWindow: boolean) => void;
+  /** Ask the host for its projects again, after a list that couldn't be read. */
+  onRetryProjects?: () => void;
   /** Extra per-host content: fleet targets, Add project…. */
   children?: ReactNode;
 }
@@ -58,13 +62,10 @@ export const HOST_CARD_PROJECT_LIMIT = 6;
 function ProjectList({
   hostName,
   projects,
-  counts,
   onOpenProject,
 }: {
   hostName: string;
   projects: readonly HostProjectRef[];
-  /** ["1 open", "2 worktrees"], as the host last reported. */
-  counts: readonly string[] | null;
   onOpenProject?: (projectId: string, newWindow: boolean) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
@@ -75,16 +76,7 @@ function ProjectList({
   const more = projects.length - shown.length;
   const anyEmoji = shown.some((project) => project.emoji);
   return (
-    <section aria-label={`Projects on ${hostName}`} data-testid="host-overview-projects">
-      <h4 className="mb-1 text-2xs font-medium text-text-secondary">
-        Projects
-        {counts?.map((part) => (
-          <Fragment key={part}>
-            {" "}
-            <FactSeparator /> {part}
-          </Fragment>
-        ))}
-      </h4>
+    <>
       {projects.length === 0 ? (
         <p className="text-xs text-text-secondary">No projects on {hostName} yet</p>
       ) : (
@@ -118,7 +110,7 @@ function ProjectList({
           Show {pluralize(more, "more project")}
         </Button>
       )}
-    </section>
+    </>
   );
 }
 
@@ -205,6 +197,7 @@ export function HostCard({
   onSwitch,
   projects,
   onOpenProject,
+  onRetryProjects,
   children,
 }: HostCardProps) {
   const live = isLive(row);
@@ -219,6 +212,50 @@ export function HostCard({
   const placeState = [row.isCurrent ? "Current" : null, state].filter(Boolean).join(" · ");
   const chart = chartWindow(history.length);
   const span = chart.minutes === 1 ? "minute" : `${chart.minutes} minutes`;
+  const listing = live && projects === undefined;
+  const counts = projects && summary ? describeProjects(summary) : null;
+
+  // The Projects section is one node through failed, listing and listed, so a
+  // pressed Retry hands focus to it rather than to the page as the listing
+  // state replaces it, and the answer finds it there.
+  const projectsRef = useRef<HTMLElement>(null);
+  const retryRef = useRef<HTMLButtonElement>(null);
+  const switchRef = useRef<HTMLButtonElement>(null);
+  const holdFocus = useRef(false);
+  // Focus held on the section says nothing of what replaced its contents, so
+  // once Retry is pressed the card announces how its listing went. An answer
+  // nobody asked for here stays quiet, as several hosts may fail at once.
+  const [retried, setRetried] = useState(false);
+  const announcement =
+    !retried || !live
+      ? ""
+      : projects === undefined
+        ? `Listing projects on ${row.name}`
+        : projects === null
+          ? `Couldn't load projects on ${row.name}`
+          : projects.length === 0
+            ? `No projects on ${row.name} yet`
+            : `${pluralize(projects.length, "project")} on ${row.name}`;
+
+  useLayoutEffect(() => {
+    if (!holdFocus.current || listing) return;
+    holdFocus.current = false;
+    // Focus the person moved elsewhere while waiting stays where they put it.
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== projectsRef.current) return;
+    // Another failure: its Retry. A list: the section stays. Gone offline: the card.
+    (retryRef.current ?? projectsRef.current ?? switchRef.current)?.focus({ preventScroll: true });
+  }, [listing, projects]);
+
+  const retryProjects = () => {
+    const section = projectsRef.current;
+    if (section?.contains(document.activeElement)) {
+      holdFocus.current = true;
+      section.focus({ preventScroll: true });
+    }
+    setRetried(true);
+    onRetryProjects?.();
+  };
 
   return (
     <article
@@ -230,6 +267,7 @@ export function HostCard({
     >
       <div className="flex flex-col gap-1">
         <button
+          ref={switchRef}
           type="button"
           className={cn(
             "-m-1 flex min-w-0 items-center gap-2 rounded-[var(--radius-md)] p-1 text-left",
@@ -293,24 +331,56 @@ export function HostCard({
         </div>
       )}
 
-      {!projects && live && (
-        <section aria-label={`Projects on ${row.name}`}>
-          <h4 className="mb-1 text-2xs font-medium text-text-secondary">Projects</h4>
-          <p className="text-xs text-text-secondary">
-            {projects === null
-              ? `Couldn't load projects on ${row.name}. Reopen the overview to try again`
-              : `Listing projects on ${row.name}…`}
-          </p>
+      {(projects || live) && (
+        <section
+          ref={projectsRef}
+          tabIndex={-1}
+          aria-label={`Projects on ${row.name}`}
+          data-testid={projects ? "host-overview-projects" : undefined}
+          className={cn(
+            "-m-1 rounded-[var(--radius-md)] p-1",
+            "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline"
+          )}
+        >
+          <h4 className="mb-1 text-2xs font-medium text-text-secondary">
+            Projects
+            {counts?.map((part) => (
+              <Fragment key={part}>
+                {" "}
+                <FactSeparator /> {part}
+              </Fragment>
+            ))}
+          </h4>
+          {projects ? (
+            <ProjectList hostName={row.name} projects={projects} onOpenProject={onOpenProject} />
+          ) : projects === null ? (
+            <InlineError
+              action={
+                onRetryProjects && (
+                  <Button
+                    ref={retryRef}
+                    variant="outline"
+                    size="xs"
+                    className="-my-0.5"
+                    aria-label={`Retry listing projects on ${row.name}`}
+                    onClick={retryProjects}
+                  >
+                    <RefreshCw aria-hidden="true" />
+                    Retry
+                  </Button>
+                )
+              }
+            >
+              Couldn&apos;t load projects on {row.name}
+            </InlineError>
+          ) : (
+            <p className="text-xs text-text-secondary">Listing projects on {row.name}…</p>
+          )}
         </section>
       )}
-      {projects && (
-        <ProjectList
-          hostName={row.name}
-          projects={projects}
-          counts={summary ? describeProjects(summary) : null}
-          onOpenProject={onOpenProject}
-        />
-      )}
+      <span role="status" className="sr-only">
+        {announcement}
+      </span>
 
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
         {summary &&

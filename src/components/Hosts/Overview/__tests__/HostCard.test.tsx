@@ -289,4 +289,141 @@ describe("HostCard", () => {
     rerender(<HostCard row={row} history={[]} onSwitch={() => {}} />);
     expect(screen.queryByTestId("host-overview-projects")).toBeNull();
   });
+
+  it("offers a Retry for a project list that couldn't be read, not a reopen", () => {
+    const row = makeRow({});
+    const onRetryProjects = vi.fn();
+    render(
+      <HostCard
+        row={row}
+        history={[]}
+        onSwitch={() => {}}
+        projects={null}
+        onRetryProjects={onRetryProjects}
+      />
+    );
+    const card = screen.getByTestId("host-overview-card");
+    expect(card.textContent).toContain(`Couldn't load projects on ${row.name}`);
+    expect(card.textContent).not.toMatch(/reopen/i);
+    expect(onRetryProjects).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: `Retry listing projects on ${row.name}` }));
+    expect(onRetryProjects).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a pressed Retry", () => {
+    const row = makeRow({});
+    const retryName = `Retry listing projects on ${row.name}`;
+    const projectsRegion = () => screen.getByRole("region", { name: `Projects on ${row.name}` });
+    const switchButton = () => screen.getByRole("button", { name: `Switch to ${row.name}` });
+    const announced = () => screen.getByRole("status").textContent;
+    type Projects = readonly { id: string; name: string; path: string }[] | null;
+
+    /** The card as the overview draws it: `undefined` while the host is asked. */
+    function cardWith(onRetryProjects: () => void) {
+      return (projects?: Projects) => (
+        <HostCard
+          row={row}
+          history={[]}
+          onSwitch={() => {}}
+          projects={projects}
+          onRetryProjects={onRetryProjects}
+        />
+      );
+    }
+
+    /** Failed, Retry focused and pressed, then listing. */
+    function pressRetry() {
+      const onRetryProjects = vi.fn();
+      const card = cardWith(onRetryProjects);
+      const view = render(card(null));
+      const retry = screen.getByRole("button", { name: retryName });
+      retry.focus();
+      fireEvent.click(retry);
+      const section = projectsRegion();
+      expect(onRetryProjects).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(section);
+      view.rerender(card(undefined));
+      return { view, section, card, onRetryProjects };
+    }
+
+    it("shows the listing state with focus held on the Projects section, not the page", () => {
+      const { section } = pressRetry();
+      expect(screen.queryByRole("button", { name: retryName })).toBeNull();
+      expect(section.textContent).toContain(`Listing projects on ${row.name}…`);
+      expect(projectsRegion()).toBe(section);
+      expect(document.activeElement).toBe(section);
+      expect(announced()).toBe(`Listing projects on ${row.name}`);
+    });
+
+    it("replaces the failure with the list, focus staying on the section", () => {
+      const { view, section, card } = pressRetry();
+      view.rerender(card([{ id: "p1", name: "api", path: "/srv/api" }]));
+      expect(screen.getByRole("button", { name: `Open api on ${row.name}` })).toBeTruthy();
+      expect(section.textContent).not.toContain("Couldn't load");
+      expect(projectsRegion()).toBe(section);
+      expect(document.activeElement).toBe(section);
+      expect(announced()).toBe(`1 project on ${row.name}`);
+    });
+
+    it("hands focus to the new Retry when the host fails again", () => {
+      const { view, card } = pressRetry();
+      view.rerender(card(null));
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: retryName }));
+      expect(announced()).toBe(`Couldn't load projects on ${row.name}`);
+    });
+
+    it("leaves focus where the person moved it while waiting", () => {
+      const { view, card } = pressRetry();
+      switchButton().focus();
+      view.rerender(card(null));
+      expect(document.activeElement).toBe(switchButton());
+    });
+
+    it("lets go once answered, so a later list takes no focus", () => {
+      const { view, section, card } = pressRetry();
+      view.rerender(card([]));
+      expect(document.activeElement).toBe(section);
+      section.blur();
+      view.rerender(card(undefined));
+      view.rerender(card([{ id: "p1", name: "api", path: "/srv/api" }]));
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it("hands focus to the card's host button when the host drops while asked", () => {
+      const { view, onRetryProjects } = pressRetry();
+      view.rerender(
+        <HostCard
+          row={{ ...row, connection: { status: "unreachable", lastSeenAt: null, detail: null } }}
+          history={[]}
+          onSwitch={() => {}}
+          onRetryProjects={onRetryProjects}
+        />
+      );
+      expect(screen.queryByRole("region", { name: `Projects on ${row.name}` })).toBeNull();
+      expect(document.activeElement).toBe(switchButton());
+      expect(announced()).toBe("");
+    });
+
+    it("moves no focus for a Retry pressed while focus is elsewhere", () => {
+      const onRetryProjects = vi.fn();
+      const card = cardWith(onRetryProjects);
+      const view = render(card(null));
+      switchButton().focus();
+      fireEvent.click(screen.getByRole("button", { name: retryName }));
+      expect(onRetryProjects).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(switchButton());
+      view.rerender(card(undefined));
+      view.rerender(card(null));
+      expect(document.activeElement).toBe(switchButton());
+    });
+
+    it("takes no focus, and announces nothing, for an answer nobody pressed Retry for", () => {
+      const card = cardWith(() => {});
+      const view = render(card(undefined));
+      expect(document.activeElement).toBe(document.body);
+      view.rerender(card(null));
+      expect(document.activeElement).toBe(document.body);
+      expect(announced()).toBe("");
+    });
+  });
 });
