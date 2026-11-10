@@ -538,8 +538,9 @@ export function FilePane({
 
   const remoteFile = useRemoteFileContext();
 
-  // Route Cmd+F to the source view's find bar while this pane is focused
-  // (no-op in rendered markdown, matching the dialog).
+  // Route Cmd+F to the open file's find bar while this pane is focused, in the
+  // grid and the viewer dialog alike: CodeMirror's in Source, the document's
+  // own in rendered Markdown.
   useEffect(() => {
     if (!isFocused) return;
     const handleFindInPanel = () => {

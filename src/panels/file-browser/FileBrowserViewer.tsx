@@ -526,8 +526,10 @@ export function FileBrowserViewer({
   const bodyRef = useRef<HTMLDivElement>(null);
   const codeViewerRef = useRef<CodeViewerHandle>(null);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
-  // Cmd+F opens the source view's find bar while this panel has focus, as it
-  // does in the file panel; rendered and media views have nothing to search.
+  // Cmd+F opens the open file's find bar while this panel has focus, as it does
+  // in the file panel: CodeMirror's in Source, the document's own in rendered
+  // Markdown. Media, rendered HTML and Diff mount neither, so it does nothing
+  // there.
   useEffect(() => {
     if (!isFocused) return;
     const handleFindInPanel = () => {
@@ -1596,6 +1598,7 @@ export function FileBrowserViewer({
                 bytes in place. Unlike video/audio/pdf there is no playback to
                 interrupt (#11587). */}
             <MarkdownViewer
+              ref={markdownViewerRef}
               content={draftText ?? state.content}
               filePath={filePath}
               rootPath={rootPath}
