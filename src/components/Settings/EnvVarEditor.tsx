@@ -735,7 +735,7 @@ export function EnvVarEditor({
     // rows) and so a thrown onChange leaves local state untouched.
     onChange(mergedEnv);
     lastEnvRef.current = mergedEnv;
-    setRows(envToDraft(mergedEnv));
+    setRows(envToDraft(mergedEnv, inheritedEnv));
     setTouchedKeys({});
   };
 
