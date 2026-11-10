@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@/clients/logsClient", () => ({
   logsClient: {
@@ -10,11 +10,24 @@ vi.mock("@/clients/logsClient", () => ({
   },
 }));
 
+// A small fixed catalog: the searched module sits inside the rendered rows and
+// past the first one however the real catalog grows.
+vi.mock("@shared/config/loggerNames", () => ({
+  LOGGER_NAMES: ["*", "main:Alpha", "main:Bravo", "main:Charlie", "main:Delta"],
+}));
+
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { logsClient } from "@/clients/logsClient";
 import { LogLevelPalette } from "../LogLevelPalette";
 
 const noop = () => {};
+
+const MODULE_ROWS = ["*", "main:Alpha", "main:Bravo", "main:Charlie", "main:Delta"].map(
+  (name) => `palette-option-${name}`
+);
+const LEVEL_ROWS = ["debug", "info", "warn", "error", "off", "clear"].map(
+  (id) => `palette-option-${id}`
+);
 
 function renderPalette(isOpen: boolean, onClose: () => void = noop) {
   return render(<LogLevelPalette isOpen={isOpen} onClose={onClose} />, {
@@ -27,7 +40,15 @@ function input() {
 }
 
 function optionIds() {
-  return screen.getAllByRole("option").map((o) => o.id);
+  return screen.queryAllByRole("option").map((o) => o.id);
+}
+
+function cursorId() {
+  return input().getAttribute("aria-activedescendant");
+}
+
+function stepLabel() {
+  return screen.getByRole("dialog").getAttribute("aria-label") ?? "";
 }
 
 async function settle() {
@@ -44,16 +65,39 @@ async function enter() {
   await settle();
 }
 
-/** The palette is closed and opened by its host while the component stays mounted. */
-async function reopen(rerender: ReturnType<typeof renderPalette>["rerender"], onClose = noop) {
+async function arrowDown() {
+  fireEvent.keyDown(input(), { key: "ArrowDown" });
+  await settle();
+}
+
+/** The scrim sits behind the dialog panel; clicking it is how a mouse user dismisses. */
+async function clickScrim() {
+  fireEvent.click(screen.getByRole("dialog").parentElement!);
+  await settle();
+}
+
+/**
+ * The host closes the palette and opens it again while the component stays
+ * mounted. `afterExit` waits for the shell to drop its DOM first, the way a
+ * reopen after a pause finds it; otherwise the reopen lands mid-animation.
+ */
+async function reopen(
+  rerender: ReturnType<typeof renderPalette>["rerender"],
+  onClose: () => void = noop,
+  { afterExit = false } = {}
+) {
   rerender(<LogLevelPalette isOpen={false} onClose={onClose} />);
   await settle();
+  if (afterExit) {
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  }
   rerender(<LogLevelPalette isOpen onClose={onClose} />);
   await settle();
 }
 
 describe("LogLevelPalette reopening", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     Element.prototype.scrollIntoView = vi.fn();
     vi.mocked(logsClient.getLevelOverrides).mockResolvedValue({});
     vi.mocked(logsClient.getRegistry).mockResolvedValue([]);
@@ -65,65 +109,82 @@ describe("LogLevelPalette reopening", () => {
     renderPalette(true);
     await settle();
     expect(input().value).toBe("");
-    const ids = optionIds();
-    expect(ids.length).toBeGreaterThan(10);
-    expect(input().getAttribute("aria-activedescendant")).toBe(ids[0]);
+    expect(optionIds()).toEqual(MODULE_ROWS);
+    expect(cursorId()).toBe(MODULE_ROWS[0]);
   });
 
   it("shows an empty field, the full list and the first row after a module and level were chosen from a search", async () => {
     const onClose = vi.fn();
     const { rerender } = renderPalette(true, onClose);
     await settle();
-    const fullList = optionIds();
 
-    await type("PtyManager");
-    expect(optionIds().length).toBeLessThan(fullList.length);
+    await type("Charlie");
+    expect(optionIds()).toEqual(["palette-option-main:Charlie"]);
     await enter();
-    expect(screen.getByRole("dialog").getAttribute("aria-label")).toContain("choose a level");
+    expect(stepLabel()).toContain("choose a level");
     await enter();
-    expect(logsClient.setLevelOverrides).toHaveBeenCalledWith({ "pty-host:PtyManager": "debug" });
+    expect(logsClient.setLevelOverrides).toHaveBeenCalledWith({ "main:Charlie": "debug" });
     expect(onClose).toHaveBeenCalledTimes(1);
 
     await reopen(rerender, onClose);
 
-    expect(screen.getByRole("dialog").getAttribute("aria-label")).toContain("choose a module");
+    expect(stepLabel()).toContain("choose a module");
     expect(input().value).toBe("");
-    expect(optionIds()).toEqual(fullList);
-    expect(input().getAttribute("aria-activedescendant")).toBe(fullList[0]);
+    expect(optionIds()).toEqual(MODULE_ROWS);
+    expect(cursorId()).toBe(MODULE_ROWS[0]);
   });
 
-  it("shows an empty field, the full list and the first row after the scrim closed it with text in the field", async () => {
+  it.each([
+    ["straight away", false],
+    ["once the exit animation has finished", true],
+  ])(
+    "shows an empty field, the full list and the first row when the scrim closed it with text in the field and it reopens %s",
+    async (_name, afterExit) => {
+      const onClose = vi.fn();
+      const { rerender } = renderPalette(true, onClose);
+      await settle();
+
+      await type("Charlie");
+      expect(optionIds()).toEqual(["palette-option-main:Charlie"]);
+      await clickScrim();
+      expect(onClose).toHaveBeenCalledTimes(1);
+
+      await reopen(rerender, onClose, { afterExit });
+
+      expect(input().value).toBe("");
+      expect(optionIds()).toEqual(MODULE_ROWS);
+      expect(cursorId()).toBe(MODULE_ROWS[0]);
+    }
+  );
+
+  it("recovers from a search with no matches", async () => {
     const onClose = vi.fn();
     const { rerender } = renderPalette(true, onClose);
     await settle();
-    const fullList = optionIds();
 
-    await type("PtyManager");
-    expect(optionIds().length).toBeLessThan(fullList.length);
-    fireEvent.click(screen.getByRole("dialog").parentElement!);
-    await settle();
+    await type("zzzzqqqq");
+    expect(optionIds()).toEqual([]);
+    await clickScrim();
     expect(onClose).toHaveBeenCalledTimes(1);
 
     await reopen(rerender, onClose);
 
     expect(input().value).toBe("");
-    expect(optionIds()).toEqual(fullList);
-    expect(input().getAttribute("aria-activedescendant")).toBe(fullList[0]);
+    expect(optionIds()).toEqual(MODULE_ROWS);
+    expect(cursorId()).toBe(MODULE_ROWS[0]);
   });
 
   it("goes back to the first row after the cursor moved with no search", async () => {
     const { rerender } = renderPalette(true);
     await settle();
-    const fullList = optionIds();
 
-    fireEvent.keyDown(input(), { key: "ArrowDown" });
-    fireEvent.keyDown(input(), { key: "ArrowDown" });
-    await settle();
-    expect(input().getAttribute("aria-activedescendant")).toBe(fullList[2]);
+    await arrowDown();
+    await arrowDown();
+    expect(cursorId()).toBe(MODULE_ROWS[2]);
 
     await reopen(rerender);
 
-    expect(input().getAttribute("aria-activedescendant")).toBe(fullList[0]);
+    expect(cursorId()).toBe(MODULE_ROWS[0]);
   });
 
   it("lands on the first level, not the one a stale level search matched, after the scrim closed the level step", async () => {
@@ -131,23 +192,23 @@ describe("LogLevelPalette reopening", () => {
     const { rerender } = renderPalette(true, onClose);
     await settle();
     await enter();
-    const levelRows = optionIds();
+    expect(optionIds()).toEqual(LEVEL_ROWS);
+
     await type("off");
-    expect(optionIds().length).toBeLessThan(levelRows.length);
-    fireEvent.click(screen.getByRole("dialog").parentElement!);
-    await settle();
+    expect(optionIds()[0]).toBe("palette-option-off");
+    await clickScrim();
     expect(onClose).toHaveBeenCalledTimes(1);
 
     await reopen(rerender, onClose);
     await enter();
 
-    expect(screen.getByRole("dialog").getAttribute("aria-label")).toContain("choose a level");
+    expect(stepLabel()).toContain("choose a level");
     expect(input().value).toBe("");
-    expect(optionIds()).toEqual(levelRows);
-    expect(input().getAttribute("aria-activedescendant")).toBe(levelRows[0]);
+    expect(optionIds()).toEqual(LEVEL_ROWS);
+    expect(cursorId()).toBe(LEVEL_ROWS[0]);
   });
 
-  it("keeps the step and the search while it stays open and the overrides load", async () => {
+  it("keeps the search and the cursor while it stays open and the overrides load", async () => {
     let resolveOverrides: (value: Record<string, string>) => void = noop;
     vi.mocked(logsClient.getLevelOverrides).mockReturnValue(
       new Promise((resolve) => {
@@ -157,11 +218,18 @@ describe("LogLevelPalette reopening", () => {
     renderPalette(true);
     await settle();
 
-    await type("PtyManager");
-    await act(async () => resolveOverrides({ "pty-host:PtyManager": "debug" }));
+    await type("main");
+    expect(optionIds().length).toBeGreaterThan(2);
+    await arrowDown();
+    await arrowDown();
+    const cursor = cursorId();
+    expect(cursor).not.toBe(optionIds()[0]);
 
-    expect(input().value).toBe("PtyManager");
-    expect(screen.getByRole("dialog").getAttribute("aria-label")).toContain("choose a module");
-    expect(input().getAttribute("aria-activedescendant")).toBe(optionIds()[0]);
+    await act(async () => resolveOverrides({ "main:Delta": "debug" }));
+
+    expect(document.getElementById("palette-option-main:Delta")!.textContent).toContain("debug");
+    expect(input().value).toBe("main");
+    expect(cursorId()).toBe(cursor);
+    expect(stepLabel()).toContain("choose a module");
   });
 });
