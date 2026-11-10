@@ -99,6 +99,7 @@ describe("showWindowInactive", () => {
     showWindowInactive(windowMock(order, "background") as never);
 
     expect(order).toEqual(["background.showInactive"]);
+    expect(electron.BrowserWindow.getFocusedWindow).not.toHaveBeenCalled();
   });
 
   it("on macOS restacks the window the user is in above the one it revealed, without activating it", () => {
@@ -129,26 +130,34 @@ describe("showWindowInactive", () => {
     expect(order).toEqual(["background.showInactive", "self.showInactive"]);
   });
 
-  it("on macOS reads the focused window before revealing, and skips one destroyed meanwhile", () => {
-    setPlatform("darwin");
-    const order: string[] = [];
-    const focused = windowMock(order, "focused");
-    electron.BrowserWindow.getFocusedWindow.mockImplementation(() => {
-      order.push("getFocusedWindow");
-      return focused;
-    });
-    const background = windowMock(order, "background");
-    background.showInactive.mockImplementation(() => {
-      order.push("background.showInactive");
-      focused.isDestroyed.mockReturnValue(true);
-      return 0;
-    });
+  it.each([
+    ["macOS", "darwin", undefined],
+    ["X11", "linux", "x11"],
+  ] as const)(
+    "on %s reads the focused window before revealing, and skips one destroyed meanwhile",
+    (_name, platform, sessionType) => {
+      setPlatform(platform);
+      if (sessionType) process.env.XDG_SESSION_TYPE = sessionType;
+      const order: string[] = [];
+      const focused = windowMock(order, "focused");
+      electron.BrowserWindow.getFocusedWindow.mockImplementation(() => {
+        order.push("getFocusedWindow");
+        return focused;
+      });
+      const background = windowMock(order, "background");
+      background.showInactive.mockImplementation(() => {
+        order.push("background.showInactive");
+        focused.isDestroyed.mockReturnValue(true);
+        return 0;
+      });
 
-    showWindowInactive(background as never);
+      showWindowInactive(background as never);
 
-    expect(order).toEqual(["getFocusedWindow", "background.showInactive"]);
-    expect(focused.moveTop).not.toHaveBeenCalled();
-  });
+      expect(order).toEqual(["getFocusedWindow", "background.showInactive"]);
+      expect(focused.moveTop).not.toHaveBeenCalled();
+      expect(focused.focus).not.toHaveBeenCalled();
+    }
+  );
 
   it("leaves stacking to the OS on Windows", () => {
     setPlatform("win32");
@@ -158,5 +167,6 @@ describe("showWindowInactive", () => {
     showWindowInactive(windowMock(order, "background") as never);
 
     expect(order).toEqual(["background.showInactive"]);
+    expect(electron.BrowserWindow.getFocusedWindow).not.toHaveBeenCalled();
   });
 });
