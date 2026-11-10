@@ -1208,7 +1208,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
         "Show 2 hidden tabs, including active"
       );
 
-      const dot = overflowButton!.querySelector("span.bg-text-primary\\/70");
+      const dot = overflowButton!.querySelector("span.status-mark.bg-text-secondary");
       expect(dot).not.toBeNull();
       // Accent restraint: the neutral cue must NOT use any accent token.
       expect(dot!.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\w-])/);
