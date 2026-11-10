@@ -638,7 +638,7 @@ export function WorktreeMenuItems({
             aria-label={canPullRebase ? "Pull and rebase" : "Pull and rebase, no upstream"}
           >
             <ArrowDown className={ICON} />
-            Pull and rebase
+            Pull and rebase…
             {!canPullRebase && <C.Meta>No upstream</C.Meta>}
           </C.Item>
         ),
@@ -650,7 +650,7 @@ export function WorktreeMenuItems({
             aria-label={nothingToPush ? "Push, nothing to push" : "Push"}
           >
             <ArrowUp className={ICON} />
-            Push
+            Push…
             {nothingToPush && <C.Meta>Nothing to push</C.Meta>}
           </C.Item>
         ),

@@ -1262,15 +1262,15 @@ describe("WorktreeMenuItems Git submenu", () => {
     });
 
     expect(gitRowLabels(container)).toEqual([
-      "Pull and rebase",
-      "Push",
+      "Pull and rebase…",
+      "Push…",
       "Fetch",
       "Fetch and prune",
       expect.stringContaining("Rebase onto base branch"),
       expect.stringContaining("Merge base branch in"),
     ]);
     expect(isDisabled(gitRowMatching(/Pull and rebase/))).toBe(false);
-    expect(isDisabled(gitRowMatching(/^Push$/))).toBe(false);
+    expect(isDisabled(gitRowMatching(/^Push…$/))).toBe(false);
   });
 
   it("says why pull is unavailable rather than dropping the row", () => {
@@ -1341,7 +1341,7 @@ describe("WorktreeMenuItems Git submenu", () => {
       worktree: makeWorktree({ ...measured(null) }),
     });
 
-    expect(isDisabled(gitRowMatching(/^Push$/))).toBe(false);
+    expect(isDisabled(gitRowMatching(/^Push…$/))).toBe(false);
   });
 
   it("disables push when nothing is ahead", () => {
@@ -1380,8 +1380,8 @@ describe("WorktreeMenuItems Git submenu", () => {
     });
 
     expect(gitRowLabels(container)).toEqual([
-      "Pull and rebase",
-      "Push",
+      "Pull and rebase…",
+      "Push…",
       "Fetch",
       "Fetch and prune",
       expect.stringContaining("Rebase onto base branch"),
@@ -1397,7 +1397,7 @@ describe("WorktreeMenuItems Git submenu", () => {
     renderWorktreeMenu({ ...callbacks, worktree: makeWorktree({ aheadCount: 1 }) }, "context-menu");
 
     gitRowMatching(/Pull and rebase/).click();
-    gitRowMatching(/^Push$/).click();
+    gitRowMatching(/^Push…$/).click();
     expect(callbacks.onGitPullRebase).toHaveBeenCalledWith("context-menu");
     expect(callbacks.onGitPush).toHaveBeenCalledWith("context-menu");
   });
@@ -1440,8 +1440,8 @@ describe("WorktreeMenuItems Git submenu", () => {
     });
 
     expect(gitRowLabels(container)).toEqual([
-      "Pull and rebase",
-      "Push",
+      "Pull and rebase…",
+      "Push…",
       "Fetch",
       "Fetch and prune",
       expect.stringContaining("Rebase onto base branch"),
