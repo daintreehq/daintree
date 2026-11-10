@@ -436,6 +436,12 @@ export function KeyboardShortcutsTab() {
       setShortcutError({ kind: "save", ...attempt });
       return;
     }
+    if (!result.ok) {
+      // The menu keeps its old accelerators until its next rebuild.
+      logError("Saved keybinding override but the reply failed", undefined, {
+        error: result.error,
+      });
+    }
     setShortcutError(null);
     setEditingRowId(null);
     focusActionRow(loadBindings(), actionId, attempt.combo || (combos[0] ?? ""), attempt.rowId);
