@@ -1656,6 +1656,7 @@ function buildElectronApi(): ElectronAPI {
           focusIntent?: import("../shared/types/ipc/project.js").ProjectFocusOnActivateIntent;
           trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace;
           ignoreMemoryPressure?: boolean;
+          showInOtherWindow?: boolean;
         }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId, outgoingState, options),
 
@@ -1734,6 +1735,7 @@ function buildElectronApi(): ElectronAPI {
         options?: {
           trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace;
           ignoreMemoryPressure?: boolean;
+          showInOtherWindow?: boolean;
         }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId, outgoingState, options),
 

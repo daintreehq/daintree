@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
-import type { AppErrorCode } from "../../types/appError.js";
+import type { AppErrorCode, CachedViewReleaseBlock } from "../../types/appError.js";
 import {
+  getProjectHeldElsewhereMessage,
+  getProjectHeldRecovery,
   getProjectOpenFailure,
+  isPersistentHold,
   withRemoveFromRecent,
   PROJECT_OPEN_RECOVERY_LABELS,
   type ProjectOpenFailure,
@@ -60,6 +63,8 @@ describe("getProjectOpenFailure", () => {
     // generic handling.
     expect(getProjectOpenFailure("NOT_A_GIT_REPO", FOLDER)).toBeNull();
     expect(getProjectOpenFailure("INTERNAL", FOLDER)).toBeNull();
+    // A project another window holds is about that window, never the folder (#16724).
+    expect(getProjectOpenFailure("PROJECT_HELD_ELSEWHERE", FOLDER)).toBeNull();
     expect(getProjectOpenFailure("BINARY_FILE", FOLDER)).toBeNull();
   });
 
@@ -140,5 +145,74 @@ describe("withRemoveFromRecent", () => {
     withRemoveFromRecent(failure);
 
     expect(failure.recovery).toBe("choose-folder");
+  });
+});
+
+describe("a project another window holds (#16724)", () => {
+  /**
+   * What each hold must convey, and the one way forward it gets, written out
+   * here rather than read back from the module, so swapping two reasons' copy
+   * or reclassifying one fails.
+   */
+  const HOLDS: Array<{
+    reason: CachedViewReleaseBlock;
+    says: RegExp;
+    shown: "show-in-other-window" | "retry";
+    notShowable: "none" | "retry";
+  }> = [
+    {
+      reason: "assistant",
+      says: /stop the Assistant/,
+      shown: "show-in-other-window",
+      notShowable: "none",
+    },
+    {
+      reason: "unsaved-work",
+      says: /lose unsaved work/,
+      shown: "show-in-other-window",
+      notShowable: "none",
+    },
+    { reason: "mcp", says: /handling a request/, shown: "retry", notShowable: "retry" },
+    { reason: "flush", says: /saving its changes/, shown: "retry", notShowable: "retry" },
+    {
+      reason: "dictation",
+      says: /dictation is still running/,
+      shown: "retry",
+      notShowable: "retry",
+    },
+    { reason: "unavailable", says: /still busy there/, shown: "retry", notShowable: "retry" },
+  ];
+
+  it.each(HOLDS)("words the $reason hold as the project being open elsewhere, and why", (hold) => {
+    const message = getProjectHeldElsewhereMessage("Alpha", hold.reason);
+    expect(message).toContain('"Alpha" is open in another window');
+    expect(message).toMatch(hold.says);
+    for (const folderWord of ["folder", "drive", "repository"]) {
+      expect(message.toLowerCase()).not.toContain(folderWord);
+    }
+    // A retry is only suggested where one can succeed.
+    expect(message.includes("Try again")).toBe(hold.shown === "retry");
+    expect(isPersistentHold(hold.reason)).toBe(hold.shown !== "retry");
+  });
+
+  it.each(HOLDS)("offers the $reason hold its one way forward", (hold) => {
+    expect(
+      getProjectHeldRecovery({
+        code: "PROJECT_HELD_ELSEWHERE",
+        reason: hold.reason,
+        showable: true,
+      })
+    ).toBe(hold.shown);
+    expect(
+      getProjectHeldRecovery({
+        code: "PROJECT_HELD_ELSEWHERE",
+        reason: hold.reason,
+        showable: false,
+      })
+    ).toBe(hold.notShowable);
+  });
+
+  it("keeps the retry when nothing says the hold lasts", () => {
+    expect(getProjectHeldRecovery(undefined)).toBe("retry");
   });
 });

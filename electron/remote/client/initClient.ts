@@ -482,7 +482,12 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         projectStore.getProjectById(projectId)?.name ??
         scratchStore.getScratchById(projectId)?.name ??
         projectId;
-      return releaseCachedOwner(otherOwnerOf(key, windowId), key, name)?.context.windowId ?? null;
+      // A window switching hosts can't yet be brought to a view another window
+      // keeps cached, so a hold here offers no way to show it there (#16724).
+      return (
+        releaseCachedOwner(otherOwnerOf(key, windowId), key, name, { showable: false })?.context
+          .windowId ?? null
+      );
     },
     redirectToLocalOwner(projectId, exceptWindowId) {
       const owner = otherOwnerOf(projectId, exceptWindowId);

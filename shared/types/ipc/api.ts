@@ -772,6 +772,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         focusIntent?: import("./project.js").ProjectFocusOnActivateIntent;
         trace?: import("./project.js").ProjectSwitchTrace;
         ignoreMemoryPressure?: boolean;
+        /** The person chose to go to the project in the window keeping it cached (#16724). */
+        showInOtherWindow?: boolean;
       }
     ): Promise<ProjectSwitchResult>;
     /**
@@ -840,6 +842,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       options?: {
         trace?: import("./project.js").ProjectSwitchTrace;
         ignoreMemoryPressure?: boolean;
+        /** The person chose to go to the project in the window keeping it cached (#16724). */
+        showInOtherWindow?: boolean;
       }
     ): Promise<ProjectSwitchResult>;
     getStats(projectId: string): Promise<ProjectStats>;

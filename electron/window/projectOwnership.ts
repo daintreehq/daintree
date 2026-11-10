@@ -8,6 +8,7 @@ import type {
   ProjectSwitchResult,
 } from "../../shared/types/ipc/project.js";
 import type { Project } from "../../shared/types/project.js";
+import type { CachedViewReleaseBlock } from "../../shared/types/appError.js";
 import type { BuiltInActionId } from "../../shared/types/actions.js";
 import { hasPendingActivation } from "./projectActivationClaims.js";
 import { isWindowOnRemoteHost, switchWindowToLocal } from "./windowHost.js";
@@ -126,13 +127,21 @@ export function findOtherProjectOwner(
  * Synchronous, and called in the same tick as the requester's claim, so the
  * project never has a live view in two windows. `workspaceKey` is the key the
  * owner's manager holds the view under (a host's view is host-scoped). A view
- * that can't be released (it backs a running assistant or an MCP request) is
- * an error: the other window is never switched to the project instead.
+ * that can't be released (it backs a running assistant, unsaved work or an MCP
+ * request) is an error naming that hold: the other window is never switched to
+ * the project instead, unless the person asked for exactly that.
+ *
+ * `showInOtherWindow` is that ask, from the error's own recovery (#16724): the
+ * cached owner is answered as the owner to bring forward, its view kept
+ * whether or not it is still held, since the person chose that window over
+ * this one. `showable` is false where this machine can't bring that window to
+ * the project, so the error doesn't offer it.
  */
 export function releaseCachedOwner(
   owner: ProjectOwner | null,
   workspaceKey: string,
-  projectName: string
+  projectName: string,
+  options: { showInOtherWindow?: boolean; showable?: boolean } = {}
 ): ProjectOwner | null {
   if (owner?.state !== "cached") return owner;
   // A window bringing its own cached view to the front is on its way to it:
@@ -140,6 +149,7 @@ export function releaseCachedOwner(
   if (hasPendingActivation(workspaceKey, owner.context.windowId)) {
     return { ...owner, state: "activating" };
   }
+  if (options.showInOtherWindow === true) return owner;
   if (owner.projectViewManager.releaseCachedView(workspaceKey)) return null;
   // Still coming back in the background there (#12320, #13932): an open the
   // person asked for outranks a restore nobody is looking at, as it does in
@@ -150,7 +160,18 @@ export function releaseCachedOwner(
   ) {
     return null;
   }
-  throw cachedViewBusy(projectName);
+  throw cachedViewBusy(projectName, releaseBlockOf(owner.projectViewManager, workspaceKey), {
+    showable: options.showable,
+  });
+}
+
+function releaseBlockOf(pvm: ProjectViewManager, workspaceKey: string): CachedViewReleaseBlock {
+  try {
+    return pvm.getCachedViewReleaseBlock(workspaceKey) ?? "unavailable";
+  } catch {
+    // A window tearing down can throw from the read; it names no hold.
+    return "unavailable";
+  }
 }
 
 function isBackgroundRestoring(pvm: ProjectViewManager, workspaceKey: string): boolean {

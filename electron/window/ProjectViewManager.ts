@@ -24,6 +24,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { freezeWebContents, unfreezeWebContents } from "../utils/webContentsLifecycle.js";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { AgentState } from "../../shared/types/agent.js";
+import type { CachedViewReleaseBlock } from "../../shared/types/appError.js";
 import * as PaintGateController from "./ProjectViewPaintGateController.js";
 import { performSwitch } from "./ProjectViewSwitchController.js";
 import { cleanupEntry, getUnboundOutgoingView } from "./ProjectViewLifecycleController.js";
@@ -1774,25 +1775,37 @@ export class ProjectViewManager {
    * would lose the renderer it targets.
    */
   canReleaseCachedView(projectId: string): boolean {
+    return this.getCachedViewReleaseBlock(projectId) === null;
+  }
+
+  /**
+   * What keeps this project's cached view here, or null when it can be
+   * released (#16724). The holds that last until the person deals with them
+   * in this window, an Assistant and unsaved work, are named ahead of the ones
+   * that clear on their own, so an Assistant mid-dispatch isn't reported as a
+   * request that will finish in a moment.
+   */
+  getCachedViewReleaseBlock(projectId: string): CachedViewReleaseBlock | null {
     const entry = this.views.get(projectId);
-    if (!entry || entry.state !== "cached") return false;
+    if (!entry || entry.state !== "cached") return "unavailable";
     const wc = entry.view.webContents;
-    if (wc.isDestroyed()) return false;
-    if (projectId === this.activeProjectId) return false;
-    if (projectId === this.getOutgoingBridgeProjectId()) return false;
+    if (wc.isDestroyed()) return "unavailable";
+    if (projectId === this.activeProjectId) return "unavailable";
+    if (projectId === this.getOutgoingBridgeProjectId()) return "unavailable";
+    // Unsaved work the view says nothing would bring back (#14095): moving the
+    // project to another window would destroy it, which a move never means.
+    if (isPanelRecoveryHeldReported(wc)) return "unsaved-work";
+    if (EvictionController.hasLiveAssistantBackend(this, projectId, entry)) return "assistant";
     // Unlike pressure eviction, a move the user asked for can wait: activity
     // that can't be read is treated as a dispatch in flight.
     const mcp = this.mcpActivityFor(projectId, wc);
-    if (mcp.dispatchLease || mcp.unknown) return false;
-    // Unsaved work the view says nothing would bring back (#14095): moving the
-    // project to another window would destroy it, which a move never means.
-    if (isPanelRecoveryHeldReported(wc)) return false;
+    if (mcp.dispatchLease || mcp.unknown) return "mcp";
     // Its unsaved edits are still being flushed on the cached edge (#15633).
-    if (isCachedViewFlushPending(wc)) return false;
+    if (isCachedViewFlushPending(wc)) return "flush";
     // A dictation running there, or its cleanup, would end with the view
     // (#14773). Another window asking for the project brings this one forward.
-    if (isDictationViewHeld(wc)) return false;
-    return !EvictionController.hasLiveAssistantBackend(this, projectId, entry);
+    if (isDictationViewHeld(wc)) return "dictation";
+    return null;
   }
 
   /**

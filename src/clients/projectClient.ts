@@ -203,6 +203,7 @@ export const projectClient = {
       focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent;
       trace?: ProjectSwitchTrace;
       ignoreMemoryPressure?: boolean;
+      showInOtherWindow?: boolean;
     }
   ): Promise<ProjectSwitchResult> => {
     invalidateCurrentCache();
@@ -327,7 +328,11 @@ export const projectClient = {
   reopen: (
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
-    options?: { trace?: ProjectSwitchTrace; ignoreMemoryPressure?: boolean }
+    options?: {
+      trace?: ProjectSwitchTrace;
+      ignoreMemoryPressure?: boolean;
+      showInOtherWindow?: boolean;
+    }
   ): Promise<ProjectSwitchResult> => {
     invalidateCurrentCache();
     return window.electron.project.reopen(projectId, outgoingState, options);

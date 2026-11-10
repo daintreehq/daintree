@@ -158,6 +158,10 @@ function createOpenDirDeps(
       getWindowRegistry()
         ?.getByWindowId(windowId)
         ?.services.projectViewManager?.releaseCachedView(projectId) === true,
+    cachedViewReleaseBlock: (projectId, windowId) =>
+      getWindowRegistry()
+        ?.getByWindowId(windowId)
+        ?.services.projectViewManager?.getCachedViewReleaseBlock(projectId) ?? null,
     admitColdOpen: ({ projectId, projectPath, initiatingWindowId }) =>
       confirmColdOpenAtMemoryPressure({
         projectId,

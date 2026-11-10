@@ -6,7 +6,8 @@ import type { RequiredPluginToolsError } from "./ipc/pluginAgentMcp.js";
  * the packaged-build sanitiser (unlike `context`, which is stripped). Keep
  * every member small and free of paths, secrets and user content.
  */
-export type AppErrorDetails = PluginHostError | RequiredPluginToolsError | HostSwitchOnScreenError;
+export type AppErrorDetails =
+  PluginHostError | RequiredPluginToolsError | HostSwitchOnScreenError | ProjectHeldElsewhereError;
 
 /**
  * A host switch that failed and is showing why on the window's own switch
@@ -15,6 +16,28 @@ export type AppErrorDetails = PluginHostError | RequiredPluginToolsError | HostS
 export interface HostSwitchOnScreenError {
   code: "HOST_SWITCH_ON_SCREEN";
   switchId: string;
+}
+
+/**
+ * Why another window's cached view of a project can't be let go so the project
+ * can open in the window asking for it (#16724). An Assistant running there, or
+ * unsaved work only that view holds, lasts until the person deals with it in
+ * that window; the rest clear on their own. `unavailable` is a view that isn't
+ * settled in the background, so it names no hold at all.
+ */
+export type CachedViewReleaseBlock =
+  "assistant" | "unsaved-work" | "mcp" | "flush" | "dictation" | "unavailable";
+
+/**
+ * A project another window keeps in its cache and can't release. `showable`
+ * says whether this machine can bring that window to the project when the
+ * person asks: not for a host's project, whose view that window keeps under
+ * its host.
+ */
+export interface ProjectHeldElsewhereError {
+  code: "PROJECT_HELD_ELSEWHERE";
+  reason: CachedViewReleaseBlock;
+  showable: boolean;
 }
 
 /**
@@ -42,6 +65,10 @@ export type AppErrorCode =
   | "GIT_NOT_INSTALLED"
   | "DUBIOUS_OWNERSHIP"
   | "PROJECT_OPEN_FAILED"
+  // Another window keeps the project in its cache and can't let it go, and is
+  // never switched to it on this window's behalf (#13291); why travels as
+  // details (#16724).
+  | "PROJECT_HELD_ELSEWHERE"
   | "CLIPBOARD_EMPTY"
   | "CLIPBOARD_INVALID"
   | "UNSUPPORTED"
