@@ -1280,7 +1280,7 @@ describe("FleetArmingRibbon", () => {
         useFleetArmingStore.getState().armIds(["t3", "t1", "t2"]);
         const target = {
           key: "host-a:remote-1",
-          hostId: "host-a" as never,
+          hostId: "host-a",
           hostName: "studio-01",
           terminalId: "remote-1",
           title: "remote",
@@ -1313,6 +1313,44 @@ describe("FleetArmingRibbon", () => {
 
         expect([...useFleetArmingStore.getState().armOrder]).toEqual(["t1", "x"]);
       });
+
+      const STALE_COUNT_ROWS: Array<[RegExp, PtyPanelData["agentState"]]> = [
+        [/All waiting — this worktree/, "waiting"],
+        [/All working — all worktrees/, "working"],
+        [/All in this worktree/, "waiting"],
+      ];
+
+      it.each(STALE_COUNT_ROWS)(
+        "re-reads the live count when %s is chosen after its rendered count went stale",
+        (label, state) => {
+          seed([makeAgent("t1", state), makeAgent("t2", state)]);
+          useFleetArmingStore.getState().armIds(["t2", "t1"]);
+          const target = {
+            key: "host-a:remote-1",
+            hostId: "host-a",
+            hostName: "studio-01",
+            terminalId: "remote-1",
+            title: "remote",
+          };
+          act(() => {
+            useFleetArmingStore.getState().armCrossHostTarget(target);
+          });
+          render(<FleetArmingRibbon />);
+
+          const row = findMenuItem(label);
+          expect(row.getAttribute("data-disabled")).toBeNull();
+          // The row was enabled when it rendered; the agents it matched go away
+          // before the click, in the same batch, so the row's handler is stale.
+          act(() => {
+            seed([]);
+            fireEvent.click(row);
+          });
+
+          const after = useFleetArmingStore.getState();
+          expect(after.armOrder).toEqual(["t2", "t1"]);
+          expect(after.crossHostTargets).toEqual([target]);
+        }
+      );
 
       it("leaves presets with a count of 1 or more enabled", () => {
         seed([makeAgent("t1", "working"), makeAgent("t2", "waiting")]);
