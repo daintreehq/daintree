@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
 import { FactSeparator } from "@/components/ui/FactSeparator";
+import { buildShortcutRows, findShortcutRow, type ShortcutRowWidening } from "./shortcutRows";
 
 const CHORD_WINDOW_STYLE: React.CSSProperties & Record<"--chord-window", string> = {
   "--chord-window": `${CHORD_TIMEOUT_MS}ms`,
@@ -86,6 +87,11 @@ export interface SettingsShortcutCaptureProps {
    * caller that cannot tolerate that asks for Unbind first.
    */
   blockConflicts?: boolean;
+  /**
+   * Ids of text outside the recorder that says what a save or removal does (the
+   * settings row's description), read with the recorder, Save and Remove.
+   */
+  describedBy?: string;
 }
 
 const MODIFIER_KEYS = ["Meta", "Control", "Alt", "Shift"];
@@ -121,6 +127,7 @@ export function SettingsShortcutCapture({
   recordingHint,
   heldHint,
   blockConflicts = false,
+  describedBy: outsideDescribedBy,
 }: SettingsShortcutCaptureProps) {
   // A consumer that mounts this in response to an explicit click (the compact
   // tray, the settings list's Edit) has no reason to ask for a second "Click to
@@ -395,78 +402,36 @@ export function SettingsShortcutCapture({
     onCancel();
   };
 
-  const handleUnbindConflict = async (conflict: {
-    actionId: string;
-    description?: string;
-    combo?: string;
-  }) => {
+  const handleUnbindConflict = async (conflict: { actionId: string; description?: string }) => {
     const { actionId } = conflict;
     setIsUnbinding(true);
 
     try {
       const currentOverride = keybindingService.getOverride(actionId);
-      const defaultCombo = keybindingService.getDefaultCombo(actionId);
-
-      let conflictingCombo: string | undefined;
-      let isOverrideConflict = false;
-      let newOverrideCombos: string[] | undefined;
-
-      if (currentOverride) {
-        // Platform-aware compare so a stored "Cmd+Shift+E" override is matched
-        // when the user captures "Ctrl+Shift+E" on Windows/Linux. (#7941)
-        const matchingOverride = currentOverride.find((combo) =>
-          combosFieldsEqual(combo, capturedCombo!)
-        );
-        if (matchingOverride) {
-          conflictingCombo = matchingOverride;
-          isOverrideConflict = true;
-          newOverrideCombos = currentOverride.filter(
-            (combo) => !combosFieldsEqual(combo, capturedCombo!)
-          );
-        }
-      }
-
-      if (!conflictingCombo && defaultCombo) {
-        if (combosFieldsEqual(defaultCombo, capturedCombo!)) {
-          conflictingCombo = defaultCombo;
-        }
-      }
-
-      // A plugin or second scoped registration isn't in the shipped defaults; the
-      // conflict itself carries the combo that clashed.
-      if (
-        !conflictingCombo &&
-        conflict.combo &&
-        combosFieldsEqual(conflict.combo, capturedCombo!)
-      ) {
-        conflictingCombo = conflict.combo;
-      }
-
-      if (isOverrideConflict) {
-        // Removing the last custom combo stores an empty binding rather than
-        // dropping the override: dropping it would bring back the default, which
-        // can be the very combo being freed, or another one the user never asked for.
-        const setResult = await actionService.dispatch(
-          "keybinding.setOverride",
-          { actionId, combo: newOverrideCombos ?? [] },
-          { source: "user" }
-        );
-        if (!setResult.ok) {
-          throw new Error(setResult.error?.message || "Failed to update keybinding");
-        }
-      } else if (conflictingCombo) {
-        const setResult = await actionService.dispatch(
-          "keybinding.setOverride",
-          { actionId, combo: [] },
-          { source: "user" }
-        );
-        if (!setResult.ok) {
-          throw new Error(setResult.error?.message || "Failed to update keybinding");
-        }
-      } else {
+      // An override is one key list for the whole action, so freeing this combo
+      // writes every key the action has without it: storing an empty list would
+      // also take a second default (Zoom in's Cmd+= beside Cmd+Shift+=), and
+      // dropping the override would bring back a default that may be this very
+      // combo. Platform-aware, so a stored "Cmd+Shift+E" is freed when the user
+      // captures "Ctrl+Shift+E" on Windows/Linux. (#7941)
+      const combos = keybindingService.getTriggerCombos(actionId);
+      const remaining = combos.filter((combo) => !combosFieldsEqual(combo, capturedCombo!));
+      if (remaining.length === combos.length) {
+        // Already freed elsewhere since the list was drawn; redraw it, and move
+        // focus on from the Unbind button that goes with it.
         logWarn("Could not identify conflicting combo");
-        setIsUnbinding(false);
+        setConflictRefreshKey((prev) => prev + 1);
+        setFocusRequest((n) => n + 1);
         return;
+      }
+
+      const setResult = await actionService.dispatch(
+        "keybinding.setOverride",
+        { actionId, combo: remaining },
+        { source: "user" }
+      );
+      if (!setResult.ok) {
+        throw new Error(setResult.error?.message || "Failed to update keybinding");
       }
 
       setConflictRefreshKey((prev) => prev + 1);
@@ -535,8 +500,25 @@ export function SettingsShortcutCapture({
 
   const conflictNames = conflicts.map((conflict) => conflict.description || conflict.actionId);
   const firstUnbindable = conflicts.find((conflict) => conflict.kind !== "shadowed");
+  // Unbind keeps the other action's remaining keys, and while that action is on
+  // its defaults they then apply in every scope it is registered in: a grid-only
+  // key left behind goes app-wide. Said before the click, beside the button.
+  const unbindWidening = (actionId: string): ShortcutRowWidening | undefined => {
+    if (!capturedCombo) return undefined;
+    const mac = isMac();
+    const rows = buildShortcutRows(
+      keybindingService
+        .getAllBindingsWithEffectiveCombos()
+        .filter((binding) => binding.actionId === actionId),
+      (id) => keybindingService.hasOverride(id),
+      mac
+    );
+    const row = findShortcutRow(rows, actionId, capturedCombo, mac);
+    if (!row || !combosFieldsEqual(row.key, capturedCombo, mac)) return undefined;
+    return row.widening && row.widening.keys.length > 0 ? row.widening : undefined;
+  };
   const describedBy =
-    [validationError ? validationId : null, hasConflicts ? conflictsId : null]
+    [outsideDescribedBy, validationError ? validationId : null, hasConflicts ? conflictsId : null]
       .filter(Boolean)
       .join(" ") || undefined;
 
@@ -576,6 +558,7 @@ export function SettingsShortcutCapture({
             <div
               ref={recorderRef}
               tabIndex={-1}
+              aria-describedby={outsideDescribedBy}
               data-testid="shortcut-capture-field"
               data-recording="true"
               className={cn(
@@ -691,8 +674,14 @@ export function SettingsShortcutCapture({
           <ul className="grid gap-1 pl-5">
             {conflicts.map((conflict, index) => {
               const name = conflictNames[index]!;
+              const widening =
+                conflict.kind === "shadowed" ? undefined : unbindWidening(conflict.actionId);
+              const wideningId = `${conflictsId}-widening-${index}`;
               return (
-                <li key={conflict.actionId} className="flex items-center gap-2 min-h-7 text-sm">
+                <li
+                  key={conflict.actionId}
+                  className="flex flex-wrap items-center gap-x-2 min-h-7 text-sm"
+                >
                   <span className="min-w-0 truncate text-text-primary">{name}</span>
                   {conflict.combo && (
                     <KbdChord
@@ -723,9 +712,22 @@ export function SettingsShortcutCapture({
                       onClick={() => handleUnbindConflict(conflict)}
                       disabled={isUnbinding}
                       aria-label={`Unbind ${name}`}
+                      aria-describedby={widening ? wideningId : undefined}
                     >
                       Unbind
                     </Button>
+                  )}
+                  {widening && (
+                    <span id={wideningId} className="basis-full pb-1 text-xs text-text-secondary">
+                      After unbinding,{" "}
+                      {widening.keys.map((key, keyIndex) => (
+                        <span key={key}>
+                          {keyIndex > 0 && (keyIndex === widening.keys.length - 1 ? " and " : ", ")}
+                          <KbdChord shortcut={key} density="bare" foreground="primary" />
+                        </span>
+                      ))}{" "}
+                      {widening.keys.length > 1 ? "apply" : "applies"} {widening.where}
+                    </span>
                   )}
                 </li>
               );
@@ -763,7 +765,13 @@ export function SettingsShortcutCapture({
         {/* Removes the binding in force, never just the draft, so it is only offered
             when there is one to remove and says so in both hosts. */}
         {currentCombo !== "" && (
-          <Button type="button" variant="ghost" size={compact ? "xs" : "sm"} onClick={handleClear}>
+          <Button
+            type="button"
+            variant="ghost"
+            size={compact ? "xs" : "sm"}
+            onClick={handleClear}
+            aria-describedby={outsideDescribedBy}
+          >
             {compact ? "Remove" : "Remove shortcut"}
           </Button>
         )}
