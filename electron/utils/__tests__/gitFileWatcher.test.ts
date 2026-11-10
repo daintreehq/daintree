@@ -414,6 +414,27 @@ describe("GitFileWatcher", () => {
       refsHeads?.("rename", "feature.lock");
       await vi.advanceTimersByTimeAsync(100);
       expect(onChange).toHaveBeenCalledTimes(1);
+
+      // A main-worktree commit appends to the shared reflog: the signal a
+      // sibling's divergence against the main worktree's branch relies on.
+      callbackFor(pathJoin(commonDir, "logs"))?.("change", "HEAD");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onChange).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the lock twin of a branch that happens to be named packed-refs", async () => {
+      const onChange = vi.fn();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "packed-refs",
+        debounceMs: 100,
+        onChange,
+      });
+      await expect(gitWatcher.start()).resolves.toBe(true);
+
+      callbackFor(pathJoin(gitDir, "refs", "heads"))?.("rename", "packed-refs.lock");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onChange).toHaveBeenCalledTimes(1);
     });
   });
 

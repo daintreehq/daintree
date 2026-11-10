@@ -338,6 +338,8 @@ export class GitFileWatcher {
   private knownRelevantPaths = new Set<string>();
   /** Directory holding `.git/config` — always the common dir. */
   private gitConfigDir: string | null = null;
+  /** Directory holding the shared `packed-refs` — always the common dir. */
+  private packedRefsDir: string | null = null;
   private readonly onWatcherFailed: (() => void) | undefined;
   private readonly onInotifyLimitReached: ((limit: InotifyLimit) => void) | undefined;
   private readonly onWorktreeWatcherReady: (() => void) | undefined;
@@ -416,6 +418,7 @@ export class GitFileWatcher {
       const headPath = pathJoin(gitDir, "HEAD");
 
       this.watchFile(headPath);
+      this.packedRefsDir = commonDir;
       this.watchFile(pathJoin(commonDir, PACKED_REFS_FILE_NAME));
       this.watchFile(pathJoin(commonDir, "logs", "HEAD"));
       // Watch .git/config so `git push -u` / `git branch --set-upstream-to`
@@ -886,7 +889,7 @@ export class GitFileWatcher {
     try {
       const trackedFiles = new Set<string>([fileName]);
       const watcher = fsWatch(watchDir, { persistent: false }, (_eventType, changedFileName) => {
-        if (this.shouldHandleDirectoryEvent(changedFileName, trackedFiles)) {
+        if (this.shouldHandleDirectoryEvent(watchDir, changedFileName, trackedFiles)) {
           if (this.isGitConfigEvent(watchDir, changedFileName)) {
             this.gitConfigChangePending = true;
           }
@@ -910,6 +913,7 @@ export class GitFileWatcher {
   }
 
   private shouldHandleDirectoryEvent(
+    watchDir: string,
     changedFileName: string | Buffer | null,
     trackedFiles: Set<string>
   ): boolean {
@@ -917,9 +921,16 @@ export class GitFileWatcher {
       return true;
     }
 
+    // Every ref transaction takes `packed-refs.lock`, even a commit that only
+    // writes its own loose ref, and every worktree of the repository watches
+    // the common dir (#16678). A real rewrite renames the lock onto
+    // `packed-refs`, so the final name still reports it.
+    const inPackedRefsDir =
+      this.packedRefsDir !== null && pathNormalize(watchDir) === pathNormalize(this.packedRefsDir);
     const changedName = changedFileName.toString().replaceAll("\\", "/");
     for (const trackedFile of trackedFiles) {
-      if (this.matchesTrackedFile(changedName, trackedFile)) {
+      const matchLock = !(inPackedRefsDir && trackedFile === PACKED_REFS_FILE_NAME);
+      if (this.matchesTrackedFile(changedName, trackedFile, matchLock)) {
         return true;
       }
     }
@@ -945,24 +956,15 @@ export class GitFileWatcher {
     return this.matchesTrackedFile(changedName, GIT_CONFIG_FILE_NAME);
   }
 
-  private matchesTrackedFile(changedName: string, trackedFile: string): boolean {
-    // Every ref transaction takes `packed-refs.lock`, even a commit that only
-    // writes its own loose ref, and every worktree of the repository watches
-    // the common dir it lives in (#16678). A real rewrite renames the lock onto
-    // `packed-refs`, so the final name still reports it.
-    const lockName = trackedFile === PACKED_REFS_FILE_NAME ? null : `${trackedFile}.lock`;
-    if (changedName === trackedFile || changedName === lockName) {
+  private matchesTrackedFile(changedName: string, trackedFile: string, matchLock = true): boolean {
+    if (changedName === trackedFile || changedName.endsWith(`/${trackedFile}`)) {
       return true;
     }
-
-    if (
-      changedName.endsWith(`/${trackedFile}`) ||
-      (lockName !== null && changedName.endsWith(`/${lockName}`))
-    ) {
-      return true;
+    if (!matchLock) {
+      return false;
     }
-
-    return false;
+    const lockName = `${trackedFile}.lock`;
+    return changedName === lockName || changedName.endsWith(`/${lockName}`);
   }
 
   /** Handle git-internal file changes (HEAD, refs, reflog). Fast debounce. */
