@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
@@ -159,15 +159,33 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
     [overrides]
   );
 
+  // The palette is opened through paletteStore and this component stays mounted
+  // between openings, so neither hook's own open() runs. Call it here: it clears
+  // the query and drops the follow anchor. setQuery("") + setSelectedIndex(0)
+  // would anchor results[0] of the still-filtered list, and the hook would then
+  // chase that row to its place in the full list.
+  const wasOpenRef = useRef(false);
+  const openLoggerPalette = loggerPalette.open;
+  const openLevelPalette = levelPalette.open;
+  useEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      wasOpenRef.current = true;
+      openLoggerPalette();
+      openLevelPalette();
+    }
+    if (!isOpen) {
+      wasOpenRef.current = false;
+    }
+  }, [isOpen, openLoggerPalette, openLevelPalette]);
+
   const confirmLogger = useCallback(
     (selected: LoggerItem | undefined) => {
       if (!selected) return;
       setPendingLogger(selected.name);
       setStep("level");
-      levelPalette.setQuery("");
-      levelPalette.setSelectedIndex(0);
+      openLevelPalette();
     },
-    [levelPalette]
+    [openLevelPalette]
   );
 
   const handleLoggerConfirm = useCallback(() => {
