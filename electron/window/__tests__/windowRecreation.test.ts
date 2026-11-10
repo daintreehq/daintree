@@ -400,7 +400,7 @@ describe("OOM window recreation (#15564)", () => {
     expect(lastWritten()).toEqual([{ projectId: "proj-b" }]);
   });
 
-  it("saves a picker once setup finds the captured workspace gone", async () => {
+  it("lets go of the captured workspace once setup finds it gone", async () => {
     const win = fleet.open({ windowId: 1, activeProjectId: "proj-gone" });
     const { createWindow, crashOom } = wireWindow(fleet, win);
 
@@ -409,9 +409,10 @@ describe("OOM window recreation (#15564)", () => {
 
     expect(createWindow).toHaveBeenCalledWith("proj-gone", expect.anything());
     // The replacement's setup bound nothing, and the record it carried is let
-    // go, so neither the save nor a later one names the missing workspace.
-    expect(lastWritten()).toEqual([{ projectId: null }]);
-    expect(buildOpenWindowRecords(fleet.registry)).toEqual([{ projectId: null }]);
+    // go, so neither the save nor a later one names the missing workspace. The
+    // picker it shows instead is no record at all (#16740).
+    expect(lastWritten()).toEqual([]);
+    expect(buildOpenWindowRecords(fleet.registry)).toEqual([]);
   });
 
   it("keeps naming the captured workspace when the replacement's setup throws", async () => {
@@ -445,6 +446,6 @@ describe("OOM window recreation (#15564)", () => {
     expect(buildOpenWindowRecords(fleet.registry)).toEqual([{ projectId: "proj-x" }]);
     replacement!.activeProjectId = null;
     replacement!.views = [];
-    expect(buildOpenWindowRecords(fleet.registry)).toEqual([{ projectId: null }]);
+    expect(buildOpenWindowRecords(fleet.registry)).toEqual([]);
   });
 });

@@ -5,6 +5,7 @@ import {
   normalizeWindowRecords,
   resolvePrimaryRestoreProjectId,
   restoreWindowFleet,
+  restoredWindowRecord,
   windowRestoreArgs,
   type CreateWindowResult,
   type RestoreWindowFleetDeps,
@@ -95,6 +96,18 @@ describe("resolvePrimaryRestoreProjectId", () => {
   });
 });
 
+describe("restoredWindowRecord (#16740)", () => {
+  it.each<[string, OpenWindowRecord]>([
+    ["a local workspace with its background list", { projectId: "a", backgroundProjectIds: ["b"] }],
+    ["a host's workspace", { projectId: `studio-01:${"a".repeat(64)}` }],
+    ["a picker carrying background projects", { projectId: null, backgroundProjectIds: ["b"] }],
+    ["a bare picker", { projectId: null }],
+  ])("reads back the record the window was restored from: %s", (_label, saved) => {
+    const { projectId, options } = windowRestoreArgs(saved);
+    expect(restoredWindowRecord(projectId, options)).toEqual(saved);
+  });
+});
+
 describe("windowRestoreArgs (#15564)", () => {
   it("opens a local workspace by its id, carrying its background list", () => {
     expect(windowRestoreArgs({ projectId: "a", backgroundProjectIds: ["b"] })).toEqual({
@@ -124,7 +137,7 @@ describe("normalizeWindowRecords (#12596)", () => {
   });
 
   it("returns a manifest with no collisions untouched", () => {
-    const records = [withBackground("a", ["x"]), record("b"), record(null)];
+    const records = [withBackground("a", ["x"]), record("b")];
     const normalized = normalizeWindowRecords(records);
     expect(normalized).toEqual(records);
     expect(normalized[0]).toBe(records[0]);
@@ -137,11 +150,30 @@ describe("normalizeWindowRecords (#12596)", () => {
     ]);
   });
 
-  it("never collapses picker windows into each other", () => {
-    expect(normalizeWindowRecords([record(null), record(null)])).toEqual([
-      record(null),
-      record(null),
-    ]);
+  // A picker holds nothing to restore (#16740).
+  it("drops picker windows, handing their background projects to the first window that stays", () => {
+    expect(
+      normalizeWindowRecords([
+        withBackground(null, ["x", "b"]),
+        record("a"),
+        record(null),
+        record("b"),
+      ])
+    ).toEqual([withBackground("a", ["x"]), record("b")]);
+  });
+
+  it("keeps one picker for background projects no window with a workspace can take", () => {
+    expect(
+      normalizeWindowRecords([
+        record(null),
+        withBackground(null, ["x"]),
+        withBackground(null, ["y"]),
+      ])
+    ).toEqual([withBackground(null, ["x", "y"])]);
+  });
+
+  it("leaves nothing of a manifest of pickers alone", () => {
+    expect(normalizeWindowRecords([record(null), record(null)])).toEqual([]);
   });
 
   it("lets a project one window shows outrank another window's warm copy of it", () => {
@@ -294,12 +326,12 @@ describe("restoreWindowFleet", () => {
     // The primary window is usable before the rest are created; a saved
     // project the user opened there in the meantime must not get a second view.
     h = harness({
-      records: [record("a"), record("b"), record(null), record("c")],
+      records: [record("a"), record("b"), record("c")],
       hadManifest: true,
       isProjectOwned: (projectId) => projectId === "b",
     });
     await restoreWindowFleet(h.deps);
-    expect(h.openedProjects()).toEqual(["a", undefined, "c"]);
+    expect(h.openedProjects()).toEqual(["a", "c"]);
     expect(h.persisted()).toBe(true);
   });
 
@@ -595,6 +627,56 @@ describe("restoreWindowFleet", () => {
     h = harness({ records: [], hadManifest: false, fallbackProjectId: "last-active" });
     await restoreWindowFleet(h.deps);
     expect(h.openedProjects()).toEqual(["last-active"]);
+  });
+
+  // A picker holds nothing to restore, and one saved came back on every launch
+  // (#16740).
+  describe("picker windows in the saved set", () => {
+    it("restores the project window and none of the pickers saved beside it", async () => {
+      h = harness({
+        records: [record(null), record("a"), record(null), record(null)],
+        hadManifest: true,
+      });
+      await restoreWindowFleet(h.deps);
+      expect(h.openedProjects()).toEqual(["a"]);
+      expect(h.persisted()).toBe(true);
+    });
+
+    it("restores a window that was on a host's project and waits on its picker", async () => {
+      const key = `studio-01:${"a".repeat(64)}`;
+      h = harness({ records: [record(null), record(key)], hadManifest: true });
+      await restoreWindowFleet(h.deps);
+      expect(h.createWindow).toHaveBeenCalledTimes(1);
+      expect(h.createWindow.mock.calls[0]).toEqual([
+        undefined,
+        expect.objectContaining({ remoteWorkspaceKey: key }),
+      ]);
+    });
+
+    it("opens the last-active project once when the only picker's background list was stripped", async () => {
+      // With session restore off, the launch hands over records without their
+      // background lists: a picker that carried some is empty again.
+      h = harness({ records: [record(null)], hadManifest: false, fallbackProjectId: "last" });
+      await restoreWindowFleet(h.deps);
+      expect(h.openedProjects()).toEqual(["last"]);
+    });
+
+    it("opens one picker carrying the background projects no window with a workspace can take", async () => {
+      h = harness({
+        records: [
+          { projectId: null, backgroundProjectIds: ["x"] },
+          { projectId: null, backgroundProjectIds: ["y"] },
+        ],
+        hadManifest: false,
+        fallbackProjectId: "last",
+      });
+      await restoreWindowFleet(h.deps);
+      expect(h.createWindow).toHaveBeenCalledTimes(1);
+      expect(h.createWindow.mock.calls[0]).toEqual([
+        undefined,
+        expect.objectContaining({ backgroundProjectIds: ["x", "y"] }),
+      ]);
+    });
   });
 
   describe("a background window that fails", () => {
