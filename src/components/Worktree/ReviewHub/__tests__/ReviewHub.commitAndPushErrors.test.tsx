@@ -545,11 +545,14 @@ describe("ReviewHub", () => {
         { chord: "Ctrl+Enter", init: { ctrlKey: true } },
       ])("$chord commits and never opens the cursor row's diff", async ({ init }) => {
         const listbox = await renderOnFileList();
+        const reachedTarget = vi.fn();
+        listbox.addEventListener("keydown", reachedTarget);
 
         const notConsumed = fireEvent.keyDown(listbox, { key: "Enter", ...init });
 
         // Handled, so neither the browser nor a later listener sees it again.
         expect(notConsumed).toBe(false);
+        expect(reachedTarget).not.toHaveBeenCalled();
         await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
         expect(commitMock.mock.calls[0]?.[1]).toBe("feat: from the list");
         expect(openDiffCount()).toBe(0);
