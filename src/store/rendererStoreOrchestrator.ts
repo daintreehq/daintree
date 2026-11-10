@@ -11,6 +11,7 @@ import { subscribeFleetDraftHoldRelease } from "./fleetDraftHoldRelease";
 import { subscribeFleetFailureAutoClear } from "./fleetFailureStore";
 import { subscribeFleetRunWatcher } from "./fleetRunStore";
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
+import { useLastComposerSendStore } from "./lastComposerSendStore";
 import { subscribeFleetBroadcastResult } from "@/components/Fleet/fleetRawInputBroadcast";
 import { getCachedStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
@@ -473,6 +474,7 @@ export function initStoreOrchestrator(): () => void {
 
           for (const removedId of removedIds) {
             useTerminalInputStore.getState().clearTerminalState(removedId);
+            useLastComposerSendStore.getState().clear(removedId);
             useConsoleCaptureStore.getState().removePane(removedId);
             // Prune the panel's resource-metrics entry. The PTY `onExit` path
             // (lifecycle.ts) already calls this for terminals that exit cleanly,

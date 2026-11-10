@@ -212,6 +212,17 @@ export function useTerminalMenuCommands({
             { source: sourceRef.current }
           );
           break;
+        case "resend-last-message":
+          // Whether it can go is read for this panel, not whichever one has focus.
+          void actionService.dispatch(
+            "terminal.resendLastMessage",
+            { terminalId },
+            {
+              source: sourceRef.current,
+              contextOverride: { ...actionService.getContext(), focusedTerminalId: terminalId },
+            }
+          );
+          break;
         case "move-to-dock":
           void actionService.dispatch(
             "terminal.moveToDock",

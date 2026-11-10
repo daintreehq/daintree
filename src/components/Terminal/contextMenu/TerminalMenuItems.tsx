@@ -16,6 +16,7 @@ import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks/useKeybinding";
 import {
   ContextMenuCheckboxItem,
   ContextMenuItem,
+  ContextMenuMeta,
   ContextMenuRadioGroup,
   ContextMenuRadioItem,
   ContextMenuSeparator,
@@ -81,6 +82,7 @@ export function TerminalSelectionMenuItems({
   selectionFilePath,
   onViewSelectedFile,
   separatorAfter = true,
+  resend,
   onSendToAgent,
   onOpenInFileBrowser,
   onAction,
@@ -88,6 +90,8 @@ export function TerminalSelectionMenuItems({
   hasSelection: boolean;
   /** Input is locked, so `terminal.paste` would do nothing. */
   pasteLocked?: boolean;
+  /** Resend last message (#16746), with why it can't go now; absent where it isn't offered. */
+  resend?: { unavailableReason: string | undefined };
   hoveredUrl: string | null;
   hoveredUrlPluginName: string | null;
   hoveredFilePath: string | null;
@@ -134,6 +138,24 @@ export function TerminalSelectionMenuItems({
         Paste
         <ContextMenuShortcut shortcut={clipboardCombos.paste} />
       </ContextMenuItem>
+      {resend && (
+        <ContextMenuItem
+          disabled={resend.unavailableReason !== undefined}
+          onSelect={() => onAction("resend-last-message")}
+          // The reason beside it is decoration, so it is part of the name.
+          aria-label={
+            resend.unavailableReason === undefined
+              ? undefined
+              : `Resend last message, ${resend.unavailableReason}`
+          }
+        >
+          <RefreshCw className={ICON_CLASS} aria-hidden="true" />
+          Resend last message
+          {resend.unavailableReason !== undefined && (
+            <ContextMenuMeta>{resend.unavailableReason}</ContextMenuMeta>
+          )}
+        </ContextMenuItem>
+      )}
       {onSendToAgent && (
         <ContextMenuItem
           disabled={!hasSelection}
