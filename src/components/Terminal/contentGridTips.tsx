@@ -18,7 +18,9 @@ const ROTATING_TIP_SUBSET_SIZE = 4;
 // Tips the canvas home never rotates in. Most teach a control the same screen
 // already prints: the palette's ⌘N, the New terminal chip, the agent chips with
 // their chords, and the recipe band's own Create and Manage. One acts on the
-// focused terminal, which a grid with no panels does not have.
+// focused terminal, which a grid with no panels does not have. And ⌘⇧A
+// ("switch agents") opens the same quick switcher the ⌘P tip teaches, so here
+// it was a second key for one list, under a name that list does not carry.
 const CANVAS_HOME_EXCLUDED_TIPS = new Set([
   "panel-palette",
   "new-terminal",
@@ -26,6 +28,7 @@ const CANVAS_HOME_EXCLUDED_TIPS = new Set([
   "launch-gemini",
   "recipes",
   "context-injection",
+  "agent-switcher",
 ]);
 
 export interface TipEntry {
@@ -272,7 +275,7 @@ export function RotatingTip() {
       // it entirely. Exactly the trap `.lessons/11180.md` documents for the
       // sections above. The marker class snaps it to rest with the sections
       // around it under reduced motion, so the stagger stays one piece.
-      <p className="launcher-section-enter px-3 text-xs text-text-secondary motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]">
+      <p className="launcher-section-enter ml-px px-3 text-xs text-text-secondary motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]">
         Tip: <LiveTipMessage tip={tip} />
         {tip.actionId && tip.actionLabel && (
           <>
@@ -312,7 +315,7 @@ export function RotatingTip() {
   // first paint (#7671). `invisible` keeps the box in layout flow without
   // showing skeleton noise — the tip is sub-Doherty so a flash isn't needed.
   return (
-    <p className="invisible px-3 text-xs" aria-hidden="true">
+    <p className="invisible ml-px px-3 text-xs" aria-hidden="true">
       &nbsp;
     </p>
   );

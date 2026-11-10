@@ -1,5 +1,6 @@
 import { useRef, useCallback } from "react";
 import { RecipeRunnerItem } from "./RecipeRunnerItem";
+import { columnCentre, moveToAdjacentRow } from "../spatialRows";
 import type { TerminalRecipe } from "@/types";
 
 interface RecipeRunnerGridProps {
@@ -16,11 +17,10 @@ interface RecipeRunnerGridProps {
   setFocusedIndex: (i: number) => void;
 }
 
-// Arrow keys follow the grid as it is drawn. Left/Right walk reading order.
-// Up/Down are spatial: they land on the card in the next rendered row that sits
-// under a remembered column line, so a card spanning the row (the odd last card
-// at two columns) is reachable by Down from either card above it, and Up from it
-// returns to the column the user came down. A move off the top or bottom stays.
+// Arrow keys follow the grid as it is drawn. Left/Right walk reading order;
+// Up/Down are spatial (`spatialRows`), so a card spanning the row (the odd last
+// card at two columns) is reachable by Down from either card above it, and Up
+// from it returns to the column the user came down.
 function moveHorizontal(current: number, total: number, key: string): number {
   switch (key) {
     case "ArrowRight":
@@ -34,34 +34,6 @@ function moveHorizontal(current: number, total: number, key: string): number {
     default:
       return current;
   }
-}
-
-function moveVertical(
-  buttons: Array<HTMLButtonElement | null>,
-  current: number,
-  direction: 1 | -1,
-  columnX: number
-): number {
-  const origin = buttons[current];
-  if (!origin) return current;
-  const rows = [...new Set(buttons.map((b) => b?.offsetTop).filter((t) => t !== undefined))].sort(
-    (a, b) => a - b
-  );
-  const targetRow = rows[rows.indexOf(origin.offsetTop) + direction];
-  if (targetRow === undefined) return current;
-  let best = current;
-  let bestDistance = Infinity;
-  buttons.forEach((button, index) => {
-    if (!button || button.offsetTop !== targetRow) return;
-    const left = button.offsetLeft;
-    const right = left + button.offsetWidth;
-    const distance = columnX < left ? left - columnX : columnX > right ? columnX - right : 0;
-    if (distance < bestDistance) {
-      best = index;
-      bestDistance = distance;
-    }
-  });
-  return best;
 }
 
 const NAVIGATION_KEYS = new Set(["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp", "Home", "End"]);
@@ -92,8 +64,10 @@ export function RecipeRunnerGrid({
   const gridCols =
     recipes.length === 1
       ? "grid-cols-1"
-      : recipes.length === 2
-        ? "grid-cols-2 @max-[26rem]/launcher:grid-cols-1"
+      : recipes.length === 2 || recipes.length === 4
+        ? // Four as a 2×2 block: at three columns the fourth card sat alone on
+          // a second row beside two empty cells.
+          "grid-cols-2 @max-[26rem]/launcher:grid-cols-1"
         : // At two columns an odd last card spans the row, the same call the
           // lone-recipe case makes, instead of sitting half-width beside a hole.
           "grid-cols-3 @max-[34rem]/launcher:grid-cols-2 @max-[34rem]/launcher:[&>:last-child:nth-child(odd)]:col-span-full @max-[26rem]/launcher:grid-cols-1";
@@ -130,11 +104,12 @@ export function RecipeRunnerGrid({
         columnRunRef.current?.at === index
           ? columnRunRef.current.x
           : origin
-            ? origin.offsetLeft + origin.offsetWidth / 2
+            ? columnCentre(origin)
             : 0;
-      next = moveVertical(buttons, index, e.key === "ArrowDown" ? 1 : -1, x);
+      next = moveToAdjacentRow(buttons, index, e.key === "ArrowDown" ? 1 : -1, x);
       columnRunRef.current = { x, at: next };
     } else {
+      columnRunRef.current = null;
       next = moveHorizontal(index, focusableCount, e.key);
     }
     if (next === index) return;

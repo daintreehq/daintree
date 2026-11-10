@@ -15,6 +15,7 @@ import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { isToolbarButtonVisible } from "@/components/Layout/toolbarButtonMetadata";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import type { ActionId } from "@shared/types/actions";
+import { columnCentre, moveToAdjacentRow } from "./spatialRows";
 
 interface QuickActionProps {
   icon: React.ReactNode;
@@ -275,6 +276,8 @@ export function LauncherQuickActions() {
   ];
 
   const activeChip = Math.min(activeChipRaw, Math.max(0, chips.length - 1));
+  // The column line a run of Up/Down presses keeps to, as in the recipe grid.
+  const columnRunRef = useRef<{ x: number; at: number } | null>(null);
 
   const moveChipFocus = (next: number) => {
     setActiveChip(next);
@@ -287,10 +290,31 @@ export function LauncherQuickActions() {
     // Declared without an initializer: every branch below either assigns or
     // returns, so a default would be dead.
     let next: number;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (index + 1) % chips.length;
-    else if (e.key === "ArrowLeft" || e.key === "ArrowUp")
-      next = (index - 1 + chips.length) % chips.length;
-    else if (e.key === "Home") next = 0;
+    // Any move but Up/Down ends a column run, so the next vertical press
+    // starts from the chip it is on.
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") columnRunRef.current = null;
+    if (e.key === "ArrowRight") next = (index + 1) % chips.length;
+    else if (e.key === "ArrowLeft") next = (index - 1 + chips.length) % chips.length;
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      // The chips wrap, so Down means the chip drawn below, not the next one
+      // in reading order. On a single row there is nothing below, and Down and
+      // Up keep the toolbar pattern's linear step.
+      const buttons = chipRefs.current.slice(0, chips.length);
+      const direction = e.key === "ArrowDown" ? 1 : -1;
+      if (new Set(buttons.map((button) => button?.offsetTop)).size <= 1) {
+        next = (index + direction + chips.length) % chips.length;
+      } else {
+        const origin = buttons[index];
+        const x =
+          columnRunRef.current?.at === index
+            ? columnRunRef.current.x
+            : origin
+              ? columnCentre(origin)
+              : 0;
+        next = moveToAdjacentRow(buttons, index, direction, x);
+        columnRunRef.current = { x, at: next };
+      }
+    } else if (e.key === "Home") next = 0;
     else if (e.key === "End") next = chips.length - 1;
     else return;
     e.preventDefault();
@@ -308,7 +332,9 @@ export function LauncherQuickActions() {
   };
 
   return (
-    <div className="flex w-full flex-col items-center gap-2.5">
+    // `gap-3` under the anchor against `gap-2` between chip rows, so the palette
+    // reads as its own tier rather than row zero of the chip grid.
+    <div className="flex w-full flex-col items-center gap-3">
       {/* The palette comes FIRST. It is the only control here that reaches
           every agent, panel kind and resumable session, and it is the one whose
           position must not move — putting it above an uncapped, user-curated
@@ -331,21 +357,37 @@ export function LauncherQuickActions() {
         // them on a narrow canvas, none matching anything else on the surface.
         // Left-aligned, the group reads as one block under the anchor and the
         // rows stay put as chips are pinned and unpinned.
-        className="flex w-full flex-wrap items-center justify-start gap-2"
+        //
+        // Agents and the two tools wrap as separate runs: appended to the agent
+        // wrap, New terminal and Browse files landed wherever the agents' widths
+        // left them (after Claude with one pin, after Qwen Code with ten, split
+        // across two rows with three), so the always-present tools never had a
+        // place. They now always open their own row at the rail. One toolbar,
+        // one roving index across both runs.
+        className="flex w-full flex-col gap-2"
       >
-        {chips.map((chip, index) => (
-          <QuickAction
-            key={chip.key}
-            icon={chip.icon}
-            label={chip.label}
-            actionId={chip.actionId}
-            onClick={chip.onClick}
-            tabIndex={index === activeChip ? 0 : -1}
-            buttonRef={setChipRef(index)}
-            onFocus={() => setActiveChip(index)}
-            onKeyDown={(e) => handleChipKeyDown(e, index)}
-          />
-        ))}
+        {[chips.slice(0, agents.length), chips.slice(agents.length)].map((run, runIndex) =>
+          run.length === 0 ? null : (
+            <div key={runIndex} className="flex w-full flex-wrap items-center justify-start gap-2">
+              {run.map((chip, offset) => {
+                const index = runIndex === 0 ? offset : agents.length + offset;
+                return (
+                  <QuickAction
+                    key={chip.key}
+                    icon={chip.icon}
+                    label={chip.label}
+                    actionId={chip.actionId}
+                    onClick={chip.onClick}
+                    tabIndex={index === activeChip ? 0 : -1}
+                    buttonRef={setChipRef(index)}
+                    onFocus={() => setActiveChip(index)}
+                    onKeyDown={(e) => handleChipKeyDown(e, index)}
+                  />
+                );
+              })}
+            </div>
+          )
+        )}
       </div>
     </div>
   );

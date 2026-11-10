@@ -128,20 +128,19 @@ export function RecipeRunnerItem({
                   "group flex-col items-start gap-1.5 contrast-more:border-text-secondary group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)] contrast-more:group-focus-within/recipes:aria-selected:border-text-primary forced-colors:group-focus-within/recipes:aria-selected:outline-solid forced-colors:group-focus-within/recipes:aria-selected:outline-2 forced-colors:group-focus-within/recipes:aria-selected:outline-[color:Highlight] forced-colors:group-focus-within/recipes:aria-selected:-outline-offset-2"
                 )}
               >
-                <div className="flex items-center gap-2 w-full">
-                  <Play
-                    className={cn(
-                      "h-3.5 w-3.5 text-text-secondary transition-colors shrink-0",
-                      !disabled && "group-hover:text-text-primary"
-                    )}
-                    aria-hidden
-                  />
+                <div className="flex items-start gap-2 w-full">
+                  <PlayGlyph disabled={disabled} />
                   <span
                     className={cn(
                       // Regular weight: the card frame already gives a recipe its
                       // presence, and at medium the titles out-shouted the agent
                       // chips above them, which rank higher.
-                      "flex-1 text-sm truncate",
+                      //
+                      // Two lines before it clips: a third of the measure left a
+                      // name about 18 characters, and the name is what a recipe is
+                      // chosen by. Cards in a row stretch together, so a row only
+                      // grows when one of its names needs the second line.
+                      "min-w-0 flex-1 text-sm line-clamp-2 break-words",
                       recipe.shadowedBy ? "text-text-secondary" : "text-text-primary"
                     )}
                   >
@@ -155,12 +154,12 @@ export function RecipeRunnerItem({
                     // card the one that does nothing. The state was also
                     // `aria-hidden`, so it existed for sighted users only.
                     <>
-                      <Pin className="h-3 w-3 text-text-secondary shrink-0" aria-hidden />
+                      <Pin className="mt-1 h-3 w-3 text-text-secondary shrink-0" aria-hidden />
                       <span className="sr-only">Pinned</span>
                     </>
                   )}
                 </div>
-                <span className="flex items-center gap-1.5 w-full min-w-0 pl-5.5 text-xs text-text-secondary">
+                <span className="flex items-center gap-1.5 w-full min-w-0 pl-6 text-xs text-text-secondary">
                   <RecipeMeta
                     recipe={recipe}
                     scopeLabel={showScope ? scopeLabel : null}
@@ -233,13 +232,7 @@ export function RecipeRunnerItem({
                 "rounded-[var(--radius-md)] contrast-more:border-text-secondary group w-full flex-wrap items-center gap-x-2 gap-y-0.5 focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)] contrast-more:group-focus-within/recipes:aria-selected:border-text-primary forced-colors:group-focus-within/recipes:aria-selected:outline-solid forced-colors:group-focus-within/recipes:aria-selected:outline-2 forced-colors:group-focus-within/recipes:aria-selected:outline-[color:Highlight] forced-colors:group-focus-within/recipes:aria-selected:-outline-offset-2"
               )}
             >
-              <Play
-                className={cn(
-                  "h-3.5 w-3.5 text-text-secondary transition-colors shrink-0",
-                  !disabled && "group-hover:text-text-primary"
-                )}
-                aria-hidden
-              />
+              <PlayGlyph disabled={disabled} />
               <span
                 className={cn(
                   // The row Enter will act on shows its whole name while the filter
@@ -263,7 +256,7 @@ export function RecipeRunnerItem({
                   </>
                 )}
               </span>
-              <span className="flex min-w-0 max-w-[55%] items-center gap-1.5 text-xs text-text-secondary @max-[30rem]/launcher:max-w-none @max-[30rem]/launcher:basis-full @max-[30rem]/launcher:pl-5.5">
+              <span className="flex min-w-0 max-w-[55%] items-center gap-1.5 text-xs text-text-secondary @max-[30rem]/launcher:max-w-none @max-[30rem]/launcher:basis-full @max-[30rem]/launcher:pl-6">
                 <RecipeMeta
                   recipe={recipe}
                   scopeLabel={showScope ? scopeLabel : null}
@@ -394,5 +387,22 @@ function RecipeContextMenu({
         </>
       )}
     </ContextMenuContent>
+  );
+}
+
+// In a 16px slot, the width every glyph on the canvas home is laid out in, so
+// the 14px mark centres on the chips' glyph line and the name starts on their
+// text line; the meta line's `pl-6` is that slot plus the gap.
+function PlayGlyph({ disabled }: { disabled?: boolean }) {
+  return (
+    <span className="flex h-5 w-4 shrink-0 items-center justify-center">
+      <Play
+        className={cn(
+          "h-3.5 w-3.5 text-text-secondary transition-colors",
+          !disabled && "group-hover:text-text-primary"
+        )}
+        aria-hidden
+      />
+    </span>
   );
 }

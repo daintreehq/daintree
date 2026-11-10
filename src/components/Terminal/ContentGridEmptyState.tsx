@@ -362,12 +362,12 @@ export function ContentGridEmptyState({
                   <div className="flex w-full flex-col items-center gap-1.5 min-w-0">
                     {/* The name stays centered under the mark; the gear is
                         pulled out of flow (absolute, just past the name) so its
-                        hidden footprint never shifts the lockup off-axis. With
-                        the gear, the name keeps 2rem clear on BOTH sides, so the
+                        footprint never shifts the lockup off-axis. With the
+                        gear, the name keeps 2rem clear on BOTH sides, so the
                         gear stays inside the measure and the name stays centred. */}
                     <div
                       className={cn(
-                        "group relative flex items-center min-w-0",
+                        "relative flex items-center min-w-0",
                         hasProjectContext ? "max-w-[calc(100%-4rem)]" : "max-w-full"
                       )}
                     >
@@ -393,11 +393,14 @@ export function ContentGridEmptyState({
                         <button
                           type="button"
                           onClick={handleOpenProjectSettings}
-                          // 26px target (p-1.5 around 14px). The `before:` strip
-                          // bridges the 4px gap to the name, so the pointer
-                          // never leaves the group on its way to the gear and
-                          // the gear does not fade out under it.
-                          className="absolute left-full top-1/2 ml-1 -translate-y-1/2 shrink-0 rounded-full p-1.5 text-text-secondary opacity-0 transition-opacity duration-150 ease-out before:absolute before:inset-y-0 before:-left-1 before:w-1 before:content-[''] hover:bg-overlay-subtle hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                          // Visible at rest, in the quiet ink of the lines under
+                          // the name. It used to fade in only on hovering the
+                          // name, so the one one-click route to project settings
+                          // was found by accident, and a keyboard user's first
+                          // Tab landed on a control that appeared from nowhere.
+                          // 26px target (p-1.5 around 14px). Both contrast modes
+                          // ring it, so there it steps clear of the last letter.
+                          className="absolute left-full top-1/2 ml-1 contrast-more:ml-2 forced-colors:ml-2 -translate-y-1/2 shrink-0 rounded-full p-1.5 text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                           aria-label="Project settings"
                         >
                           <Settings className="h-3.5 w-3.5" />
@@ -409,7 +412,11 @@ export function ContentGridEmptyState({
                         {branchLabel && (
                           <div className="flex items-center gap-1.5 text-sm max-w-full min-w-0">
                             <BranchGlyph className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                            <span className="truncate min-w-0">{branchLabel}</span>
+                            {/* A long branch keeps its tail (usually the issue
+                                number) a hover away, like the name and path. */}
+                            <TruncatedTooltip content={branchLabel}>
+                              <span className="truncate min-w-0">{branchLabel}</span>
+                            </TruncatedTooltip>
                           </div>
                         )}
                         {pathLabel && (
@@ -533,7 +540,15 @@ export function ContentGridEmptyState({
 
             {showProjectPulse && hasLaunchTarget && activeWorktreeId && (
               <div
-                className={cn("w-full flex justify-center", SECTION_ENTRY, SECTION_ENTRY_DELAY_4)}
+                // `-mt-2`: the strip is a 32px row with 12px text, and the band
+                // above always ends in another borderless row, so the two rows'
+                // own padding stacked on the gap and the pulse sat ~8px further
+                // from its neighbour than every other band did from its.
+                className={cn(
+                  "-mt-2 w-full flex justify-center",
+                  SECTION_ENTRY,
+                  SECTION_ENTRY_DELAY_4
+                )}
               >
                 <ProjectPulseStrip worktreeId={activeWorktreeId} />
               </div>
