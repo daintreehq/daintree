@@ -283,6 +283,166 @@ describe("GitFileWatcher", () => {
     expect(onChange).toHaveBeenCalledTimes(2);
   });
 
+  // ---- packed-refs.lock: every ref transaction takes it (#16678) ----
+
+  describe("packed-refs lock", () => {
+    const gitDir = pathJoin("/repo", ".git");
+
+    async function armGitDir() {
+      const onChange = vi.fn();
+      const onGitConfigChanged = vi.fn();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 100,
+        onChange,
+        onGitConfigChanged,
+      });
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      const call = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
+        [unknown, unknown, unknown] | undefined;
+      const fire = call?.[2] as (eventType: string, filename: string | Buffer | null) => void;
+      expect(fire).toBeDefined();
+      return { fire, onChange, onGitConfigChanged };
+    }
+
+    it("ignores a burst that only takes and drops packed-refs.lock", async () => {
+      const { fire, onChange } = await armGitDir();
+
+      fire("rename", "packed-refs.lock");
+      fire("change", "packed-refs.lock");
+      fire("rename", "packed-refs.lock");
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("refreshes when a rewrite renames the lock onto packed-refs", async () => {
+      const { fire, onChange } = await armGitDir();
+
+      fire("rename", "packed-refs.lock");
+      fire("rename", "packed-refs.new");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(onChange).not.toHaveBeenCalled();
+
+      fire("rename", "packed-refs");
+      fire("rename", "packed-refs.lock");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onChange).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["index.lock", "HEAD.lock", "config.lock"])(
+      "still refreshes for %s on its own",
+      async (lockName) => {
+        const { fire, onChange } = await armGitDir();
+
+        fire("rename", lockName);
+        await vi.advanceTimersByTimeAsync(100);
+
+        expect(onChange).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it("keeps config.lock as a config signal while packed-refs.lock is silent", async () => {
+      const { fire, onChange, onGitConfigChanged } = await armGitDir();
+
+      fire("rename", "packed-refs.lock");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(onGitConfigChanged).not.toHaveBeenCalled();
+
+      fire("rename", "config.lock");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onGitConfigChanged).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("still refreshes for an event the platform could not name", async () => {
+      const { fire, onChange } = await armGitDir();
+
+      fire("rename", null);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads Buffer and Windows-separated names the same way", async () => {
+      const { fire, onChange } = await armGitDir();
+
+      fire("rename", Buffer.from("packed-refs.lock"));
+      fire("rename", "nested\\packed-refs.lock");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(onChange).not.toHaveBeenCalled();
+
+      fire("rename", Buffer.from("packed-refs"));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onChange).toHaveBeenCalledTimes(1);
+
+      fire("rename", "nested\\packed-refs");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onChange).toHaveBeenCalledTimes(2);
+    });
+
+    // A trailing separator survives into the common dir but not into the
+    // directory the watcher reports events from.
+    it.each(["../..", "../../", `${pathJoin("/repo", ".git")}/`])(
+      "is silent in a linked worktree's common dir (commondir %s) while its own ref lock still fires",
+      async (commondir) => {
+        const commonDir = pathJoin("/repo", ".git");
+        const linkedGitDir = pathJoin(commonDir, "worktrees", "wt");
+        vi.mocked(getGitDir).mockResolvedValue(linkedGitDir);
+        vi.mocked(readFile).mockImplementation(((path: string) =>
+          path === pathJoin(linkedGitDir, "commondir")
+            ? Promise.resolve(`${commondir}\n`)
+            : Promise.reject(new Error("ENOENT"))) as never);
+        const onChange = vi.fn();
+        const gitWatcher = new GitFileWatcher({
+          worktreePath: "/wt",
+          branch: "feature",
+          debounceMs: 100,
+          onChange,
+        });
+        await expect(gitWatcher.start()).resolves.toBe(true);
+
+        const common = callbackFor(commonDir);
+        const refsHeads = callbackFor(pathJoin(commonDir, "refs", "heads"));
+        expect(common).toBeDefined();
+        expect(refsHeads).toBeDefined();
+
+        // What a commit in a sibling worktree on `other` shows this one.
+        common?.("rename", "packed-refs.lock");
+        refsHeads?.("rename", "other.lock");
+        refsHeads?.("rename", "other");
+        await vi.advanceTimersByTimeAsync(500);
+        expect(onChange).not.toHaveBeenCalled();
+
+        refsHeads?.("rename", "feature.lock");
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onChange).toHaveBeenCalledTimes(1);
+
+        // A main-worktree commit appends to the shared reflog: the signal a
+        // sibling's divergence against the main worktree's branch relies on.
+        callbackFor(pathJoin(commonDir, "logs"))?.("change", "HEAD");
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onChange).toHaveBeenCalledTimes(2);
+      }
+    );
+
+    it("keeps the lock twin of a branch that happens to be named packed-refs", async () => {
+      const onChange = vi.fn();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "packed-refs",
+        debounceMs: 100,
+        onChange,
+      });
+      await expect(gitWatcher.start()).resolves.toBe(true);
+
+      callbackFor(pathJoin(gitDir, "refs", "heads"))?.("rename", "packed-refs.lock");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onChange).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ---- onGitConfigChanged: the `git remote add` signal (#11155) ----
 
   describe("onGitConfigChanged", () => {

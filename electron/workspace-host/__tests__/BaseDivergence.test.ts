@@ -349,6 +349,32 @@ describe("BaseDivergence", () => {
     expect(second?.behindCount).toBe(1);
   });
 
+  // A commit to the local base writes its loose ref and leaves packed-refs
+  // alone, and siblings no longer refresh for the packed-refs.lock it takes
+  // (#16678). The pass that does run must still see the move from that ref.
+  it.each([
+    ["the repository has no remotes", { remotes: [] }],
+    ["the remote base ref is missing", {}],
+  ])("recounts against the local base when only its loose ref moves and %s", async (_, repo) => {
+    installRepo({ ...repo, revList: { "main...HEAD": "0\t1\n" } });
+    const statPrecheck = makeStatPrecheck();
+    const divergence = new BaseDivergence(makeHost(), statPrecheck);
+
+    const first = await divergence.compute(false);
+    expect(first?.baseCompareRef).toBe("main");
+    expect(first?.behindCount).toBe(0);
+
+    const localBaseRef = "/test/worktree/.git/refs/heads/main";
+    vi.mocked(statPrecheck.statMtime).mockImplementation(async (path: string) =>
+      path === localBaseRef ? 2_000 : 1_000
+    );
+    installRepo({ ...repo, revList: { "main...HEAD": "1\t1\n" } });
+
+    const second = await divergence.compute(false);
+    expect(second?.baseCompareRef).toBe("main");
+    expect(second?.behindCount).toBe(1);
+  });
+
   describe("remote resolution", () => {
     it("compares against upstream when the fork layout leaves it ambiguous", async () => {
       // origin is the fork and carries a stale base; upstream is canonical.
