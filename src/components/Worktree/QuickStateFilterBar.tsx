@@ -48,9 +48,9 @@ const FILTER_VISUALS: Record<
  */
 const FILTER_TOOLTIPS: Record<QuickStateFilter, string> = {
   all: "All",
-  working: "Working: an agent is working",
-  waiting: "Attention: an agent is asking for an approval, an answer or a fix",
-  finished: "Finished: an agent handed back, or the pull request merged",
+  working: "Working: an agent observed working",
+  waiting: "Attention: an agent observed asking for an approval, an answer or a fix",
+  finished: "Finished: an agent observed handing back, or the pull request merged",
 };
 
 interface QuickStateFilterBarProps {

@@ -210,7 +210,7 @@ function detailsButton(): HTMLElement {
 }
 
 function sessionsButton(): HTMLElement {
-  return screen.getByRole("button", { name: /^Active terminals for worktree/ });
+  return screen.getByRole("button", { name: /^Terminals for worktree/ });
 }
 
 /** A real pointer click: `detail` counts presses, where Enter/Space give 0. */

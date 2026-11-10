@@ -162,6 +162,7 @@ export function NonMainSecondaryRow({
         onOpen={badges.onOpenPR}
         worktreeLabel={worktreeLabel}
         prDetectionPaused={prDetectionPaused}
+        neutral={isSidebar}
       />
     ) : null;
 
@@ -183,20 +184,18 @@ export function NonMainSecondaryRow({
       onOpen={badges.onOpenPR}
       worktreeLabel={worktreeLabel}
       prDetectionPaused={prDetectionPaused}
+      neutral={isSidebar}
     />
   ) : null;
 
   // The issue is reachable from its own reference on every card that has one,
   // the card whose headline is that issue's title included — the headline is
-  // words now, so this is where the issue opens from (#15864). On a compact
-  // card that headline's reference is one number, so it rides the identity
-  // row's trailing slot beside the PR rather than spending a line.
-  const isIssueHeadline = hasDisplayTitle && !isPrOriginated && !hasCustomTitle;
-  // The comfortable card gives a bare issue reference the line its PR takes,
-  // under the branch: an issue and its pull request are one pair, and the
-  // branch between them read as two unrelated facts. Only a reference that
-  // carries a displaced title keeps a line of its own above the branch.
-  const issueSharesLine = isCompact ? isIssueHeadline : isSidebar && !issueBadgeTitle;
+  // words now, so this is where the issue opens from (#15864). In the sidebar
+  // a bare reference is one number, so it rides the identity row's trailing
+  // slot beside the PR in either density: an issue and its pull request are
+  // one pair. Only a reference that carries a displaced title keeps a line of
+  // its own above the branch.
+  const issueSharesLine = isSidebar && !issueBadgeTitle;
   const issueBadge =
     !quietGit && worktree.issueNumber ? (
       <IssueBadge
@@ -207,11 +206,12 @@ export function NonMainSecondaryRow({
         onOpen={badges.onOpenIssue}
         worktreeLabel={worktreeLabel}
         hoverCardSide={issueSharesLine && prBadge ? "top" : "right"}
+        neutral={isSidebar}
       />
     ) : null;
-  const trailingIssueBadge = isCompact && isIssueHeadline ? issueBadge : null;
-  const referenceRowIssue = !isCompact && issueSharesLine ? issueBadge : null;
-  const stackIssueBadge = trailingIssueBadge || referenceRowIssue ? null : issueBadge;
+  // The reference that rides the identity row's trailing slot beside the PR.
+  const trailingRefIssue = issueSharesLine ? issueBadge : null;
+  const stackIssueBadge = trailingRefIssue ? null : issueBadge;
 
   // On the compact card the sync line is ambient: how far a branch has drifted is
   // worth knowing when deciding to rebase, not every time the eye passes the
@@ -306,30 +306,33 @@ export function NonMainSecondaryRow({
           has it drifted?". The upstream/PR pair still swaps between itself by
           alarm tier — that ordering is about which alarm outranks which, not
           about outranking the branch name. */}
-      {isCompact ? (
+      {isSidebar ? (
         <>
-          {/* One identity row: the branch, with its pull request in a trailing
-              slot, so the PR and its CI mark land in the same column on every
-              card instead of on a line of their own. */}
+          {/* One identity row in both densities: the branch, with its issue and
+              pull request in a trailing slot, so the references and the CI mark
+              land in the same column on every card instead of each spending a
+              line. The issue and its PR stay side by side, one pair. */}
           {((!quietGit && (hasDisplayTitle || hasCustomTitle)) ||
             sharedRowPr ||
             compactDrift ||
-            trailingIssueBadge) && (
-            // Stacked below 20rem, where a PR beside the branch left the
+            trailingRefIssue) && (
+            // Stacked below 15rem, where a PR beside the branch left the
             // branch about 14 characters.
-            <div className="flex min-w-0 flex-col gap-0.5 @xs/card:flex-row @xs/card:items-center @xs/card:gap-3">
+            <div className="flex min-w-0 flex-col gap-0.5 @[15rem]/card:flex-row @[15rem]/card:items-center @[15rem]/card:gap-3">
               {!quietGit && (hasDisplayTitle || hasCustomTitle) && (
                 <div className="min-w-0 flex-1">
                   <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
                 </div>
               )}
-              {(compactDrift || sharedRowPr || trailingIssueBadge) && (
-                // Wraps only where the row has stacked below 20rem and the
-                // group has the card's width to itself; beside the branch it
-                // keeps its own width and the branch gives way.
-                <div className="flex max-w-full shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
+              {(compactDrift || sharedRowPr || trailingRefIssue) && (
+                // Wraps only where the row has stacked and the group has the
+                // card's width to itself; beside the branch it keeps its own
+                // width and the branch gives way.
+                // ml-auto: with no branch beside it (the branch is the
+                // headline) it still sits in the trailing column.
+                <div className="flex max-w-full shrink-0 flex-wrap items-center gap-x-3 gap-y-2 @[15rem]/card:ml-auto">
                   {compactDrift}
-                  {trailingIssueBadge}
+                  {trailingRefIssue}
                   {sharedRowPr}
                 </div>
               )}
@@ -345,24 +348,8 @@ export function NonMainSecondaryRow({
           {!quietGit && (hasDisplayTitle || hasCustomTitle) && (
             <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
           )}
-          {/* The comfortable card keeps one order, branch → issue and PR → sync,
-              so each fact stays on the line the eye learned for it; urgency goes
-              to the title row's attention column instead of reordering the stack. */}
-          {isSidebar
-            ? (referenceRowIssue || prBadge) && (
-                // Each reference keeps its own target. When the card is too
-                // narrow for both, the PR wraps whole, its marks with it,
-                // rather than either number truncating; the row gap keeps the
-                // targets' vertical extensions from meeting across the wrap.
-                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-                  {referenceRowIssue}
-                  {prBadge}
-                </div>
-              )
-            : upstreamFirst
-              ? upstreamBadge
-              : prBadge}
-          {isSidebar ? upstreamBadge : upstreamFirst ? prBadge : upstreamBadge}
+          {upstreamFirst ? upstreamBadge : prBadge}
+          {upstreamFirst ? prBadge : upstreamBadge}
         </>
       )}
       {hasPlanFile && badges.onOpenPlan && (

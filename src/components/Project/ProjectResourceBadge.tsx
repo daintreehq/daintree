@@ -1018,17 +1018,15 @@ export function ProjectResourceBadge({
                   />
                 </SidebarFooterGlyph>
                 <span className="text-2xs tabular-nums text-text-secondary font-medium truncate group-hover/readout:text-text-primary group-data-[state=open]/readout:text-text-primary">
-                  {/* The row shares its width with Run command, so at the 200px
-                    floor the count drops its noun ("7 active") rather than
-                    truncating mid-word. One string either way, so the text
-                    never exists twice. */}
+                  {/* The row shares its width with Run command, so below 280px
+                    the count drops "active" ("7 projects") rather than
+                    truncating mid-word. It keeps its noun: "7 active" sat under
+                    the cards' own terminal counts and read as one more of them.
+                    One string either way, so the text never exists twice. */}
                   {stats.runningProjects > 0 ? (
                     <>
-                      {stats.runningProjects}
-                      <span className="@max-[280px]/footer:hidden">
-                        {` ${pluralNoun(stats.runningProjects, "project")}`}
-                      </span>
-                      {" active"}
+                      {`${stats.runningProjects} ${pluralNoun(stats.runningProjects, "project")}`}
+                      <span className="@max-[280px]/footer:hidden">{" active"}</span>
                     </>
                   ) : (
                     readoutLabel

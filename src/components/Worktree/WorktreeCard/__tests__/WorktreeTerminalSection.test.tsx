@@ -836,7 +836,7 @@ describe("WorktreeTerminalSection disclosure control (#15864)", () => {
   it("names the worktree it belongs to", () => {
     renderSection({ isExpanded: false, terminals, counts, worktreeLabel: "feature/login" });
     const button = document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
-    expect(button.getAttribute("aria-label")).toBe("Active terminals for worktree feature/login");
+    expect(button.getAttribute("aria-label")).toBe("Terminals for worktree feature/login");
   });
 
   it("leaves the count and the agent glyph outside the control, as card content", () => {
@@ -846,7 +846,7 @@ describe("WorktreeTerminalSection disclosure control (#15864)", () => {
     // The visible summary, not the hidden description beside it.
     const summary = button.nextElementSibling as HTMLElement;
     expect(summary.hidden).toBe(false);
-    expect(summary.textContent?.replace(/\s+/g, "")).toBe("3active");
+    expect(summary.textContent?.replace(/\s+/g, "")).toBe("3terminals");
     const glyph = summary.querySelector("svg");
     expect(glyph).not.toBeNull();
     expect(button.contains(summary)).toBe(false);

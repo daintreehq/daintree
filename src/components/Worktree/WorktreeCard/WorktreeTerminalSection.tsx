@@ -421,9 +421,9 @@ export function WorktreeTerminalSection({
   const terminalsId = `worktree-${worktreeId}-terminals`;
   const terminalsPanelId = `worktree-${worktreeId}-terminals-panel`;
   const summaryId = `${terminalsId}-summary`;
-  const triggerName = worktreeLabel
-    ? `Active terminals for worktree ${worktreeLabel}`
-    : "Active terminals";
+  // "Terminals", not "Active terminals": the count is every open terminal,
+  // idle shells included, and the row says so in the same words.
+  const triggerName = worktreeLabel ? `Terminals for worktree ${worktreeLabel}` : "Terminals";
 
   const [hintDismissed, setHintDismissed] = useState(
     () => localStorage.getItem(FLEET_HINT_DISMISSED_KEY) === "1"
@@ -440,8 +440,8 @@ export function WorktreeTerminalSection({
     // The collapsed trigger names itself once. Left to name-from-content it
     // read "3 active 3 terminals: 2 working, …" — the visible summary, then
     // the cluster's own name repeating the total. Starts with the visible
-    // "N active" so speech input can still target it by what is on screen.
-    const triggerLabel = `${pluralize(counts.total, "active terminal")}${breakdown ? `: ${breakdown}` : ""}`;
+    // "N terminals" so speech input can still target it by what is on screen.
+    const triggerLabel = `${pluralize(counts.total, "terminal")}${breakdown ? `: ${breakdown}` : ""}`;
     return {
       visibleTerminalStates: visibleStates,
       terminalSessionAriaLabel: label,
@@ -673,9 +673,7 @@ export function WorktreeTerminalSection({
           identity the child rows directly below already carry, one glyph
           each. The closed row keeps it: there, it is the only thing on screen
           naming the agent. */}
-      {isExpanded && !inline && (
-        <span className={SECTION_LABEL}>Active terminals ({counts.total})</span>
-      )}
+      {isExpanded && !inline && <span className={SECTION_LABEL}>Terminals ({counts.total})</span>}
     </button>
   );
   // The visible count and marks are content rather than part of the control's
@@ -791,24 +789,10 @@ export function WorktreeTerminalSection({
             {disclosureButton}
             <span aria-hidden="true" className="flex items-center gap-1.5">
               {summaryGlyph}
-              {/* One session's count is already beside its state glyph on the
-                  title row, so beside the Details row the row names it only
-                  past one. Stacked on its own row below 20rem it keeps the
-                  count, or it would be a chevron and an icon with nothing to
-                  say. */}
-              <span
-                className={cn(
-                  "font-mono tabular-nums",
-                  // Only when the title row really carries a glyph for it: a
-                  // lone plain shell draws none there.
-                  stateGlyphsElsewhere &&
-                    counts.total === 1 &&
-                    visibleTerminalStates.length > 0 &&
-                    "@xs/card:hidden"
-                )}
-              >
-                {counts.total}
-              </span>
+              {/* Always the count: the slot is one width whatever it holds, and
+                  a bare icon on one row beside "1" on the next read as the
+                  idle card holding more than the working one. */}
+              <span className="font-mono tabular-nums">{counts.total}</span>
             </span>
             {summaryDescription}
           </div>
@@ -816,27 +800,38 @@ export function WorktreeTerminalSection({
         {/* Beneath the shared footer row rather than in place of it: the
             trigger stays where it was clicked. */}
         {isExpanded && (
-          <div className={cn(density.well, "w-full @xs/card:basis-full")}>{panel}</div>
+          <div className={cn(density.well, "w-full @[15rem]/card:basis-full")}>{panel}</div>
         )}
       </>
     );
   }
 
   return (
-    <div id={terminalsId} className={density.well}>
+    <div
+      id={terminalsId}
+      className={cn(
+        // Closed, the sidebar row is one line on the card, like the Details row
+        // above it: a well around one row is a box around nothing, and four of
+        // them down a list were the heaviest thing on every card while saying
+        // what the title row already says. The card's own plane and gutter
+        // separate cards now. Open, the list gets its well. The margin and the
+        // reserved border match the open state, so the trigger never moves.
+        isExpanded || !isSidebar ? density.well : "mt-1.5 border border-transparent"
+      )}
+    >
       <div className={cn("flex items-center", density.rowBox)}>
         {disclosureButton}
         {!isExpanded && (
           <>
             <span
               aria-hidden="true"
-              className="flex min-w-0 flex-1 items-center gap-1.5 text-2xs text-text-secondary"
+              // The Details row's size: two sibling rows on one rail.
+              className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-text-secondary"
             >
               {summaryGlyph}
-              <span className="inline-flex items-center gap-1">
-                <span className="font-mono tabular-nums">{counts.total}</span>
-                <span className="font-sans">active</span>
-              </span>
+              {/* What the row counts, said as counted: open terminals, whatever
+                  each is doing. The title row says which are working or waiting. */}
+              <span className="font-sans">{pluralize(counts.total, "terminal")}</span>
             </span>
             {/* The live sidebar card draws these on its title row, in the
                 column where a collapsed card draws them too, so the waiting

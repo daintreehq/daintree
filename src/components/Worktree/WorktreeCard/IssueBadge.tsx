@@ -36,6 +36,13 @@ interface IssueBadgeProps {
    * the PR whether it sits beside the issue or has wrapped beneath it.
    */
   hoverCardSide?: "right" | "top";
+  /**
+   * Draw the state glyph in the line's own ink. The sidebar does: its colour
+   * belongs to live agent state, and an open reference's hue on every card
+   * was the most frequent saturated mark in the list while saying nothing
+   * that changes. The glyph's shape and the hover card still carry the state.
+   */
+  neutral?: boolean;
 }
 
 export function IssueBadge({
@@ -46,6 +53,7 @@ export function IssueBadge({
   onOpen,
   worktreeLabel,
   hoverCardSide = "right",
+  neutral = false,
 }: IssueBadgeProps) {
   const { data, loading, error, missingCredential, providerId, fetchTooltip, reset } =
     useIssueTooltip(worktreePath, issueNumber, worktreeIssueLinkTarget(provenance ?? {}));
@@ -114,7 +122,7 @@ export function IssueBadge({
           <CircleDot
             className={cn(
               "w-3 h-3 shrink-0",
-              missingCredential ? "text-text-secondary" : "text-pr-open"
+              missingCredential || neutral ? "text-text-secondary" : "text-pr-open"
             )}
             aria-hidden="true"
           />

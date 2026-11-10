@@ -121,6 +121,8 @@ interface BranchLabelProps {
   label: string;
   isActive: boolean;
   isMuted?: boolean;
+  /** The card's headline: a live card's name takes primary ink there, as a titled card's does. */
+  headline?: boolean;
   className?: string;
 }
 
@@ -130,7 +132,7 @@ interface BranchLabelProps {
  * cut are given back by the tooltip, which only opens when something is hidden,
  * and by the sr-only full name, which is what assistive technology reads.
  */
-export function BranchLabel({ label, isActive, isMuted, className }: BranchLabelProps) {
+export function BranchLabel({ label, isActive, isMuted, headline, className }: BranchLabelProps) {
   const { Icon, prefix, rest } = useMemo(() => splitBranchType(label), [label]);
   const { shown, isCut, boxRef, sizerRef } = useFittedBranchText(rest);
   const isHiding = prefix !== "" || isCut;
@@ -156,7 +158,7 @@ export function BranchLabel({ label, isActive, isMuted, className }: BranchLabel
           aria-hidden={isHiding || undefined}
           className={cn(
             "relative min-w-0 overflow-hidden whitespace-pre font-mono text-2xs transition-colors duration-150 ease-out",
-            isActive
+            isActive || (headline && !isMuted)
               ? "text-text-primary font-medium"
               : isMuted
                 ? // Muted, not unreadable: `text-text-muted` has no dark contrast

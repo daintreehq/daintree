@@ -288,21 +288,19 @@ describe("sidebar session well", () => {
 });
 
 describe("sidebar card containment", () => {
-  it("spends exactly one well on the sidebar card, and spends it on sessions", () => {
-    // The count is the rule. #11992 flattened this to zero and the cards
-    // merged; the fixes that followed went the other way — a full-bleed tray,
-    // then a title band and a footer band — and each one grouped ACROSS cards,
-    // because a region touching both card edges binds to whatever is adjacent
-    // to it. A well cannot: its inset and perimeter close it, so it belongs to
-    // the card whose padding contains it. One, contained, at the bottom.
-    // A card with no sessions draws no tray, so no well either.
+  it("spends a well on the sidebar's sessions only while they are open", () => {
+    // Closed, the sessions row is one line on the card like the Details row:
+    // a well around one row is a box around nothing, and down a list it was
+    // the heaviest shape on every card. The card's own plane and gutter
+    // separate cards now, which the well used to do. Open, the list it holds
+    // gets one, contained in the card's padding. No sessions, no tray at all.
     for (const isExpanded of [false, true]) {
       for (const total of [0, 1]) {
         const { container, unmount } = renderTerminals({ variant: "sidebar", isExpanded, total });
         expect(
           wellCount(container),
-          `sidebar sessions (expanded=${isExpanded}, total=${total}) should be ${total} well(s)`
-        ).toBe(total === 0 ? 0 : 1);
+          `sidebar sessions (expanded=${isExpanded}, total=${total})`
+        ).toBe(total > 0 && isExpanded ? 1 : 0);
         unmount();
       }
     }
@@ -311,7 +309,7 @@ describe("sidebar card containment", () => {
   it("keeps the session well inset, which is what attaches it to its own card", () => {
     // A full-bleed fill is ambiguous by construction: footer of this card, or
     // header of the next? The inset is the whole argument for the well.
-    const { container, unmount } = renderTerminals({ variant: "sidebar", isExpanded: false });
+    const { container, unmount } = renderTerminals({ variant: "sidebar", isExpanded: true });
     const well = Array.from(container.querySelectorAll("*")).find(isWell);
     expect(well, "no well found").toBeTruthy();
     const cls = well!.className.toString();
@@ -365,10 +363,12 @@ describe("sidebar card containment", () => {
 
       for (const isExpanded of [false, true]) {
         const terminals = renderTerminals({ variant, isExpanded });
+        // The sidebar's closed sessions row is a row like closed Details; the
+        // grid keeps its borderless tint in both states.
         expect(
           wellCount(terminals.container),
-          `${variant}: sessions (expanded=${isExpanded}) must have exactly one well`
-        ).toBe(1);
+          `${variant}: sessions (expanded=${isExpanded})`
+        ).toBe(variant === "sidebar" && !isExpanded ? 0 : 1);
         terminals.unmount();
       }
     }
@@ -379,7 +379,7 @@ describe("sidebar card containment", () => {
     // sidebar's full-bleed list it is the card boundary as well as the
     // section's; in the grid the cell already draws that, so repeating it
     // inside is the nesting this whole test file exists to prevent.
-    const sidebar = renderTerminals({ variant: "sidebar", isExpanded: false });
+    const sidebar = renderTerminals({ variant: "sidebar", isExpanded: true });
     const sidebarWell = Array.from(sidebar.container.querySelectorAll("*")).find(isWell);
     expect(sidebarWell, "no sidebar well found").toBeTruthy();
     expect(hasStructuralBorder(sidebarWell!)).toBe(true);
