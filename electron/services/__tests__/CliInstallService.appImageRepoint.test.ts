@@ -200,13 +200,12 @@ describe("CliInstallService — following a moved AppImage", () => {
       }
       const binary = path.join(root, "app", "daintree");
       fs.mkdirSync(path.dirname(binary), { recursive: true });
-      const sleeper = spawnSync("bash", ["-c", "command -v sleep"], {
-        encoding: "utf8",
-      }).stdout.trim();
-      fs.copyFileSync(sleeper, binary);
+      // Node, not `sleep`: Ubuntu 26.04's sleep is a uutils multicall binary
+      // that dispatches on its own name, so a copy named daintree exits at once.
+      fs.copyFileSync(process.execPath, binary);
       fs.chmodSync(binary, 0o755);
       const { spawn } = await import("node:child_process");
-      const app = spawn(binary, ["30"], { stdio: "ignore" });
+      const app = spawn(binary, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
       try {
         await new Promise((resolve) => setTimeout(resolve, 200));
         expect(spawnSync("bash", [wrapper, "--status"], { encoding: "utf8" }).stdout.trim()).toBe(

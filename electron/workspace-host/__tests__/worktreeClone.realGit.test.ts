@@ -386,7 +386,11 @@ describe("cloneIgnoredDirectories", () => {
     write(src, ".venv/b.py", "b");
     const cloneTree = vi.fn<CloneTree>(async (_from, to, signal) => {
       mkdirSync(to);
-      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()));
+      // On a slow runner the 50 ms budget can lapse before this is called.
+      await new Promise<void>((resolve) => {
+        if (signal.aborted) resolve();
+        else signal.addEventListener("abort", () => resolve(), { once: true });
+      });
       return { ok: false, reason: "killed" };
     });
 
