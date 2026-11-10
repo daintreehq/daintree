@@ -237,9 +237,9 @@ describe("resilientAtomicWriteFileSync durability", () => {
       throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
     });
 
-    expect(() =>
-      resilientAtomicWriteFileSync(target, "data", "utf-8", { durable: false })
-    ).toThrow("ENOSPC");
+    expect(() => resilientAtomicWriteFileSync(target, "data", "utf-8", { durable: false })).toThrow(
+      "ENOSPC"
+    );
 
     expect(readdirSync(tmpDir)).toEqual([]);
   });
