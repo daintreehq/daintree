@@ -328,6 +328,23 @@ export function CloneRepoDialog({
     };
   }, [isOpen]);
 
+  // Location starts at the home dir on every open, as Create project folder's
+  // does. A folder picked before it arrives wins, and a failed read leaves the
+  // picker as the way in. The home dir is read from the host the clone runs on.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    systemClient
+      .getHomeDir()
+      .then((homeDir) => {
+        if (!cancelled && homeDir) setParentPath((prev) => prev || homeDir);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
+
   const shorthandHost =
     forgeProviders.length === 1 ? (forgeProviders[0]?.hostnames[0] ?? null) : null;
 
