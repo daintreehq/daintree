@@ -2402,6 +2402,7 @@ describe("handleDirectoryOpen failure dialogs", () => {
     it("brings the window keeping it to the project only once the person chooses that", async () => {
       const PROJECT = { id: "project-alpha", name: "alpha", path: FOLDER };
       const ownerWindow = {
+        id: 4,
         isDestroyed: () => false,
         isMinimized: () => false,
         show: vi.fn(),
@@ -2435,7 +2436,7 @@ describe("handleDirectoryOpen failure dialogs", () => {
         ],
       });
       getAppWebContentsMock.mockImplementation((win) =>
-        win === ownerWindow ? ownerAppWebContents : mockWebContents
+        win.id === 4 ? ownerAppWebContents : mockWebContents
       );
       projectStoreMock.addProject.mockResolvedValue(PROJECT);
       vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({
@@ -2467,8 +2468,8 @@ describe("handleDirectoryOpen failure dialogs", () => {
 
       await handleDirectoryOpen(FOLDER, targetWindowStub());
 
-      const first = vi.mocked(dialog.showMessageBox).mock.calls[0]?.[1] as { buttons: string[] };
-      expect(first.buttons).toEqual(["Try again", "Cancel"]);
+      const calls: unknown[][] = vi.mocked(dialog.showMessageBox).mock.calls;
+      expect(Reflect.get(calls[0]?.[1] as object, "buttons")).toEqual(["Try again", "Cancel"]);
       expect(projectStoreMock.addProject).toHaveBeenNthCalledWith(2, FOLDER);
     });
 
