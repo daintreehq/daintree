@@ -155,8 +155,10 @@ export function StatusDot({
   // reaches here on a status that already agreed to yield, and an auto-parked
   // row is the case where both would otherwise have drawn (#11822).
   const dot = showResumeDot ? (
+    // A size smaller than the state marks: a promise about what opening brings
+    // back, not a state, and it must never pass for the 8px unread disc.
     <div
-      className="workspace-mark w-2 h-2 rounded-full bg-text-secondary"
+      className="workspace-mark w-1.5 h-1.5 rounded-full bg-text-secondary"
       data-testid="workspace-resume-dot"
       aria-hidden="true"
     />
@@ -206,10 +208,11 @@ function wedgePath(share: number): string {
  * genuinely has something to divide.
  *
  * The cost of dropping the notch is that two hues sitting close together make a
- * split mark read as one disc. Every built-in keeps `review` and `working` apart
- * for that reason (#15866); a custom palette that doesn't gets a legible mark
- * stating one of its two facts, where the notch was an illegible mark stating
- * both, and the row's line carries the counts in words either way.
+ * split mark read as one disc. `review` is the primary ink, so against the
+ * working green it splits by lightness on every theme; a custom palette whose
+ * demand hue sits near its green gets a legible mark stating one of its two
+ * facts, where the notch was an illegible mark stating both, and the row's line
+ * carries the counts in words either way.
  *
  * `aria-hidden`, like every mark in this list: the row's own line states both
  * counts in words, and a mark that also announced itself would have a reader
@@ -586,7 +589,9 @@ const MOD_ENTER = "Cmd+Enter";
 export function getProjectSwitcherEnterHint(
   row: ProjectSwitcherRow | undefined,
   modifierHeld: boolean,
-  canOpenWindow: boolean
+  canOpenWindow: boolean,
+  /** Agents the highlighted row's resume mark promises; 0 when it draws none. */
+  resumableAgentCount = 0
 ): { keys: string; label: string } | null {
   if (!row) return null;
   // A missing project's Enter opens the relocation dialog, not a switch.
@@ -605,6 +610,15 @@ export function getProjectSwitcherEnterHint(
   }
   if (opensWindow && !row.isOpenInThisWindow) {
     return { keys: MOD_ENTER, label: "to open in new window" };
+  }
+  // The resume mark's meaning, said where Enter's consequence already is: the
+  // mark is a 6px dot, and nothing else on screen explains it. The caller
+  // counts it with the test that draws the mark (`showResumableAgentMark`), so
+  // the two can never disagree about a row. "Resume" alone, since every Enter
+  // here switches; with "switch and" it no longer fits the dropdown's footer
+  // beside the section keys.
+  if (resumableAgentCount > 0) {
+    return { keys: "Enter", label: `to resume ${pluralize(resumableAgentCount, "agent")}` };
   }
   return { keys: "Enter", label: "to switch" };
 }
@@ -881,6 +895,9 @@ export function ProjectListItem({
             {newWindowLabel}
           </ContextMenuItem>
         )}
+        {/* With the other ways to open it, so the menu still ends on its
+            destructive items rather than a submenu beside Remove. */}
+        {!project.isMissing && <OpenOnHostSubmenu projectId={project.id} />}
         {onTogglePinProject && (
           <ContextMenuItem onSelect={() => onTogglePinProject(project.id)}>
             {project.isPinned ? (
@@ -979,7 +996,6 @@ export function ProjectListItem({
             </ContextMenuItem>
           </>
         )}
-        {!project.isMissing && <OpenOnHostSubmenu projectId={project.id} />}
       </ContextMenuContent>
     </ContextMenu>
   );

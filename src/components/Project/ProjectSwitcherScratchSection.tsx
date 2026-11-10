@@ -421,6 +421,8 @@ export function ScratchSection({
                         className="workspace-mark h-1.5 w-1.5 shrink-0 rounded-full bg-activity-working"
                         aria-hidden="true"
                       />
+                      {/* The folded count before it ends without a break. */}
+                      <span className="sr-only">, </span>
                       {pluralize(runningAgents, "agent")} running
                     </span>
                   )}

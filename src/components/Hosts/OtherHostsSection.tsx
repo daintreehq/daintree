@@ -317,6 +317,11 @@ function optionLabel(option: OtherHostOption, group: OtherHostGroup): string {
   }
 }
 
+/** An idle host whose only fact is the Connect its row already ends on. */
+function isRoutineConnect(option: OtherHostOption, group: OtherHostGroup): boolean {
+  return option.kind === "connect" && group.link.state === "Not connected" && !group.listing;
+}
+
 /** The word a host's own row ends on: what picking it does. */
 const HOST_ROW_VERB: Record<Exclude<OtherHostOption["kind"], "project" | "worktree">, string> = {
   connect: "Connect",
@@ -376,9 +381,11 @@ function HostHeader({ group, labelId }: { group: OtherHostGroup; labelId?: strin
       </span>
       {/* Name and state together name the group: both are what it is. */}
       <span id={labelId} className="flex min-w-0 items-center gap-2.5">
+        {/* A tier below the rows it heads: in the rows' own type it read as
+            one more row the cursor somehow skipped. */}
         <HostNameText
           name={group.hostName}
-          className="text-sm font-semibold leading-tight text-text-primary"
+          className="text-sm font-medium leading-tight text-text-secondary"
         />
         {group.note && <span className="sr-only">, </span>}
         <HostState group={group} className="text-xs" />
@@ -572,13 +579,25 @@ export function OtherHostsSection({
               <HostGlyph platform={group.platform} size={14} />
             </CommandTile>
             <div className="min-w-0 flex-1">
+              {/* A host you would first have to connect to is not somewhere you
+                  can go yet, so it sits a step back until the cursor lights it. */}
               <HostNameText
                 name={group.hostName}
-                className="text-sm font-semibold leading-tight text-text-primary"
+                className={cn(
+                  "text-sm font-semibold leading-tight",
+                  isRoutineConnect(option, group)
+                    ? "text-text-secondary group-aria-selected:text-text-primary"
+                    : "text-text-primary"
+                )}
               />
-              {/* `leading-tight`, not the status line's `leading-none`: this line
-                  truncates, and clipping at the line box takes the descenders. */}
-              <HostState group={group} className="mt-0.5 text-2xs leading-tight" />
+              {/* "Not connected" under every idle host is the trailing Connect
+                  said again, row after row; the label drops it for the same
+                  reason (`optionLabel`). Anything else the link says stays. */}
+              {!isRoutineConnect(option, group) && (
+                // `leading-tight`, not the status line's `leading-none`: this line
+                // truncates, and clipping at the line box takes the descenders.
+                <HostState group={group} className="mt-0.5 text-2xs leading-tight" />
+              )}
             </div>
             {!(option.kind === "retry" && option.busy) && (
               <span className="shrink-0 text-xs text-text-secondary group-aria-selected:text-text-primary">
@@ -610,7 +629,10 @@ export function OtherHostsSection({
   return (
     <section className="px-1 pt-2 pb-1" data-testid="project-switcher-other-hosts">
       {!foldable ? (
-        <div className={cn("flex min-h-6 items-center px-2", PALETTE_SECTION_LABEL_CLASS)}>
+        // The chevron's room kept, so the label sits where every band label
+        // above it does rather than out on the status column.
+        <div className={cn("flex min-h-6 items-center gap-1.5 px-2", PALETTE_SECTION_LABEL_CLASS)}>
+          <span className="w-3 shrink-0" aria-hidden="true" />
           {label}
         </div>
       ) : (
@@ -664,6 +686,8 @@ export function OtherHostsSection({
                 // The hosts are the count; what they offer is said in words,
                 // so the number never changes what it is counting.
                 <span className="ml-1 normal-case tracking-normal text-text-secondary">
+                  {/* Or the name runs on: "4 hosts2 projects". */}
+                  <span className="sr-only">, </span>
                   {pluralize(projectCount, "project")}
                 </span>
               )}
