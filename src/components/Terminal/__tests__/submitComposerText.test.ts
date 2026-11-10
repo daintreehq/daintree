@@ -353,7 +353,8 @@ describe("submitPaneComposerText noting the pane's last message (#16746)", () =>
     client.submitWithImages.mockResolvedValue(undefined);
     const valid = Array.from({ length: MAX_SUBMIT_IMAGE_PATHS + 2 }, (_, i) => `/shot-${i}.png`);
 
-    await submitPaneComposerText("t1", "many", ["relative.png", ...valid], pane());
+    const images = ["relative.png", ...valid];
+    await submitPaneComposerText("t1", `many ${images.join(" ")}`, images, pane());
 
     expect(getLastComposerSend("t1")?.imagePaths).toEqual(valid.slice(0, MAX_SUBMIT_IMAGE_PATHS));
   });

@@ -60,7 +60,7 @@ describe("terminal.resendLastMessage (#16746)", () => {
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
   });
 
-  it("leaves a refusal to the held message's own row, which already says why", async () => {
+  it("says so when another message was held first, which a hidden panel can't show", async () => {
     resend.resendLastComposerSend.mockImplementation(async (id: string) => {
       useHeldComposerSendStore.getState().noteHeld({
         terminalId: id,
@@ -77,7 +77,7 @@ describe("terminal.resendLastMessage (#16746)", () => {
     await expect(
       definition().run(undefined, { focusedTerminalId: "idle", dispatchSource: "user" })
     ).rejects.toThrow();
-    expect(notify).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it("resends to a named panel over the focused one", async () => {
