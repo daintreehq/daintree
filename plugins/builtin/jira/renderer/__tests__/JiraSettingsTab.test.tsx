@@ -111,7 +111,14 @@ describe("JiraSettingsTab", () => {
   it("does nothing on Enter while the token is empty", async () => {
     await renderLoaded("No credentials saved");
     fill({ site: "acme.atlassian.net", email: "ada@example.com" });
+    const readsBefore = getSettingValues.mock.calls.length;
     fireEvent.keyDown(field("Jira account email"), { key: "Enter" });
+    // A started save writes the site and email before it sends the token.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(getSettingValues.mock.calls.length).toBe(readsBefore);
+    expect(setSettingValue).not.toHaveBeenCalled();
     expect(setCredential).not.toHaveBeenCalled();
   });
 
