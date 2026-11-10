@@ -92,6 +92,7 @@ vi.mock("@/services/ActionService", () => ({
 
 vi.mock("@/services/TerminalInstanceService", () => {
   const terminalInstanceService = {
+    get: () => undefined,
     getTerminal: () => undefined,
     getSelection: () => "",
   };
