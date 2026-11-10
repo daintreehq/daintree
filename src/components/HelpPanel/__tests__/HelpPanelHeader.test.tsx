@@ -438,7 +438,7 @@ describe("HelpPanelHeader", () => {
       });
       const parked = atCeiling.getAllByRole("button", { name: reason });
       expect(parked).toHaveLength(2);
-      expect(parked.every((item) => item.disabled)).toBe(true);
+      expect(parked.every((item) => item.hasAttribute("disabled"))).toBe(true);
       // The count is seen, not heard: the sentence in the name already says it.
       const counts = parked.map((item) => item.querySelector("[data-testid='menu-meta']"));
       expect(counts.map((meta) => meta?.textContent)).toEqual([
