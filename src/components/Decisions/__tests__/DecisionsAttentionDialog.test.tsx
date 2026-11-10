@@ -131,7 +131,7 @@ describe("DecisionsAttentionDialog: Mark handled (#16638)", () => {
     });
     useDecisionsAttentionStore.setState({
       isOpen: true,
-      request: { terminalId: null, seq: 1 },
+      request: { terminalId: null, returnFocusTo: null, seq: 1 },
     });
   });
   afterEach(() => {
