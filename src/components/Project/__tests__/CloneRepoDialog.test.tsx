@@ -1584,6 +1584,8 @@ describe("CloneRepoDialog", () => {
       render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
       await waitFor(() => expect(location().value).toBe("/Users/test"));
+      // A destination alone isn't enough to clone.
+      expect(cloneButton().getAttribute("aria-disabled")).toBe("true");
       const urlInput = screen.getByLabelText(/^url$/i);
       fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
@@ -1619,6 +1621,30 @@ describe("CloneRepoDialog", () => {
       expect(location().value).toBe("/tmp");
     });
 
+    it("leaves a running clone's destination alone when the home dir arrives late", async () => {
+      cloneRepoMock.mockImplementation(() => new Promise(() => {}));
+      const resolveHome = deferHomeDir();
+      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText(/^url$/i), {
+        target: { value: "https://github.com/user/repo.git" },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      await act(async () => {
+        fireEvent.click(cloneButton());
+      });
+      expect(cloneRepoMock).toHaveBeenCalledWith(expect.objectContaining({ parentPath: "/tmp" }));
+
+      await act(async () => {
+        resolveHome("/Users/test");
+      });
+      await waitForRunningMode();
+      const destination = screen.getByText("Destination").parentElement?.textContent ?? "";
+      expect(destination).toContain("/tmp/repo");
+      expect(destination).not.toContain("/Users/test");
+    });
+
     it.each([
       ["can't be read", () => getHomeDirMock.mockRejectedValue(new Error("bridge gone"))],
       ["comes back empty", () => getHomeDirMock.mockResolvedValue("")],
@@ -1634,6 +1660,11 @@ describe("CloneRepoDialog", () => {
       expect(location().value).toBe("");
       expect(screen.getByTestId("footer-hint").textContent).toBe("Choose a location to continue");
       expect(cloneButton().getAttribute("aria-disabled")).toBe("true");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      expect(cloneButton().getAttribute("aria-disabled")).toBeNull();
     });
 
     it("starts from the home dir again on every open, not from the last pick", async () => {
