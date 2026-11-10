@@ -218,6 +218,17 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     }
   }, [isOpen]);
 
+  // A handed-over keyboard lands on the selected tab, where arrows reach the
+  // rest of the dock; taken once, so later tab changes don't pull focus.
+  const tabFocusRequest = useDiagnosticsStore((s) => s.tabFocusRequest);
+  useEffect(() => {
+    if (!isOpen || !tabFocusRequest) return;
+    useDiagnosticsStore.getState().clearTabFocusRequest();
+    outerRef.current
+      ?.querySelector<HTMLElement>(`#diagnostics-${activeTab}-tab`)
+      ?.focus({ preventScroll: true, focusVisible: tabFocusRequest.focusVisible });
+  }, [isOpen, tabFocusRequest, activeTab]);
+
   const handleFocusCapture = (e: React.FocusEvent<HTMLDivElement>) => {
     if (!focusInsideRef.current) {
       const from = e.relatedTarget;

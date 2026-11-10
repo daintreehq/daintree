@@ -7,6 +7,12 @@ interface DiagnosticsState {
   activeTab: DiagnosticsTab;
   height: number;
   maxHeight: number;
+  /**
+   * Left by an opener that hands the keyboard to the dock along with the view
+   * (one whose own surface just closed, so focus has nowhere useful to return).
+   * The dock takes it once mounted and focuses its selected tab.
+   */
+  tabFocusRequest: { focusVisible: boolean } | null;
 
   toggleDock: () => void;
   openDock: (tab?: DiagnosticsTab) => void;
@@ -15,6 +21,8 @@ interface DiagnosticsState {
   setOpen: (open: boolean) => void;
   setHeight: (height: number) => void;
   setMaxHeight: (max: number) => void;
+  requestTabFocus: (focusVisible: boolean) => void;
+  clearTabFocusRequest: () => void;
   reset: () => void;
 }
 
@@ -32,6 +40,7 @@ const createDiagnosticsStore: StateCreator<DiagnosticsState> = (set) => ({
   activeTab: "problems",
   height: DEFAULT_HEIGHT,
   maxHeight: initialMaxHeight,
+  tabFocusRequest: null,
 
   toggleDock: () =>
     set((state) => ({
@@ -47,6 +56,7 @@ const createDiagnosticsStore: StateCreator<DiagnosticsState> = (set) => ({
   closeDock: () =>
     set({
       isOpen: false,
+      tabFocusRequest: null,
     }),
 
   setActiveTab: (tab) =>
@@ -78,12 +88,17 @@ const createDiagnosticsStore: StateCreator<DiagnosticsState> = (set) => ({
       return { maxHeight: nextMax, height: clampedHeight };
     }),
 
+  requestTabFocus: (focusVisible) => set({ tabFocusRequest: { focusVisible } }),
+
+  clearTabFocusRequest: () => set({ tabFocusRequest: null }),
+
   reset: () =>
     set({
       isOpen: false,
       activeTab: "problems",
       height: DEFAULT_HEIGHT,
       maxHeight: initialMaxHeight,
+      tabFocusRequest: null,
     }),
 });
 

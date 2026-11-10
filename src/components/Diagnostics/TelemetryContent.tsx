@@ -171,7 +171,9 @@ function TelemetryEmptyState({ active }: { active: boolean }) {
       scale="canvas"
       className="py-3"
       title="Waiting for the next payload"
-      description="Payloads appear here as Daintree records them. Error reports show up only when telemetry is set to Errors Only or Full Usage. Nothing is sent until you opt in."
+      description={
+        "Payloads appear here as Daintree records them. Error reports show up only when telemetry is set to Errors\u00a0only or Full\u00a0usage. Nothing is sent until you opt in."
+      }
     />
   );
 }
