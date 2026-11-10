@@ -570,50 +570,74 @@ describe("DiffPane — file stepping", () => {
 describe("DiffPane — file keys across the whole pane (#16643)", () => {
   const changeSet = [entry("a.ts"), entry("b.ts", "added"), entry("c.ts")];
 
+  /** Exactly one step since the last check, and to `changeSet[index]`. */
   function expectStepTo(index: number): void {
     const target = changeSet[index]!;
-    expect(setDiffPanelFileMock).toHaveBeenLastCalledWith(
+    expect(setDiffPanelFileMock).toHaveBeenCalledTimes(1);
+    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
       PANEL_ID,
       target.path,
       target.status,
       target.viewedKey
     );
+    setDiffPanelFileMock.mockClear();
+  }
+
+  /** Where the store's setter would leave the panel after a step to `index`. */
+  function seedAt(index: number): void {
+    const target = changeSet[index]!;
+    seedPanel({
+      filePath: target.path,
+      fileStatus: target.status,
+      viewedKey: target.viewedKey,
+      changeSet,
+    });
   }
 
   it.each(["grid", "dialog"] as const)(
     "keeps stepping from the footer buttons the keys are advertised on (%s)",
     (location) => {
-      seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
-      renderPane(true, location);
+      seedAt(0);
+      const { rerender } = renderPane(true, location);
       const next = screen.getByRole("button", { name: "Next file" });
+      next.focus();
       fireEvent.click(next);
-      setDiffPanelFileMock.mockReset();
+      expectStepTo(1);
+      seedAt(1);
+      rerender(paneElement(true, location));
+      expect(document.activeElement).toBe(next);
 
       fireEvent.keyDown(next, { key: "]" });
       expectStepTo(2);
       fireEvent.keyDown(screen.getByRole("button", { name: "Previous file" }), { key: "[" });
       expectStepTo(0);
+      fireEvent.keyDown(next, { key: "v" });
+      expect(toggleViewedMock).toHaveBeenCalledTimes(1);
+      expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, changeSet[1]!.viewedKey);
     }
   );
 
-  it("toggles Viewed and steps from the footer's Viewed checkbox", () => {
-    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet });
-    renderPane();
-    const viewed = screen.getByRole("checkbox", { name: "Viewed" });
-    fireEvent.click(viewed);
-    expect(toggleViewedMock).toHaveBeenCalledTimes(1);
+  it.each(["grid", "dialog"] as const)(
+    "toggles Viewed and steps from the footer's Viewed checkbox (%s)",
+    (location) => {
+      seedAt(0);
+      renderPane(true, location);
+      const viewed = screen.getByRole("checkbox", { name: "Viewed" });
+      fireEvent.click(viewed);
+      expect(toggleViewedMock).toHaveBeenCalledTimes(1);
 
-    fireEvent.keyDown(viewed, { key: "v" });
-    expect(toggleViewedMock).toHaveBeenCalledTimes(2);
-    expect(toggleViewedMock).toHaveBeenLastCalledWith(WORKTREE_PATH, changeSet[0]!.viewedKey);
-    fireEvent.keyDown(viewed, { key: "]" });
-    expectStepTo(1);
-  });
+      fireEvent.keyDown(viewed, { key: "v" });
+      expect(toggleViewedMock).toHaveBeenCalledTimes(2);
+      expect(toggleViewedMock).toHaveBeenLastCalledWith(WORKTREE_PATH, changeSet[0]!.viewedKey);
+      fireEvent.keyDown(viewed, { key: "]" });
+      expectStepTo(1);
+    }
+  );
 
   it.each(["grid", "dialog"] as const)(
     "steps from the pane root, where focus lands when the pane is focused (%s)",
     (location) => {
-      seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
+      seedAt(1);
       renderPane(true, location);
       const root = screen.getByTestId("panel-root");
       root.focus();
@@ -625,55 +649,8 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     }
   );
 
-  it("leaves a key the focused control already claimed to that control", () => {
-    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet });
-    renderPane();
-
-    fireEvent.keyDown(screen.getByTestId("diff-sidebar-row"), { key: "v" });
-
-    // The row marked its own file; the pane's current file is left alone.
-    expect(sidebarRowViewed).toHaveBeenCalledTimes(1);
-    expect(toggleViewedMock).not.toHaveBeenCalled();
-  });
-
-  it("lets the keys type into text fields anywhere in the pane", () => {
-    seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
-    renderPane();
-    const search = document.createElement("input");
-    search.type = "search";
-    const note = document.createElement("textarea");
-    screen.getByTestId("diff-pane-body").appendChild(search);
-    screen.getByTestId("diff-pane-footer").appendChild(note);
-
-    for (const field of [search, note]) {
-      for (const key of ["[", "]", "v"]) {
-        // Not cancelled, so the character still reaches the field.
-        expect(fireEvent.keyDown(field, { key })).toBe(true);
-      }
-    }
-
-    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
-    expect(toggleViewedMock).not.toHaveBeenCalled();
-  });
-
-  it("follows the pane's focus as it leaves and returns", () => {
-    seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
-    const { rerender } = renderPane();
-    const press = () =>
-      fireEvent.keyDown(screen.getByRole("button", { name: "Next file" }), { key: "]" });
-
-    rerender(paneElement(false));
-    press();
-    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
-
-    rerender(paneElement(true));
-    press();
-    expect(setDiffPanelFileMock).toHaveBeenCalledTimes(1);
-    expectStepTo(2);
-  });
-
   it("steps from the header toolbar's controls", () => {
-    seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
+    seedAt(1);
     renderPane();
 
     fireEvent.keyDown(screen.getByRole("button", { name: "Wrap long lines" }), { key: "]" });
@@ -686,21 +663,57 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     expectStepTo(0);
   });
 
+  it("leaves a key the focused control already claimed to that control", () => {
+    seedAt(0);
+    renderPane();
+
+    fireEvent.keyDown(screen.getByTestId("diff-sidebar-row"), { key: "v" });
+
+    // The row marked its own file; the pane's current file is left alone.
+    expect(sidebarRowViewed).toHaveBeenCalledTimes(1);
+    expect(toggleViewedMock).not.toHaveBeenCalled();
+  });
+
+  it("lets the keys type into text fields anywhere in the pane", () => {
+    seedAt(1);
+    renderPane();
+    const search = document.createElement("input");
+    search.type = "search";
+    const select = document.createElement("select");
+    const note = document.createElement("textarea");
+    const editor = document.createElement("div");
+    editor.contentEditable = "true";
+    // jsdom leaves `isContentEditable` unimplemented.
+    Object.defineProperty(editor, "isContentEditable", { value: true });
+    screen.getByTestId("diff-pane-body").append(search, select);
+    screen.getByTestId("diff-pane-footer").append(note, editor);
+
+    for (const field of [search, select, note, editor]) {
+      for (const key of ["[", "]", "v"]) {
+        // Not cancelled, so the character still reaches the field.
+        expect(fireEvent.keyDown(field, { key })).toBe(true);
+      }
+    }
+
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+    expect(toggleViewedMock).not.toHaveBeenCalled();
+  });
+
   it("leaves keys pressed in an overlay the pane opened alone", () => {
     viewerOverlay.open = true;
-    seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
+    seedAt(1);
     renderPane();
     const item = screen.getByRole("menuitem", { name: "Overlay item" });
     expect(screen.getByTestId("panel-root").contains(item)).toBe(false);
 
-    for (const key of ["[", "]", "v"]) fireEvent.keyDown(item, { key });
+    for (const key of ["[", "]", "v"]) expect(fireEvent.keyDown(item, { key })).toBe(true);
 
     expect(setDiffPanelFileMock).not.toHaveBeenCalled();
     expect(toggleViewedMock).not.toHaveBeenCalled();
   });
 
   it("stays inert everywhere in a background pane", () => {
-    seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
+    seedAt(1);
     renderPane(false);
 
     fireEvent.keyDown(screen.getByTestId("panel-root"), { key: "]" });
@@ -711,14 +724,30 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     expect(toggleViewedMock).not.toHaveBeenCalled();
   });
 
+  it("follows the pane's focus as it leaves and returns", () => {
+    seedAt(1);
+    const { rerender } = renderPane();
+    const press = () =>
+      fireEvent.keyDown(screen.getByRole("button", { name: "Next file" }), { key: "]" });
+
+    rerender(paneElement(false));
+    press();
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+
+    rerender(paneElement(true));
+    press();
+    expectStepTo(2);
+  });
+
   it("leaves modified chords to the app", () => {
-    seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
+    seedAt(1);
     renderPane();
     const root = screen.getByTestId("panel-root");
 
-    fireEvent.keyDown(root, { key: "]", metaKey: true });
-    fireEvent.keyDown(root, { key: "[", ctrlKey: true });
-    fireEvent.keyDown(root, { key: "v", altKey: true });
+    // Not cancelled either, so the chord still reaches whatever owns it.
+    expect(fireEvent.keyDown(root, { key: "]", metaKey: true })).toBe(true);
+    expect(fireEvent.keyDown(root, { key: "[", ctrlKey: true })).toBe(true);
+    expect(fireEvent.keyDown(root, { key: "v", altKey: true })).toBe(true);
 
     expect(setDiffPanelFileMock).not.toHaveBeenCalled();
     expect(toggleViewedMock).not.toHaveBeenCalled();

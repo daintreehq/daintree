@@ -238,6 +238,7 @@ test.describe.serial("Core: diff panel", () => {
   test("] steps to the image, and both versions decode side by side", async () => {
     // Focus is still on the Split radio in the toolbar: the file keys belong to
     // the whole pane, not only its diff body.
+    await expect(layoutRadio("Split")).toBeFocused();
     await page.keyboard.press("]");
     await expect(positionIndicator()).toHaveText("3 of 3", { timeout: T_MEDIUM });
 
@@ -267,9 +268,11 @@ test.describe.serial("Core: diff panel", () => {
   });
 
   test("an edit on disk marks the diff stale, and Refresh draws the new hunk", async () => {
-    await diffDialog().getByRole("button", { name: "Previous file", exact: true }).click();
+    const previous = diffDialog().getByRole("button", { name: "Previous file", exact: true });
+    await previous.click();
     await expect(positionIndicator()).toHaveText("2 of 3", { timeout: T_MEDIUM });
     // The key the button's tooltip names keeps working from the button.
+    await expect(previous).toBeFocused();
     await page.keyboard.press("[");
     await expect(positionIndicator()).toHaveText("1 of 3", { timeout: T_MEDIUM });
     await expectTextHunks(["charlie revised", "foxtrot added"], "@@ -1,5 +1,6 @@");
