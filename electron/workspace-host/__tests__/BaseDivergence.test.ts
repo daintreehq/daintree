@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { join } from "node:path";
 
 const mockGitRaw = vi.fn();
 const { mockCreateHardenedGit, mockCreateWslHardenedGit } = vi.hoisted(() => ({
@@ -364,7 +365,7 @@ describe("BaseDivergence", () => {
     expect(first?.baseCompareRef).toBe("main");
     expect(first?.behindCount).toBe(0);
 
-    const localBaseRef = "/test/worktree/.git/refs/heads/main";
+    const localBaseRef = join("/test/worktree/.git", "refs", "heads", "main");
     vi.mocked(statPrecheck.statMtime).mockImplementation(async (path: string) =>
       path === localBaseRef ? 2_000 : 1_000
     );

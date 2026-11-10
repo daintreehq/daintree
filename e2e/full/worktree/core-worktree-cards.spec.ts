@@ -131,7 +131,7 @@ test.describe.serial("Core: Worktree Cards", () => {
           },
           { timeout: T_LONG }
         )
-        .toContain(`${count}active`);
+        .toContain(`${count}terminals`);
     }
 
     // Two assertions because there are two channels: the count reaches assistive

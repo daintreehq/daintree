@@ -548,7 +548,9 @@ test.describe("Core: Terminal pane", () => {
         await window.keyboard.press("Escape");
         await expect(window.locator(SEL.contextMenu.content)).toHaveCount(0, { timeout: T_SHORT });
         await rightClickPane(window, panel);
-        await clickMenuItem(window, "Paste");
+        await expect(menuItem(window, "Paste").first()).toBeDisabled();
+        await window.keyboard.press("Escape");
+        await expect(window.locator(SEL.contextMenu.content)).toHaveCount(0, { timeout: T_SHORT });
 
         await focusXtermInput(panel);
         await window.keyboard.type("locked", { delay: 15 });

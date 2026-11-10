@@ -168,6 +168,10 @@ describe.skipIf(!gitVersionAtLeast(2, 28))(
     });
 
     it("refreshes only the worktree that committed", async (ctx) => {
+      const packedRefsPath = path.join(repoPath(), ".git", "packed-refs");
+      const readPackedRefs = () =>
+        fs.existsSync(packedRefsPath) ? fs.readFileSync(packedRefsPath, "utf8") : null;
+      const packedRefsBefore = readPackedRefs();
       const {
         armed: [a, b],
         commonNames,
@@ -182,8 +186,9 @@ describe.skipIf(!gitVersionAtLeast(2, 28))(
       await vi.waitFor(() => expect(a.changes()).toBeGreaterThan(0), { timeout: 5000 });
       await settle();
 
-      // Whatever the commit wrote straight into the common dir was a lock.
-      expect(commonNames.every((name) => name === "packed-refs.lock")).toBe(true);
+      // Directory notifications vary by OS; packed refs must stay unchanged
+      // while the committing worktree's loose ref moves.
+      expect(readPackedRefs()).toBe(packedRefsBefore);
       expect(b.changes()).toBe(0);
     });
 
