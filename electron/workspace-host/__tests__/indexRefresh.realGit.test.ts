@@ -102,34 +102,55 @@ describe("refreshWorktreeIndex against real git", () => {
     fs.writeFileSync(path.join(worktree, "new.txt"), "untracked\n");
     const before = visibleState(worktree);
 
-    await refreshWorktreeIndex(worktree, undefined);
+    await refreshWorktreeIndex(worktree, undefined, () => true);
 
     expect(visibleState(worktree)).toEqual(before);
     expect(before.status).toContain("?? new.txt");
     expect(before.status).toContain("MM c.txt");
   });
 
-  it("rewrites an index that status under GIT_OPTIONAL_LOCKS=0 leaves racy", async () => {
-    const { worktree } = makeLinkedWorktree();
+  /**
+   * A racily clean index, built the way a checkout leaves one: every entry's
+   * cached stat matches its file, and the index is no newer than the entries.
+   */
+  function makeRacyIndex(worktree: string): { index: string; stamp: number } {
     const index = indexPath(worktree);
-    // Files and index stamped a minute back, as one checkout would leave them:
-    // the entries' cached mtimes are no older than the index.
-    const stamp = Math.floor(Date.now() / 1000) - 60;
+    // Even, so a filesystem with 2 s timestamps stores it as given.
+    const now = Math.floor(Date.now() / 1000) - 60;
+    const stamp = now - (now % 2);
     for (const name of ["a", "b", "c", "d", "e"]) {
       fs.utimesSync(path.join(worktree, `${name}.txt`), stamp, stamp);
     }
+    git(worktree, "update-index", "--refresh");
     fs.utimesSync(index, stamp, stamp);
+    return { index, stamp };
+  }
+
+  it("rewrites a racily clean index that status under GIT_OPTIONAL_LOCKS=0 leaves alone", async () => {
+    const { worktree } = makeLinkedWorktree();
+    const { index, stamp } = makeRacyIndex(worktree);
+    expect(entryMtimes(worktree)).toEqual([stamp, stamp, stamp, stamp, stamp]);
+    const racyIndex = fs.readFileSync(index);
 
     git(worktree, "status", "--porcelain");
+    expect(fs.readFileSync(index).equals(racyIndex)).toBe(true);
     expect(Math.floor(fs.statSync(index).mtimeMs / 1000)).toBe(stamp);
 
-    await refreshWorktreeIndex(worktree, undefined);
+    await refreshWorktreeIndex(worktree, undefined, () => true);
 
-    const indexSeconds = Math.floor(fs.statSync(index).mtimeMs / 1000);
-    const mtimes = entryMtimes(worktree);
-    expect(mtimes).toHaveLength(5);
-    expect(mtimes.every((mtime) => mtime === stamp && mtime < indexSeconds)).toBe(true);
+    expect(Math.floor(fs.statSync(index).mtimeMs / 1000)).toBeGreaterThan(stamp);
+    expect(entryMtimes(worktree)).toEqual([stamp, stamp, stamp, stamp, stamp]);
     expect(git(worktree, "status", "--porcelain")).toBe("");
+  });
+
+  it("starts no git when it is no longer wanted by the time the factory is ready", async () => {
+    const { worktree } = makeLinkedWorktree();
+    const { index } = makeRacyIndex(worktree);
+    const racyIndex = fs.readFileSync(index);
+
+    await refreshWorktreeIndex(worktree, undefined, () => false);
+
+    expect(fs.readFileSync(index).equals(racyIndex)).toBe(true);
   });
 
   it("rejects when another git holds index.lock, and leaves the lock and the index alone", async () => {
@@ -139,7 +160,9 @@ describe("refreshWorktreeIndex against real git", () => {
     fs.writeFileSync(lock, "held by an agent");
     const indexBefore = fs.readFileSync(index);
 
-    await expect(refreshWorktreeIndex(worktree, undefined)).rejects.toThrow(/index\.lock/);
+    await expect(refreshWorktreeIndex(worktree, undefined, () => true)).rejects.toThrow(
+      /index\.lock/
+    );
 
     expect(fs.readFileSync(lock, "utf8")).toBe("held by an agent");
     expect(fs.readFileSync(index).equals(indexBefore)).toBe(true);
@@ -155,7 +178,7 @@ describe("refreshWorktreeIndex against real git", () => {
     const before = visibleState(worktree);
     expect(before.status).toContain("UU a.txt");
 
-    await refreshWorktreeIndex(worktree, undefined);
+    await refreshWorktreeIndex(worktree, undefined, () => true);
 
     expect(visibleState(worktree)).toEqual(before);
   });

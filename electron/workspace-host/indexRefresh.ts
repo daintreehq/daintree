@@ -25,11 +25,14 @@ export const INDEX_REFRESH_DELAY_MS = 2_500;
  */
 export async function refreshWorktreeIndex(
   worktreePath: string,
-  wsl: WslGitInvocation | undefined
+  wsl: WslGitInvocation | undefined,
+  mayStart: () => boolean
 ): Promise<void> {
   // No abort signal: this git holds `index.lock`, and a stopped git that has
   // not exited within the kill grace is SIGKILLed, which leaves the lock behind
   // for the agent's next commit. Only the block timeout can stop it.
   const git = wsl ? await createWslHardenedGit(wsl) : await createHardenedGit(worktreePath);
+  // Asked again after the factory's await, which a stop can land inside.
+  if (!mayStart()) return;
   await git.raw(["update-index", "--ignore-submodules", "--refresh"]);
 }

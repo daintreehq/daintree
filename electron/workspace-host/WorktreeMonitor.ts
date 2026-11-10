@@ -1920,7 +1920,11 @@ export class WorktreeMonitor {
       // this git once started; see `refreshWorktreeIndex`.
       this.indexRefresh = null;
       try {
-        await refreshWorktreeIndex(this.path, this.wslInvocation);
+        await refreshWorktreeIndex(
+          this.path,
+          this.wslInvocation,
+          () => this.indexRefreshAllowed && request.isOwned()
+        );
       } catch (error) {
         logDebug("[WorktreeMonitor] Index refresh skipped", {
           worktreeId: this.id,
@@ -1931,8 +1935,12 @@ export class WorktreeMonitor {
     this.indexRefreshQueued = true;
     try {
       if (this.pollQueue) {
-        // Behind status work: a late refresh costs a slow pass, a late status a stale card.
-        await this.pollQueue.add(run, { signal: this._pollAbortController.signal, priority: -1 });
+        // Ranked with this worktree's own status passes: the queue has no aging,
+        // so anything lower could wait behind a busy fleet indefinitely.
+        await this.pollQueue.add(run, {
+          signal: this._pollAbortController.signal,
+          priority: this.isElevated ? 1 : 0,
+        });
       } else {
         await run();
       }

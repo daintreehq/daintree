@@ -224,6 +224,7 @@ describe("WorkspaceService.createWorktree", () => {
     });
 
     mockSendEvent = vi.fn();
+    mockRefreshWorktreeIndex.mockReset().mockResolvedValue(undefined);
 
     const WorkspaceServiceModule = await import("../WorkspaceService.js");
     service = new WorkspaceServiceModule.WorkspaceService(mockSendEvent);
@@ -1793,7 +1794,6 @@ describe("WorkspaceService.createWorktree", () => {
       ({ INDEX_REFRESH_DELAY_MS } = await import("../indexRefresh.js"));
       // setImmediate stays real for flushAsyncTail.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-      mockRefreshWorktreeIndex.mockReset().mockResolvedValue(undefined);
     });
 
     afterEach(() => {
@@ -1804,6 +1804,14 @@ describe("WorkspaceService.createWorktree", () => {
     // land here too; each test counts only its own worktree's.
     const refreshesOf = (worktreePath: string) =>
       mockRefreshWorktreeIndex.mock.calls.filter(([calledPath]) => calledPath === worktreePath);
+
+    type SentEvent = { type: string; requestId?: string; success?: boolean };
+    const sentEvents = (): SentEvent[] =>
+      mockSendEvent.mock.calls.map((call: unknown[]) => call[0] as SentEvent);
+    const resultsFor = (requestId: string) =>
+      sentEvents().filter(
+        (event) => event.type === "create-worktree-result" && event.requestId === requestId
+      );
 
     async function create(name: string): Promise<string> {
       const worktreePath = path.resolve(`/test/worktree-${name}`);
@@ -1820,20 +1828,17 @@ describe("WorkspaceService.createWorktree", () => {
       vi.spyOn(service["lifecycleService"], "copyDaintreeDir").mockImplementation(
         () => new Promise<void>((resolve) => (releaseCopy = resolve))
       );
+      const resultsSeenByRefresh: SentEvent[][] = [];
+      mockRefreshWorktreeIndex.mockImplementation(async () => {
+        resultsSeenByRefresh.push(resultsFor("req-index-refresh"));
+      });
 
       const worktreePath = await create("index-refresh");
-
-      expect(mockSendEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "create-worktree-result",
-          requestId: "req-index-refresh",
-          success: true,
-        })
-      );
       expect(refreshesOf(worktreePath)).toHaveLength(0);
 
       await vi.advanceTimersByTimeAsync(INDEX_REFRESH_DELAY_MS);
-      expect(refreshesOf(worktreePath)).toEqual([[worktreePath, undefined]]);
+      expect(refreshesOf(worktreePath)).toEqual([[worktreePath, undefined, expect.any(Function)]]);
+      expect(resultsSeenByRefresh).toEqual([[expect.objectContaining({ success: true })]]);
       expect(service["monitors"].get(worktreePath)?.setupStatus?.state).toBe("running");
 
       releaseCopy();
@@ -1904,15 +1909,12 @@ describe("WorkspaceService.createWorktree", () => {
       await flushAsyncTail();
 
       expect(refreshesOf(worktreePath)).toHaveLength(1);
-      const events = mockSendEvent.mock.calls.map(([event]) => event);
-      expect(
-        events.filter(
-          (event) =>
-            event.type === "create-worktree-result" &&
-            event.requestId === "req-index-refresh-locked"
-        )
-      ).toHaveLength(1);
-      expect(events.filter((event) => JSON.stringify(event).includes("index.lock"))).toEqual([]);
+      expect(resultsFor("req-index-refresh-locked")).toEqual([
+        expect.objectContaining({ success: true }),
+      ]);
+      expect(sentEvents().filter((event) => JSON.stringify(event).includes("index.lock"))).toEqual(
+        []
+      );
     });
   });
 
