@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
-import type { AppErrorCode } from "../../types/appError.js";
+import type { AppErrorCode, CachedViewReleaseBlock } from "../../types/appError.js";
 import {
+  getProjectHeldElsewhereMessage,
+  getProjectHeldRecovery,
   getProjectOpenFailure,
+  isPersistentHold,
   withRemoveFromRecent,
   PROJECT_OPEN_RECOVERY_LABELS,
   type ProjectOpenFailure,
@@ -60,6 +63,8 @@ describe("getProjectOpenFailure", () => {
     // generic handling.
     expect(getProjectOpenFailure("NOT_A_GIT_REPO", FOLDER)).toBeNull();
     expect(getProjectOpenFailure("INTERNAL", FOLDER)).toBeNull();
+    // A project another window holds is about that window, never the folder (#16724).
+    expect(getProjectOpenFailure("PROJECT_HELD_ELSEWHERE", FOLDER)).toBeNull();
     expect(getProjectOpenFailure("BINARY_FILE", FOLDER)).toBeNull();
   });
 
@@ -140,5 +145,49 @@ describe("withRemoveFromRecent", () => {
     withRemoveFromRecent(failure);
 
     expect(failure.recovery).toBe("choose-folder");
+  });
+});
+
+describe("a project another window holds (#16724)", () => {
+  const REASONS: CachedViewReleaseBlock[] = [
+    "assistant",
+    "unsaved-work",
+    "mcp",
+    "flush",
+    "dictation",
+    "unavailable",
+  ];
+
+  it.each(REASONS)("words the %s hold as the project being open elsewhere, never a folder", (reason) => {
+    const message = getProjectHeldElsewhereMessage("Alpha", reason);
+    expect(message).toContain('"Alpha" is open in another window');
+    for (const folderWord of ["folder", "drive", "repository"]) {
+      expect(message.toLowerCase()).not.toContain(folderWord);
+    }
+    // Only a hold that clears on its own is worth trying again for.
+    expect(message.includes("Try again")).toBe(!isPersistentHold(reason));
+  });
+
+  it("offers that window for a lasting hold, a retry for a passing one", () => {
+    for (const reason of REASONS) {
+      expect(
+        getProjectHeldRecovery({ code: "PROJECT_HELD_ELSEWHERE", reason, showable: true })
+      ).toBe(isPersistentHold(reason) ? "show-in-other-window" : "retry");
+    }
+  });
+
+  it("offers nothing for a lasting hold it can't show, and never a retry", () => {
+    for (const reason of REASONS) {
+      const recovery = getProjectHeldRecovery({
+        code: "PROJECT_HELD_ELSEWHERE",
+        reason,
+        showable: false,
+      });
+      expect(recovery).toBe(isPersistentHold(reason) ? "none" : "retry");
+    }
+  });
+
+  it("keeps the retry when nothing says the hold lasts", () => {
+    expect(getProjectHeldRecovery(undefined)).toBe("retry");
   });
 });

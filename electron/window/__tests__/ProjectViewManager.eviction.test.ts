@@ -4451,6 +4451,7 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       holdFor(mgr, "proj-a", true);
 
       expect(mgr.canReleaseCachedView("proj-a")).toBe(false);
+      expect(mgr.getCachedViewReleaseBlock("proj-a")).toBe("unsaved-work");
       expect(mgr.releaseCachedView("proj-a")).toBe(false);
       expect(mgr.getAllViews().map((v) => v.projectId)).toContain("proj-a");
       expect(mgr.canReleaseCachedView("proj-b")).toBe(true);
@@ -4545,6 +4546,7 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       dictateIn(mgr, "proj-a");
 
       expect(mgr.canReleaseCachedView("proj-a")).toBe(false);
+      expect(mgr.getCachedViewReleaseBlock("proj-a")).toBe("dictation");
       expect(mgr.releaseCachedView("proj-a")).toBe(false);
       expect(mgr.canReleaseCachedView("proj-b")).toBe(true);
     });
@@ -4637,6 +4639,7 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       const wcB = await seedWithFlushingView(mgr);
 
       expect(mgr.releaseCachedView("proj-b")).toBe(false);
+      expect(mgr.getCachedViewReleaseBlock("proj-b")).toBe("flush");
       expect(mgr.canReleaseCachedView("proj-a")).toBe(true);
 
       settleCachedViewFlush(wcB, flushIdSentTo(wcB));
@@ -5217,6 +5220,32 @@ describe("ProjectViewManager — releasing a cached view to another window (#132
   it("keeps a cached view still loading", () => {
     mgr.views.get("proj-a")!.state = "loading";
     expect(mgr.canReleaseCachedView("proj-a")).toBe(false);
+  });
+
+  it("names what keeps each view it won't release, and nothing for one it will (#16724)", () => {
+    expect(mgr.getCachedViewReleaseBlock("proj-a")).toBeNull();
+    expect(mgr.getCachedViewReleaseBlock("proj-b")).toBe("unavailable");
+    expect(mgr.getCachedViewReleaseBlock("proj-z")).toBe("unavailable");
+
+    dispatching.add("proj-a");
+    expect(mgr.getCachedViewReleaseBlock("proj-a")).toBe("mcp");
+    dispatching.delete("proj-a");
+    mcpBroken = true;
+    expect(mgr.getCachedViewReleaseBlock("proj-a")).toBe("mcp");
+  });
+
+  it("names an Assistant that is mid-request as the Assistant, which outlasts the request", () => {
+    const wcA = wcOf("proj-a");
+    assistantBackends.set("proj-a", { terminalId: "t-help-a", webContentsId: wcA.id });
+    liveTerminals.add("t-help-a");
+    dispatching.add("proj-a");
+
+    expect(mgr.getCachedViewReleaseBlock("proj-a")).toBe("assistant");
+    // Repeated asks find the same hold while the Assistant runs, and none once it ends.
+    expect(mgr.releaseCachedView("proj-a")).toBe(false);
+    expect(mgr.getCachedViewReleaseBlock("proj-a")).toBe("assistant");
+    liveTerminals.delete("t-help-a");
+    expect(mgr.getCachedViewReleaseBlock("proj-a")).toBe("mcp");
   });
 });
 

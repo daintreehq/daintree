@@ -542,12 +542,21 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     owner.views.push(idFor("/work/known"));
     owner.pinned.push(idFor("/work/known"));
     const asking = world.add({ active: "other" });
-    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+    const deps = {
+      ...makeDeps(world),
+      redirectToOwner: vi.fn(() => true),
+      cachedViewReleaseBlock: vi.fn(() => "assistant" as const),
+    };
 
     await expect(
       routeProjectOpen("/work/known", newWindowFrom(asking.id), deps)
-    ).rejects.toMatchObject({ code: "PROJECT_OPEN_FAILED" });
+    ).rejects.toMatchObject({
+      code: "PROJECT_HELD_ELSEWHERE",
+      details: { reason: "assistant", showable: true },
+    });
 
+    // The reason is asked of the window that keeps it, for the project asked for.
+    expect(deps.cachedViewReleaseBlock).toHaveBeenCalledWith(idFor("/work/known"), owner.id);
     expect(deps.releaseCachedView).not.toHaveBeenCalled();
     expect(deps.redirectToOwner).not.toHaveBeenCalled();
     expect(deps.openDirectory).not.toHaveBeenCalled();
@@ -672,9 +681,13 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
     deps.releaseCachedView.mockReturnValueOnce(false);
 
+    // With no reason to read, the refusal names none rather than guessing one.
     await expect(
       routeProjectOpen("/work/known", newWindowFrom(asking.id), deps)
-    ).rejects.toMatchObject({ code: "PROJECT_OPEN_FAILED" });
+    ).rejects.toMatchObject({
+      code: "PROJECT_HELD_ELSEWHERE",
+      details: { reason: "unavailable" },
+    });
 
     expect(deps.redirectToOwner).not.toHaveBeenCalled();
     expect(deps.createWindowForPath).not.toHaveBeenCalled();

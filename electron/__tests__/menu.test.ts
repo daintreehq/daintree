@@ -302,6 +302,7 @@ import { markProjectlessView } from "../window/projectlessViews.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getWorkspaceClientRef } from "../window/windowServices.js";
 import { AppError } from "../utils/errorTypes.js";
+import { cachedViewBusy } from "../window/cachedViewBusy.js";
 import { registerRemoteService } from "../remote/runtime.js";
 
 beforeEach(() => {
@@ -952,6 +953,51 @@ describe("File menu layout (#12473)", () => {
       );
       expect(openFolderInNewWindowMock).toHaveBeenCalledTimes(1);
       expect(projectStoreMock.addProject).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    it("retries a project another window holds for a moment as a new window still (#16724)", async () => {
+      openFolderInNewWindowMock.mockRejectedValueOnce(cachedViewBusy("Recent A", "flush"));
+      vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({
+        response: 0,
+        checkboxChecked: false,
+      });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await click(recentEntry("darwin"), { metaKey: true });
+
+      expect(dialog.showMessageBox).toHaveBeenCalledWith(
+        mockBrowserWindow,
+        expect.objectContaining({
+          message: "Couldn't open project",
+          detail: expect.stringContaining('"Recent A" is open in another window'),
+          buttons: ["Try again", "Cancel"],
+        })
+      );
+      expect(openFolderInNewWindowMock).toHaveBeenCalledTimes(2);
+      expect(projectStoreMock.addProject).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    it("offers the window holding it for good, not another new window (#16724)", async () => {
+      openFolderInNewWindowMock.mockRejectedValueOnce(cachedViewBusy("Recent A", "assistant"));
+      vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({
+        response: 0,
+        checkboxChecked: false,
+      });
+      projectStoreMock.addProject.mockRejectedValueOnce(new Error("stop here"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await click(recentEntry("darwin"), { metaKey: true });
+
+      expect(dialog.showMessageBox).toHaveBeenNthCalledWith(
+        1,
+        mockBrowserWindow,
+        expect.objectContaining({ buttons: ["Show in other window", "Cancel"] })
+      );
+      // Showing it goes through the ordinary open, which finds that window.
+      expect(openFolderInNewWindowMock).toHaveBeenCalledTimes(1);
+      expect(projectStoreMock.addProject).toHaveBeenCalledWith(RECENT.path);
       errSpy.mockRestore();
     });
 
@@ -2335,6 +2381,45 @@ describe("handleDirectoryOpen failure dialogs", () => {
     expect(opts.buttons[0]).not.toBe("OK");
     expect(opts.defaultId).toBe(1);
     expect(opts.cancelId).toBe(1);
+  });
+
+  describe("a project another window keeps cached and can't let go of (#16724)", () => {
+    it("says where it is and what holds it there, never the folder copy", async () => {
+      projectStoreMock.addProject.mockRejectedValue(cachedViewBusy("alpha", "assistant"));
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      const opts = shownDialog();
+      expect(opts.title).toBe("Couldn't open project");
+      expect(opts.detail).toContain('"alpha" is open in another window');
+      expect(opts.detail).toContain("Assistant");
+      expect(opts.detail.toLowerCase()).not.toContain("drive");
+      expect(opts.buttons).toEqual(["Show in other window", "Cancel"]);
+      expect(opts.cancelId).toBe(1);
+    });
+
+    it("offers a retry only for a hold that clears on its own", async () => {
+      projectStoreMock.addProject.mockRejectedValue(cachedViewBusy("alpha", "mcp"));
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      expect(shownDialog().buttons).toEqual(["Try again", "Cancel"]);
+    });
+
+    it("offers nothing to press for a lasting hold it can't show from here", async () => {
+      projectStoreMock.addProject.mockRejectedValueOnce(
+        cachedViewBusy("alpha", "unsaved-work", { showable: false })
+      );
+      vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({
+        response: 0,
+        checkboxChecked: false,
+      });
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      expect(shownDialog().buttons).toEqual(["OK"]);
+      expect(projectStoreMock.addProject).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("keeps a raw error from reaching the dialog even when it isn't classified", async () => {

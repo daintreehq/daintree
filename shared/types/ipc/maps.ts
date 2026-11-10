@@ -761,6 +761,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
         focusIntent?: ProjectFocusOnActivateIntent;
         trace?: ProjectSwitchTrace;
         ignoreMemoryPressure?: boolean;
+        /** The person chose to go to the project in the window keeping it cached (#16724). */
+        showInOtherWindow?: boolean;
       },
     ];
     result: ProjectSwitchResult;
@@ -793,7 +795,12 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { trace?: ProjectSwitchTrace; ignoreMemoryPressure?: boolean },
+      options?: {
+        trace?: ProjectSwitchTrace;
+        ignoreMemoryPressure?: boolean;
+        /** The person chose to go to the project in the window keeping it cached (#16724). */
+        showInOtherWindow?: boolean;
+      },
     ];
     result: ProjectSwitchResult;
   };

@@ -23,6 +23,7 @@ import {
 import type { ProjectViewManager } from "../ProjectViewManager.js";
 import type { WindowContext, WindowRegistry } from "../WindowRegistry.js";
 import type { Project } from "../../../shared/types/project.js";
+import type { CachedViewReleaseBlock } from "../../../shared/types/appError.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../remote/runtime.js";
 
 function makeWebContents(destroyed = false, loading = false) {
@@ -229,8 +230,16 @@ describe("revealWindow", () => {
 });
 
 describe("releaseCachedOwner", () => {
-  function ownerIn(state: "foreground" | "activating" | "cached", released: boolean) {
-    const pvm = { ...makePvm("q", ["q", "p"]), releaseCachedView: vi.fn(() => released) };
+  function ownerIn(
+    state: "foreground" | "activating" | "cached",
+    released: boolean,
+    block: CachedViewReleaseBlock = "assistant"
+  ) {
+    const pvm = {
+      ...makePvm("q", ["q", "p"]),
+      releaseCachedView: vi.fn(() => released),
+      getCachedViewReleaseBlock: vi.fn(() => (released ? null : block)),
+    };
     const win = makeBrowserWindow();
     return {
       owner: { context: makeContext(2, pvm, win), projectViewManager: pvm, state } as never,
@@ -251,10 +260,49 @@ describe("releaseCachedOwner", () => {
   it("fails rather than switching the other window when its cached view can't be released", () => {
     const { owner, win } = ownerIn("cached", false);
     expect(() => releaseCachedOwner(owner, "p", "P")).toThrow(
-      expect.objectContaining({ code: "PROJECT_OPEN_FAILED" })
+      expect.objectContaining({ code: "PROJECT_HELD_ELSEWHERE" })
     );
     expect(getAppWebContentsMock).not.toHaveBeenCalled();
     expect(win.show).not.toHaveBeenCalled();
+  });
+
+  it("names the hold it met, and fails the same way every time while it lasts (#16724)", () => {
+    const { owner, pvm, win } = ownerIn("cached", false, "assistant");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let thrown: unknown;
+      try {
+        releaseCachedOwner(owner, "p", "P");
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toMatchObject({
+        code: "PROJECT_HELD_ELSEWHERE",
+        details: { code: "PROJECT_HELD_ELSEWHERE", reason: "assistant", showable: true },
+      });
+      expect((thrown as { userMessage?: string }).userMessage).toContain('"P"');
+    }
+    expect(pvm.releaseCachedView).toHaveBeenCalledTimes(3);
+    expect(getAppWebContentsMock).not.toHaveBeenCalled();
+    expect(win.show).not.toHaveBeenCalled();
+  });
+
+  it("says a hold can't be shown there when the caller can't bring that window to it", () => {
+    const { owner } = ownerIn("cached", false, "unsaved-work");
+    expect(() => releaseCachedOwner(owner, "p", "P", { showable: false })).toThrow(
+      expect.objectContaining({
+        details: { code: "PROJECT_HELD_ELSEWHERE", reason: "unsaved-work", showable: false },
+      })
+    );
+  });
+
+  it("answers the window keeping it as the owner to bring forward only when asked, its view kept (#16724)", () => {
+    for (const released of [false, true]) {
+      const { owner, pvm, win } = ownerIn("cached", released);
+      expect(releaseCachedOwner(owner, "p", "P", { showInOtherWindow: true })).toBe(owner);
+      expect(pvm.releaseCachedView).not.toHaveBeenCalled();
+      // Bringing it forward is the redirect's job, which the caller runs.
+      expect(win.show).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps a window showing the project, or on its way to it, as the owner to bring forward", () => {
@@ -287,7 +335,7 @@ describe("releaseCachedOwner", () => {
       expect(releaseCachedOwner(owner, "studio-01:p", "P")).toBeNull();
     } else {
       expect(() => releaseCachedOwner(owner, "studio-01:p", "P")).toThrow(
-        expect.objectContaining({ code: "PROJECT_OPEN_FAILED" })
+        expect.objectContaining({ code: "PROJECT_HELD_ELSEWHERE" })
       );
     }
     expect(pvm.abandonBackgroundRestore).toHaveBeenCalledWith("studio-01:p");
@@ -298,7 +346,7 @@ describe("releaseCachedOwner", () => {
     const abandon = vi.fn(() => true);
     Object.assign(pvm, { abandonBackgroundRestore: abandon });
     expect(() => releaseCachedOwner(owner, "p", "P")).toThrow(
-      expect.objectContaining({ code: "PROJECT_OPEN_FAILED" })
+      expect.objectContaining({ code: "PROJECT_HELD_ELSEWHERE" })
     );
     expect(abandon).not.toHaveBeenCalled();
   });

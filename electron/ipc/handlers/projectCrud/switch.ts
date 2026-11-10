@@ -83,6 +83,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       focusIntent?: ProjectFocusOnActivateIntent;
       trace?: ProjectSwitchTrace;
       ignoreMemoryPressure?: boolean;
+      showInOtherWindow?: boolean;
     }
   ): Promise<ProjectSwitchResult> => {
     if (typeof projectId !== "string" || !projectId) {
@@ -104,7 +105,9 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     markMainReceived(trace, operation);
     supersedePendingHostSwitch(operation.windowId);
 
-    const owner = releaseCachedOwner(findOwnerElsewhere(deps, operation), projectId, project.name);
+    const owner = releaseCachedOwner(findOwnerElsewhere(deps, operation), projectId, project.name, {
+      showInOtherWindow: options?.showInOtherWindow === true,
+    });
     if (owner) return redirectToProjectOwner(owner, project, options?.focusIntent);
 
     const releaseClaim = claimProjectActivation(projectId, operation.windowId);
@@ -196,7 +199,11 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     ctx: IpcContext,
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
-    options?: { trace?: ProjectSwitchTrace; ignoreMemoryPressure?: boolean }
+    options?: {
+      trace?: ProjectSwitchTrace;
+      ignoreMemoryPressure?: boolean;
+      showInOtherWindow?: boolean;
+    }
   ): Promise<ProjectSwitchResult> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
@@ -225,7 +232,9 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     markMainReceived(trace, operation);
     supersedePendingHostSwitch(operation.windowId);
 
-    const owner = releaseCachedOwner(findOwnerElsewhere(deps, operation), projectId, project.name);
+    const owner = releaseCachedOwner(findOwnerElsewhere(deps, operation), projectId, project.name, {
+      showInOtherWindow: options?.showInOtherWindow === true,
+    });
     if (owner) return redirectToProjectOwner(owner, project);
 
     const releaseClaim = claimProjectActivation(projectId, operation.windowId);

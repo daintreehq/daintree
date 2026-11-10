@@ -2817,11 +2817,62 @@ describe("project switch/reopen redirects to the window that owns the project (#
       ownerPvm.releaseCachedView.mockReturnValue(false);
 
       await expect(switchHandler(SENDER_EVENT, TARGET.id, OUTGOING)).rejects.toMatchObject({
-        code: "PROJECT_OPEN_FAILED",
+        code: "PROJECT_HELD_ELSEWHERE",
       });
       expect(senderPvm.switchTo).not.toHaveBeenCalled();
       expect(ownerAppWebContents.send).not.toHaveBeenCalled();
       expect(ownerWindow.focus).not.toHaveBeenCalled();
+    });
+
+    describe.each([
+      ["switch", "switchHandler"],
+      ["reopen", "reopenHandler"],
+    ] as const)("a %s while an Assistant keeps it there (#16724)", (_label, handlerKey) => {
+      function setupHeld() {
+        const setup = setupCached();
+        setup.ownerPvm.releaseCachedView.mockReturnValue(false);
+        Object.assign(setup.ownerPvm, {
+          getCachedViewReleaseBlock: vi.fn(() => "assistant" as const),
+        });
+        return setup;
+      }
+
+      it("fails the same way on every attempt, never moving either window", async () => {
+        const setup = setupHeld();
+        for (let attempt = 0; attempt < 3; attempt++) {
+          await expect(setup[handlerKey](SENDER_EVENT, TARGET.id, OUTGOING)).rejects.toMatchObject(
+            {
+              code: "PROJECT_HELD_ELSEWHERE",
+              details: { reason: "assistant", showable: true },
+            }
+          );
+        }
+        expect(setup.senderPvm.switchTo).not.toHaveBeenCalled();
+        expect(setup.ownerPvm.switchTo).not.toHaveBeenCalled();
+        expect(setup.ownerAppWebContents.send).not.toHaveBeenCalled();
+        expect(setup.ownerWindow.focus).not.toHaveBeenCalled();
+      });
+
+      it("has that window switch to it itself once the person asks, keeping its view", async () => {
+        const setup = setupHeld();
+
+        const result = await setup[handlerKey](SENDER_EVENT, TARGET.id, OUTGOING, {
+          showInOtherWindow: true,
+        });
+
+        expect(result).toEqual({
+          outcome: "activated-elsewhere",
+          project: TARGET,
+          targetWindowId: 2,
+        });
+        expect(setup.ownerPvm.releaseCachedView).not.toHaveBeenCalled();
+        expect(setup.ownerAppWebContents.send).toHaveBeenCalledWith(
+          CHANNELS.MENU_ACTION,
+          expect.objectContaining({ actionId: "project.switch", args: { projectId: TARGET.id } })
+        );
+        expect(setup.ownerWindow.focus).toHaveBeenCalled();
+        expect(setup.senderPvm.switchTo).not.toHaveBeenCalled();
+      });
     });
 
     it("handles a reopen the same way", async () => {

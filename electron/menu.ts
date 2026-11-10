@@ -55,11 +55,13 @@ import {
 } from "./windowMenuState.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
-import { getUserMessage, isAppError } from "./utils/errorTypes.js";
+import { getUserMessage, isAppError, type AppError } from "./utils/errorTypes.js";
 import {
+  getProjectHeldRecovery,
   getProjectOpenFailure,
   withRemoveFromRecent,
   PROJECT_OPEN_RECOVERY_LABELS,
+  SHOW_IN_OTHER_WINDOW_LABEL,
 } from "../shared/utils/projectOpenErrors.js";
 import { removeProjectWithCleanup } from "./ipc/handlers/projectCrud/crud.js";
 import { isWindowsStoreBuild, getBuildChannelLabel } from "../shared/config/distribution.js";
@@ -940,7 +942,7 @@ function buildRecentProjectsMenu(
       const targetWindow = getTarget(browserWindow);
       if (!targetWindow) return;
       if (isNewWindowClick(event)) {
-        await openInNewWindow(project.path, targetWindow);
+        await openInNewWindow(project.path, targetWindow, cliAvailabilityService);
         return;
       }
       await handleDirectoryOpen(project.path, targetWindow, cliAvailabilityService);
@@ -959,12 +961,26 @@ function isNewWindowClick(event: Electron.KeyboardEvent | undefined): boolean {
   return process.platform === "darwin" ? event?.metaKey === true : event?.ctrlKey === true;
 }
 
-async function openInNewWindow(directoryPath: string, targetWindow: BrowserWindow): Promise<void> {
+async function openInNewWindow(
+  directoryPath: string,
+  targetWindow: BrowserWindow,
+  cliAvailabilityService?: CliAvailabilityService
+): Promise<void> {
   try {
     await openFolderInNewWindow(directoryPath, targetWindow.id);
   } catch (error) {
     console.error("Failed to open project in a new window:", error);
     if (targetWindow.isDestroyed()) return;
+    if (isAppError(error) && error.code === "PROJECT_HELD_ELSEWHERE") {
+      await showProjectHeldElsewhere(
+        error,
+        directoryPath,
+        targetWindow,
+        () => openInNewWindow(directoryPath, targetWindow, cliAvailabilityService),
+        cliAvailabilityService
+      );
+      return;
+    }
     // Its own retry, never showProjectOpenFailure's: that one reopens the
     // folder in this window, which is exactly what the user asked not to do.
     const { response } = await dialog.showMessageBox(targetWindow, {
@@ -977,7 +993,7 @@ async function openInNewWindow(directoryPath: string, targetWindow: BrowserWindo
       cancelId: 1,
     });
     if (response === 0 && !targetWindow.isDestroyed()) {
-      await openInNewWindow(directoryPath, targetWindow);
+      await openInNewWindow(directoryPath, targetWindow, cliAvailabilityService);
     }
   }
 }
@@ -1003,7 +1019,7 @@ async function promptForDirectoryOpen(
 
   if (result.canceled || result.filePaths.length === 0) return;
   if (options?.newWindow) {
-    await openInNewWindow(result.filePaths[0], targetWindow);
+    await openInNewWindow(result.filePaths[0], targetWindow, cliAvailabilityService);
     return;
   }
   await handleDirectoryOpen(result.filePaths[0], targetWindow, cliAvailabilityService);
@@ -1023,6 +1039,16 @@ async function showProjectOpenFailure(
   targetWindow: BrowserWindow,
   cliAvailabilityService?: CliAvailabilityService
 ): Promise<void> {
+  if (isAppError(error) && error.code === "PROJECT_HELD_ELSEWHERE") {
+    await showProjectHeldElsewhere(
+      error,
+      directoryPath,
+      targetWindow,
+      () => handleDirectoryOpen(directoryPath, targetWindow, cliAvailabilityService),
+      cliAvailabilityService
+    );
+    return;
+  }
   let failure = (isAppError(error) && getProjectOpenFailure(error.code, directoryPath)) || {
     title: "Couldn't open folder",
     message: `Something went wrong opening "${directoryPath}".`,
@@ -1112,6 +1138,49 @@ async function showProjectOpenFailure(
 }
 
 /**
+ * A project another window keeps cached and can't let go of (#16724). The
+ * dialog says what holds it there, never the folder copy, which is about a
+ * folder that didn't respond. A hold that lasts offers that window instead of
+ * a retry that can't succeed, and the window comes to the project only now
+ * the person chose it (#13291); one that clears on its own offers the request
+ * again exactly as it was made, so a new-window open stays one.
+ */
+async function showProjectHeldElsewhere(
+  error: AppError,
+  directoryPath: string,
+  targetWindow: BrowserWindow,
+  retry: () => Promise<void>,
+  cliAvailabilityService?: CliAvailabilityService
+): Promise<void> {
+  const details = error.details?.code === "PROJECT_HELD_ELSEWHERE" ? error.details : undefined;
+  const recovery = getProjectHeldRecovery(details);
+  const buttons =
+    recovery === "none"
+      ? ["OK"]
+      : [
+          recovery === "retry" ? PROJECT_OPEN_RECOVERY_LABELS.retry : SHOW_IN_OTHER_WINDOW_LABEL,
+          "Cancel",
+        ];
+  const { response } = await dialog.showMessageBox(targetWindow, {
+    type: "error",
+    title: "Couldn't open project",
+    message: "Couldn't open project",
+    detail: getUserMessage(error),
+    buttons,
+    defaultId: buttons.length - 1,
+    cancelId: buttons.length - 1,
+  });
+  if (recovery === "none" || response !== 0 || targetWindow.isDestroyed()) return;
+  if (recovery === "retry") {
+    await retry();
+    return;
+  }
+  await handleDirectoryOpen(directoryPath, targetWindow, cliAvailabilityService, {
+    showInOtherWindow: true,
+  });
+}
+
+/**
  * A folder on this machine, opened in a window that is on a remote host: Open
  * Recent there, its failure recovery, or a folder whose view that window still
  * holds in its cache. The window comes back to this machine to show it, its
@@ -1148,7 +1217,7 @@ async function openLocalFolderInHostWindow(
     // routed from outside the app runs on the same serialized chain this one
     // joins, and waiting on it would hang.
     if (isAppError(error) && error.code === "NOT_A_GIT_REPO") {
-      void openInNewWindow(directoryPath, targetWindow);
+      void openInNewWindow(directoryPath, targetWindow, cliAvailabilityService);
       return;
     }
     console.error("Failed to open project:", error);
@@ -1164,8 +1233,12 @@ export async function handleDirectoryOpen(
   directoryPath: string,
   targetWindow: BrowserWindow,
   cliAvailabilityService?: CliAvailabilityService,
-  /** Set once the user chose to open anyway at critical memory pressure (#13638). */
-  options?: { ignoreMemoryPressure?: boolean }
+  options?: {
+    /** Set once the user chose to open anyway at critical memory pressure (#13638). */
+    ignoreMemoryPressure?: boolean;
+    /** Go to the project in the window keeping it cached, as the person chose (#16724). */
+    showInOtherWindow?: boolean;
+  }
 ): Promise<void> {
   if (targetWindow.isDestroyed()) return;
   supersedePendingHostSwitch(targetWindow.id);
@@ -1200,7 +1273,8 @@ export async function handleDirectoryOpen(
           projectViewManager: pvm,
         }),
         project.id,
-        project.name
+        project.name,
+        { showInOtherWindow: options?.showInOtherWindow === true }
       );
       if (owner) {
         redirectToProjectOwner(owner, project);

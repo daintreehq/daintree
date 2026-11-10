@@ -1,4 +1,8 @@
-import type { AppErrorCode } from "../types/appError.js";
+import type {
+  AppErrorCode,
+  CachedViewReleaseBlock,
+  ProjectHeldElsewhereError,
+} from "../types/appError.js";
 
 /**
  * User-facing copy for the folder-open failures classified by the pre-flight
@@ -128,4 +132,57 @@ export function getProjectOpenFailure(
 export function withRemoveFromRecent(failure: ProjectOpenFailure): ProjectOpenFailure {
   if (!failure.removable) return failure;
   return { ...failure, recovery: "remove-from-recent" };
+}
+
+/**
+ * Holds that outlast any retry: an Assistant pinned to the other window's view
+ * runs until it is ended there, and unsaved work only that view holds stays
+ * until it is dealt with there. The rest clear on their own (#16724).
+ */
+export function isPersistentHold(reason: CachedViewReleaseBlock): boolean {
+  return reason === "assistant" || reason === "unsaved-work";
+}
+
+/**
+ * The copy for a project another window keeps in its cache and can't let go
+ * of, named for what holds it there (#16724). Authored in main as the error's
+ * `userMessage`, so a toast and a native dialog say the same thing.
+ */
+export function getProjectHeldElsewhereMessage(
+  projectName: string,
+  reason: CachedViewReleaseBlock
+): string {
+  const subject = `"${projectName}" is open in another window`;
+  switch (reason) {
+    case "assistant":
+      return `${subject}, and moving it here would stop the Assistant running there. Open it in that window instead.`;
+    case "unsaved-work":
+      return `${subject}, and moving it here would lose unsaved work there. Open it in that window instead.`;
+    case "mcp":
+      return `${subject}, which may still be handling a request for it. Try again in a moment.`;
+    case "flush":
+      return `${subject}, which is still saving its changes. Try again in a moment.`;
+    case "dictation":
+      return `${subject}, where dictation is still running. Try again once it stops.`;
+    case "unavailable":
+      return `${subject} and is still busy there. Try again in a moment.`;
+  }
+}
+
+export type ProjectHeldRecovery = "show-in-other-window" | "retry" | "none";
+
+export const SHOW_IN_OTHER_WINDOW_LABEL = "Show in other window";
+
+/**
+ * The one way forward a held project offers. A hold that lasts asks for the
+ * other window to be brought to the project, since trying again can't
+ * succeed, and offers nothing when this machine can't do that. Without details
+ * (stripped somewhere on the way) nothing says the hold lasts, so a retry
+ * stays on offer as before.
+ */
+export function getProjectHeldRecovery(
+  details: ProjectHeldElsewhereError | undefined
+): ProjectHeldRecovery {
+  if (!details || !isPersistentHold(details.reason)) return "retry";
+  return details.showable ? "show-in-other-window" : "none";
 }
