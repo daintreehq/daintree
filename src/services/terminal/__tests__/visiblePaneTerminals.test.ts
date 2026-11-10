@@ -155,8 +155,9 @@ describe("visiblePaneTerminals (#16737)", () => {
     await settle();
 
     const hide = reporter.hidePaneTerminal("t1");
-    const hideAgain = reporter.hidePaneTerminal("t1");
     await settle();
+    expect(reports()).toEqual([["t1", "t2"], ["t2"]]);
+    const hideAgain = reporter.hidePaneTerminal("t1");
     hide();
     hide();
     await settle();
@@ -165,6 +166,28 @@ describe("visiblePaneTerminals (#16737)", () => {
     hideAgain();
     await settle();
     expect(reports()).toEqual([["t1", "t2"], ["t2"], ["t1", "t2"]]);
+  });
+
+  it("shows a terminal its one owner hid once that owner lets go", async () => {
+    register(new Set(["t1"]));
+    const show = reporter.hidePaneTerminal("t1");
+    await settle();
+    show();
+    await settle();
+    expect(reports()).toEqual([[], ["t1"]]);
+  });
+
+  it("keeps a terminal hidden across its service going and a new one coming", async () => {
+    const hide = reporter.hidePaneTerminal("t1");
+    const off = register(new Set(["t1"]));
+    await settle();
+    off();
+    register(new Set(["t1"]));
+    await settle();
+    expect(reports().at(-1)).toEqual([]);
+    hide();
+    await settle();
+    expect(reports().at(-1)).toEqual(["t1"]);
   });
 
   it("does nothing where the preload has no such call", async () => {

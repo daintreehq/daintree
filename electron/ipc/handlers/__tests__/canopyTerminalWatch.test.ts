@@ -1670,6 +1670,7 @@ describe("a main-view pane showing the terminal (#16737)", () => {
   it("forgets every pane when Canopy stops, and no later reconcile brings one back", async () => {
     show(["run-1"]);
     stopAllTerminalWatches();
+    expect(paneOwnedTerminals()).toEqual([]);
     followDriveLeaseChange();
     expect(paneOwnedTerminals()).toEqual([]);
 

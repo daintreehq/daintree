@@ -581,10 +581,27 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
     expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t2", "t3"]]);
 
     // The dock's parking container: mounted and laid out, but never rendered.
-    service.instances.get("t2")!.hostElement.checkVisibility = () => false;
+    const t2 = service.instances.get("t2")!.hostElement;
+    let renders = false;
+    t2.checkVisibility = () => renders;
     service.setVisible("t3", true);
     await settle();
     expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t3"]]);
+    renders = true;
+    service.setVisible("t3", true);
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t2", "t3"]]);
+
+    // Out of the document, as a pane between two homes is.
+    const slot = t2.parentElement!;
+    t2.remove();
+    service.setVisible("t3", true);
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t3"]]);
+    slot.appendChild(t2);
+    service.setVisible("t3", true);
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t2", "t3"]]);
 
     service.dispose();
     expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([[]]);

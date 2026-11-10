@@ -271,6 +271,11 @@ vi.mock("@/store/macroFocusStore", () => {
 });
 
 vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
+const { hidePaneTerminal, showPane } = vi.hoisted(() => {
+  const showPane = vi.fn();
+  return { showPane, hidePaneTerminal: vi.fn(() => showPane) };
+});
+vi.mock("@/services/terminal/visiblePaneTerminals", () => ({ hidePaneTerminal }));
 vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
@@ -322,6 +327,26 @@ beforeEach(() => {
     },
     writable: true,
     configurable: true,
+  });
+});
+
+describe("HelpPanel — its pane, as Canopy's sizing sees it (#16737)", () => {
+  it("hides its terminal from the pane report while hidden or closed, and shows it again", () => {
+    hidePaneTerminal.mockClear();
+    showPane.mockClear();
+    const { rerender } = render(<HelpPanel width={380} />);
+    expect(hidePaneTerminal).not.toHaveBeenCalled();
+
+    rerender(<HelpPanel width={0} isVisible={false} />);
+    expect(hidePaneTerminal.mock.calls).toEqual([["t-1"]]);
+    expect(showPane).not.toHaveBeenCalled();
+
+    rerender(<HelpPanel width={380} />);
+    expect(showPane).toHaveBeenCalledTimes(1);
+
+    helpPanelState.isOpen = false;
+    rerender(<HelpPanel width={380} />);
+    expect(hidePaneTerminal.mock.calls).toEqual([["t-1"], ["t-1"]]);
   });
 });
 
