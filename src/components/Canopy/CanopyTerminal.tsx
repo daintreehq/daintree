@@ -407,13 +407,15 @@ export function CanopyTerminal({
     // Another host's terminal is sized only once its watch answer says the host takes it.
     let holdsSize = localId !== null;
     // Another surface has the size: this pane draws the PTY's grid, clipped,
-    // until the user's own click, keystroke or reply takes the size back.
+    // until the user's own click, keystroke or reply takes the size back, or the
+    // host says so once the agent's own pane stops showing it (#16737).
     let following = false;
     // The size is this pane's to take: main is asked even for a grid the PTY
     // already has, as holding is what stops the terminal's other views fitting.
     let mustHold = true;
-    // Another host's run, shown where only use takes the size: that host never
-    // tells this pane to follow, so the pane holds itself back until used.
+    // Another host's run, shown where only use takes the size: that host tells
+    // this pane to follow only while its own pane shows the run, so the pane
+    // holds itself back until used.
     let awaitingUse = false;
 
     let inset = FRAME_PADDING_PX;

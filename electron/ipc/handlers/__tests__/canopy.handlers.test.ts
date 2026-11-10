@@ -3028,6 +3028,81 @@ describe("canopy IPC", () => {
         expect(sizeHolds().at(-1)).toEqual([]);
       });
 
+      describe("against a pane showing the terminal (#16737)", () => {
+        const show = (view: { call: ReturnType<typeof remoteView>["call"] }, ids: string[]) =>
+          view.call(CANOPY_METHOD_CHANNELS.setVisiblePaneTerminals, ids);
+
+        it.each([
+          [
+            "a window on this machine",
+            (ids: string[]) =>
+              invoke(CANOPY_METHOD_CHANNELS.setVisiblePaneTerminals, fakeSender(5), ids),
+          ],
+          ["a window on the viewer's machine", (ids: string[]) => show(remoteView(-34), ids)],
+        ] as const)(
+          "follows while %s shows it, and takes the size again after",
+          async (_case, report) => {
+            lease.holder = "self";
+            const { view, watchId } = await openViewerStream(-16);
+            await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+            expect(sizeHolds().at(-1)).toEqual(["run-1"]);
+            ptyClient.resize.mockClear();
+            const sent = view.endpoint.send as ReturnType<typeof vi.fn>;
+            sent.mockClear();
+
+            await report(["run-1"]);
+
+            expect(sizeHolds().at(-1)).toEqual([]);
+            expect(ptyClient.resize).not.toHaveBeenCalled();
+            expect(sent).toHaveBeenCalledWith({
+              type: "event",
+              channel: CHANNELS.CANOPY_TERMINAL_DATA,
+              args: [expect.objectContaining({ kind: "resize", runId: "run-1", following: true })],
+            });
+            await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 90, 28);
+            expect(ptyClient.resize).not.toHaveBeenCalled();
+
+            await report([]);
+            await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 90, 28);
+            expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 90, 28);
+          }
+        );
+
+        it("counts a window on another machine only for its own project's terminals", async () => {
+          lease.holder = "self";
+          const { view, watchId } = await openViewerStream(-17);
+          await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+          state.terminalProject = "project-2";
+
+          await show(remoteView(-35), ["run-1"]);
+
+          expect(sizeHolds().at(-1)).toEqual(["run-1"]);
+        });
+
+        it("counts no pane a viewer reports: it shows panels", async () => {
+          lease.holder = "self";
+          const { view, watchId } = await openViewerStream(-18);
+          await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+
+          await show(viewer(-19), ["run-1"]);
+
+          expect(sizeHolds().at(-1)).toEqual(["run-1"]);
+        });
+
+        it("forgets a window on another machine once its view closes", async () => {
+          lease.holder = "self";
+          const { view, watchId } = await openViewerStream(-20);
+          const window = remoteView(-36);
+          await show(window, ["run-1"]);
+          await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+          expect(ptyClient.resize).not.toHaveBeenCalled();
+
+          window.close();
+          await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+          expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+        });
+      });
+
       it("says to the viewer that this host takes its size", async () => {
         lease.holder = "self";
         const view = viewer(-14);
@@ -3428,6 +3503,66 @@ describe("canopy IPC", () => {
       await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
 
       expect(ptyClient.resize).not.toHaveBeenCalled();
+    });
+
+    describe("a main window showing the terminal in a pane (#16737)", () => {
+      const show = (view: unknown, terminalIds: unknown) =>
+        invoke(CANOPY_METHOD_CHANNELS.setVisiblePaneTerminals, view, terminalIds);
+
+      it("outranks the panel's hold, and whatever the user does in the panel, until the pane goes", async () => {
+        const { sender, watchId } = await openHeld();
+        const pane = fakeSender(5);
+
+        await show(pane, ["run-1"]);
+        expect(await holds(pane)).toEqual([]);
+
+        await invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, sender, watchId);
+        await invoke(CANOPY_METHOD_CHANNELS.terminalSendKey, sender, watchId, "escape");
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+
+        await show(pane, []);
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+        expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+        expect(await holds(pane)).toEqual(["run-1"]);
+      });
+
+      it("lets go of the pane once its view goes, unasked", async () => {
+        const { sender, watchId } = await openHeld();
+        const pane = fakeSender(5);
+        await show(pane, ["run-1"]);
+
+        pane.emit("destroyed");
+
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+        expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+      });
+
+      it("counts no pane in the Canopy window's own view", async () => {
+        const canopy = fakeSender(9);
+        markProjectlessView(
+          canopy as unknown as Electron.WebContents,
+          fakeWindow() as unknown as Electron.BrowserWindow
+        );
+        try {
+          await openHeld();
+          await show(canopy, ["run-1"]);
+          expect(await holds(canopy)).toEqual(["run-1"]);
+        } finally {
+          canopy.emit("destroyed");
+        }
+      });
+
+      it.each([
+        ["no list", "run-1"],
+        ["an id no terminal has", [""]],
+        ["more terminals than any grid shows", Array.from({ length: 501 }, (_, i) => `t${i}`)],
+      ])("refuses %s", async (_case, terminalIds) => {
+        await openHeld();
+        const result = await outcome(show(fakeSender(5), terminalIds));
+        expect(result.ok).toBe(false);
+        expect(await holds(fakeSender(5))).toEqual(["run-1"]);
+      });
     });
 
     describe("in the Canopy window, which sizes nothing until used (#16339)", () => {

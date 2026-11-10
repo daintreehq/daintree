@@ -73,6 +73,8 @@ type WatchTestService = {
     options?: { automatic?: boolean; takesSize?: boolean }
   ) => void;
   runResizePass: (ids: string[], options?: { immediate?: boolean }) => void;
+  setVisible: (id: string, isVisible: boolean) => void;
+  detachForProjectSwitch: (id: string) => void;
   destroy: (id: string) => void;
   dispose: () => void;
   resizeController: {
@@ -392,6 +394,7 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
   let pushHolds: (terminalIds: string[]) => void;
   let hydrate: string[];
   const takeTerminalSize = vi.fn(async (_terminalId: string) => {});
+  const setVisiblePaneTerminals = vi.fn(async (_terminalIds: string[]) => {});
 
   beforeEach(async () => {
     vi.resetModules();
@@ -410,7 +413,11 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
             return () => {};
           }),
         },
-        canopy: { getSizeHolds: vi.fn(async () => hydrate), takeTerminalSize },
+        canopy: {
+          getSizeHolds: vi.fn(async () => hydrate),
+          takeTerminalSize,
+          setVisiblePaneTerminals,
+        },
       },
     });
 
@@ -521,6 +528,30 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
       service.notifyUserInput("t1", "", { automatic: true });
       expect(takeTerminalSize).not.toHaveBeenCalled();
     });
+  });
+
+  it("tells main which terminals its panes show, so they outrank a panel (#16737)", async () => {
+    setVisiblePaneTerminals.mockClear();
+    await service.prewarmTerminal("t1", "terminal", {});
+    await service.prewarmTerminal("t2", "terminal", {});
+    service.setVisible("t1", true);
+    service.setVisible("t2", true);
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t1", "t2"]]);
+
+    service.setVisible("t2", false);
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t1"]]);
+
+    service.detachForProjectSwitch("t1");
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([[]]);
+
+    service.setVisible("t2", true);
+    await settle();
+    service.destroy("t2");
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.slice(-2)).toEqual([[["t2"]], [[]]]);
   });
 
   it("keeps a pane held while another frontend still drives the project", async () => {

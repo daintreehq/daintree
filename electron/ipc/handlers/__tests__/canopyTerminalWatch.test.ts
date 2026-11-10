@@ -1367,7 +1367,7 @@ describe("a view that takes the size only once used (#16339)", () => {
     off();
   });
 
-  it("never starts a panel from another machine following: its hold answers to the drive alone", async () => {
+  it("never starts a panel from another machine following: only the drive or a pane takes its hold", async () => {
     const { pty } = fakePty();
     const { sender } = fakeSender(1);
     const opened = await openUnused(pty, sender, "run-1", true);
