@@ -69,6 +69,23 @@ describe("pluginUnsavedPanels", () => {
     expect(getUnsavedPluginPanels("acme.demo").map((p) => p.panelId)).toEqual(["installed"]);
   });
 
+  it("finds a repository plugin's panels by its instance key, in that project only", () => {
+    // The project plugin controls ask by instance key before unloading (#16656).
+    const wc = new FakeContents();
+    report(wc, [
+      panel("mine", makeProjectPluginInstanceKey("a".repeat(64), "acme.demo")),
+      panel("other-project", makeProjectPluginInstanceKey("b".repeat(64), "acme.demo")),
+      panel("installed", makeInstalledProjectInstanceKey("a".repeat(64), "acme.demo")),
+      panel("global", "acme.demo"),
+    ]);
+
+    expect(
+      getUnsavedPluginPanels(makeProjectPluginInstanceKey("a".repeat(64), "acme.demo")).map(
+        (p) => p.panelId
+      )
+    ).toEqual(["mine"]);
+  });
+
   it("replaces a view's report, and an empty one forgets the view and its listeners", () => {
     const wc = new FakeContents();
     report(wc, [panel("p1")]);
