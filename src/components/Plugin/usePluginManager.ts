@@ -1196,8 +1196,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       handleInstallResult(result);
       advanceUpdateQueue();
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to reinstall plugin"));
-      logError("Failed to reinstall plugin from URL", err);
+      setError(formatErrorMessage(err, "Failed to update plugin"));
+      logError("Failed to update plugin from URL", err);
       // In a batch, skip the failed plugin and keep draining; a single check
       // leaves its confirm untouched (advanceUpdateQueue clears it either way).
       if (isBatchActiveRef.current) advanceUpdateQueue();
