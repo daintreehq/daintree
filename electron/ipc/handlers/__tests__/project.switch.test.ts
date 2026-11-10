@@ -2840,12 +2840,10 @@ describe("project switch/reopen redirects to the window that owns the project (#
       it("fails the same way on every attempt, never moving either window", async () => {
         const setup = setupHeld();
         for (let attempt = 0; attempt < 3; attempt++) {
-          await expect(setup[handlerKey](SENDER_EVENT, TARGET.id, OUTGOING)).rejects.toMatchObject(
-            {
-              code: "PROJECT_HELD_ELSEWHERE",
-              details: { reason: "assistant", showable: true },
-            }
-          );
+          await expect(setup[handlerKey](SENDER_EVENT, TARGET.id, OUTGOING)).rejects.toMatchObject({
+            code: "PROJECT_HELD_ELSEWHERE",
+            details: { reason: "assistant", showable: true },
+          });
         }
         expect(setup.senderPvm.switchTo).not.toHaveBeenCalled();
         expect(setup.ownerPvm.switchTo).not.toHaveBeenCalled();

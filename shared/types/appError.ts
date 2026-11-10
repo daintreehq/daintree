@@ -7,10 +7,7 @@ import type { RequiredPluginToolsError } from "./ipc/pluginAgentMcp.js";
  * every member small and free of paths, secrets and user content.
  */
 export type AppErrorDetails =
-  | PluginHostError
-  | RequiredPluginToolsError
-  | HostSwitchOnScreenError
-  | ProjectHeldElsewhereError;
+  PluginHostError | RequiredPluginToolsError | HostSwitchOnScreenError | ProjectHeldElsewhereError;
 
 /**
  * A host switch that failed and is showing why on the window's own switch
@@ -29,12 +26,7 @@ export interface HostSwitchOnScreenError {
  * settled in the background, so it names no hold at all.
  */
 export type CachedViewReleaseBlock =
-  | "assistant"
-  | "unsaved-work"
-  | "mcp"
-  | "flush"
-  | "dictation"
-  | "unavailable";
+  "assistant" | "unsaved-work" | "mcp" | "flush" | "dictation" | "unavailable";
 
 /**
  * A project another window keeps in its cache and can't release. `showable`

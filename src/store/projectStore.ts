@@ -849,7 +849,9 @@ function transitionRecoveryActions(
     held && error.details?.code === "PROJECT_HELD_ELSEWHERE" ? error.details : undefined;
   switch (held ? getProjectHeldRecovery(details) : "retry") {
     case "show-in-other-window":
-      return [{ label: SHOW_IN_OTHER_WINDOW_LABEL, variant: "primary", onClick: showInOtherWindow }];
+      return [
+        { label: SHOW_IN_OTHER_WINDOW_LABEL, variant: "primary", onClick: showInOtherWindow },
+      ];
     case "none":
       return [];
     case "retry":

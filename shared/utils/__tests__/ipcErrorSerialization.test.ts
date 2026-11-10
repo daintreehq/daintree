@@ -463,7 +463,9 @@ describe("AppError details allowlist", () => {
     expect(
       pickAppErrorDetails({ code: "PROJECT_HELD_ELSEWHERE", reason: "mcp", showable: "yes" })
     ).toBeUndefined();
-    expect(pickAppErrorDetails({ code: "PROJECT_HELD_ELSEWHERE", showable: false })).toBeUndefined();
+    expect(
+      pickAppErrorDetails({ code: "PROJECT_HELD_ELSEWHERE", showable: false })
+    ).toBeUndefined();
   });
 
   it("rebuilds required plugin tools details, dropping extra fields and unknown states", () => {

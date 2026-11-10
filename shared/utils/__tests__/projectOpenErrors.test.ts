@@ -158,15 +158,18 @@ describe("a project another window holds (#16724)", () => {
     "unavailable",
   ];
 
-  it.each(REASONS)("words the %s hold as the project being open elsewhere, never a folder", (reason) => {
-    const message = getProjectHeldElsewhereMessage("Alpha", reason);
-    expect(message).toContain('"Alpha" is open in another window');
-    for (const folderWord of ["folder", "drive", "repository"]) {
-      expect(message.toLowerCase()).not.toContain(folderWord);
+  it.each(REASONS)(
+    "words the %s hold as the project being open elsewhere, never a folder",
+    (reason) => {
+      const message = getProjectHeldElsewhereMessage("Alpha", reason);
+      expect(message).toContain('"Alpha" is open in another window');
+      for (const folderWord of ["folder", "drive", "repository"]) {
+        expect(message.toLowerCase()).not.toContain(folderWord);
+      }
+      // Only a hold that clears on its own is worth trying again for.
+      expect(message.includes("Try again")).toBe(!isPersistentHold(reason));
     }
-    // Only a hold that clears on its own is worth trying again for.
-    expect(message.includes("Try again")).toBe(!isPersistentHold(reason));
-  });
+  );
 
   it("offers that window for a lasting hold, a retry for a passing one", () => {
     for (const reason of REASONS) {
