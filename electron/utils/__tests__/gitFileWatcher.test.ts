@@ -382,45 +382,50 @@ describe("GitFileWatcher", () => {
       expect(onChange).toHaveBeenCalledTimes(2);
     });
 
-    it("is silent in a linked worktree's common dir while its own ref lock still fires", async () => {
-      const commonDir = pathJoin("/repo", ".git");
-      const linkedGitDir = pathJoin(commonDir, "worktrees", "wt");
-      vi.mocked(getGitDir).mockResolvedValue(linkedGitDir);
-      vi.mocked(readFile).mockImplementation(((path: string) =>
-        path === pathJoin(linkedGitDir, "commondir")
-          ? Promise.resolve("../..\n")
-          : Promise.reject(new Error("ENOENT"))) as never);
-      const onChange = vi.fn();
-      const gitWatcher = new GitFileWatcher({
-        worktreePath: "/wt",
-        branch: "feature",
-        debounceMs: 100,
-        onChange,
-      });
-      await expect(gitWatcher.start()).resolves.toBe(true);
+    // A trailing separator survives into the common dir but not into the
+    // directory the watcher reports events from.
+    it.each(["../..", "../../", `${pathJoin("/repo", ".git")}/`])(
+      "is silent in a linked worktree's common dir (commondir %s) while its own ref lock still fires",
+      async (commondir) => {
+        const commonDir = pathJoin("/repo", ".git");
+        const linkedGitDir = pathJoin(commonDir, "worktrees", "wt");
+        vi.mocked(getGitDir).mockResolvedValue(linkedGitDir);
+        vi.mocked(readFile).mockImplementation(((path: string) =>
+          path === pathJoin(linkedGitDir, "commondir")
+            ? Promise.resolve(`${commondir}\n`)
+            : Promise.reject(new Error("ENOENT"))) as never);
+        const onChange = vi.fn();
+        const gitWatcher = new GitFileWatcher({
+          worktreePath: "/wt",
+          branch: "feature",
+          debounceMs: 100,
+          onChange,
+        });
+        await expect(gitWatcher.start()).resolves.toBe(true);
 
-      const common = callbackFor(commonDir);
-      const refsHeads = callbackFor(pathJoin(commonDir, "refs", "heads"));
-      expect(common).toBeDefined();
-      expect(refsHeads).toBeDefined();
+        const common = callbackFor(commonDir);
+        const refsHeads = callbackFor(pathJoin(commonDir, "refs", "heads"));
+        expect(common).toBeDefined();
+        expect(refsHeads).toBeDefined();
 
-      // What a commit in a sibling worktree on `other` shows this one.
-      common?.("rename", "packed-refs.lock");
-      refsHeads?.("rename", "other.lock");
-      refsHeads?.("rename", "other");
-      await vi.advanceTimersByTimeAsync(500);
-      expect(onChange).not.toHaveBeenCalled();
+        // What a commit in a sibling worktree on `other` shows this one.
+        common?.("rename", "packed-refs.lock");
+        refsHeads?.("rename", "other.lock");
+        refsHeads?.("rename", "other");
+        await vi.advanceTimersByTimeAsync(500);
+        expect(onChange).not.toHaveBeenCalled();
 
-      refsHeads?.("rename", "feature.lock");
-      await vi.advanceTimersByTimeAsync(100);
-      expect(onChange).toHaveBeenCalledTimes(1);
+        refsHeads?.("rename", "feature.lock");
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onChange).toHaveBeenCalledTimes(1);
 
-      // A main-worktree commit appends to the shared reflog: the signal a
-      // sibling's divergence against the main worktree's branch relies on.
-      callbackFor(pathJoin(commonDir, "logs"))?.("change", "HEAD");
-      await vi.advanceTimersByTimeAsync(100);
-      expect(onChange).toHaveBeenCalledTimes(2);
-    });
+        // A main-worktree commit appends to the shared reflog: the signal a
+        // sibling's divergence against the main worktree's branch relies on.
+        callbackFor(pathJoin(commonDir, "logs"))?.("change", "HEAD");
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onChange).toHaveBeenCalledTimes(2);
+      }
+    );
 
     it("keeps the lock twin of a branch that happens to be named packed-refs", async () => {
       const onChange = vi.fn();

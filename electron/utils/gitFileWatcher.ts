@@ -418,8 +418,11 @@ export class GitFileWatcher {
       const headPath = pathJoin(gitDir, "HEAD");
 
       this.watchFile(headPath);
-      this.packedRefsDir = commonDir;
-      this.watchFile(pathJoin(commonDir, PACKED_REFS_FILE_NAME));
+      const packedRefsPath = pathJoin(commonDir, PACKED_REFS_FILE_NAME);
+      // The directory `watchFile` will report events from: a `commondir` read
+      // with a trailing separator keeps it, and the join drops it.
+      this.packedRefsDir = dirname(packedRefsPath);
+      this.watchFile(packedRefsPath);
       this.watchFile(pathJoin(commonDir, "logs", "HEAD"));
       // Watch .git/config so `git push -u` / `git branch --set-upstream-to`
       // triggers a poll deterministically — without this the new tracking
@@ -870,9 +873,9 @@ export class GitFileWatcher {
       this.watchers.push(watcher);
     } catch {
       // The directory may not exist yet (no fetch has written loose remote
-      // refs, or they are all packed). Silent fallback: packed-refs watching,
-      // Daintree's own fetch-triggered status refresh, and the timed poll
-      // still cover origin movement.
+      // refs, or they are all packed). Silent fallback: a fetch that packs its
+      // refs rewrites the watched packed-refs, and Daintree's own
+      // fetch-triggered status refresh and the timed poll cover the rest.
     }
   }
 

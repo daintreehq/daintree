@@ -13,6 +13,8 @@ import { GitFileWatcher } from "../gitFileWatcher.js";
 let root: string;
 const watchers: GitFileWatcher[] = [];
 const probes: fs.FSWatcher[] = [];
+/** Last time a probe heard a name or a watcher requested a refresh. */
+let lastActivityAt = 0;
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
@@ -41,6 +43,21 @@ function gitVersionAtLeast(major: number, minor: number): boolean {
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DEBOUNCE_MS = 100;
+const QUIET_MS = DEBOUNCE_MS * 4;
+
+/**
+ * Wait until neither the probes nor the watchers have reported anything for
+ * `QUIET_MS`, so a late or replayed event (FSEvents can replay writes from
+ * just before a stream opened) has landed before counts are read or reset.
+ * Bounded: absence after a quiet window is evidence, not a drain guarantee.
+ */
+async function settle(): Promise<void> {
+  const deadline = Date.now() + 5000;
+  await delay(QUIET_MS);
+  while (Date.now() - lastActivityAt < QUIET_MS && Date.now() < deadline) {
+    await delay(50);
+  }
+}
 
 function commit(worktree: string, content: string): void {
   fs.writeFileSync(path.join(worktree, "file.txt"), content);
@@ -56,13 +73,14 @@ interface Armed {
 }
 
 /**
- * Arm real watchers on each worktree, plus raw probes on the common dir and
- * its refs/heads that record every name the platform reports, so a quiet
- * watcher can be told apart from a transaction the platform never reported.
+ * Arm real watchers on each worktree, plus raw probes on the shared
+ * directories they watch, recording every name the platform reports. The
+ * common-dir probe hears `packed-refs.lock` through the same directory a
+ * sibling's watcher does, so it shows the stimulus reached that watcher.
  */
 async function arm(
   targets: Array<{ worktree: string; branch: string }>
-): Promise<{ armed: Armed[]; commonNames: string[]; refNames: string[] }> {
+): Promise<{ armed: Armed[]; commonNames: string[] }> {
   const counts = targets.map(() => 0);
   for (const [index, { worktree, branch }] of targets.entries()) {
     const watcher = new GitFileWatcher({
@@ -71,6 +89,7 @@ async function arm(
       debounceMs: DEBOUNCE_MS,
       onChange: () => {
         counts[index]++;
+        lastActivityAt = Date.now();
       },
     });
     watchers.push(watcher);
@@ -79,26 +98,40 @@ async function arm(
 
   const commonDir = path.join(repoPath(), ".git");
   const commonNames: string[] = [];
-  const refNames: string[] = [];
-  probes.push(
-    fs.watch(commonDir, (_type, name) => {
-      commonNames.push(name ? name.toString() : "");
-    }),
-    fs.watch(path.join(commonDir, "refs", "heads"), (_type, name) => {
-      refNames.push(name ? name.toString() : "");
-    })
-  );
+  for (const dir of [
+    commonDir,
+    path.join(commonDir, "refs", "heads"),
+    path.join(commonDir, "logs"),
+  ]) {
+    probes.push(
+      fs.watch(dir, (_type, name) => {
+        if (dir === commonDir) commonNames.push(name ? name.toString() : "");
+        lastActivityAt = Date.now();
+      })
+    );
+  }
 
-  // FSEvents can replay writes from just before the stream opened.
-  await delay(500);
+  await settle();
   commonNames.length = 0;
-  refNames.length = 0;
   counts.fill(0);
   return {
     armed: counts.map((_, index) => ({ changes: () => counts[index] })),
     commonNames,
-    refNames,
   };
+}
+
+/**
+ * Wait for the transaction's `packed-refs.lock` to reach the common dir. A git
+ * that doesn't take it for this transaction never had the fan-out, so the
+ * case has nothing to prove there.
+ */
+async function heardPackedRefsLock(commonNames: string[]): Promise<boolean> {
+  try {
+    await vi.waitFor(() => expect(commonNames).toContain("packed-refs.lock"), { timeout: 3000 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function setUp(): void {
@@ -134,11 +167,10 @@ describe.skipIf(!gitVersionAtLeast(2, 28))(
       fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it("refreshes only the worktree that committed", async () => {
+    it("refreshes only the worktree that committed", async (ctx) => {
       const {
         armed: [a, b],
         commonNames,
-        refNames,
       } = await arm([
         { worktree: worktreePath("wt-a"), branch: "feat-a" },
         { worktree: worktreePath("wt-b"), branch: "feat-b" },
@@ -146,21 +178,19 @@ describe.skipIf(!gitVersionAtLeast(2, 28))(
 
       commit(worktreePath("wt-a"), "two");
 
-      // B shares both probed directories, so once the probe has heard the
-      // branch ref land, B's watchers have too; then outlast the debounce.
-      await vi.waitFor(() => expect(refNames).toContain("feat-a"), { timeout: 5000 });
+      if (!(await heardPackedRefsLock(commonNames))) ctx.skip();
       await vi.waitFor(() => expect(a.changes()).toBeGreaterThan(0), { timeout: 5000 });
-      await delay(DEBOUNCE_MS * 5);
+      await settle();
 
       // Whatever the commit wrote straight into the common dir was a lock.
       expect(commonNames.every((name) => name === "packed-refs.lock")).toBe(true);
       expect(b.changes()).toBe(0);
     });
 
-    it("refreshes no sibling when a linked worktree creates and switches to a branch", async () => {
+    it("refreshes no sibling when a linked worktree creates and switches to a branch", async (ctx) => {
       const {
         armed: [a, b],
-        refNames,
+        commonNames,
       } = await arm([
         { worktree: worktreePath("wt-a"), branch: "feat-a" },
         { worktree: worktreePath("wt-b"), branch: "feat-b" },
@@ -168,10 +198,11 @@ describe.skipIf(!gitVersionAtLeast(2, 28))(
 
       git(worktreePath("wt-a"), "switch", "-q", "-c", "feat-a2");
 
-      await vi.waitFor(() => expect(refNames).toContain("feat-a2"), { timeout: 5000 });
+      if (!(await heardPackedRefsLock(commonNames))) ctx.skip();
       await vi.waitFor(() => expect(a.changes()).toBeGreaterThan(0), { timeout: 5000 });
-      await delay(DEBOUNCE_MS * 5);
+      await settle();
 
+      expect(commonNames.every((name) => name === "packed-refs.lock")).toBe(true);
       expect(b.changes()).toBe(0);
     });
 
@@ -195,7 +226,8 @@ describe.skipIf(!gitVersionAtLeast(2, 28))(
         { worktree: worktreePath("wt-b"), branch: "feat-b" },
       ]);
 
-      git(repoPath(), "pack-refs", "--all");
+      // Loose refs stay, so the packed-refs rename is the only signal.
+      git(repoPath(), "pack-refs", "--all", "--no-prune");
 
       await vi.waitFor(() => expect(a.changes()).toBeGreaterThan(0), { timeout: 5000 });
       await vi.waitFor(() => expect(b.changes()).toBeGreaterThan(0), { timeout: 5000 });
@@ -208,7 +240,9 @@ describe.skipIf(!gitVersionAtLeast(2, 28))(
         armed: [b],
       } = await arm([{ worktree: worktreePath("wt-b"), branch: "feat-b" }]);
 
-      git(worktreePath("wt-a"), "branch", "-q", "-D", "gone");
+      // Plumbing, because `git branch -D` also rewrites the config, which is
+      // a signal of its own.
+      git(worktreePath("wt-a"), "update-ref", "-d", "refs/heads/gone");
 
       await vi.waitFor(() => expect(b.changes()).toBeGreaterThan(0), { timeout: 5000 });
     });
