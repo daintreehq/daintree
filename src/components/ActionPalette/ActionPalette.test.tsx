@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 interface MockSearchablePaletteProps {
@@ -9,6 +9,11 @@ interface MockSearchablePaletteProps {
   emptyContent?: React.ReactNode;
   [key: string]: unknown;
 }
+
+// Draws the sectioned body inside the mocked palette, so the component's own
+// reveal effect sees a mounted listbox. Off by default: other tests render
+// `renderBody` themselves.
+const drawBodyInline = { current: false };
 
 const lastSearchablePaletteProps: { current: MockSearchablePaletteProps | null } = {
   current: null,
@@ -35,6 +40,9 @@ vi.mock("@/components/ui/SearchablePalette", () => ({
       <div data-testid="searchable-palette">
         {(props.inputPrefix as React.ReactNode) ?? null}
         {props.beforeList ?? null}
+        {drawBodyInline.current
+          ? (props.renderBody as (() => React.ReactNode) | undefined)?.()
+          : null}
         {showEmptyContent ? (
           props.emptyMessage ? (
             <p>{props.emptyMessage as string}</p>
@@ -199,6 +207,61 @@ describe("ActionPalette", () => {
     );
 
     expect(typeof lastSearchablePaletteProps.current?.renderBody).toBe("function");
+  });
+
+  describe("sectioned body reveal", () => {
+    const rows = [makeItem("a.one", "One"), makeItem("b.two", "Two"), makeItem("c.three", "Three")];
+    const sections = [{ id: "category:general", label: "General", start: 0, count: 3 }];
+    const realMatches = Element.prototype.matches;
+    const realScrollIntoView = Element.prototype.scrollIntoView;
+    let scrollIntoView: ReturnType<typeof vi.fn>;
+    let hovered: Element | null = null;
+
+    beforeEach(() => {
+      drawBodyInline.current = true;
+      hovered = null;
+      scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView as unknown as typeof realScrollIntoView;
+      // jsdom has no pointer, so `:hover` is stubbed onto the row being pointed at.
+      Element.prototype.matches = function (this: Element, selector: string) {
+        if (selector === ":hover") return this === hovered;
+        return realMatches.call(this, selector);
+      } as typeof realMatches;
+    });
+
+    afterEach(() => {
+      drawBodyInline.current = false;
+      Element.prototype.matches = realMatches;
+      Element.prototype.scrollIntoView = realScrollIntoView;
+    });
+
+    const palette = (selectedIndex: number) => (
+      <ActionPalette
+        {...baseProps}
+        results={rows}
+        totalResults={rows.length}
+        sections={sections}
+        selectedIndex={selectedIndex}
+      />
+    );
+
+    it("does not scroll a row the pointer just claimed, but does for a key-driven move", () => {
+      const { container, rerender } = render(palette(0));
+      const rowEl = (id: string) => container.querySelector(`[data-action-id="${id}"]`)!;
+      scrollIntoView.mockClear();
+
+      hovered = rowEl("b.two");
+      fireEvent.pointerMove(hovered);
+      rerender(palette(1));
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      // A key step onto the row beneath a resting pointer still owes the reveal.
+      hovered = rowEl("c.three");
+      fireEvent.keyDown(document.body, { key: "ArrowDown" });
+      rerender(palette(2));
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(rowEl("c.three"));
+    });
   });
 
   it("does NOT pass a renderBody callback when a query is typed", () => {

@@ -15,6 +15,7 @@ import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { UI_PALETTE_EXIT_DURATION } from "@/lib/animationUtils";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import { PaletteScopeChip } from "@/components/ui/PaletteScopeChip";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { ActionPaletteItem, HIDE_SHORTCUT, PIN_SHORTCUT } from "./ActionPaletteItem";
@@ -193,6 +194,9 @@ export function ActionPalette({
     const selectedId = results[selectedIndex]?.id;
     if (!selectedId) return;
     const row = listEl.querySelector<HTMLElement>(`[data-action-id="${CSS.escape(selectedId)}"]`);
+    // A row under the pointer was just claimed by it; revealing it would
+    // scroll a half-visible row out from under the pointer.
+    if (isPointerClaimed(row)) return;
     row?.scrollIntoView({ block: "nearest", behavior: "instant" });
   }, [showSections, selectedIndex, results]);
 
