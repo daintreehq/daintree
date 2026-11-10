@@ -231,7 +231,8 @@ export interface CanopyTerminalView {
   holdsSize?: boolean;
   /**
    * The stream opens following the PTY's grid, taking no size until the user
-   * works in it: the Canopy window's, which stays open all day (#16339).
+   * works in it: the Canopy window's, which stays open all day (#16339). Also
+   * while a main window shows the terminal in a pane, which has the size (#16737).
    */
   following?: boolean;
 }
@@ -264,7 +265,9 @@ export type CanopyTerminalData =
     }
   /**
    * The PTY's grid, or the stream saying afresh what it is. `following` says the
-   * panel takes no size of its own until the user interacts with it (#16333).
+   * panel takes no size of its own until the user interacts with it (#16333),
+   * or while a main window's pane shows the terminal (#16737). A grid without
+   * it after one with it lets the panel take the size again.
    */
   | {
       kind: "resize";

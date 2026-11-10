@@ -318,6 +318,7 @@ export const CHANNELS = {
   CANOPY_GET_MODEL: "canopy:get-model",
   CANOPY_GET_SIZE_HOLDS: "canopy:get-size-holds",
   CANOPY_TAKE_TERMINAL_SIZE: "canopy:take-terminal-size",
+  CANOPY_SET_VISIBLE_PANE_TERMINALS: "canopy:set-visible-pane-terminals",
   CANOPY_RETRY_MODEL: "canopy:retry-model",
   CANOPY_REMOVE_MODELS: "canopy:remove-models",
   CANOPY_RENAME: "canopy:rename",

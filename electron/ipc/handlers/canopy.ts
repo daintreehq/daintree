@@ -97,6 +97,7 @@ import {
   beginWatchRequest,
   isCurrentWatchRequest,
   followDriveLeaseChange,
+  forgetVisiblePaneTerminals,
   claimWatchedRunSize,
   claimWatchedSize,
   onSizeHoldsChange,
@@ -105,6 +106,7 @@ import {
   stopAllTerminalWatches,
   stopWorkerTerminalWatches,
   resizeWatchedTerminal,
+  setVisiblePaneTerminals,
   stopTerminalWatch,
   stopTerminalWatchById,
   watchTerminal,
@@ -537,6 +539,8 @@ function assertRunId(value: unknown): asserts value is string {
 
 /** The most runs one bulk read change may name. */
 const MAX_READ_BATCH = 500;
+/** The most terminals one view may report showing in its panes: far above any real grid. */
+const MAX_VISIBLE_PANES = 500;
 /** Every run a panel can list, the whole fleet across projects: far above any real one. */
 const MAX_SHOWN_RUNS = 10_000;
 /** How much of a terminal a search reads: its screen and the history the describer reads. */
@@ -1406,6 +1410,7 @@ function syncActive(): void {
 
 /** A view that stopped showing its panel without saying so (reload, crash, teardown). */
 function forgetView(id: number): void {
+  forgetVisiblePaneTerminals(id);
   stopTerminalWatch(id);
   viewScopes.delete(id);
   viewShown.delete(id);
@@ -1961,6 +1966,42 @@ export const canopyNamespace = defineIpcNamespace({
           return;
         }
         yieldSizeToPane(terminalId);
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * The terminals a main window's view shows in a pane, all of them each
+     * time. Such a pane owns its terminal's size while its view may size it,
+     * and every Canopy panel follows meanwhile (#16737). Not gated on Canopy:
+     * a panel opened later must find the pane already there.
+     */
+    setVisiblePaneTerminals: op(
+      CANOPY_METHOD_CHANNELS.setVisiblePaneTerminals,
+      async (ctx, terminalIds: string[]): Promise<void> => {
+        // Not rate-limited, as `setShown` isn't: a dropped report would leave the
+        // view's last one standing, and the renderer sends one per change at most.
+        if (!Array.isArray(terminalIds) || terminalIds.length > MAX_VISIBLE_PANES) {
+          throw new Error("Invalid terminals");
+        }
+        for (const terminalId of terminalIds) assertRunId(terminalId);
+        // Canopy's own windows show panels, not panes.
+        if (isViewer(ctx) || followsUntilUsed(ctx)) return;
+        watchView(ctx);
+        followDriveLease();
+        const { endpoint } = ctx;
+        setVisiblePaneTerminals(ctx.webContentsId, terminalIds, (terminalId) => {
+          const ptyClient = getPtyClient();
+          if (!ptyClient) return false;
+          // A remote view sizes only its own project's terminals.
+          if (
+            endpoint.kind === "remote-view" &&
+            ptyClient.getTerminalProjectId(terminalId) !== endpoint.projectId
+          ) {
+            return false;
+          }
+          return drivesRun(ctx, terminalId);
+        });
       },
       { withContext: true }
     ),

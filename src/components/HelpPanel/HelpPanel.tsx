@@ -103,6 +103,7 @@ import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 import { isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { hidePaneTerminal } from "@/services/terminal/visiblePaneTerminals";
 import {
   useGlobalAssistantIdentity,
   useProjectAssistantIdentity,
@@ -800,6 +801,15 @@ export function HelpPanel({
       return () => service.setFocused(terminalId, false);
     });
   }, [isOpen, isVisible, hasDomFocus, terminalId]);
+
+  // Closed or gesture-hidden, the panel slides off-canvas with its terminal
+  // still attached, and nothing the terminal service sees says so. Its pane
+  // isn't shown, so a Canopy panel may size the session again (#16737).
+  const paneShown = isOpen && isVisible;
+  useEffect(() => {
+    if (!terminalId || paneShown) return undefined;
+    return hidePaneTerminal(terminalId);
+  }, [paneShown, terminalId]);
 
   const { isResizing, handleResizeStart, handleResizeKeyDown, handleResetWidth } =
     useHelpPanelResize({ width, setWidth, onResizeStart, onResizeEnd });

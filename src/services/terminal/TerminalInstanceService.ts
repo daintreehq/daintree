@@ -11,6 +11,7 @@ import {
 import { terminalClient } from "@/clients";
 import { getDriveLeaseSnapshot, subscribeDriveLeaseSnapshot } from "./inputGate";
 import { isCanopySizeHeld, subscribeCanopySizeHolds, takeCanopySize } from "./canopySizeHolds";
+import { noteVisiblePanesChanged, registerVisiblePaneSource } from "./visiblePaneTerminals";
 import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
 import type { RendererTerminalBufferCounts } from "@shared/types/memoryAccounting";
@@ -243,6 +244,7 @@ class TerminalInstanceService {
   private unsubExit: (() => void) | null = null;
   private unsubDriveLease: (() => void) | null = null;
   private unsubCanopySizeHolds: (() => void) | null = null;
+  private offVisiblePanes: (() => void) | null = null;
   /**
    * Terminals held at the PTY's grid because another frontend owns their size:
    * it drives this project (#13282), or a Canopy panel on another machine
@@ -1056,6 +1058,7 @@ class TerminalInstanceService {
     const wasVisible = this.instances.get(id)?.isVisible;
     this.revealController.setVisible(id, isVisible, expectedGeneration);
     this.historyRelease.sync(id);
+    noteVisiblePanesChanged();
     const managed = this.instances.get(id);
     // A pane revealed mid-stream can stay at BURST, so the tier-upgrade
     // re-derive never fires; lift its pressure cap here instead.
@@ -1295,6 +1298,21 @@ class TerminalInstanceService {
     if (this.unsubDriveLease) return;
     this.unsubDriveLease = subscribeDriveLeaseSnapshot(() => this.syncWatchMode());
     this.unsubCanopySizeHolds = subscribeCanopySizeHolds(() => this.syncWatchMode());
+  }
+
+  /**
+   * The terminals this service shows in a pane: what main lets size their PTY
+   * ahead of Canopy. A pane the dock parked stays mounted and can keep its last
+   * visible reading, so the engine is asked whether it renders at all.
+   */
+  private *visiblePaneIds(): Iterable<string> {
+    for (const [id, managed] of this.instances) {
+      if (!managed.isVisible || managed.isDetached) continue;
+      const host = managed.hostElement;
+      if (!host.isConnected) continue;
+      if (typeof host.checkVisibility === "function" && !host.checkVisibility()) continue;
+      yield id;
+    }
   }
 
   /**
@@ -1854,6 +1872,7 @@ class TerminalInstanceService {
     this.instances.set(id, managed);
     this.ensureResizeResultSubscription();
     this.ensureDriveLeaseSubscription();
+    this.offVisiblePanes ??= registerVisiblePaneSource(() => this.visiblePaneIds());
     if (this.followsPty(id)) this.watchTerminal(id, managed);
 
     const initialTier = getRefreshTier ? getRefreshTier() : TerminalRefreshTier.FOCUSED;
@@ -2624,6 +2643,7 @@ class TerminalInstanceService {
     managed.isVisible = false;
     managed.isDetached = true;
     this.historyRelease.sync(id);
+    noteVisiblePanesChanged();
   }
 
   detachForProjectSwitch(id: string): void {
@@ -2636,6 +2656,7 @@ class TerminalInstanceService {
 
     managed.isVisible = false;
     managed.isDetached = true;
+    noteVisiblePanesChanged();
 
     this.resizeController.clearResizeJob(managed);
     this.resizeController.clearSettledTimer(id);
@@ -3762,6 +3783,7 @@ class TerminalInstanceService {
     managed.scrollbackRestoreState = "none";
 
     this.instances.delete(id);
+    if (managed.isVisible) noteVisiblePanesChanged();
     if (this.watchHolds.delete(id)) {
       this.watchEchoSeq.delete(id);
       this.watchUnseeded.delete(id);
@@ -3911,6 +3933,8 @@ class TerminalInstanceService {
     this.reconciliationWatchdog.dispose();
     this.writeController.dispose();
     this.instances.forEach((_, id) => this.destroy(id));
+    this.offVisiblePanes?.();
+    this.offVisiblePanes = null;
     this.offscreenManager.dispose();
     this.webGLManager.dispose();
     this.rendererPolicy.dispose();

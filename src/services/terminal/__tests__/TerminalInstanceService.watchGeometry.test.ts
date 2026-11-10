@@ -73,6 +73,9 @@ type WatchTestService = {
     options?: { automatic?: boolean; takesSize?: boolean }
   ) => void;
   runResizePass: (ids: string[], options?: { immediate?: boolean }) => void;
+  setVisible: (id: string, isVisible: boolean) => void;
+  detach: (id: string, container: HTMLElement | null) => void;
+  detachForProjectSwitch: (id: string) => void;
   destroy: (id: string) => void;
   dispose: () => void;
   resizeController: {
@@ -392,6 +395,7 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
   let pushHolds: (terminalIds: string[]) => void;
   let hydrate: string[];
   const takeTerminalSize = vi.fn(async (_terminalId: string) => {});
+  const setVisiblePaneTerminals = vi.fn(async (_terminalIds: string[]) => {});
 
   beforeEach(async () => {
     vi.resetModules();
@@ -410,7 +414,11 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
             return () => {};
           }),
         },
-        canopy: { getSizeHolds: vi.fn(async () => hydrate), takeTerminalSize },
+        canopy: {
+          getSizeHolds: vi.fn(async () => hydrate),
+          takeTerminalSize,
+          setVisiblePaneTerminals,
+        },
       },
     });
 
@@ -521,6 +529,82 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
       service.notifyUserInput("t1", "", { automatic: true });
       expect(takeTerminalSize).not.toHaveBeenCalled();
     });
+  });
+
+  /** Put the pane's host where a grid would: in the document. */
+  const mountPane = (id: string) => {
+    const slot = document.createElement("div");
+    document.body.appendChild(slot);
+    slot.appendChild(service.instances.get(id)!.hostElement);
+  };
+
+  it("tells main which terminals its panes show, so they outrank a panel (#16737)", async () => {
+    setVisiblePaneTerminals.mockClear();
+    await service.prewarmTerminal("t1", "terminal", {});
+    await service.prewarmTerminal("t2", "terminal", {});
+    for (const id of ["t1", "t2"]) mountPane(id);
+    service.setVisible("t1", true);
+    service.setVisible("t2", true);
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t1", "t2"]]);
+
+    service.setVisible("t2", false);
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t1"]]);
+
+    service.detachForProjectSwitch("t1");
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([[]]);
+
+    service.setVisible("t2", true);
+    await settle();
+    service.destroy("t2");
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.slice(-2)).toEqual([[["t2"]], [[]]]);
+  });
+
+  it("reports no pane that is detached, parked where nothing renders, or gone with its service", async () => {
+    setVisiblePaneTerminals.mockClear();
+    for (const id of ["t1", "t2", "t3"]) {
+      await service.prewarmTerminal(id, "terminal", {});
+      mountPane(id);
+      service.setVisible(id, true);
+    }
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t1", "t2", "t3"]]);
+
+    const host = service.instances.get("t1")!.hostElement;
+    service.detach("t1", host.parentElement);
+    // A stale reading after the detach still names no shown pane.
+    service.setVisible("t1", true);
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t2", "t3"]]);
+
+    // The dock's parking container: mounted and laid out, but never rendered.
+    const t2 = service.instances.get("t2")!.hostElement;
+    let renders = false;
+    t2.checkVisibility = () => renders;
+    service.setVisible("t3", true);
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t3"]]);
+    renders = true;
+    service.setVisible("t3", true);
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t2", "t3"]]);
+
+    // Out of the document, as a pane between two homes is.
+    const slot = t2.parentElement!;
+    t2.remove();
+    service.setVisible("t3", true);
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t3"]]);
+    slot.appendChild(t2);
+    service.setVisible("t3", true);
+    await settle();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([["t2", "t3"]]);
+
+    service.dispose();
+    expect(setVisiblePaneTerminals.mock.calls.at(-1)).toEqual([[]]);
   });
 
   it("keeps a pane held while another frontend still drives the project", async () => {

@@ -38,6 +38,7 @@ export const CANOPY_METHOD_CHANNELS = {
   getModel: "canopy:get-model",
   getSizeHolds: "canopy:get-size-holds",
   takeTerminalSize: "canopy:take-terminal-size",
+  setVisiblePaneTerminals: "canopy:set-visible-pane-terminals",
   retryModel: "canopy:retry-model",
   removeModels: "canopy:remove-models",
   terminalInput: "canopy:terminal-input",

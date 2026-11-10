@@ -245,7 +245,8 @@ export function remoteCanopyTerminalApi(hostId: HostId): CanopyTerminalApi {
     unwatchTerminal: on("canopy:unwatch-terminal"),
     terminalInput: on("canopy:terminal-input"),
     terminalResize: on("canopy:terminal-resize"),
-    // A panel never follows there: another host's holds answer to its drive lease.
+    // Nothing to claim there: another host's holds answer to its drive lease and
+    // its own windows' panes, which tell the panel when to follow and when to stop.
     terminalClaimSize: () => Promise.resolve(),
     terminalSubmit: on("canopy:terminal-submit"),
     terminalSendKey: on("canopy:terminal-send-key"),

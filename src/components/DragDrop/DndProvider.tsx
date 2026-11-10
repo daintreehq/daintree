@@ -119,6 +119,7 @@ import {
 import { useDragRecovery } from "./useDragRecovery";
 import { trashDroppedPanel } from "./trashDrop";
 import { pluralize } from "@/lib/pluralize";
+import { noteVisiblePanesChanged } from "@/services/terminal/visiblePaneTerminals";
 import { MOUSE_SENSOR_OPTIONS, TOUCH_SENSOR_OPTIONS } from "./dragActivation";
 import {
   DURATION_100,
@@ -1221,6 +1222,7 @@ export function DndProvider({ children }: DndProviderProps) {
           if (managed?.hostElement.isConnected) {
             // Force service visibility true since we know grid terminals should be visible
             managed.isVisible = true;
+            noteVisiblePanesChanged();
 
             // CRITICAL: Re-apply renderer policy to update lastAppliedTier.
             // Without this, terminals stuck in BACKGROUND tier continue dropping writes

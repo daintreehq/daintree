@@ -69,7 +69,9 @@ interface Watch {
   /**
    * The panel shows the PTY's grid and takes no size of its own: another
    * surface has it, or its window was put away. No measure ends this, only the
-   * user's own interaction with the panel, or a new selection (#16333).
+   * user's own interaction with the panel, or a new selection (#16333). A
+   * main-view pane showing the terminal makes it follow as well, without
+   * touching this, so it takes the size again once the pane goes (#16737).
    */
   following: boolean;
   /** The PTY incarnation the stream is for; a different one is a respawn. */
@@ -92,7 +94,8 @@ interface Watch {
   binding: AssistantWatchBinding | null;
   /**
    * A panel reading this host from another machine. Its hold answers to the
-   * drive lease alone: no pane here takes it back, and no window here puts it away.
+   * drive lease and to a main-view pane showing the terminal: no interaction
+   * here takes it back, and no window here puts it away.
    */
   remote: boolean;
 }
@@ -109,6 +112,26 @@ const holders = new Map<string, string>();
 const MAX_PENDING_HOLDS = 8;
 let publishedSizeHolds = "[]";
 const sizeHoldListeners = new Set<(terminalIds: string[]) => void>();
+
+/**
+ * Per main-window view, local or remote, the terminals it shows in a pane, and
+ * whether it may size each one now: a pane whose resizes the PTY would drop
+ * (another screen drives its project) can't own the size.
+ */
+interface PanePresence {
+  terminalIds: ReadonlySet<string>;
+  maySize: (terminalId: string) => boolean;
+}
+const panePresence = new Map<number, PanePresence>();
+/**
+ * The terminals a main-view pane owns the size of, as last reconciled. The
+ * main view always outranks Canopy (#16737): while one of these is shown, no
+ * panel holds it, from this machine or another, and every panel follows.
+ */
+let paneOwned: ReadonlySet<string> = new Set();
+
+/** The panel draws the PTY's grid: by its own state, or because a main-view pane has the size. */
+const followsGrid = (watch: Watch): boolean => watch.following || paneOwned.has(watch.runId);
 
 const sameSize = (a: GridSize | null, b: GridSize | null): boolean =>
   a !== null && b !== null && a.cols === b.cols && a.rows === b.rows;
@@ -167,7 +190,9 @@ function stopViewWatches(webContentsId: number): void {
  * the stream with nothing to hand back, and nothing typed into the view can
  * reach a successor under the same id.
  *
- * One surface owns the size at a time, and only the user moves it: the
+ * One surface owns the size at a time. A main-view pane showing the terminal
+ * always has it, and every panel follows the PTY's grid while one does
+ * (`setVisiblePaneTerminals`, #16737). Otherwise only the user moves it: the
  * interaction that hands it over is what `yieldSizeToPane` and
  * `claimWatchedSize` hear. Until then every other view follows the PTY's grid.
  * A view that `followsUntilUsed` starts out following, so selecting a run
@@ -268,7 +293,7 @@ export async function watchTerminal(
       runId,
       cols: grid.cols,
       rows: grid.rows,
-      ...(watch.following ? { following: true } : {}),
+      ...(followsGrid(watch) ? { following: true } : {}),
     });
   let releaseMirror: (() => void) | undefined;
   let releaseBinding: (() => void) | undefined;
@@ -389,12 +414,12 @@ export async function watchTerminal(
   }
   // Told to follow before it had a grid to say so with; the view holds this
   // back for the stream's answer, as it does any chunk ahead of it.
-  if (watch.following) watch.announceGrid();
+  if (followsGrid(watch)) watch.announceGrid();
   return {
     watchId,
     // In the answer too, so the panel never measures for a size it won't get
     // while that message is still on its way.
-    ...(watch.following ? { following: true } : {}),
+    ...(followsGrid(watch) ? { following: true } : {}),
     snapshot: snapshot
       ? {
           data: snapshot.data,
@@ -449,7 +474,7 @@ export function resizeWatchedTerminal(
   }
   if (watch.ownerSize === null) return;
   // Measures keep coming while the panel follows; none of them is the user's.
-  if (watch.following) return;
+  if (followsGrid(watch)) return;
   const holder = holders.get(watch.runId);
   const other = holder !== undefined && holder !== watch.key ? watches.get(holder) : undefined;
   // Another view's hold stands unless that view has lost control of the run.
@@ -491,7 +516,8 @@ function followAll(runId: string): void {
  * The user turned to the terminal's own pane: every panel here follows, and the
  * pane's fit moves the PTY, once, when it hears the hold has gone. The size
  * remembered for the pane isn't sent first, as the box may have moved since. A
- * hold from another machine stands.
+ * hold from another machine stands. A pane shown in a view that reports its
+ * panes has the size already; this covers one that doesn't.
  */
 export function yieldSizeToPane(runId: string): void {
   const holder = holders.get(runId);
@@ -570,11 +596,91 @@ export function sizeHolds(): string[] {
   const held: string[] = [];
   for (const [runId, holder] of holders) {
     const watch = watches.get(holder);
-    if (watch && watch.heldSize !== null && watch.isCurrent() && watch.mayResize()) {
+    if (
+      watch &&
+      watch.heldSize !== null &&
+      !paneOwned.has(runId) &&
+      watch.isCurrent() &&
+      watch.mayResize()
+    ) {
       held.push(runId);
     }
   }
   return held.sort();
+}
+
+function panesOwning(): Set<string> {
+  const owned = new Set<string>();
+  for (const { terminalIds, maySize } of panePresence.values()) {
+    for (const terminalId of terminalIds) {
+      if (!owned.has(terminalId) && maySize(terminalId)) owned.add(terminalId);
+    }
+  }
+  return owned;
+}
+
+/**
+ * Bring the panels in line with which terminals a main-view pane now owns. A
+ * terminal a pane has just taken loses its hold with nothing handed back: the
+ * pane fits its own box once it hears the hold has gone, so the PTY moves
+ * once, to the pane. Its panels are told to follow; their late echoes are
+ * still known as theirs. Once no pane shows it, a panel that was taking the
+ * size is told the grid with no `following`, and measures and holds again;
+ * one following on its own goes on following. Returns the terminals whose
+ * panels were told.
+ */
+function reconcilePaneOwnership(): Set<string> {
+  const before = paneOwned;
+  const now = panesOwning();
+  paneOwned = now;
+  const moved = new Set<string>();
+  for (const runId of now) {
+    if (before.has(runId)) continue;
+    moved.add(runId);
+    holders.delete(runId);
+    for (const watch of watches.values()) {
+      if (watch.runId !== runId) continue;
+      watch.heldSize = null;
+      watch.announceGrid();
+    }
+  }
+  for (const runId of before) {
+    if (now.has(runId)) continue;
+    moved.add(runId);
+    for (const watch of watches.values()) {
+      if (watch.runId === runId && !watch.following && watch.isCurrent()) watch.announceGrid();
+    }
+  }
+  return moved;
+}
+
+/**
+ * The terminals a main-window view shows in a pane, replacing what it said
+ * before; an empty list once it shows none, or is put away. `maySize` is asked
+ * again whenever the drive lease moves.
+ */
+export function setVisiblePaneTerminals(
+  viewId: number,
+  terminalIds: Iterable<string>,
+  maySize: (terminalId: string) => boolean
+): void {
+  const ids = new Set(terminalIds);
+  if (ids.size === 0) panePresence.delete(viewId);
+  else panePresence.set(viewId, { terminalIds: ids, maySize });
+  reconcilePaneOwnership();
+  publishSizeHolds();
+}
+
+/** The view went away: none of its panes shows anything any more. */
+export function forgetVisiblePaneTerminals(viewId: number): void {
+  if (!panePresence.delete(viewId)) return;
+  reconcilePaneOwnership();
+  publishSizeHolds();
+}
+
+/** Test seam: the terminals a main-view pane owns the size of. */
+export function paneOwnedTerminals(): string[] {
+  return [...paneOwned].sort();
 }
 
 /** Tell the listeners when {@link sizeHolds} changed; also after a drive lease moves. */
@@ -591,15 +697,17 @@ export function publishSizeHolds(): void {
  * nothing handed back, so the new driver's panes fit again; one that may size
  * again is told the PTY's grid, which has it ask for its own once more. One
  * that follows goes on following: a lease moving is nothing the user did to it.
+ * Which panes may own the size moves with the lease too, and is settled first.
  */
 export function followDriveLeaseChange(): void {
+  const told = reconcilePaneOwnership();
   for (const [key, watch] of watches) {
     if (!watch.isCurrent()) continue;
     if (!watch.mayResize()) {
       if (holders.get(watch.runId) === key) holders.delete(watch.runId);
       watch.heldSize = null;
       watch.pendingHolds = [];
-    } else if (watch.heldSize === null && !watch.following) {
+    } else if (watch.heldSize === null && !followsGrid(watch) && !told.has(watch.runId)) {
       watch.announceGrid();
     }
   }
@@ -636,6 +744,8 @@ export function stopTerminalWatchById(webContentsId: number, watchId: number): v
 export function stopAllTerminalWatches(): void {
   requests.clear();
   for (const key of [...watches.keys()]) stopWatch(key);
+  panePresence.clear();
+  paneOwned = new Set();
 }
 
 /**

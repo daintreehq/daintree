@@ -490,6 +490,10 @@ export interface GeneratedIpcInvokeMap {
     args: [runIds: string[]];
     result: void;
   };
+  "canopy:set-visible-pane-terminals": {
+    args: [terminalIds: string[]];
+    result: void;
+  };
   "canopy:submit-reply": {
     args: [
       runId: string,

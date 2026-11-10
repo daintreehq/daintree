@@ -173,6 +173,9 @@ export interface GeneratedElectronAPI {
     setShown(
       ...args: IpcInvokeMap["canopy:set-shown"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-shown"]["result"]>;
+    setVisiblePaneTerminals(
+      ...args: IpcInvokeMap["canopy:set-visible-pane-terminals"]["args"]
+    ): Promise<IpcInvokeMap["canopy:set-visible-pane-terminals"]["result"]>;
     submitReply(
       ...args: IpcInvokeMap["canopy:submit-reply"]["args"]
     ): Promise<IpcInvokeMap["canopy:submit-reply"]["result"]>;
