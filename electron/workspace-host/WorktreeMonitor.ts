@@ -36,6 +36,9 @@ import {
 import type { StatusAdmissionController } from "./StatusAdmissionController.js";
 import { TimeoutError, withTimeout } from "../utils/withTimeout.js";
 import type { ClaimedIssue, IssueClaimProvenance } from "../services/issueBranchClaim.js";
+import { logDebug } from "../utils/logger.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { INDEX_REFRESH_DELAY_MS, refreshWorktreeIndex } from "./indexRefresh.js";
 
 // Hard ceiling for individual filesystem syscalls on the poll path. On a
 // healthy disk these return in well under a millisecond; on a stalled mount
@@ -100,6 +103,12 @@ export interface WorktreePollingPermissions {
   backgroundWork: boolean;
   /** Coalesce harder and meter automatic status passes. */
   attenuated: boolean;
+}
+
+interface IndexRefreshRequest {
+  readonly notBefore: number;
+  /** Whether the service still holds this monitor for the worktree. */
+  readonly isOwned: () => boolean;
 }
 
 export interface WorktreeMonitorConfig {
@@ -289,6 +298,14 @@ export class WorktreeMonitor {
   // Cleared by `clearTimers()` so `stop()` cancels the deferred poll.
   private initialStatusTimer: NodeJS.Timeout | null = null;
   private firstStatusTimer: NodeJS.Timeout | null = null;
+  // The one index refresh a worktree this process created is owed (#16679),
+  // held from `scheduleIndexRefresh` until its git may start. One that comes
+  // due during a pause or a closed download gate stays owed, and
+  // `scheduleNextPoll` re-arms it when status work runs again.
+  private indexRefresh: IndexRefreshRequest | null = null;
+  private indexRefreshScheduled = false;
+  private indexRefreshTimer: NodeJS.Timeout | null = null;
+  private indexRefreshQueued = false;
 
   // Extra state
   private _createdAt: number | undefined;
@@ -1853,9 +1870,95 @@ export class WorktreeMonitor {
     this.armFirstStatusRecovery(delayMs);
   }
 
+  /**
+   * Owe this worktree one index refresh (#16679). The create path calls it;
+   * every later call is a no-op. Nothing runs here, so the create result never
+   * waits on git.
+   */
+  scheduleIndexRefresh(isOwned: () => boolean, delayMs: number = INDEX_REFRESH_DELAY_MS): void {
+    if (this.indexRefreshScheduled || !this._isRunning) return;
+    this.indexRefreshScheduled = true;
+    this.indexRefresh = { notBefore: Date.now() + delayMs, isOwned };
+    this.armIndexRefresh();
+  }
+
+  /**
+   * The refresh only pays for itself in status passes, so it runs when they
+   * do: a backgrounded worktree with no agent waits for the resume, one with an
+   * agent keeps polling and keeps its refresh. A closed gate means git would
+   * block on placeholders.
+   */
+  private get indexRefreshAllowed(): boolean {
+    return this._isRunning && this.statusWorkAllowed && this.statusDownloadGate === "open";
+  }
+
+  private armIndexRefresh(): void {
+    const request = this.indexRefresh;
+    if (!request || this.indexRefreshTimer || this.indexRefreshQueued) return;
+    if (!this.indexRefreshAllowed) return;
+    this.indexRefreshTimer = setTimeout(
+      () => {
+        this.indexRefreshTimer = null;
+        void this.runIndexRefresh(request);
+      },
+      Math.max(0, request.notBefore - Date.now())
+    );
+    this.indexRefreshTimer.unref?.();
+  }
+
+  private async runIndexRefresh(request: IndexRefreshRequest): Promise<void> {
+    const run = async (): Promise<void> => {
+      // Paused or gated since it was armed: still owed.
+      if (this.indexRefresh !== request || !this.indexRefreshAllowed) return;
+      // A worktree deleted or recreated at this path since has its own monitor.
+      if (!request.isOwned()) {
+        this.indexRefresh = null;
+        return;
+      }
+      // Spent once git may start, whatever becomes of it: a held lock means an
+      // agent's git is writing the index, which heals it anyway. Nothing stops
+      // this git once started; see `refreshWorktreeIndex`.
+      this.indexRefresh = null;
+      try {
+        await refreshWorktreeIndex(
+          this.path,
+          this.wslInvocation,
+          () => this.indexRefreshAllowed && request.isOwned()
+        );
+      } catch (error) {
+        logDebug("[WorktreeMonitor] Index refresh skipped", {
+          worktreeId: this.id,
+          error: formatErrorMessage(error, "git update-index failed"),
+        });
+      }
+    };
+    this.indexRefreshQueued = true;
+    try {
+      if (this.pollQueue) {
+        // Ranked with this worktree's own status passes: the queue has no aging,
+        // so anything lower could wait behind a busy fleet indefinitely.
+        await this.pollQueue.add(run, {
+          signal: this._pollAbortController.signal,
+          priority: this.isElevated ? 1 : 0,
+        });
+      } else {
+        await run();
+      }
+    } catch {
+      // Withdrawn from the queue by stop().
+    } finally {
+      this.indexRefreshQueued = false;
+    }
+  }
+
   stop(): void {
     this._isRunning = false;
     this._pollAbortController.abort();
+    this.indexRefresh = null;
+    if (this.indexRefreshTimer) {
+      clearTimeout(this.indexRefreshTimer);
+      this.indexRefreshTimer = null;
+    }
     // An in-flight pass belongs to the lifecycle that just ended. Free its slot
     // so a restart can run its own instead of waiting for the old one to settle.
     this.gitStatusPass.abandon();
@@ -2349,6 +2452,9 @@ export class WorktreeMonitor {
     if (!this._isRunning || !this.statusWorkAllowed) {
       return;
     }
+    // Every path that lets status work run again comes through here: a resume,
+    // an agent starting, the download gate opening. An owed refresh goes with it.
+    this.armIndexRefresh();
 
     if (this.pollingStrategy.isCircuitBreakerTripped()) {
       this.scheduleCircuitBreakerRetry();

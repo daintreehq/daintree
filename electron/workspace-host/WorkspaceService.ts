@@ -3574,6 +3574,14 @@ export class WorkspaceService {
       // reconcile 5s later).
       this.topologyWatcher.clearPending(pendingCreateKey);
 
+      // The checkout left the index racily clean, and our status never writes
+      // it back (#16679). Only a timer is armed here; git runs seconds later,
+      // and only while this monitor still stands for the worktree.
+      const createdMonitor = this.monitors.get(canonicalWorktreeId);
+      createdMonitor?.scheduleIndexRefresh(
+        () => this.monitors.get(canonicalWorktreeId) === createdMonitor
+      );
+
       if (options.worktreeMode && options.worktreeMode !== "local") {
         const m = this.monitors.get(canonicalWorktreeId);
         if (m) {
