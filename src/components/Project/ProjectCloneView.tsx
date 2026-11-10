@@ -13,6 +13,11 @@ import { useProjectCloneJob } from "@/hooks/useProjectCloneJob";
 import { actionService } from "@/services/ActionService";
 import { useProjectStore } from "@/store/projectStore";
 import { reloadView } from "@/utils/reloadView";
+import {
+  buildCloneSignInAction,
+  loadCloneForgeProviders,
+  type CloneForgeProvider,
+} from "./cloneSignIn";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { Project } from "@shared/types";
 import type { ProjectCloneJobSnapshot } from "@shared/types/ipc/projectClone";
@@ -73,8 +78,23 @@ export function ProjectCloneView({ project }: { project: Project }) {
   const [retrying, setRetrying] = useState(false);
   const [actionError, setActionError] = useState<{ title: string; message: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [forgeProviders, setForgeProviders] = useState<CloneForgeProvider[]>([]);
 
   const state = viewState(project, job);
+  const authFailed = state === "failed" && job?.gitReason === "auth-failed";
+
+  // Read only for a failure that sign-in could fix; the banner stays plain
+  // until the providers arrive or if they never do.
+  useEffect(() => {
+    if (!authFailed) return;
+    let cancelled = false;
+    void loadCloneForgeProviders().then((providers) => {
+      if (!cancelled) setForgeProviders(providers);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authFailed]);
   const stages = job?.stages ?? [];
   const currentIndex = stages.findIndex((stage) => stage.key === job?.currentStageKey);
   const currentStage = currentIndex === -1 ? null : (stages[currentIndex] ?? null);
@@ -94,6 +114,8 @@ export function ProjectCloneView({ project }: { project: Project }) {
   const source = job?.source ?? null;
   const targetPath = job?.targetPath ?? project.path;
   const canRetry = job?.canRetry ?? false;
+  const signInAction =
+    authFailed && source !== null ? buildCloneSignInAction(source, forgeProviders) : null;
 
   const stop = () => {
     setActionError(null);
@@ -226,6 +248,7 @@ export function ProjectCloneView({ project }: { project: Project }) {
             severity="error"
             title="Clone failed"
             description={job?.error ?? "The clone ended without a checkout."}
+            action={signInAction ?? undefined}
             className="rounded-[var(--radius-md)]"
           />
         )}

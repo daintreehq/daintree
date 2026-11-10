@@ -7,7 +7,7 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { cn } from "@/lib/utils";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check, CircleSlash, FolderOpen, LogIn, CheckCircle2 } from "lucide-react";
+import { Check, CircleSlash, FolderOpen, CheckCircle2 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { FolderDown } from "@/components/icons";
@@ -15,7 +15,6 @@ import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/Inl
 import { projectClient, systemClient } from "@/clients";
 import { mintRemoteOperationId } from "@/clients/operationsClient";
 import { runHostOperation } from "@/hooks/useHostConnection";
-import { actionService } from "@/services/ActionService";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { validateFolderName } from "@shared/utils/folderName";
@@ -39,8 +38,11 @@ import {
 } from "./projectDialogFields";
 import { useProjectCreationGroup } from "@/hooks/useProjectCreationGroup";
 import { join as joinPath } from "@shared/utils/path";
-import { matchProviderForRemoteUrl } from "@shared/utils/forgeHostnames";
-import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
+import {
+  buildCloneSignInAction,
+  loadCloneForgeProviders,
+  type CloneForgeProvider,
+} from "./cloneSignIn";
 import type { CloneRepoProgressEvent, CloneRepoResult } from "@shared/types/ipc/gitClone";
 import type { ProjectCloneStartRequest } from "@shared/types/ipc/projectClone";
 import type { ProjectCreationIdentity } from "@shared/types";
@@ -53,12 +55,6 @@ import { FactSeparator } from "@/components/ui/FactSeparator";
 interface CloneError {
   message: string;
   gitReason?: GitOperationReason;
-}
-
-interface CloneForgeProvider {
-  providerId: string;
-  name: string;
-  hostnames: string[];
 }
 
 interface CloneRepoDialogProps {
@@ -324,21 +320,9 @@ export function CloneRepoDialog({
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
-    void window.electron.forge
-      .getProviders()
-      .then((entries) => {
-        if (cancelled) return;
-        setForgeProviders(
-          entries.map((entry) => ({
-            providerId: makeForgeProviderId(entry.pluginId, entry.contribution.id),
-            name: entry.contribution.name,
-            hostnames: entry.contribution.matches,
-          }))
-        );
-      })
-      .catch(() => {
-        if (!cancelled) setForgeProviders([]);
-      });
+    void loadCloneForgeProviders().then((providers) => {
+      if (!cancelled) setForgeProviders(providers);
+    });
     return () => {
       cancelled = true;
     };
@@ -579,36 +563,13 @@ export function CloneRepoDialog({
     }
   };
 
-  // The provider sign-in is the banner's action only when the URL actually
-  // belongs to a registered forge; otherwise the footer's Retry is the sole
-  // recovery, so the two never offer competing answers to the same failure.
-  const signInAction: BannerAction | null = useMemo(() => {
-    if (error?.gitReason !== "auth-failed") return null;
-    const matchedProviderId = matchProviderForRemoteUrl(
-      normalizeCloneUrl(url, shorthandHost),
-      forgeProviders
-    );
-    if (matchedProviderId === null) return null;
-    const matchedProvider = forgeProviders.find((p) => p.providerId === matchedProviderId);
-    if (!matchedProvider) return null;
-    return {
-      id: "signin-forge-provider",
-      label: `Sign in to ${matchedProvider.name}`,
-      icon: LogIn,
-      // Neutral chip, not the info-tinted `accent`: inside a red banner that
-      // variant rendered dimmer than the prose it was meant to resolve.
-      variant: "primary",
-      onClick: () => {
-        void actionService.dispatch(
-          "app.settings.openTab",
-          { tab: "code-forge", subtab: matchedProvider.providerId },
-          { source: "user" }
-        );
-      },
-      title: `Open ${matchedProvider.name} sign-in`,
-      ariaLabel: `Sign in to ${matchedProvider.name}`,
-    };
-  }, [error?.gitReason, url, shorthandHost, forgeProviders]);
+  const signInAction: BannerAction | null = useMemo(
+    () =>
+      error?.gitReason === "auth-failed"
+        ? buildCloneSignInAction(normalizeCloneUrl(url, shorthandHost), forgeProviders)
+        : null,
+    [error?.gitReason, url, shorthandHost, forgeProviders]
+  );
 
   // What pressing Clone will do, said once — or, until it can, what is still
   // missing. Replaces the path caption that used to hang under the name field.
