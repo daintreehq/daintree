@@ -6,12 +6,20 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
 vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/hooks/useOverlayState", () => ({ useOverlayState: () => {} }));
-vi.mock("@/hooks/useAnimatedPresence", () => ({
-  useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
-    isVisible: isOpen,
-    shouldRender: isOpen,
-  }),
-}));
+// Held open after `isOpen` goes false when `presence.lingering` is set, as the real
+// exit animation keeps the dialog's buttons mounted for a moment.
+const presence = { lingering: false };
+vi.mock("@/hooks/useAnimatedPresence", async () => {
+  const { useRef } = await import("react");
+  return {
+    useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => {
+      const wasOpen = useRef(false);
+      if (isOpen) wasOpen.current = true;
+      const lingers = presence.lingering && !isOpen && wasOpen.current;
+      return { isVisible: isOpen || lingers, shouldRender: isOpen || lingers };
+    },
+  };
+});
 
 vi.mock("@/clients", () => ({
   appClient: { getState: vi.fn(() => Promise.resolve({})) },
@@ -77,6 +85,7 @@ function gpuSwitch(): HTMLElement {
 }
 
 beforeEach(() => {
+  presence.lingering = false;
   _resetHostPlatformForTests();
 });
 
@@ -141,6 +150,41 @@ describe("Hardware acceleration toggle confirms before restarting", () => {
       expect(setHardwareAcceleration).toHaveBeenCalledTimes(1);
       expect(setHardwareAcceleration).toHaveBeenCalledWith(sends);
       expect(screen.queryByText(/Restart Daintree to turn hardware acceleration/)).toBeNull();
+    });
+  });
+
+  describe("while the dialog is still animating out", () => {
+    beforeEach(() => {
+      presence.lingering = true;
+      installElectron(false);
+    });
+
+    it("sends once when the confirm button is pressed twice", async () => {
+      await renderTab();
+      await act(async () => {
+        fireEvent.click(gpuSwitch());
+      });
+      const confirm = screen.getByRole("button", { name: "Restart Daintree" });
+      await act(async () => {
+        fireEvent.click(confirm);
+        fireEvent.click(confirm);
+      });
+      expect(setHardwareAcceleration).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends nothing when the confirm button is pressed after cancelling", async () => {
+      await renderTab();
+      await act(async () => {
+        fireEvent.click(gpuSwitch());
+      });
+      const confirm = screen.getByRole("button", { name: "Restart Daintree" });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+      });
+      await act(async () => {
+        fireEvent.click(confirm);
+      });
+      expect(setHardwareAcceleration).not.toHaveBeenCalled();
     });
   });
 });
