@@ -8,7 +8,7 @@ import {
   forwardRef,
 } from "react";
 import CodeMirror from "@uiw/react-codemirror";
-import { EditorView, Decoration, type DecorationSet, keymap } from "@codemirror/view";
+import { EditorView, Decoration, type DecorationSet, keymap, panels } from "@codemirror/view";
 import { type Extension, StateEffect, StateField, EditorState } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import { type SyntaxNode } from "@lezer/common";
@@ -153,6 +153,18 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
   const stickyScopeRef = useRef<string | null>(null);
   const [stickyScope, setStickyScope] = useState<string | null>(null);
   const [cmLineHeight, setCmLineHeight] = useState<number>(24);
+  // Find docks here, above the scrolling document rather than inside it: the
+  // wrapper below scrolls sideways for long lines, which carried a docked bar
+  // out of a narrow pane, and its top edge belongs to the scope line. Sticky,
+  // because a host that sizes this viewer to its content (FilePane) scrolls
+  // the whole viewer instead, and find has to stay on screen there too.
+  const [panelHost] = useState(() => document.createElement("div"));
+  const mountPanelHost = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (node && panelHost.parentNode !== node) node.appendChild(panelHost);
+    },
+    [panelHost]
+  );
 
   // Track the active palette's polarity so CodeMirror's internal base matches
   // the canvas it renders on (RC-8) — a light palette must not get the dark base.
@@ -205,9 +217,10 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
 
   const extensions = useMemo<Extension[]>(() => {
     const list = langExtension ? [...BASE_EXTENSIONS, langExtension] : [...BASE_EXTENSIONS];
+    list.push(panels({ topContainer: panelHost }));
     if (wrapLines) list.push(EditorView.lineWrapping);
     return list;
-  }, [langExtension, wrapLines]);
+  }, [langExtension, wrapLines, panelHost]);
 
   const handleScroll = useCallback(() => {
     if (rafRef.current !== null) return;
@@ -304,48 +317,46 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
     [initialLine]
   );
 
-  // The docked find bar is sticky at the top of this same scroller and stacks
-  // over the scope row once scrolled, so while it is open the row steps aside
-  // rather than leaving a blank line above the bar.
   return (
-    <div
-      ref={scrollRef}
-      onScroll={handleScroll}
-      className={cn(
-        "overflow-auto text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible [&:has(.cm-panels-top)>[data-code-scope]]:hidden",
-        className
-      )}
-    >
+    <div className={cn("flex min-h-0 flex-col", className)}>
+      <div ref={mountPanelHost} className="sticky top-0 z-10 shrink-0" />
       <div
-        data-code-scope=""
-        className={cn(
-          "sticky top-0 z-10 pointer-events-none flex items-center px-2 truncate border-b whitespace-pre",
-          stickyScope !== null
-            ? "border-[var(--theme-border-default)] bg-[var(--theme-surface-sidebar)] text-[var(--theme-text-secondary)]"
-            : "border-transparent bg-transparent text-transparent"
-        )}
-        style={{
-          height: `${cmLineHeight}px`,
-          lineHeight: `${cmLineHeight}px`,
-        }}
+        ref={scrollRef}
+        onScroll={handleScroll}
+        // `isolate` keeps CodeMirror's own stacking (its gutters sit at z-index
+        // 200) from painting over the sticky find bar as the document scrolls.
+        className="isolate min-h-0 flex-1 overflow-auto text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible"
       >
-        {stickyScope ?? " "}
+        <div
+          className={cn(
+            "sticky top-0 z-10 pointer-events-none flex items-center px-2 truncate border-b whitespace-pre",
+            stickyScope !== null
+              ? "border-[var(--theme-border-default)] bg-[var(--theme-surface-sidebar)] text-[var(--theme-text-secondary)]"
+              : "border-transparent bg-transparent text-transparent"
+          )}
+          style={{
+            height: `${cmLineHeight}px`,
+            lineHeight: `${cmLineHeight}px`,
+          }}
+        >
+          {stickyScope ?? " "}
+        </div>
+        <CodeMirror
+          value={content}
+          theme={editorTheme}
+          extensions={extensions}
+          editable={false}
+          readOnly={true}
+          basicSetup={{
+            lineNumbers: true,
+            foldGutter: true,
+            highlightActiveLine: false,
+            highlightSelectionMatches: false,
+            autocompletion: false,
+          }}
+          onCreateEditor={handleCreateEditor}
+        />
       </div>
-      <CodeMirror
-        value={content}
-        theme={editorTheme}
-        extensions={extensions}
-        editable={false}
-        readOnly={true}
-        basicSetup={{
-          lineNumbers: true,
-          foldGutter: true,
-          highlightActiveLine: false,
-          highlightSelectionMatches: false,
-          autocompletion: false,
-        }}
-        onCreateEditor={handleCreateEditor}
-      />
     </div>
   );
 });

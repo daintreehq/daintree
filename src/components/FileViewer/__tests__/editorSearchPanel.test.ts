@@ -47,6 +47,15 @@ function field(name: string): HTMLInputElement {
   return panel().querySelector<HTMLInputElement>(`input[name=${name}]`)!;
 }
 
+/** A search option (case, re, word): a pressed-state toggle button. */
+function option(name: string): HTMLButtonElement {
+  return panel().querySelector<HTMLButtonElement>(`button[name=${name}]`)!;
+}
+
+function pressed(name: string): boolean {
+  return option(name).getAttribute("aria-pressed") === "true";
+}
+
 function type(input: HTMLInputElement, value: string) {
   input.value = value;
   input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
@@ -106,10 +115,7 @@ describe("editorSearchPanel (#12755)", () => {
     const { view } = mounted;
     type(queryInput(), "al");
     type(field("replace"), "be");
-    for (const name of ["case", "re", "word"]) {
-      field(name).checked = true;
-      field(name).dispatchEvent(new Event("change", { bubbles: true }));
-    }
+    for (const name of ["case", "re", "word"]) option(name).click();
     const query = getSearchQuery(view.state);
     expect(query.search).toBe("al");
     expect(query.replace).toBe("be");
@@ -133,17 +139,16 @@ describe("editorSearchPanel (#12755)", () => {
     });
     expect(queryInput().value).toBe("ph");
     expect(field("replace").value).toBe("PH");
-    expect(field("case").checked).toBe(true);
-    expect(field("re").checked).toBe(true);
-    expect(field("word").checked).toBe(true);
+    expect(pressed("case")).toBe(true);
+    expect(pressed("re")).toBe(true);
+    expect(pressed("word")).toBe(true);
   });
 
   it("marks an unparseable pattern invalid, and an empty query not", () => {
     mounted = mount("alpha", { readOnly: true });
     const wrapper = queryInput().parentElement!;
     expect(wrapper.hasAttribute("data-invalid")).toBe(false);
-    field("re").checked = true;
-    field("re").dispatchEvent(new Event("change", { bubbles: true }));
+    option("re").click();
     type(queryInput(), "(");
     expect(wrapper.getAttribute("data-invalid")).toBe("true");
     expect(queryInput().getAttribute("aria-invalid")).toBe("true");
@@ -153,8 +158,7 @@ describe("editorSearchPanel (#12755)", () => {
     type(queryInput(), "(");
     expect(wrapper.getAttribute("data-invalid")).toBe("true");
     // The same text is a fine literal search once regexp is off.
-    field("re").checked = false;
-    field("re").dispatchEvent(new Event("change", { bubbles: true }));
+    option("re").click();
     expect(wrapper.hasAttribute("data-invalid")).toBe(false);
   });
 
@@ -173,46 +177,36 @@ describe("editorSearchPanel (#12755)", () => {
       accessibleName: node.getAttribute("aria-label") ?? node.textContent,
     }));
     expect(buttons).toEqual([
-      { name: "prev", text: "Previous", accessibleName: "Previous match" },
-      { name: "next", text: "Next", accessibleName: "Next match" },
-      { name: "select", text: "Select all matches", accessibleName: "Select all matches" },
+      { name: "case", text: "Aa", accessibleName: "Match case" },
+      { name: "word", text: "ab", accessibleName: "Match whole word" },
+      { name: "re", text: ".*", accessibleName: "Use regular expression" },
+      { name: "prev", text: "", accessibleName: "Previous match" },
+      { name: "next", text: "", accessibleName: "Next match" },
+      { name: "select", text: "Select all", accessibleName: "Select all matches" },
       { name: "replace", text: "Replace", accessibleName: "Replace" },
       { name: "replaceAll", text: "Replace all", accessibleName: "Replace all" },
-      { name: "close", text: "×", accessibleName: "Close find bar" },
-    ]);
-    const options = [...panel().querySelectorAll("label")].map((label) => {
-      const box = label.querySelector("input")!;
-      return {
-        name: box.name,
-        text: label.textContent,
-        accessibleName: box.getAttribute("aria-label") ?? label.textContent,
-      };
-    });
-    expect(options).toEqual([
-      { name: "case", text: "Match case", accessibleName: "Match case" },
-      { name: "word", text: "Whole word", accessibleName: "Match whole word" },
-      { name: "re", text: "Regex", accessibleName: "Regex" },
+      { name: "", text: "", accessibleName: "Close find bar" },
     ]);
     expect(field("replace").getAttribute("aria-label")).toBe("Replace with");
   });
 
   it("names each worded control with its visible words intact (WCAG 2.5.3)", () => {
     mounted = mount("alpha", { readOnly: false });
-    const worded = [
-      ...[...panel().querySelectorAll<HTMLButtonElement>("button")]
-        .filter((node) => node.name !== "close")
-        .map((node) => ({ visible: node.textContent!, name: node.getAttribute("aria-label") })),
-      ...[...panel().querySelectorAll("label")].map((label) => ({
-        visible: label.textContent!,
-        name: label.querySelector("input")!.getAttribute("aria-label"),
-      })),
-    ];
-    for (const { visible, name } of worded) {
-      expect((name ?? visible).toLowerCase()).toContain(visible.toLowerCase());
+    // The options' Aa, ab and .* are glyphs, as in the terminal and Browser
+    // find bars, and stepping and close are icons; the rest carry words.
+    const worded = [...panel().querySelectorAll<HTMLButtonElement>("button")].filter(
+      (node) => !node.hasAttribute("aria-pressed") && node.textContent !== ""
+    );
+    expect(worded.length).toBeGreaterThan(0);
+    for (const node of worded) {
+      const visible = node.textContent!;
+      const name = node.getAttribute("aria-label") ?? visible;
+      expect(name.toLowerCase()).toContain(visible.toLowerCase());
     }
-    // The close glyph is not read out as "multiplication sign".
-    const glyph = panel().querySelector("button[name=close] span")!;
-    expect(glyph.getAttribute("aria-hidden")).toBe("true");
+    // An icon is never read out on top of its button's name.
+    for (const icon of panel().querySelectorAll("button svg")) {
+      expect(icon.getAttribute("aria-hidden")).toBe("true");
+    }
   });
 
   it("the previous, next and select-all-matches buttons drive the editor's matches", () => {
@@ -316,7 +310,7 @@ describe("editorSearchPanel (#12755)", () => {
   it("the close button closes the panel and hands focus back to the editor", () => {
     mounted = mount("alpha", { readOnly: true });
     const { view } = mounted;
-    const close = panel().querySelector<HTMLButtonElement>("button[name=close]")!;
+    const close = panel().querySelector<HTMLButtonElement>('button[aria-label="Close find bar"]')!;
     close.focus();
     close.click();
     expect(searchPanelOpen(view.state)).toBe(false);
@@ -333,7 +327,7 @@ describe("editorSearchPanel (#12755)", () => {
     openSearchPanel(view);
     expect(queryInput().value).toBe("ph");
     expect(field("replace").value).toBe("PH");
-    expect(field("word").checked).toBe(true);
+    expect(pressed("word")).toBe(true);
     expect(document.activeElement).toBe(queryInput());
   });
 
