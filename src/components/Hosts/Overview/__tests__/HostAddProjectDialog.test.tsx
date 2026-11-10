@@ -106,6 +106,12 @@ function renderDialog(onOpened = vi.fn()) {
 }
 
 describe("HostAddProjectDialog", () => {
+  it("opens with focus on the repository URL field", async () => {
+    renderDialog();
+    const field = screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" });
+    await waitFor(() => expect(document.activeElement).toBe(field));
+  });
+
   it("clones a URL onto that host into the folder the host suggests, then opens it", async () => {
     execute.mockResolvedValue({
       kind: "opened",
