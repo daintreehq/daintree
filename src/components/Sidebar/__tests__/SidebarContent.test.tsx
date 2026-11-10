@@ -528,6 +528,12 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       expect(source.match(/<SidebarListEmptyState\b/g) ?? []).toHaveLength(1);
     });
 
+    it("tells the resolver how many deleted-worktree rows the list will show", () => {
+      expect(source).toMatch(
+        /resolveSidebarListEmpty\(\{[\s\S]*?deletedRowCount: deletedWorktrees\.size,/
+      );
+    });
+
     it("hands focus to the search field before each recovery action unmounts its button", () => {
       for (const handler of [
         "handleShowAllMatches",
