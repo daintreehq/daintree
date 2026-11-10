@@ -161,7 +161,17 @@ export function ProjectPluginIndicator() {
         </button>
       </PopoverTrigger>
 
-      <PopoverContent side="top" align="start" className="w-72 p-3">
+      <PopoverContent
+        side="top"
+        align="start"
+        className="w-72 p-3"
+        // Stepping aside for the unsaved-work prompt is a hand-off, not a close:
+        // the popover's restore would land on the footer after its exit, behind
+        // the prompt that already took focus.
+        onCloseAutoFocus={(event) => {
+          if (guard.pending !== null) event.preventDefault();
+        }}
+      >
         <div className="space-y-3">
           <div>
             <p className={LIST_LABEL_CLASS}>Project plugins</p>

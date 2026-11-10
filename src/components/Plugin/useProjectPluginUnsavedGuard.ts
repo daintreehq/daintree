@@ -40,21 +40,31 @@ function unloadTargets(unload: ProjectPluginUnload): string[] {
   return targets;
 }
 
-/** Every target's dirty panels, once each, or `null` when any read failed. */
-async function readTargets(targets: readonly string[]): Promise<PluginUnsavedPanel[] | null> {
-  const reads = await Promise.all(targets.map(readUnsavedPanels));
+/**
+ * The dirty panels of everything the unload would take down, once each, or
+ * `null` when any read failed. A plugin that loads while a read is out unloads
+ * with the rest, so the targets are taken again after every read until none is
+ * new, and nothing is submitted unread.
+ */
+async function readUnloadPanels(unload: ProjectPluginUnload): Promise<PluginUnsavedPanel[] | null> {
+  const read = new Set<string>();
   const seen = new Set<string>();
   const panels: PluginUnsavedPanel[] = [];
-  for (const read of reads) {
-    if (read === null) return null;
-    for (const panel of read) {
-      const key = unsavedPanelKey(panel);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      panels.push(panel);
+  for (;;) {
+    const fresh = unloadTargets(unload).filter((target) => !read.has(target));
+    if (fresh.length === 0) return panels;
+    const answers = await Promise.all(fresh.map(readUnsavedPanels));
+    for (const answer of answers) {
+      if (answer === null) return null;
+      for (const panel of answer) {
+        const key = unsavedPanelKey(panel);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        panels.push(panel);
+      }
     }
+    for (const target of fresh) read.add(target);
   }
-  return panels;
 }
 
 function submit(unload: ProjectPluginUnload): Promise<void> {
@@ -106,8 +116,7 @@ export function useProjectPluginUnsavedGuard() {
 
   const request = async (unload: ProjectPluginUnload) => {
     if (readingRef.current || pendingRef.current !== null) return;
-    const targets = unloadTargets(unload);
-    if (targets.length === 0) {
+    if (unloadTargets(unload).length === 0) {
       await submit(unload);
       return;
     }
@@ -115,7 +124,7 @@ export function useProjectPluginUnsavedGuard() {
     readingRef.current = true;
     let panels: PluginUnsavedPanel[] | null;
     try {
-      panels = await readTargets(targets);
+      panels = await readUnloadPanels(unload);
     } finally {
       readingRef.current = false;
     }
@@ -154,9 +163,9 @@ export function useProjectPluginUnsavedGuard() {
     const prompt = pendingRef.current;
     if (!prompt || confirmingRef.current === prompt) return;
     confirmingRef.current = prompt;
-    // Resolved again rather than reused: a plugin that loaded while the prompt
-    // was open unloads with the rest, so its panels count too.
-    const current = await readTargets(unloadTargets(prompt.unload));
+    // Read afresh rather than reused: a plugin that loaded while the prompt was
+    // open unloads with the rest, so its panels count too.
+    const current = await readUnloadPanels(prompt.unload);
     if (confirmingRef.current === prompt) confirmingRef.current = null;
     if (pendingRef.current !== prompt) return;
     if (useProjectPluginStore.getState().projectId !== prompt.projectId) {

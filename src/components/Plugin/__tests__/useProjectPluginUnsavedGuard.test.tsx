@@ -178,6 +178,47 @@ describe("useProjectPluginUnsavedGuard — turning the project's plugins off", (
     expect(setProjectPluginTrust).toHaveBeenCalledWith("disabled");
   });
 
+  it("reads a plugin that loads while the first read is out before revoking", async () => {
+    seed([plugin("a.one", "active"), plugin("a.two", "staged")]);
+    getUnsavedPanels.mockImplementation(async (id) => {
+      if (id === key("a.one")) {
+        // a.two finishes loading while main answers for a.one.
+        seed([plugin("a.one", "active"), plugin("a.two", "active")]);
+        return [];
+      }
+      return [dirty("late")];
+    });
+    const { result } = renderHook(() => useProjectPluginUnsavedGuard());
+
+    await act(() => result.current.decide("disabled"));
+
+    expect(getUnsavedPanels.mock.calls.map(([id]) => id)).toEqual([key("a.one"), key("a.two")]);
+    expect(setProjectPluginTrust).not.toHaveBeenCalled();
+    expect(result.current.pending?.panels.map((p) => p.panelId)).toEqual(["late"]);
+  });
+
+  it("reads a plugin that loads while Discard reads before revoking", async () => {
+    seed([plugin("a.one", "active"), plugin("a.two", "staged")]);
+    panelsByKey({ [key("a.one")]: [dirty("panel-1")] });
+    const { result } = renderHook(() => useProjectPluginUnsavedGuard());
+    await act(() => result.current.decide("disabled"));
+
+    getUnsavedPanels.mockImplementation(async (id) => {
+      if (id === key("a.one")) {
+        seed([plugin("a.one", "active"), plugin("a.two", "active")]);
+        return [dirty("panel-1")];
+      }
+      return [dirty("panel-2")];
+    });
+    await act(() => result.current.confirm());
+
+    expect(setProjectPluginTrust).not.toHaveBeenCalled();
+    expect(result.current.pending?.panels.map((p) => p.panelId).sort()).toEqual([
+      "panel-1",
+      "panel-2",
+    ]);
+  });
+
   it("stops with the store's decide error when any read fails", async () => {
     seed([plugin("a.one", "active"), plugin("a.two", "active")]);
     panelsByKey({ [key("a.two")]: new Error("boom") });
