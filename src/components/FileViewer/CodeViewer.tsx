@@ -304,16 +304,20 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
     [initialLine]
   );
 
+  // The docked find bar is sticky at the top of this same scroller and stacks
+  // over the scope row once scrolled, so while it is open the row steps aside
+  // rather than leaving a blank line above the bar.
   return (
     <div
       ref={scrollRef}
       onScroll={handleScroll}
       className={cn(
-        "overflow-auto text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
+        "overflow-auto text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible [&:has(.cm-panels-top)>[data-code-scope]]:hidden",
         className
       )}
     >
       <div
+        data-code-scope=""
         className={cn(
           "sticky top-0 z-10 pointer-events-none flex items-center px-2 truncate border-b whitespace-pre",
           stickyScope !== null

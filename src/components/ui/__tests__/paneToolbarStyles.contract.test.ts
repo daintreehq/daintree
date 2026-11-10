@@ -30,6 +30,7 @@ const PANE_TOOLBAR_FILES = [
   "src/components/DevPreview/ConsoleDrawer.tsx",
   "src/components/DevPreview/ConsolePanel.tsx",
   "src/components/DevPreview/DiagnosticsPanel.tsx",
+  "src/components/FileViewer/editorSearchPanel.ts",
 ];
 
 /**
