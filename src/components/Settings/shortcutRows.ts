@@ -120,7 +120,8 @@ export function buildShortcutRows(
   sources.forEach((source, index) => {
     const group = groups.get(source.actionId)!;
     const scopes = overrideScopes(group.map((member) => member.scope));
-    const editScope = new Set(group.map((member) => member.scope)).size > 1 ? "global" : source.scope;
+    const editScope =
+      new Set(group.map((member) => member.scope)).size > 1 ? "global" : source.scope;
     const base = {
       actionId: source.actionId,
       description: source.description,

@@ -342,14 +342,7 @@ export function KeyboardShortcutsTab() {
       (b) =>
         (filterMode === "all" || b.isOverridden) &&
         (!query ||
-          matchesQuery(
-            query,
-            b.description,
-            b.actionId,
-            b.key,
-            b.scopeNote,
-            b.category
-          ) ||
+          matchesQuery(query, b.description, b.actionId, b.key, b.scopeNote, b.category) ||
           matchesKeys(query, b.searchKeys) ||
           matchesKeys(query, layoutSearchKeys?.get(b.rowId) ?? ""))
     );
@@ -392,7 +385,12 @@ export function KeyboardShortcutsTab() {
   };
 
   /** Moves focus to the action's row holding `key`, once `rows` replaced the one acted on. */
-  const focusActionRow = (rows: ShortcutBinding[], actionId: string, key: string, rowId: string) => {
+  const focusActionRow = (
+    rows: ShortcutBinding[],
+    actionId: string,
+    key: string,
+    rowId: string
+  ) => {
     setFocusRowId(findShortcutRow(rows, actionId, key, isMac())?.rowId ?? rowId);
   };
 

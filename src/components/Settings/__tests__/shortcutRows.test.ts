@@ -113,7 +113,10 @@ describe("buildShortcutRows", () => {
 
   it("warns of nothing when every key already applies where an override would", () => {
     const rows = buildShortcutRows(
-      [source("window.zoomIn", "Cmd+=", "global"), source("window.zoomIn", "Cmd+Shift+=", "global")],
+      [
+        source("window.zoomIn", "Cmd+=", "global"),
+        source("window.zoomIn", "Cmd+Shift+=", "global"),
+      ],
       () => false,
       true
     );
@@ -135,9 +138,9 @@ describe("buildShortcutRows", () => {
     expect(
       buildShortcutRows(fleet(["Cmd+J"]), () => true, true).map((r) => [r.key, r.scopeNote])
     ).toEqual([["Cmd+J", undefined]]);
-    expect(
-      buildShortcutRows(fleet([]), () => true, true).map((r) => [r.key, r.scopeNote])
-    ).toEqual([["", undefined]]);
+    expect(buildShortcutRows(fleet([]), () => true, true).map((r) => [r.key, r.scopeNote])).toEqual(
+      [["", undefined]]
+    );
   });
 
   it("shows an imported override's repeated keys once", () => {
@@ -151,11 +154,7 @@ describe("buildShortcutRows", () => {
 
   it("leaves other actions' rows where they were", () => {
     const rows = buildShortcutRows(
-      [
-        source("a", "Cmd+A", "global"),
-        ...fleet(["Y", "Z"]),
-        source("b", "Cmd+B", "global"),
-      ],
+      [source("a", "Cmd+A", "global"), ...fleet(["Y", "Z"]), source("b", "Cmd+B", "global")],
       (actionId) => actionId === "fleet.armFocused",
       true
     );
