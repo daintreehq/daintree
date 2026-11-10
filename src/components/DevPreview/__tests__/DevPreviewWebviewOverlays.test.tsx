@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { DevPreviewWebviewOverlays } from "../DevPreviewWebviewOverlays";
 import {
   webviewLoadErrorHeading,
@@ -147,8 +147,46 @@ describe("DevPreviewWebviewOverlays — crash banners", () => {
     expect(screen.getByText(/reason: crashed \(exit code 1\)/i)).toBeTruthy();
     screen.getByRole("button", { name: /reload preview page/i }).click();
     expect(onHardReload).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/hard restart/i)).toBeNull();
     screen.getByRole("button", { name: /dismiss/i }).click();
     expect(onCloseCrash).toHaveBeenCalledTimes(1);
+  });
+
+  it("labels the restart action 'Restart dev server' on both banners", async () => {
+    const onRestartDevServer = vi.fn();
+    const props = { onRestartDevServer, onRequestRestartAndClearCache: vi.fn() };
+    const { unmount } = render(
+      <DevPreviewWebviewOverlays {...baseProps({ ...props, crashState: "crashed" })} />
+    );
+    fireEvent.keyDown(screen.getByRole("button", { name: "More preview recovery options" }), {
+      key: "Enter",
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart dev server" }));
+    expect(onRestartDevServer).toHaveBeenCalledTimes(1);
+    unmount();
+
+    render(<DevPreviewWebviewOverlays {...baseProps({ ...props, crashState: "unresponsive" })} />);
+    screen.getByRole("button", { name: "Restart dev server" }).click();
+    expect(onRestartDevServer).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the console drawer's endpoint label on both banners without cache actions", async () => {
+    const { unmount } = render(
+      <DevPreviewWebviewOverlays
+        {...baseProps({ crashState: "unresponsive", onRequestRestartAndClearCache: undefined })}
+      />
+    );
+    screen.getByRole("button", { name: "Pause and resume resource environment" });
+    unmount();
+    render(
+      <DevPreviewWebviewOverlays
+        {...baseProps({ crashState: "crashed", onRequestRestartAndClearCache: undefined })}
+      />
+    );
+    fireEvent.keyDown(screen.getByRole("button", { name: "More preview recovery options" }), {
+      key: "Enter",
+    });
+    await screen.findByRole("menuitem", { name: "Pause and resume resource environment" });
   });
 
   it("renders the unresponsive banner distinctly and wires its own close handler", () => {
