@@ -136,3 +136,48 @@ describe("Save as project follow-up", () => {
     );
   });
 });
+
+describe("Remove project confirm", () => {
+  function renderRemove(isActive: boolean) {
+    const project = {
+      id: "p1",
+      name: "retry-queue",
+      path: "/Users/me/code/retry-queue",
+      isActive,
+      processCount: 0,
+      activeAgentCount: 0,
+      waitingAgentCount: 0,
+    };
+    render(
+      <ProjectSwitcherConfirmDialogs
+        removeConfirmProject={project as never}
+        onRemoveConfirmClose={vi.fn()}
+        onConfirmRemove={vi.fn()}
+        paletteInputRef={createRef<HTMLInputElement>()}
+      />
+    );
+  }
+
+  it("names the saved state a removal deletes and leaves the folder alone", () => {
+    renderRemove(false);
+
+    expect(screen.getByTestId("confirm-title").textContent).toBe("Remove 'retry-queue'?");
+    const body = screen.getByTestId("confirm-body").textContent ?? "";
+    for (const word of ["settings", "schedules", "layout", "session history"]) {
+      expect(body).toContain(word);
+    }
+    expect(body).toContain("ends any running terminals");
+    expect(body).toContain("The folder itself isn't touched");
+    expect(body).toContain(".daintree/recipes/");
+    expect(body).not.toContain("open it again later");
+  });
+
+  it("keeps the Close copy for the project on screen", () => {
+    renderRemove(true);
+
+    expect(screen.getByTestId("confirm-title").textContent).toBe("Close 'retry-queue'?");
+    expect(screen.getByTestId("confirm-body").textContent).toContain(
+      "The project will remain in your list"
+    );
+  });
+});

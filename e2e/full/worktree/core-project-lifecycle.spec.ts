@@ -211,7 +211,7 @@ test.describe.serial("Core: Project Lifecycle", () => {
 
     // Confirm removal
     const dialog = window
-      .getByRole("alertdialog", { name: /^Remove '.+' from the list\?$/ })
+      .getByRole("alertdialog", { name: /^Remove '.+'\?$/ })
       .last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
     await dialog.getByRole("button", { name: "Remove project" }).click();

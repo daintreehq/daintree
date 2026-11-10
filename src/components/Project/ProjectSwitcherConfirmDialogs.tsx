@@ -185,7 +185,7 @@ export function ProjectSwitcherConfirmDialogs({
           title={
             removeConfirmProject.isActive
               ? `Close '${removeConfirmProject.name}'?`
-              : `Remove '${removeConfirmProject.name}' from the list?`
+              : `Remove '${removeConfirmProject.name}'?`
           }
           zIndex="nested"
           confirmLabel={removeConfirmProject.isActive ? "Close project" : "Remove project"}
@@ -257,7 +257,7 @@ export function ProjectSwitcherConfirmDialogs({
             <div className="text-xs text-text-secondary">
               {removeConfirmProject.isActive
                 ? "The project will remain in your list and can be reopened at any time."
-                : "This project will be removed from your list. You can open it again later, but any running terminals or processes will need to be restarted."}
+                : "Removing it deletes this project's saved settings, recipes stored outside the repository, schedules, layout and session history, and ends any running terminals and processes. Opening the folder again starts the project fresh. The folder itself isn't touched, and recipes kept in the repository under .daintree/recipes/ stay."}
             </div>
           </div>
         </ConfirmDialog>

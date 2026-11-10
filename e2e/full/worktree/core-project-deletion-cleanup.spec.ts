@@ -260,7 +260,7 @@ test.describe.serial("Deletion Cleanup: Background project removal", () => {
     await removeProjectViaSwitcher(window, PROJECT_B);
 
     const dialog = window
-      .getByRole("alertdialog", { name: /^Remove '.+' from the list\?$/ })
+      .getByRole("alertdialog", { name: /^Remove '.+'\?$/ })
       .last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
     await expect(dialog.getByRole("button", { name: "Remove project" })).toBeVisible();
@@ -292,7 +292,7 @@ test.describe.serial("Deletion Cleanup: Background project removal", () => {
     await removeProjectViaSwitcher(window, PROJECT_B);
 
     const dialog = window
-      .getByRole("alertdialog", { name: /^Remove '.+' from the list\?$/ })
+      .getByRole("alertdialog", { name: /^Remove '.+'\?$/ })
       .last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 

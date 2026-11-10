@@ -278,7 +278,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     danger: "confirm",
     scope: "renderer",
     dangerRationale:
-      "Removes a project from the list. Worktrees on disk remain but the project entry is lost.",
+      "Removes a project from the list and deletes its saved state: settings, recipes stored outside the repository, schedules, layout and session history. Running terminals are ended. The folder and worktrees on disk are not touched, and recipes kept in the repository under .daintree/recipes/ stay.",
     argsSchema: z.object({ projectId: z.string() }),
     run: (args: unknown, ctx: ActionContext) =>
       runProjectAction("project.remove", args, ctx, callbacks),

@@ -1053,7 +1053,7 @@ async function showProjectOpenFailure(
     // than presenting it as a tidy-up of the list.
     detail:
       failure.recovery === "remove-from-recent"
-        ? `${failure.message}\n\nRemoving it forgets this project's saved settings and session history. The folder itself isn't touched.`
+        ? `${failure.message}\n\nRemoving it forgets this project's saved settings, schedules, layout and session history. The folder itself isn't touched.`
         : failure.message,
     buttons: [PROJECT_OPEN_RECOVERY_LABELS[failure.recovery], "Cancel"],
     defaultId: 1,
