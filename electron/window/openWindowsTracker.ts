@@ -387,12 +387,15 @@ function collectWindowRecords(
   // take one of its slots.
   let workspaceWindows = 0;
 
-  const registered = new Set(registry.all().map((ctx) => ctx.windowId));
+  // Every registered window, focused or not, so a closed one is the only kind
+  // whose last-seen workspace is let go.
+  const ordered = registry.focusOrder();
+  const registered = new Set(ordered.map((ctx) => ctx.windowId));
   for (const windowId of lastShownWorkspaces.keys()) {
     if (!registered.has(windowId)) lastShownWorkspaces.delete(windowId);
   }
 
-  for (const ctx of registry.focusOrder()) {
+  for (const ctx of ordered) {
     if (ctx.windowId === excludeWindowId) continue;
     if (ctx.browserWindow.isDestroyed()) continue;
 
@@ -573,7 +576,7 @@ function persist(excludeWindowId?: number): void {
     // record (#16740), and refusing to save them would keep restoring a
     // project window the user has since closed.
     const windowsLeft = state.registry
-      .all()
+      .focusOrder()
       .some((ctx) => ctx.windowId !== excludeWindowId && !ctx.browserWindow.isDestroyed());
     if (!windowsLeft && !canopyWindowOpen && process.platform !== "darwin") return;
     writeOpenWindowsManifest(records, { canopyWindowOpen });
