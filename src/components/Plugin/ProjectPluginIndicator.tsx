@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { RotateCw } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,8 @@ import type { ProjectPluginInfo } from "@shared/types/plugin";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { pluralize } from "@/lib/pluralize";
 import { useHostPluginParityNotice } from "./useHostPluginParityNotice";
+import { useProjectPluginUnsavedGuard } from "./useProjectPluginUnsavedGuard";
+import { ProjectPluginUnsavedDialog } from "./ProjectPluginUnsavedDialog";
 
 function stateLabel(state: ProjectPluginInfo["state"]): string {
   switch (state) {
@@ -74,6 +76,12 @@ export function ProjectPluginIndicator() {
   const decide = useProjectPluginStore((s) => s.decide);
   const activateStaged = useProjectPluginStore((s) => s.activateStaged);
   const reload = useProjectPluginStore((s) => s.reload);
+  // Turning the plugins off asks first when a panel of theirs holds unsaved
+  // work (#16656). The popover steps aside while that prompt is up and comes
+  // back when it closes, so a cancel returns to where the user was.
+  const guard = useProjectPluginUnsavedGuard();
+  const turnOffRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const blocked = plugins.filter((p) => p.state === "blocked");
   const staged = plugins.filter((p) => p.state === "staged");
@@ -86,6 +94,14 @@ export function ProjectPluginIndicator() {
   // surface left to appear on (#12212).
   const unsaved = trust?.decision === "enabled" && trust.persisted === false;
 
+  // Outside the popover's content, so it outlives the popover stepping aside.
+  const dialog = (
+    <ProjectPluginUnsavedDialog
+      guard={guard}
+      restoreFocusTo={() => turnOffRef.current ?? triggerRef.current}
+    />
+  );
+
   if (
     blocked.length === 0 &&
     staged.length === 0 &&
@@ -93,7 +109,7 @@ export function ProjectPluginIndicator() {
     failed.length === 0 &&
     !unsaved
   )
-    return null;
+    return guard.pending === null ? null : dialog;
 
   // Ordered by how much it is a fault rather than a state the user chose, and
   // by how little else carries it. A decision that silently will not survive a
@@ -113,9 +129,10 @@ export function ProjectPluginIndicator() {
           : `${pluralize(staged.length, "project plugin")} staged`;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open && guard.pending === null} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           aria-label={`Project plugins — ${summary}`}
           // Same row as the resource readout at the foot of the footer: identical
@@ -232,10 +249,11 @@ export function ProjectPluginIndicator() {
             {enabled ? (
               <>
                 <Button
+                  ref={turnOffRef}
                   variant="outline"
                   size="sm"
                   className="w-full"
-                  onClick={() => void decide("disabled")}
+                  onClick={() => void guard.decide("disabled")}
                   loading={deciding === "disabled"}
                 >
                   Turn off project plugins
@@ -282,6 +300,7 @@ export function ProjectPluginIndicator() {
           </div>
         </div>
       </PopoverContent>
+      {dialog}
     </Popover>
   );
 }

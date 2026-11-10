@@ -28,6 +28,8 @@ import {
   useProjectSurfaceRefusals,
 } from "@/hooks/useProjectSurfaceRefusals";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
+import { useProjectPluginUnsavedGuard } from "@/components/Plugin/useProjectPluginUnsavedGuard";
+import { ProjectPluginUnsavedDialog } from "@/components/Plugin/ProjectPluginUnsavedDialog";
 import { systemClient } from "@/clients";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -63,7 +65,10 @@ export function ProjectPluginPane({
   const trust = useProjectPluginStore((s) => s.trust);
   const muting = useProjectPluginStore((s) => s.muting);
   const activating = useProjectPluginStore((s) => s.activating);
-  const setMuted = useProjectPluginStore((s) => s.setMuted);
+  // Switching it off unloads it, so that asks first when one of its panels
+  // holds unsaved work (#16656). Switching it on goes straight through.
+  const guard = useProjectPluginUnsavedGuard();
+  const setMuted = guard.setMuted;
   const activateStaged = useProjectPluginStore((s) => s.activateStaged);
   const reload = useProjectPluginStore((s) => s.reload);
   const reloading = useProjectPluginStore((s) => s.reloading);
@@ -338,6 +343,7 @@ export function ProjectPluginPane({
         scope="project"
         refreshKey={`${plugin.state}:${loaded ? "loaded" : "unloaded"}`}
       />
+      <ProjectPluginUnsavedDialog guard={guard} />
     </div>
   );
 }
