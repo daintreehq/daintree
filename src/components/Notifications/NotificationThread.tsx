@@ -21,12 +21,10 @@ export function NotificationThread({
   onArchive,
   onToggleRead,
   onRestore,
-  compact = false,
-  showSource = true,
+  grouped = false,
 }: {
   group: ThreadGroup;
-  compact?: boolean;
-  showSource?: boolean;
+  grouped?: boolean;
   onDismiss: () => void;
   rowRef?: (el: HTMLDivElement | null) => void;
   tabIndex?: number;
@@ -71,23 +69,10 @@ export function NotificationThread({
         // stops on the same roving-tabindex ring, so they must not focus
         // differently — one outline, one box-shadow ring would read as two
         // kinds of row.
-        tabIndex !== undefined && PALETTE_ROW_FOCUS_CLASS
+        tabIndex !== undefined && PALETTE_ROW_FOCUS_CLASS,
+        tabIndex !== undefined && "focus-visible:bg-overlay-highlight"
       )}
     >
-      {/* The thread rail, out of flow on purpose. As a `border-l-2` it was part
-          of the box, so every threaded row's icon, unread dot and title sat 2px
-          right of every solo row's — the panel's left column visibly broke on
-          exactly the rows that carry the most weight. Absolute positioning
-          keeps the mark and drops the displacement.
-          `data-notification-thread-rail` is not styling: a background is forced
-          to Canvas under `forced-colors: active` and would vanish, where the old
-          border survived, so index.css repaints it the same way it repaints the
-          unread dot and the count chip. */}
-      <span
-        aria-hidden="true"
-        data-notification-thread-rail="true"
-        className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-tint/15"
-      />
       <NotificationCenterEntry
         entry={displayEntry}
         displayType={displayType}
@@ -104,8 +89,7 @@ export function NotificationThread({
         onArchive={onArchive}
         onToggleRead={onToggleRead}
         onRestore={onRestore}
-        compact={compact}
-        showSource={showSource}
+        grouped={grouped}
       />
     </div>
   );

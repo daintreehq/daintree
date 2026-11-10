@@ -648,13 +648,6 @@
      row can be both unread and focused. */
   [data-notification-unread="true"] {
     background-color: CanvasText !important;
-    /* The dot badges the status icon now instead of sitting off in the row's
-       left gutter, and this block paints the icon CanvasText too — so the two
-       fuse into one malformed glyph without a cut-out between them. The ring
-       that separates them in the normal cascade is a box-shadow, and box
-       shadows are not painted here, so the cut-out has to be an outline.
-       Outlines follow border-radius, so it stays round. */
-    outline: 1.5px solid Canvas;
   }
 
   /* Inbox thread-count chip. The tint fill is forced to Canvas, which strips the
@@ -663,15 +656,6 @@
      survive the override, so give it one. */
   [data-notification-count="true"] {
     border: 1px solid CanvasText;
-  }
-
-  /* Inbox thread rail. This used to be a `border-l-2`, which survived the
-     override on its own but pushed every threaded row 2px right of every solo
-     one. It is now an absolutely positioned background, and a background is
-     forced to Canvas here — so repaint it, or threaded rows lose their only
-     at-rest marker in the one mode that has no other way to show it. */
-  [data-notification-thread-rail="true"] {
-    background-color: CanvasText !important;
   }
 
   /* Filter chips and pressed toggle buttons. Selection is carried by a fill and

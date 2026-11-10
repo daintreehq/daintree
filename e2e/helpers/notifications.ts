@@ -286,6 +286,7 @@ export interface SeedHistoryEntry {
     worktreeId?: string;
     panelId?: string;
     eventKind?: string;
+    hostName?: string;
   };
   actions?: { label: string; actionId: string; variant?: "primary" | "secondary" }[];
 }

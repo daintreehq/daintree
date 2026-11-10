@@ -1013,7 +1013,7 @@ describe("NotificationCenterEntry — row menu names the full source", () => {
           correlationId: "c-src",
           context: { worktreeId: "/repo/worktrees/feature-a-very-long-branch-name-that-truncates" },
         })}
-        showSource={false}
+        grouped
       />
     );
     await openMenu();

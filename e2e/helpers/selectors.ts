@@ -361,8 +361,8 @@ export const SEL = {
     center: '[data-testid="notification-center"]',
     centerList: '[role="list"][aria-label="Notifications"]',
     centerRow: '[role="listitem"]',
-    centerFilter: (label: string) =>
-      `button[aria-pressed]:has([data-filter-chip-label]:text-is("${label}"))`,
+    // Segments carry `${testId}-${value}`; the value is the label lowercased.
+    centerFilter: (label: string) => `[data-testid="notification-filter-${label.toLowerCase()}"]`,
     markAllReadButton: 'button:text-is("Mark all read")',
     mutedPill: '[data-testid="notification-muted-pill"]',
     mutedEmptyState: '[data-testid="notification-muted-empty-state"]',

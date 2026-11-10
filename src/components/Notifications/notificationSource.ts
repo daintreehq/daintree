@@ -49,6 +49,56 @@ export function useNotificationSource(context: NotificationContext): string {
 }
 
 /**
+ * The source a row prints under itself: only the parts that say "somewhere
+ * else". The app's own name, the project in view and its active worktree are
+ * where the user already is, and printing them on every row buried the rows
+ * from another project, worktree, machine or plugin under a column of one
+ * repeated name. Null when nothing is left; the full source stays in the row
+ * menu (`useNotificationSource`).
+ */
+export function useNotificationRowSource(
+  context: NotificationContext,
+  /** Under a group header, which already names the host, project and worktree. */
+  grouped = false
+): string | null {
+  const projectId = context?.projectId;
+  const worktreeId = context?.worktreeId;
+  const hostName = context?.hostName;
+  const projectName = useProjectStore((s) =>
+    projectId ? s.projects.find((p) => p.id === projectId)?.name : undefined
+  );
+  const worktreeName = useWorktreeStoreOptional<string | undefined>(
+    (s) => (worktreeId ? s.worktrees.get(worktreeId)?.name : undefined),
+    undefined
+  );
+  const ownerId = useViewOwnerId();
+  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  // Another host's project id can match nothing here, but a host row is never "here".
+  const isHereProject = !hostName && !!projectId && projectId === ownerId;
+  const project = projectName ?? (projectId ? UNKNOWN_PROJECT_LABEL : undefined);
+  const worktree = worktreeId ? worktreeName?.trim() || worktreeNameFromId(worktreeId) : undefined;
+  // Here, any worktree but the active one is somewhere else, the main one
+  // included. Elsewhere the project is printed, and a main worktree carries
+  // its name, so it would only say it twice.
+  const otherWorktree = !worktree
+    ? undefined
+    : isHereProject
+      ? worktreeId === activeWorktreeId
+        ? undefined
+        : worktree
+      : worktree === project
+        ? undefined
+        : worktree;
+  if (grouped) return context?.plugin?.name?.trim() || null;
+  return formatNotificationSource(
+    isHereProject ? undefined : project,
+    otherWorktree,
+    hostName,
+    context?.plugin?.name
+  );
+}
+
+/**
  * Whether this view still has the worktree: present in its inventory and not
  * one of the deleted worktrees whose terminals outlived them.
  */
