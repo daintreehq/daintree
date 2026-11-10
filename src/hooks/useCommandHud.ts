@@ -203,6 +203,9 @@ export function useCommandHud(): UseCommandHudReturn {
     const dispatchId = (entry?.paletteRedirectTo ?? item.actionId) as Parameters<
       typeof actionService.dispatch
     >[0];
+    // Read off the id that runs, as the palette does: a redirect's failure
+    // comes from the sibling, so that is the definition whose toast it is.
+    const selfNotifies = actionService.selfNotifiesOnExecutionError(dispatchId);
 
     void actionService
       .dispatch(
@@ -220,6 +223,9 @@ export function useCommandHud(): UseCommandHudReturn {
         // rather than a silent no-op (#12120), but the dialog it just opened is
         // what the user should be answering — not an error toast over it.
         if (isStagedConfirmation(result.error)) return;
+        // An action that owns its failure toast has already raised the
+        // specific one; a "Couldn't run" beside it names no cause.
+        if (result.error.code === "EXECUTION_ERROR" && selfNotifies) return;
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
