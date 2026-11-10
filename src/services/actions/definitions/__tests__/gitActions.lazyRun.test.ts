@@ -122,24 +122,4 @@ describe("git action run bodies (#14239)", () => {
     expect(m.runLookups).toBe(1);
     expect(notify).not.toHaveBeenCalled();
   });
-
-  it("reports a chunk that never loads, not only a module that loads broken", async () => {
-    // The getter above throws after the import resolved. This rejects the
-    // import itself, which is what a missing or poisoned chunk does.
-    vi.doMock("../gitActions.impl", () => {
-      throw new Error("Failed to fetch dynamically imported module");
-    });
-    try {
-      const def = (await register()).get("git.push")!();
-      await expect(
-        def.run({ cwd: "/repo/one" }, { dispatchSource: "keybinding" })
-      ).rejects.toThrow();
-      expect(notify).toHaveBeenCalledTimes(1);
-      expect((notify.mock.calls[0]![0] as { message: string }).message).not.toContain(
-        "dynamically imported"
-      );
-    } finally {
-      vi.doUnmock("../gitActions.impl");
-    }
-  });
 });

@@ -660,7 +660,8 @@ describe("git.forcePushWithLease failure (#16667)", () => {
     notifyMock.mockReturnValue("");
     const { service, git } = setup();
     seedLease();
-    git.forcePushWithLease.mockRejectedValueOnce(gitError("network-unavailable", "offline"));
+    const cause = gitError("network-unavailable", "offline");
+    git.forcePushWithLease.mockRejectedValueOnce(cause);
 
     const dispatched = dispatch(
       service,
@@ -669,10 +670,12 @@ describe("git.forcePushWithLease failure (#16667)", () => {
       { source: "menu" }
     );
     await answerForcePushConfirm(true);
-    await dispatched;
+    const result = await dispatched;
 
+    expectFailedWith(result, cause);
     expect(notifyMock).toHaveBeenCalledTimes(1);
-    expect(useAnnouncerStore.getState().assertive?.msg).toContain("feature/x");
+    // Names the failure, so it can never read as the success announcement.
+    expect(useAnnouncerStore.getState().assertive?.msg).toBe("Couldn't force push feature/x");
   });
 
   it("leaves a toasted failure to the toast's own alert", async () => {
