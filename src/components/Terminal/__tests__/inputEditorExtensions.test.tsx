@@ -622,6 +622,12 @@ describe("formatChipLabel", () => {
   it("drops the time when the file name carries none", () => {
     expect(formatChipLabel("/Users/me/Pictures/diagram.png")).toBe("Image");
   });
+
+  it("drops the time when the pasted name's timestamp is not a real date", () => {
+    expect(formatChipLabel("/tmp/daintree-clipboard/clipboard-99999999999999999-abcd.png")).toBe(
+      "Image"
+    );
+  });
 });
 
 describe("readImageChipPaths (#12792)", () => {
