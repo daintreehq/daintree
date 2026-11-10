@@ -4,7 +4,7 @@ import { render, act, fireEvent, screen, within, cleanup } from "@testing-librar
 import { primeRadix } from "@/components/ui/radix-loader";
 import { ToolbarAssistantButton } from "../ToolbarAssistantButton";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
-import { ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
+import { ASSISTANT_SLOTS, MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { usePanelStore } from "@/store";
 import { STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { McpRuntimeSnapshot } from "@shared/types";
@@ -751,6 +751,13 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
         .getAllByRole("menuitem")
         .map((item) => item.getAttribute("aria-disabled"))
     ).toEqual([null, null, "true", "true"]);
+    // The ceiling is the reason, so the parked items say so (#16659).
+    expect(
+      within(menu).getAllByRole("menuitem", {
+        name: /, \d+ sessions is the maximum for one project$/,
+      })
+    ).toHaveLength(2);
+    expect(menu.textContent).toContain(`${MAX_ASSISTANT_SLOTS} of ${MAX_ASSISTANT_SLOTS} open`);
     unmount();
 
     // An empty tab at the ceiling is still somewhere to start one.
@@ -763,6 +770,10 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
         .getAllByRole("menuitem")
         .map((item) => item.getAttribute("aria-disabled"))
     ).toEqual([null, null, null, null]);
+    expect(
+      within(menu).queryAllByRole("menuitem", { name: /maximum for one project/ })
+    ).toHaveLength(0);
+    expect(menu.textContent).not.toContain(`of ${MAX_ASSISTANT_SLOTS} open`);
   });
 
   it("keeps the plain click a toggle and nothing more, whatever the choice", () => {

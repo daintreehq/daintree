@@ -1286,6 +1286,7 @@ export function HelpPanel({
         isFocused={isHighlighted}
         newSessionAgentIds={supportedInstalledAgentIds}
         canStartNewSession={canStartSessionWithAgent}
+        openSessionCount={openSlots.length}
         onNewSessionWithAgent={handleOpenSessionWithAgent}
       />
 
