@@ -312,26 +312,6 @@ export function NotificationCenterEntry({
         tabIndex !== undefined && "focus-visible:bg-overlay-highlight"
       )}
     >
-      {/* Unread sits in the row's own gutter, on the first line, in one
-          column down the list. Badged onto the severity glyph's corner it
-          nicked the triangle and the circle that carry severity, and the eye
-          had to inspect each icon to find it. The 16px inset already holds
-          it, so read rows keep the same text column. */}
-      {isNew && (
-        <span
-          aria-hidden="true"
-          // The handle the `forced-colors: active` block repaints: the UA
-          // forces this background to Canvas, and an untitled unread row has
-          // no other visual unread signal.
-          data-notification-unread="true"
-          className={cn(
-            "absolute left-[5px] h-1.5 w-1.5 rounded-full bg-status-info",
-            // Centred on the first line: the 24px title track on a titled row,
-            // the message's first line on an untitled one.
-            entry.title ? "top-[19px]" : "top-[15px]"
-          )}
-        />
-      )}
       <div
         className={cn(
           "flex w-4 shrink-0 items-center justify-center",
@@ -353,6 +333,27 @@ export function NotificationCenterEntry({
         {isNew && <span className="sr-only">Unread. </span>}
         <Icon className="h-4 w-4" />
       </div>
+      {/* Unread sits in the row's own gutter, on the first line, in one
+          column down the list. Badged onto the severity glyph's corner it
+          nicked the triangle and the circle that carry severity, and the eye
+          had to inspect each icon to find it. The 16px inset already holds
+          it, so read rows keep the same text column. After the icon in the
+          DOM, so the row's leading in-flow child is the same read or unread. */}
+      {isNew && (
+        <span
+          aria-hidden="true"
+          // The handle the `forced-colors: active` block repaints: the UA
+          // forces this background to Canvas, and an untitled unread row has
+          // no other visual unread signal.
+          data-notification-unread="true"
+          className={cn(
+            "absolute left-[5px] h-1.5 w-1.5 rounded-full bg-status-info",
+            // Centred on the first line: the 24px title track on a titled row,
+            // the message's first line on an untitled one.
+            entry.title ? "top-[19px]" : "top-[15px]"
+          )}
+        />
+      )}
       <div className="grid flex-1 min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-2">
         {entry.title && (
           <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-1.5">
@@ -467,9 +468,7 @@ export function NotificationCenterEntry({
           </p>
         )}
         {entry.actions && entry.actions.length > 0 && (
-          <div
-            className="col-span-2 row-start-5 mt-1.5 flex flex-wrap gap-1.5"
-          >
+          <div className="col-span-2 row-start-5 mt-1.5 flex flex-wrap gap-1.5">
             {entry.actions.map((action, index) => {
               const manifest = actionService.get(action.actionId as ActionId);
               const isAvailable = manifest !== null && manifest.enabled;

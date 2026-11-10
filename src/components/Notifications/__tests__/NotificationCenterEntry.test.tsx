@@ -199,17 +199,16 @@ describe("NotificationCenterEntry unread signal", () => {
     }
   });
 
-  it("renders the unread dot out of flow, inside the leading icon wrapper", () => {
+  it("renders the unread dot out of flow, in the row gutter rather than on the icon", () => {
     const { container } = render(<NotificationCenterEntry entry={makeEntry()} isNew />);
     const iconWrapper = container.firstElementChild?.firstElementChild;
     expect(iconWrapper).not.toBeNull();
     const dot = container.querySelector(".bg-status-info.rounded-full");
     expect(dot).not.toBeNull();
     if (iconWrapper instanceof HTMLElement && dot instanceof HTMLElement) {
-      // The dot badges the icon's top-right corner via absolute positioning —
-      // it must not participate in the row's flex flow, or read/unread toggles
-      // would shift the icon column.
-      expect(iconWrapper.contains(dot)).toBe(true);
+      // Off the severity glyph, so it can't nick the shape that carries
+      // severity, and absolute, so read/unread toggles don't shift the icon.
+      expect(iconWrapper.contains(dot)).toBe(false);
       expect(dot.className).toMatch(/\babsolute\b/);
     }
   });

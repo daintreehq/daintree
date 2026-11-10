@@ -530,9 +530,7 @@ async function measure(page: Page, label: string): Promise<void> {
       // attribute picked the toggle at x=184 on the first run.
       const firstChip = Array.from(
         popover.querySelectorAll('[role="radio"], button[aria-pressed]')
-      ).find(
-        (b) => b.textContent?.trim() === "All"
-      ) as HTMLElement | undefined;
+      ).find((b) => b.textContent?.trim() === "All") as HTMLElement | undefined;
       const pill = document.querySelector(pillSel);
       const sectionLabel = Array.from(popover.querySelectorAll("div")).find(
         (d) =>
@@ -888,13 +886,16 @@ test("notification center review — scrollport, rhythm, and chrome", async () =
     //     set while the panel is closed, since closing writes Date.now().
     await step(page, "divider", async () => {
       await closeCenter(page);
-      await page.evaluate((at) => {
-        (
-          window as unknown as {
-            __daintreeNotificationsE2E: { setCenterLastClosedAt: (t: number) => void };
-          }
-        ).__daintreeNotificationsE2E.setCenterLastClosedAt(at);
-      }, now - 15 * MINUTE);
+      await page.evaluate(
+        (at) => {
+          (
+            window as unknown as {
+              __daintreeNotificationsE2E: { setCenterLastClosedAt: (t: number) => void };
+            }
+          ).__daintreeNotificationsE2E.setCenterLastClosedAt(at);
+        },
+        now - 15 * MINUTE
+      );
       await page.locator(SEL.notifications.bellButton).click();
       await page.locator(POPOVER).waitFor({ state: "visible", timeout: 8000 });
       await settle(page, 500);

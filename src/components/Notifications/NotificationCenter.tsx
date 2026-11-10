@@ -592,15 +592,19 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   ];
   // Off outranks any pause: nothing breaks through, so there is no
   // breakthrough list to give, and the pause is only worth its end time.
-  const quietDetail = (masterOff ? [pillLabel] : [
-    ...concurrentCauses,
-    pillLabel ? (osDndOnly ? "Daintree's own alerts still show" : summaryHeroLine) : "",
-    // Only what the user switched off. "Finished" ships off, so the full off
-    // list printed "Off: Finished" on every pause for a choice nobody made.
-    silencedLabel,
-    projectOffLabel,
-    otherProjectsOffLabel,
-  ]).filter(Boolean);
+  const quietDetail = (
+    masterOff
+      ? [pillLabel]
+      : [
+          ...concurrentCauses,
+          pillLabel ? (osDndOnly ? "Daintree's own alerts still show" : summaryHeroLine) : "",
+          // Only what the user switched off. "Finished" ships off, so the full off
+          // list printed "Off: Finished" on every pause for a choice nobody made.
+          silencedLabel,
+          projectOffLabel,
+          otherProjectsOffLabel,
+        ]
+  ).filter(Boolean);
   // What "Clear all" actually costs, named in the confirm. The count is the
   // preview; the archived and snoozed breakdown is the part a user standing on
   // the Archived tab would not otherwise expect, since the store call ignores
@@ -639,7 +643,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   // An emptied inbox hides the filter, so it must not stay on a tab nobody can
   // see — the next notification would open onto "You're all caught up".
   useEffect(() => {
-    if ((filter === "snoozed" && !hasSnoozedThreads) || (filter !== "all" && entries.length === 0)) {
+    if (
+      (filter === "snoozed" && !hasSnoozedThreads) ||
+      (filter !== "all" && entries.length === 0)
+    ) {
       setFilter("all");
     }
   }, [filter, hasSnoozedThreads, entries.length]);
