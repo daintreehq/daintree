@@ -70,7 +70,8 @@ export function NotificationThread({
         // differently — one outline, one box-shadow ring would read as two
         // kinds of row.
         tabIndex !== undefined && PALETTE_ROW_FOCUS_CLASS,
-        tabIndex !== undefined && "focus-visible:bg-overlay-highlight"
+        tabIndex !== undefined &&
+          "focus-visible:bg-overlay-highlight contrast-more:focus-visible:outline-2 forced-colors:focus-visible:outline-2"
       )}
     >
       <NotificationCenterEntry

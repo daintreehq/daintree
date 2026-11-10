@@ -309,7 +309,9 @@ export function NotificationCenterEntry({
         tabIndex !== undefined && PALETTE_ROW_FOCUS_CLASS,
         // The row the list's cursor is on wears the app's one highlighted-row
         // fill; the accent ring is the focus anchor on top of it, not the mark.
-        tabIndex !== undefined && "focus-visible:bg-overlay-highlight"
+        // Both high-contrast modes keep that ring as the fill's outline.
+        tabIndex !== undefined &&
+          "focus-visible:bg-overlay-highlight contrast-more:focus-visible:outline-2 forced-colors:focus-visible:outline-2"
       )}
     >
       <div
