@@ -277,10 +277,14 @@ describe("subscribeParcelWatcher", () => {
     listener("change", ".git");
     listener("change", "src\\index.ts");
     listener("change", ".gitignore");
+    // A null filename is the root-level dirty signal; the pattern's `^`
+    // alternative must not swallow it.
+    listener("change", null);
 
     expect(callback.mock.calls).toEqual([
       [null, [{ path: resolve(root, "src\\index.ts"), type: "update" }]],
       [null, [{ path: resolve(root, ".gitignore"), type: "update" }]],
+      [null, [{ path: root, type: "update" }]],
     ]);
     await subscription.unsubscribe();
   });

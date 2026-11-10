@@ -3658,7 +3658,8 @@ describe("GitFileWatcher", () => {
 
       // No `.` or `..` segments: Parcel and the Windows adapter both hand the
       // matcher a normalized path relative to the root, and picomatch's `**`
-      // never matched such a segment anyway.
+      // never matched such a segment anyway. No newlines either; the case
+      // below covers the one deliberate difference.
       const disagreements = [...corpus].filter(
         (path) => legacy.some((glob) => glob.test(path)) !== WORKTREE_IGNORE_PATTERN.test(path)
       );
@@ -3667,6 +3668,15 @@ describe("GitFileWatcher", () => {
       const ignoredCount = [...corpus].filter((path) => WORKTREE_IGNORE_PATTERN.test(path)).length;
       expect(ignoredCount).toBeGreaterThan(LEGACY_IGNORED_NAMES.length);
       expect(corpus.size - ignoredCount).toBeGreaterThan(LEGACY_IGNORED_NAMES.length);
+    });
+
+    it("ignores a newline-bearing name under an ignored directory, which the globs let through", () => {
+      // picomatch's `**` used a non-dotAll `.`, so a newline anywhere in the
+      // path escaped every glob. The pattern matches whole segments, so the
+      // name below an ignored directory no longer matters.
+      expect(WORKTREE_IGNORE_PATTERN.test("node_modules/pkg/odd\nname.js")).toBe(true);
+      expect(WORKTREE_IGNORE_PATTERN.test("odd\ndir/dist/x.js")).toBe(true);
+      expect(WORKTREE_IGNORE_PATTERN.test("dist\n/x.js")).toBe(false);
     });
 
     it("subscribes at the canonical root on macOS so FSEvents paths match it", async () => {

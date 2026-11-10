@@ -444,12 +444,16 @@ describe("recursive ignore pattern against the real watcher (#16676)", () => {
     writeFileSync(join(root, "src.txt"), "untracked\n");
     mkdirSync(join(root, "packages", "app", "dist"), { recursive: true });
     mkdirSync(join(root, "packages", "app", "__pycache__"), { recursive: true });
+    mkdirSync(join(root, "packages", "lib"), { recursive: true });
 
     const probe = await arm(root);
     const churn = await probe(() => {
+      // Created after subscribe, so no OS-level exclusion can cover it.
+      mkdirSync(join(root, "packages", "lib", "node_modules", "pkg"), { recursive: true });
       for (let i = 0; i < 15; i++) {
         writeFileSync(join(root, "packages", "app", "dist", `chunk-${i}.js`), `${i}\n`);
         writeFileSync(join(root, "packages", "app", "__pycache__", `m${i}.pyc`), `${i}\n`);
+        writeFileSync(join(root, "packages", "lib", "node_modules", "pkg", `f${i}.js`), `${i}\n`);
       }
     });
     expect(churn).toEqual({ changes: 0, fileSignals: 0 });
