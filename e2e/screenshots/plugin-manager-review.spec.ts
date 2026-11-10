@@ -67,6 +67,17 @@
  *   focus          keyboard focus ring on the first row.
  *   contrast       prefers-contrast: more.
  *   forced         forced-colors: active.
+ *   installfile    Install from file with nothing selected: a real `.dntr`
+ *                  through the real installer, the native picker stubbed in
+ *                  main. The new plugin sorts last, below the fold.
+ *   installfilter  the same with another plugin selected and a search active
+ *                  that the new plugin doesn't match.
+ *   installfailed  a broken archive: the failure path, which must not change.
+ *
+ * The install steps run last because they add rows every earlier shot would
+ * otherwise show. After each one the text of every status region in the view
+ * is appended to install-status.txt beside the shots, since what a screen
+ * reader hears after an install is invisible in a PNG.
  *
  * Opt-in only: skips itself unless DAINTREE_SHOT_PLUGINMGR is set, so the
  * marketing screenshots workflow never runs it.
@@ -84,10 +95,20 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, cpSync } from "fs";
+import { execFileSync } from "child_process";
+import {
+  mkdtempSync,
+  writeFileSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  readdirSync,
+  cpSync,
+  appendFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import path from "path";
-import { launchApp, closeApp, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, mockOpenDialog, type AppContext } from "../helpers/launch";
 import { openAndOnboardProject } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { createFixtureRepo } from "../helpers/fixtures";
@@ -372,6 +393,33 @@ function writeInstalledPlugins(fakeHome: string): Record<string, InstalledFixtur
     records[fixture.id] = fixture.record;
   }
   return records;
+}
+
+/**
+ * Pack a plugin into a `.dntr` the way the installer reads one: a zip with
+ * `plugin.json` at its root. Leaving `version` out produces an archive the
+ * installer rejects, for the failure step.
+ */
+function packArchive(
+  root: string,
+  fixture: { id: string; displayName: string; version?: string; description: string }
+): string {
+  const dir = path.join(root, fixture.id);
+  mkdirSync(path.join(dir, "main"), { recursive: true });
+  writeFileSync(path.join(dir, "main", "index.js"), STUB_MAIN);
+  const manifest: Record<string, unknown> = {
+    name: fixture.id,
+    displayName: fixture.displayName,
+    description: fixture.description,
+    main: "main/index.js",
+    engines: { daintree: ">=0.11.0" },
+    capabilities: [],
+  };
+  if (fixture.version) manifest.version = fixture.version;
+  writeFileSync(path.join(dir, "plugin.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  const out = path.join(root, `${fixture.id}.dntr`);
+  execFileSync("zip", ["-X", "-q", "-r", out, "plugin.json", "main"], { cwd: dir });
+  return out;
 }
 
 /**
@@ -727,6 +775,118 @@ test("plugin manager review — provenance, states, and overflow", async () => {
       await snap(page, "98-forced-colors-list", LIST);
       await page.emulateMedia({ forcedColors: "none" }).catch(() => {});
       await settle(page, 300);
+    });
+
+    // 21-23. Installing from the manager, through the real installer. Main's
+    //     native picker is stubbed to hand back the archive, so everything
+    //     after the path is the product's own install path.
+    const archiveRoot = path.join(fixtureRoot, "archives");
+    mkdirSync(archiveRoot, { recursive: true });
+    const statusLog = path.join(OUTPUT_DIR, `install-status${TAG}.txt`);
+    writeFileSync(statusLog, "");
+    const installButton = page.locator(`${MANAGER} button`, { hasText: "Install plugin" }).first();
+
+    const installFromFile = async (archive: string): Promise<void> => {
+      if (!ctx) throw new Error("app not launched");
+      await mockOpenDialog(ctx.app, archive);
+      await installButton.click();
+      await page.locator('[role="menuitem"]', { hasText: "Install from file" }).first().click();
+      // A loading Button is aria-disabled for exactly as long as the install runs.
+      await expect(installButton).not.toHaveAttribute("aria-disabled", "true", {
+        timeout: T_LONG,
+      });
+      await settle(page, 1200);
+    };
+
+    // What the PNG can't show: what a screen reader hears, which row is
+    // selected and whether it sits inside the list's viewport, and where focus
+    // was left.
+    const recordStatus = async (slug: string): Promise<void> => {
+      const texts = await page.locator(`${MANAGER} [role="status"]`).allTextContents();
+      const spoken = texts.map((t) => t.trim()).filter(Boolean);
+      const facts = await page.evaluate((list) => {
+        const viewport = document.querySelector(list)?.getBoundingClientRect();
+        const row = document
+          .querySelector(`${list} button[aria-current="true"]`)
+          ?.closest("li")
+          ?.getBoundingClientRect();
+        const active = document.activeElement as HTMLElement | null;
+        const label = active?.getAttribute("aria-label");
+        return {
+          selected:
+            document
+              .querySelector(`${list} button[aria-current="true"]`)
+              ?.textContent?.trim()
+              .slice(0, 40) ?? null,
+          rowInView: !!(
+            viewport &&
+            row &&
+            row.top >= viewport.top &&
+            row.bottom <= viewport.bottom
+          ),
+          focus: active
+            ? `${active.tagName.toLowerCase()}${label ? `[${label}]` : ""} ${(active.textContent ?? "").trim().slice(0, 30)}`
+            : null,
+        };
+      }, LIST);
+      appendFileSync(statusLog, `${slug}: ${JSON.stringify({ spoken, ...facts })}\n`);
+    };
+
+    const clearSelection = async (): Promise<void> => {
+      const current = page.locator(`${LIST} button[aria-current="true"]`);
+      if ((await current.count()) > 0) {
+        await current.first().click();
+        await settle(page, 300);
+      }
+    };
+
+    await step("installfile", async () => {
+      await clearSearch(page);
+      await clearSelection();
+      await page.locator(LIST).evaluate((el) => {
+        el.scrollTop = 0;
+      });
+      const archive = packArchive(archiveRoot, {
+        id: "acme.zephyr-snippets",
+        displayName: "Zephyr Snippets",
+        version: "1.0.0",
+        description: "Reusable prompt snippets, inserted from the composer.",
+      });
+      await installFromFile(archive);
+      await expect(page.locator(`${LIST} li`, { hasText: "Zephyr Snippets" })).toHaveCount(1, {
+        timeout: T_LONG,
+      });
+      await snap(page, "100-installed-from-file");
+      await snap(page, "101-installed-from-file-list", LIST);
+      await recordStatus("100-installed-from-file");
+    });
+
+    await step("installfilter", async () => {
+      await clearSearch(page);
+      await select(page, "Docker Control");
+      await page.locator(SEARCH).fill("docker");
+      await settle(page, 400);
+      const archive = packArchive(archiveRoot, {
+        id: "acme.lint-lens",
+        displayName: "Lint Lens",
+        version: "0.4.0",
+        description: "Shows lint results for the files an agent touched.",
+      });
+      await installFromFile(archive);
+      await snap(page, "102-installed-under-filter");
+      await recordStatus("102-installed-under-filter");
+    });
+
+    await step("installfailed", async () => {
+      await clearSearch(page);
+      const archive = packArchive(archiveRoot, {
+        id: "acme.broken-archive",
+        displayName: "Broken Archive",
+        description: "A manifest with no version.",
+      });
+      await installFromFile(archive);
+      await snap(page, "103-install-failed");
+      await recordStatus("103-install-failed");
     });
 
     // Count the artifacts rather than trusting the exit code. A step that threw
