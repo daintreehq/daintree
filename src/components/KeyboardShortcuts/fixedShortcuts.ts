@@ -19,8 +19,8 @@ export const FIXED_SHORTCUTS: readonly FixedShortcut[] = [
   },
   {
     label: "Open worktree",
-    keys: ["Space"],
-    description: "Enter or Right moves into the row's actions",
+    keys: ["Space", "Enter"],
+    description: "Right or F2 moves into the row's actions",
     category: "Worktrees",
   },
   {
