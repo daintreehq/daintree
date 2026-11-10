@@ -187,6 +187,26 @@ describe("HostSwitchDialog", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("names only the request while the hosts haven't answered", async () => {
+    let finishLook!: (prepared: HostSwitchPreparation) => void;
+    prepare.mockReturnValueOnce(
+      new Promise<HostSwitchPreparation>((resolve) => {
+        finishLook = resolve;
+      })
+    );
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    expect(screen.getByRole("heading", { name: "Open project on studio-01" })).toBeTruthy();
+    expect(screen.queryByText(/isn't on studio-01/)).toBeNull();
+    expect(await screen.findByText(/^Checking the project on .+ and studio-01$/)).toBeTruthy();
+
+    await act(async () => {
+      finishLook(preparation());
+    });
+    expect(
+      await screen.findByRole("heading", { name: "daintree isn't on studio-01 yet" })
+    ).toBeTruthy();
+  });
+
   it("shows git's words and the host's own fix when the host can't clone", async () => {
     prepare.mockResolvedValue(preparation());
     execute.mockResolvedValue({
@@ -340,6 +360,33 @@ describe("HostSwitchDialog", () => {
     expect(alert.textContent).toContain("Didn't push feature/host-chip");
     await waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("names only the request while a moved branch is looked at again", async () => {
+    const ahead = preparation({
+      branchCheck: { kind: "ahead", remote: "origin", ahead: 1 },
+      unpushedCommits: [{ sha: "abc1234", subject: "Draw the host chip" }],
+      unpushedCommitCount: 1,
+    });
+    prepare
+      .mockResolvedValueOnce(ahead)
+      .mockReturnValueOnce(new Promise<HostSwitchPreparation>(() => {}));
+    execute.mockResolvedValue({
+      kind: "git-failed",
+      step: "push",
+      hostId: "local",
+      reason: "branch-moved",
+      message: "feature/host-chip moved since its commits were shown. Nothing was pushed.",
+    });
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("radio", { name: PUSH_CHOICE }));
+    fireEvent.click(screen.getByRole("button", { name: "Push, then clone" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Didn't push feature/host-chip"
+    );
+    await waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("heading", { name: "Open project on studio-01" })).toBeTruthy();
+    expect(screen.queryByText(/isn't on studio-01/)).toBeNull();
   });
 
   it("asks again rather than opening by itself once a moved branch was looked at again", async () => {
@@ -841,6 +888,8 @@ describe("HostSwitchDialog when looking at the project fails", () => {
     render(<HostSwitchDialog request={worktreeRequest} onClose={() => {}} />);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("The link to studio-01 dropped.");
+    expect(screen.getByRole("heading", { name: "Open project on studio-01" })).toBeTruthy();
+    expect(screen.queryByText(/isn't on studio-01/)).toBeNull();
     expect(screen.getByRole("button", { name: "Switch host only" })).toBeTruthy();
     const focusKeyBefore = screen.getByTestId("app-dialog").getAttribute("data-focus-reset-key");
 
@@ -935,6 +984,8 @@ describe("HostSwitchDialog when looking at the project fails", () => {
     );
     await screen.findByText("The link to studio-01 dropped.");
     expect(screen.queryByRole("button", { name: "Retry clone" })).toBeNull();
+    // The earlier answer is still held, but a failed look vouches for nothing.
+    expect(screen.getByRole("heading", { name: "Open project on studio-01" })).toBeTruthy();
 
     let finishLook!: (prepared: HostSwitchPreparation) => void;
     prepare.mockReturnValueOnce(
@@ -943,7 +994,8 @@ describe("HostSwitchDialog when looking at the project fails", () => {
       })
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(screen.queryByText("daintree isn't on studio-01 yet")).toBeNull();
+    expect(screen.queryByText(/isn't on studio-01/)).toBeNull();
+    expect(screen.getByRole("heading", { name: "Open project on studio-01" })).toBeTruthy();
     expect(prepare).toHaveBeenCalledTimes(3);
     expect(execute).toHaveBeenCalledTimes(1);
 
