@@ -493,9 +493,12 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <Button
             variant="ghost"
             size="xs"
-            onClick={handleRefresh}
-            disabled={isLoading}
-            className="pulse-control mt-2 -ml-2.5 text-2xs"
+            onClick={() => {
+              if (!isLoading) handleRefresh();
+            }}
+            // Not `disabled`: pressing it would drop keyboard focus to the page.
+            aria-disabled={isLoading}
+            className="pulse-control mt-2 -ml-2.5 text-2xs aria-disabled:cursor-not-allowed"
             aria-label={`Refresh — last updated ${updatedLabel}`}
             data-testid="pulse-last-updated"
           >
