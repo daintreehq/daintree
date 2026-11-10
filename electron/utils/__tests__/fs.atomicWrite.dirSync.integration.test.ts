@@ -41,6 +41,15 @@ describe("dir fsync integration (real fs, no mocks)", () => {
     expect(files).toEqual(["test.json"]);
   });
 
+  it("replaces an existing file without the syncs and leaves no temp behind", () => {
+    const target = path.join(tmpDir, "test.json");
+    resilientAtomicWriteFileSync(target, "original", "utf-8");
+    resilientAtomicWriteFileSync(target, "updated", "utf-8", { durable: false });
+
+    expect(readFileSync(target, "utf-8")).toBe("updated");
+    expect(readdirSync(tmpDir)).toEqual(["test.json"]);
+  });
+
   it("overwrites existing file atomically", async () => {
     const target = path.join(tmpDir, "test.json");
     await resilientAtomicWriteFile(target, "original", "utf-8");
