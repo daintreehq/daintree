@@ -38,6 +38,8 @@ const MACOS_EMFILE_LIMIT_HELP =
  */
 /** Name of the git config file inside the common dir. */
 const GIT_CONFIG_FILE_NAME = "config";
+/** Name of the packed refs file inside the common dir. */
+const PACKED_REFS_FILE_NAME = "packed-refs";
 
 const WORKTREE_IGNORE_GLOBS = [
   "**/node_modules/**",
@@ -414,7 +416,7 @@ export class GitFileWatcher {
       const headPath = pathJoin(gitDir, "HEAD");
 
       this.watchFile(headPath);
-      this.watchFile(pathJoin(commonDir, "packed-refs"));
+      this.watchFile(pathJoin(commonDir, PACKED_REFS_FILE_NAME));
       this.watchFile(pathJoin(commonDir, "logs", "HEAD"));
       // Watch .git/config so `git push -u` / `git branch --set-upstream-to`
       // triggers a poll deterministically — without this the new tracking
@@ -944,11 +946,19 @@ export class GitFileWatcher {
   }
 
   private matchesTrackedFile(changedName: string, trackedFile: string): boolean {
-    if (changedName === trackedFile || changedName === `${trackedFile}.lock`) {
+    // Every ref transaction takes `packed-refs.lock`, even a commit that only
+    // writes its own loose ref, and every worktree of the repository watches
+    // the common dir it lives in (#16678). A real rewrite renames the lock onto
+    // `packed-refs`, so the final name still reports it.
+    const lockName = trackedFile === PACKED_REFS_FILE_NAME ? null : `${trackedFile}.lock`;
+    if (changedName === trackedFile || changedName === lockName) {
       return true;
     }
 
-    if (changedName.endsWith(`/${trackedFile}`) || changedName.endsWith(`/${trackedFile}.lock`)) {
+    if (
+      changedName.endsWith(`/${trackedFile}`) ||
+      (lockName !== null && changedName.endsWith(`/${lockName}`))
+    ) {
       return true;
     }
 
