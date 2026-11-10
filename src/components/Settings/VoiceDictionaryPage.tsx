@@ -369,7 +369,7 @@ export function VoiceDictionaryPage({
           <SettingsRow
             id="voice-dictionary-add"
             label="Add terms"
-            description="One per line or separated by commas. Write heard -> Term to teach a mishearing"
+            description="One per line or separated by commas; press Shift+Enter for a new line. Write heard -> Term to teach a mishearing"
             layout="stacked"
             control={({ labelId, descriptionId }) => (
               <div className="space-y-2">
@@ -635,6 +635,7 @@ function EntryEditor({
   return (
     <SettingsRow
       label={`Edit ${entry.term}`}
+      description="Heard as: one phrase per line. Press Shift+Enter for a new line; Enter saves."
       layout="stacked"
       error={error}
       control={({ labelId, descriptionId }) => (
@@ -657,6 +658,7 @@ function EntryEditor({
             rows={2}
             value={heard}
             aria-label={`Heard-as phrases for ${entry.term}`}
+            aria-describedby={descriptionId}
             placeholder="Heard as, one phrase per line"
             onChange={(e) => setHeard(e.target.value)}
             onKeyDown={onKeyDown}

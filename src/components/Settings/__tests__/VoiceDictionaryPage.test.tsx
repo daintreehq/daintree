@@ -276,6 +276,20 @@ describe("VoiceDictionaryPage", () => {
       });
     });
 
+    it("names Shift+Enter beside the heard-as field, with or without content (#16628)", () => {
+      install(mainLike([zustand]));
+      render(<PageWith initial={[zustand]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit Zustand" }));
+      const heard = screen.getByLabelText("Heard-as phrases for Zustand");
+      const hint = screen.getByText(/Press Shift\+Enter for a new line; Enter saves/);
+      expect(hint.textContent).toContain("Heard as");
+      expect(heard.getAttribute("aria-describedby")?.split(" ")).toContain(hint.id);
+      fireEvent.change(heard, { target: { value: "zoo stand\nzoo stan" } });
+      expect(screen.getByText(/Press Shift\+Enter for a new line; Enter saves/)).toBeTruthy();
+      expect(screen.getByText(/press Shift\+Enter for a new line/)).toBeTruthy();
+    });
+
     it("asks before an edit takes it, and moves it on Move", async () => {
       const main = mainLike([zustand, term("Zoostand")]);
       install(main);
