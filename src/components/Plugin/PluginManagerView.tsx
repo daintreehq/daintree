@@ -9,7 +9,15 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Callout, CALLOUT_ICON, CALLOUT_ICON_TONE, calloutVariants } from "@/components/ui/Callout";
-import { useState, useEffect, useRef, useMemo, useDeferredValue, useId } from "react";
+import {
+  useState,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useMemo,
+  useDeferredValue,
+  useId,
+} from "react";
 import { createPortal } from "react-dom";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
@@ -51,7 +59,7 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { isMac, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
-import { usePluginManager } from "./usePluginManager";
+import { usePluginManager, type InstallOutcome } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
 import { UnsavedPanelsCallout } from "./UnsavedPanelsCallout";
 import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
@@ -112,6 +120,42 @@ interface PluginRowProps {
   onToggle: () => void;
   /** Attached to the row root so a deep-link `open` (#9559) can scroll it into view. */
   innerRef?: (el: HTMLLIElement | null) => void;
+}
+
+/**
+ * What a screen reader hears when an install or update finishes (#16654). The
+ * selection is the visible confirmation; this says the same thing to someone
+ * who can't see it, and says why their search emptied when it did.
+ */
+function describeInstallOutcome(
+  outcome: InstallOutcome,
+  revealedPastSearch: LoadedPluginInfo | null
+): string {
+  const labels = outcome.ids.map((id) => {
+    const plugin = outcome.plugins.find((p) => p.manifest.name === id);
+    return plugin ? pluginLabel(plugin) : id;
+  });
+  const updated = outcome.plugins[0];
+  const parts = [
+    outcome.kind === "updated"
+      ? updated
+        ? `${pluginLabel(updated)} updated to v${updated.manifest.version}`
+        : `${labels[0]} updated`
+      : labels.length === 1
+        ? `${labels[0]} installed`
+        : `${pluralize(labels.length, "plugin")} installed: ${labels.join(", ")}`,
+  ];
+  if (outcome.failedCount > 0) {
+    parts.push(`${pluralize(outcome.failedCount, "file")} couldn't be installed`);
+  }
+  if (revealedPastSearch) {
+    parts.push(
+      labels.length === 1
+        ? "Search cleared to show it"
+        : `Search cleared to show ${pluginLabel(revealedPastSearch)}`
+    );
+  }
+  return parts.join(". ");
 }
 
 /** Where a per-project package runs, for its row's second line. */
@@ -491,6 +535,16 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     if (!isOpen) setQuery("");
   }, [isOpen]);
 
+  // The install outcome, as a status message (WCAG 4.1.3). Emptied the moment
+  // an install or update starts so the next outcome is always a change, even
+  // when it is the same plugin installed again, and on close so a reopened view
+  // doesn't mount holding a stale one.
+  const [installAnnouncement, setInstallAnnouncement] = useState("");
+  const installRunning = pm.isInstalling || pm.isReinstalling;
+  useEffect(() => {
+    if (installRunning || !isOpen) setInstallAnnouncement("");
+  }, [installRunning, isOpen]);
+
   // Move focus into the view when it opens. Unlike the former modal dialog, a
   // role="region" view doesn't trap focus, so without this the keyboard focus
   // can stay on a background grid terminal — and `terminal.close` (Cmd+W) skips
@@ -538,19 +592,52 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     }
   }, [pm.plugins, selectedPluginId]);
 
+  // A row being revealed (a deep-link `open`, a finished install). Held until
+  // the row has rendered and been scrolled to: clearing a search that hid it
+  // only shows the row once the deferred query catches up.
+  const [revealTargetId, setRevealTargetId] = useState<string | null>(null);
+  // The last install outcome the view has acted on. The refreshed list and its
+  // outcome arrive in one render, and the reconciliation below runs before the
+  // outcome effect, so it has to know an outcome is still on its way.
+  const handledOutcomeRef = useRef(0);
+  const installOutcome = pm.installOutcome;
+
   // When a filter is active, also null a selection whose plugin is no longer in
   // the filtered set — otherwise the detail pane keeps showing a plugin that the
   // current query hides (#9557). Separate from the full-list effect above so the
-  // two have independent dependency arrays and can't race.
+  // two have independent dependency arrays and can't race. Two exemptions: a
+  // plugin being revealed, whose search was just cleared while the filtered set
+  // still reflects the old query; and a selected plugin an update is moving out
+  // of the filter (a repaired one under `@problem`), from the moment its update
+  // starts until the outcome effect reveals it, since an update keeps the
+  // selection. The outcome lands in the same render as its list, and this runs
+  // before the outcome effect, so an unhandled outcome counts as in progress.
+  const updatingPluginId = pm.updatingPluginId;
   useEffect(() => {
+    const updating =
+      selectedPluginId !== null &&
+      (selectedPluginId === updatingPluginId ||
+        (installOutcome !== null &&
+          installOutcome.kind === "updated" &&
+          installOutcome.nonce !== handledOutcomeRef.current &&
+          installOutcome.ids.includes(selectedPluginId)));
     if (
       isSearchActive &&
       selectedPluginId !== null &&
+      selectedPluginId !== revealTargetId &&
+      !updating &&
       !filteredPlugins.some((p) => p.manifest.name === selectedPluginId)
     ) {
       setSelectedPluginId(null);
     }
-  }, [isSearchActive, filteredPlugins, selectedPluginId]);
+  }, [
+    isSearchActive,
+    filteredPlugins,
+    selectedPluginId,
+    revealTargetId,
+    installOutcome,
+    updatingPluginId,
+  ]);
 
   // The same reconciliation for the project inventory, which had none: a
   // project plugin could be selected and then filtered out of the list while
@@ -566,29 +653,90 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     }
   }, [filteredProjectPlugins, selectedProjectPluginId]);
 
+  /**
+   * Select a plugin, show its detail and bring its row into view, without
+   * moving focus. A search that hides the row is cleared (#9557 + #9559) and
+   * one that still shows it is kept, so the user loses only what was in the
+   * way. Returns whether the search was cleared.
+   */
+  const hiddenBySearch = (plugin: LoadedPluginInfo): boolean =>
+    isQueryActive(parsePluginQuery(query)) && filterPlugins([plugin], query).length === 0;
+  const revealPlugin = useEffectEvent((plugin: LoadedPluginInfo): boolean => {
+    const id = plugin.manifest.name;
+    const hidden = hiddenBySearch(plugin);
+    if (hidden) setQuery("");
+    // A project plugin left selected would stay lit beside the target and keep
+    // the detail pane, so the reveal would show the wrong plugin.
+    setSelectedProjectPluginId(null);
+    setSelectedPluginId(id);
+    setRevealTargetId(id);
+    return hidden;
+  });
+
+  // Scroll a revealed row into view once it has rendered.
+  useEffect(() => {
+    if (revealTargetId === null) return;
+    const row = rowRefs.current.get(revealTargetId);
+    if (!row) {
+      // Still waiting on the list or on a cleared search to commit; once both
+      // have settled, a row that never rendered isn't coming.
+      if (deferredQuery === query && !pm.loading) setRevealTargetId(null);
+      return;
+    }
+    const options: ScrollIntoViewOptions & { container: "nearest" } = {
+      block: "center",
+      // Honour reduced motion: the row can be anywhere in the list, so the
+      // smooth scroll is an arbitrarily long animation the user never asked for.
+      behavior: skipMotion ? "auto" : "smooth",
+      // Only the list scrolls. Centring a row near the end otherwise scrolls
+      // the list's overflow-hidden wrapper too, leaving a blank band under the
+      // last row. Not yet in TypeScript's DOM types.
+      container: "nearest",
+    };
+    row.scrollIntoView(options);
+    setRevealTargetId(null);
+  }, [
+    revealTargetId,
+    filteredPlugins,
+    groupedPlugins,
+    deferredQuery,
+    query,
+    pm.loading,
+    skipMotion,
+  ]);
+
   // When the hook resolves a deep-link `open` target to an installed plugin
-  // (#9559), select it and scroll its row into view, then clear the focus
-  // request so it doesn't re-trigger on the next render.
+  // (#9559), reveal it, then clear the request so it doesn't re-trigger.
   const focusPluginId = pm.focusPluginId;
   const clearFocusPluginId = pm.clearFocusPluginId;
   useEffect(() => {
     if (!focusPluginId) return;
-    if (!pm.plugins.some((p) => p.manifest.name === focusPluginId)) return;
-    // Clear any active filter so the deep-link target row is actually rendered
-    // and can be scrolled into view (#9557 + #9559).
-    setQuery("");
-    // A project plugin left selected would stay lit beside the target and keep
-    // the detail pane, so the deep link would open the wrong plugin.
-    setSelectedProjectPluginId(null);
-    setSelectedPluginId(focusPluginId);
-    const row = rowRefs.current.get(focusPluginId);
-    if (!row) return; // Row not rendered yet — leave focusPluginId set so a
-    // subsequent list/filter refresh retries the scroll.
-    // Honour reduced motion: a deep link can land anywhere in the list, so the
-    // smooth scroll is an arbitrarily long animation the user never asked for.
-    row.scrollIntoView({ block: "center", behavior: skipMotion ? "auto" : "smooth" });
+    const target = pm.plugins.find((p) => p.manifest.name === focusPluginId);
+    if (!target) return;
+    revealPlugin(target);
     clearFocusPluginId();
-  }, [focusPluginId, clearFocusPluginId, pm.plugins, skipMotion]);
+  }, [focusPluginId, clearFocusPluginId, pm.plugins]);
+
+  // A finished install hands the user to what it installed (#16654): the
+  // plugin's row selected and in view and its detail open, which is the visible
+  // confirmation even for an install too quick to show progress. A drop shows
+  // its last plugin. An update keeps the selection where it is, and is revealed
+  // only when it is the selected plugin and the search no longer shows it. Both
+  // are announced. The hook publishes this only once the refreshed list holds
+  // the plugin, so the deep link's "isn't installed" check never sees it missing.
+  const actOnInstallOutcome = useEffectEvent((outcome: InstallOutcome) => {
+    handledOutcomeRef.current = outcome.nonce;
+    const target =
+      outcome.kind === "installed"
+        ? (outcome.plugins.at(-1) ?? null)
+        : (outcome.plugins.find((p) => p.manifest.name === selectedPluginId && hiddenBySearch(p)) ??
+          null);
+    const searchCleared = target !== null && revealPlugin(target);
+    setInstallAnnouncement(describeInstallOutcome(outcome, searchCleared ? target : null));
+  });
+  useEffect(() => {
+    if (installOutcome) actOnInstallOutcome(installOutcome);
+  }, [installOutcome]);
 
   // A `plugin.openSettings` whose home is the manager: select the plugin the
   // same way a deep-link `open` does. The detail pane then opens its Settings
@@ -878,6 +1026,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             </div>
             <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
               {searchAnnouncement}
+            </p>
+            <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+              {installAnnouncement}
             </p>
             {/* The health summary. Deliberately a filter, not a re-sort: the
                 list keeps its category order and its spatial memory, and this
@@ -1322,10 +1473,13 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           />
         </AppDialog.Body>
         <AppDialog.Footer
+          // While the install runs, Cancel cancels it: the progress banner and
+          // its own Cancel sit behind this dialog's scrim. A cancelled install
+          // closes the dialog like any other uncorrectable outcome.
           secondaryAction={{
             label: "Cancel",
-            onClick: pm.closeUrlDialog,
-            disabled: pm.isInstalling,
+            onClick: pm.isInstalling ? pm.cancelActiveInstall : pm.closeUrlDialog,
+            disabled: pm.isInstalling && (pm.cancelRequested || pm.cancelRefused),
           }}
           primaryAction={{
             label: "Install",

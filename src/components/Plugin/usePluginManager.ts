@@ -33,8 +33,8 @@ const UP_TO_DATE_NOTIFICATION_DURATION_MS = 4000;
 
 /**
  * Map a structured install failure to user-facing copy. The bounded-fetch codes
- * (F24) get tailored guidance; everything else falls back to the error's own
- * message so manifest/engine failures still read clearly.
+ * (F24) and manifest schema failures get tailored guidance; everything else
+ * falls back to the error's own message.
  */
 function installErrorMessage(error: PluginInstallError | undefined): string {
   switch (error?.code) {
@@ -50,14 +50,25 @@ function installErrorMessage(error: PluginInstallError | undefined): string {
       // The archive itself may be fine — it just never finished arriving, so
       // "check the file" would send the user down the wrong path (#11302).
       return "Unpacking the plugin took too long and was stopped. Try installing it again.";
+    case "manifest_invalid": {
+      // A schema failure carries the field, and its message is the validator's
+      // ("expected string, received undefined"), which names neither the field
+      // nor what to do. Only the author can fix a manifest. "The archive", not
+      // "this plugin": the selected plugin sits right beside this message.
+      const field = error?.path?.join(".");
+      if (!field) break;
+      const problem = /received undefined/.test(error?.message ?? "")
+        ? `is missing "${field}"`
+        : `has an invalid "${field}" value`;
+      return `The archive's plugin.json ${problem}, so it can't be installed. Ask the plugin's author for a corrected archive.`;
+    }
     case "archive_mismatch":
       // The install no longer matches the preview the user approved — the
       // server sent different bytes, or the plugin is gone (#12612).
       // Re-checking shows what's actually there now.
       return "This update no longer matches what you reviewed, so nothing was installed. Check for updates again.";
-    default:
-      return error?.message ?? "Installation failed. Check the file and try again.";
   }
+  return error?.message ?? "Installation failed. Check the file and try again.";
 }
 
 type UnsavedPanelsRead = { pluginId: string; panels: PluginUnsavedPanel[] };
@@ -76,6 +87,32 @@ type PendingUpdate = {
     { status: "available" }
   >;
 };
+
+/**
+ * What a finished install or update did, published once the refreshed list
+ * holds it (#16654). The view selects an install's last plugin and announces
+ * both kinds; publishing earlier would select against a list that doesn't have
+ * the plugin yet.
+ */
+export interface InstallOutcome {
+  /** New per outcome, so installing the same plugin twice still reads as new. */
+  nonce: number;
+  kind: "installed" | "updated";
+  /** The plugin ids in install order, the last being the one to show. */
+  ids: string[];
+  /** The same ids as the refreshed list has them; one missing from it is skipped. */
+  plugins: LoadedPluginInfo[];
+  /** Files from the same drop that didn't install. */
+  failedCount: number;
+}
+
+type PendingOutcome = Omit<InstallOutcome, "nonce" | "plugins">;
+
+/**
+ * Whether an install result came from adding a plugin or from updating one. Main
+ * answers both with `installed`, and only an install moves the selection.
+ */
+type InstallIntent = "install" | "update";
 
 /**
  * All plugin-management state and lifecycle handlers for the plugin manager
@@ -105,6 +142,20 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const [noticeTone, setNoticeTone] = useState<"neutral" | "warning">("neutral");
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [refreshKey, setRefreshKey] = useState(0);
+  // A load failure's own message, so the refresh that succeeds clears that and
+  // nothing else: an install's failures are written before the refresh it
+  // triggers lands, and a blanket clear erased them (#16654).
+  const listLoadErrorRef = useRef<string | null>(null);
+  // An install or update waiting on the refresh that will hold its plugins.
+  const pendingOutcomeRef = useRef<PendingOutcome | null>(null);
+  const outcomeNonceRef = useRef(0);
+  const [installOutcome, setInstallOutcome] = useState<InstallOutcome | null>(null);
+  // The plugin an update is replacing, from its download until its outcome is
+  // published. Main broadcasts a provenance change when the install commits, so
+  // a refresh can bring the new record before the install call returns; the
+  // view keeps this plugin selected across that gap even if the new record no
+  // longer matches the search.
+  const [updatingPluginId, setUpdatingPluginId] = useState<string | null>(null);
   // Mirror of `refreshKey` for async staleness checks. A list refresh (reopen,
   // mutation, or cross-window provenance change) bumps the key; an update check
   // that started before the bump must discard its result rather than surface a
@@ -350,6 +401,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // the `cancelled` flag (that would cross-cancel the initial load — #4958).
   useEffect(() => {
     let cancelled = false;
+    // Read when the load starts: a load already in flight when an install
+    // finished returns a list from before it, so it can't settle the outcome.
+    const outcome = pendingOutcomeRef.current;
     window.electron.plugin
       .list()
       .then((list) => {
@@ -357,12 +411,30 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         // `plugin:list` also carries loaded project plugins, which the manager
         // lists from the project inventory instead; kept here they showed as a
         // second, installed-looking row whose toggle targets the global id.
-        setPlugins(sortPlugins(list.filter((plugin) => plugin.origin !== "project")));
-        setError(null);
+        const next = sortPlugins(list.filter((plugin) => plugin.origin !== "project"));
+        setPlugins(next);
+        const loadError = listLoadErrorRef.current;
+        if (loadError !== null) {
+          listLoadErrorRef.current = null;
+          setError((current) => (current === loadError ? null : current));
+        }
+        if (outcome && pendingOutcomeRef.current === outcome) {
+          pendingOutcomeRef.current = null;
+          // The outcome carries the update from here.
+          if (outcome.kind === "updated") setUpdatingPluginId(null);
+          outcomeNonceRef.current += 1;
+          setInstallOutcome({
+            ...outcome,
+            nonce: outcomeNonceRef.current,
+            plugins: outcome.ids.flatMap((id) => next.filter((p) => p.manifest.name === id)),
+          });
+        }
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(formatErrorMessage(err, "Failed to load plugins"));
+        const message = formatErrorMessage(err, "Failed to load plugins");
+        listLoadErrorRef.current = message;
+        setError(message);
         logError("Failed to load plugins", err);
       })
       .finally(() => {
@@ -643,14 +715,33 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     }
   };
 
+  /** Re-pull the list and publish what was installed or updated once it lands. */
+  const settleOutcome = (outcome: PendingOutcome) => {
+    pendingOutcomeRef.current = outcome;
+    setRefreshKey((k) => k + 1);
+  };
+
   const handleInstallResult = (
-    result: Awaited<ReturnType<typeof window.electron.plugin.installFromFile>>
+    result: Awaited<ReturnType<typeof window.electron.plugin.installFromFile>>,
+    intent: InstallIntent
   ) => {
+    // An update that didn't install has nothing left to carry the selection
+    // across; one that did hands it to its outcome.
+    if (intent === "update" && result.status !== "installed") setUpdatingPluginId(null);
     switch (result.status) {
       case "installed":
-        setError(null);
-        setNotice(null);
-        setRefreshKey((k) => k + 1);
+        // An update leaves the notice and error alone, here and on failure:
+        // during "Update all" they hold the run's warning and any earlier
+        // plugin's failure.
+        if (intent === "install") {
+          setError(null);
+          setNotice(null);
+        }
+        settleOutcome({
+          kind: intent === "install" ? "installed" : "updated",
+          ids: [result.pluginId],
+          failedCount: 0,
+        });
         return;
       case "cancelled":
         return;
@@ -662,7 +753,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         setError("That doesn't look like a valid URL. Check it and try again.");
         return;
       case "failed": {
-        setNotice(null);
+        if (intent === "install") setNotice(null);
         setError(installErrorMessage(result.errors[0]));
         return;
       }
@@ -674,7 +765,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setIsInstalling(true);
     try {
       const result = await runInstallJob((jobId) => window.electron.plugin.installFromFile(jobId));
-      handleInstallResult(result);
+      handleInstallResult(result, "install");
     } catch (err) {
       setError(formatErrorMessage(err, "Failed to install plugin"));
       logError("Failed to install plugin from file", err);
@@ -685,6 +776,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
 
   const performInstallFromUrl = async (url: string, expected?: PluginInstallExpectation) => {
     setIsInstalling(true);
+    if (expected) setUpdatingPluginId(expected.pluginId);
     try {
       const result = await runInstallJob(
         (jobId) =>
@@ -693,7 +785,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
             : window.electron.plugin.installFromUrl(url, jobId),
         url
       );
-      handleInstallResult(result);
+      // An expectation binds the install to a reviewed update; a manual URL
+      // install has none.
+      handleInstallResult(result, expected ? "update" : "install");
       // Keep the dialog open for URL-correctable failures so the user can edit
       // in place: a malformed URL, a download error (404 / DNS), or a response
       // that wasn't a plugin archive. Size/timeout failures and successful
@@ -708,6 +802,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         setUrlInput("");
       }
     } catch (err) {
+      if (expected) setUpdatingPluginId(null);
       setError(formatErrorMessage(err, "Failed to install plugin"));
       logError("Failed to install plugin from URL", err);
     } finally {
@@ -829,8 +924,11 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setError(null);
     setIsInstalling(true);
     // Collect per-file failures so a later file's success can't silently clear
-    // an earlier file's error (the loop installs one file at a time).
+    // an earlier file's error (the loop installs one file at a time). Successes
+    // are collected too, so the drop reveals and announces once, at the end,
+    // rather than moving the selection through every file.
     const failures: string[] = [];
+    const installed: string[] = [];
     try {
       const paths = window.electron.files.getDroppedFilePaths(dntrFiles);
       for (const [index, file] of dntrFiles.entries()) {
@@ -847,10 +945,15 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           // A cancel abandons the whole drop, not just this file — the user
           // stopped the batch, so silently installing the rest would ignore them.
           if (result.status === "cancelled") break;
-          if (result.status === "failed") {
-            failures.push(`${file.name} — ${result.errors[0]?.message ?? "install failed"}`);
+          if (result.status === "installed") {
+            // The same plugin dropped twice counts once, at its last position.
+            const at = installed.indexOf(result.pluginId);
+            if (at !== -1) installed.splice(at, 1);
+            installed.push(result.pluginId);
+          } else if (result.status === "failed") {
+            failures.push(`${file.name} — ${installErrorMessage(result.errors[0])}`);
           } else {
-            handleInstallResult(result);
+            handleInstallResult(result, "install");
           }
         } catch (err) {
           failures.push(`${file.name} — ${formatErrorMessage(err, "install failed")}`);
@@ -862,6 +965,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       setIsInstalling(false);
     }
     if (failures.length > 0) setError(failures.join("; "));
+    if (installed.length > 0) {
+      settleOutcome({ kind: "installed", ids: installed, failedCount: failures.length });
+    }
   };
 
   const handleDragEnter = (e: React.DragEvent) => {
@@ -1187,15 +1293,18 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     // the user just dismissed. `advanceUpdateQueue` below still drives the
     // batch; it sets the next `pendingUpdate` itself and never reads this one.
     setPendingUpdate(null);
+    setUpdatingPluginId(pluginId);
     try {
-      setError(null);
+      // In a batch an earlier plugin's failure stays up until the run ends.
+      if (!isBatchActiveRef.current) setError(null);
       const result = await runInstallJob(
         (jobId) => window.electron.plugin.installFromUrl(url, jobId, expected),
         url
       );
-      handleInstallResult(result);
+      handleInstallResult(result, "update");
       advanceUpdateQueue();
     } catch (err) {
+      setUpdatingPluginId(null);
       setError(formatErrorMessage(err, "Failed to update plugin"));
       logError("Failed to update plugin from URL", err);
       // In a batch, skip the failed plugin and keep draining; a single check
@@ -1272,5 +1381,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     handleDrop,
     focusPluginId,
     clearFocusPluginId,
+    installOutcome,
+    updatingPluginId,
   };
 }

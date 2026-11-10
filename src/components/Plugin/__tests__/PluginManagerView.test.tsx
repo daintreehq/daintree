@@ -273,6 +273,382 @@ describe("PluginManagerView — .dntr drop", () => {
   });
 });
 
+describe("PluginManagerView — after an install (#16654)", () => {
+  // jsdom lacks scrollIntoView; revealing a row calls it.
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  const listMock = () => vi.mocked(window.electron.plugin.list);
+  const named = (name: string, displayName: string, overrides: Partial<LoadedPluginInfo> = {}) =>
+    makePlugin({
+      instanceId: name,
+      manifest: { ...makePlugin().manifest, name, displayName },
+      ...overrides,
+    });
+
+  /** The install outcome's status message, which only exists once it is spoken. */
+  async function installStatus(text: string): Promise<HTMLElement> {
+    const status = await screen.findByText(text);
+    expect(status.getAttribute("role")).toBe("status");
+    return status;
+  }
+
+  it("selects, reveals and announces a plugin installed from file, without moving focus", async () => {
+    // The list only holds the plugin once main has installed it.
+    listMock().mockResolvedValueOnce([]).mockResolvedValue([makePlugin()]);
+    vi.mocked(window.electron.plugin.installFromFile).mockResolvedValue({
+      status: "installed",
+      pluginId: "acme.demo",
+    });
+    renderDialog();
+    await screen.findByText("No plugins installed");
+    const trigger = screen.getByRole("button", { name: "Install from file" });
+    trigger.focus();
+
+    fireEvent.click(trigger);
+
+    await installStatus("Acme Demo installed");
+    expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true");
+    expect(screen.getByRole("region", { name: "Details for Acme Demo" })).toBeTruthy();
+    await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled());
+    expect(document.activeElement).toBe(trigger);
+    // The deep link's not-found notice never sees the list before the plugin.
+    expect(screen.queryByText(/isn't installed/)).toBeNull();
+  });
+
+  it("moves the selection off another plugin to the one just installed from a URL", async () => {
+    const other = named("acme.other", "Other Tool");
+    listMock().mockResolvedValueOnce([other]).mockResolvedValue([makePlugin(), other]);
+    vi.mocked(window.electron.plugin.installFromUrl).mockResolvedValue({
+      status: "installed",
+      pluginId: "acme.demo",
+    });
+    renderDialog();
+    fireEvent.click(await findPluginRowButton("Other Tool"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/demo.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    await installStatus("Acme Demo installed");
+    expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true");
+    expect(pluginRowButton("Other Tool").getAttribute("aria-current")).toBeNull();
+    await waitFor(() => expect(screen.queryByLabelText("Plugin URL")).toBeNull());
+  });
+
+  it("clears a search that hides the installed plugin, and says so", async () => {
+    const other = named("acme.other", "Other Tool");
+    listMock().mockResolvedValueOnce([other]).mockResolvedValue([makePlugin(), other]);
+    vi.mocked(window.electron.plugin.installFromFile).mockResolvedValue({
+      status: "installed",
+      pluginId: "acme.demo",
+    });
+    renderDialog();
+    await findPluginRowButton("Other Tool");
+    const search = screen.getByLabelText("Search plugins") as HTMLInputElement;
+    fireEvent.change(search, { target: { value: "other" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from file" }));
+
+    await installStatus("Acme Demo installed. Search cleared to show it");
+    expect(search.value).toBe("");
+    await waitFor(() =>
+      expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true")
+    );
+    await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled());
+  });
+
+  it("keeps a search that still shows the installed plugin", async () => {
+    listMock().mockResolvedValueOnce([]).mockResolvedValue([makePlugin()]);
+    vi.mocked(window.electron.plugin.installFromFile).mockResolvedValue({
+      status: "installed",
+      pluginId: "acme.demo",
+    });
+    renderDialog();
+    await screen.findByText("No plugins installed");
+    const search = screen.getByLabelText("Search plugins") as HTMLInputElement;
+    fireEvent.change(search, { target: { value: "demo" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from file" }));
+
+    await installStatus("Acme Demo installed");
+    expect(search.value).toBe("demo");
+    expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true");
+  });
+
+  it("announces the same plugin installed twice as two outcomes", async () => {
+    listMock().mockResolvedValue([makePlugin()]);
+    vi.mocked(window.electron.plugin.installFromFile).mockResolvedValue({
+      status: "installed",
+      pluginId: "acme.demo",
+    });
+    renderDialog();
+    await findPluginRowButton("Acme Demo");
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from file" }));
+    const status = await installStatus("Acme Demo installed");
+
+    // Setting the same text again is no change, and a live region speaks only
+    // changes: the second install has to empty the region before it refills it.
+    let settleInstall!: (result: PluginInstallResult) => void;
+    vi.mocked(window.electron.plugin.installFromFile).mockImplementationOnce(
+      () => new Promise((resolve) => (settleInstall = resolve))
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Install from file" }));
+    await waitFor(() => expect(status.textContent).toBe(""));
+
+    await act(async () => settleInstall({ status: "installed", pluginId: "acme.demo" }));
+    await waitFor(() => expect(status.textContent).toBe("Acme Demo installed"));
+  });
+
+  it("selects a drop's last installed plugin once, and keeps the files that failed", async () => {
+    const first = named("acme.a", "Plugin A");
+    listMock().mockResolvedValueOnce([]).mockResolvedValue([first, makePlugin()]);
+    vi.mocked(window.electron.plugin.installFromPath).mockImplementation(async (path: string) =>
+      path.endsWith("broken.dntr")
+        ? {
+            status: "failed",
+            errors: [
+              {
+                code: "manifest_invalid",
+                path: ["version"],
+                message: "Invalid input: expected string, received undefined",
+              },
+            ],
+          }
+        : { status: "installed", pluginId: path.endsWith("a.dntr") ? "acme.a" : "acme.demo" }
+    );
+    renderDialog();
+
+    await dropOnView([
+      droppedFile("a.dntr", "/drop/a.dntr"),
+      droppedFile("broken.dntr", "/drop/broken.dntr"),
+      droppedFile("demo.dntr", "/drop/demo.dntr"),
+    ]);
+
+    await installStatus("2 plugins installed: Plugin A, Acme Demo. 1 file couldn't be installed");
+    expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true");
+    expect(pluginRowButton("Plugin A").getAttribute("aria-current")).toBeNull();
+    // Written before the refresh the drop triggers, and still there after it.
+    expect(
+      screen.getByText(
+        "broken.dntr — The archive's plugin.json is missing \"version\", so it can't be installed. Ask the plugin's author for a corrected archive."
+      )
+    ).toBeTruthy();
+  });
+
+  it("keeps the selection and announces the version when Update all updates a plugin", async () => {
+    const updatable = named("acme.a", "Plugin A", {
+      source: "url",
+      originalUrl: "https://example.com/acme.a.dntr",
+      archiveHash: "h",
+    });
+    const updated = { ...updatable, manifest: { ...updatable.manifest, version: "2.0.0" } };
+    listMock()
+      .mockResolvedValueOnce([updatable, makePlugin()])
+      .mockResolvedValue([updated, makePlugin()]);
+    vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+      status: "available",
+      name: "acme.a",
+      version: "2.0.0",
+      capabilities: [],
+      archiveHash: "a".repeat(64),
+    });
+    vi.mocked(window.electron.plugin.installFromUrl).mockResolvedValue({
+      status: "installed",
+      pluginId: "acme.a",
+    });
+    renderDialog();
+    fireEvent.click(await findPluginRowButton("Acme Demo"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Update all" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update plugin" }));
+
+    await installStatus("Plugin A updated to v2.0.0");
+    expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true");
+    expect(pluginRowButton("Plugin A").getAttribute("aria-current")).toBeNull();
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("keeps a repaired plugin selected when its update takes it out of the problem filter", async () => {
+    const urlInstalled = {
+      source: "url" as const,
+      originalUrl: "https://example.com/acme.broken.dntr",
+      archiveHash: "h",
+    };
+    const broken = named("acme.broken", "Broken Tool", {
+      ...urlInstalled,
+      loadError: { message: "boom", at: 1 },
+    });
+    const repaired = {
+      ...broken,
+      loadError: null,
+      manifest: { ...broken.manifest, version: "2.0.0" },
+    };
+    listMock()
+      .mockResolvedValueOnce([broken, makePlugin()])
+      .mockResolvedValue([repaired, makePlugin()]);
+    vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+      status: "available",
+      name: "acme.broken",
+      version: "2.0.0",
+      capabilities: [],
+      archiveHash: "b".repeat(64),
+    });
+    vi.mocked(window.electron.plugin.installFromUrl).mockResolvedValue({
+      status: "installed",
+      pluginId: "acme.broken",
+    });
+    renderDialog();
+    await findPluginRowButton("Broken Tool");
+    const search = screen.getByLabelText("Search plugins") as HTMLInputElement;
+    fireEvent.change(search, { target: { value: "@problem" } });
+    fireEvent.click(await findPluginRowButton("Broken Tool"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check Broken Tool for updates" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update plugin" }));
+
+    await installStatus("Broken Tool updated to v2.0.0. Search cleared to show it");
+    expect(search.value).toBe("");
+    await waitFor(() =>
+      expect(pluginRowButton("Broken Tool").getAttribute("aria-current")).toBe("true")
+    );
+    expect(screen.getByRole("region", { name: "Details for Broken Tool" })).toBeTruthy();
+  });
+
+  it("keeps the repaired plugin selected when main's refresh lands before the update returns", async () => {
+    const broken = named("acme.broken", "Broken Tool", {
+      source: "url",
+      originalUrl: "https://example.com/acme.broken.dntr",
+      archiveHash: "h",
+      loadError: { message: "boom", at: 1 },
+    });
+    const repaired = { ...broken, loadError: null };
+    listMock()
+      .mockResolvedValueOnce([broken, makePlugin()])
+      .mockResolvedValue([repaired, makePlugin()]);
+    const provenanceListeners: Array<() => void> = [];
+    vi.mocked(window.electron.plugin.onProvenanceChanged).mockImplementation((cb) => {
+      provenanceListeners.push(cb as () => void);
+      return () => {};
+    });
+    const fireProvenance = () => provenanceListeners.forEach((listener) => listener());
+    vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+      status: "available",
+      name: "acme.broken",
+      version: "1.0.0",
+      capabilities: [],
+      archiveHash: "b".repeat(64),
+    });
+    let settleInstall!: (result: PluginInstallResult) => void;
+    vi.mocked(window.electron.plugin.installFromUrl).mockImplementation(
+      () => new Promise((resolve) => (settleInstall = resolve))
+    );
+    renderDialog();
+    await findPluginRowButton("Broken Tool");
+    fireEvent.change(screen.getByLabelText("Search plugins"), { target: { value: "@problem" } });
+    fireEvent.click(await findPluginRowButton("Broken Tool"));
+    fireEvent.click(await screen.findByRole("button", { name: "Check Broken Tool for updates" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update plugin" }));
+    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalled());
+
+    // The install has committed and main says so before the call returns: the
+    // refreshed record no longer matches @problem.
+    await act(async () => fireProvenance());
+    await waitFor(() => expect(listMock()).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("region", { name: "Details for Broken Tool" })).toBeTruthy();
+
+    await act(async () => settleInstall({ status: "installed", pluginId: "acme.broken" }));
+
+    await installStatus("Broken Tool updated to v1.0.0. Search cleared to show it");
+    await waitFor(() =>
+      expect(pluginRowButton("Broken Tool").getAttribute("aria-current")).toBe("true")
+    );
+  });
+
+  it("keeps Update all's check warning when one of its updates fails", async () => {
+    const urlInstalled = (name: string, displayName: string) =>
+      named(name, displayName, {
+        source: "url",
+        originalUrl: `https://example.com/${name}.dntr`,
+        archiveHash: "h",
+      });
+    listMock().mockResolvedValue([
+      urlInstalled("acme.a", "Plugin A"),
+      urlInstalled("acme.b", "Plugin B"),
+    ]);
+    vi.mocked(window.electron.plugin.checkForUpdate).mockImplementation(async (id: string) =>
+      id === "acme.a"
+        ? { status: "fetch-failed", message: "offline" }
+        : {
+            status: "available",
+            name: "acme.b",
+            version: "2.0.0",
+            capabilities: [],
+            archiveHash: "b".repeat(64),
+          }
+    );
+    vi.mocked(window.electron.plugin.installFromUrl).mockResolvedValue({
+      status: "failed",
+      errors: [{ code: "fetch_failed", message: "offline" }],
+    });
+    renderDialog();
+    fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update plugin" }));
+
+    await screen.findByText("Couldn't download the plugin. Check the URL and try again.");
+    expect(screen.getByText("1 plugin couldn't be checked for updates.")).toBeTruthy();
+  });
+
+  it("cancels a running URL install from the dialog's own Cancel", async () => {
+    let settleInstall!: (result: PluginInstallResult) => void;
+    vi.mocked(window.electron.plugin.installFromUrl).mockImplementation(
+      () => new Promise((resolve) => (settleInstall = resolve))
+    );
+    renderDialog();
+    await screen.findByText("No plugins installed");
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/slow.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalled());
+    const jobId = String(vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]![1]);
+
+    // The progress banner's Cancel is behind this dialog's scrim.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(window.electron.plugin.cancelInstall).toHaveBeenCalledWith(jobId));
+
+    await act(async () => settleInstall({ status: "cancelled" }));
+    await waitFor(() => expect(screen.queryByLabelText("Plugin URL")).toBeNull());
+  });
+
+  it("says nothing and selects nothing when an install fails or is cancelled", async () => {
+    listMock().mockResolvedValue([makePlugin()]);
+    vi.mocked(window.electron.plugin.installFromFile)
+      .mockResolvedValueOnce({
+        status: "failed",
+        errors: [{ code: "archive_invalid", message: "The archive is empty" }],
+      })
+      .mockResolvedValueOnce({ status: "cancelled" });
+    renderDialog();
+    await findPluginRowButton("Acme Demo");
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from file" }));
+    await screen.findByText("The archive is empty");
+    fireEvent.click(screen.getByRole("button", { name: "Install from file" }));
+    await waitFor(() => expect(window.electron.plugin.installFromFile).toHaveBeenCalledTimes(2));
+
+    expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBeNull();
+    const spoken = screen.getAllByRole("status").map((region) => region.textContent ?? "");
+    expect(spoken.some((text) => /installed/.test(text))).toBe(false);
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+  });
+});
+
 describe("PluginManagerView", () => {
   it("moves focus into the view on open so the keyboard isn't left on the background", async () => {
     // role="region" doesn't trap focus; the view must steal it on open so
