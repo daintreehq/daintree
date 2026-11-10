@@ -707,13 +707,17 @@ export function HostSwitchDialog({
     }
   };
 
-  const projectName = prep?.projectName ?? "This project";
+  const projectName = prep?.projectName ?? "the project";
+  // Without an answer, or after a look that failed (an earlier answer may still
+  // be held), nothing has been seen of the host's copy: the title is only the request.
   const title =
-    view === "existing"
-      ? `Open ${projectName} on ${targetName}`
-      : landed
-        ? `${projectName} is on ${targetName} now`
-        : `${projectName} isn't on ${targetName} yet`;
+    prep === null || loadError !== null
+      ? `Open project on ${targetName}`
+      : view === "existing"
+        ? `Open ${projectName} on ${targetName}`
+        : landed
+          ? `${projectName} is on ${targetName} now`
+          : `${projectName} isn't on ${targetName} yet`;
   const busy = running !== null;
   // Once the clone landed, what it was cloned from and into is history.
   const locked = busy || landed !== null;
