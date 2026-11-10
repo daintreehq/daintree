@@ -81,7 +81,9 @@ function gpuRow(): HTMLElement {
 }
 
 function gpuSwitch(): HTMLElement {
-  return gpuRow().querySelector("[role='switch']") as HTMLElement;
+  const el = gpuRow().querySelector<HTMLElement>("[role='switch']");
+  if (!el) throw new Error("GPU switch not rendered");
+  return el;
 }
 
 beforeEach(() => {
