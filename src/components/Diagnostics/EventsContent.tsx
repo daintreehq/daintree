@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useEventStore, type EventRecord } from "@/store/eventStore";
@@ -24,6 +24,7 @@ export function EventsContent({ className }: EventsContentProps) {
   const {
     events,
     filters,
+    filtersResetCount,
     selectedEventId,
     autoScroll,
     setAutoScroll,
@@ -37,6 +38,7 @@ export function EventsContent({ className }: EventsContentProps) {
     useShallow((state) => ({
       events: state.events,
       filters: state.filters,
+      filtersResetCount: state.filtersResetCount,
       selectedEventId: state.selectedEventId,
       autoScroll: state.autoScroll,
       setAutoScroll: state.setAutoScroll,
@@ -50,6 +52,7 @@ export function EventsContent({ className }: EventsContentProps) {
   );
 
   const [loadState, setLoadState] = useState<"loading" | "loaded" | "failed">("loading");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -108,10 +111,26 @@ export function EventsContent({ className }: EventsContentProps) {
   const selectedEvent = selectedEventId
     ? events.find((e) => e.id === selectedEventId) || null
     : null;
+  const selectedFilteredOut =
+    selectedEvent !== null && !filteredEvents.some((e) => e.id === selectedEvent.id);
+
+  // The filtered-empty state's button unmounts with the state it belongs to,
+  // so focus goes to the search field, as it does from the bar.
+  const clearFiltersFromEmptyState = (event: MouseEvent<HTMLButtonElement>) => {
+    clearFilters();
+    searchInputRef.current?.focus({ preventScroll: true, focusVisible: event.detail === 0 });
+  };
 
   return (
     <div className={cn("flex flex-col h-full", className)}>
-      <EventFilters events={events} filters={filters} onFiltersChange={setFilters} />
+      <EventFilters
+        events={events}
+        filters={filters}
+        onFiltersChange={setFilters}
+        onClear={clearFilters}
+        resetSignal={filtersResetCount}
+        searchInputRef={searchInputRef}
+      />
 
       {loadState === "failed" && events.length === 0 ? (
         <div className="p-3">
@@ -141,7 +160,7 @@ export function EventsContent({ className }: EventsContentProps) {
                 <EventTimeline
                   events={deferredFilteredEvents}
                   totalCount={events.length}
-                  onClearFilters={clearFilters}
+                  onClearFilters={clearFiltersFromEmptyState}
                   selectedId={selectedEventId}
                   onSelectEvent={setSelectedEvent}
                   autoScroll={autoScroll}
@@ -151,7 +170,12 @@ export function EventsContent({ className }: EventsContentProps) {
             </div>
 
             <div className="flex min-h-0 w-1/2 flex-col">
-              <EventDetail event={selectedEvent} hasEvents={events.length > 0} />
+              <EventDetail
+                event={selectedEvent}
+                hasEvents={events.length > 0}
+                hasMatches={filteredEvents.length > 0}
+                filteredOut={selectedFilteredOut}
+              />
             </div>
           </div>
         </>

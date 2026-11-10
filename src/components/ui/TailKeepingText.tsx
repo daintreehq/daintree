@@ -1,3 +1,4 @@
+import type { Ref } from "react";
 import { cn } from "@/lib/utils";
 import { HighlightedText } from "./HighlightedText";
 
@@ -52,23 +53,26 @@ export function TailKeepingText({
   text,
   indices,
   className,
+  headRef,
 }: {
   text: string;
   /** Match ranges on the whole text, split across the two halves. */
   indices?: Ranges;
   className?: string;
+  /** The part that truncates, for a host that discloses the full text once it clips. */
+  headRef?: Ref<HTMLSpanElement>;
 }) {
   const split = tailStart(text);
   if (split === 0) {
     return (
-      <span className={cn("min-w-0 truncate", className)}>
+      <span ref={headRef} className={cn("min-w-0 truncate", className)}>
         <HighlightedText text={text} indices={indices} />
       </span>
     );
   }
   return (
     <span className={cn("flex min-w-0", className)}>
-      <span className="min-w-[4ch] truncate whitespace-pre">
+      <span ref={headRef} className="min-w-[4ch] truncate whitespace-pre">
         <HighlightedText text={text.slice(0, split)} indices={sliceRanges(indices, 0, split)} />
       </span>
       <span className="shrink-0 whitespace-pre">
