@@ -36,6 +36,8 @@ export function SectionBar({
     onEnter: () => void;
     /** Up from the bar, back into the list above it. */
     onLeaveUp?: () => void;
+    /** Down from a shut bar, on past its section: true once something took the key. */
+    onLeaveDown?: () => boolean;
     buttonRef?: React.Ref<HTMLButtonElement>;
   };
   /** The section's own menu, beside a folding bar rather than inside its button. */
@@ -71,10 +73,17 @@ export function SectionBar({
           foldState.onLeaveUp();
           return;
         }
-        if (event.key !== "ArrowDown" || !foldState.expanded) return;
-        event.preventDefault();
-        event.stopPropagation();
-        foldState.onEnter();
+        if (event.key !== "ArrowDown") return;
+        if (foldState.expanded) {
+          event.preventDefault();
+          event.stopPropagation();
+          foldState.onEnter();
+          return;
+        }
+        if (foldState.onLeaveDown?.()) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
       }}
       className={cn(
         SECTION_BAR_CLASS,

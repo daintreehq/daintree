@@ -96,7 +96,7 @@ export function useCanopyInboxKeyboard({
   markAllRead: () => void;
   /** ⌘A in the list: every result of the search, to review for the Trash. Absent with no search. */
   onSelectAll?: () => void;
-  /** Down off the inbox's last row, into the Trash below it: false when there is none. */
+  /** Down off the inbox's last row, on to the section bar below it (Archived, else Trash): false when there is none. */
   onPastEnd?: () => boolean;
 }) {
   const focusEntryNow = (entry: CanopyInboxEntry) =>
@@ -114,7 +114,7 @@ export function useCanopyInboxKeyboard({
     selectedAssistant ??
     (listed.length === 0 && shownAssistants.length > 0 ? shownAssistants[0]! : null);
   const searchSelected = focusedIndex !== -1 ? visible[focusedIndex]! : (visible[0] ?? null);
-  // Down off the bottom of the inbox, from the row with that key: on to the Trash.
+  // Down off the bottom of the inbox, from the row with that key: on to the bar below it.
   const pastEnd = (key: string | null, event: KeyboardEvent<HTMLElement>): boolean => {
     if (key === null || navigation[navigation.length - 1]?.key !== key) return false;
     if (!onPastEnd?.()) return false;
@@ -325,7 +325,7 @@ export function useCanopyInboxKeyboard({
       }
     }
     const selected = searchSelected;
-    // Nothing in the inbox: down from the search is down into the Trash.
+    // Nothing in the inbox: down from the search is down to the bar below it.
     if (plain && event.key === "ArrowDown" && navigation.length === 0 && onPastEnd?.()) {
       event.preventDefault();
       return;
