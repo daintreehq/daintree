@@ -175,9 +175,7 @@ describe("Canopy reader process", () => {
     send({ type: "read", id: 1, state, lines: ["one line"] });
     send({ type: "read", id: 2, state, lines: ["first", "", "second", "third"] });
     send({ type: "read", id: 3, state, lines: ["", "  "] });
-    await vi.waitFor(() =>
-      expect(posted().filter((m) => m.type === "reading")).toHaveLength(3)
-    );
+    await vi.waitFor(() => expect(posted().filter((m) => m.type === "reading")).toHaveLength(3));
     expect(posted().flatMap((m) => (m.type === "reading" ? [m.id] : []))).toEqual([1, 2, 3]);
 
     const feeds = mocks.run.mock.calls.map(([f]) => f as Feeds);
