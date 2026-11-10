@@ -430,8 +430,6 @@ function TerminalContextMenuBody({
   const pluginItems = usePluginContextMenuItems("terminal", pluginMenuContext);
 
   const [hasSelection, setHasSelection] = useState(false);
-  // Read at open: a fleet-scope mount locks the managed terminal without the store.
-  const [managedInputLocked, setManagedInputLocked] = useState(false);
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
   // The plugin that claims the hovered URL (#13798), read with it on open.
   const [hoveredUrlPluginName, setHoveredUrlPluginName] = useState<string | null>(null);
@@ -508,7 +506,6 @@ function TerminalContextMenuBody({
       setLiveRecentVoiceTargets(resolved);
 
       const managed = peekTerminalService()?.get(terminalId) ?? null;
-      setManagedInputLocked(!!managed?.isInputLocked);
       if (!managed?.terminal) {
         clearHoveredLink();
         setHasSelection(false);
@@ -891,7 +888,10 @@ function TerminalContextMenuBody({
           {hasPty && (
             <TerminalSelectionMenuItems
               hasSelection={hasSelection}
-              pasteLocked={!!terminal.isInputLocked || managedInputLocked}
+              // A fleet-scope mount locks the managed terminal without the store.
+              pasteLocked={
+                !!terminal.isInputLocked || !!peekTerminalService()?.get(terminalId)?.isInputLocked
+              }
               hoveredUrl={hoveredUrl}
               hoveredUrlPluginName={hoveredUrlPluginName}
               hoveredFilePath={hoveredFilePath}
