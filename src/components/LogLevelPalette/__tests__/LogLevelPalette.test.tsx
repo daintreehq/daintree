@@ -93,7 +93,8 @@ describe("LogLevelPalette reopening", () => {
   });
 
   it("shows an empty field, the full list and the first row after the scrim closed it with text in the field", async () => {
-    const { rerender } = renderPalette(true);
+    const onClose = vi.fn();
+    const { rerender } = renderPalette(true, onClose);
     await settle();
     const fullList = optionIds();
 
@@ -101,16 +102,33 @@ describe("LogLevelPalette reopening", () => {
     expect(optionIds().length).toBeLessThan(fullList.length);
     fireEvent.click(screen.getByRole("dialog").parentElement!);
     await settle();
+    expect(onClose).toHaveBeenCalledTimes(1);
 
-    await reopen(rerender);
+    await reopen(rerender, onClose);
 
     expect(input().value).toBe("");
     expect(optionIds()).toEqual(fullList);
     expect(input().getAttribute("aria-activedescendant")).toBe(fullList[0]);
   });
 
-  it("lands on the first level, not the one a stale level search matched, after the scrim closed the level step", async () => {
+  it("goes back to the first row after the cursor moved with no search", async () => {
     const { rerender } = renderPalette(true);
+    await settle();
+    const fullList = optionIds();
+
+    fireEvent.keyDown(input(), { key: "ArrowDown" });
+    fireEvent.keyDown(input(), { key: "ArrowDown" });
+    await settle();
+    expect(input().getAttribute("aria-activedescendant")).toBe(fullList[2]);
+
+    await reopen(rerender);
+
+    expect(input().getAttribute("aria-activedescendant")).toBe(fullList[0]);
+  });
+
+  it("lands on the first level, not the one a stale level search matched, after the scrim closed the level step", async () => {
+    const onClose = vi.fn();
+    const { rerender } = renderPalette(true, onClose);
     await settle();
     await enter();
     const levelRows = optionIds();
@@ -118,8 +136,9 @@ describe("LogLevelPalette reopening", () => {
     expect(optionIds().length).toBeLessThan(levelRows.length);
     fireEvent.click(screen.getByRole("dialog").parentElement!);
     await settle();
+    expect(onClose).toHaveBeenCalledTimes(1);
 
-    await reopen(rerender);
+    await reopen(rerender, onClose);
     await enter();
 
     expect(screen.getByRole("dialog").getAttribute("aria-label")).toContain("choose a level");

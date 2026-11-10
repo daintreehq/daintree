@@ -160,10 +160,11 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
   );
 
   // The palette is opened through paletteStore and this component stays mounted
-  // between openings, so neither hook's own open() runs. Call it here: it clears
-  // the query and drops the follow anchor. setQuery("") + setSelectedIndex(0)
-  // would anchor results[0] of the still-filtered list, and the hook would then
-  // chase that row to its place in the full list.
+  // between openings, so the hooks' own open() never runs. Call it for the
+  // module list: it clears the query and drops the follow anchor.
+  // setQuery("") + setSelectedIndex(0) would anchor results[0] of the
+  // still-filtered list, and the hook would then chase that row to its place in
+  // the full list. The level list is reset on entering the level step below.
   const wasOpenRef = useRef(false);
   const openLoggerPalette = loggerPalette.open;
   const openLevelPalette = levelPalette.open;
@@ -171,12 +172,11 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
     if (isOpen && !wasOpenRef.current) {
       wasOpenRef.current = true;
       openLoggerPalette();
-      openLevelPalette();
     }
     if (!isOpen) {
       wasOpenRef.current = false;
     }
-  }, [isOpen, openLoggerPalette, openLevelPalette]);
+  }, [isOpen, openLoggerPalette]);
 
   const confirmLogger = useCallback(
     (selected: LoggerItem | undefined) => {
