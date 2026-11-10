@@ -546,11 +546,38 @@ describe("ReviewHub", () => {
       ])("$chord commits and never opens the cursor row's diff", async ({ init }) => {
         const listbox = await renderOnFileList();
 
-        fireEvent.keyDown(listbox, { key: "Enter", ...init });
+        const notConsumed = fireEvent.keyDown(listbox, { key: "Enter", ...init });
 
+        // Handled, so neither the browser nor a later listener sees it again.
+        expect(notConsumed).toBe(false);
         await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
         expect(commitMock.mock.calls[0]?.[1]).toBe("feat: from the list");
         expect(openDiffCount()).toBe(0);
+      });
+
+      it("opens nothing for Alt+Enter, which is not the plain key the list opens a diff on", async () => {
+        const listbox = await renderOnFileList();
+
+        fireEvent.keyDown(listbox, { key: "Enter", altKey: true });
+
+        expect(openDiffCount()).toBe(0);
+        expect(commitMock).not.toHaveBeenCalled();
+      });
+
+      it("takes a held chord as one press: the repeats are swallowed, not run again", async () => {
+        const listbox = await renderOnFileList();
+
+        const repeatConsumed = fireEvent.keyDown(listbox, {
+          key: "Enter",
+          metaKey: true,
+          repeat: true,
+        });
+        expect(repeatConsumed).toBe(false);
+        expect(commitMock).not.toHaveBeenCalled();
+        expect(openDiffCount()).toBe(0);
+
+        fireEvent.keyDown(listbox, { key: "Enter", metaKey: true });
+        await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
       });
 
       it("leaves plain Enter opening the diff", async () => {
@@ -607,6 +634,34 @@ describe("ReviewHub", () => {
         expect(document.activeElement).toBe(screen.getByLabelText("Commit message"));
         expect(commitMock).not.toHaveBeenCalled();
         expect(openDiffCount()).toBe(0);
+      });
+
+      it("answers when focus is on the pane around the hub, as keyboard pane navigation leaves it", async () => {
+        const pane = document.createElement("div");
+        pane.tabIndex = -1;
+        document.body.appendChild(pane);
+        try {
+          render(
+            <ReviewHubContent
+              isOpen={true}
+              worktreePath={WORKTREE_PATH}
+              onClose={vi.fn()}
+              keyboardScope={pane}
+            />,
+            { container: pane }
+          );
+          await waitFor(() => screen.getByLabelText("Commit message"));
+          fireEvent.change(screen.getByLabelText("Commit message"), {
+            target: { value: "feat: from the pane" },
+          });
+
+          fireEvent.keyDown(pane, { key: "Enter", metaKey: true });
+
+          await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+          expect(commitMock.mock.calls[0]?.[1]).toBe("feat: from the pane");
+        } finally {
+          pane.remove();
+        }
       });
 
       it("answers from a hub button as well", async () => {

@@ -5,6 +5,7 @@ import {
   useEffect,
   useEffectEvent,
   useId,
+  useLayoutEffect,
   type RefObject,
 } from "react";
 import { ProgressBar } from "@/components/ui/ProgressBar";
@@ -516,7 +517,10 @@ export function CommitPanel({
     },
     [isBusy, pushConfirmOpen, isBlocked, focusBlocker, hasRemote, handleCommit, handlePrimaryClick]
   );
-  useEffect(() => {
+  // A layout effect so the hub's native key listener never sees the previous
+  // render's callback: a status refresh that has just turned up a conflict must
+  // not still answer the chord as if the commit were unblocked.
+  useLayoutEffect(() => {
     if (!shortcutRef) return;
     shortcutRef.current = runCommitShortcut;
     return () => {

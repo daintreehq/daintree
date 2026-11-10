@@ -126,10 +126,24 @@ describe("CommitPanel shortcut handler", () => {
     expect(props.onCommitAndPush).not.toHaveBeenCalled();
   });
 
+  it("sends focus to the blocker for the Shift variant too, rather than returning quietly", async () => {
+    const { props, press } = renderPanel({ stagedCount: 0 });
+    await press(true);
+    expect(props.onFocusBlocker).toHaveBeenCalledWith("staged-files");
+    expect(props.onCommit).not.toHaveBeenCalled();
+  });
+
   it("focuses the message box when the message is the blocker", async () => {
     const { press } = renderPanel({ commitMessage: "  " });
     await press();
     expect(document.activeElement).toBe(screen.getByLabelText("Commit message"));
+  });
+
+  it("focuses the message box for the Shift variant when the message is the blocker", async () => {
+    const { props, press } = renderPanel({ commitMessage: "" });
+    await press(true);
+    expect(document.activeElement).toBe(screen.getByLabelText("Commit message"));
+    expect(props.onCommit).not.toHaveBeenCalled();
   });
 
   it("does nothing while a commit is in flight, even once the staged list has emptied", async () => {

@@ -43,7 +43,7 @@ interface UseReviewHubKeyboardArgs {
   handleToggleUnstaged: (filePath: string) => void;
   handleViewedChange: (viewedKey: string, viewed: boolean) => void;
   viewedFiles: ReadonlySet<string>;
-  /** The hub's own element: the commit chord answers only to focus inside it. */
+  /** The hub's own element: the commit chord answers only to focus inside it or on the pane around it. */
   rootRef: RefObject<HTMLElement | null>;
   /** Filled by the commit panel while it is mounted. */
   commitShortcutRef: RefObject<CommitShortcutHandler | null>;
@@ -137,7 +137,10 @@ export function useReviewHubKeyboard({
       // own trigger is a layer over it even while focus still sits there.
       if (selectedFile || selectedBaseBranchFile) return;
       const root = rootRef.current;
-      if (!target || !root?.contains(target)) return;
+      // The pane's own container counts as the hub: keyboard pane navigation
+      // focuses it, not anything inside, and the chord is still on screen.
+      const paneEl = keyboardScope instanceof HTMLElement ? keyboardScope : null;
+      if (!target || !root || !(root.contains(target) || target === paneEl)) return;
       if (root.querySelector(`[${PR_CHECKS_OPEN_ATTR}="true"]`)) return;
       // No panel to answer it (base-branch comparison, nothing to commit): leave
       // the key alone rather than swallow it.
