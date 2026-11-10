@@ -57,8 +57,10 @@ import { PRESS_AGAIN_CONFIRM_MS } from "@/lib/pressAgain";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import {
+  answerAttentionLabel,
   answerNeedsConfirm,
   answerOptions,
+  itemAnswerAttention,
   itemArchived,
   itemLooksDone,
   quickApproveOption,
@@ -67,7 +69,7 @@ import {
 import { KIND_LABEL, itemDetail, readerAttribution } from "./CanopyRow";
 import { CanopyTerminal, type CanopyStreamState } from "./CanopyTerminal";
 import { CanopyTitle } from "./CanopyTitle";
-import type { CanopyAsideActions } from "./CanopyRowMenu";
+import type { CanopyAnswerActions, CanopyAsideActions } from "./CanopyRowMenu";
 import { ownCanopyTerminalApi, type CanopyTerminalApi } from "./canopyHostSource";
 import { parseAllHostsKey } from "./canopyAllHosts";
 import { useCanopyFrame } from "./canopyFrame";
@@ -82,6 +84,11 @@ import {
   type VoiceRecordingTarget,
 } from "@/store/voiceRecordingStore";
 import { VoiceMicNoticeBanner } from "@/components/Terminal/VoiceMicNoticeBanner";
+import {
+  InlineStatusBanner,
+  PaneBannerSurfaceContext,
+} from "@/components/Terminal/InlineStatusBanner";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -186,6 +193,10 @@ interface CanopyCardProps extends CanopyCardHandlers {
   hostScope?: string | null;
   /** Park and snooze for a run on the window's own host; absent where they can't be offered. */
   aside?: CanopyAsideActions;
+  /** The Decisions answers the run holds that need a person, and the list that deals with them. */
+  answers?: CanopyAnswerActions;
+  /** The run's host by name, when it is another host's: its answers stay there. */
+  hostLabel?: string | null;
   /** The run's host's Canopy; the window's own by default. */
   terminalApi?: CanopyTerminalApi;
   /** The link to the run's host is down: nothing is typed or answered until it is back. */
@@ -216,6 +227,27 @@ export function canReplyTo(item: CanopyItem, liveSecretPrompt = false): boolean 
  */
 export function canTrashItem(_item: CanopyItem): boolean {
   return true;
+}
+
+/**
+ * What the pane says of a run's Decisions answers that need a person: that
+ * Daintree won't type them in, that a reply here leaves them where they are,
+ * and — for a run on another host, whose answers stay there — why they can't
+ * be reviewed from this window.
+ */
+export function answerAttentionNotice(
+  count: number,
+  otherHost: string | null
+): { title: string; description: string } {
+  const answers = count === 1 ? "this Decisions answer" : "these Decisions answers";
+  const them = count === 1 ? "it" : "them";
+  return {
+    title: answerAttentionLabel(count),
+    description:
+      otherHost === null
+        ? `Daintree won't type ${answers} in on its own, and replying here won't handle ${them}.`
+        : `${otherHost} keeps ${answers}, so this computer can't review ${them}, and replying here won't handle ${them}.`,
+  };
 }
 
 export function canopyCardDomId(runId: string): string {
@@ -295,6 +327,8 @@ export function CanopyCard({
   otherHostId,
   hostScope = null,
   aside,
+  answers,
+  hostLabel = null,
   terminalApi = ownCanopyTerminalApi,
   reconnecting = false,
   workLabel = null,
@@ -715,6 +749,27 @@ export function CanopyCard({
     action !== null ||
     progress !== null ||
     summaryNotes.length > 0;
+  // Decisions saw an answer for the run stop on its way in: Daintree's own
+  // observation, held for as long as the answer needs a person. A reply,
+  // park or archive here moves the run in the list and leaves the answer
+  // where it was.
+  const answerCount = itemAnswerAttention(item);
+  const canReviewAnswers = answers?.canReviewAnswers(item) ?? false;
+  const answerNotice =
+    answerCount === 0
+      ? null
+      : answerAttentionNotice(answerCount, otherHost ? hostLabel || "Its host" : null);
+  // Said once when it arrives on the run in view; the row already describes
+  // it to whoever arrows to it, so selecting the run says nothing new.
+  const announce = useAnnouncerStore((state) => state.announce);
+  const answersBeforeRef = useRef(answerCount);
+  useEffect(() => {
+    const before = answersBeforeRef.current;
+    answersBeforeRef.current = answerCount;
+    if (before === 0 && answerCount > 0) {
+      announce(`${answerAttentionLabel(answerCount)}: ${row.title}`);
+    }
+  }, [answerCount, announce, row.title]);
   const brandSurface: BrandMarkSurface = focused
     ? { surface: "surface-panel", extension: "panel-header-focus-bg", lift: "overlay-medium" }
     : { surface: "surface-panel", extension: "panel-header-bg" };
@@ -946,6 +1001,36 @@ export function CanopyCard({
           </span>
         )}
       </SurfaceHeader>
+
+      {/* Daintree's observation in its own band under the title bar, ahead of
+          the reader's words, which keep their attribution. It comes with the
+          pane, before the terminal measures, and snaps rather than animates:
+          the terminal moves once, when the answer arrives or is dealt with. */}
+      {answerNotice !== null && (
+        <PaneBannerSurfaceContext value={true}>
+          <InlineStatusBanner
+            severity="warning"
+            layout="pane"
+            animated={false}
+            role="status"
+            ariaLive="off"
+            title={answerNotice.title}
+            description={answerNotice.description}
+            rootAttributes={{ "data-canopy-answer-attention": "" }}
+            {...(canReviewAnswers && answers !== undefined
+              ? {
+                  action: {
+                    id: "review-answers",
+                    label: "Review answers",
+                    variant: "primary" as const,
+                    ariaLabel: `Review answers for ${row.title}`,
+                    onClick: () => answers.onReviewAnswers(item),
+                  },
+                }
+              : {})}
+          />
+        </PaneBannerSurfaceContext>
+      )}
 
       {/* What the row leaves out to stay three lines tall: the summary, how
           far through its task the run is, and what the agent reported. One

@@ -758,6 +758,7 @@ function CanopyInbox({
     askRename,
     rowMenu,
     setAside,
+    answers,
     parkRunId,
     closePark,
     trashArm,
@@ -2231,6 +2232,8 @@ function CanopyInbox({
                       otherHostId={(everyHost ? focusedHostId : hostId) ?? undefined}
                       hostScope={hostId}
                       aside={setAside}
+                      answers={answers}
+                      hostLabel={focusedItem.workspace.host || hostName}
                       terminalApi={terminalApi}
                       workLabel={workLabelOf(focusedItem)}
                       moveOnTo={moveOnTo}

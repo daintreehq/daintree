@@ -1,4 +1,5 @@
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import { pluralize } from "@/lib/pluralize";
 import { observedCanopyKind, observedCaughtUp } from "@shared/utils/canopyObservedKind";
 import {
   CANOPY_ATTENTION_CATEGORIES,
@@ -174,6 +175,11 @@ export function itemAwaitsPermission(item: CanopyItem): boolean {
  */
 export function itemAnswerAttention(item: CanopyItem): number {
   return item.row.run.answerAttention ?? 0;
+}
+
+/** How a row and its pane both name a count of answers needing attention. */
+export function answerAttentionLabel(count: number): string {
+  return count === 1 ? "Answer needs attention" : `${pluralize(count, "answer")} need attention`;
 }
 
 /**

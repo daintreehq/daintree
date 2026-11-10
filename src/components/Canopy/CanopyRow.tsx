@@ -10,10 +10,10 @@ import { AskingCircle, Clock } from "@/components/icons";
 import type { CanopyCategory } from "@shared/types/ipc/canopy";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { formatTimeAgo } from "@/utils/timeAgo";
-import { pluralize } from "@/lib/pluralize";
 import {
   answerOptions,
   itemAgentNeedHolds,
+  answerAttentionLabel,
   itemAnswerAttention,
   itemContextWarning,
   itemFacts,
@@ -503,12 +503,7 @@ export function CanopyRow({
   const agentWords = agentNeedWords(item);
   const agentNote = agentWords !== null && agentWords !== status ? agentWords : null;
   const answers = itemAnswerAttention(item);
-  const answerNote =
-    answers === 0
-      ? null
-      : answers === 1
-        ? "Answer needs attention"
-        : `${pluralize(answers, "answer")} need attention`;
+  const answerNote = answers === 0 ? null : answerAttentionLabel(answers);
   const statusTail = [
     agentNote,
     answerNote,

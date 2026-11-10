@@ -7,14 +7,15 @@ import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { AgentSnoozeDurationOption } from "@shared/utils/agentSnoozeDurations";
-import { itemArchived, itemSubject, type CanopyItem } from "./canopyModel";
+import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { itemAnswerAttention, itemArchived, itemSubject, type CanopyItem } from "./canopyModel";
 import {
   canopyCardDomId,
   type CanopyCardHandle,
   type CanopyCardHandlers,
   type CanopyPaneFocus,
 } from "./CanopyCard";
-import type { CanopyRowMenuActions } from "./CanopyRowMenu";
+import type { CanopyAnswerActions, CanopyRowMenuActions } from "./CanopyRowMenu";
 import {
   hostRefusal,
   refusedOutcomes,
@@ -505,8 +506,26 @@ export function useCanopyInboxActions({
     },
   };
 
+  // Decisions' list holds this computer's answers: a run on another host
+  // keeps its own there, which this window can't read or act on.
+  const canReviewAnswers = (item: CanopyItem) =>
+    itemAnswerAttention(item) > 0 && placeOf(item, hostId, ownHostId).hostId === null;
+  const answers: CanopyAnswerActions = {
+    canReviewAnswers,
+    // Its first answer for the run takes the focus; once the run's last
+    // answer has gone, and the control that opened the list with it, the
+    // close returns to the run's row.
+    onReviewAnswers: (item) => {
+      if (!canReviewAnswers(item)) return;
+      useDecisionsAttentionStore.getState().open(placeOf(item, hostId, ownHostId).runId, {
+        returnFocusTo: canopyCardDomId(item.runId),
+      });
+    },
+  };
+
   const rowMenu: CanopyRowMenuActions = {
     ...setAside,
+    ...answers,
     onOpen: handlers.onOpen,
     // The run already open keeps its pane mounted, so the composer is focused
     // directly; another run's pane takes the keyboard there as it opens.
@@ -567,6 +586,7 @@ export function useCanopyInboxActions({
     askRename,
     rowMenu,
     setAside,
+    answers,
     parkRunId,
     closePark,
     trashArm,

@@ -19,12 +19,13 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
-import { useWorktrees } from "@/hooks/useWorktrees";
+import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { worktreeDisplayName } from "@/utils/recipeScope";
 import { pluralize } from "@/lib/pluralize";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import type { WorktreeSnapshot } from "@shared/types";
 import type {
   DecisionsAnswerDestination,
   DecisionsAnswerDestinations,
@@ -87,14 +88,21 @@ const STILL_WORKING_MS = 5_000;
 
 type WorktreeName = (id: string, fallback: string | null) => string | null;
 
+const NO_WORKTREES = new Map<string, WorktreeSnapshot>();
+
+/**
+ * The project's own names for its worktrees, where the list opens in a project
+ * view. The Canopy window holds no project: there each answer keeps the name
+ * it was asked under.
+ */
 function useWorktreeNames(): WorktreeName {
-  const { worktrees } = useWorktrees();
+  const worktreeMap = useWorktreeStoreOptional((state) => state.worktrees, NO_WORKTREES);
   return useCallback(
     (id: string, fallback: string | null) => {
-      const known = worktrees.find((worktree) => worktree.id === id);
+      const known = worktreeMap.get(id);
       return worktreeDisplayName(known) ?? fallback;
     },
-    [worktrees]
+    [worktreeMap]
   );
 }
 
@@ -550,9 +558,10 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     };
   }, [isOpen, refresh]);
 
-  // Opened from a pane's chip: its first answer's first action takes the
-  // focus once listed, ringed when the keyboard brought the person here.
-  // With none listed for that pane, the list itself holds it.
+  // Opened for a pane — from its chip, or from its run in Canopy: its first
+  // answer's first action takes the focus once listed, ringed when the
+  // keyboard brought the person here. With none listed for that pane, the
+  // list itself holds it.
   const focusedFor = useRef(0);
   useEffect(() => {
     if (!isOpen || request.terminalId === null || focusedFor.current === request.seq) return;
@@ -561,8 +570,12 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     const target = listRef.current?.querySelector<HTMLElement>(
       `[data-terminal-id="${CSS.escape(request.terminalId)}"] ${ITEM_ACTIONS}`
     );
-    if (target) target.focus();
-    else bodyRef.current?.focus({ focusVisible: false } as FocusOptions);
+    if (target) {
+      target.focus({ preventScroll: true });
+      // The whole answer comes into view, padding included: scrolled only as
+      // far as its action, the last answer's focus ring sat under the footer.
+      target.closest<HTMLElement>("[data-question-id]")?.scrollIntoView({ block: "nearest" });
+    } else bodyRef.current?.focus({ focusVisible: false } as FocusOptions);
   }, [isOpen, list, loadError, request]);
 
   // An item that left took the focus with it: the next one's first action
@@ -649,7 +662,11 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
 
   // Opened from a chip, the close returns to that pane: its chip while it
   // shows, else the pane itself, since the chip goes with its last answer.
+  // An opener that named its own successor (a Canopy row) gets that instead.
   const restoreFocusTo = useCallback((): HTMLElement | null => {
+    if (request.returnFocusTo !== null) {
+      return document.getElementById(request.returnFocusTo);
+    }
     const id = request.terminalId;
     if (id === null) return null;
     const escaped = CSS.escape(id);
@@ -658,7 +675,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
         `[data-panel-id="${escaped}"][data-panel-location="grid"]`
       ) ?? document.querySelector<HTMLElement>(`[data-panel-id="${escaped}"]`);
     return pane?.querySelector<HTMLElement>(PANE_CHIP) ?? pane;
-  }, [request.terminalId]);
+  }, [request.terminalId, request.returnFocusTo]);
 
   const restoreAfterConfirm = useCallback((): HTMLElement | null => {
     const from = confirmFrom.current;
