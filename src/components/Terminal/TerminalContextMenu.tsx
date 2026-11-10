@@ -888,6 +888,10 @@ function TerminalContextMenuBody({
           {hasPty && (
             <TerminalSelectionMenuItems
               hasSelection={hasSelection}
+              // A fleet-scope mount locks the managed terminal without the store.
+              pasteLocked={
+                !!terminal.isInputLocked || !!peekTerminalService()?.get(terminalId)?.isInputLocked
+              }
               hoveredUrl={hoveredUrl}
               hoveredUrlPluginName={hoveredUrlPluginName}
               hoveredFilePath={hoveredFilePath}
