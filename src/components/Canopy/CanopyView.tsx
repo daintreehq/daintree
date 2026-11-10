@@ -34,9 +34,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
-import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
+import { itemArchived, itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
 import { searchPasteText } from "./canopySearch";
-import { isWorkerEntry } from "./canopyInboxProjection";
+import { isWorkerEntry, type CanopyInboxEntry } from "./canopyInboxProjection";
 import { CanopyCard, REPLY_GO_TO_TERMINAL, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
 import { CanopyRowMenu } from "./CanopyRowMenu";
@@ -907,6 +907,7 @@ function CanopyInbox({
 
   // Canopy's Trash: every agent run the host's trash holds, any project's.
   const trashRef = useRef<CanopyTrashSectionHandle>(null);
+  const archivedBarRef = useRef<HTMLButtonElement>(null);
   // A run put back from the Trash comes into the inbox selected, once it is
   // back in the fleet: the same run, or the pane resuming its session. Anything
   // the user selects from the press on, another host or the panel closing, wins.
@@ -994,12 +995,31 @@ function CanopyInbox({
     scopeKey: hostId ?? "",
     isBackInFleet,
   });
-  // Up off the Trash bar: the inbox's last row, else the search.
+  const focusEntryOrSearch = (entry: CanopyInboxEntry | undefined) => {
+    if (!entry) searchRef.current?.focus();
+    else if (entry.role === "worker") focusCardNow(entry.item.runId);
+    else focusAssistantNow(entry.item.id);
+  };
+  // A shut Archived bar is a stop of its own between the inbox and the Trash. An
+  // open one is walked through as its rows, and a search shows no bar at all.
+  const focusArchivedBar = () => {
+    const bar = archivedBarRef.current;
+    if (!bar || archivedExpanded) return false;
+    bar.focus();
+    return true;
+  };
+  // Up off the Trash bar: the Archived bar when it is shut, else the inbox's last row, else the search.
   const leaveTrashUp = () => {
-    const last = projection.navigation[projection.navigation.length - 1];
-    if (!last) searchRef.current?.focus();
-    else if (last.role === "worker") focusCardNow(last.item.runId);
-    else focusAssistantNow(last.item.id);
+    if (focusArchivedBar()) return;
+    focusEntryOrSearch(projection.navigation[projection.navigation.length - 1]);
+  };
+  // Up off the Archived bar, shut or open: the row above it. Archived rows sit
+  // below the bar, so they are never that row.
+  const leaveArchivedUp = () => {
+    const above = projection.navigation.filter(
+      (entry) => entry.role === "assistant" || !itemArchived(entry.item)
+    );
+    focusEntryOrSearch(above[above.length - 1]);
   };
 
   const {
@@ -1030,7 +1050,7 @@ function CanopyInbox({
     toggleRead,
     markAllRead,
     onSelectAll: bulkTrashable ? openBulkTrash : undefined,
-    onPastEnd: () => trashRef.current?.focusHeader() ?? false,
+    onPastEnd: () => focusArchivedBar() || (trashRef.current?.focusHeader() ?? false),
   });
   // The keys the open card names are the ones that act from where the keyboard is.
   const keyboardAt = useCanopyKeyboardPlace(isOpen);
@@ -2048,6 +2068,9 @@ function CanopyInbox({
                               controls: "canopy-archived",
                               onToggle: () => setArchivedExpanded(!archivedExpanded),
                               onEnter: () => focusCardNow(shownInbox.archived[0]!.runId),
+                              onLeaveUp: leaveArchivedUp,
+                              onLeaveDown: () => trashRef.current?.focusHeader() ?? false,
+                              buttonRef: archivedBarRef,
                             }
                       }
                     />

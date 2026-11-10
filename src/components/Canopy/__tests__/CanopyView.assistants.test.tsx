@@ -326,6 +326,7 @@ afterEach(() => {
     workOf: null,
     globalDocked: false,
     dockWidth: null,
+    archivedExpanded: false,
   });
   window.localStorage.removeItem("daintree-canopy-order");
   window.localStorage.removeItem("daintree-canopy-global-docked");
@@ -657,6 +658,43 @@ describe("CanopyView role filter", () => {
     fireEvent.keyDown(assistantRows()[0]!, { key: "ArrowUp" });
     expect(document.activeElement).toBe(last);
     expect(document.querySelector("[data-testid=canopy-assistant-pane]")).toBeNull();
+  });
+
+  it("steps between the last assistant and the Archived bar below it, shut or open", async () => {
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: [
+          run("waiting", { agentState: "waiting", waitingReason: "approval", since: NOW - 60_000 }),
+          run("done", { agentState: "completed", since: NOW - 90_000 }),
+        ],
+        changedAt: NOW,
+        degraded: false,
+        lastSuccessfulAt: NOW,
+      },
+    });
+    const archived: CanopySnapshot = {
+      ...canopySnapshot,
+      dispositions: [{ runId: "done", spawnedAt: NOW - 3_600_000, kind: "archived", at: NOW }],
+    };
+    // Opening the panel takes main's answer over the store's snapshot.
+    canopyBridge.setActive.mockImplementation(async () => archived);
+    useCanopyStore.setState({ snapshot: archived });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const bar = () =>
+      document.querySelector<HTMLButtonElement>("button[aria-controls=canopy-archived]")!;
+    const [, lastAssistant] = assistantRows();
+    act(() => lastAssistant!.focus());
+    fireEvent.keyDown(lastAssistant!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(bar());
+    fireEvent.keyDown(bar(), { key: "ArrowUp" });
+    expect(document.activeElement).toBe(lastAssistant);
+    // Open, the bar still goes up to the assistant above it, not the archived row below.
+    fireEvent.click(bar());
+    expect(document.getElementById("canopy-card-done")).not.toBeNull();
+    act(() => bar().focus());
+    fireEvent.keyDown(bar(), { key: "ArrowUp" });
+    expect(document.activeElement).toBe(lastAssistant);
   });
 
   it("dictates into the selected worker's reply, and into nothing while an assistant is selected", async () => {

@@ -165,10 +165,23 @@ function installElectron(snapshot: CanopySnapshot) {
 
 let frame: CanopyFrame;
 
-/** Shows the panel over `trash`, with the given runs in the inbox. */
-async function open(trash: CanopyTrashEntry[], runIds: string[] = ["live"]) {
-  const snapshot = { ...baseSnapshot, trash };
-  useFleetSnapshotStore.setState({ snapshot: fleet(runIds) });
+/** Shows the panel over `trash`, with the given runs in the inbox and `archived` ones under its bar. */
+async function open(
+  trash: CanopyTrashEntry[],
+  runIds: string[] = ["live"],
+  archived: string[] = []
+) {
+  const snapshot = {
+    ...baseSnapshot,
+    trash,
+    dispositions: archived.map((runId) => ({
+      runId,
+      spawnedAt: NOW - 3_600_000,
+      kind: "archived" as const,
+      at: NOW,
+    })),
+  };
+  useFleetSnapshotStore.setState({ snapshot: fleet([...runIds, ...archived]) });
   useCanopyStore.setState({ isOpen: true, snapshot, mode: "on" });
   const canopy = installElectron(snapshot);
   render(<CanopyView frame={frame} />);
@@ -184,6 +197,14 @@ async function frames() {
 
 function trashBar(): HTMLButtonElement | null {
   return document.querySelector<HTMLButtonElement>("button[aria-controls=canopy-trash]");
+}
+
+function archivedBar(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>("button[aria-controls=canopy-archived]");
+}
+
+function searchInput(): HTMLInputElement {
+  return document.querySelector<HTMLInputElement>("[data-canopy-standalone] input[role=combobox]")!;
 }
 
 function trashRows(): HTMLElement[] {
@@ -217,6 +238,7 @@ afterEach(() => {
     order: null,
     unreadOnly: false,
     trashExpanded: false,
+    archivedExpanded: false,
   });
   window.localStorage.removeItem("daintree-canopy-order");
   vi.useRealTimers();
@@ -744,5 +766,107 @@ describe("CanopyView Trash", () => {
       vi.advanceTimersByTime(EXPIRY_CONFIRMED_MS);
     });
     expect(expiries()).toEqual(["'Fix expired' expired and was removed permanently"]);
+  });
+});
+
+describe("CanopyView arrow order across the Archived and Trash bars", () => {
+  const card = (runId: string) => document.getElementById(`canopy-card-${runId}`)!;
+
+  it("walks the last inbox row, the Archived bar and the Trash bar in order, both folded", async () => {
+    await open(TRASH, ["live"], ["done"]);
+    expect(archivedBar()!.getAttribute("aria-expanded")).toBe("false");
+    expect(trashBar()!.getAttribute("aria-expanded")).toBe("false");
+    const last = card("live");
+    act(() => last.focus());
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(archivedBar());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(trashBar());
+    fireEvent.keyDown(trashBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(archivedBar());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("stops on a folded Archived bar below the last row when no Trash is showing", async () => {
+    await open([], ["live"], ["done"]);
+    expect(trashBar()).toBeNull();
+    const last = card("live");
+    act(() => last.focus());
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(archivedBar());
+    // Nothing below it to go on to.
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(archivedBar());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("goes up from the Archived bar to the search when the inbox is empty, and back down", async () => {
+    await open(TRASH, [], ["done"]);
+    expect(card("done")).toBeNull();
+    act(() => archivedBar()!.focus());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(searchInput());
+    fireEvent.keyDown(searchInput(), { key: "ArrowDown" });
+    expect(document.activeElement).toBe(archivedBar());
+  });
+
+  it("goes up from an open Archived bar to the row above it, not the archived row below", async () => {
+    await open(TRASH, ["live"], ["done"]);
+    fireEvent.click(archivedBar()!);
+    expect(card("done")).not.toBeNull();
+    act(() => archivedBar()!.focus());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(card("live"));
+  });
+
+  it("goes up from an open Archived bar to the search when the inbox is empty", async () => {
+    await open([], [], ["done"]);
+    fireEvent.click(archivedBar()!);
+    expect(archivedBar()!.getAttribute("aria-expanded")).toBe("true");
+    expect(card("done")).not.toBeNull();
+    act(() => archivedBar()!.focus());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(searchInput());
+  });
+
+  it("leaves an open Archived section's rows to carry on into the Trash and back", async () => {
+    await open(TRASH, ["live"], ["done", "older-done"]);
+    fireEvent.click(archivedBar()!);
+    const rows = [...document.querySelectorAll<HTMLElement>("#canopy-archived [data-canopy-card]")];
+    expect(rows).toHaveLength(2);
+    const [first, last] = [rows[0]!, rows[1]!];
+    act(() => archivedBar()!.focus());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(last);
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(trashBar());
+    fireEvent.keyDown(trashBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("goes down from a search's last match, archived ones shown open, to the Trash match", async () => {
+    await open([trashed("newer", "p1", 3_000)], ["live"], ["done"]);
+    const input = searchInput();
+    act(() => input.focus());
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "app" } });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, SEARCH_SETTLE_MS));
+    });
+    // The search shows its matches open, with no bar on either section.
+    expect(archivedBar()).toBeNull();
+    expect(trashBar()).toBeNull();
+    expect(card("done")).not.toBeNull();
+    expect(trashRows()).toHaveLength(1);
+    act(() => card("done").focus());
+    fireEvent.keyDown(card("done"), { key: "ArrowDown" });
+    expect(document.activeElement).toBe(trashRows()[0]);
+    fireEvent.keyDown(trashRows()[0]!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(card("done"));
   });
 });
