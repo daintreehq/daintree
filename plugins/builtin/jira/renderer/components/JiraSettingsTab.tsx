@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
   Button,
   Callout,
@@ -13,6 +13,7 @@ import {
 import { actionService } from "@/services/ActionService";
 import { BUILTIN_JIRA_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { logError } from "@/utils/logger";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import {
   EMAIL_SETTING,
   JIRA_PLUGIN_ID,
@@ -221,6 +222,12 @@ export function JiraSettingsTab() {
   const canSave =
     loaded && !busy && siteUrl.trim() !== "" && email.trim() !== "" && token.trim() !== "";
 
+  const saveOnEnter = (event: KeyboardEvent) => {
+    if (!isEnterToSubmit(event)) return;
+    event.preventDefault();
+    if (canSave) void handleSave();
+  };
+
   return (
     // `forge-access-token` is the anchor settings search and the token-recovery
     // surfaces target, whichever form a provider uses.
@@ -279,6 +286,7 @@ export function JiraSettingsTab() {
                 aria-describedby={descriptionId}
                 aria-invalid={siteError ? true : undefined}
                 invalid={siteError !== null}
+                onKeyDown={saveOnEnter}
                 autoComplete="off"
                 disabled={disabled}
                 className="w-full"
@@ -307,6 +315,7 @@ export function JiraSettingsTab() {
                 aria-describedby={descriptionId}
                 aria-invalid={emailError ? true : undefined}
                 invalid={emailError !== null}
+                onKeyDown={saveOnEnter}
                 autoComplete="off"
                 disabled={disabled}
                 className="w-full"
@@ -337,6 +346,7 @@ export function JiraSettingsTab() {
                 aria-describedby={descriptionId}
                 aria-invalid={saveError ? true : undefined}
                 invalid={saveError !== null}
+                onKeyDown={saveOnEnter}
                 autoComplete="new-password"
                 disabled={disabled}
                 className="w-full"

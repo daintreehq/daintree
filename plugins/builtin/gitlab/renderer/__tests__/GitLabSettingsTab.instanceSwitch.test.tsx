@@ -92,3 +92,19 @@ describe("GitLabSettingsTab — switching instance with a saved token", () => {
     expect(clearCredential).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("GitLabSettingsTab — Enter in the token field", () => {
+  it("saves once on Enter, and does nothing while the field is empty", async () => {
+    await renderLoaded();
+    const token = screen.getByLabelText("GitLab personal access token");
+    fireEvent.keyDown(token, { key: "Enter" });
+    expect(setCredential).not.toHaveBeenCalled();
+
+    fireEvent.change(token, { target: { value: "glpat-new" } });
+    fireEvent.keyDown(token, { key: "Enter" });
+    fireEvent.keyDown(token, { key: "Enter" });
+
+    await waitFor(() => expect(setCredential).toHaveBeenCalledTimes(1));
+    expect(setCredential).toHaveBeenCalledWith("daintree.gitlab.gitlab", { token: "glpat-new" });
+  });
+});

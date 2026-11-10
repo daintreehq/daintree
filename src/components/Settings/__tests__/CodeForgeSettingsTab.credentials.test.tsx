@@ -168,6 +168,41 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     expect(screen.getByText("Credentials saved")).toBeTruthy();
   });
 
+  it("saves once on Enter in a credential field, and ignores Enter on an empty primary field", async () => {
+    const { setCredential } = installForgeMocks({
+      providers: [
+        makeProvider("acme", "gitea", "Gitea", [
+          { id: "token", label: "API token", type: "password" },
+          { id: "host", label: "Host", type: "text" },
+        ]),
+      ],
+      setCredentialResult: { valid: true },
+    });
+    const onSubtabChange = vi.fn();
+
+    render(<CodeForgeSettingsTab activeSubtab="acme.gitea" onSubtabChange={onSubtabChange} />);
+
+    const token = (await screen.findByLabelText("API token")) as HTMLInputElement;
+    const host = screen.getByLabelText("Host") as HTMLInputElement;
+    fireEvent.change(host, { target: { value: "git.example.com" } });
+    fireEvent.keyDown(host, { key: "Enter" });
+    expect(setCredential).not.toHaveBeenCalled();
+
+    fireEvent.change(token, { target: { value: "secret-token" } });
+    fireEvent.keyDown(token, { key: "Enter" });
+    fireEvent.keyDown(token, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(screen.getByText("Checked and saved")).toBeTruthy();
+    });
+    expect(setCredential).toHaveBeenCalledTimes(1);
+    expect(setCredential).toHaveBeenCalledWith("acme.gitea", {
+      token: "secret-token",
+      host: "git.example.com",
+    });
+    expect(onSubtabChange).not.toHaveBeenCalled();
+  });
+
   it("surfaces the validation error and does not clear the field on invalid credentials", async () => {
     const { setCredential } = installForgeMocks({
       providers: [
