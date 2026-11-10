@@ -129,6 +129,35 @@ export function canCopy(item: SubjectFields): boolean {
   return answerHeld || item.followUps.length > 0;
 }
 
+/**
+ * Whether Mark handled asks first (#16638). While the answer can still be
+ * resumed or sent to another agent, handling it takes those, and Copy, off
+ * the list for good. Where neither is offered (delivery uncertain, the
+ * answer unreadable, asked on another host) it is the way out, so one click
+ * is enough.
+ */
+export function handledNeedsConfirm(
+  item: Pick<DecisionsAttentionItem, "canResume" | "canReassign">
+): boolean {
+  return item.canResume || item.canReassign;
+}
+
+export function handledConfirmTitle(alias: number): string {
+  return `Mark ${aliasLabel(alias)} handled?`;
+}
+
+/** What marking handled takes away, in agreement with how many things it holds. */
+export function handledConfirmBody(subject: AttentionSubject): string {
+  const plural = isPlural(subject);
+  const it = plural ? "them" : "it";
+  return (
+    `Its ${subject} ${plural ? "leave" : "leaves"} this list, the pane's chip and Canopy, and ` +
+    `Daintree won't type ${it} in. Copy, Try resume and Choose destination go with ${it}, so ` +
+    `${plural ? "they" : "it"} can't be copied or sent to an agent from here afterwards. ` +
+    `The Decisions audit trail records the question as handled.`
+  );
+}
+
 /** The agent's name, falling back to its id. */
 export function agentLabel(origin: { agentId: string; agentName: string | null }): string {
   return origin.agentName ?? origin.agentId;

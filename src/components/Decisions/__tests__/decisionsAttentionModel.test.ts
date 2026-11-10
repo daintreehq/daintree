@@ -6,6 +6,9 @@ import type {
 import {
   canCopy,
   copyLabel,
+  handledConfirmBody,
+  handledConfirmTitle,
+  handledNeedsConfirm,
   outcomeText,
   reasonText,
   remainingText,
@@ -123,5 +126,29 @@ describe("follow-ups in the needs-attention list (#16231)", () => {
     );
     // An answer alone reads as it always has.
     expect(outcomeText(4, delivered)).toBe("Answer to q-4 typed into “Claude”");
+  });
+});
+
+describe("Mark handled's confirmation (#16638)", () => {
+  it("asks first only while the answer can still be resumed or sent on", () => {
+    expect(handledNeedsConfirm({ canResume: true, canReassign: true })).toBe(true);
+    expect(handledNeedsConfirm({ canResume: false, canReassign: true })).toBe(true);
+    expect(handledNeedsConfirm({ canResume: true, canReassign: false })).toBe(true);
+    // A delivery that may already have gone in offers neither: Mark handled is the way out.
+    expect(handledNeedsConfirm({ canResume: false, canReassign: false })).toBe(false);
+  });
+
+  it("names the question and agrees with what it takes off the list", () => {
+    expect(handledConfirmTitle(7)).toBe("Mark q-7 handled?");
+
+    const one = handledConfirmBody("answer");
+    expect(one).toContain("Its answer leaves this list");
+    expect(one).toContain("won't type it in");
+    expect(one).toContain("so it can't be copied or sent to an agent");
+
+    const several = handledConfirmBody("answer and follow-ups");
+    expect(several).toContain("Its answer and follow-ups leave this list");
+    expect(several).toContain("won't type them in");
+    expect(several).toContain("so they can't be copied or sent to an agent");
   });
 });

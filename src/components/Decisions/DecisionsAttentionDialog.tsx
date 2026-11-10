@@ -44,6 +44,9 @@ import {
   copyLabel,
   destinationDetail,
   fromLines,
+  handledConfirmBody,
+  handledConfirmTitle,
+  handledNeedsConfirm,
   leavesList,
   missingAnswerText,
   originParts,
@@ -488,9 +491,11 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   const [busy, setBusy] = useState<ReadonlyMap<string, Busy>>(new Map());
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [move, setMove] = useState<PendingMove | null>(null);
+  /** The item Mark handled is asking about (#16638). */
+  const [handling, setHandling] = useState<DecisionsAttentionItem | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
-  /** The row a move was confirmed from, for the confirmation's close to land after it. */
-  const moveFrom = useRef<{ questionId: string; index: number } | null>(null);
+  /** The row a confirmation was opened from, for its close to land after it. */
+  const confirmFrom = useRef<{ questionId: string; index: number } | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   /** The place in the list of an item whose action may take it off, for focus to land after. */
   const focusAfter = useRef<{ questionId: string; index: number } | null>(null);
@@ -517,6 +522,14 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     setOutcome(null);
     void refresh();
   }, [isOpen, request.seq, refresh]);
+
+  // A confirmation belongs to the opening it was asked in: closing the list
+  // takes it with it, so a reopening never shows one for an item it never asked about.
+  useEffect(() => {
+    if (isOpen) return;
+    setMove(null);
+    setHandling(null);
+  }, [isOpen]);
 
   // Panes' Decisions state changes whenever an answer moves; read again once a burst settles.
   useEffect(() => {
@@ -608,6 +621,23 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     await refresh();
   };
 
+  const askAbout = (item: DecisionsAttentionItem) => {
+    confirmFrom.current = {
+      questionId: item.questionId,
+      index: items.findIndex((candidate) => candidate.questionId === item.questionId),
+    };
+  };
+
+  const markHandled = (item: DecisionsAttentionItem) =>
+    void run(item, "handled", () => decisionsClient.markAnswerHandled(item.questionId));
+
+  const confirmHandled = () => {
+    if (handling === null) return;
+    const item = handling;
+    setHandling(null);
+    markHandled(item);
+  };
+
   const confirmMove = () => {
     if (move === null) return;
     const { item, destination } = move;
@@ -630,8 +660,8 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     return pane?.querySelector<HTMLElement>(PANE_CHIP) ?? pane;
   }, [request.terminalId]);
 
-  const restoreAfterMove = useCallback((): HTMLElement | null => {
-    const from = moveFrom.current;
+  const restoreAfterConfirm = useCallback((): HTMLElement | null => {
+    const from = confirmFrom.current;
     const rows = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-question-id]") ?? [])];
     if (from !== null && rows.length > 0) {
       const row =
@@ -719,19 +749,17 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
                       void run(item, "resume", () => decisionsClient.resumeAnswer(item.questionId))
                     }
                     onChoose={(destination) => {
-                      moveFrom.current = {
-                        questionId: item.questionId,
-                        index: items.findIndex(
-                          (candidate) => candidate.questionId === item.questionId
-                        ),
-                      };
+                      askAbout(item);
                       setMove({ item, destination });
                     }}
-                    onHandled={() =>
-                      void run(item, "handled", () =>
-                        decisionsClient.markAnswerHandled(item.questionId)
-                      )
-                    }
+                    onHandled={() => {
+                      if (!handledNeedsConfirm(item)) {
+                        markHandled(item);
+                        return;
+                      }
+                      askAbout(item);
+                      setHandling(item);
+                    }}
                   />
                 ))}
               </ul>
@@ -764,7 +792,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
         // The menu that opened it is its row's; when a fast move has already
         // taken that row away, the close lands on the next row, else the one
         // before, else the list's own place.
-        restoreFocusTo={restoreAfterMove}
+        restoreFocusTo={restoreAfterConfirm}
         confirmLabel={move === null ? "Send answer" : `Send ${subjectOf(move.item)}`}
         onConfirm={confirmMove}
       >
@@ -788,6 +816,42 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
               lines={toLines(
                 move.destination,
                 worktreeName(move.destination.worktreeId, move.destination.worktreeName)
+              )}
+            />
+          </dl>
+        )}
+      </ConfirmDialog>
+      <ConfirmDialog
+        isOpen={handling !== null}
+        onClose={() => setHandling(null)}
+        zIndex="nested"
+        variant="destructive"
+        title={handling === null ? "" : handledConfirmTitle(handling.alias)}
+        description={
+          <span className="[text-wrap:pretty]">
+            {handledConfirmBody(handling === null ? "answer" : subjectOf(handling))}
+          </span>
+        }
+        // Cancelling returns to the button that asked; once the row is gone,
+        // the close lands on the next row, else the one before, else the
+        // list's own place.
+        restoreFocusTo={restoreAfterConfirm}
+        confirmLabel="Mark handled"
+        onConfirm={confirmHandled}
+      >
+        {handling !== null && (
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2 text-xs">
+            {handling.question !== null && (
+              <>
+                <dt className="text-text-secondary">Question</dt>
+                <dd className="text-text-primary [text-wrap:pretty]">{handling.question}</dd>
+              </>
+            )}
+            <dt className="text-text-secondary">From</dt>
+            <PaneLinesValue
+              lines={fromLines(
+                handling,
+                worktreeName(handling.origin.worktreeId, handling.origin.worktreeName)
               )}
             />
           </dl>
