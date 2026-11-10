@@ -1944,7 +1944,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         status: "error",
         url: null,
         terminalId: "dev-terminal-1",
-        error: { type: "compile-error", message: "Build failed" },
+        error: { type: "permission", message: "EACCES" },
       };
       render(<DevPreviewPane {...baseProps} />);
       expect(terminalStoreState.showDevPreviewOutput).toHaveBeenCalledWith("dev-preview-panel-1");
