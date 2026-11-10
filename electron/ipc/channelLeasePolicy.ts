@@ -123,6 +123,7 @@ export const CHANNEL_LEASE_POLICY = {
   "canopy:terminal-data": "free",
   "canopy:terminal-input": "handler",
   "canopy:take-terminal-size": "handler",
+  "canopy:set-visible-pane-terminals": "handler",
   "canopy:terminal-claim-size": "handler",
   "canopy:terminal-resize": "handler",
   "canopy:terminal-send-key": "handler",

@@ -9,9 +9,12 @@ import {
   claimWatchedRunSize,
   claimWatchedSize,
   followDriveLeaseChange,
+  forgetVisiblePaneTerminals,
   onSizeHoldsChange,
+  paneOwnedTerminals,
   releaseViewSizeHolds,
   resizeWatchedTerminal,
+  setVisiblePaneTerminals,
   sizeHolds,
   stopAllTerminalWatches,
   stopTerminalWatch,
@@ -1371,5 +1374,263 @@ describe("a view that takes the size only once used (#16339)", () => {
     resizeWatchedTerminal(pty, 1, opened.watchId!, 100, 30);
     expect(opened.following).toBeUndefined();
     expect(resizes(pty)).toEqual([[100, 30]]);
+  });
+});
+
+describe("a main-view pane showing the terminal (#16737)", () => {
+  const resizes = (pty: PtyClient) =>
+    (pty.resize as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => call.slice(1));
+
+  const echo = (emitter: EventEmitter, cols: number, rows: number) =>
+    emitter.emit("resize-result", "run-1", {
+      launchGeneration: 1,
+      requestedCols: cols,
+      requestedRows: rows,
+      appliedCols: cols,
+      appliedRows: rows,
+      outcome: "applied",
+    });
+
+  /** The main window's view, 7, showing the terminal in a pane it may size. */
+  const show = (terminalIds: string[], maySize: (id: string) => boolean = () => true) =>
+    setVisiblePaneTerminals(7, terminalIds, maySize);
+
+  /** A panel, local or from another machine, holding run-1 at 100x30; its pane was 120x36. */
+  async function held(remote = false) {
+    const fake = fakePty();
+    const view = fakeSender(remote ? -5 : 1);
+    const opened = await watchTerminal(
+      fake.pty,
+      view.sender,
+      "run-1",
+      100,
+      beginWatchRequest(view.sender.id),
+      1,
+      () => true,
+      null,
+      remote
+    );
+    resizeWatchedTerminal(fake.pty, view.sender.id, opened.watchId!, 100, 30);
+    echo(fake.emitter, 100, 30);
+    vi.mocked(fake.pty.resize).mockClear();
+    view.sent.length = 0;
+    return { ...fake, ...view, watchId: opened.watchId! };
+  }
+
+  describe.each([
+    ["on this machine", false],
+    ["from another machine", true],
+  ] as const)("over a panel's hold %s", (_case, remote) => {
+    it("takes the size from the panel with nothing handed back: the pane's fit moves the PTY, once", async () => {
+      const { pty, emitter, sender, sent, watchId } = await held(remote);
+      const heard: string[][] = [];
+      const off = onSizeHoldsChange((ids) => heard.push(ids));
+
+      show(["run-1"]);
+
+      expect(pty.resize).not.toHaveBeenCalled();
+      expect(sizeHolds()).toEqual([]);
+      expect(heard).toEqual([[]]);
+      expect(paneOwnedTerminals()).toEqual(["run-1"]);
+      expect(sent).toEqual([
+        { kind: "resize", watchId, runId: "run-1", cols: 100, rows: 30, following: true },
+      ]);
+
+      // The pane fits its own box; the panel draws that grid.
+      echo(emitter, 140, 40);
+      expect(sent.at(-1)).toEqual({
+        kind: "resize",
+        watchId,
+        runId: "run-1",
+        cols: 140,
+        rows: 40,
+        following: true,
+      });
+
+      // Nothing the panel measures, or the user does in it, sizes the PTY while the pane shows.
+      resizeWatchedTerminal(pty, sender.id, watchId, 100, 30);
+      claimWatchedSize(sender.id, watchId);
+      resizeWatchedTerminal(pty, sender.id, watchId, 90, 28);
+      show(["run-1"]);
+      followDriveLeaseChange();
+      resizeWatchedTerminal(pty, sender.id, watchId, 90, 28);
+      expect(pty.resize).not.toHaveBeenCalled();
+      expect(sizeHolds()).toEqual([]);
+      expect(sent.every((message) => (message as { following?: boolean }).following)).toBe(true);
+
+      // Closing the panel hands nothing back: the size is the pane's.
+      stopTerminalWatch(sender.id);
+      expect(pty.resize).not.toHaveBeenCalled();
+      off();
+    });
+
+    it("lets the panel take the size again once no pane shows the terminal", async () => {
+      const { pty, emitter, sender, sent, watchId } = await held(remote);
+      show(["run-1"]);
+      echo(emitter, 140, 40);
+      sent.length = 0;
+
+      show([]);
+
+      expect(paneOwnedTerminals()).toEqual([]);
+      expect(sent).toEqual([{ kind: "resize", watchId, runId: "run-1", cols: 140, rows: 40 }]);
+      resizeWatchedTerminal(pty, sender.id, watchId, 100, 30);
+      expect(resizes(pty)).toEqual([[100, 30]]);
+      expect(sizeHolds()).toEqual(["run-1"]);
+
+      // And hands the pane's newest size back when it closes.
+      vi.mocked(pty.resize).mockClear();
+      echo(emitter, 100, 30);
+      stopTerminalWatch(sender.id);
+      expect(resizes(pty)).toEqual([[140, 40]]);
+    });
+
+    it("lets go again when the view showing the pane goes", async () => {
+      const { pty, sender, sent, watchId } = await held(remote);
+      show(["run-1"]);
+      sent.length = 0;
+
+      forgetVisiblePaneTerminals(7);
+
+      expect(sent).toEqual([{ kind: "resize", watchId, runId: "run-1", cols: 100, rows: 30 }]);
+      resizeWatchedTerminal(pty, sender.id, watchId, 90, 28);
+      expect(resizes(pty)).toEqual([[90, 28]]);
+    });
+
+    it("opens a panel following while the pane shows the terminal", async () => {
+      const { pty } = fakePty();
+      show(["run-1"]);
+      const view = fakeSender(remote ? -5 : 1);
+      const opened = await watchTerminal(
+        pty,
+        view.sender,
+        "run-1",
+        100,
+        beginWatchRequest(view.sender.id),
+        1,
+        () => true,
+        null,
+        remote
+      );
+
+      expect(opened.following).toBe(true);
+      expect(view.sent).toEqual([
+        {
+          kind: "resize",
+          watchId: opened.watchId,
+          runId: "run-1",
+          cols: 120,
+          rows: 36,
+          following: true,
+        },
+      ]);
+      resizeWatchedTerminal(pty, view.sender.id, opened.watchId!, 100, 30);
+      expect(pty.resize).not.toHaveBeenCalled();
+    });
+  });
+
+  it("leaves the hold to a pane its view may not size, until the drive moves to that view", async () => {
+    const { pty, sent } = await held();
+    const authority = { may: false };
+    show(["run-1"], () => authority.may);
+
+    expect(sizeHolds()).toEqual(["run-1"]);
+    expect(sent).toEqual([]);
+
+    authority.may = true;
+    followDriveLeaseChange();
+
+    expect(sizeHolds()).toEqual([]);
+    expect(sent.at(-1)).toMatchObject({ kind: "resize", following: true });
+    expect(pty.resize).not.toHaveBeenCalled();
+  });
+
+  it("counts a pane in any view: the terminal stays the panes' until the last one goes", async () => {
+    const { pty, sender, watchId } = await held();
+    show(["run-1"]);
+    setVisiblePaneTerminals(8, ["run-1", "run-2"], () => true);
+
+    show([]);
+    resizeWatchedTerminal(pty, sender.id, watchId, 90, 28);
+    expect(pty.resize).not.toHaveBeenCalled();
+
+    setVisiblePaneTerminals(8, ["run-2"], () => true);
+    resizeWatchedTerminal(pty, sender.id, watchId, 90, 28);
+    expect(resizes(pty)).toEqual([[90, 28]]);
+  });
+
+  it("keeps a panel that follows on its own following once the pane goes, unless used meanwhile", async () => {
+    const { pty, emitter } = fakePty();
+    const unused = fakeSender(1);
+    const used = fakeSender(2);
+    const openUnused = (view: ReturnType<typeof fakeSender>) =>
+      watchTerminal(
+        pty,
+        view.sender,
+        "run-1",
+        100,
+        beginWatchRequest(view.sender.id),
+        undefined,
+        undefined,
+        null,
+        false,
+        "detail",
+        true
+      );
+    const left = await openUnused(unused);
+    const right = await openUnused(used);
+    show(["run-1"]);
+    echo(emitter, 140, 40);
+
+    // Used while the pane shows: recorded, but nothing moves.
+    claimWatchedSize(2, right.watchId!);
+    resizeWatchedTerminal(pty, 2, right.watchId!, 100, 30);
+    expect(pty.resize).not.toHaveBeenCalled();
+    expect(used.sent.at(-1)).toMatchObject({ following: true });
+    unused.sent.length = 0;
+    used.sent.length = 0;
+
+    show([]);
+
+    expect(unused.sent).toEqual([]);
+    expect(used.sent).toEqual([
+      { kind: "resize", watchId: right.watchId, runId: "run-1", cols: 140, rows: 40 },
+    ]);
+    resizeWatchedTerminal(pty, 1, left.watchId!, 90, 28);
+    resizeWatchedTerminal(pty, 2, right.watchId!, 100, 30);
+    expect(resizes(pty)).toEqual([[100, 30]]);
+  });
+
+  it("makes the global assistant's stream follow too", async () => {
+    const { pty, emitter } = fakePty();
+    const { sender, sent } = fakeSender(1);
+    const opened = await watchTerminal(
+      pty,
+      sender,
+      "run-1",
+      100,
+      beginWatchRequest(1, "global"),
+      1,
+      () => true,
+      null,
+      false,
+      "global"
+    );
+    resizeWatchedTerminal(pty, 1, opened.watchId!, 100, 30);
+    echo(emitter, 100, 30);
+    vi.mocked(pty.resize).mockClear();
+
+    show(["run-1"]);
+
+    expect(sizeHolds()).toEqual([]);
+    expect(sent.at(-1)).toMatchObject({ kind: "resize", following: true });
+    resizeWatchedTerminal(pty, 1, opened.watchId!, 90, 28);
+    expect(pty.resize).not.toHaveBeenCalled();
+  });
+
+  it("forgets every pane when Canopy stops", async () => {
+    show(["run-1"]);
+    stopAllTerminalWatches();
+    expect(paneOwnedTerminals()).toEqual([]);
   });
 });
