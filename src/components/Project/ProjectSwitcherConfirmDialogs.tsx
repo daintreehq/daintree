@@ -257,7 +257,11 @@ export function ProjectSwitcherConfirmDialogs({
             <div className="text-xs text-text-secondary">
               {removeConfirmProject.isActive
                 ? "The project will remain in your list and can be reopened at any time."
-                : "Removing it deletes this project's saved settings, recipes stored outside the repository, schedules, layout and session history, and ends any running terminals and processes. Opening the folder again starts the project fresh. The folder itself isn't touched, and recipes kept in the repository under .daintree/recipes/ stay."}
+                : `Removing it deletes this project's saved settings, recipes stored outside the repository, schedules and layout, and ends any running terminals and processes. Opening the folder again starts the project fresh. ${
+                    removeConfirmProject.cloneState === "cloning"
+                      ? "Its clone is still running: removing it cancels the clone and discards the partly cloned folder."
+                      : "The folder itself isn't touched, and recipes kept in the repository under .daintree/recipes/ stay."
+                  }`}
             </div>
           </div>
         </ConfirmDialog>

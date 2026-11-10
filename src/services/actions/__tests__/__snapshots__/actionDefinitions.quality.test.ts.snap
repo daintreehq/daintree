@@ -4613,7 +4613,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   {
     "category": "project",
     "danger": "confirm",
-    "dangerRationale": "Removes a project from the list and deletes its saved state: settings, recipes stored outside the repository, schedules, layout and session history. Running terminals are ended. The folder and worktrees on disk are not touched, and recipes kept in the repository under .daintree/recipes/ stay.",
+    "dangerRationale": "Removes a project from the list and deletes its saved state: settings, recipes stored outside the repository, schedules and layout. Running terminals are ended. The folder and worktrees on disk are not touched (a project whose clone is still running has the partial clone discarded), and recipes kept in the repository under .daintree/recipes/ stay.",
     "description": "Remove a project from the list",
     "examples": undefined,
     "id": "project.remove",

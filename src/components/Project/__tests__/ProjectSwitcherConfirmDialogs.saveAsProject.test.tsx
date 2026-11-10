@@ -140,7 +140,7 @@ describe("Save as project follow-up", () => {
 });
 
 describe("Remove project confirm", () => {
-  function renderRemove(isActive: boolean) {
+  function renderRemove(isActive: boolean, cloneState?: SearchableProject["cloneState"]) {
     const project: SearchableProject = {
       id: "p1",
       name: "retry-queue",
@@ -149,6 +149,7 @@ describe("Remove project confirm", () => {
       lastOpened: 0,
       status: "closed",
       isActive,
+      cloneState,
       isBackground: false,
       isMissing: false,
       isPinned: false,
@@ -178,13 +179,26 @@ describe("Remove project confirm", () => {
 
     expect(screen.getByTestId("confirm-title").textContent).toBe("Remove 'retry-queue'?");
     const body = screen.getByTestId("confirm-body").textContent ?? "";
-    for (const word of ["settings", "schedules", "layout", "session history"]) {
+    for (const word of [
+      "settings",
+      "recipes stored outside the repository",
+      "schedules",
+      "layout",
+    ]) {
       expect(body).toContain(word);
     }
     expect(body).toContain("ends any running terminals");
     expect(body).toContain("The folder itself isn't touched");
     expect(body).toContain(".daintree/recipes/");
     expect(body).not.toContain("open it again later");
+  });
+
+  it("says a still-running clone is cancelled rather than promising the folder is untouched", () => {
+    renderRemove(false, "cloning");
+
+    const body = screen.getByTestId("confirm-body").textContent ?? "";
+    expect(body).toContain("cancels the clone");
+    expect(body).not.toContain("The folder itself isn't touched");
   });
 
   it("keeps the Close copy for the project on screen", () => {
