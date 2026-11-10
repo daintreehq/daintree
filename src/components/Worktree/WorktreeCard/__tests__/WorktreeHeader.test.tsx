@@ -377,27 +377,27 @@ describe("WorktreeHeader primary worktree standard branch layout", () => {
     expect(screen.getByText("main")).toBeDefined();
   });
 
-  it("styles the project name differently when active vs inactive", () => {
-    const active = renderHeader({
-      worktree: mainWorktree,
-      isMainWorktree: true,
-      isMainOnStandardBranch: true,
-      isActive: true,
-      branchLabel: "main",
-    });
-    const activeClass = active.getByTestId("primary-worktree-project-name").className;
-    active.unmount();
+  it("styles the project name by liveness, not by selection", () => {
+    const nameClass = (overrides: Partial<WorktreeHeaderProps>) => {
+      const view = renderHeader({
+        worktree: mainWorktree,
+        isMainWorktree: true,
+        isMainOnStandardBranch: true,
+        branchLabel: "main",
+        ...overrides,
+      });
+      const className = view.getByTestId("primary-worktree-project-name").className;
+      view.unmount();
+      return className;
+    };
 
-    const inactive = renderHeader({
-      worktree: mainWorktree,
-      isMainWorktree: true,
-      isMainOnStandardBranch: true,
-      isActive: false,
-      branchLabel: "main",
-    });
-    const inactiveClass = inactive.getByTestId("primary-worktree-project-name").className;
-
-    expect(activeClass).not.toBe(inactiveClass);
+    // A live card's name reads the same selected or not; the card's fill and
+    // edge mark the selection. An idle (muted) card's name steps down.
+    const activeLive = nameClass({ isActive: true, isMuted: false });
+    const inactiveLive = nameClass({ isActive: false, isMuted: false });
+    const inactiveMuted = nameClass({ isActive: false, isMuted: true });
+    expect(inactiveLive).toBe(activeLive);
+    expect(inactiveMuted).not.toBe(inactiveLive);
   });
 
   it("falls back to BranchLabel when isMainOnStandardBranch is false", () => {

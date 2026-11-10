@@ -290,11 +290,11 @@ async function stubHosts(app: ElectronApplication, fixture: HostsFixture): Promi
   await app.evaluate(
     ({ ipcMain }, fx) => {
       const g = globalThis as unknown as {
-        __sidebarHosts?: typeof fx;
+        __sidebarHosts?: HostsFixture;
         __sidebarStubbed?: boolean;
         __sidebarLocalProjectId?: string;
       };
-      g.__sidebarHosts = fx;
+      g.__sidebarHosts = fx as unknown as HostsFixture;
       if (!g.__sidebarStubbed) {
         g.__sidebarStubbed = true;
         ipcMain.removeHandler("remote-hosts:list");

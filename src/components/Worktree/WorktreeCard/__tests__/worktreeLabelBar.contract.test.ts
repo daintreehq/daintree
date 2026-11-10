@@ -59,11 +59,10 @@ describe("worktree label bar cut-out (#13408)", () => {
     expect(cardSource).toMatch(/collapsed=\{effectiveIsCollapsed\}/);
   });
 
-  it("moves the keyboard-cursor edge to the right on a labelled card", () => {
-    const rule = sidebarCss.match(
-      /\.sidebar-worktree-card\[data-label\]:not\(\[data-active="true"\]\)[^{]*\{([^}]*)\}/
-    );
-    expect(rule?.[1]).toMatch(/--card-edge:\s*inset -2px 0 0 var\(--theme-selection-outline\)/);
+  it("draws no keyboard-cursor edge on the leading side, where the label bar is", () => {
+    // The cursor is a perimeter on every card; nothing in the sidebar draws a
+    // leading inset edge that the colour bar would have to share.
+    expect(sidebarCss).not.toMatch(/--card-edge:[^;]*inset 2px 0 0/);
   });
 
   it("keeps the hue under forced colors, bar and swatch alike", () => {

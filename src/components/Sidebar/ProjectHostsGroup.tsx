@@ -290,8 +290,8 @@ function CollapsedTotals({ totals }: { totals: Totals }) {
     { key: "blocked", band: "blocked", n: totals.blocked },
     { key: "asking", band: "needs-you", n: totals.counts.asking - totals.blocked },
     { key: "quiet", band: "quiet", n: totals.counts.quiet },
-    { key: "review", band: "review", n: totals.counts.review },
-    { key: "running", band: "running", n: totals.counts.running },
+    { key: "unread", band: "review", n: totals.counts.review },
+    { key: "working", band: "running", n: totals.counts.running },
   ];
   return (
     <span
