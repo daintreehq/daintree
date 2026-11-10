@@ -51,9 +51,11 @@ function FullSkeleton({
         )}
       </div>
 
+      {/* The caption already names the phase, so the hint says how the wait is
+          going ("Still working…", then "Taking longer than usual…") rather
+          than repeating it. */}
       <SkeletonHint
         className="absolute bottom-8 inset-x-4 flex justify-center pointer-events-auto"
-        message={phaseLabel}
         onCancel={onCancel}
       />
     </div>
@@ -99,7 +101,6 @@ function OverlayBody({ phaseLabel, onCancel }: { phaseLabel: string; onCancel?: 
 
       <SkeletonHint
         className="absolute bottom-8 inset-x-4 flex justify-center pointer-events-auto"
-        message={phaseLabel}
         onCancel={onCancel}
       />
     </div>

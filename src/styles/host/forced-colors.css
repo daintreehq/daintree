@@ -187,8 +187,11 @@
      near-Canvas value in forced-colors — measured at roughly 1.06:1 on white,
      i.e. invisible. These states are often icon-plus-one-line, so losing the
      icon removes half the state. Repaint with CanvasText and drop the opacity
-     mixing that caused it. */
-  [data-empty-state-icon] {
+     mixing that caused it. A glyph tinted by its own class keeps that colour
+     (Chromium forces only an inherited currentColor), so the stopped-load Info
+     mark stayed secondary grey at ~2.6:1; the svg is repainted too. */
+  [data-empty-state-icon],
+  [data-empty-state-icon] svg {
     color: CanvasText !important;
     opacity: 1 !important;
   }

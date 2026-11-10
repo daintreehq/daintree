@@ -85,9 +85,11 @@ describe("pane and inline busy states", () => {
       // status, so the alert can sit behind that one condition.
       expect(source, file).toMatch(/<PaneState\b[\s\S]*?live=(?:"alert"|\{[^}]*"alert"\})/);
     }
+    // The dev preview's load errors follow the same rule: a stop the user asked
+    // for drops to a polite status, every failure stays an alert.
     const overlays =
       FILES.find((f) => f.file === "src/components/DevPreview/DevPreviewWebviewOverlays.tsx")
         ?.source ?? "";
-    expect(overlays).toMatch(/<PaneState\b[\s\S]*?live="alert"/);
+    expect(overlays).toMatch(/<PaneState\b[\s\S]*?live=(?:"alert"|\{[^}]*"alert"\})/);
   });
 });

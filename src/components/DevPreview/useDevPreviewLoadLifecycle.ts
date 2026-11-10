@@ -7,6 +7,7 @@ import { DEV_PREVIEW_PROXY_STATUS_TEXT } from "@shared/utils/devPreviewProxy";
 import { applyDevPreviewEmulation } from "./viewportEmulation";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { pushBrowserHistory } from "../Browser/historyUtils";
+import { STOPPED_LOAD_TITLE } from "../Browser/browserUtils";
 import { loadWebviewUrl } from "./loadWebviewUrl";
 import type { BlockedNavAction } from "./BlockedNavBanner";
 
@@ -42,7 +43,7 @@ export function webviewLoadErrorHeading(code: WebviewLoadErrorCode): string {
     case "timeout":
       return "Page load timed out";
     case "aborted":
-      return "Load cancelled";
+      return STOPPED_LOAD_TITLE;
     case "connection_refused":
       return "Dev server unreachable";
     case "proxy_error":

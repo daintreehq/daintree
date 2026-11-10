@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
 import type { BrowserHistory } from "@shared/types/browser";
-import type { NormalizeResult } from "../Browser/browserUtils";
+import { STOPPED_LOAD_MESSAGE, type NormalizeResult } from "../Browser/browserUtils";
 import {
   goBackBrowserHistory,
   goForwardBrowserHistory,
@@ -213,7 +213,7 @@ export function useDevPreviewNavigation({
     } catch {
       // Webview detached
     }
-    setWebviewLoadError({ code: "aborted", message: "Load cancelled." });
+    setWebviewLoadError({ code: "aborted", message: STOPPED_LOAD_MESSAGE });
   }, [clearLoadTimers, setIsLoading, setWebviewLoadError, webviewRef]);
 
   const handleRetryWebviewLoad = useCallback(() => {
