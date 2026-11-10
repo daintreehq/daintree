@@ -739,6 +739,232 @@ describe("ThemeBrowser navigation contract", () => {
     expect(useAppThemeStore.getState().previewSchemeId).toBe(darkSchemeAt(3)!.id);
   });
 
+  // The cursor is the highlighted row, not a number that outlives the list it
+  // was counted in. Every case below changes the list under a cursor and then
+  // arrows, and each one used to step from an index the new list never offered.
+  describe("arrowing after the list changes (#16655)", () => {
+    const schemesOf = (type: "dark" | "light") =>
+      BUILT_IN_APP_SCHEMES.filter((s) =>
+        type === "light" ? s.type === "light" : s.type !== "light"
+      );
+    const matching = (query: string, type: "dark" | "light" = "dark") =>
+      schemesOf(type).filter((s) => s.name.toLowerCase().includes(query));
+    const previewId = () => useAppThemeStore.getState().previewSchemeId;
+    const typeFilter = (value: string) => {
+      const input = screen.getByLabelText<HTMLInputElement>("Filter themes");
+      fireEvent.change(input, { target: { value } });
+      return input;
+    };
+    const press = (key: string) => {
+      fireEvent.keyDown(screen.getByLabelText("Filter themes"), { key });
+    };
+    const clickRow = (name: string) => {
+      const row = findRowByName(name);
+      fireEvent.pointerDown(row);
+      fireEvent.click(row);
+    };
+
+    it("previews the first match on ArrowDown when the filter hides every highlighted row", () => {
+      render(<Harness />);
+      const matches = matching("o");
+      expect(matches.length).toBeGreaterThan(2);
+      expect(matches.some((s) => s.id === DEFAULT_APP_SCHEME_ID)).toBe(false);
+
+      const input = typeFilter("o");
+
+      expect(input.getAttribute("aria-activedescendant")).toBeNull();
+      expect(previewId()).toBeNull();
+      press("ArrowDown");
+      expect(previewId()).toBe(matches[0]!.id);
+    });
+
+    it("previews the last match on ArrowUp when nothing is highlighted", () => {
+      render(<Harness />);
+      const matches = matching("o");
+
+      typeFilter("o");
+      press("ArrowUp");
+
+      expect(previewId()).toBe(matches[matches.length - 1]!.id);
+    });
+
+    it("enters at the first match, not the end, when the current theme sat low in the list", () => {
+      const lowest = schemesOf("dark").at(-1)!;
+      useAppThemeStore.setState({ selectedSchemeId: lowest.id });
+      render(<Harness />);
+      const matches = matching("an");
+      expect(matches.length).toBeGreaterThan(1);
+      expect(matches.some((s) => s.id === lowest.id)).toBe(false);
+
+      typeFilter("an");
+      press("ArrowDown");
+
+      expect(previewId()).toBe(matches[0]!.id);
+    });
+
+    it("steps to the row below a previewed row that survives a narrower query", () => {
+      const previewed = darkSchemeAt(4)!;
+      render(<Harness />);
+      clickRow(previewed.name);
+      const matches = matching("i");
+      const at = matches.findIndex((s) => s.id === previewed.id);
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(at).not.toBe(4);
+
+      typeFilter("i");
+      expect(previewId()).toBe(previewed.id);
+
+      press("ArrowDown");
+      expect(previewId()).toBe(matches[at + 1]!.id);
+      press("ArrowUp");
+      expect(previewId()).toBe(previewed.id);
+    });
+
+    it("keeps a click and the arrow after it in step inside a filtered list", () => {
+      render(<Harness />);
+      const matches = matching("o");
+      typeFilter("o");
+
+      clickRow(matches[1]!.name);
+      press("ArrowDown");
+
+      expect(previewId()).toBe(matches[2]!.id);
+    });
+
+    it.each([
+      [
+        "Escape",
+        () => fireEvent.keyDown(screen.getByLabelText("Filter themes"), { key: "Escape" }),
+      ],
+      [
+        "the clear button",
+        () => fireEvent.click(screen.getByRole("button", { name: "Clear filter" })),
+      ],
+    ])("steps on from the highlighted row after %s clears the query", (_label, clear) => {
+      render(<Harness />);
+      const dark = schemesOf("dark");
+      const previewed = dark[6]!;
+      clickRow(previewed.name);
+      typeFilter(previewed.name.slice(2).toLowerCase());
+      expect(previewId()).toBe(previewed.id);
+
+      clear();
+      expect(screen.getByLabelText<HTMLInputElement>("Filter themes").value).toBe("");
+      press("ArrowDown");
+
+      expect(previewId()).toBe(dark[7]!.id);
+    });
+
+    it("starts from the first row after switching to Light, and from the current theme on the way back", () => {
+      render(<Harness />);
+      const light = schemesOf("light");
+      const dark = schemesOf("dark");
+      clickRow(dark[2]!.name);
+
+      fireEvent.click(screen.getByRole("radio", { name: "Light" }));
+      expect(previewId()).toBeNull();
+      expect(
+        screen.getByLabelText("Filter themes").getAttribute("aria-activedescendant")
+      ).toBeNull();
+      press("ArrowDown");
+      expect(previewId()).toBe(light[0]!.id);
+
+      fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
+      expect(previewId()).toBeNull();
+      press("ArrowDown");
+      expect(previewId()).toBe(dark[1]!.id);
+    });
+
+    it("leaves the preview and the saved theme alone until a key or a click asks", () => {
+      render(<Harness />);
+      typeFilter("o");
+      expect(previewId()).toBeNull();
+
+      press("Enter");
+
+      expect(useAppThemeStore.getState().selectedSchemeId).toBe(DEFAULT_APP_SCHEME_ID);
+      expect(previewId()).toBeNull();
+    });
+
+    // jsdom measures nothing, so the page size falls back to 10 and every page
+    // lands on an end of these short lists. Measuring two rows a page makes the
+    // starting row matter.
+    const withPagesOfTwo = (run: () => void) => {
+      const list = screen.getByRole("listbox", { name: "Theme list" });
+      Object.defineProperty(list, "clientHeight", { configurable: true, value: 80 });
+      const rect = vi
+        .spyOn(Element.prototype, "getBoundingClientRect")
+        .mockReturnValue({ height: 40 } as DOMRect);
+      try {
+        run();
+      } finally {
+        rect.mockRestore();
+      }
+    };
+
+    it("pages from a previewed row that survives a narrower query", () => {
+      const previewed = darkSchemeAt(4)!;
+      render(<Harness />);
+      clickRow(previewed.name);
+      const matches = matching("i");
+      const at = matches.findIndex((s) => s.id === previewed.id);
+      typeFilter("i");
+
+      withPagesOfTwo(() => {
+        press("PageUp");
+        expect(previewId()).toBe(matches[at - 2]!.id);
+        press("PageDown");
+        expect(previewId()).toBe(matches[at]!.id);
+      });
+    });
+
+    it.each([
+      ["PageDown", 0],
+      ["PageUp", -1],
+    ])("%s enters at the same row as its arrow when nothing is highlighted", (key, at) => {
+      render(<Harness />);
+      const matches = matching("o");
+      typeFilter("o");
+
+      withPagesOfTwo(() => press(key));
+
+      expect(previewId()).toBe(matches.at(at)!.id);
+    });
+
+    describe("in a project that has its own theme", () => {
+      afterEach(() => {
+        useAppThemeStore.setState({ projectSchemeId: null, projectSnapshotScheme: null });
+      });
+
+      // The project's theme is already on screen, so there is nothing to repaint
+      // when the cursor lands on its row; the row must still take the highlight,
+      // or the arrows, which step from it, would stall one row short.
+      it("lets the arrows step past the row of the theme already on screen", () => {
+        const dark = schemesOf("dark");
+        useAppThemeStore.setState({ projectSchemeId: dark[1]!.id });
+        render(<Harness />);
+
+        press("ArrowDown");
+        expect(previewId()).toBe(dark[1]!.id);
+        expect(findRowByName(dark[1]!.name).getAttribute("aria-selected")).toBe("true");
+
+        press("ArrowDown");
+        expect(previewId()).toBe(dark[2]!.id);
+      });
+
+      it("continues from that row after it is clicked", () => {
+        const dark = schemesOf("dark");
+        useAppThemeStore.setState({ projectSchemeId: dark[1]!.id });
+        render(<Harness />);
+
+        clickRow(dark[1]!.name);
+        press("ArrowDown");
+
+        expect(previewId()).toBe(dark[2]!.id);
+      });
+    });
+  });
+
   it("saves the clicked theme even when the pointer crosses other rows on the way to Set theme", async () => {
     const { appThemeClient } = await import("@/clients/appThemeClient");
     vi.mocked(appThemeClient.setColorScheme).mockClear();
