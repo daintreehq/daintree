@@ -15,8 +15,9 @@
  * signal persisted: WindowRegistry keeps focus *history*, not timestamps, so a
  * `lastFocusedAt` field would have nothing truthful to write into it.
  *
- * `projectId: null` is a real record, not a hole — a window sitting on the
- * project picker restores as a picker window.
+ * `projectId: null` is a window on the project picker. It holds nothing to
+ * restore, so neither side keeps one ({@link dropPickerWindows}, #16740) unless
+ * it is the only window left to carry background projects.
  *
  * Deliberately dependency-free: the reader that consumes it runs before
  * `app.whenReady()`, and keeping the shape and its validation clear of the DB
@@ -281,6 +282,36 @@ export function serializeOpenWindowsManifest(
     ...(canopyWindowOpen ? { canopyWindow: true as const } : {}),
   };
   return JSON.stringify(manifest);
+}
+
+/**
+ * The windows worth bringing back: every window on the project picker dropped
+ * (#16740). A picker has no workspace, terminals or layout, so restoring one
+ * only reopens an empty window, and it then came back on every launch.
+ *
+ * A picker can still hold background projects: warm views, or live workspaces
+ * the orphan sweep gave the most-recently-focused window. Those go to the first
+ * window that stays, after its own, the way a dropped duplicate's go to the
+ * window that kept its project. With no window left to take them, one picker
+ * carries them all, so a session of pickers still opens one window and its
+ * running projects still come back.
+ */
+export function dropPickerWindows(records: readonly OpenWindowRecord[]): OpenWindowRecord[] {
+  const kept = records.filter((record) => record.projectId !== null);
+  const foregrounds = new Set(kept.map((record) => record.projectId));
+  const carried = records.flatMap((record) =>
+    record.projectId === null
+      ? (record.backgroundProjectIds ?? []).filter((id) => !foregrounds.has(id))
+      : []
+  );
+  if (carried.length === 0) return kept;
+
+  const [first, ...rest] = kept;
+  const backgroundProjectIds = capBackgroundProjectIds(
+    [...(first?.backgroundProjectIds ?? []), ...carried],
+    first?.projectId ?? null
+  );
+  return [{ projectId: first?.projectId ?? null, backgroundProjectIds }, ...rest];
 }
 
 /** Longest project id a host-scoped key may carry (the switch refuses longer ones). */

@@ -520,6 +520,70 @@ describe("the launch a stored manifest produces", () => {
   });
 });
 
+// A window on the project picker holds nothing to restore, so a relaunch brings
+// back the windows that had a workspace and none of the pickers (#16740).
+describe("picker windows in a stored manifest (#16740)", () => {
+  const HOST_PROJECT = `studio-01:${"d".repeat(64)}`;
+
+  it("restores the project window and none of the pickers beside it", () => {
+    withDb({
+      manifest: manifestJson([
+        { projectId: null },
+        { projectId: PROJECT_A },
+        { projectId: null },
+        { projectId: null },
+      ]),
+      existingProjectIds: [PROJECT_A],
+    });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect(hadManifest).toBe(true);
+    expect(ids(records)).toEqual([PROJECT_A]);
+    expect(resolvePrimaryRestoreProjectId(records, hadManifest, "last-active")).toBe(PROJECT_A);
+  });
+
+  it("opens one window on the last-active project when every saved window was a picker", () => {
+    withDb({ manifest: manifestJson([{ projectId: null }, { projectId: null }]) });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect({ hadManifest, records }).toEqual({ hadManifest: false, records: [] });
+    expect(resolvePrimaryRestoreProjectId(records, hadManifest, "last-active")).toBe(
+      "last-active"
+    );
+  });
+
+  it("keeps a window that was on a host's project while it waited on its picker", () => {
+    withDb({
+      manifest: manifestJson([{ projectId: null }, { projectId: HOST_PROJECT }]),
+    });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect(hadManifest).toBe(true);
+    expect(ids(records)).toEqual([HOST_PROJECT]);
+  });
+
+  it("hands a dropped picker's background projects to the first window that stays", () => {
+    withDb({
+      manifest: manifestJson([
+        { projectId: null, backgroundProjectIds: [PROJECT_B, SCRATCH_A] },
+        { projectId: PROJECT_A, backgroundProjectIds: [SCRATCH_B] },
+      ]),
+      existingProjectIds: [PROJECT_A, PROJECT_B],
+      liveScratchIds: [SCRATCH_A, SCRATCH_B],
+    });
+    expect(readOpenWindowsManifestSync().records).toEqual([
+      { projectId: PROJECT_A, backgroundProjectIds: [SCRATCH_B, PROJECT_B, SCRATCH_A] },
+    ]);
+  });
+
+  it("opens a picker, not the last-active project, when the pickers sat beside deleted projects", () => {
+    withDb({
+      manifest: manifestJson([{ projectId: null }, { projectId: PROJECT_GONE }]),
+      existingProjectIds: [PROJECT_A],
+    });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect({ hadManifest, records }).toEqual({ hadManifest: true, records: [] });
+    expect(resolvePrimaryRestoreProjectId(records, hadManifest, "last-active")).toBeUndefined();
+  });
+});
+
 // Closing the last window is the quit gesture on Windows and Linux: its
 // `closed` save persists a manifest naming zero windows, which the reader
 // deliberately treats as no manifest so the launch falls back to the workspace

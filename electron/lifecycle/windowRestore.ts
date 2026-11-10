@@ -9,6 +9,7 @@
 
 import { parseHostScopedKey } from "../../shared/types/remoteHosts.js";
 import {
+  dropPickerWindows,
   isRemoteWorkspaceKey,
   type OpenWindowRecord,
 } from "../services/persistence/windowManifest.js";
@@ -176,6 +177,22 @@ export function windowRestoreArgs(record: OpenWindowRecord): {
 }
 
 /**
+ * The record a restored window stands for, read back from what `createWindow`
+ * was given: the inverse of {@link windowRestoreArgs}. A window still coming up
+ * is saved as this until its setup settles (`createWindowHoldingRecord`).
+ */
+export function restoredWindowRecord(
+  projectId: string | undefined,
+  options?: { remoteWorkspaceKey?: string; backgroundProjectIds?: readonly string[] }
+): OpenWindowRecord {
+  const foreground = options?.remoteWorkspaceKey ?? projectId ?? null;
+  const background = options?.backgroundProjectIds ?? [];
+  return background.length > 0
+    ? { projectId: foreground, backgroundProjectIds: [...background] }
+    : { projectId: foreground };
+}
+
+/**
  * Collapse the manifest to one live view per workspace across the whole fleet
  * (#12596). A manifest saved before that rule existed can name one project in
  * two windows, and restoring it verbatim would rebuild the duplicate: two views
@@ -186,14 +203,19 @@ export function windowRestoreArgs(record: OpenWindowRecord): {
  * whose own project an earlier window already claimed is dropped rather than
  * reopened on a picker, and its background list folds into the window that kept
  * the project — those can be projects whose agents are still running, and
- * dropping them would skip their restore. Picker windows (`null`) never collide.
+ * dropping them would skip their restore.
+ *
+ * Picker windows go first, by the manifest reader's own rule
+ * ({@link dropPickerWindows}, #16740), so a caller that strips background
+ * lists before restoring never brings back the picker that was only carrying
+ * them.
  */
 export function normalizeWindowRecords(records: readonly OpenWindowRecord[]): OpenWindowRecord[] {
   const kept: OpenWindowRecord[] = [];
   const keeperByProject = new Map<string, number>();
   const folded = new Map<number, string[]>();
 
-  for (const record of records) {
+  for (const record of dropPickerWindows(records)) {
     const { projectId } = record;
     if (projectId !== null) {
       const keeper = keeperByProject.get(projectId);
