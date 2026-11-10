@@ -743,7 +743,9 @@ describe("BrowserPane webview lifecycle regression", () => {
       vi.advanceTimersByTime(SKELETON_HINT_FIRST_THRESHOLD_MS);
     });
 
-    expect(liveRegion?.textContent).toContain("Loading page");
+    // The phase is the caption's to say; the hint says how the wait is going.
+    expect(liveRegion?.textContent).toContain("Still working");
+    expect(liveRegion?.textContent).not.toContain("Loading page");
     expect(liveRegion?.textContent).toContain("Cancel option available");
   });
 
