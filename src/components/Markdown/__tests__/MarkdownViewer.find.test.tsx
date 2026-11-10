@@ -55,7 +55,8 @@ async function openFind(ref: RefObject<MarkdownViewerHandle | null>) {
   act(() => ref.current!.openSearch());
   const input = await screen.findByRole("textbox", { name: "Find in document" });
   await waitFor(() => expect(document.activeElement).toBe(input));
-  return input as HTMLInputElement;
+  if (!(input instanceof HTMLInputElement)) throw new Error("find field is not an input");
+  return input;
 }
 
 const count = () => screen.getByRole("status").textContent;

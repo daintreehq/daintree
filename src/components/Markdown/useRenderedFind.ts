@@ -34,7 +34,9 @@ export interface RenderedFindState {
   /** More matches exist than were counted. */
   capped: boolean;
   inputRef: React.RefObject<HTMLInputElement | null>;
-  isComposingRef: React.RefObject<boolean>;
+  /** IME composition: the query searches once a composition commits, not per keystroke. */
+  startComposition: () => void;
+  endComposition: (value: string) => void;
   open: () => void;
   close: () => void;
   setQuery: (query: string) => void;
@@ -127,6 +129,15 @@ export function useRenderedFind(root: HTMLElement | null): RenderedFindState {
     if (!isComposingRef.current) search(next, matchCase, false);
   };
 
+  const startComposition = () => {
+    isComposingRef.current = true;
+  };
+
+  const endComposition = (value: string) => {
+    isComposingRef.current = false;
+    setQuery(value);
+  };
+
   const step = (direction: 1 | -1) => {
     const count = result.ranges.length;
     if (count === 0) return;
@@ -199,7 +210,8 @@ export function useRenderedFind(root: HTMLElement | null): RenderedFindState {
     activeIndex,
     capped: result.capped,
     inputRef,
-    isComposingRef,
+    startComposition,
+    endComposition,
     open,
     close,
     setQuery,

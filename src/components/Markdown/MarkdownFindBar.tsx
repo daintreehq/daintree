@@ -33,7 +33,8 @@ export function MarkdownFindBar({
     activeIndex,
     capped,
     inputRef,
-    isComposingRef,
+    startComposition,
+    endComposition,
     setQuery,
     goNext,
     goPrev,
@@ -45,7 +46,8 @@ export function MarkdownFindBar({
   // Enter and Cmd/Ctrl+G belong to the field; Escape closes from anywhere in
   // the bar, and stops there, so a dialog around the document stays open.
   const handleFieldKeyDown = (e: React.KeyboardEvent) => {
-    if (isComposingRef.current) return;
+    // Keys that commit an IME composition belong to the composition.
+    if (e.nativeEvent.isComposing) return;
     const step =
       e.key === "Enter" || (e.key.toLowerCase() === "g" && (e.metaKey || e.ctrlKey) && !e.altKey);
     if (!step) return;
@@ -68,7 +70,7 @@ export function MarkdownFindBar({
       className={cn("max-w-[calc(100%-1rem)]", FIND_BAR_CLASS, className)}
       data-testid="markdown-find-bar"
       onKeyDown={(e) => {
-        if (isComposingRef.current || e.key !== "Escape") return;
+        if (e.nativeEvent.isComposing || e.key !== "Escape") return;
         e.preventDefault();
         e.stopPropagation();
         close();
@@ -81,13 +83,8 @@ export function MarkdownFindBar({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={handleFieldKeyDown}
-        onCompositionStart={() => {
-          isComposingRef.current = true;
-        }}
-        onCompositionEnd={(e) => {
-          isComposingRef.current = false;
-          setQuery(e.currentTarget.value);
-        }}
+        onCompositionStart={startComposition}
+        onCompositionEnd={(e) => endComposition(e.currentTarget.value)}
         placeholder="Find in document…"
         aria-label="Find in document"
         aria-describedby={counterId}

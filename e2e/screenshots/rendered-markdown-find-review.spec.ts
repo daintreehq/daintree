@@ -280,7 +280,7 @@ test("rendered markdown find review", async () => {
     const opened = await dispatchAction(page, "worktree.openFileBrowserPanel", { worktreeId });
     const browserPanelId = opened.result?.panelId;
     if (!browserPanelId) throw new Error("openFileBrowserPanel returned no panelId");
-    let panel = page.locator(`[data-panel-id="${browserPanelId}"]`);
+    const panel = page.locator(`[data-panel-id="${browserPanelId}"]`);
     await panel.waitFor({ state: "visible", timeout: T_MEDIUM });
     await settle(page, 1200);
 

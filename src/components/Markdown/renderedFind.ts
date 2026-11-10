@@ -40,10 +40,8 @@ function indexText(root: Element): TextIndex {
   const doc = root.ownerDocument;
   const walker = doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        return (node as Element).matches(SKIP_SELECTOR)
-          ? NodeFilter.FILTER_REJECT
-          : NodeFilter.FILTER_SKIP;
+      if (node instanceof Element) {
+        return node.matches(SKIP_SELECTOR) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
       }
       return NodeFilter.FILTER_ACCEPT;
     },
@@ -52,9 +50,8 @@ function indexText(root: Element): TextIndex {
   const nodes: Text[] = [];
   const starts: number[] = [];
   let block: Element | null | undefined;
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const textNode = node as Text;
-    if (textNode.data.length === 0) continue;
+  for (let textNode = walker.nextNode(); textNode; textNode = walker.nextNode()) {
+    if (!(textNode instanceof Text) || textNode.data.length === 0) continue;
     const nodeBlock = textNode.parentElement?.closest(BLOCK_SELECTOR) ?? null;
     if (block !== undefined && nodeBlock !== block) text += BLOCK_BREAK;
     block = nodeBlock;
@@ -145,34 +142,13 @@ export function selectionSeed(root: Element): string | null {
   return text;
 }
 
-interface HighlightRegistryLike {
-  get(name: string): unknown;
-  set(name: string, highlight: unknown): void;
-}
-
-interface HighlightLike {
-  add(range: Range): void;
-  delete(range: Range): boolean;
-  priority: number;
-}
-
-function highlightRegistry(): HighlightRegistryLike | null {
-  const css = (globalThis as { CSS?: { highlights?: HighlightRegistryLike } }).CSS;
-  if (!css?.highlights || typeof (globalThis as { Highlight?: unknown }).Highlight !== "function") {
-    return null;
-  }
-  return css.highlights;
-}
-
-function sharedHighlight(name: string, priority: number): HighlightLike | null {
-  const registry = highlightRegistry();
-  if (!registry) return null;
-  const existing = registry.get(name) as HighlightLike | undefined;
+function sharedHighlight(name: string, priority: number): Highlight | null {
+  if (typeof CSS === "undefined" || !CSS.highlights || typeof Highlight !== "function") return null;
+  const existing = CSS.highlights.get(name);
   if (existing) return existing;
-  const HighlightCtor = (globalThis as unknown as { Highlight: new () => HighlightLike }).Highlight;
-  const created = new HighlightCtor();
+  const created = new Highlight();
   created.priority = priority;
-  registry.set(name, created);
+  CSS.highlights.set(name, created);
   return created;
 }
 
