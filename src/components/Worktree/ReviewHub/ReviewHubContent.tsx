@@ -73,6 +73,7 @@ import { useReviewHubCommitAndPush } from "./useReviewHubCommitAndPush";
 import { useReviewHubRowSelection } from "./useReviewHubRowSelection";
 import { useReviewHubFileCursor } from "./useReviewHubFileCursor";
 import { useReviewHubKeyboard } from "./useReviewHubKeyboard";
+import type { CommitShortcutHandler } from "./commitShortcut";
 import { PluginReadinessChecks, useWorktreeReviewPluginChecks } from "./PluginReadinessChecks";
 import {
   deriveReviewReadiness,
@@ -448,6 +449,7 @@ export function ReviewHubContent({
     selectionAnchorRef,
   } = selection;
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const commitShortcutRef = useRef<CommitShortcutHandler | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   // The same element as `scrollContainerRef`, held in STATE as well: Virtuoso
   // needs it as a prop, and a ref mutation does not re-render, so windowing
@@ -1487,6 +1489,8 @@ export function ReviewHubContent({
     handleToggleUnstaged,
     handleViewedChange,
     viewedFiles,
+    rootRef,
+    commitShortcutRef,
   });
 
   // Shape-matched skeletons replace the old full-area spinners. Doherty-gate
@@ -2355,6 +2359,7 @@ export function ReviewHubContent({
               skipPushConfirm={skipPushConfirm}
               onSetSkipPushConfirm={(value) => setSkipPushConfirmForWorktree(worktreePath, value)}
               isVerifying={!statusIsFresh}
+              shortcutRef={commitShortcutRef}
             />
           )}
       </div>
