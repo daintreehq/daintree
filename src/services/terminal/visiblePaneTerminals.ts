@@ -38,7 +38,7 @@ function flush(): void {
   if (key === sent) return;
   sent = key;
   const mine = ++attempt;
-  report(ids).then(
+  Promise.resolve(report(ids)).then(
     () => {
       warned = false;
     },
