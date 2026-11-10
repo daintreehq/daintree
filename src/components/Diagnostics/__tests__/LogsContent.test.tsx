@@ -221,7 +221,8 @@ describe("LogsContent — auto-scroll follows the toggle and the scroll position
     reportBottom(true);
     reportBottom(false);
     // Scrolled away, but the flag has not caught up yet (it is still on).
-    useLogsStore.setState({ autoScroll: true });
+    setFlag(true);
+    virtuoso.scrollToIndex.mockClear();
 
     fireEvent.click(await findByText("Jump to latest"));
 
@@ -252,6 +253,22 @@ describe("LogsContent — auto-scroll follows the toggle and the scroll position
     expect(virtuoso.scrollToIndex).not.toHaveBeenCalled();
   });
 
+  it("counts lines that arrive while scrolled away and clears the count on resume", async () => {
+    mockGetAll.mockResolvedValue([makeLog("a", { timestamp: 1 }), makeLog("b", { timestamp: 2 })]);
+    const { findByText, queryByText } = await renderList();
+    reportBottom(true);
+    reportBottom(false);
+
+    act(() => useLogsStore.getState().addLogs([makeLog("c", { timestamp: 3, message: "c" })]));
+    expect(await findByText("1 new")).not.toBeNull();
+
+    setFlag(true);
+    reportBottom(true);
+
+    expect(queryByText("1 new")).toBeNull();
+    expect(queryByText("Jump to latest")).toBeNull();
+  });
+
   it("keeps following off when the toggle is turned off at the bottom", async () => {
     await renderList();
     reportBottom(true);
@@ -261,6 +278,16 @@ describe("LogsContent — auto-scroll follows the toggle and the scroll position
     expect(useLogsStore.getState().autoScroll).toBe(false);
     expect(virtuoso.props?.followOutput).toBe(false);
     expect(virtuoso.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("keeps a flag switched off at the bottom off when the bottom is reported again", async () => {
+    await renderList();
+    reportBottom(true);
+    setFlag(false);
+
+    reportBottom(true);
+
+    expect(useLogsStore.getState().autoScroll).toBe(false);
   });
 
   it("does not turn a flag the user switched off back on when the list first opens at the bottom", async () => {
