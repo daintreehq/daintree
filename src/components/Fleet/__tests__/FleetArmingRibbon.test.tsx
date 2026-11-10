@@ -1266,6 +1266,80 @@ describe("FleetArmingRibbon", () => {
       expect([...armed].sort()).toEqual(["t1", "t2", "t3"]);
     });
 
+    describe("presets with a count of 0", () => {
+      // Each row names a state none of the seeded agents is in.
+      const ZERO_COUNT_ROWS: Array<[RegExp, PtyPanelData["agentState"]]> = [
+        [/All waiting — this worktree/, "working"],
+        [/All waiting — all worktrees/, "working"],
+        [/All working — this worktree/, "waiting"],
+        [/All working — all worktrees/, "waiting"],
+      ];
+
+      it.each(ZERO_COUNT_ROWS)("choosing %s leaves the fleet as it was", (label, state) => {
+        seed([makeAgent("t1", state), makeAgent("t2", state), makeAgent("t3", state)]);
+        useFleetArmingStore.getState().armIds(["t3", "t1", "t2"]);
+        const target = {
+          key: "host-a:remote-1",
+          hostId: "host-a" as never,
+          hostName: "studio-01",
+          terminalId: "remote-1",
+          title: "remote",
+        };
+        act(() => {
+          useFleetArmingStore.getState().armCrossHostTarget(target);
+        });
+        const before = useFleetArmingStore.getState();
+        render(<FleetArmingRibbon />);
+
+        const row = findMenuItem(label);
+        expect(row.getAttribute("data-disabled")).toBe("true");
+        fireEvent.click(row);
+
+        const after = useFleetArmingStore.getState();
+        expect(after.armOrder).toEqual(["t3", "t1", "t2"]);
+        expect(after.crossHostTargets).toEqual([target]);
+        expect(after.lastArmedId).toBe(before.lastArmedId);
+        expect(screen.getByTestId("fleet-arming-ribbon")).toBeTruthy();
+      });
+
+      it("'All in this worktree' is disabled and inert when this worktree has no eligible terminal", () => {
+        seed([{ ...makeAgent("t1", "working"), worktreeId: "wt-2" } as PtyPanelData]);
+        useFleetArmingStore.getState().armIds(["t1", "x"]);
+        render(<FleetArmingRibbon />);
+
+        const row = findMenuItem(/All in this worktree/);
+        expect(row.getAttribute("data-disabled")).toBe("true");
+        fireEvent.click(row);
+
+        expect([...useFleetArmingStore.getState().armOrder]).toEqual(["t1", "x"]);
+      });
+
+      it("leaves presets with a count of 1 or more enabled", () => {
+        seed([makeAgent("t1", "working"), makeAgent("t2", "waiting")]);
+        useFleetArmingStore.getState().armIds(["t1", "t2"]);
+        render(<FleetArmingRibbon />);
+
+        expect(
+          findMenuItem(/All waiting — this worktree/).getAttribute("data-disabled")
+        ).toBeNull();
+        expect(
+          findMenuItem(/All working — all worktrees/).getAttribute("data-disabled")
+        ).toBeNull();
+        expect(findMenuItem(/All in this worktree/).getAttribute("data-disabled")).toBeNull();
+      });
+
+      it("'Clear selection' still empties the fleet", () => {
+        seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+        useFleetArmingStore.getState().armIds(["t1", "t2"]);
+        render(<FleetArmingRibbon />);
+
+        const clear = findMenuItem(/Clear selection/);
+        expect(clear.getAttribute("data-disabled")).toBeNull();
+        fireEvent.click(clear);
+        expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+      });
+    });
+
     it("'Clear selection' clears the armed set", () => {
       useFleetArmingStore.getState().armIds(["a", "b", "c"]);
       render(<FleetArmingRibbon />);
