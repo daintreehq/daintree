@@ -764,9 +764,9 @@ export function ProjectListItem({
           {/* Same shape as `, current` above — see `ResumableAgentsLabel`. */}
           {showResumeDot && <ResumableAgentsLabel count={project.resumableAgentCount ?? 0} />}
           {/*
-           * Spoken here, in the name, on every such row: the visible control at
-           * the row's end only shows on the lit row and is hidden from
-           * assistive tech, as a control inside `role="option"` has to be.
+           * Spoken here, in the name, on every such row: the glyph at the row's
+           * end is hidden from assistive tech, as a control inside
+           * `role="option"` has to be.
            */}
           {showOpenElsewhere && <span className="sr-only">, Open in another window</span>}
           {project.neverAutoSleep && (
@@ -805,36 +805,42 @@ export function ProjectListItem({
          */}
         <RowStatusLine status={status} />
       </div>
-      {showGoToWindow && (
-        // Only on the lit row: on every row that qualified it read as clutter
-        // beside the names. Presentational, like the action palette's pin, so
-        // Enter and ⌘↵ stay its keyboard route and the name above its speech.
-        // Hidden by visibility, not opacity, so an unlit row has no invisible
-        // target at its end, and the slot is kept so names don't reflow.
+      {showOpenElsewhere && (
+        // Always shown, not only on the lit row: it is the mark that the project
+        // is open in another window. Where the row's menu offers "Go to window"
+        // it is also that action; elsewhere it is the mark alone. Presentational,
+        // like the action palette's pin, so Enter and ⌘↵ stay its keyboard route
+        // and the name above its speech.
         <div className="shrink-0 flex items-center" aria-hidden="true">
-          <RowControlTooltip label="Go to window">
+          {showGoToWindow ? (
+            <RowControlTooltip label="Go to window">
+              <span
+                role="presentation"
+                data-testid="project-open-elsewhere-marker"
+                // A mouse press would otherwise take focus from the search input.
+                // Touch and pen are left alone: the row's context menu arms its
+                // long-press from that same pointerdown.
+                onPointerDown={(e) => {
+                  if (e.pointerType === "mouse") e.preventDefault();
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onSelectNewWindow?.(project);
+                }}
+                className={ROW_CONTROL_CLASS}
+              >
+                <AppWindow className="w-3.5 h-3.5" aria-hidden />
+              </span>
+            </RowControlTooltip>
+          ) : (
             <span
-              role="presentation"
-              data-testid="project-open-elsewhere-marker"
-              // A mouse press would otherwise take focus from the search input.
-              // Touch and pen are left alone: the row's context menu arms its
-              // long-press from that same pointerdown.
-              onPointerDown={(e) => {
-                if (e.pointerType === "mouse") e.preventDefault();
-              }}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onSelectNewWindow?.(project);
-              }}
-              className={cn(
-                ROW_CONTROL_CLASS,
-                "invisible group-hover:visible group-aria-selected:visible"
-              )}
+              data-testid="project-open-elsewhere-mark"
+              className="inline-flex size-6 items-center justify-center text-text-secondary"
             >
               <AppWindow className="w-3.5 h-3.5" aria-hidden />
             </span>
-          </RowControlTooltip>
+          )}
         </div>
       )}
       {/* Not under the "Current project" band header: it already names this

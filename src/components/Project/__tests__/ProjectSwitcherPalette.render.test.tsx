@@ -2440,7 +2440,7 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
     expect(screen.getByRole("option", { name: /Payments,\s*Open in another window/ })).toBeTruthy();
   });
 
-  it("puts a go-to-window control at the row's end, shown only on the lit row (#16616)", () => {
+  it("puts a go-to-window control at the row's end (#16616)", () => {
     const onSelect = vi.fn();
     const onSelectNewWindow = vi.fn();
     const project = makeProject({ name: "Payments", openInOtherWindow: "foreground" });
@@ -2464,6 +2464,10 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
     // Neutral, never accent — several rows can carry it. Kept out of the
     // option's name, which already says it, and out of the tab order.
     expect(button.getAttribute("class") ?? "").not.toMatch(/accent/);
+    // Shown on every qualifying row, lit or not: it is also the open-elsewhere mark.
+    expect(button.getAttribute("class") ?? "").not.toMatch(
+      /\binvisible\b|\bopacity-0\b|\bhidden\b/
+    );
     expect(button.closest('[aria-hidden="true"]')).not.toBeNull();
     expect(button.tabIndex).toBeLessThan(0);
     expect(button.querySelector("button, a, input, [tabindex]")).toBeNull();
@@ -2536,6 +2540,8 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
     );
 
     expect(control()).toHaveLength(0);
+    // Still marked at the row's end, without the action.
+    expect(screen.getAllByTestId("project-open-elsewhere-mark")).toHaveLength(2);
     // Still said: only the control follows the menu's action.
     expect(screen.getByRole("option", { name: /Here,\s*Open in another window/ })).toBeTruthy();
     expect(screen.getByRole("option", { name: /Kept,\s*Open in another window/ })).toBeTruthy();
