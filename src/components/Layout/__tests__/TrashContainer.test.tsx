@@ -245,7 +245,7 @@ describe("TrashContainer", () => {
     const { getByTestId } = render(<TrashContainer trashedTerminals={[]} />);
     const ghost = getByTestId("trash-container-ghost");
     expect(ghost).not.toBeNull();
-    expect(ghost.textContent).toContain("Trash (drop to delete)");
+    expect(ghost.textContent).toContain("Trash (drop to close)");
     expect(ghost.getAttribute("aria-hidden")).toBe("true");
     expect(ghost.getAttribute("tabindex")).toBe("-1");
   });
@@ -255,7 +255,7 @@ describe("TrashContainer", () => {
     const { getByTestId } = render(<TrashContainer trashedTerminals={[]} compact />);
     const ghost = getByTestId("trash-container-ghost");
     expect(ghost).not.toBeNull();
-    expect(ghost.textContent).not.toContain("Trash (drop to delete)");
+    expect(ghost.textContent).not.toContain("Trash (drop to close)");
   });
 
   // Every token of the shared frame, and no cursor of its own: a drop here

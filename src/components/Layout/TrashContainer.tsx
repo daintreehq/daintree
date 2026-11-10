@@ -487,7 +487,7 @@ export function TrashContainer({
           )}
         >
           <Trash2 className="w-3.5 h-3.5 text-text-secondary" aria-hidden="true" />
-          {!compact && <span className="font-medium">Trash (drop to delete)</span>}
+          {!compact && <span className="font-medium">Trash (drop to close)</span>}
         </Button>
       </div>
     );
