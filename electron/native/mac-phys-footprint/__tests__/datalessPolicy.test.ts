@@ -6,8 +6,6 @@ import { describe, expect, it } from "vitest";
 // Drives the compiled addon against the real kernel (#16361). The binary only
 // exists on macOS after a native build, so elsewhere this skips.
 const BINARY = path.resolve(__dirname, "../build/Release/mac_phys_footprint.node");
-// IOPOL_MATERIALIZE_DATALESS_FILES_OFF in <sys/resource.h>.
-const MATERIALIZE_OFF = 1;
 // A custom pool size would change how many workers there are to reach.
 const canRun =
   process.platform === "darwin" &&
@@ -18,7 +16,13 @@ interface Addon {
   disableThreadPoolDatalessMaterialization(
     threads: number,
     timeoutMs: number
-  ): Promise<{ requested: number; applied: number; errors: number[]; processPolicy: number }>;
+  ): Promise<{
+    requested: number;
+    applied: number;
+    errors: number[];
+    processPolicyBefore: number;
+    processPolicy: number;
+  }>;
 }
 
 describe.skipIf(!canRun)("disableThreadPoolDatalessMaterialization", () => {
@@ -27,10 +31,12 @@ describe.skipIf(!canRun)("disableThreadPoolDatalessMaterialization", () => {
   it("reaches every libuv worker, one rendezvous each, and leaves the process alone", async () => {
     const result = await addon.disableThreadPoolDatalessMaterialization(4, 1_000);
     expect(result).toMatchObject({ requested: 4, applied: 4, errors: [] });
-    // The process-wide policy is what shells and agents would inherit.
-    expect(Number.isInteger(result.processPolicy)).toBe(true);
-    expect(result.processPolicy).not.toBe(MATERIALIZE_OFF);
-    expect(result.processPolicy).not.toBe(-1);
+    // The process-wide policy is what shells and agents would inherit. Its
+    // value is whatever this process inherited (macos-15 runners hand down
+    // OFF), so the call is judged by whether it changed it.
+    expect(Number.isInteger(result.processPolicyBefore)).toBe(true);
+    expect(result.processPolicyBefore).not.toBe(-1);
+    expect(result.processPolicy).toBe(result.processPolicyBefore);
   });
 
   it("stops at the barrier timeout when asked for more threads than the pool has", async () => {
