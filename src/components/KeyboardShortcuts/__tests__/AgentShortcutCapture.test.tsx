@@ -14,7 +14,9 @@ vi.mock("@/services/KeybindingService", () => ({
     beginShortcutCapture: vi.fn(() => () => {}),
     formatComboForDisplay: vi.fn((combo: string) => combo),
     getOverride: vi.fn(() => undefined),
-    getDefaultCombo: vi.fn(() => undefined),
+    getTriggerCombos: vi.fn(() => []),
+    getAllBindingsWithEffectiveCombos: vi.fn(() => []),
+    hasOverride: vi.fn(() => false),
   },
   normalizeKeyForBinding: vi.fn((e: KeyboardEvent) => e.key),
 }));
