@@ -19,9 +19,12 @@ import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
 import { actionService } from "@/services/ActionService";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
+import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { logError } from "@/utils/logger";
 import { pluralize } from "@/lib/pluralize";
 import { isClientAppError } from "@/utils/clientAppError";
+import { CrashReportContents } from "./telemetryDisclosure";
+import type { SettingsTabClose } from "./settingsTabClose";
 
 type TelemetryLevel = "off" | "errors" | "full";
 type LogRetention = 7 | 30 | 90 | 0;
@@ -69,38 +72,24 @@ const TELEMETRY_DISCLOSURE: Array<{
   level: TelemetryLevel;
   title: string;
   summary: string;
-  fields: string[];
   events?: readonly string[];
 }> = [
   {
     level: "off",
     title: "Off",
     summary: "No data is collected or transmitted.",
-    fields: [],
   },
   {
     level: "errors",
     title: "Errors only",
     summary:
       "Crash reports and error details are sent to Sentry. Home-directory paths are redacted from stack frames and error messages before transmission. Usage analytics aren't sent, and any analytics events recorded before you chose a level are discarded.",
-    fields: [
-      "Exception type and message (home directory redacted)",
-      "Stack frames with sanitized file paths, line and column numbers",
-      "App version, Node.js version, and build environment (production or development)",
-      "Operating system name, version, and architecture",
-      "Default runtime metadata provided by the Sentry Electron SDK (CPU, memory, GPU, locale, timezone, and similar vendor-supplied fields)",
-      "Approximate location (city and country), which Sentry looks up from your connection's IP address when a report arrives; the IP address itself isn't stored with the report",
-      "Breadcrumbs of recent activity in the main and renderer processes preceding the crash: app, window, screen, power and update lifecycle events, console logs, network requests, child-process and utility-process exits and errors, app actions, page navigation, clicks and key presses on page elements, and earlier error reports",
-      "Network request and navigation URLs reduced to their origin, with paths, query strings and fragments removed",
-      "Email addresses, home-directory usernames and repository names in SSH remotes redacted from messages, breadcrumbs, and error details",
-    ],
   },
   {
     level: "full",
     title: "Full usage",
     summary:
       "Crash reports and error details, plus anonymous usage analytics events, including those listed below. Each event carries its name, a timestamp, and event-specific properties — never file contents, prompts, or credentials. Analytics events go to Sentry too, which records the same approximate location for them as for crash reports. Analytics events recorded before you chose a level may be sent when you choose Full usage.",
-    fields: [],
     events: ANALYTICS_EVENTS,
   },
 ];
@@ -130,9 +119,10 @@ const RETENTION_OPTIONS: SettingsPresetOption<LogRetention>[] = [
 interface PrivacyDataTabProps {
   activeSubtab: string | null;
   onSubtabChange: (id: string) => void;
+  onClose?: SettingsTabClose;
 }
 
-export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabProps) {
+export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: PrivacyDataTabProps) {
   // Telemetry, logs and local data are this machine's; agent session history is kept
   // where the agents run. A remote window names the owner of each section.
   const currentSubtab = activeSubtab ?? "telemetry";
@@ -344,8 +334,22 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     window.electron.privacy.resetAllData();
   };
 
-  const handleOpenTelemetryPreview = () => {
-    void actionService.dispatch("telemetry.togglePreview", { active: true }, { source: "user" });
+  // The preview lives in the Diagnostics dock, under this dialog's scrim, so
+  // Settings closes first and the dock opens once it has gone. Closing takes
+  // away where the user was, so the dock gets the keyboard too, with a ring
+  // only when the press came from it (a keyboard click carries no detail).
+  const handleOpenTelemetryPreview = (event: React.MouseEvent) => {
+    const focusVisible = event.detail === 0;
+    const openPreview = async () => {
+      const opened = await actionService.dispatch(
+        "telemetry.togglePreview",
+        { active: true },
+        { source: "user" }
+      );
+      if (opened.ok) useDiagnosticsStore.getState().requestTabFocus(focusVisible);
+    };
+    if (onClose) void onClose((closed) => closed && void openPreview());
+    else void openPreview();
   };
 
   const hiddenActionCount = useActionPrefsStore((state) => state.hiddenActionIds.length);
@@ -442,7 +446,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                 )}
                 <SettingsRow
                   label="Preview outbound telemetry"
-                  description="Inspect every sanitized payload Daintree would send — live, for this session only, with no transmission to any server."
+                  description="See each sanitized payload in the Diagnostics dock as it's recorded, for this session only. Previewing doesn't change what your telemetry level sends."
                   control={
                     <Button variant="outline" size="sm" onClick={handleOpenTelemetryPreview}>
                       Open preview
@@ -464,13 +468,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                       <dt className="text-sm font-medium text-text-primary">{entry.title}</dt>
                       <dd className="mt-1 space-y-2 text-xs text-text-secondary select-text">
                         <p>{entry.summary}</p>
-                        {entry.fields.length > 0 && (
-                          <ul className="list-disc pl-4 space-y-0.5">
-                            {entry.fields.map((field) => (
-                              <li key={field}>{field}</li>
-                            ))}
-                          </ul>
-                        )}
+                        {entry.level === "errors" && <CrashReportContents className="pt-1" />}
                         {entry.events && entry.events.length > 0 && (
                           <>
                             <Button

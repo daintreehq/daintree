@@ -807,6 +807,7 @@ export const SETTINGS_REGISTRY = [
     importer: LazyPrivacyDataTab.preload,
     LazyComponent: LazyPrivacyDataTab,
     needsSubtabs: true,
+    needsOnClose: true,
     searchNavDescription: "Telemetry level, log retention, data folder, cache, and factory reset",
     searchNavKeywords: ["privacy", "data", "telemetry", "reset", "cache", "logs"],
     sections: [
