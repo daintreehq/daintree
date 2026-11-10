@@ -716,6 +716,13 @@ async function themedStates(run: Run, theme: string): Promise<void> {
   });
 }
 
+/** Mark handled asks first while the answer can still be resumed or sent on (#16638). */
+async function confirmHandled(page: Page, alias: string): Promise<void> {
+  const confirm = page.getByRole("alertdialog").filter({ hasText: `Mark ${alias} handled?` });
+  await expect(confirm).toBeVisible({ timeout: 8000 });
+  await confirm.getByRole("button", { name: "Mark handled" }).click();
+}
+
 async function daintreeStates(run: Run): Promise<void> {
   const { page, panes } = run;
   const theme = "daintree";
@@ -832,6 +839,7 @@ async function daintreeStates(run: Run): Promise<void> {
     await page.keyboard.press("Shift+Tab");
     await page.keyboard.press("Tab");
     await page.keyboard.press("Enter");
+    await confirmHandled(page, "q-36");
     await expect(page.locator('[data-testid="decisions-attention-outcome"]')).toContainText(
       "marked handled",
       { timeout: 8000 }
@@ -850,6 +858,9 @@ async function daintreeStates(run: Run): Promise<void> {
     await openFromChip(page, panes);
     for (const alias of ["q-36", "q-38", "q-39", "q-40"]) {
       await page.getByRole("button", { name: `Mark ${alias} handled` }).click();
+      // q-39's delivery is uncertain and q-40's answer can't be opened: neither offers
+      // Try resume or Choose destination, so Mark handled is one click for them.
+      if (alias === "q-36" || alias === "q-38") await confirmHandled(page, alias);
       await expect(page.getByRole("button", { name: `Mark ${alias} handled` })).toHaveCount(0, {
         timeout: 8000,
       });
