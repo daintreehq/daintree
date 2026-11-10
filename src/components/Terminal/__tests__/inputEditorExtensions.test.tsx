@@ -616,9 +616,7 @@ describe("formatChipLabel", () => {
 
   it("labels this machine's pasted image by its epoch timestamp", () => {
     const at = new Date(2026, 9, 12, 14, 5, 0).getTime();
-    expect(formatChipLabel(`/tmp/daintree-clipboard/clipboard-${at}-abcd.png`)).toBe(
-      "Image 14:05"
-    );
+    expect(formatChipLabel(`/tmp/daintree-clipboard/clipboard-${at}-abcd.png`)).toBe("Image 14:05");
   });
 
   it("drops the time when the file name carries none", () => {
