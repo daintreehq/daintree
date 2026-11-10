@@ -20,7 +20,11 @@ import {
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
 import { assessInterruptCandidate } from "../../../shared/utils/terminalInterrupt.js";
 import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
-import { buildTerminalSendCommandReceipt } from "../../../shared/utils/terminalSendCommandResult.js";
+import type { QueuedSendReceipt } from "../../../shared/types/queuedSend.js";
+import {
+  buildTerminalSendCommandReceipt,
+  MAX_ECHOED_COMMAND_CHARS,
+} from "../../../shared/utils/terminalSendCommandResult.js";
 import { planChoice } from "../../../shared/utils/terminalChoice.js";
 import {
   CHOOSE_SCREEN_LINES,
@@ -53,6 +57,8 @@ import type {
 } from "../HelpSessionService.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { AssistantLaunchRequest, AssistantLaunchResult } from "./assistantLaunch.js";
+import type { WhenBusy } from "./GlobalWorkerSteer.js";
+import { HoldRefusedError, type WorkerSteerQueue } from "./WorkerSteerQueue.js";
 
 /**
  * An assistant addressing another (#13496), as main established it from the
@@ -102,6 +108,27 @@ export interface AssistantTerminalRecord {
   hasPty?: boolean;
   isTrashed?: boolean;
   lastHandback?: TerminalHandback;
+  hasPendingSubmission?: boolean;
+  /** The run identity a held send is checked against before it is typed (#16620). */
+  agentIncarnation?: number;
+  agentSessionId?: string;
+  worktreeId?: string;
+  lastOwnedPromptInput?: { owner: string; at: number };
+  lastForeignPromptInputAt?: number;
+}
+
+/**
+ * What a send asks of an assistant mid-turn (#16620): held on the queue a
+ * worker's send waits on, typed at its next prompt.
+ */
+export interface AssistantWhenBusy extends WhenBusy {
+  /**
+   * Asked right before the held line is written, long after the call: the
+   * drive rule the call answered to, without its MCP session, which closes
+   * when idle while the assistant that queued it carries on. Null while it
+   * may go ahead.
+   */
+  authorize(): { code: string; message: string } | null;
 }
 
 export interface AssistantTerminalControlDeps {
@@ -116,14 +143,17 @@ export interface AssistantTerminalControlDeps {
   /** Under the strict settled-prompt guard, so the lane admits it only while the gate still holds. */
   /**
    * `promptAsWritten` is the brief before its provenance stamp and handback
-   * instruction, for the run's first-prompt record (#15521).
+   * instruction, for the run's first-prompt record (#15521). `promptOwner`
+   * files the line as the sender's prompt input (#16620), so a send another
+   * caller holds for the same assistant drops on it, and the sender's own doesn't.
    */
   submit(
     terminalId: string,
     text: string,
     submissionToken: string,
     handbackCode: string | undefined,
-    promptAsWritten: string
+    promptAsWritten: string,
+    promptOwner: string
   ): void;
   /** `inputOwner` files the keys under the caller in the pty host (#16094). */
   doubleEscape(terminalId: string, inputOwner: string): void;
@@ -134,6 +164,8 @@ export interface AssistantTerminalControlDeps {
   projectName(projectId: string): string | null;
   /** Ends the session, which kills its PTY. */
   revoke(sessionId: string): Promise<void>;
+  /** Where a send for a mid-turn assistant is held (#16620); absent or null, none is. */
+  queue?: () => Pick<WorkerSteerQueue, "hold"> | null;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /** The reply a screen shows, ending at the handback marker observed when there is one. */
@@ -293,6 +325,9 @@ function busyMessage(verdict: Exclude<WakeGateVerdict, { kind: "ready" }>): stri
  * running lanes, so a terminal id from anywhere else is no assistant here.
  */
 export class AssistantTerminalControl {
+  /** Assistants keys are going into, by terminal: a held send waits until they're in. */
+  private readonly writing = new Map<string, number>();
+
   constructor(private readonly deps: AssistantTerminalControlDeps) {}
 
   /** Whether `terminalId` is any running assistant on this machine, whoever asks. */
@@ -472,17 +507,23 @@ export class AssistantTerminalControl {
   /**
    * Submit a prompt to an assistant (#13496): to the run `generation` names
    * and no other, stamped with where it came from, and only while it waits at
-   * its prompt with nothing typed there since it settled. Refused rather than
-   * queued otherwise, so a person's draft is never sent along with it or
-   * interleaved with it, whichever machine asks. The strict settled-prompt
-   * guard closes the gap between that read and the write, mid-turn included,
-   * so a second brief sent alongside the first never lands in its turn.
+   * its prompt with nothing typed there since it settled, so a person's draft
+   * is never sent along with it or interleaved with it, whichever machine
+   * asks. The strict settled-prompt guard closes the gap between that read
+   * and the write, mid-turn included, so a second brief sent alongside the
+   * first never lands in its turn. Mid-turn with `whenBusy` it is held for
+   * the next prompt instead (#16620); refused otherwise.
    */
   async submit(
     caller: AssistantCaller,
     target: AssistantTarget,
-    request: { command: string; generation: number | undefined; handback: boolean }
-  ): Promise<ReturnType<typeof buildTerminalSendCommandReceipt>> {
+    request: {
+      command: string;
+      generation: number | undefined;
+      handback: boolean;
+      whenBusy?: AssistantWhenBusy;
+    }
+  ): Promise<ReturnType<typeof buildTerminalSendCommandReceipt> | QueuedSendReceipt> {
     this.requireGeneration(caller, target, request.generation);
     const record = await this.deps.getTerminal(target.terminalId);
     if (!record) {
@@ -492,6 +533,10 @@ export class AssistantTerminalControl {
       );
     }
     const verdict = evaluateWakeGate(record, ASSISTANT_SEND_GATE);
+    // Only a turn still running is waited out; every other refusal stands.
+    if (verdict.kind === "hold" && verdict.reason === "working" && request.whenBusy) {
+      return this.hold(caller, target, record, request, request.whenBusy);
+    }
     if (verdict.kind !== "ready") {
       // Keys can leave text in the input that the send's Enter would take along (#16094).
       const ownKeys =
@@ -506,6 +551,25 @@ export class AssistantTerminalControl {
     }
     // The read was async: the run must still be the one the caller named.
     this.requireGeneration(caller, target, request.generation);
+    const { text, handbackCode } = this.prepareLine(caller, target, request);
+    const submissionToken = randomUUID();
+    this.deps.submit(
+      target.terminalId,
+      text,
+      submissionToken,
+      handbackCode,
+      request.command,
+      inputOwnerOf(caller)
+    );
+    return buildTerminalSendCommandReceipt(target.terminalId, request.command, submissionToken);
+  }
+
+  /** The line a send types: stamped with where it came from, with any handback instruction. */
+  private prepareLine(
+    caller: AssistantCaller,
+    target: AssistantTarget,
+    request: { command: string; handback: boolean }
+  ): { text: string; handbackCode: string | undefined } {
     // A message up to the global is raised with it, never a brief for it to carry out.
     const stamped =
       target.scope === "global"
@@ -515,20 +579,107 @@ export class AssistantTerminalControl {
             caller.machineName
           )
         : stampAssistantPrompt(request.command, caller.machineName);
-    const submissionToken = randomUUID();
-    if (request.handback) {
-      const handbackCode = mintHandbackCode();
-      this.deps.submit(
-        target.terminalId,
-        appendHandbackInstruction(stamped, handbackCode, "run"),
-        submissionToken,
-        handbackCode,
-        request.command
+    if (!request.handback) return { text: stamped, handbackCode: undefined };
+    const handbackCode = mintHandbackCode();
+    return { text: appendHandbackInstruction(stamped, handbackCode, "run"), handbackCode };
+  }
+
+  /**
+   * Hold a send for an assistant mid-turn (#16620) on the queue a worker's
+   * held send waits on, which asks again right before typing it whether the
+   * run is the same, nobody else has put input there since, and it waits at
+   * its own prompt rather than a question. Nothing is written here.
+   */
+  private hold(
+    caller: AssistantCaller,
+    target: AssistantTarget,
+    record: AssistantTerminalRecord,
+    request: { command: string; generation: number | undefined; handback: boolean },
+    whenBusy: AssistantWhenBusy
+  ): QueuedSendReceipt {
+    const { terminalId } = target;
+    const busy = (why: string): never => {
+      throw new AssistantTargetError(
+        ASSISTANT_TARGET_REFUSALS.busy,
+        `${why} (state: ${record.agentState ?? "unknown"})`
       );
-    } else {
-      this.deps.submit(target.terminalId, stamped, submissionToken, undefined, request.command);
+    };
+    const queue = this.deps.queue?.() ?? null;
+    if (queue === null) {
+      busy(
+        "The assistant is mid-turn, and this host can't hold a message for it right now. Nothing was sent; send once it is waiting at its prompt."
+      );
     }
-    return buildTerminalSendCommandReceipt(target.terminalId, request.command, submissionToken);
+    const owner = inputOwnerOf(caller);
+    // What would stop an immediate send at its next prompt stops this one now:
+    // a draft typed mid-turn is still in the composer when the turn ends.
+    if (record.hasPendingSubmission === true) {
+      busy("A submission is still being written to the assistant. Nothing was sent.");
+    }
+    if (record.lastStateChange === undefined) {
+      busy(
+        "The assistant hasn't been seen settling, so a draft in its prompt can't be ruled out. Nothing was sent."
+      );
+    }
+    const typed = typedSinceSettle(record, owner);
+    if (typed === "someone") busy(busyMessage({ kind: "hold", reason: "typing" }));
+    if (typed === "own-keys") busy(OWN_KEYS_HELD_MESSAGE);
+    // The read was async: the run must still be the one the caller named.
+    this.requireGeneration(caller, target, request.generation);
+    const { text, handbackCode } = this.prepareLine(caller, target, request);
+    let held: ReturnType<WorkerSteerQueue["hold"]>;
+    try {
+      held = queue!.hold({
+        principal: owner,
+        projectId: target.projectId,
+        terminalId,
+        generation: request.generation!,
+        run: {
+          ...(record.agentIncarnation !== undefined
+            ? { agentIncarnation: record.agentIncarnation }
+            : {}),
+          ...(record.agentSessionId !== undefined ? { agentSessionId: record.agentSessionId } : {}),
+          ...(record.worktreeId !== undefined ? { worktreeId: record.worktreeId } : {}),
+          ...(record.lastOwnedPromptInput !== undefined
+            ? { lastOwnedPromptInput: record.lastOwnedPromptInput }
+            : {}),
+          ...(record.lastForeignPromptInputAt !== undefined
+            ? { lastForeignPromptInputAt: record.lastForeignPromptInputAt }
+            : {}),
+        },
+        text,
+        promptAsWritten: request.command,
+        ...(handbackCode !== undefined ? { handbackCode } : {}),
+        ttlSeconds: whenBusy.queue.ttlSeconds,
+        // Still the session the caller named, and still one it reaches.
+        authorize: () =>
+          this.resolve(caller, terminalId)?.sessionId === target.sessionId
+            ? whenBusy.authorize()
+            : {
+                code: ASSISTANT_TARGET_REFUSALS.notFound,
+                message: "The assistant it was held for is gone.",
+              },
+        isWriting: () => this.writing.has(terminalId),
+        ...(whenBusy.takeNotice !== undefined ? { takeNotice: whenBusy.takeNotice } : {}),
+        ...(whenBusy.onWritten !== undefined ? { onWritten: whenBusy.onWritten } : {}),
+      });
+    } catch (error) {
+      if (!(error instanceof HoldRefusedError)) throw error;
+      busy(`The assistant is mid-turn. ${error.message} Nothing was sent.`);
+    }
+    const superseded = held!.supersededToken
+      ? ` It replaces your earlier held message ${held!.supersededToken}, which won't be sent.`
+      : "";
+    return {
+      sent: false,
+      queued: true,
+      terminalId,
+      command: request.command.slice(0, MAX_ECHOED_COMMAND_CHARS),
+      queuedSendToken: held!.queuedSendToken,
+      expiresAt: held!.expiresAt,
+      ...(held!.supersededToken ? { supersededToken: held!.supersededToken } : {}),
+      message: `Held, not sent: it is typed the next time the assistant waits at its own prompt with nothing typed there, and dropped if anyone else sends it input or the run changes first.${superseded} Check it with terminal.getStatus and this queuedSendToken; withdraw it with terminal.cancelQueuedSend.`,
+    };
   }
 
   /**
@@ -612,8 +763,52 @@ export class AssistantTerminalControl {
       typedSinceSettle(record, inputOwner) === "own-keys"
         ? { inputSinceSettle: "own-keys" as const }
         : {};
+    // A send held for this assistant waits until the keys are in (#16620).
+    this.writing.set(target.terminalId, (this.writing.get(target.terminalId) ?? 0) + 1);
+    try {
+      return await this.pressKeys(caller, target, request, {
+        keys,
+        inputOwner,
+        foreignBefore,
+        admittedOver,
+        before,
+        pressed: [],
+      });
+    } finally {
+      const left = (this.writing.get(target.terminalId) ?? 1) - 1;
+      if (left > 0) this.writing.set(target.terminalId, left);
+      else this.writing.delete(target.terminalId);
+    }
+  }
+
+  private async pressKeys(
+    caller: AssistantCaller,
+    target: AssistantTarget,
+    request: { generation: number | undefined },
+    pass: {
+      keys: string[];
+      inputOwner: string;
+      foreignBefore: number | undefined;
+      admittedOver: { inputSinceSettle?: "own-keys" };
+      before: string | null;
+      pressed: string[];
+    }
+  ): Promise<{
+    terminalId: string;
+    keys: string[];
+    screen?: string;
+    screenChanged?: boolean;
+    inputSinceSettle?: "own-keys";
+  }> {
+    const { keys, inputOwner, foreignBefore, admittedOver, before, pressed } = pass;
+    const readScreen = async (lines: number) => {
+      const snapshot = await readTailSnapshot(
+        (options) => this.deps.serializedState(target.terminalId, options),
+        lines
+      );
+      return snapshot === null ? null : tailCapturedOutput(snapshot.data, lines, true).content;
+    };
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-    const pressed: string[] = [];
     const stopPartway = (code: string, why: string): never => {
       throw new AssistantTargetError(
         code,
