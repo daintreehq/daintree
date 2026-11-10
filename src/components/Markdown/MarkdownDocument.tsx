@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { MarkdownImageCacheBust, useMarkdownRenderPolicy } from "./markdownRenderPolicy";
@@ -71,6 +71,8 @@ export interface MarkdownDocumentProps {
    * content, such as a plugin view's Markdown block.
    */
   selectAllScope?: SelectAllScope;
+  /** Receives the document's root element, the text find in rendered mode searches. */
+  documentRef?: (element: HTMLDivElement | null) => void;
 }
 
 /**
@@ -90,6 +92,7 @@ export function MarkdownDocument({
   fontSize,
   onRendered,
   selectAllScope = "surface",
+  documentRef,
 }: MarkdownDocumentProps) {
   // Runs after the first commit, which is the point the host's height pin can
   // hand the box back to the document. Cold fence grammars land later and swap
@@ -105,6 +108,13 @@ export function MarkdownDocument({
   // command falls back to the whole app (#12135). Claim it for the document.
   const rootRef = useRef<HTMLDivElement>(null);
   useScopedSelectAll(rootRef, true, selectAllScope);
+  const setRoot = useCallback(
+    (element: HTMLDivElement | null) => {
+      rootRef.current = element;
+      documentRef?.(element);
+    },
+    [documentRef]
+  );
 
   const { components, urlTransform } = useMarkdownRenderPolicy({ filePath, rootPath });
 
@@ -133,7 +143,7 @@ export function MarkdownDocument({
       : { "--markdown-font-size": MARKDOWN_FONT_SIZE_TOKEN[fontSize] };
 
   return (
-    <div ref={rootRef} className={cn("markdown-document prose", className)} style={fontStyle}>
+    <div ref={setRoot} className={cn("markdown-document prose", className)} style={fontStyle}>
       <MarkdownImageCacheBust value={cacheBust}>{rendered}</MarkdownImageCacheBust>
     </div>
   );
