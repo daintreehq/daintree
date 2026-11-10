@@ -1194,6 +1194,147 @@ describe("useProjectSwitcherPalette", () => {
       });
       expect(result.current.results).toHaveLength(3);
     });
+
+    // The action palette's "Enter to search projects" hands its typed text
+    // over rather than making the user type it again (#16631).
+    it("opens on a handed-over query, ranked for it from the first render, on the top match", async () => {
+      // Browse leads with `legacy-api` (frecency); the query ranks `api-server`
+      // above it, so a browse preselect left standing would be visible here.
+      const handOffProjects = [
+        { ...searchProjects[0]!, id: "legacy", name: "legacy-api", path: "/work/legacy-api" },
+        { ...searchProjects[1]!, id: "server", name: "api-server", path: "/work/api-server" },
+        { ...searchProjects[2]!, id: "web", name: "web", path: "/work/web" },
+      ];
+      projectState.projects = handOffProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(handOffProjects.map((p) => p.id)));
+
+      const renders: ReturnType<typeof useProjectSwitcherPalette>[] = [];
+      const { result } = renderHook(() => {
+        const palette = useProjectSwitcherPalette();
+        renders.push(palette);
+        return palette;
+      });
+      act(() => {
+        result.current.open();
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(handOffProjects.length);
+      });
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe("legacy");
+
+      act(() => {
+        result.current.close();
+      });
+      renders.length = 0;
+      act(() => {
+        result.current.open("modal", { query: "work/api" });
+      });
+
+      expect(usePaletteStore.getState().activePaletteId).toBe("project-switcher");
+      expect(result.current.isOpen).toBe(true);
+      expect(result.current.query).toBe("work/api");
+      // Every render, not just the settled one: the first commit of the opening
+      // is what an immediate Enter acts on.
+      const seeded = renders.filter((palette) => palette.query === "work/api");
+      expect(seeded.length).toBeGreaterThan(0);
+      for (const palette of seeded) {
+        expect(palette.results.map((row) => row.id)).toEqual(["server", "legacy"]);
+        expect(palette.results[palette.selectedIndex]?.id).toBe("server");
+      }
+    });
+
+    it("treats a whitespace-only handed-over query as browse", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("modal", { query: "   " });
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(searchProjects.length);
+      });
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe("project-1");
+    });
+
+    it("never carries a handed-over query into a later opening", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("modal", { query: "repos/other" });
+      });
+      act(() => {
+        result.current.close();
+      });
+      act(() => {
+        result.current.open();
+      });
+
+      expect(result.current.query).toBe("");
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(searchProjects.length);
+      });
+    });
+
+    it("drops a handed-over query when another palette takes the slot", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("modal", { query: "repos/other" });
+      });
+      expect(result.current.query).toBe("repos/other");
+      // The action palette replaces the store slot directly, so `close()` never
+      // runs; its `/` route then reopens through the store, skipping `open()`.
+      act(() => {
+        usePaletteStore.getState().openPalette("action");
+      });
+      act(() => {
+        usePaletteStore.getState().openPalette("project-switcher");
+      });
+
+      expect(result.current.isOpen).toBe(true);
+      expect(result.current.query).toBe("");
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(searchProjects.length);
+      });
+    });
+
+    it("shows the modal for a hand-off even after the toolbar dropdown was the last surface", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("dropdown");
+      });
+      expect(result.current.mode).toBe("dropdown");
+      expect(result.current.isOpen).toBe(true);
+      act(() => {
+        result.current.close();
+      });
+      expect(result.current.isOpen).toBe(false);
+      act(() => {
+        result.current.open("modal", { query: "repos/other" });
+      });
+
+      expect(result.current.mode).toBe("modal");
+      expect(result.current.isOpen).toBe(true);
+      expect(result.current.query).toBe("repos/other");
+    });
   });
 
   describe("search activity freeze — issue #11861", () => {
