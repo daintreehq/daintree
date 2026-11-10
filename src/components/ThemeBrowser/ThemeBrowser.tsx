@@ -328,15 +328,23 @@ export function ThemeBrowser() {
     (id: string, debounceAnnounce?: boolean) => {
       const state = useAppThemeStore.getState();
       if (state.previewSchemeId === id) return;
-      // Already on screen, which in a project with its own theme is not the
-      // global selection: nothing to repaint. The row still has to take the
-      // highlight when it is not the one highlighted, or the arrows, which step
-      // from the highlight, could never move past it.
-      const onScreen = state.previewSchemeId === null && resolveCommittedScheme(state).id === id;
-      if (onScreen && id === state.selectedSchemeId) return;
+      // Nothing to preview when the highlighted global selection is already on
+      // screen. In a project with its own theme the screen shows the project's
+      // theme, so the global selection still previews, and so does the project's
+      // own row: the arrows step from the highlight, so that row has to take it
+      // or they could never move past it. Repainting it is cheap, and writing
+      // claims the latest theme intent, which keeps an older deferred paint from
+      // landing on top of the row the user picked.
+      if (
+        state.previewSchemeId === null &&
+        id === state.selectedSchemeId &&
+        resolveCommittedScheme(state).id === id
+      ) {
+        return;
+      }
       const scheme = resolveAppTheme(id, selectSelectableSchemes(state));
       setPreviewSchemeId(id);
-      if (!onScreen) injectSchemeToDOM(scheme);
+      injectSchemeToDOM(scheme);
       if (debounceAnnounce) {
         if (announceTimerRef.current) clearTimeout(announceTimerRef.current);
         announceTimerRef.current = setTimeout(() => {
@@ -495,7 +503,10 @@ export function ThemeBrowser() {
         }
       } else if (e.key === "Enter") {
         e.preventDefault();
-        handleCommit();
+        // With nothing highlighted the list offers no theme to save: the saved
+        // one may be filtered out of it, and Enter must never apply a theme the
+        // list does not show (#15057). "Set theme" stays available for it.
+        if (activeIndex >= 0) handleCommit();
       }
     },
     [filteredThemes, revealRow, handleCommit, handlePreview, activeIndex, activeSchemeId]

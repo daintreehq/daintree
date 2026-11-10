@@ -833,8 +833,16 @@ describe("ThemeBrowser navigation contract", () => {
 
     it.each([
       [
-        "Escape",
+        "Escape in the field",
         () => fireEvent.keyDown(screen.getByLabelText("Filter themes"), { key: "Escape" }),
+      ],
+      [
+        "Escape outside the field",
+        () => {
+          act(() => {
+            window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+          });
+        },
       ],
       [
         "the clear button",
@@ -875,7 +883,9 @@ describe("ThemeBrowser navigation contract", () => {
       expect(previewId()).toBe(dark[1]!.id);
     });
 
-    it("leaves the preview and the saved theme alone until a key or a click asks", () => {
+    it("applies nothing on Enter while no row is highlighted", async () => {
+      const { appThemeClient } = await import("@/clients/appThemeClient");
+      vi.mocked(appThemeClient.setColorScheme).mockClear();
       render(<Harness />);
       typeFilter("o");
       expect(previewId()).toBeNull();
@@ -884,6 +894,8 @@ describe("ThemeBrowser navigation contract", () => {
 
       expect(useAppThemeStore.getState().selectedSchemeId).toBe(DEFAULT_APP_SCHEME_ID);
       expect(previewId()).toBeNull();
+      expect(vi.mocked(appThemeClient.setColorScheme)).not.toHaveBeenCalled();
+      expect(useThemeBrowserStore.getState().isOpen).toBe(true);
     });
 
     // jsdom measures nothing, so the page size falls back to 10 and every page
@@ -894,7 +906,7 @@ describe("ThemeBrowser navigation contract", () => {
       Object.defineProperty(list, "clientHeight", { configurable: true, value: 80 });
       const rect = vi
         .spyOn(Element.prototype, "getBoundingClientRect")
-        .mockReturnValue({ height: 40 } as DOMRect);
+        .mockReturnValue(new DOMRect(0, 0, 0, 40));
       try {
         run();
       } finally {
@@ -936,9 +948,9 @@ describe("ThemeBrowser navigation contract", () => {
         useAppThemeStore.setState({ projectSchemeId: null, projectSnapshotScheme: null });
       });
 
-      // The project's theme is already on screen, so there is nothing to repaint
-      // when the cursor lands on its row; the row must still take the highlight,
-      // or the arrows, which step from it, would stall one row short.
+      // The project's theme is already on screen, but its row must still take the
+      // highlight when the cursor lands on it, or the arrows, which step from the
+      // highlight, would stall one row short.
       it("lets the arrows step past the row of the theme already on screen", () => {
         const dark = schemesOf("dark");
         useAppThemeStore.setState({ projectSchemeId: dark[1]!.id });
@@ -958,8 +970,10 @@ describe("ThemeBrowser navigation contract", () => {
         render(<Harness />);
 
         clickRow(dark[1]!.name);
-        press("ArrowDown");
+        expect(previewId()).toBe(dark[1]!.id);
+        expect(findRowByName(dark[1]!.name).getAttribute("aria-selected")).toBe("true");
 
+        press("ArrowDown");
         expect(previewId()).toBe(dark[2]!.id);
       });
     });
