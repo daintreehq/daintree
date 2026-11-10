@@ -4,6 +4,7 @@ import {
   MAX_BACKGROUND_PROJECTS_PER_WINDOW,
   MAX_RESTORED_WINDOWS,
   OPEN_WINDOWS_MANIFEST_VERSION,
+  dropPickerWindows,
   filterRestorableWindows,
   isReadableOpenWindowsManifest,
   isRemoteWorkspaceKey,
@@ -198,6 +199,30 @@ describe("filterRestorableWindows", () => {
 
   it("keeps both windows when a duplicated project still exists", () => {
     expect(filterRestorableWindows([record("a"), record("a")], new Set(["a"]))).toHaveLength(2);
+  });
+});
+
+// A picker holds nothing to restore (#16740).
+describe("dropPickerWindows", () => {
+  it("returns the windows with a workspace untouched when no picker carries anything", () => {
+    const kept = { projectId: "a", backgroundProjectIds: ["x"] };
+    const result = dropPickerWindows([record(null), kept, record(null), record("b")]);
+    expect(result).toEqual([kept, record("b")]);
+    expect(result[0]).toBe(kept);
+  });
+
+  it("keeps the staying window's own background projects ahead of a picker's under the cap", () => {
+    const own = Array.from({ length: MAX_BACKGROUND_PROJECTS_PER_WINDOW - 1 }, (_, i) => `own${i}`);
+    const [first] = dropPickerWindows([
+      { projectId: null, backgroundProjectIds: ["a", "late1", "late2"] },
+      { projectId: "a", backgroundProjectIds: own },
+    ]);
+    // The picker's copy of the window's own project is no background project.
+    expect(first).toEqual({ projectId: "a", backgroundProjectIds: [...own, "late1"] });
+  });
+
+  it("leaves nothing when every window was an empty picker", () => {
+    expect(dropPickerWindows([record(null), record(null)])).toEqual([]);
   });
 });
 
