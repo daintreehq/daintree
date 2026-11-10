@@ -2865,7 +2865,13 @@ describe("WorktreeMonitor", () => {
     });
 
     function startedMonitor(queue?: PQueueType) {
-      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main", queue);
+      const monitor = new WorktreeMonitor(
+        TEST_WORKTREE,
+        TEST_CONFIG,
+        makeCallbacks(),
+        "main",
+        queue
+      );
       monitor.startWithoutGitStatus();
       return monitor;
     }

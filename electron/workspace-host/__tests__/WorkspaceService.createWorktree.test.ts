@@ -1894,7 +1894,9 @@ describe("WorkspaceService.createWorktree", () => {
 
     it("swallows a held index.lock: one result, and nothing surfaces the failure", async () => {
       mockRefreshWorktreeIndex.mockRejectedValue(
-        new Error("fatal: Unable to create 'C:/test/root/.git/worktrees/x/index.lock': File exists.")
+        new Error(
+          "fatal: Unable to create 'C:/test/root/.git/worktrees/x/index.lock': File exists."
+        )
       );
 
       const worktreePath = await create("index-refresh-locked");
