@@ -19,7 +19,7 @@ export const NOTHING_SENT_REASON = "Nothing sent to this panel yet";
 /** What decides whether a pane's last message can go again, as it stands. */
 export interface ResendReadiness {
   hasSend: boolean;
-  /** A terminal panel, not restarting. */
+  /** See {@link isResendLiveTerminal}. */
   isLive: boolean;
   /** The panel's lock, or its instance's. */
   isInputLocked: boolean;
@@ -41,8 +41,11 @@ export function resendUnavailableReason(readiness: ResendReadiness): string | un
   return undefined;
 }
 
-function isLiveTerminal(panel: PanelInstance | undefined): boolean {
-  return panel !== undefined && isPtyPanel(panel) && panel.isRestarting !== true;
+/** A terminal panel whose process is running and not restarting, as far as this view knows. */
+export function isResendLiveTerminal(panel: PanelInstance | undefined): boolean {
+  if (panel === undefined || !isPtyPanel(panel)) return false;
+  if (panel.hasPty === false || panel.isRestarting === true) return false;
+  return panel.runtimeStatus !== "exited" && panel.runtimeStatus !== "error";
 }
 
 function isPaneInputLocked(id: string, panel: PanelInstance | undefined): boolean {
@@ -54,7 +57,7 @@ export function readResendReadiness(terminalId: string): ResendReadiness {
   const panel = usePanelStore.getState().panelsById[terminalId];
   return {
     hasSend: getLastComposerSend(terminalId) !== undefined,
-    isLive: isLiveTerminal(panel),
+    isLive: isResendLiveTerminal(panel),
     isInputLocked: isPaneInputLocked(terminalId, panel),
     inputBlock: getTerminalInputBlock(),
     isHolding: hasHeldComposerSend(terminalId),
@@ -73,7 +76,7 @@ export function resendLastComposerSend(terminalId: string): Promise<boolean> {
   return submitPaneComposerText(terminalId, last.text, last.imagePaths, {
     canTakeInput: () => {
       const panel = usePanelStore.getState().panelsById[terminalId];
-      return isLiveTerminal(panel) && !isPaneInputLocked(terminalId, panel);
+      return isResendLiveTerminal(panel) && !isPaneInputLocked(terminalId, panel);
     },
     onSending: () =>
       withTerminalService((service) => service.notifyUserInput(terminalId), terminalId),

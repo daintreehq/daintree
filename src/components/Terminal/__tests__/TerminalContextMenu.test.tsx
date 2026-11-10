@@ -269,6 +269,7 @@ import {
   noteLastComposerSend,
   useLastComposerSendStore,
 } from "@/store/lastComposerSendStore";
+import { useHeldComposerSendStore } from "@/store/heldComposerSendStore";
 import { AGENT_SNOOZE_LABEL } from "@shared/utils/agentSnoozeDurations";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
@@ -1668,12 +1669,37 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     }
   });
 
+  it.each([
+    ["nothing has been sent", false, "Nothing sent to this panel yet"],
+    ["a message is already held", true, "A message is already held"],
+  ])("offers Resend last message disabled when %s, saying why", (_name, holding, why) => {
+    if (holding) {
+      noteLastComposerSend("panel-1", "again", [], claimComposerSendSeq());
+      useHeldComposerSendStore.getState().noteHeld({
+        terminalId: "panel-1",
+        token: "token-1",
+        text: "waiting",
+        imagePaths: [],
+        heldAt: 1,
+        expiresAt: 2,
+        status: "held",
+      });
+    }
+    try {
+      renderMenu(agentPane);
+      const row = screen.getByText("Resend last message").closest("button")!;
+      expect(row.getAttribute("aria-disabled")).toBe("true");
+      expect(row.textContent).toContain(why);
+    } finally {
+      useLastComposerSendStore.setState({ sends: {} });
+      useHeldComposerSendStore.setState({ held: {}, dropped: {}, refused: {} });
+    }
+  });
+
   it("offers Resend last message on a plain shell only once a broadcast has reached it", () => {
     const shell = { id: "panel-1", title: "zsh", kind: "terminal", worktreeId: "wt-1" };
     renderMenu(shell);
-    expect(level(submenu(menuTree(), "Session"))).not.toContain(
-      "Resend last messageNothing sent to this panel yet"
-    );
+    expect(screen.queryByText("Resend last message")).toBeNull();
     cleanup();
 
     noteLastComposerSend("panel-1", "make test", [], claimComposerSendSeq());

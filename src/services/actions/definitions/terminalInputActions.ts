@@ -36,6 +36,8 @@ import {
   resendLastComposerSend,
   resendUnavailableReason,
 } from "@/components/Terminal/resendLastComposerSend";
+import { hasHeldComposerSend } from "@/store/heldComposerSendStore";
+import { notify } from "@/lib/notify";
 
 const NO_FOCUSED_PANEL = "No panel is focused";
 
@@ -561,6 +563,7 @@ export function registerTerminalInputActions(
     danger: "safe",
     denyPluginDispatch: true,
     nonRepeatable: true,
+    selfNotifiesOnExecutionError: true,
     scope: "renderer",
     keywords: ["retry", "again", "repeat", "prompt", "send"],
     argsSchema: z.object({ terminalId: z.string().min(1).optional() }).optional(),
@@ -579,7 +582,19 @@ export function registerTerminalInputActions(
       if (targetId === undefined) throw new UnactionableTargetError(NO_FOCUSED_PANEL);
       const reason = resendUnavailableReason(readResendReadiness(targetId));
       if (reason !== undefined) throw new UnactionableTargetError(reason);
-      await resendLastComposerSend(targetId);
+      const taken = await resendLastComposerSend(targetId).catch(() => false);
+      if (taken) return;
+      // A held message's row already says why another can't go; anything else
+      // turned down between the check and the send would pass unseen.
+      if (!hasHeldComposerSend(targetId)) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Couldn't resend message",
+          message: "The panel didn't take its last message, so nothing was sent or held.",
+        });
+      }
+      throw new Error("The last message wasn't sent");
     },
   }));
 

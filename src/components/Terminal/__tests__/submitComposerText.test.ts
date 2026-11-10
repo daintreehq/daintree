@@ -27,6 +27,7 @@ vi.mock("@/services/terminal/inputGate", () => ({
 
 import { submitComposerText, submitPaneComposerText } from "../submitComposerText";
 import { getLastComposerSend, useLastComposerSendStore } from "@/store/lastComposerSendStore";
+import { MAX_SUBMIT_IMAGE_PATHS } from "@shared/utils/imageAttachmentInput";
 
 beforeEach(() => {
   useLastComposerSendStore.setState({ sends: {} });
@@ -321,25 +322,40 @@ describe("submitPaneComposerText noting the pane's last message (#16746)", () =>
   });
 
   it("notes a held send as main holds it, so a dropped or withdrawn one can go again", async () => {
+    // What main keeps is what its delivery will write, so that is what is noted.
     holdClient.hold.mockResolvedValue({
       held: true,
       send: {
         terminalId: "t1",
         token: "token-1",
-        text: "ship it /a.png",
-        imagePaths: ["/a.png"],
+        text: "ship it, as main keeps it",
+        imagePaths: ["/kept.png"],
         heldAt: 1,
         expiresAt: 2,
         status: "held",
       },
     });
 
-    await submitPaneComposerText("t1", "ship it /a.png", ["/a.png"], pane({ mayHold: true }));
+    await submitPaneComposerText(
+      "t1",
+      "ship it /a.png /b.png",
+      ["/a.png", "/b.png"],
+      pane({ mayHold: true })
+    );
 
     expect(getLastComposerSend("t1")).toMatchObject({
-      text: "ship it /a.png",
-      imagePaths: ["/a.png"],
+      text: "ship it, as main keeps it",
+      imagePaths: ["/kept.png"],
     });
+  });
+
+  it("notes only as many images as one submit attaches, past the ones that can't be", async () => {
+    client.submitWithImages.mockResolvedValue(undefined);
+    const valid = Array.from({ length: MAX_SUBMIT_IMAGE_PATHS + 2 }, (_, i) => `/shot-${i}.png`);
+
+    await submitPaneComposerText("t1", "many", ["relative.png", ...valid], pane());
+
+    expect(getLastComposerSend("t1")?.imagePaths).toEqual(valid.slice(0, MAX_SUBMIT_IMAGE_PATHS));
   });
 
   it("keeps the message on record when a later send is refused", async () => {

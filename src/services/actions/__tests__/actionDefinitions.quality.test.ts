@@ -1672,11 +1672,12 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // plugin gate: with nothing sent it answers DISABLED. A focused terminal
     // with a message on record lets the plugin gate be what fires.
     const { usePanelStore } = await import("@/store/panelStore");
-    const { claimComposerSendSeq, noteLastComposerSend } =
+    const { claimComposerSendSeq, noteLastComposerSend, useLastComposerSendStore } =
       await import("@/store/lastComposerSendStore");
+    const panelsBefore = usePanelStore.getState().panelsById;
     usePanelStore.setState({
       panelsById: {
-        ...usePanelStore.getState().panelsById,
+        ...panelsBefore,
         "t-placeholder": { id: "t-placeholder", kind: "terminal" } as never,
       },
     });
@@ -1686,18 +1687,23 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     };
 
     const failures: string[] = [];
-    for (const id of PLUGIN_DENIED_INJECTION_ACTIONS) {
-      const result = await service.dispatch(id, STRICT_ARGS[id] ?? args, {
-        source: "plugin",
-        ...(CONTEXT[id] && { contextOverride: CONTEXT[id] }),
-      });
-      if (result.ok) {
-        failures.push(`${id} (plugin dispatch succeeded — side door open)`);
-        continue;
+    try {
+      for (const id of PLUGIN_DENIED_INJECTION_ACTIONS) {
+        const result = await service.dispatch(id, STRICT_ARGS[id] ?? args, {
+          source: "plugin",
+          ...(CONTEXT[id] && { contextOverride: CONTEXT[id] }),
+        });
+        if (result.ok) {
+          failures.push(`${id} (plugin dispatch succeeded — side door open)`);
+          continue;
+        }
+        if (result.error.code !== "RESTRICTED") {
+          failures.push(`${id} (got "${result.error.code}", expected RESTRICTED)`);
+        }
       }
-      if (result.error.code !== "RESTRICTED") {
-        failures.push(`${id} (got "${result.error.code}", expected RESTRICTED)`);
-      }
+    } finally {
+      usePanelStore.setState({ panelsById: panelsBefore });
+      useLastComposerSendStore.getState().clear("t-placeholder");
     }
     expect(failures).toEqual([]);
   });

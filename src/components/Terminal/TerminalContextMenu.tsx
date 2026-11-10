@@ -69,7 +69,7 @@ import {
 } from "@/components/Tour/tourRegistry";
 import { PanelContextMenuTriggerScope } from "./PanelContextMenuTrigger";
 import { panelHasComposer } from "./terminalComposer";
-import { resendUnavailableReason } from "./resendLastComposerSend";
+import { isResendLiveTerminal, resendUnavailableReason } from "./resendLastComposerSend";
 import { useLastComposerSendStore } from "@/store/lastComposerSendStore";
 import { useHeldComposerSendStore } from "@/store/heldComposerSendStore";
 import { useTerminalInputBlock } from "@/hooks/useHostConnection";
@@ -871,7 +871,7 @@ function TerminalContextMenuBody({
       ? {
           unavailableReason: resendUnavailableReason({
             hasSend: hasLastSend,
-            isLive: terminalPty !== undefined && terminalPty.isRestarting !== true,
+            isLive: isResendLiveTerminal(terminalPty),
             isInputLocked: inputLocked,
             inputBlock,
             isHolding: isHoldingSend,

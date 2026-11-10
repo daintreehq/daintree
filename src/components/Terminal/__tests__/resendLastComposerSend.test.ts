@@ -89,10 +89,24 @@ describe("resendLastComposerSend (#16746)", () => {
     useTerminalInputStore.getState().setDraftInput("t1", "half-typed next prompt");
     noteLastComposerSend("t1", "the last one", [], claimComposerSendSeq());
 
-    await resendLastComposerSend("t1");
+    try {
+      await resendLastComposerSend("t1");
 
-    expect(useTerminalInputStore.getState().getDraftInput("t1")).toBe("half-typed next prompt");
-    expect(client.submit).toHaveBeenCalledWith("t1", "the last one");
+      expect(useTerminalInputStore.getState().getDraftInput("t1")).toBe("half-typed next prompt");
+      expect(client.submit).toHaveBeenCalledWith("t1", "the last one");
+    } finally {
+      useTerminalInputStore.getState().clearDraftInput("t1");
+    }
+  });
+
+  it("goes at once to a working agent declared to queue input mid-turn", async () => {
+    pane({ agentState: "working", detectedAgentId: "claude" });
+    noteLastComposerSend("t1", "and then", [], claimComposerSendSeq());
+
+    await expect(resendLastComposerSend("t1")).resolves.toBe(true);
+
+    expect(holdClient.hold).not.toHaveBeenCalled();
+    expect(client.submit).toHaveBeenCalledWith("t1", "and then");
   });
 
   it("is held for a working agent that doesn't queue input, as a typed send is", async () => {
@@ -117,12 +131,16 @@ describe("resendLastComposerSend (#16746)", () => {
     expect(useHeldComposerSendStore.getState().refused.t1).toBe(true);
   });
 
-  it("is refused while the pane's input is locked or it is restarting", async () => {
+  it("is refused while the pane's input is locked or its terminal isn't running", async () => {
     noteLastComposerSend("t1", "again", [], claimComposerSendSeq());
 
     pane({ isInputLocked: true });
     await expect(resendLastComposerSend("t1")).resolves.toBe(false);
     pane({ isRestarting: true });
+    await expect(resendLastComposerSend("t1")).resolves.toBe(false);
+    pane({ runtimeStatus: "exited" });
+    await expect(resendLastComposerSend("t1")).resolves.toBe(false);
+    pane({ hasPty: false });
     await expect(resendLastComposerSend("t1")).resolves.toBe(false);
     pane();
     service.managed = { isInputLocked: true };
@@ -151,8 +169,14 @@ describe("resendUnavailableReason", () => {
     pane({ agentState: "working", detectedAgentId: "gemini" });
     expect(reason()).toBeUndefined();
 
-    pane({ isRestarting: true });
-    expect(reason()).toMatch(/isn't running/);
+    for (const notRunning of [
+      { isRestarting: true },
+      { runtimeStatus: "exited" },
+      { hasPty: false },
+    ]) {
+      pane(notRunning);
+      expect(reason()).toMatch(/isn't running/);
+    }
     pane({ isInputLocked: true });
     expect(reason()).toMatch(/locked/);
     pane();
