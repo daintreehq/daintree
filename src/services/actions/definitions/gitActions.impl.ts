@@ -7,11 +7,12 @@ import { requireWorktreeId, requireWorktreePath, type WorktreeLocationArgs } fro
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useGitWorktreeOperationConfirmStore } from "@/store/gitWorktreeOperationConfirmStore";
-import { useGitForcePushStore } from "@/store/gitForcePushStore";
+import { useGitForcePushStore, type ForcePushRecovery } from "@/store/gitForcePushStore";
 import { useFileMutationConfirmStore } from "@/store/fileMutationConfirmStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isClientGitError } from "@/utils/clientGitError";
 import { humanizeAppError, formatErrorMessage } from "@shared/utils/errorMessage";
+import { getGitRecoveryAction } from "@shared/utils/gitOperationErrors";
 import { notify } from "@/lib/notify";
 import type { RepoOperationState } from "@/components/Git/repoOperationCopy";
 import { actionService } from "@/services/ActionService";
@@ -245,6 +246,105 @@ function reportGitFailure(
   });
 }
 
+/**
+ * Surface a failed push, pull-rebase or force push (#16667).
+ *
+ * The same reason as {@link reportGitFailure}: dispatch catches the throw, so a
+ * keybinding, a palette pick and a menu row see the failure only if the action
+ * reports it. These recoveries are the remote's rather than Review Hub's, and
+ * they used to live in the worktree card alone, so the card's menu reported a
+ * rejected push and the default Cmd+K Cmd+P chord did not.
+ *
+ * A rejection that captured a lease offers the force push it makes possible.
+ * The lease comes from THIS attempt's rejection, never read back from the
+ * store, so an older capture can't turn an auth failure into a force push.
+ * Anything else offers the one route `getGitRecoveryAction` maps for its
+ * reason, or none.
+ *
+ * Quiet for agent dispatch, which gets the error as its result, and for a
+ * caller that renders the failure itself (Review Hub's push banner).
+ */
+function reportRemoteGitFailure(
+  error: unknown,
+  attempt: {
+    /** Names the operation when the failure carries no reason of its own. */
+    operation: string;
+    location: WorktreeLocationArgs | undefined;
+    /** `null` when the failure came before the worktree resolved. */
+    cwd: string | null;
+    lease?: ForcePushRecovery | null;
+  },
+  ctx: ActionContext
+): void {
+  if (ctx.dispatchSource === "agent" || ctx.callerReportsFailure) return;
+  const { operation, location, cwd, lease } = attempt;
+  const worktreeId = resolveWorktreeIdOrNull(location, ctx);
+  const context = { worktreeId: worktreeId ?? undefined, eventKind: "git" as const };
+  // A recovery runs as the surface the failure came from, so a menu-started
+  // push's force push is a menu dispatch rather than a user one.
+  const options = ctx.dispatchSource ? { source: ctx.dispatchSource } : undefined;
+
+  if (lease && cwd) {
+    notify({
+      type: "error",
+      context,
+      title: "Push failed",
+      message: `${lease.branchName} has commits on the remote you don't have locally. Force pushing discards them; pulling keeps them.`,
+      action: {
+        label: "Force push…",
+        onClick: () => void actionService.dispatch("git.forcePushWithLease", { cwd }, options),
+      },
+    });
+    return;
+  }
+
+  // Decodes the `[GitError|<reason>|…]` transport prefix in place, so neither
+  // the reason lookup nor the message below sees the wire format.
+  const gitReason = isClientGitError(error) ? error.gitReason : undefined;
+  const message = formatErrorMessage(error, "");
+  const humanized = humanizeAppError({
+    type: "git",
+    source: "gitActions",
+    message,
+    gitReason,
+    // Read only when the reason maps to nothing: then the thrown sentence (a
+    // precondition written for the person, or git's own) says more than the
+    // stock "a git operation didn't complete".
+    recoveryHint: message || undefined,
+  });
+  const classified = gitReason !== undefined && gitReason !== "unknown";
+  const title = classified ? humanized.title : `${operation} failed`;
+  const body = humanized.body;
+
+  const recovery = gitReason ? getGitRecoveryAction(gitReason) : undefined;
+  // The table's entries take different location spellings, and a wrong one
+  // fails silently: `worktree.openReviewHub` declares `z.object({ worktreeId })`,
+  // which STRIPS a stray `cwd` and falls back to the active worktree, opening
+  // the wrong one's Review Hub. The git actions want the path.
+  const recoveryArgs = recovery
+    ? (recovery.args ??
+      (recovery.actionId === "worktree.openReviewHub"
+        ? worktreeId && { worktreeId }
+        : cwd && { cwd }))
+    : undefined;
+  if (recovery && recoveryArgs) {
+    notify({
+      type: "error",
+      context,
+      title,
+      message: body,
+      action: {
+        label: recovery.label,
+        onClick: () => void actionService.dispatch(recovery.actionId, recoveryArgs, options),
+      },
+    });
+    return;
+  }
+
+  // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok. `RECOVERY_ACTIONS` in gitOperationErrors.ts is the map of which git failures have a route; the ones that reach here are those it deliberately leaves unrouted, or a failure with no worktree to send a recovery to, and an invented action would send the user somewhere unrelated to what failed.
+  notify({ type: "error", context, title, message: body });
+}
+
 export const gitActionRuns = {
   "git.getProjectPulse": async (args: unknown, ctx: ActionContext) => {
     const merged = (args ?? {}) as WorktreeLocationArgs & {
@@ -418,88 +518,109 @@ export const gitActionRuns = {
     const { setUpstream, ...location } = (args ?? {}) as WorktreeLocationArgs & {
       setUpstream?: boolean;
     };
-    const resolvedCwd = requireWorktreePath(location, ctx);
-    // Palette/keybinding/user sources reach run() ungated, so enforce the D2
-    // push preview here (#8242) — the dialog shows the target branch and the
-    // commits that would be pushed before the IPC fires. An agent dispatch
-    // that reaches run() has ALREADY cleared ActionService's host-attested
-    // confirm gate via the MCP bridge, which surfaces the same fresh
-    // branch/commit preview in its own modal. Re-requesting here would
-    // double-prompt, and this store resolves only from a renderer dialog no
-    // headless MCP client can click — so the push would hang forever (#11538).
-    //
-    // Either way the push carries what the confirm SHOWED, not merely that it
-    // was approved: the branch, its commit and the destination (#15646). Agents
-    // keep working in the worktree while a confirm is open, and without the
-    // review the push publishes whatever the branch holds by the time it runs.
-    let review: GitPushReview | undefined;
-    if (ctx.dispatchSource !== "agent") {
-      const result = await useGitPushConfirmStore.getState().requestConfirmation(resolvedCwd);
-      if (!result.confirmed) return;
-      review = result.review;
-    } else if (ctx.hostApprovedPush) {
-      // Absent for a standing automation grant, which previews nothing and so
-      // has nothing to pin. Present but naming another worktree is an approval
-      // for a different push, never one to spend here.
-      if (ctx.hostApprovedPush.cwd !== resolvedCwd) {
-        throw new Error(
-          "Push refused: the approval was for a different worktree than this push would run in. Nothing was pushed."
-        );
-      }
-      review = ctx.hostApprovedPush.review;
-    }
-    // A rejection is the ONLY moment a `--force-with-lease` SHA may be read
-    // (#7822), and `handlePush` is the only thing that reads it — inside its
-    // own catch, against the destination it actually pushed to. Stashing it
-    // here is what lets the card menu offer a force push later without
-    // re-deriving anything. The previous lease is dropped first: once a new
-    // push has run, an older capture describes a remote state nobody has
-    // observed since.
-    const forcePush = useGitForcePushStore.getState();
-    forcePush.clearRecovery(resolvedCwd);
+    // Everything is inside the report, worktree resolution included: the
+    // definition advertises `selfNotifiesOnExecutionError`, so a throw that
+    // escapes unreported is silent on every surface (#16667).
+    let resolvedCwd: string | null = null;
+    let lease: ForcePushRecovery | null = null;
     try {
-      const opId = mintRemoteOperationId();
-      // A push has no result to rebuild; a lost answer settles on the host's outcome.
-      return await runHostOperation(
-        opId,
-        () =>
-          review
-            ? window.electron.git.push(resolvedCwd, setUpstream, opId, review)
-            : opId
-              ? window.electron.git.push(resolvedCwd, setUpstream, opId)
-              : window.electron.git.push(resolvedCwd, setUpstream),
-        { fromResult: () => undefined }
-      );
-    } catch (error) {
-      if (isClientGitError(error) && error.gitReason === "push-rejected-outdated") {
-        // `recordRejection` stores nothing when either field is missing, so a
-        // rejection whose `git.revparse` failed leaves no row to click rather
-        // than a row that would force without a lease.
-        forcePush.recordRejection({
-          cwd: resolvedCwd,
-          branchName: error.branchName,
-          leaseSha: error.leaseSha,
-        });
+      const cwd = requireWorktreePath(location, ctx);
+      resolvedCwd = cwd;
+      // Palette/keybinding/user sources reach run() ungated, so enforce the D2
+      // push preview here (#8242) — the dialog shows the target branch and the
+      // commits that would be pushed before the IPC fires. An agent dispatch
+      // that reaches run() has ALREADY cleared ActionService's host-attested
+      // confirm gate via the MCP bridge, which surfaces the same fresh
+      // branch/commit preview in its own modal. Re-requesting here would
+      // double-prompt, and this store resolves only from a renderer dialog no
+      // headless MCP client can click — so the push would hang forever (#11538).
+      //
+      // Either way the push carries what the confirm SHOWED, not merely that it
+      // was approved: the branch, its commit and the destination (#15646). Agents
+      // keep working in the worktree while a confirm is open, and without the
+      // review the push publishes whatever the branch holds by the time it runs.
+      let review: GitPushReview | undefined;
+      if (ctx.dispatchSource !== "agent") {
+        const result = await useGitPushConfirmStore.getState().requestConfirmation(cwd);
+        if (!result.confirmed) return;
+        review = result.review;
+      } else if (ctx.hostApprovedPush) {
+        // Absent for a standing automation grant, which previews nothing and so
+        // has nothing to pin. Present but naming another worktree is an approval
+        // for a different push, never one to spend here.
+        if (ctx.hostApprovedPush.cwd !== cwd) {
+          throw new Error(
+            "Push refused: the approval was for a different worktree than this push would run in. Nothing was pushed."
+          );
+        }
+        review = ctx.hostApprovedPush.review;
       }
+      // A rejection is the ONLY moment a `--force-with-lease` SHA may be read
+      // (#7822), and `handlePush` is the only thing that reads it — inside its
+      // own catch, against the destination it actually pushed to. Stashing it
+      // here is what lets the card menu offer a force push later without
+      // re-deriving anything. The previous lease is dropped first: once a new
+      // push has run, an older capture describes a remote state nobody has
+      // observed since.
+      const forcePush = useGitForcePushStore.getState();
+      forcePush.clearRecovery(cwd);
+      try {
+        const opId = mintRemoteOperationId();
+        // A push has no result to rebuild; a lost answer settles on the host's outcome.
+        return await runHostOperation(
+          opId,
+          () =>
+            review
+              ? window.electron.git.push(cwd, setUpstream, opId, review)
+              : opId
+                ? window.electron.git.push(cwd, setUpstream, opId)
+                : window.electron.git.push(cwd, setUpstream),
+          { fromResult: () => undefined }
+        );
+      } catch (error) {
+        if (isClientGitError(error) && error.gitReason === "push-rejected-outdated") {
+          // `recordRejection` stores nothing when either field is missing, so a
+          // rejection whose `git.revparse` failed leaves no row to click rather
+          // than a row that would force without a lease.
+          lease = forcePush.recordRejection({
+            cwd,
+            branchName: error.branchName,
+            leaseSha: error.leaseSha,
+          });
+        }
+        throw error;
+      }
+    } catch (error) {
+      reportRemoteGitFailure(error, { operation: "Push", location, cwd: resolvedCwd, lease }, ctx);
       throw error;
     }
   },
   "git.pullRebase": async (args: unknown, ctx: ActionContext) => {
-    const resolvedCwd = requireWorktreePath(args as WorktreeLocationArgs | undefined, ctx);
-    // Palette, keybinding, and the terminal push-error recovery banner reach
-    // run() ungated, so enforce the rebase confirm here (#8242). The ReviewHub
-    // CTA calls the IPC directly, but asks the same store for its confirm, so
-    // every entry point shows one dialog. Agent dispatch is skipped for
-    // the same reason as `git.push`: ActionService already cleared it against
-    // the MCP bridge's own confirm, and this deferred store can only be
-    // resolved by a renderer dialog a headless client cannot reach (#11538).
-    if (ctx.dispatchSource !== "agent") {
-      const confirmed = await useGitPullRebaseConfirmStore
-        .getState()
-        .requestConfirmation(resolvedCwd);
-      if (!confirmed) return;
+    const location = args as WorktreeLocationArgs | undefined;
+    let resolvedCwd: string | null = null;
+    try {
+      const cwd = requireWorktreePath(location, ctx);
+      resolvedCwd = cwd;
+      // Palette, keybinding, and the terminal push-error recovery banner reach
+      // run() ungated, so enforce the rebase confirm here (#8242). The ReviewHub
+      // CTA calls the IPC directly, but asks the same store for its confirm, so
+      // every entry point shows one dialog. Agent dispatch is skipped for
+      // the same reason as `git.push`: ActionService already cleared it against
+      // the MCP bridge's own confirm, and this deferred store can only be
+      // resolved by a renderer dialog a headless client cannot reach (#11538).
+      if (ctx.dispatchSource !== "agent") {
+        const confirmed = await useGitPullRebaseConfirmStore.getState().requestConfirmation(cwd);
+        if (!confirmed) return;
+      }
+      await window.electron.git.pullRebase(cwd);
+    } catch (error) {
+      reportRemoteGitFailure(
+        error,
+        { operation: "Pull and rebase", location, cwd: resolvedCwd },
+        ctx
+      );
+      throw error;
     }
-    await window.electron.git.pullRebase(resolvedCwd);
   },
   "git.fetch": async (args: unknown, ctx: ActionContext) => {
     // Everything is inside the try, including `requireWorktreePath`. The
@@ -635,64 +756,73 @@ export const gitActionRuns = {
     await routeHaltToReviewHub(resolvedCwd, location, ctx);
   },
   "git.forcePushWithLease": async (args: unknown, ctx: ActionContext) => {
-    const resolvedCwd = requireWorktreePath(args as WorktreeLocationArgs | undefined, ctx);
-    const store = useGitForcePushStore.getState();
-    const record = store.getRecovery(resolvedCwd);
-    if (!record) {
-      throw new Error(
-        "Force push is available only after a push was rejected because the remote moved"
-      );
-    }
-
-    // Copied out before the first await. The store entry can be replaced
-    // while the confirm is open, and the operation must run against the
-    // lease the user was actually shown.
-    const { branchName, leaseSha, generation } = record;
-
-    // Agent dispatch has already cleared ActionService's host-attested
-    // confirm gate, and this deferred store resolves only from a renderer
-    // dialog no headless client can click — awaiting it would hang (#11538).
-    if (ctx.dispatchSource !== "agent") {
-      const confirmed = await store.requestConfirmation(record);
-      // Declining is a normal outcome, not a failure — but a caller cannot
-      // tell it from a completed push unless the two return different
-      // things. ReviewHub's banner keys its own recovery state off this.
-      if (!confirmed) return { forced: false };
-      // A push that ran while the dialog was open replaced the lease. The
-      // confirm was granted against the old one, so it does not carry over.
-      const current = useGitForcePushStore.getState().getRecovery(resolvedCwd);
-      if (!current || current.generation !== generation) {
-        throw new Error("The push state changed while confirming — try pushing again");
-      }
-    }
-
+    const location = args as WorktreeLocationArgs | undefined;
+    let resolvedCwd: string | null = null;
     try {
-      await window.electron.git.forcePushWithLease(resolvedCwd, branchName, leaseSha);
-    } catch (error) {
-      // Decode before rethrowing. The preload ships the discriminant fields
-      // inside an `[GitError|reason|lease|branch]` message prefix, and
-      // `isClientGitError` strips it as a side effect — without this, every
-      // consumer downstream (the ReviewHub banner, the card toast) classifies
-      // and displays the encoded envelope instead of the message.
-      const decoded = isClientGitError(error);
-      // A rejection means the remote refused the lease: it is no longer where
-      // it stood when the push that captured it was rejected, so the record
-      // describes a state that has been disproven. Transport and auth
-      // failures say nothing about the remote's position and keep it for a
-      // retry. Matched on the message because `GitOperationReason` has no
-      // member for a failed lease — git's own `stale info` is the signal.
-      if (decoded && /\bstale info\b|\[rejected\]/i.test(error.message)) {
-        useGitForcePushStore.getState().clearRecovery(resolvedCwd, generation);
+      const cwd = requireWorktreePath(location, ctx);
+      resolvedCwd = cwd;
+      const store = useGitForcePushStore.getState();
+      const record = store.getRecovery(cwd);
+      if (!record) {
+        throw new Error(
+          "Force push is available only after a push was rejected because the remote moved"
+        );
       }
-      useAnnouncerStore.getState().announce(`Couldn't force push ${branchName}`, "assertive");
+
+      // Copied out before the first await. The store entry can be replaced
+      // while the confirm is open, and the operation must run against the
+      // lease the user was actually shown.
+      const { branchName, leaseSha, generation } = record;
+
+      // Agent dispatch has already cleared ActionService's host-attested
+      // confirm gate, and this deferred store resolves only from a renderer
+      // dialog no headless client can click — awaiting it would hang (#11538).
+      if (ctx.dispatchSource !== "agent") {
+        const confirmed = await store.requestConfirmation(record);
+        // Declining is a normal outcome, not a failure — but a caller cannot
+        // tell it from a completed push unless the two return different
+        // things. ReviewHub's banner keys its own recovery state off this.
+        if (!confirmed) return { forced: false };
+        // A push that ran while the dialog was open replaced the lease. The
+        // confirm was granted against the old one, so it does not carry over.
+        const current = useGitForcePushStore.getState().getRecovery(cwd);
+        if (!current || current.generation !== generation) {
+          throw new Error("The push state changed while confirming — try pushing again");
+        }
+      }
+
+      try {
+        await window.electron.git.forcePushWithLease(cwd, branchName, leaseSha);
+      } catch (error) {
+        // Decode before rethrowing. The preload ships the discriminant fields
+        // inside an `[GitError|reason|lease|branch]` message prefix, and
+        // `isClientGitError` strips it as a side effect — without this, every
+        // consumer downstream (the ReviewHub banner, the toast) classifies
+        // and displays the encoded envelope instead of the message.
+        const decoded = isClientGitError(error);
+        // A rejection means the remote refused the lease: it is no longer where
+        // it stood when the push that captured it was rejected, so the record
+        // describes a state that has been disproven. Transport and auth
+        // failures say nothing about the remote's position and keep it for a
+        // retry. Matched on the message because `GitOperationReason` has no
+        // member for a failed lease — git's own `stale info` is the signal.
+        if (decoded && /\bstale info\b|\[rejected\]/i.test(error.message)) {
+          useGitForcePushStore.getState().clearRecovery(cwd, generation);
+        }
+        // No announcement of its own: the toast below, or the caller's banner,
+        // is an alert region and is read out already.
+        throw error;
+      }
+      // Conditional on the generation: a push that landed during the force
+      // push owns the record now, and clearing it would drop a lease this call
+      // never held.
+      useGitForcePushStore.getState().clearRecovery(cwd, generation);
+      useAnnouncerStore.getState().announce(`Force pushed ${branchName}`);
+      return { forced: true };
+    } catch (error) {
+      reportRemoteGitFailure(error, { operation: "Force push", location, cwd: resolvedCwd }, ctx);
       throw error;
     }
-    // Conditional on the generation: a push that landed during the force
-    // push owns the record now, and clearing it would drop a lease this call
-    // never held.
-    useGitForcePushStore.getState().clearRecovery(resolvedCwd, generation);
-    useAnnouncerStore.getState().announce(`Force pushed ${branchName}`);
-    return { forced: true };
   },
   "git.markSafeDirectory": async (args: unknown, ctx: ActionContext) => {
     await window.electron.git.markSafeDirectory(

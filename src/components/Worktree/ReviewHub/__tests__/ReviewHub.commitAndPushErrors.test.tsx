@@ -815,7 +815,8 @@ describe("ReviewHub", () => {
         expect(actionDispatchMock).toHaveBeenCalledWith(
           "git.forcePushWithLease",
           { cwd: WORKTREE_PATH },
-          { source: "user" }
+          // The pane's banner is the report, so the action's toast stands down.
+          { source: "user", callerReportsFailure: true }
         )
       );
       expect(forcePushWithLeaseMock).not.toHaveBeenCalled();
@@ -848,7 +849,8 @@ describe("ReviewHub", () => {
         expect(actionDispatchMock).toHaveBeenCalledWith(
           "git.forcePushWithLease",
           { cwd: WORKTREE_PATH },
-          { source: "user" }
+          // The pane's banner is the report, so the action's toast stands down.
+          { source: "user", callerReportsFailure: true }
         )
       );
       // The old banner described the rejected push; a failed recovery has to

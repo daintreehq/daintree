@@ -767,6 +767,10 @@ export class ActionService {
         // And the preset half (#16047): the change a human was shown, so an
         // injected `contextOverride` cannot claim an approval for another.
         hostApprovedPresetWrite: options?.hostApprovedPresetWrite,
+        // Same unconditional stamp (#16667): it silences an action's own
+        // failure toast, so only the caller that will show the failure itself
+        // may set it, never a `contextOverride`.
+        callerReportsFailure: options?.callerReportsFailure,
         // Same unconditional stamp (#15648): an action that waits on a person
         // gives up at this deadline, so a `contextOverride` must not be able
         // to stretch or plant one.

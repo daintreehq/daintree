@@ -233,6 +233,18 @@ export interface ActionContext {
    */
   hostApprovedPresetWrite?: string;
   /**
+   * The caller shows this dispatch's failure itself, so an action that owns its
+   * failure toast stays quiet (#16667). Set by `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.callerReportsFailure}, stamped over whatever a
+   * `contextOverride` claimed, and never on any `argsSchema`: it would let an
+   * MCP client or a model silence the only signal a person gets.
+   *
+   * For a surface that already renders the failure in place, such as Review
+   * Hub's push banner, where a toast for the same failure would say it twice.
+   * The failure still comes back on the dispatch result.
+   */
+  callerReportsFailure?: boolean;
+  /**
    * When main gives up on the agent dispatch running this action, as epoch ms
    * on this machine's clock (#15648). Set by `ActionService.dispatch` from
    * {@link ActionDispatchOptions.dispatchDeadlineAt} on the same terms as
@@ -420,6 +432,10 @@ export interface ActionDefinition<
    * the `try`. A partial catch makes the claim false and silently swallows the
    * uncovered failures at the palette. Errors raised *before* `run()` (arg
    * validation, `NOT_FOUND`) carry a different code and still toast normally.
+   *
+   * The command HUD reads it on the same terms. An agent dispatch and one whose
+   * caller set {@link ActionContext.callerReportsFailure} are the two cases an
+   * action may stay quiet in, since neither has a generic toast to stand down.
    */
   selfNotifiesOnExecutionError?: boolean;
   run: (args: InferActionArgs<S>, ctx: ActionContext) => Promise<Result>;
@@ -683,6 +699,8 @@ export interface ActionDispatchOptions {
    * bridge.
    */
   hostApprovedPresetWrite?: string;
+  /** See {@link ActionContext.callerReportsFailure}. */
+  callerReportsFailure?: boolean;
   /**
    * Main's deadline for the MCP dispatch this runs — NOT a client-supplied
    * value. See {@link ActionContext.dispatchDeadlineAt}. Set only by the MCP
