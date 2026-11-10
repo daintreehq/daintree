@@ -4,26 +4,39 @@ import { viewWebContents } from "./activeViewFocus.js";
 /**
  * Map a window without activating it, leaving the window the user is in on top.
  *
- * X11 window managers stack a newly mapped window on top whether or not it gets
- * focus (xfwm4 raises every window it frames), so each background window of a
- * startup restore buried the window holding keyboard focus, and any dialog it
- * showed, such as a deep-link install. A restack request can't undo that:
- * `moveTop()` sends `_NET_RESTACK_WINDOW`, which xfwm4 does not handle at all.
- * Activating the focused window again does, on any EWMH window manager: the
- * `_NET_ACTIVE_WINDOW` request carries a fresh timestamp from the app that
- * already holds focus, so focus-stealing prevention lets it through, and the
- * window manager raises the window it activates.
+ * Both macOS and X11 stack a window shown inactive above the focused one, so
+ * each background window of a startup restore buried the window holding
+ * keyboard focus, and any dialog it showed, such as a deep-link install.
  *
- * X11 only: under Wayland the compositor owns stacking.
+ * macOS: `showInactive()` ends in `orderFrontRegardless`. `moveTop()` orders
+ * the focused window back in front without touching the key window or its
+ * first responder, so typing stays where it was.
+ *
+ * X11: window managers stack a newly mapped window on top whether or not it
+ * gets focus (xfwm4 raises every window it frames). A restack request can't
+ * undo that: `moveTop()` sends `_NET_RESTACK_WINDOW`, which xfwm4 does not
+ * handle at all. Activating the focused window again does, on any EWMH window
+ * manager: the `_NET_ACTIVE_WINDOW` request carries a fresh timestamp from the
+ * app that already holds focus, so focus-stealing prevention lets it through,
+ * and the window manager raises the window it activates.
+ *
+ * Under Wayland the compositor owns stacking.
  */
 export function showWindowInactive(win: BrowserWindow): void {
-  const focused = restoresStacking() ? BrowserWindow.getFocusedWindow() : null;
+  const restack = stackingRestore();
+  const focused = restack ? BrowserWindow.getFocusedWindow() : null;
   win.showInactive();
-  if (focused && focused !== win && !focused.isDestroyed()) reactivate(focused);
+  if (!focused || focused === win || focused.isDestroyed()) return;
+  if (restack === "restack") focused.moveTop();
+  else reactivate(focused);
 }
 
-function restoresStacking(): boolean {
-  return process.platform === "linux" && process.env.XDG_SESSION_TYPE !== "wayland";
+function stackingRestore(): "restack" | "reactivate" | null {
+  if (process.platform === "darwin") return "restack";
+  if (process.platform === "linux" && process.env.XDG_SESSION_TYPE !== "wayland") {
+    return "reactivate";
+  }
+  return null;
 }
 
 /**

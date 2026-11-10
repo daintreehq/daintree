@@ -101,15 +101,62 @@ describe("showWindowInactive", () => {
     expect(order).toEqual(["background.showInactive"]);
   });
 
-  it("leaves stacking to the OS on macOS and Windows", () => {
-    for (const platform of ["darwin", "win32"] as const) {
-      setPlatform(platform);
-      const order: string[] = [];
-      electron.BrowserWindow.getFocusedWindow.mockReturnValue(windowMock(order, "focused"));
+  it("on macOS restacks the window the user is in above the one it revealed, without activating it", () => {
+    setPlatform("darwin");
+    const order: string[] = [];
+    const terminalView = webContentsMock(order, "projectView", true);
+    const focused = windowMock(order, "focused", [{ webContents: terminalView }]);
+    electron.BrowserWindow.getFocusedWindow.mockReturnValue(focused);
 
-      showWindowInactive(windowMock(order, "background") as never);
+    showWindowInactive(windowMock(order, "background") as never);
 
-      expect(order).toEqual(["background.showInactive"]);
-    }
+    // showInactive() orders the revealed window front regardless; a pure
+    // restack keeps the key window and the view holding keyboard focus.
+    expect(order).toEqual(["background.showInactive", "focused.moveTop"]);
+    expect(focused.focus).not.toHaveBeenCalled();
+    expect(terminalView.focus).not.toHaveBeenCalled();
+  });
+
+  it("on macOS restacks nothing when no Daintree window has focus, or the revealed one does", () => {
+    setPlatform("darwin");
+    const order: string[] = [];
+    showWindowInactive(windowMock(order, "background") as never);
+
+    const self = windowMock(order, "self");
+    electron.BrowserWindow.getFocusedWindow.mockReturnValue(self);
+    showWindowInactive(self as never);
+
+    expect(order).toEqual(["background.showInactive", "self.showInactive"]);
+  });
+
+  it("on macOS reads the focused window before revealing, and skips one destroyed meanwhile", () => {
+    setPlatform("darwin");
+    const order: string[] = [];
+    const focused = windowMock(order, "focused");
+    electron.BrowserWindow.getFocusedWindow.mockImplementation(() => {
+      order.push("getFocusedWindow");
+      return focused;
+    });
+    const background = windowMock(order, "background");
+    background.showInactive.mockImplementation(() => {
+      order.push("background.showInactive");
+      focused.isDestroyed.mockReturnValue(true);
+      return 0;
+    });
+
+    showWindowInactive(background as never);
+
+    expect(order).toEqual(["getFocusedWindow", "background.showInactive"]);
+    expect(focused.moveTop).not.toHaveBeenCalled();
+  });
+
+  it("leaves stacking to the OS on Windows", () => {
+    setPlatform("win32");
+    const order: string[] = [];
+    electron.BrowserWindow.getFocusedWindow.mockReturnValue(windowMock(order, "focused"));
+
+    showWindowInactive(windowMock(order, "background") as never);
+
+    expect(order).toEqual(["background.showInactive"]);
   });
 });
