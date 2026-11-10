@@ -3129,6 +3129,68 @@ describe("a window on a remote host", () => {
     errSpy.mockRestore();
   });
 
+  it("keeps the person's choice when the window lands on a host while the folder is added (#16724)", async () => {
+    let onHost = false;
+    const hostOf = (windowId: number) =>
+      windowId === mockBrowserWindow.id && onHost ? "studio-01" : "local";
+    windowHosts.windowHost.mockImplementation(hostOf);
+    projectStoreMock.addProject.mockImplementation(async () => {
+      onHost = true;
+      return { id: RECENT.id, path: RECENT.path };
+    });
+    const ownerWindow = {
+      id: 4,
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const ownerAppWebContents = {
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => false,
+      send: vi.fn(),
+      once: vi.fn(),
+    };
+    const liveView = { webContents: { isDestroyed: () => false } };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getPrimary: () => undefined,
+      getByWindowId: () => undefined,
+      all: () => [
+        {
+          windowId: 4,
+          browserWindow: ownerWindow,
+          services: {
+            projectViewManager: {
+              getActiveProjectId: () => "elsewhere",
+              getOutgoingBridgeProjectId: () => null,
+              getAllViews: () => [
+                { projectId: "elsewhere", view: liveView },
+                { projectId: RECENT.id, view: liveView },
+              ],
+            },
+          },
+        },
+      ],
+    });
+    getAppWebContentsMock.mockImplementation((win) =>
+      win.id === 4 ? ownerAppWebContents : mockWebContents
+    );
+    try {
+      await handleDirectoryOpen(RECENT.path, hostWindow, undefined, { showInOtherWindow: true });
+
+      expect(ownerAppWebContents.send).toHaveBeenCalledExactlyOnceWith(CHANNELS.MENU_ACTION, {
+        actionId: "project.switch",
+        args: { projectId: RECENT.id },
+      });
+      expect(windowHosts.switchWindowToLocal).not.toHaveBeenCalled();
+    } finally {
+      windowHosts.windowHost.mockImplementation((windowId: number) =>
+        windowId === mockBrowserWindow.id ? "studio-01" : "local"
+      );
+      projectStoreMock.addProject.mockReset();
+    }
+  });
+
   it("opens a folder with no repository in a window on this machine, never the host window's git prompt", async () => {
     projectStoreMock.addProject.mockRejectedValue(
       new AppError({ code: "NOT_A_GIT_REPO", message: "Not a git repository: /work/plain" })
