@@ -938,13 +938,17 @@ describe("unfilled controls on the empty grid (#16723)", () => {
     const scheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === id)!;
     const extensions = (scheme.extensions ?? {}) as Record<string, string | undefined>;
     const field =
-      extensions["panel-grid-bg"] ?? extensions["terminal-grid-bg"] ?? scheme.tokens["surface-grid"];
+      extensions["panel-grid-bg"] ??
+      extensions["terminal-grid-bg"] ??
+      scheme.tokens["surface-grid"];
     // `#panel-grid` paints this as background-color, where a gradient is invalid.
     expect(field, `${id} grid field`).toMatch(/^#[0-9a-f]{6}$/i);
 
     const border = scheme.tokens["border-default"];
     const borderAlpha = parseRgba(border);
-    const edge = borderAlpha ? blendOverBackground(borderAlpha.hex, field, borderAlpha.opacity) : border;
+    const edge = borderAlpha
+      ? blendOverBackground(borderAlpha.hex, field, borderAlpha.opacity)
+      : border;
     const edgeRatio = contrastRatio(edge, field);
     expect(
       edgeRatio,
