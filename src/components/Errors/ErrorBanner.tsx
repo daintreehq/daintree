@@ -152,11 +152,20 @@ export function ErrorBanner({
     setRecoveryPending(true);
     setFailedKey(null);
     let failure: unknown;
+    let reportedByAction = false;
     try {
       const result = await actionService.dispatch(recoveryAction.actionId, recoveryAction.args, {
         source: "user",
       });
-      if (!result.ok) failure = result.error;
+      if (!result.ok) {
+        failure = result.error;
+        // A push or pull-rebase names its own cause in a toast (#16667), so a
+        // "Recovery failed" here would report the same failure twice. Only for
+        // a throw out of run(), the one failure that promise covers.
+        reportedByAction =
+          result.error.code === "EXECUTION_ERROR" &&
+          actionService.selfNotifiesOnExecutionError(recoveryAction.actionId);
+      }
     } catch (err) {
       failure = err;
     }
@@ -168,6 +177,7 @@ export function ErrorBanner({
       errorId: error.id,
       actionId: recoveryAction.actionId,
     });
+    if (reportedByAction) return;
     if (liveKey.current !== recoveryKey) return;
     setFailedKey(recoveryKey);
     // The row stays quiet by design, so a failure after the arrival has been

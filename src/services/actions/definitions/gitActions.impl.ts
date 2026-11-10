@@ -263,6 +263,10 @@ function reportGitFailure(
  *
  * Quiet for agent dispatch, which gets the error as its result, and for a
  * caller that renders the failure itself (Review Hub's push banner).
+ *
+ * Returns whether a toast went up. `notify` keeps quiet hours and a blurred
+ * window to the inbox, and a caller with nothing else on screen may need to
+ * say the outcome aloud instead.
  */
 function reportRemoteGitFailure(
   error: unknown,
@@ -275,8 +279,8 @@ function reportRemoteGitFailure(
     lease?: ForcePushRecovery | null;
   },
   ctx: ActionContext
-): void {
-  if (ctx.dispatchSource === "agent" || ctx.callerReportsFailure) return;
+): boolean {
+  if (ctx.dispatchSource === "agent" || ctx.callerReportsFailure) return false;
   const { operation, location, cwd, lease } = attempt;
   const worktreeId = resolveWorktreeIdOrNull(location, ctx);
   const context = { worktreeId: worktreeId ?? undefined, eventKind: "git" as const };
@@ -285,7 +289,7 @@ function reportRemoteGitFailure(
   const options = ctx.dispatchSource ? { source: ctx.dispatchSource } : undefined;
 
   if (lease && cwd) {
-    notify({
+    return !!notify({
       type: "error",
       context,
       title: "Push failed",
@@ -295,7 +299,6 @@ function reportRemoteGitFailure(
         onClick: () => void actionService.dispatch("git.forcePushWithLease", { cwd }, options),
       },
     });
-    return;
   }
 
   // Decodes the `[GitError|<reason>|…]` transport prefix in place, so neither
@@ -328,7 +331,7 @@ function reportRemoteGitFailure(
         : cwd && { cwd }))
     : undefined;
   if (recovery && recoveryArgs) {
-    notify({
+    return !!notify({
       type: "error",
       context,
       title,
@@ -338,11 +341,10 @@ function reportRemoteGitFailure(
         onClick: () => void actionService.dispatch(recovery.actionId, recoveryArgs, options),
       },
     });
-    return;
   }
 
   // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok. `RECOVERY_ACTIONS` in gitOperationErrors.ts is the map of which git failures have a route; the ones that reach here are those it deliberately leaves unrouted, or a failure with no worktree to send a recovery to, and an invented action would send the user somewhere unrelated to what failed.
-  notify({ type: "error", context, title, message: body });
+  return !!notify({ type: "error", context, title, message: body });
 }
 
 export const gitActionRuns = {
@@ -758,6 +760,8 @@ export const gitActionRuns = {
   "git.forcePushWithLease": async (args: unknown, ctx: ActionContext) => {
     const location = args as WorktreeLocationArgs | undefined;
     let resolvedCwd: string | null = null;
+    // Set once the force push itself ran and failed, not a precondition.
+    let failedBranch: string | null = null;
     try {
       const cwd = requireWorktreePath(location, ctx);
       resolvedCwd = cwd;
@@ -809,8 +813,7 @@ export const gitActionRuns = {
         if (decoded && /\bstale info\b|\[rejected\]/i.test(error.message)) {
           useGitForcePushStore.getState().clearRecovery(cwd, generation);
         }
-        // No announcement of its own: the toast below, or the caller's banner,
-        // is an alert region and is read out already.
+        failedBranch = branchName;
         throw error;
       }
       // Conditional on the generation: a push that landed during the force
@@ -820,7 +823,18 @@ export const gitActionRuns = {
       useAnnouncerStore.getState().announce(`Force pushed ${branchName}`);
       return { forced: true };
     } catch (error) {
-      reportRemoteGitFailure(error, { operation: "Force push", location, cwd: resolvedCwd }, ctx);
+      const toasted = reportRemoteGitFailure(
+        error,
+        { operation: "Force push", location, cwd: resolvedCwd },
+        ctx
+      );
+      // The toast, or the caller's banner, is an alert region and reads itself
+      // out. Quiet hours or a blurred window send the toast to the inbox
+      // instead, and the force push the person just confirmed must not end in
+      // silence. An agent dispatch has nobody at the screen waiting on it.
+      if (failedBranch && !toasted && ctx.dispatchSource !== "agent" && !ctx.callerReportsFailure) {
+        useAnnouncerStore.getState().announce(`Couldn't force push ${failedBranch}`, "assertive");
+      }
       throw error;
     }
   },

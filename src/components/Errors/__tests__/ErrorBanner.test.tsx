@@ -12,9 +12,11 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 
 const mockDispatch = vi.fn().mockResolvedValue({ ok: true });
+const mockSelfNotifies = vi.fn().mockReturnValue(false);
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: (...args: unknown[]) => mockDispatch(...args),
+    selfNotifiesOnExecutionError: (id: string) => mockSelfNotifies(id),
   },
 }));
 
@@ -396,8 +398,40 @@ describe("ErrorBanner", () => {
       beforeEach(() => {
         mockDispatch.mockReset();
         mockDispatch.mockResolvedValue({ ok: true });
+        mockSelfNotifies.mockReset().mockReturnValue(false);
         vi.mocked(logError).mockClear();
         useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+      });
+
+      // `git.pullRebase` toasts its own cause (#16667); the row repeating it
+      // as "Recovery failed" would report one failure twice.
+      it("leaves an action's own failure toast to speak for it", async () => {
+        mockSelfNotifies.mockImplementation((id: string) => id === "git.pullRebase");
+        mockDispatch.mockResolvedValueOnce(failure);
+        render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
+
+        await clickRecovery();
+
+        expect(mockSelfNotifies).toHaveBeenCalledWith("git.pullRebase");
+        expect(screen.queryByText(/Recovery failed/)).toBeNull();
+        expect(screen.getByText("Pull the remote changes first")).toBeTruthy();
+        expect(useAnnouncerStore.getState().nextId).toBe(1);
+        expect(logError).toHaveBeenCalledTimes(1);
+        expect(recoveryButton().getAttribute("aria-disabled")).toBeNull();
+      });
+
+      it("still reports a failure raised before the action ran, toast or not", async () => {
+        // Its toast is promised only for a throw out of run().
+        mockSelfNotifies.mockReturnValue(true);
+        mockDispatch.mockResolvedValueOnce({
+          ok: false,
+          error: { code: "NOT_FOUND", message: "Action not found" },
+        });
+        render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
+
+        await clickRecovery();
+
+        expect(screen.getByText(/Recovery failed/)).toBeTruthy();
       });
 
       it("says so in place of the hint, and leaves the action available to retry", async () => {

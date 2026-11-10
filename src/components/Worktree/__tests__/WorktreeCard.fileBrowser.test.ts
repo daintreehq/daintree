@@ -157,7 +157,9 @@ describe("WorktreeCard — git rows (#12090, #16667)", () => {
 
   it("leaves failure reporting to the action, so a rejection toasts once", () => {
     const body = dispatchBody();
-    expect(body).not.toMatch(/\bnotify\(/);
-    expect(body).not.toContain("result.error");
+    // The helper fires the dispatch and drops it. Any read of its outcome is
+    // the start of a second report, whatever it is spelled as.
+    expect(body).toMatch(/void actionService\.dispatch\(/);
+    expect(body).not.toMatch(/\bnotify\b|\.then\b|\bawait\b|\bresult\b/);
   });
 });

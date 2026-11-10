@@ -4,7 +4,10 @@ const notifyMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 import { ActionService, actionService } from "@/services/ActionService";
-import type { ActionDispatchOptions, ActionId } from "@shared/types/actions";
+import type { ActionDispatchOptions, ActionDispatchResult, ActionId } from "@shared/types/actions";
+import type { GitOperationReason } from "@shared/types/ipc/errors";
+import { humanizeAppError } from "@shared/utils/errorMessage";
+import { getGitRecoveryAction } from "@shared/utils/gitOperationErrors";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import { registerGitActions } from "../gitActions";
 // The run bodies load on first dispatch (#14239). Evaluate them before the
@@ -13,6 +16,7 @@ import "../gitActions.impl";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   setWorktreePathIndexAccessor,
   resetStoreAccessorsForTesting,
@@ -84,7 +88,7 @@ function dispatch(
   id: string,
   args: unknown,
   options: ActionDispatchOptions
-) {
+): Promise<ActionDispatchResult> {
   return service.dispatch(id as ActionId, args, options);
 }
 
@@ -112,10 +116,10 @@ async function answerForcePushConfirm(ok: boolean): Promise<void> {
 
 /** The error shape the preload reconstructs from a `GitOperationError`. */
 function gitError(
-  reason: string,
+  reason: GitOperationReason,
   message: string,
   fields: { lease?: string; branch?: string } = {}
-) {
+): Error {
   const lease = fields.lease ? encodeURIComponent(fields.lease) : "";
   const branch = fields.branch ? encodeURIComponent(fields.branch) : "";
   return new Error(`[GitError|${reason}|${lease}|${branch}] ${message}`);
@@ -126,6 +130,19 @@ function onlyToast(): Toast {
   return notifyMock.mock.calls[0]![0] as Toast;
 }
 
+/** The copy a classified failure must carry: the translation table's, not a constant. */
+function humanized(reason: GitOperationReason): { title: string; body: string } {
+  return humanizeAppError({ type: "git", source: "test", message: "", gitReason: reason });
+}
+
+/** The failure came out of the IPC this test rejected, not out of something earlier. */
+function expectFailedWith(result: ActionDispatchResult, cause: Error): void {
+  expect(result.ok).toBe(false);
+  if (result.ok) return;
+  expect(result.error.code).toBe("EXECUTION_ERROR");
+  expect(result.error.details).toBe(cause);
+}
+
 beforeEach(() => {
   setWorktreePathIndexAccessor(
     () =>
@@ -134,7 +151,9 @@ beforeEach(() => {
         [OTHER_ID, OTHER_PATH],
       ])
   );
-  notifyMock.mockClear();
+  // `notify` hands back the toast's id, or "" when the toast was kept to the inbox.
+  notifyMock.mockReset().mockReturnValue("toast-1");
+  useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
   recoveryDispatch = vi.spyOn(actionService, "dispatch").mockResolvedValue({
     ok: true,
     result: undefined,
@@ -190,7 +209,31 @@ describe("git.push failure from a keybinding (#16667)", () => {
     );
   });
 
-  it("offers Pull and rebase for a divergence whose lease could not be read", async () => {
+  it("names the rejected branch and worktree, not the active one's", async () => {
+    const { service, git } = setup();
+    git.push.mockRejectedValueOnce(
+      gitError("push-rejected-outdated", "Updates were rejected", {
+        lease: LEASE,
+        branch: "release/2",
+      })
+    );
+
+    const dispatched = dispatch(service, "git.push", { cwd: OTHER_PATH }, { source: "menu" });
+    await answerPushConfirm(true);
+    await dispatched;
+
+    const toast = onlyToast();
+    expect(toast.message).toContain("release/2");
+    expect(toast.context.worktreeId).toBe(OTHER_ID);
+    toast.action!.onClick();
+    expect(recoveryDispatch).toHaveBeenCalledWith(
+      "git.forcePushWithLease",
+      { cwd: OTHER_PATH },
+      { source: "menu" }
+    );
+  });
+
+  it("offers the table's recovery for a divergence whose lease could not be read", async () => {
     const { service, git } = setup();
     git.push.mockRejectedValueOnce(
       gitError("push-rejected-outdated", "Updates were rejected", { branch: "feature/x" })
@@ -201,20 +244,25 @@ describe("git.push failure from a keybinding (#16667)", () => {
     await dispatched;
 
     const toast = onlyToast();
-    expect(toast.title).not.toBe("Push failed");
-    expect(toast.message).not.toContain("[GitError|");
-    expect(toast.action?.label).toBe("Pull and rebase");
+    const expected = humanized("push-rejected-outdated");
+    expect({ title: toast.title, message: toast.message }).toEqual({
+      title: expected.title,
+      message: expected.body,
+    });
+    const recovery = getGitRecoveryAction("push-rejected-outdated")!;
+    expect(toast.action?.label).toBe(recovery.label);
     toast.action!.onClick();
     expect(recoveryDispatch).toHaveBeenCalledWith(
-      "git.pullRebase",
+      recovery.actionId,
       { cwd: WT_PATH },
       { source: "keybinding" }
     );
   });
 
   it("never offers a force push off a lease an earlier push captured", async () => {
-    // The store is cleared before each push, but the offer must come from this
-    // attempt's rejection, so an auth failure can't inherit a stale capture.
+    // The store is cleared before each push, so the lease is recorded inside
+    // the IPC: reading the store instead of this attempt's rejection would
+    // find it and offer a force push for an auth failure.
     const { service, git } = setup();
     git.push.mockImplementationOnce(async () => {
       useGitForcePushStore
@@ -230,7 +278,7 @@ describe("git.push failure from a keybinding (#16667)", () => {
     expect(onlyToast().action?.label).not.toBe("Force push…");
   });
 
-  it("routes an auth failure to the table's own settings tab", async () => {
+  it("routes an auth failure with the table's own args, never a worktree location", async () => {
     const { service, git } = setup();
     git.push.mockRejectedValueOnce(gitError("auth-failed", "Permission denied"));
 
@@ -239,16 +287,17 @@ describe("git.push failure from a keybinding (#16667)", () => {
     await dispatched;
 
     const toast = onlyToast();
-    expect(toast.action?.label).toBe("Sign in with GitHub");
+    expect(toast.title).toBe(humanized("auth-failed").title);
+    const recovery = getGitRecoveryAction("auth-failed")!;
+    expect(recovery.args).toBeDefined();
+    expect(toast.action?.label).toBe(recovery.label);
     toast.action!.onClick();
-    const [actionId, args] = recoveryDispatch.mock.calls[0]!;
-    expect(actionId).toBe("app.settings.openTab");
-    // The table's args, not a worktree location it would have stripped.
-    expect(args).toMatchObject({ tab: "code-forge" });
-    expect(args).not.toHaveProperty("cwd");
+    expect(recoveryDispatch).toHaveBeenCalledWith(recovery.actionId, recovery.args, {
+      source: "keybinding",
+    });
   });
 
-  it("reports an unrouted failure without inventing an action", async () => {
+  it("reports an unrouted failure in the table's words, without inventing an action", async () => {
     const { service, git } = setup();
     git.push.mockRejectedValueOnce(gitError("network-unavailable", "Could not resolve host"));
 
@@ -257,8 +306,25 @@ describe("git.push failure from a keybinding (#16667)", () => {
     await dispatched;
 
     const toast = onlyToast();
+    const expected = humanized("network-unavailable");
+    expect(toast.title).toBe(expected.title);
+    expect(toast.message).toBe(expected.body);
     expect(toast.action).toBeUndefined();
     expect(toast.context.worktreeId).toBe(WT_ID);
+  });
+
+  it("names the push and git's own sentence for a failure classified as unknown", async () => {
+    const { service, git } = setup();
+    git.push.mockRejectedValueOnce(gitError("unknown", "remote: internal server error"));
+
+    const dispatched = dispatch(service, "git.push", undefined, { source: "keybinding" });
+    await answerPushConfirm(true);
+    await dispatched;
+
+    const toast = onlyToast();
+    expect(toast.title).toBe("Push failed");
+    expect(toast.message).toBe("remote: internal server error");
+    expect(toast.action).toBeUndefined();
   });
 
   it("names the push and the thrown cause for a failure with no git reason", async () => {
@@ -304,7 +370,8 @@ describe("git.push failure from a keybinding (#16667)", () => {
 
   it("raises no toast for an agent, which still gets the error as its result", async () => {
     const { service, git } = setup();
-    git.push.mockRejectedValueOnce(gitError("auth-failed", "Permission denied"));
+    const cause = gitError("auth-failed", "Permission denied");
+    git.push.mockRejectedValueOnce(cause);
 
     const result = await dispatch(
       service,
@@ -314,14 +381,14 @@ describe("git.push failure from a keybinding (#16667)", () => {
     );
 
     expect(git.push).toHaveBeenCalled();
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.message).toContain("Permission denied");
+    expectFailedWith(result, cause);
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("raises no toast for a caller that reports the failure itself", async () => {
     const { service, git } = setup();
-    git.push.mockRejectedValueOnce(gitError("auth-failed", "Permission denied"));
+    const cause = gitError("auth-failed", "Permission denied");
+    git.push.mockRejectedValueOnce(cause);
 
     const dispatched = dispatch(service, "git.push", undefined, {
       source: "user",
@@ -330,7 +397,8 @@ describe("git.push failure from a keybinding (#16667)", () => {
     await answerPushConfirm(true);
     const result = await dispatched;
 
-    expect(result.ok).toBe(false);
+    expect(git.push).toHaveBeenCalled();
+    expectFailedWith(result, cause);
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
@@ -370,7 +438,9 @@ describe("git.pullRebase failure (#16667)", () => {
     expect(result.ok).toBe(false);
     const toast = onlyToast();
     expect(toast.context.worktreeId).toBe(OTHER_ID);
-    expect(toast.action?.label).toBe("Resolve conflicts");
+    const recovery = getGitRecoveryAction("conflict-unresolved")!;
+    expect(recovery.actionId).toBe("worktree.openReviewHub");
+    expect(toast.action?.label).toBe(recovery.label);
     // `worktree.openReviewHub` strips a `cwd`, so it must get the id.
     toast.action!.onClick();
     expect(recoveryDispatch).toHaveBeenCalledWith(
@@ -388,7 +458,22 @@ describe("git.pullRebase failure (#16667)", () => {
     await answerPullRebaseConfirm(true);
     await dispatched;
 
-    expect(onlyToast().title).toBe("Pull and rebase failed");
+    const toast = onlyToast();
+    expect(toast.title).toBe("Pull and rebase failed");
+    expect(toast.message).toBe("fatal: no upstream configured");
+  });
+
+  it("reports a pull-rebase with no worktree to run in, before any confirm", async () => {
+    const { service, git } = setup({});
+
+    const result = await dispatch(service, "git.pullRebase", undefined, { source: "keybinding" });
+
+    expect(result.ok).toBe(false);
+    expect(git.pullRebase).not.toHaveBeenCalled();
+    expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).toBeNull();
+    const toast = onlyToast();
+    expect(toast.title).toBe("Pull and rebase failed");
+    expect(toast.message).toMatch(/no active worktree/i);
   });
 
   it("stays silent when the confirm is cancelled", async () => {
@@ -396,15 +481,17 @@ describe("git.pullRebase failure (#16667)", () => {
 
     const dispatched = dispatch(service, "git.pullRebase", undefined, { source: "keybinding" });
     await answerPullRebaseConfirm(false);
-    await dispatched;
+    const result = await dispatched;
 
+    expect(result.ok).toBe(true);
     expect(git.pullRebase).not.toHaveBeenCalled();
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
-  it("raises no toast for an agent", async () => {
+  it("raises no toast for an agent, which still gets the error as its result", async () => {
     const { service, git } = setup();
-    git.pullRebase.mockRejectedValueOnce(gitError("conflict-unresolved", "Merge conflict"));
+    const cause = gitError("conflict-unresolved", "Merge conflict");
+    git.pullRebase.mockRejectedValueOnce(cause);
 
     const result = await dispatch(
       service,
@@ -413,7 +500,8 @@ describe("git.pullRebase failure (#16667)", () => {
       { source: "agent", confirmed: true }
     );
 
-    expect(result.ok).toBe(false);
+    expect(git.pullRebase).toHaveBeenCalledWith(WT_PATH);
+    expectFailedWith(result, cause);
     expect(notifyMock).not.toHaveBeenCalled();
   });
 });
@@ -425,29 +513,55 @@ describe("git.forcePushWithLease failure (#16667)", () => {
       .recordRejection({ cwd: WT_PATH, branchName: "feature/x", leaseSha: LEASE });
   }
 
-  it("reports a refused lease and drops it", async () => {
+  it("reports a refused lease in git's words, drops it, and offers no second force push", async () => {
+    const { service, git } = setup();
+    seedLease();
+    // A refused lease is git's `(stale info)`, which no reason pattern claims.
+    const cause = gitError("unknown", "! [rejected] feature/x -> feature/x (stale info)");
+    git.forcePushWithLease.mockRejectedValueOnce(cause);
+
+    const dispatched = dispatch(
+      service,
+      "git.forcePushWithLease",
+      { cwd: WT_PATH },
+      { source: "menu" }
+    );
+    await answerForcePushConfirm(true);
+    const result = await dispatched;
+
+    expectFailedWith(result, cause);
+    expect(useGitForcePushStore.getState().getRecovery(WT_PATH)).toBeNull();
+    const toast = onlyToast();
+    expect(toast.title).toBe("Force push failed");
+    expect(toast.message).toBe("! [rejected] feature/x -> feature/x (stale info)");
+    expect(toast.action).toBeUndefined();
+  });
+
+  it("routes a force push the remote refused as out of date to the table's recovery", async () => {
     const { service, git } = setup();
     seedLease();
     git.forcePushWithLease.mockRejectedValueOnce(
-      gitError("push-rejected-outdated", "! [rejected] feature/x (stale info)")
+      gitError("push-rejected-outdated", "! [rejected] feature/x (fetch first)")
     );
 
     const dispatched = dispatch(
       service,
       "git.forcePushWithLease",
       { cwd: WT_PATH },
-      {
-        source: "menu",
-      }
+      { source: "menu" }
     );
     await answerForcePushConfirm(true);
-    const result = await dispatched;
+    await dispatched;
 
-    expect(result.ok).toBe(false);
-    expect(useGitForcePushStore.getState().getRecovery(WT_PATH)).toBeNull();
+    const recovery = getGitRecoveryAction("push-rejected-outdated")!;
     const toast = onlyToast();
-    // Not another force push: the lease it would spend was just disproven.
-    expect(toast.action?.label).toBe("Pull and rebase");
+    expect(toast.action?.label).toBe(recovery.label);
+    toast.action!.onClick();
+    expect(recoveryDispatch).toHaveBeenCalledWith(
+      recovery.actionId,
+      { cwd: WT_PATH },
+      { source: "menu" }
+    );
   });
 
   it("reports a force push with no lease to spend", async () => {
@@ -457,9 +571,7 @@ describe("git.forcePushWithLease failure (#16667)", () => {
       service,
       "git.forcePushWithLease",
       { cwd: WT_PATH },
-      {
-        source: "menu",
-      }
+      { source: "menu" }
     );
 
     expect(result.ok).toBe(false);
@@ -467,6 +579,18 @@ describe("git.forcePushWithLease failure (#16667)", () => {
     const toast = onlyToast();
     expect(toast.title).toBe("Force push failed");
     expect(toast.message).toMatch(/only after a push was rejected/);
+  });
+
+  it("reports a force push with no worktree to run in", async () => {
+    const { service, git } = setup({});
+
+    const result = await dispatch(service, "git.forcePushWithLease", undefined, {
+      source: "menu",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(git.forcePushWithLease).not.toHaveBeenCalled();
+    expect(onlyToast().message).toMatch(/no active worktree/i);
   });
 
   it("reports a lease replaced while the confirm was open", async () => {
@@ -477,9 +601,7 @@ describe("git.forcePushWithLease failure (#16667)", () => {
       service,
       "git.forcePushWithLease",
       { cwd: WT_PATH },
-      {
-        source: "menu",
-      }
+      { source: "menu" }
     );
     await vi.waitFor(() => {
       expect(useGitForcePushStore.getState().pendingConfirm).not.toBeNull();
@@ -500,9 +622,7 @@ describe("git.forcePushWithLease failure (#16667)", () => {
       service,
       "git.forcePushWithLease",
       { cwd: WT_PATH },
-      {
-        source: "menu",
-      }
+      { source: "menu" }
     );
     await answerForcePushConfirm(false);
     const result = await dispatched;
@@ -515,32 +635,61 @@ describe("git.forcePushWithLease failure (#16667)", () => {
   it("leaves a failure to the caller that banners it, such as Review Hub", async () => {
     const { service, git } = setup();
     seedLease();
+    const cause = gitError("network-unavailable", "offline");
+    git.forcePushWithLease.mockRejectedValueOnce(cause);
+
+    const dispatched = dispatch(
+      service,
+      "git.forcePushWithLease",
+      { cwd: WT_PATH },
+      { source: "user", callerReportsFailure: true }
+    );
+    await answerForcePushConfirm(true);
+    const result = await dispatched;
+
+    expect(git.forcePushWithLease).toHaveBeenCalledWith(WT_PATH, "feature/x", LEASE);
+    expectFailedWith(result, cause);
+    expect(notifyMock).not.toHaveBeenCalled();
+    // The banner is the caller's alert, so nothing is announced on top of it.
+    expect(useAnnouncerStore.getState().assertive).toBeNull();
+  });
+
+  it("says a failed force push aloud when its toast was kept to the inbox", async () => {
+    // Quiet hours, disabled toasts and a blurred window all route to the inbox,
+    // and `notify` hands back no toast id then.
+    notifyMock.mockReturnValue("");
+    const { service, git } = setup();
+    seedLease();
     git.forcePushWithLease.mockRejectedValueOnce(gitError("network-unavailable", "offline"));
 
     const dispatched = dispatch(
       service,
       "git.forcePushWithLease",
       { cwd: WT_PATH },
-      {
-        source: "user",
-        callerReportsFailure: true,
-      }
+      { source: "menu" }
     );
     await answerForcePushConfirm(true);
-    const result = await dispatched;
+    await dispatched;
 
-    expect(result.ok).toBe(false);
-    expect(notifyMock).not.toHaveBeenCalled();
-    // A transport failure says nothing about the remote, so the lease stays.
-    expect(useGitForcePushStore.getState().getRecovery(WT_PATH)).not.toBeNull();
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(useAnnouncerStore.getState().assertive?.msg).toContain("feature/x");
   });
-});
 
-describe("toast ownership", () => {
-  it("each of the three stands the palette's and the HUD's generic toast down", () => {
-    const { service } = setup();
-    for (const id of ["git.push", "git.pullRebase", "git.forcePushWithLease"]) {
-      expect(service.selfNotifiesOnExecutionError(id as ActionId), id).toBe(true);
-    }
+  it("leaves a toasted failure to the toast's own alert", async () => {
+    const { service, git } = setup();
+    seedLease();
+    git.forcePushWithLease.mockRejectedValueOnce(gitError("network-unavailable", "offline"));
+
+    const dispatched = dispatch(
+      service,
+      "git.forcePushWithLease",
+      { cwd: WT_PATH },
+      { source: "menu" }
+    );
+    await answerForcePushConfirm(true);
+    await dispatched;
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(useAnnouncerStore.getState().assertive).toBeNull();
   });
 });

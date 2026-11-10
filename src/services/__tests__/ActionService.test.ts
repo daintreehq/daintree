@@ -1149,10 +1149,16 @@ describe("ActionService", () => {
           ...options,
           contextOverride: { callerReportsFailure: true },
         });
+        await service.dispatch("actions.list", undefined, {
+          ...options,
+          callerReportsFailure: true,
+          contextOverride: { callerReportsFailure: false },
+        });
 
         expect(mockRun.mock.calls.map(([, ctx]) => ctx.callerReportsFailure)).toEqual([
           true,
           undefined,
+          true,
         ]);
       });
 

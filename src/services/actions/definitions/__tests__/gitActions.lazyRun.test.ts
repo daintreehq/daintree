@@ -66,36 +66,80 @@ describe("git action run bodies (#14239)", () => {
     expect(m.push).not.toHaveBeenCalled();
   });
 
-  // `git.push` stands the palette's and the HUD's generic toast down (#16667),
-  // so a load failure it never reached its own catch for must still be told.
-  it("reports a failed load for an action that owns its failure toast", async () => {
-    m.failImpl = true;
-    const def = (await register()).get("git.push")!();
-    await expect(def.run({ cwd: "/repo/one" }, { dispatchSource: "keybinding" })).rejects.toThrow(
-      "chunk load failed"
+  // These stand the palette's and the HUD's generic toast down (#16667), so a
+  // load failure their own catch never saw must still be told. Enumerated from
+  // the live definitions, so a newly flagged action is held to it too.
+  async function selfReporting(): Promise<string[]> {
+    const actions = await register();
+    return [...actions.values()]
+      .map((create) => create())
+      .filter((def) => def.selfNotifiesOnExecutionError === true)
+      .map((def) => def.id);
+  }
+
+  it("reports a failed load for every action that owns its failure toast", async () => {
+    const ids = await selfReporting();
+    expect(ids).toEqual(
+      expect.arrayContaining(["git.push", "git.pullRebase", "git.forcePushWithLease"])
     );
-    expect(notify).toHaveBeenCalledTimes(1);
-    const toast = notify.mock.calls[0]![0] as { type: string; title: string; message: string };
-    expect(toast.type).toBe("error");
-    expect(toast.title).toBe("Push failed");
-    // Not the import's own message, which is a bundle path.
-    expect(toast.message).not.toContain("chunk load failed");
+    m.failImpl = true;
+    const actions = await register();
+    for (const id of ids) {
+      notify.mockReset();
+      const before = m.runLookups;
+      await expect(
+        actions.get(id as never)!().run({ cwd: "/repo/one" }, { dispatchSource: "keybinding" })
+      ).rejects.toThrow("chunk load failed");
+      // It got as far as the run bodies, so the throw is the load failure.
+      expect(m.runLookups, id).toBe(before + 1);
+      expect(notify, id).toHaveBeenCalledTimes(1);
+      const toast = notify.mock.calls[0]![0] as { type: string; title: string; message: string };
+      expect(toast.type).toBe("error");
+      expect(toast.title.length, id).toBeGreaterThan(0);
+      // Not the import's own message, which is a bundle path.
+      expect(toast.message).not.toContain("chunk load failed");
+    }
   });
 
   it("keeps a failed load quiet for an agent and for a caller that reports it", async () => {
     m.failImpl = true;
     const def = (await register()).get("git.push")!();
-    await expect(def.run({ cwd: "/repo/one" }, ctx)).rejects.toThrow();
+    await expect(def.run({ cwd: "/repo/one" }, ctx)).rejects.toThrow("chunk load failed");
     await expect(
       def.run({ cwd: "/repo/one" }, { dispatchSource: "user", callerReportsFailure: true })
-    ).rejects.toThrow();
+    ).rejects.toThrow("chunk load failed");
+    expect(m.runLookups).toBe(2);
     expect(notify).not.toHaveBeenCalled();
   });
 
   it("leaves a failed load to the palette for an action that does not own its toast", async () => {
     m.failImpl = true;
     const def = (await register()).get("git.stageAll")!();
-    await expect(def.run({ cwd: "/repo/one" }, { dispatchSource: "user" })).rejects.toThrow();
+    expect(def.selfNotifiesOnExecutionError).not.toBe(true);
+    await expect(def.run({ cwd: "/repo/one" }, { dispatchSource: "user" })).rejects.toThrow(
+      "chunk load failed"
+    );
+    expect(m.runLookups).toBe(1);
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("reports a chunk that never loads, not only a module that loads broken", async () => {
+    // The getter above throws after the import resolved. This rejects the
+    // import itself, which is what a missing or poisoned chunk does.
+    vi.doMock("../gitActions.impl", () => {
+      throw new Error("Failed to fetch dynamically imported module");
+    });
+    try {
+      const def = (await register()).get("git.push")!();
+      await expect(
+        def.run({ cwd: "/repo/one" }, { dispatchSource: "keybinding" })
+      ).rejects.toThrow();
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect((notify.mock.calls[0]![0] as { message: string }).message).not.toContain(
+        "dynamically imported"
+      );
+    } finally {
+      vi.doUnmock("../gitActions.impl");
+    }
   });
 });
