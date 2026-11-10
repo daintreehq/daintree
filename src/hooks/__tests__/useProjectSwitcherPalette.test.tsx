@@ -1241,6 +1241,32 @@ describe("useProjectSwitcherPalette", () => {
       });
     });
 
+    it("drops a handed-over query when another palette takes the slot", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("modal", { query: "repos/other" });
+      });
+      // The action palette replaces the store slot directly, so `close()` never
+      // runs; its `/` route then reopens through the store, skipping `open()`.
+      act(() => {
+        usePaletteStore.getState().openPalette("action");
+      });
+      act(() => {
+        usePaletteStore.getState().openPalette("project-switcher");
+      });
+
+      expect(result.current.isOpen).toBe(true);
+      expect(result.current.query).toBe("");
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(searchProjects.length);
+      });
+    });
+
     it("shows the modal for a hand-off even after the toolbar dropdown was the last surface", async () => {
       projectState.projects = searchProjects;
       projectState.currentProject = null;

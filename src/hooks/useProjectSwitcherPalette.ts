@@ -95,6 +95,14 @@ export function useProjectSwitcherPalette({
   const [mode, setMode] = useState<ProjectSwitcherMode>("modal");
   const isOpen = mode === "modal" ? modalIsOpen : dropdownIsOpen;
   const [query, setQuery] = useState("");
+  // A palette taking the store slot closes this one without `close()`, so the
+  // query is dropped here as well: a later opening that skips `open()` — the
+  // action palette's `/` route — would otherwise come back on the old text.
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (wasOpen !== isOpen) {
+    setWasOpen(isOpen);
+    if (!isOpen) setQuery("");
+  }
   const deferredQuery = useDeferredValue(query);
   const isSearching = query.trim().length > 0;
   // Only stale while a search is still catching up. Clearing the box restores
