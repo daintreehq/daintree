@@ -1,4 +1,13 @@
-import { useState, useCallback, useRef, useEffect, useEffectEvent, useId } from "react";
+import {
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useLayoutEffect,
+  type RefObject,
+} from "react";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Callout } from "@/components/ui/Callout";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
@@ -19,6 +28,7 @@ import { PREVIEW_COMMIT_LIMIT } from "@/components/Git/gitRemoteOperationPreview
 import { pluralize } from "@/lib/pluralize";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { PathTail } from "@/components/ui/PathTail";
+import { isCommitShortcut, type CommitShortcutHandler } from "./commitShortcut";
 
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
@@ -164,6 +174,12 @@ interface CommitPanelProps {
    * act on a file list or branch that may have moved; typing stays open.
    */
   isVerifying?: boolean;
+  /**
+   * Where the panel registers the handler for its primary-action chord, so the
+   * hub's key handler can answer it while focus is on the file list or a hub
+   * control rather than the message box. Cleared when the panel unmounts.
+   */
+  shortcutRef?: RefObject<CommitShortcutHandler | null>;
 }
 
 export function CommitPanel({
@@ -190,6 +206,7 @@ export function CommitPanel({
   skipPushConfirm,
   onSetSkipPushConfirm,
   isVerifying = false,
+  shortcutRef,
 }: CommitPanelProps) {
   // Which submit is in flight. Commit & push holds it through the commit and the
   // refresh that follows, so the composer never looks idle before the push starts.
@@ -481,6 +498,36 @@ export function CommitPanel({
     setDontAskChecked(false);
   }, []);
 
+  // The one answer to Cmd+Enter, whichever element has focus. Mid-commit and
+  // behind the push confirm there is nothing to start: a second press would
+  // otherwise re-open the confirm, or send focus to a blocker the commit itself
+  // just created by emptying the staged list.
+  const runCommitShortcut = useCallback<CommitShortcutHandler>(
+    ({ commitOnly }) => {
+      if (isBusy || pushConfirmOpen) return;
+      if (isBlocked) {
+        focusBlocker();
+        return;
+      }
+      if (commitOnly && hasRemote) {
+        void handleCommit();
+      } else {
+        handlePrimaryClick();
+      }
+    },
+    [isBusy, pushConfirmOpen, isBlocked, focusBlocker, hasRemote, handleCommit, handlePrimaryClick]
+  );
+  // A layout effect so the hub's native key listener never sees the previous
+  // render's callback: a status refresh that has just turned up a conflict must
+  // not still answer the chord as if the commit were unblocked.
+  useLayoutEffect(() => {
+    if (!shortcutRef) return;
+    shortcutRef.current = runCommitShortcut;
+    return () => {
+      if (shortcutRef.current === runCommitShortcut) shortcutRef.current = null;
+    };
+  }, [shortcutRef, runCommitShortcut]);
+
   const progressEntries = [...pushProgress.values()];
 
   const handleKeyDown = useCallback(
@@ -591,25 +638,13 @@ export function CommitPanel({
         return;
       }
 
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      if (isCommitShortcut(e)) {
         e.preventDefault();
-        if (isBlocked) {
-          focusBlocker();
-          return;
-        }
-        if (e.shiftKey && hasRemote) {
-          void handleCommit();
-        } else {
-          void handlePrimaryClick();
-        }
+        runCommitShortcut({ commitOnly: e.shiftKey });
       }
     },
     [
-      handlePrimaryClick,
-      handleCommit,
-      hasRemote,
-      isBlocked,
-      focusBlocker,
+      runCommitShortcut,
       fetchHistoryMessages,
       applyHistoryMessage,
       onCommitMessageChange,

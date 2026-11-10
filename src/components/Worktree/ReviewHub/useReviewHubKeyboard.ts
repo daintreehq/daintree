@@ -1,9 +1,10 @@
 import { useEffect, useEffectEvent } from "react";
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { GitStatus } from "@shared/types";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 import { isFileRowMenuKey, openFileRowMenuFromKeyboard } from "@/hooks/useFileRowMenuItems";
+import { isCommitShortcut, type CommitShortcutHandler } from "./commitShortcut";
 import type { FileStageRowSection } from "./FileStageRow";
 import { PR_CHECKS_OPEN_ATTR } from "./PrChecksPopover";
 import type { DiffMode } from "./reviewHubUtils";
@@ -42,11 +43,15 @@ interface UseReviewHubKeyboardArgs {
   handleToggleUnstaged: (filePath: string) => void;
   handleViewedChange: (viewedKey: string, viewed: boolean) => void;
   viewedFiles: ReadonlySet<string>;
+  /** The hub's own element: the commit chord answers only to focus inside it or on the pane around it. */
+  rootRef: RefObject<HTMLElement | null>;
+  /** Filled by the commit panel while it is mounted. */
+  commitShortcutRef: RefObject<CommitShortcutHandler | null>;
 }
 
 /**
- * The hub's capture-phase key handler: Escape's layered dismissal, and the
- * file list's cursor, open, stage, viewed and row-menu keys.
+ * The hub's capture-phase key handler: Escape's layered dismissal, the commit
+ * chord, and the file list's cursor, open, stage, viewed and row-menu keys.
  */
 export function useReviewHubKeyboard({
   isOpen,
@@ -66,6 +71,8 @@ export function useReviewHubKeyboard({
   handleToggleUnstaged,
   handleViewedChange,
   viewedFiles,
+  rootRef,
+  commitShortcutRef,
 }: UseReviewHubKeyboardArgs) {
   const { focusedIndex, fileListRef, moveCursorTo, focusedRowExists, revealRow, setPendingMenu } =
     cursor;
@@ -117,6 +124,35 @@ export function useReviewHubKeyboard({
     const target = e.target instanceof HTMLElement ? e.target : null;
     if (isTextWidget(target)) return;
     if (document.activeElement?.closest('[role="menu"]')) return;
+
+    // The commit chord the status line advertises. The message box answers it
+    // on its own; from the file list or a hub control nothing did, and the list
+    // read it as a plain Enter and opened the row's diff. Handled ahead of the
+    // list's gates because it commits, not navigates: a collapsed list, an empty
+    // filter or a focused button doesn't change what it means.
+    if (isCommitShortcut(e)) {
+      // A diff overlay owns the keyboard while open. Focus that has left the hub
+      // (a portalled dialog, menu or popover) is another surface's, however the
+      // listener is scoped; and a checks disclosure that is open from the hub's
+      // own trigger is a layer over it even while focus still sits there.
+      if (selectedFile || selectedBaseBranchFile) return;
+      const root = rootRef.current;
+      // The pane's own container counts as the hub: keyboard pane navigation
+      // focuses it, not anything inside, and the chord is still on screen.
+      const paneEl = keyboardScope instanceof HTMLElement ? keyboardScope : null;
+      if (!target || !root || !(root.contains(target) || target === paneEl)) return;
+      if (root.querySelector(`[${PR_CHECKS_OPEN_ATTR}="true"]`)) return;
+      // No panel to answer it (base-branch comparison, nothing to commit): leave
+      // the key alone rather than swallow it.
+      const run = commitShortcutRef.current;
+      if (!run) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // A held chord must not commit and then keep going into whatever the
+      // commit leaves focused.
+      if (!e.repeat) run({ commitOnly: e.shiftKey });
+      return;
+    }
     // A radiogroup (the diff mode switch) answers its own arrow keys, the way it
     // does everywhere else; this capture listener would otherwise take Up/Down
     // before the group ever sees them.
@@ -183,9 +219,14 @@ export function useReviewHubKeyboard({
       return;
     }
 
+    // Cmd/Ctrl+Enter is the commit chord above, and these are the list's own
+    // plain keys: a modified one belongs to whatever binding owns that chord,
+    // not to the row under the cursor (the `v` case below says the same).
+    const hasChordModifier = e.metaKey || e.ctrlKey || e.altKey;
+
     switch (e.key) {
       case "Enter": {
-        if (targetIsControl || focusedIndex < 0) return;
+        if (hasChordModifier || targetIsControl || focusedIndex < 0) return;
         const item = navigableItems[focusedIndex];
         if (!item) return;
         e.preventDefault();
@@ -204,7 +245,7 @@ export function useReviewHubKeyboard({
         return;
       }
       case " ": {
-        if (targetIsControl || focusedIndex < 0) return;
+        if (hasChordModifier || targetIsControl || focusedIndex < 0) return;
         const item = navigableItems[focusedIndex];
         if (!item) return;
         e.preventDefault();
@@ -217,7 +258,7 @@ export function useReviewHubKeyboard({
         return;
       }
       default: {
-        if (e.key.toLowerCase() === "v" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (e.key.toLowerCase() === "v" && !hasChordModifier) {
           if (targetIsControl || focusedIndex < 0) return;
           const item = navigableItems[focusedIndex];
           if (!item) return;
