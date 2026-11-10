@@ -1,10 +1,11 @@
 import { z } from "zod";
 
 /**
- * A global Assistant's prompt held for the next time a busy worker waits at
- * its own prompt (#16187): what `terminal.sendCommandOwned` answers with
+ * A prompt held for the next time a busy agent waits at its own prompt: a
+ * global Assistant's for a worker (#16187), or any assistant's for another
+ * assistant (#16620). What `terminal.sendCommandOwned` answers with
  * `whenBusy: "queue"`, and what a status read says became of it. Kept in the
- * memory of the host that runs the worker; a restart forgets it.
+ * memory of the host that runs the agent; a restart forgets it.
  */
 
 /** How long a held prompt waits by default, and the bounds a caller may set. */
@@ -94,7 +95,7 @@ export const WhenBusyArgSchema = z
   .enum(["refuse", "queue"])
   .optional()
   .describe(
-    "An agent you didn't launch and isn't at its prompt: `refuse` (default) sends nothing; `queue` holds the text for its next prompt."
+    "Busy assistant, or worker you neither launched nor were handed: `refuse` (default) sends nothing; `queue` holds it for its next prompt."
   );
 
 export const QueueTtlSecondsArgSchema = z

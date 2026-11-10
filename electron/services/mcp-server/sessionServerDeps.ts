@@ -1137,8 +1137,9 @@ export function createSessionServerDeps(
     isTerminalInPinnedWorkspace,
     ...(deps.replyWaiter !== undefined ? { replyWaiter: deps.replyWaiter } : {}),
     ...(deps.terminalNotify !== undefined ? { terminalNotify: deps.terminalNotify } : {}),
-    // Only a session relayed for a Shell's global Assistant holds any (#16187).
-    ...(deps.workerSteerQueue !== undefined && relay?.global === true
+    // Only a relayed session holds any: a global Assistant's for a worker
+    // (#16187), or any assistant's for another assistant (#16620).
+    ...(deps.workerSteerQueue !== undefined && relay !== undefined
       ? { workerSteerQueue: deps.workerSteerQueue }
       : {}),
     // A relayed session is never this machine's assistant: no lane, and no

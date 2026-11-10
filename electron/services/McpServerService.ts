@@ -736,12 +736,15 @@ export class McpServerService {
     this.workerPrincipalResolver = resolver;
   }
 
-  /** Where the global Assistant's prompts for busy workers are held (#16187). */
   /**
    * A terminal's own notice line, for a wake no MCP call of its own queued: a
-   * notice it arms later joins this one rather than replacing it.
+   * notice it arms later joins this one rather than replacing it. An
+   * assistant's is its help session's (#16620), the line its own notices
+   * ride, since a line opened for the terminal under another key ends that one.
    */
   workerNoticePane(terminalId: string): OwnPane {
+    const helpSessionId = this.getSessionIdForTerminal(terminalId);
+    if (helpSessionId !== null) return { key: helpNotifyKey(helpSessionId), terminalId };
     const principal = this.workerPrincipalResolver?.(terminalId) ?? null;
     return {
       key: principal !== null ? paneNotifyKey(principal) : workerNotifyKey(terminalId),
@@ -749,6 +752,7 @@ export class McpServerService {
     };
   }
 
+  /** Where prompts held for a busy worker or assistant wait (#16187, #16620). */
   getWorkerSteerQueue(): WorkerSteerQueue {
     return this.workerSteerQueue;
   }

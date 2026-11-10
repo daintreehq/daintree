@@ -289,7 +289,8 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
  * names another assistant's run, or a worker the global Assistant steers or
  * shows, which only an assistant may address (#13496, #14551, #16096);
  * `whenBusy`, `queueTtlSeconds` and `queuedSendToken` hold a message for such
- * a worker and read it back, which only the global Assistant can (#16187).
+ * a worker or another assistant and read it back, which only an assistant can
+ * (#16187, #16620).
  * Left off the listing so every such client does not pay for an argument it can
  * never use on every turn.
  */

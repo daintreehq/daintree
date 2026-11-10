@@ -261,6 +261,15 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
           logger.warn("Couldn't release what was handed to an ended assistant", { error });
         });
     },
+    endHeldSends: (helpSessionId) => {
+      void mcpServer()
+        .then(({ mcpServerService }) =>
+          mcpServerService.endRelayHeldSends(LOCAL_RELAY_SENDER_ID, helpSessionId)
+        )
+        .catch((error: unknown) => {
+          logger.warn("Couldn't drop what an ended assistant held for busy agents", { error });
+        });
+    },
     retirePrincipal: (senderId, helpSessionId) => {
       void mcpServer()
         .then(({ mcpServerService }) =>

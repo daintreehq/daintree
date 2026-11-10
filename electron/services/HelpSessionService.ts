@@ -2539,6 +2539,7 @@ export class HelpSessionService {
         pty: () => getPtyClient(),
         extractReply,
         projectName: (projectId) => projectStore.getProjectById(projectId)?.name ?? null,
+        queue: () => mcpServerService.getWorkerSteerQueue(),
       }),
       steer: liveGlobalWorkerSteer({
         pty: () => getPtyClient(),

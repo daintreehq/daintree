@@ -9,6 +9,7 @@ vi.mock("electron", () => ({
 }));
 
 import { createSessionServer, validateDisplayImageUrl } from "../sessionServer.js";
+import type { TerminalNotifyHandlers } from "../terminalNotify.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
 import type { McpSessionOrigin } from "../../../../shared/types/ipc/mcpServer.js";
@@ -947,6 +948,200 @@ describe("one assistant addressing another (#13496)", () => {
       arguments: { terminalId: ASSISTANT_TERMINAL, command: "x", generation: 4 },
     });
     expect(toolErrorPayload(result).code).toBe("ASSISTANT_BUSY");
+  });
+
+  describe("a send held for a busy assistant (#16620)", () => {
+    const RELAYED = {
+      ...CALLER,
+      kind: "relay",
+      senderId: "s",
+      linkSessionId: "l",
+    } as AssistantCaller;
+    const relayed = (refuseWrite: { code: string; message: string } | null = null) =>
+      assistantDeps({ caller: RELAYED, origin: "external", relay: true, refuseWrite });
+    const heldBy = (control: ReturnType<typeof assistantDeps>["control"]) =>
+      (
+        control.submit.mock.calls[0] as unknown as [
+          unknown,
+          unknown,
+          {
+            whenBusy?: {
+              queue: { ttlSeconds: number };
+              authorize(): { code: string; message: string } | null;
+            };
+          },
+        ]
+      )[2].whenBusy;
+
+    it("forwards a relayed owned send's `whenBusy` and its time, under the drive rule", async () => {
+      const { deps, control } = relayed();
+      const server = await serve(deps);
+      const result = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: {
+          terminalId: ASSISTANT_TERMINAL,
+          command: "Run the suite",
+          generation: 4,
+          whenBusy: "queue",
+          queueTtlSeconds: 120,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      const whenBusy = heldBy(control)!;
+      expect(whenBusy.queue).toEqual({ ttlSeconds: 120 });
+      // Asked again when the held line is written, of the target's project.
+      const refuseWrite = deps.relay!.refuseWrite as ReturnType<typeof vi.fn>;
+      expect(whenBusy.authorize()).toBeNull();
+      const driven = { code: "DRIVEN_ELSEWHERE", message: "Another machine drives it." };
+      refuseWrite.mockReturnValue(driven);
+      expect(whenBusy.authorize()).toEqual(driven);
+      expect(refuseWrite).toHaveBeenLastCalledWith(TARGET.projectId);
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("forwards none without `queue`, or on the unowned send", async () => {
+      const owned = relayed();
+      await callTool(await serve(owned.deps), {
+        name: "terminal.sendCommandOwned",
+        arguments: {
+          terminalId: ASSISTANT_TERMINAL,
+          command: "x",
+          generation: 4,
+          whenBusy: "refuse",
+        },
+      });
+      expect(heldBy(owned.control)).toBeUndefined();
+
+      // A send within the project, or up to the global, stays refuse-only.
+      for (const terminalId of [ASSISTANT_TERMINAL, GLOBAL_TERMINAL]) {
+        const local = assistantDeps({ caller: CALLER });
+        await callTool(await serve(local.deps), {
+          name: "terminal.sendCommand",
+          arguments: { terminalId, command: "x", generation: 4, whenBusy: "queue" },
+        });
+        expect(local.control.submit, terminalId).toHaveBeenCalledTimes(1);
+        expect(heldBy(local.control), terminalId).toBeUndefined();
+      }
+    });
+
+    it("refuses what it can't hold, sending nothing", async () => {
+      const { deps, control } = relayed();
+      const server = await serve(deps);
+      for (const [args, pattern] of [
+        [{ whenBusy: "queue", waitForReply: true }, /waitForReply/],
+        [{ queueTtlSeconds: 600 }, /goes only with/],
+        [{ whenBusy: "queue", queueTtlSeconds: 5 }, /from 60 to 3600/],
+        [{ whenBusy: "later" }, /`refuse` or `queue`/],
+      ] as const) {
+        const result = await callTool(server, {
+          name: "terminal.sendCommandOwned",
+          arguments: { terminalId: ASSISTANT_TERMINAL, command: "x", generation: 4, ...args },
+        });
+        const payload = toolErrorPayload(result);
+        expect(payload.code, JSON.stringify(args)).toBe("VALIDATION_ERROR");
+        expect(payload.message).toMatch(pattern);
+      }
+      expect(control.submit).not.toHaveBeenCalled();
+    });
+
+    it("hands the call's notice to the held send, and leaves older ones until it is written", async () => {
+      const pending = { complete: vi.fn(), cancel: vi.fn() };
+      const handlers = {
+        whenIdle: vi.fn(),
+        prepareSend: vi.fn().mockResolvedValue(pending),
+        prepareLaunch: vi.fn(),
+        prepareKeys: vi.fn(),
+        forgetTarget: vi.fn(),
+        holdTarget: vi.fn(),
+        settleTargetHold: vi.fn(),
+        supersede: vi.fn(),
+        releaseHold: vi.fn(),
+      } satisfies TerminalNotifyHandlers;
+      const pane = { key: "relay\u0000p", terminalId: "relay\u0000p" };
+      const held = {
+        sent: false,
+        queued: true,
+        terminalId: ASSISTANT_TERMINAL,
+        command: "x",
+        queuedSendToken: "held-1",
+        expiresAt: 9_000,
+        message: "Held, not sent.",
+      };
+      const { deps, control } = relayed();
+      let taken: unknown;
+      control.submit.mockImplementation((async (
+        _caller: unknown,
+        _target: unknown,
+        request: { whenBusy?: { takeNotice?: () => unknown } }
+      ) => {
+        taken = request.whenBusy?.takeNotice?.();
+        return held;
+      }) as never);
+      const server = await serve({ ...deps, terminalNotify: handlers, resolveOwnPane: () => pane });
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: {
+          terminalId: ASSISTANT_TERMINAL,
+          command: "x",
+          generation: 4,
+          whenBusy: "queue",
+          notify: true,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      // The call ended without settling its notice: the held send has it.
+      expect(taken).toBe(pending);
+      expect(pending.complete).not.toHaveBeenCalled();
+      expect(pending.cancel).not.toHaveBeenCalled();
+
+      // Without a notice, what the pane heard about the assistant goes stale once written, not now.
+      control.submit.mockImplementation((async () => held) as never);
+      await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: {
+          terminalId: ASSISTANT_TERMINAL,
+          command: "y",
+          generation: 4,
+          whenBusy: "queue",
+        },
+      });
+      expect(handlers.supersede).not.toHaveBeenCalled();
+      (
+        control.submit.mock.calls[1] as unknown as [
+          unknown,
+          unknown,
+          { whenBusy: { onWritten(): void } },
+        ]
+      )[2].whenBusy.onWritten();
+      expect(handlers.supersede).toHaveBeenCalledWith(pane, ASSISTANT_TERMINAL);
+    });
+
+    it("answers with the held receipt", async () => {
+      const { deps, control } = relayed();
+      control.submit.mockResolvedValueOnce({
+        sent: false,
+        queued: true,
+        terminalId: ASSISTANT_TERMINAL,
+        command: "x",
+        queuedSendToken: "held-1",
+        expiresAt: 9_000,
+        message: "Held, not sent.",
+      } as never);
+      const server = await serve(deps);
+      const result = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: {
+          terminalId: ASSISTANT_TERMINAL,
+          command: "x",
+          generation: 4,
+          whenBusy: "queue",
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      const [first] = result.content as Array<{ text: string }>;
+      expect(JSON.parse(first!.text)).toMatchObject({ queued: true, queuedSendToken: "held-1" });
+    });
   });
 
   it("routes a relayed owned close, interrupt and read to the assistant, past the ledger", async () => {
