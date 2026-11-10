@@ -7,6 +7,12 @@ interface EventsState {
   events: EventRecord[];
   isOpen: boolean;
   filters: EventFilterOptions;
+  /**
+   * Bumped by every clearFilters(). The search and trace fields hold drafts
+   * for their debounce, and a clear from outside the bar (the filtered-empty
+   * state) can't reach them — this is the signal to drop the drafts too.
+   */
+  filtersResetCount: number;
   selectedEventId: string | null;
   autoScroll: boolean;
 
@@ -56,6 +62,7 @@ const createEventsStore: StateCreator<EventsState> = (set, get) => ({
   events: [],
   isOpen: false,
   filters: {},
+  filtersResetCount: 0,
   selectedEventId: null,
   autoScroll: true,
 
@@ -106,7 +113,8 @@ const createEventsStore: StateCreator<EventsState> = (set, get) => ({
       filters: { ...state.filters, ...newFilters },
     })),
 
-  clearFilters: () => set({ filters: {} }),
+  clearFilters: () =>
+    set((state) => ({ filters: {}, filtersResetCount: state.filtersResetCount + 1 })),
 
   setSelectedEvent: (id) => set({ selectedEventId: id }),
 
@@ -117,6 +125,7 @@ const createEventsStore: StateCreator<EventsState> = (set, get) => ({
       events: [],
       isOpen: false,
       filters: {},
+      filtersResetCount: 0,
       selectedEventId: null,
       autoScroll: true,
     }),

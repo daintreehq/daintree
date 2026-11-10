@@ -1,14 +1,24 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, type MouseEvent, type RefObject } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
 import { SearchField, clearSearchBeforeDismiss } from "@/components/ui/SearchField";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { FilterChip } from "@/components/ui/FilterChip";
-import { Check, ListFilter } from "lucide-react";
+import { TailKeepingText } from "@/components/ui/TailKeepingText";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Check, ListFilter, X } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { EventRecord, EventFilterOptions, EventCategory } from "@/store/eventStore";
 import { EVENT_CATEGORY_STYLES } from "@/config/categoryColors";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
+import {
+  activeContextFilters,
+  formatContextValue,
+  hasActiveEventFilters,
+  type ContextFilterKey,
+} from "./contextFilters";
 
 // Dot per category as a recognition aid beside the label, from the same hue
 // family as the timeline's category chips. Never the only signal.
@@ -32,20 +42,98 @@ const ALL_CATEGORIES: EventCategory[] = [
   "artifact",
 ];
 
-type FilterSubset = Pick<EventFilterOptions, "types" | "categories" | "search" | "traceId">;
-
 interface EventFiltersProps {
   events: EventRecord[];
-  filters: FilterSubset;
-  onFiltersChange: (filters: FilterSubset) => void;
+  filters: EventFilterOptions;
+  onFiltersChange: (filters: EventFilterOptions) => void;
+  /** Clears every filter. The bar drops its own drafts and keeps focus first. */
+  onClear: () => void;
+  /** Changes whenever filters are cleared from anywhere, so pending drafts are dropped too. */
+  resetSignal?: number;
+  /** The search field, so a clear from outside the bar can hand focus to it. */
+  searchInputRef?: RefObject<HTMLInputElement | null>;
   className?: string;
 }
 
-export function EventFilters({ events, filters, onFiltersChange, className }: EventFiltersProps) {
+/** A worktree id is its path; the folder name is the part that tells two apart. */
+function worktreeName(value: string): string {
+  const trimmed = value.replace(/[\\/]+$/, "");
+  return trimmed.slice(Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\")) + 1) || value;
+}
+
+/** Pointer clicks hand focus over without a ring; keyboard activation keeps it. */
+function focusAfter(event: MouseEvent, target: HTMLElement | null | undefined) {
+  target?.focus({ preventScroll: true, focusVisible: event.detail === 0 });
+}
+
+interface AppliedContextTokenProps {
+  filterKey: ContextFilterKey;
+  label: string;
+  noun: string;
+  value: string | number;
+  onClear: (event: MouseEvent<HTMLButtonElement>, key: ContextFilterKey) => void;
+}
+
+/**
+ * A value set from an event's Context, shown in the bar as the selected chip
+ * it is in Context; pressing it clears that one value. A worktree shows its
+ * folder name, and the full id is disclosed whenever the label doesn't carry it.
+ */
+function AppliedContextToken({ filterKey, label, noun, value, onClear }: AppliedContextTokenProps) {
+  const full = formatContextValue(filterKey, value);
+  const display = filterKey === "worktreeId" ? worktreeName(full) : full;
+  const { ref: headRef, isTruncated } = useTruncationDetection();
+  const showFull = display !== full || isTruncated;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <FilterChip
+          selected
+          data-applied-filter=""
+          aria-label={`${label}: ${display}`}
+          aria-description={display !== full ? full : undefined}
+          onClick={(event) => onClear(event, filterKey)}
+          className="max-w-72"
+        >
+          <span className="shrink-0 font-normal">{label}:</span>
+          <TailKeepingText text={display} headRef={headRef} />
+          <X aria-hidden="true" className="h-3 w-3 shrink-0" />
+        </FilterChip>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        {showFull ? <div className="font-mono break-all">{full}</div> : null}
+        <div className={showFull ? "text-text-secondary" : undefined}>Clear {noun} filter</div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+export function EventFilters({
+  events,
+  filters,
+  onFiltersChange,
+  onClear,
+  resetSignal,
+  searchInputRef,
+  className,
+}: EventFiltersProps) {
   const [searchInput, setSearchInput] = useState(filters.search || "");
   const [traceIdInput, setTraceIdInput] = useState(filters.traceId || "");
   const traceInputRef = useRef<HTMLInputElement>(null);
+  const ownSearchRef = useRef<HTMLInputElement>(null);
+  const searchRef = searchInputRef ?? ownSearchRef;
   const [moreOpen, setMoreOpen] = useState(false);
+
+  // A clear from outside the bar (the filtered-empty state's Clear filters)
+  // empties the store but can't reach these drafts; without this a draft
+  // typed just before the clear would commit itself after the debounce.
+  const lastResetRef = useRef(resetSignal);
+  useEffect(() => {
+    if (lastResetRef.current === resetSignal) return;
+    lastResetRef.current = resetSignal;
+    setSearchInput("");
+    setTraceIdInput("");
+  }, [resetSignal]);
 
   useEffect(() => {
     setSearchInput(filters.search || "");
@@ -83,48 +171,36 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
     return counts;
   }, [events]);
 
-  const { availableTypes, typeCounts } = useMemo(() => {
-    const types = new Set<string>();
+  // Grouped by the same categories, labels and order as the chips. A selected
+  // type stays listed after its events are cleared, so it can still be unticked.
+  const { groupedTypes, typeCounts } = useMemo(() => {
     const counts = new Map<string, number>();
-
+    const categoryOf = new Map<string, EventCategory>();
     events.forEach((event) => {
-      types.add(event.type);
       counts.set(event.type, (counts.get(event.type) || 0) + 1);
+      if (event.category) categoryOf.set(event.type, event.category);
+    });
+    filters.types?.forEach((type) => {
+      if (!counts.has(type)) counts.set(type, 0);
     });
 
-    return {
-      availableTypes: Array.from(types).sort(),
-      typeCounts: counts,
-    };
-  }, [events]);
+    const byCategory = new Map<EventCategory | "other", string[]>();
+    Array.from(counts.keys())
+      .sort()
+      .forEach((type) => {
+        const category = categoryOf.get(type) ?? "other";
+        byCategory.set(category, [...(byCategory.get(category) ?? []), type]);
+      });
 
-  const groupedTypes = useMemo(() => {
-    const groups: Record<string, string[]> = {
-      system: [],
-      agent: [],
-      devserver: [],
-      watcher: [],
-      file: [],
-      ui: [],
-      other: [],
-    };
-
-    availableTypes.forEach((type) => {
-      if (type.startsWith("sys:")) groups.system!.push(type);
-      else if (type.startsWith("agent:")) groups.agent!.push(type);
-      else if (type.startsWith("server:")) groups.devserver!.push(type);
-      else if (type.startsWith("watcher:")) groups.watcher!.push(type);
-      else if (type.startsWith("file:")) groups.file!.push(type);
-      else if (type.startsWith("ui:")) groups.ui!.push(type);
-      else groups.other!.push(type);
-    });
-
-    Object.keys(groups).forEach((key) => {
-      if (groups[key]!.length === 0) delete groups[key];
-    });
-
-    return groups;
-  }, [availableTypes]);
+    const groups: Array<{ label: string; types: string[] }> = [];
+    for (const category of ALL_CATEGORIES) {
+      const types = byCategory.get(category);
+      if (types) groups.push({ label: EVENT_CATEGORY_STYLES[category].label, types });
+    }
+    const other = byCategory.get("other");
+    if (other) groups.push({ label: "Other", types: other });
+    return { groupedTypes: groups, typeCounts: counts };
+  }, [events, filters.types]);
 
   const handleSearchChange = (value: string) => {
     setSearchInput(value);
@@ -161,11 +237,39 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
     onFiltersChange({ ...filters, types: newTypes.length > 0 ? newTypes : undefined });
   };
 
-  const clearTypeFilters = () => {
+  // The button unmounts with the selection it clears; the trace field above
+  // it is the nearest control that stays.
+  const clearTypeFilters = (event: MouseEvent<HTMLButtonElement>) => {
+    if (document.activeElement === event.currentTarget) focusAfter(event, traceInputRef.current);
     onFiltersChange({ ...filters, types: undefined });
   };
 
+  // The token unmounts with its filter, so focus moves on first: to the next
+  // token, else the previous one, else the search field.
+  const clearContextFilter = (event: MouseEvent<HTMLButtonElement>, key: ContextFilterKey) => {
+    const token = event.currentTarget;
+    if (document.activeElement === token) {
+      const tokens = Array.from(
+        token.parentElement?.querySelectorAll<HTMLElement>("[data-applied-filter]") ?? []
+      );
+      const index = tokens.indexOf(token);
+      focusAfter(event, tokens[index + 1] ?? tokens[index - 1] ?? searchRef.current);
+    }
+    onFiltersChange({ ...filters, [key]: undefined });
+  };
+
+  // "Clear filters" unmounts once nothing is left to clear, so focus lands in
+  // the search field rather than falling to the body.
+  const handleClearAll = (event: MouseEvent<HTMLButtonElement>) => {
+    setSearchInput("");
+    setTraceIdInput("");
+    focusAfter(event, searchRef.current);
+    onClear();
+  };
+
   const moreFilterCount = (filters.types?.length || 0) + (filters.traceId ? 1 : 0);
+  const appliedContext = activeContextFilters(filters);
+  const showClearAll = hasActiveEventFilters(filters);
 
   return (
     <div
@@ -178,6 +282,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
         size="dense"
         fieldClassName="min-w-[150px] max-w-[260px] flex-1"
         type="search"
+        inputRef={searchRef}
         value={searchInput}
         onChange={(e) => handleSearchChange(e.target.value)}
         onClear={clearSearch}
@@ -231,7 +336,9 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
         </PopoverTrigger>
         <PopoverContent
           align="end"
-          className="flex max-h-[60vh] w-80 flex-col p-0"
+          // Bounded by the room Radix measured as well, or a tall list opening
+          // upward from the dock runs its header off the top of the window.
+          className="flex max-h-[min(60vh,var(--radix-popover-content-available-height))] w-80 flex-col p-0"
           onEscapeKeyDown={(e) => clearSearchBeforeDismiss(e, traceInputRef.current, clearTraceId)}
         >
           <div className="shrink-0 space-y-1 border-b border-divider p-3">
@@ -262,8 +369,10 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
               </Button>
             )}
           </div>
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
-            {Object.keys(groupedTypes).length === 0 ? (
+          {/* A short list of short rows that routinely runs past the bottom: the
+              compact fade says it continues without washing out a live row. */}
+          <ScrollShadow compact className="flex-1" scrollClassName="space-y-2 px-2 pb-2">
+            {groupedTypes.length === 0 ? (
               <EmptyState
                 variant="zero-data"
                 scale="popover"
@@ -271,11 +380,9 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
                 className="py-6"
               />
             ) : null}
-            {Object.entries(groupedTypes).map(([category, types]) => (
-              <div key={category}>
-                <div className="px-1 pb-0.5 text-2xs font-medium capitalize text-text-secondary">
-                  {category}
-                </div>
+            {groupedTypes.map(({ label, types }) => (
+              <div key={label}>
+                <div className="px-1 pb-0.5 text-2xs font-medium text-text-secondary">{label}</div>
                 {types.map((type) => {
                   const isChecked = filters.types?.includes(type) || false;
                   return (
@@ -300,9 +407,36 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
                 })}
               </div>
             ))}
-          </div>
+          </ScrollShadow>
         </PopoverContent>
       </Popover>
+
+      {/* Values set from an event's Context have no control of their own up
+          here, so each one is shown and cleared from the bar. */}
+      {appliedContext.length > 0 ? (
+        <div
+          className="flex min-w-0 flex-wrap items-center gap-1"
+          role="group"
+          aria-label="Context filters"
+        >
+          {appliedContext.map(({ key, label, noun, value }) => (
+            <AppliedContextToken
+              key={key}
+              filterKey={key}
+              label={label}
+              noun={noun}
+              value={value}
+              onClear={clearContextFilter}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {showClearAll ? (
+        <Button variant="ghost" size="xs" onClick={handleClearAll}>
+          Clear filters
+        </Button>
+      ) : null}
     </div>
   );
 }
