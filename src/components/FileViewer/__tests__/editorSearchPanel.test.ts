@@ -47,6 +47,15 @@ function field(name: string): HTMLInputElement {
   return panel().querySelector<HTMLInputElement>(`input[name=${name}]`)!;
 }
 
+/** A search option (case, re, word): a pressed-state toggle button. */
+function option(name: string): HTMLButtonElement {
+  return panel().querySelector<HTMLButtonElement>(`button[name=${name}]`)!;
+}
+
+function pressed(name: string): boolean {
+  return option(name).getAttribute("aria-pressed") === "true";
+}
+
 function type(input: HTMLInputElement, value: string) {
   input.value = value;
   input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
@@ -106,10 +115,7 @@ describe("editorSearchPanel (#12755)", () => {
     const { view } = mounted;
     type(queryInput(), "al");
     type(field("replace"), "be");
-    for (const name of ["case", "re", "word"]) {
-      field(name).checked = true;
-      field(name).dispatchEvent(new Event("change", { bubbles: true }));
-    }
+    for (const name of ["case", "re", "word"]) option(name).click();
     const query = getSearchQuery(view.state);
     expect(query.search).toBe("al");
     expect(query.replace).toBe("be");
@@ -133,17 +139,16 @@ describe("editorSearchPanel (#12755)", () => {
     });
     expect(queryInput().value).toBe("ph");
     expect(field("replace").value).toBe("PH");
-    expect(field("case").checked).toBe(true);
-    expect(field("re").checked).toBe(true);
-    expect(field("word").checked).toBe(true);
+    expect(pressed("case")).toBe(true);
+    expect(pressed("re")).toBe(true);
+    expect(pressed("word")).toBe(true);
   });
 
   it("marks an unparseable pattern invalid, and an empty query not", () => {
     mounted = mount("alpha", { readOnly: true });
     const wrapper = queryInput().parentElement!;
     expect(wrapper.hasAttribute("data-invalid")).toBe(false);
-    field("re").checked = true;
-    field("re").dispatchEvent(new Event("change", { bubbles: true }));
+    option("re").click();
     type(queryInput(), "(");
     expect(wrapper.getAttribute("data-invalid")).toBe("true");
     expect(queryInput().getAttribute("aria-invalid")).toBe("true");
@@ -153,8 +158,7 @@ describe("editorSearchPanel (#12755)", () => {
     type(queryInput(), "(");
     expect(wrapper.getAttribute("data-invalid")).toBe("true");
     // The same text is a fine literal search once regexp is off.
-    field("re").checked = false;
-    field("re").dispatchEvent(new Event("change", { bubbles: true }));
+    option("re").click();
     expect(wrapper.hasAttribute("data-invalid")).toBe(false);
   });
 
@@ -316,7 +320,7 @@ describe("editorSearchPanel (#12755)", () => {
   it("the close button closes the panel and hands focus back to the editor", () => {
     mounted = mount("alpha", { readOnly: true });
     const { view } = mounted;
-    const close = panel().querySelector<HTMLButtonElement>("button[name=close]")!;
+    const close = panel().querySelector<HTMLButtonElement>('button[aria-label="Close find bar"]')!;
     close.focus();
     close.click();
     expect(searchPanelOpen(view.state)).toBe(false);
@@ -333,7 +337,7 @@ describe("editorSearchPanel (#12755)", () => {
     openSearchPanel(view);
     expect(queryInput().value).toBe("ph");
     expect(field("replace").value).toBe("PH");
-    expect(field("word").checked).toBe(true);
+    expect(pressed("word")).toBe(true);
     expect(document.activeElement).toBe(queryInput());
   });
 
