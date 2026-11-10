@@ -99,15 +99,23 @@ export function useProjectSwitcherPalette({
   // query is dropped here as well: a later opening that skips `open()` — the
   // action palette's `/` route — would otherwise come back on the old text.
   const [wasOpen, setWasOpen] = useState(isOpen);
+  // The query an opening handed over. It ranks on the opening's own commit:
+  // the deferral is for keystrokes, and lagging here would show browse rows
+  // under the handed-over text, with an unrelated row highlighted for Enter.
+  const [seededQuery, setSeededQuery] = useState<string | null>(null);
   if (wasOpen !== isOpen) {
     setWasOpen(isOpen);
-    if (!isOpen) setQuery("");
+    if (!isOpen) {
+      setQuery("");
+      setSeededQuery(null);
+    }
   }
   const deferredQuery = useDeferredValue(query);
+  const rankedQuery = query === seededQuery ? query : deferredQuery;
   const isSearching = query.trim().length > 0;
   // Only stale while a search is still catching up. Clearing the box restores
   // browse in the same commit, so that transition is never "filtering".
-  const isFiltering = isSearching && query !== deferredQuery;
+  const isFiltering = isSearching && query !== rankedQuery;
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const suppressCloseAutoFocusRef = useRef(false);
 
@@ -248,7 +256,7 @@ export function useProjectSwitcherPalette({
   // Clearing the box reverts to browse immediately rather than holding the
   // deferred ranking for a commit — otherwise browse would flash the stale
   // search ranking on the way back to an empty query.
-  const resultsQuery = isSearching ? deferredQuery : "";
+  const resultsQuery = isSearching ? rankedQuery : "";
 
   // Held apart from `results` so browse keeps a stable array identity across
   // scratch-store traffic. Folded into the same memo, a rename in the pinned
@@ -277,9 +285,9 @@ export function useProjectSwitcherPalette({
     );
   }, [browseRows, hasCollapsedBand, collapsedBands]);
 
-  // True exactly when `results` is the ranked, scratch-carrying list — which is
-  // one commit behind `isSearching`, since the ranking runs on the deferred
-  // query. The pinned scratch section hides on THIS, never on the live query:
+  // True exactly when `results` is the ranked, scratch-carrying list — which,
+  // while typing, is one commit behind `isSearching`, since the ranking runs on
+  // the deferred query. The pinned scratch section hides on THIS, never on the live query:
   // hiding a commit early would leave the scratches nowhere for that frame.
   const isRankedSearch = isSearching && resultsQuery.trim().length > 0;
 
@@ -347,6 +355,7 @@ export function useProjectSwitcherPalette({
         setDropdownIsOpen(true);
       }
       setQuery(initialQuery);
+      setSeededQuery(initialQuery);
       // A closed palette renders against held stats, so the freeze is cut from
       // the store's current map rather than this render's rows.
       const stats = useProjectStatsStore.getState().stats;

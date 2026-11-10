@@ -336,9 +336,54 @@ describe("ActionPalette", () => {
   it("routes '/' from an empty field without handing the switcher any text", () => {
     const onSearchProjects = vi.fn();
     render(<ActionPalette {...baseProps} onSearchProjects={onSearchProjects} />);
-    fireKey("/");
+    expect(fireKey("/")).toBe(true);
     expect(usePaletteStore.getState().activePaletteId).toBe("project-switcher");
     expect(onSearchProjects).not.toHaveBeenCalled();
+  });
+
+  describe("leaves Enter alone on a path-shaped query when projects aren't offered", () => {
+    it.each([
+      ["a matching action", { results: [makeItem("a.action", "Alpha")], totalResults: 1 }],
+      ["results still catching up", { isStale: true }],
+      [
+        "a plugin command's argument field",
+        {
+          argPrompt: {
+            actionTitle: "Open",
+            fieldTitle: "Path",
+            step: 1,
+            total: 1,
+            kind: "string" as const,
+          },
+        },
+      ],
+    ])("with %s", (_label, overrides) => {
+      const onSearchProjects = vi.fn();
+      render(
+        <ActionPalette
+          {...baseProps}
+          query="work/api"
+          onSearchProjects={onSearchProjects}
+          {...overrides}
+        />
+      );
+      expect(fireKey("Enter")).toBe(false);
+      expect(onSearchProjects).not.toHaveBeenCalled();
+      expect(usePaletteStore.getState().activePaletteId).toBe("action");
+    });
+
+    it("inside the commands scope", () => {
+      const onSearchProjects = vi.fn();
+      const { rerender } = render(
+        <ActionPalette {...baseProps} onSearchProjects={onSearchProjects} />
+      );
+      fireKey(">");
+      rerender(
+        <ActionPalette {...baseProps} query="work/api" onSearchProjects={onSearchProjects} />
+      );
+      expect(fireKey("Enter")).toBe(false);
+      expect(onSearchProjects).not.toHaveBeenCalled();
+    });
   });
 
   it("draws no footer band over an empty result list it can't act on", () => {
