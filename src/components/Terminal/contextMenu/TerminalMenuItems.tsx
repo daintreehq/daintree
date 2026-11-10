@@ -82,7 +82,6 @@ export function TerminalSelectionMenuItems({
   selectionFilePath,
   onViewSelectedFile,
   separatorAfter = true,
-  resend,
   onSendToAgent,
   onOpenInFileBrowser,
   onAction,
@@ -90,8 +89,6 @@ export function TerminalSelectionMenuItems({
   hasSelection: boolean;
   /** Input is locked, so `terminal.paste` would do nothing. */
   pasteLocked?: boolean;
-  /** Resend last message (#16746), with why it can't go now; absent where it isn't offered. */
-  resend?: { unavailableReason: string | undefined };
   hoveredUrl: string | null;
   hoveredUrlPluginName: string | null;
   hoveredFilePath: string | null;
@@ -138,24 +135,6 @@ export function TerminalSelectionMenuItems({
         Paste
         <ContextMenuShortcut shortcut={clipboardCombos.paste} />
       </ContextMenuItem>
-      {resend && (
-        <ContextMenuItem
-          disabled={resend.unavailableReason !== undefined}
-          onSelect={() => onAction("resend-last-message")}
-          // The reason beside it is decoration, so it is part of the name.
-          aria-label={
-            resend.unavailableReason === undefined
-              ? undefined
-              : `Resend last message, ${resend.unavailableReason}`
-          }
-        >
-          <RefreshCw className={ICON_CLASS} aria-hidden="true" />
-          Resend last message
-          {resend.unavailableReason !== undefined && (
-            <ContextMenuMeta>{resend.unavailableReason}</ContextMenuMeta>
-          )}
-        </ContextMenuItem>
-      )}
       {onSendToAgent && (
         <ContextMenuItem
           disabled={!hasSelection}
@@ -420,6 +399,7 @@ export function TerminalSessionMenuItems({
   isInputLocked,
   isVoiceLockedHere,
   canDictateHere,
+  resend,
   liveRecentVoiceTargets,
   orchestratorCandidateIds,
   onRequestHandOver,
@@ -435,6 +415,8 @@ export function TerminalSessionMenuItems({
   isVoiceLockedHere: boolean;
   /** The pane has a composer to dictate into, so it can be taken as the lock (#14955). */
   canDictateHere: boolean;
+  /** Resend last message (#16746), with why it can't go now; absent where it isn't offered. */
+  resend?: { unavailableReason: string | undefined };
   liveRecentVoiceTargets: ReadonlyArray<{ panelId: string; label: string }>;
   orchestratorCandidateIds: readonly string[];
   onRequestHandOver: (orchestratorPaneId: string) => void;
@@ -501,6 +483,24 @@ export function TerminalSessionMenuItems({
           {/* Redraw always heads the group when there is a PTY; without one the
               preset row may draw nothing, so no separator to strand. */}
           {hasPty && <ContextMenuSeparator />}
+          {resend && (
+            <ContextMenuItem
+              disabled={resend.unavailableReason !== undefined}
+              onSelect={() => onAction("resend-last-message")}
+              // The reason beside it is decoration, so it is part of the name.
+              aria-label={
+                resend.unavailableReason === undefined
+                  ? undefined
+                  : `Resend last message, ${resend.unavailableReason}`
+              }
+            >
+              <RefreshCw className={ICON_CLASS} aria-hidden="true" />
+              Resend last message
+              {resend.unavailableReason !== undefined && (
+                <ContextMenuMeta>{resend.unavailableReason}</ContextMenuMeta>
+              )}
+            </ContextMenuItem>
+          )}
           <ContextMenuCheckboxItem
             checked={isInputLocked ?? false}
             onSelect={() => onAction("toggle-input-lock")}

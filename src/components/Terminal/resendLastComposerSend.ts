@@ -11,9 +11,10 @@ import { hasHeldComposerSend, useHeldComposerSendStore } from "@/store/heldCompo
 import { getLastComposerSend } from "@/store/lastComposerSendStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { paneComposerHold, submitPaneComposerText } from "./submitComposerText";
+import { paneComposerHold } from "./paneComposerHold";
+import { submitPaneComposerText } from "./submitComposerText";
 
-export const NOTHING_SENT_REASON = "Nothing has been sent to this panel yet";
+export const NOTHING_SENT_REASON = "Nothing sent to this panel yet";
 
 /** What decides whether a pane's last message can go again, as it stands. */
 export interface ResendReadiness {
@@ -33,10 +34,10 @@ export interface ResendReadiness {
  */
 export function resendUnavailableReason(readiness: ResendReadiness): string | undefined {
   if (!readiness.hasSend) return NOTHING_SENT_REASON;
-  if (!readiness.isLive) return "This panel's terminal isn't running";
-  if (readiness.isInputLocked) return "This panel's input is locked";
+  if (!readiness.isLive) return "Terminal isn't running";
+  if (readiness.isInputLocked) return "Input is locked";
   if (readiness.inputBlock !== null) return getTerminalInputBlockMessage(readiness.inputBlock);
-  if (readiness.isHolding) return "A message is already held for this panel";
+  if (readiness.isHolding) return "A message is already held";
   return undefined;
 }
 

@@ -121,6 +121,8 @@ const { logDebug, logInfo, logWarn } = await import("@/utils/logger");
 const { useWorktreeSelectionStore, persistMruList, suppressMruRecording } =
   await import("../worktreeStore");
 const { useTerminalInputStore } = await import("../terminalInputStore");
+const { claimComposerSendSeq, getLastComposerSend, noteLastComposerSend } =
+  await import("../lastComposerSendStore");
 const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
 const { useResourceMonitoringStore } = await import("../resourceMonitoringStore");
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
@@ -549,6 +551,30 @@ describe("rendererStoreOrchestrator", () => {
     usePanelStore.getState().removePanel("term-1");
 
     expect(clearSpy).toHaveBeenCalledWith("term-1");
+  });
+
+  it("keeps a panel's last message through the trash and forgets it once removed (#16746)", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "term-1": {
+          id: "term-1",
+          title: "T1",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["term-1"],
+    });
+    noteLastComposerSend("term-1", "again", [], claimComposerSendSeq());
+
+    usePanelStore.getState().trashPanel("term-1");
+    expect(getLastComposerSend("term-1")?.text).toBe("again");
+
+    usePanelStore.getState().removePanel("term-1");
+    expect(getLastComposerSend("term-1")).toBeUndefined();
   });
 
   it("clears worktree focus tracking when last-focused terminal is removed", () => {

@@ -14,6 +14,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { getLastComposerSend, useLastComposerSendStore } from "@/store/lastComposerSendStore";
 import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
 
 import type { RecipeContext } from "@/utils/recipeVariables";
@@ -898,6 +899,26 @@ describe("executeFleetBroadcast — image chips (#15600)", () => {
       ["c", "no pictures"],
       ["d", ""],
     ]);
+  });
+
+  it("leaves each pane what it was sent as its last message, and nothing where it failed (#16746)", async () => {
+    useLastComposerSendStore.setState({ sends: {} });
+    submitWithImagesMock.mockImplementation(async (id) => {
+      if (id === "c") throw new Error("EPIPE");
+    });
+    seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c")]);
+
+    await executeFleetBroadcast(
+      `compare ${ONE}`,
+      ["a", "b", "c"],
+      { b: `only ${TWO}` },
+      undefined,
+      { imagePaths: [ONE, TWO] }
+    );
+
+    expect(getLastComposerSend("a")).toMatchObject({ text: `compare ${ONE}`, imagePaths: [ONE] });
+    expect(getLastComposerSend("b")).toMatchObject({ text: `only ${TWO}`, imagePaths: [TWO] });
+    expect(getLastComposerSend("c")).toBeUndefined();
   });
 
   it("gives a pane sent the draft the chips in the editor's order, as one pane's send would", async () => {

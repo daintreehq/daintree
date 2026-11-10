@@ -127,7 +127,8 @@ import {
 } from "./terminalFocus";
 import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
-import { paneComposerHold, submitPaneComposerText } from "./submitComposerText";
+import { submitPaneComposerText } from "./submitComposerText";
+import { paneComposerHold } from "./paneComposerHold";
 import { HeldComposerSendRow } from "./HeldComposerSend";
 import { useHeldComposerSendStore } from "@/store/heldComposerSendStore";
 import {

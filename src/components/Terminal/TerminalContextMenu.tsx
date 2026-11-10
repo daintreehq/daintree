@@ -917,7 +917,6 @@ function TerminalContextMenuBody({
             <TerminalSelectionMenuItems
               hasSelection={hasSelection}
               pasteLocked={inputLocked}
-              resend={resend}
               hoveredUrl={hoveredUrl}
               hoveredUrlPluginName={hoveredUrlPluginName}
               hoveredFilePath={hoveredFilePath}
@@ -952,6 +951,7 @@ function TerminalContextMenuBody({
             isInputLocked={terminal.isInputLocked}
             isVoiceLockedHere={isVoiceLockedHere}
             canDictateHere={hasComposer}
+            resend={resend}
             liveRecentVoiceTargets={liveRecentVoiceTargets}
             orchestratorCandidateIds={orchestratorCandidateIds}
             onRequestHandOver={handleRequestHandOver}

@@ -1668,9 +1668,29 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.deletePreset": { agentId: "claude", presetId: "p-placeholder" },
     };
 
+    // terminal.resendLastMessage gates on `isEnabled`, which runs before the
+    // plugin gate: with nothing sent it answers DISABLED. A focused terminal
+    // with a message on record lets the plugin gate be what fires.
+    const { usePanelStore } = await import("@/store/panelStore");
+    const { claimComposerSendSeq, noteLastComposerSend } =
+      await import("@/store/lastComposerSendStore");
+    usePanelStore.setState({
+      panelsById: {
+        ...usePanelStore.getState().panelsById,
+        "t-placeholder": { id: "t-placeholder", kind: "terminal" } as never,
+      },
+    });
+    noteLastComposerSend("t-placeholder", "again", [], claimComposerSendSeq());
+    const CONTEXT: Readonly<Record<string, { focusedTerminalId: string }>> = {
+      "terminal.resendLastMessage": { focusedTerminalId: "t-placeholder" },
+    };
+
     const failures: string[] = [];
     for (const id of PLUGIN_DENIED_INJECTION_ACTIONS) {
-      const result = await service.dispatch(id, STRICT_ARGS[id] ?? args, { source: "plugin" });
+      const result = await service.dispatch(id, STRICT_ARGS[id] ?? args, {
+        source: "plugin",
+        ...(CONTEXT[id] && { contextOverride: CONTEXT[id] }),
+      });
       if (result.ok) {
         failures.push(`${id} (plugin dispatch succeeded — side door open)`);
         continue;
