@@ -26,8 +26,10 @@ describe("SectionBar's arrow keys", () => {
   });
 
   it("leaves the key alone when nothing is below a shut bar to take it", () => {
-    const { button } = bar({ onLeaveDown: () => false });
+    const onLeaveDown = vi.fn(() => false);
+    const { button } = bar({ onLeaveDown });
     expect(fireEvent.keyDown(button, { key: "ArrowDown" })).toBe(true);
+    expect(onLeaveDown).toHaveBeenCalledTimes(1);
     const bare = bar();
     expect(fireEvent.keyDown(bare.button, { key: "ArrowDown" })).toBe(true);
     expect(bare.onEnter).not.toHaveBeenCalled();
@@ -50,5 +52,36 @@ describe("SectionBar's arrow keys", () => {
     }
     const { button } = bar();
     expect(fireEvent.keyDown(button, { key: "ArrowUp" })).toBe(true);
+  });
+});
+
+describe("SectionBar's arrow keys beyond the bar", () => {
+  function inParent(fold: Parameters<typeof SectionBar>[0]["fold"]) {
+    const reached = vi.fn();
+    const view = render(
+      <div onKeyDown={(event) => reached(event.key)}>
+        <SectionBar id="s" label="Section" fold={fold} />
+      </div>
+    );
+    return { reached, button: view.container.querySelector("button")! };
+  }
+  const base = { controls: "rows", onToggle: vi.fn(), onEnter: vi.fn() };
+
+  it("keeps a handled arrow to itself, and lets an unhandled one on", () => {
+    const { reached, button } = inParent({
+      ...base,
+      expanded: false,
+      onLeaveUp: vi.fn(),
+      onLeaveDown: () => true,
+    });
+    fireEvent.keyDown(button, { key: "ArrowUp" });
+    fireEvent.keyDown(button, { key: "ArrowDown" });
+    expect(reached).not.toHaveBeenCalled();
+    fireEvent.keyDown(button, { key: "ArrowLeft" });
+    expect(reached).toHaveBeenCalledWith("ArrowLeft");
+
+    const idle = inParent({ ...base, expanded: false, onLeaveDown: () => false });
+    fireEvent.keyDown(idle.button, { key: "ArrowDown" });
+    expect(idle.reached).toHaveBeenCalledWith("ArrowDown");
   });
 });

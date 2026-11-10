@@ -824,21 +824,28 @@ describe("CanopyView arrow order across the Archived and Trash bars", () => {
   it("goes up from an open Archived bar to the search when the inbox is empty", async () => {
     await open([], [], ["done"]);
     fireEvent.click(archivedBar()!);
+    expect(archivedBar()!.getAttribute("aria-expanded")).toBe("true");
+    expect(card("done")).not.toBeNull();
     act(() => archivedBar()!.focus());
     fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
     expect(document.activeElement).toBe(searchInput());
   });
 
   it("leaves an open Archived section's rows to carry on into the Trash and back", async () => {
-    await open(TRASH, ["live"], ["done"]);
+    await open(TRASH, ["live"], ["done", "older-done"]);
     fireEvent.click(archivedBar()!);
+    const rows = [...document.querySelectorAll<HTMLElement>("#canopy-archived [data-canopy-card]")];
+    expect(rows).toHaveLength(2);
+    const [first, last] = [rows[0]!, rows[1]!];
     act(() => archivedBar()!.focus());
     fireEvent.keyDown(archivedBar()!, { key: "ArrowDown" });
-    expect(document.activeElement).toBe(card("done"));
-    fireEvent.keyDown(card("done"), { key: "ArrowDown" });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(last);
+    fireEvent.keyDown(last, { key: "ArrowDown" });
     expect(document.activeElement).toBe(trashBar());
     fireEvent.keyDown(trashBar()!, { key: "ArrowUp" });
-    expect(document.activeElement).toBe(card("done"));
+    expect(document.activeElement).toBe(last);
   });
 
   it("goes down from a search's last match, archived ones shown open, to the Trash match", async () => {
