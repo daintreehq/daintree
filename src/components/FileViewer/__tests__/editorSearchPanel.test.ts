@@ -23,7 +23,7 @@ function mount(doc: string, { readOnly }: { readOnly: boolean }) {
         search({ top: true, createPanel: createEditorSearchPanel }),
         keymap.of(searchKeymap),
         EditorState.readOnly.of(readOnly),
-        // CodeViewer gets this from basicSetup, and the "all" button needs it.
+        // CodeViewer gets this from basicSetup, and "Select all matches" needs it.
         EditorState.allowMultipleSelections.of(true),
       ],
     }),
@@ -165,7 +165,57 @@ describe("editorSearchPanel (#12755)", () => {
     expect(getSearchQuery(mounted.view.state).search).toBe("lph");
   });
 
-  it("the next, previous and all buttons drive the editor's matches", () => {
+  it("labels every control in sentence case, under its unchanged name attribute (#16641)", () => {
+    mounted = mount("alpha", { readOnly: false });
+    const buttons = [...panel().querySelectorAll<HTMLButtonElement>("button")].map((node) => ({
+      name: node.name,
+      text: node.textContent,
+      accessibleName: node.getAttribute("aria-label") ?? node.textContent,
+    }));
+    expect(buttons).toEqual([
+      { name: "prev", text: "Previous", accessibleName: "Previous match" },
+      { name: "next", text: "Next", accessibleName: "Next match" },
+      { name: "select", text: "Select all matches", accessibleName: "Select all matches" },
+      { name: "replace", text: "Replace", accessibleName: "Replace" },
+      { name: "replaceAll", text: "Replace all", accessibleName: "Replace all" },
+      { name: "close", text: "×", accessibleName: "Close find bar" },
+    ]);
+    const options = [...panel().querySelectorAll("label")].map((label) => {
+      const box = label.querySelector("input")!;
+      return {
+        name: box.name,
+        text: label.textContent,
+        accessibleName: box.getAttribute("aria-label") ?? label.textContent,
+      };
+    });
+    expect(options).toEqual([
+      { name: "case", text: "Match case", accessibleName: "Match case" },
+      { name: "word", text: "Whole word", accessibleName: "Match whole word" },
+      { name: "re", text: "Regex", accessibleName: "Regex" },
+    ]);
+    expect(field("replace").getAttribute("aria-label")).toBe("Replace with");
+  });
+
+  it("names each worded control with its visible words intact (WCAG 2.5.3)", () => {
+    mounted = mount("alpha", { readOnly: false });
+    const worded = [
+      ...[...panel().querySelectorAll<HTMLButtonElement>("button")]
+        .filter((node) => node.name !== "close")
+        .map((node) => ({ visible: node.textContent!, name: node.getAttribute("aria-label") })),
+      ...[...panel().querySelectorAll("label")].map((label) => ({
+        visible: label.textContent!,
+        name: label.querySelector("input")!.getAttribute("aria-label"),
+      })),
+    ];
+    for (const { visible, name } of worded) {
+      expect((name ?? visible).toLowerCase()).toContain(visible.toLowerCase());
+    }
+    // The close glyph is not read out as "multiplication sign".
+    const glyph = panel().querySelector("button[name=close] span")!;
+    expect(glyph.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("the previous, next and select-all-matches buttons drive the editor's matches", () => {
     mounted = mount("a1 a2 a3", { readOnly: true });
     const { view } = mounted;
     type(queryInput(), "a");
