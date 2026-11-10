@@ -3,10 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 
 const dispatchMock = vi.fn().mockResolvedValue({ ok: true, result: undefined });
-let manifest: Array<{ id: string; enabled: boolean; disabledReason?: string }> = [];
+let manifest: Array<{
+  id: string;
+  enabled: boolean;
+  disabledReason?: string;
+  paletteRedirectTo?: string;
+}> = [];
 vi.mock("@/services/ActionService", () => ({
   actionService: {
-    get: () => undefined,
+    get: (id: string) => manifest.find((entry) => entry.id === id) ?? null,
     list: () => manifest,
     dispatch: (...args: unknown[]) => dispatchMock(...args),
   },
@@ -249,6 +254,50 @@ describe("ChordIndicator (Cmd+K command HUD)", () => {
 
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(keybindingService.getPendingChord()).not.toBeNull();
+  });
+
+  describe("on the commit row, whose pick redirects to Review Hub", () => {
+    const commitRow = () => options().find((o) => o.id === "command-hud-option-git.commit")!;
+
+    it("shows Review Hub's state, not the commit action's", async () => {
+      manifest = [
+        { id: "git.commit", enabled: true, paletteRedirectTo: "worktree.openReviewHub" },
+        { id: "worktree.openReviewHub", enabled: false, disabledReason: "No worktree is active" },
+      ];
+      render(<ChordIndicator />);
+      pressCmdK();
+      await flushFrames();
+
+      expect(commitRow().getAttribute("aria-disabled")).toBe("true");
+      expect(commitRow().textContent).toContain("No worktree is active");
+
+      fireEvent.click(commitRow());
+      await flushFrames();
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("opens Review Hub when it can, whatever the commit action says", async () => {
+      manifest = [
+        {
+          id: "git.commit",
+          enabled: false,
+          disabledReason: "Never shown",
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+        { id: "worktree.openReviewHub", enabled: true },
+      ];
+      render(<ChordIndicator />);
+      pressCmdK();
+      await flushFrames();
+
+      expect(commitRow().getAttribute("aria-disabled")).not.toBe("true");
+      expect(commitRow().textContent).not.toContain("Never shown");
+
+      fireEvent.click(commitRow());
+      await flushFrames();
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock.mock.calls[0]![0]).toBe("worktree.openReviewHub");
+    });
   });
 
   it("finds every row of a group by typing its visible heading", async () => {

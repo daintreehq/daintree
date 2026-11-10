@@ -987,9 +987,10 @@ export class ActionService {
       this.requiresArgsCache.set(definition.id, requiresArgs);
     }
 
-    // Project the palette behavior onto the manifest. Palette-only — these
-    // fields are read by useActionPalette and ignored by dispatch()/MCP, so
-    // keybindings, context menus, and the MCP tool surface are unaffected. The
+    // Project the palette behavior onto the manifest. These fields are read by
+    // useActionPalette (and the redirect by keybindings and the command HUD,
+    // through resolveInteractiveActionId) and ignored by dispatch()/MCP, so
+    // context menus and the MCP tool surface are unaffected. The
     // `requireContext` predicate fails CLOSED (disabled-with-reason) since
     // that's purely a palette-row state, not a dispatch gate.
     let paletteHidden: true | undefined;

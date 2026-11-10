@@ -27,10 +27,10 @@ export type ActionScope = "renderer";
  * picked. `requiresArgs` only answers "does the schema reject zero args" — this
  * field answers "what should happen when a user picks this from the palette."
  *
- * Palette-only: `ActionService.list()` projects this onto the manifest, but
- * `dispatch()`/`get()` ignore it, so keybindings, context menus, and the MCP
- * tool surface are unaffected. Unset behaves as `"run"` (today's behavior:
- * dispatch the action with `{}`).
+ * `ActionService.list()`/`get()` project this onto the manifest, and
+ * `dispatch()` ignores it, so context menus and the MCP tool surface are
+ * unaffected. Unset behaves as `"run"` (today's behavior: dispatch the action
+ * with `{}`).
  *
  * - `hidden` — never list the action in the palette. Still dispatchable via
  *   keybinding / direct id and still visible to MCP (use `isVisible` instead to
@@ -40,7 +40,8 @@ export type ActionScope = "renderer";
  *   but dispatch `to` instead when picked. The companion UI action — typically a
  *   dialog-opener — is what actually runs. For headless arg-taking actions that
  *   have an interactive sibling (e.g. `worktree.createWithRecipe` →
- *   `worktree.createDialog.open`).
+ *   `worktree.createDialog.open`). Keybindings and the command HUD follow it
+ *   too (`resolveInteractiveActionId`): they dispatch with no args either.
  * - `requireContext` — list the action, but render it disabled-with-reason in
  *   the palette when `isReady(ctx)` is false (the palette no-ops a disabled row
  *   and shows `reason` inline). When ready, dispatch normally with `{}`. For
@@ -549,9 +550,9 @@ export interface ActionManifestEntry {
   /** Set when the action is deprecated. Reported by `mcp.surface` (#11549). */
   deprecated?: ActionDeprecation;
   /**
-   * Projected from {@link ActionDefinition.palette}. Palette-only — these are
-   * read by the action-palette layer and ignored by `dispatch()`/MCP. See
-   * {@link PaletteBehavior}.
+   * Projected from {@link ActionDefinition.palette}. Read by the action palette
+   * (and, for `paletteRedirectTo`, by keybindings and the command HUD); ignored
+   * by `dispatch()`/MCP. See {@link PaletteBehavior}.
    */
   /** `palette.mode === "hidden"` — exclude from the palette listing. */
   paletteHidden?: boolean;
