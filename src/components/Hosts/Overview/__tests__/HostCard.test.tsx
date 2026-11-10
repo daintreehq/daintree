@@ -289,4 +289,117 @@ describe("HostCard", () => {
     rerender(<HostCard row={row} history={[]} onSwitch={() => {}} />);
     expect(screen.queryByTestId("host-overview-projects")).toBeNull();
   });
+
+  it("offers a Retry for a project list that couldn't be read, not a reopen", () => {
+    const row = makeRow({});
+    const onRetryProjects = vi.fn();
+    render(
+      <HostCard
+        row={row}
+        history={[]}
+        onSwitch={() => {}}
+        projects={null}
+        onRetryProjects={onRetryProjects}
+      />
+    );
+    const card = screen.getByTestId("host-overview-card");
+    expect(card.textContent).toContain(`Couldn't load projects on ${row.name}`);
+    expect(card.textContent).not.toMatch(/reopen/i);
+    expect(onRetryProjects).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: `Retry listing projects on ${row.name}` }));
+    expect(onRetryProjects).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a pressed Retry", () => {
+    const row = makeRow({});
+    const retryName = `Retry listing projects on ${row.name}`;
+    const projectsRegion = () => screen.getByRole("region", { name: `Projects on ${row.name}` });
+
+    /** The card as the overview draws it while the host is asked: failed, then listing. */
+    function pressRetry() {
+      const onRetryProjects = vi.fn();
+      const card = (projects?: readonly { id: string; name: string; path: string }[] | null) => (
+        <HostCard
+          row={row}
+          history={[]}
+          onSwitch={() => {}}
+          projects={projects}
+          onRetryProjects={onRetryProjects}
+        />
+      );
+      const view = render(card(null));
+      const retry = screen.getByRole("button", { name: retryName });
+      retry.focus();
+      fireEvent.click(retry);
+      const section = projectsRegion();
+      expect(onRetryProjects).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(section);
+      view.rerender(card(undefined));
+      return { view, section, card, onRetryProjects };
+    }
+
+    it("shows the listing state with focus held on the Projects section, not the page", () => {
+      const { section } = pressRetry();
+      expect(screen.queryByRole("button", { name: retryName })).toBeNull();
+      expect(section.textContent).toContain(`Listing projects on ${row.name}…`);
+      expect(projectsRegion()).toBe(section);
+      expect(document.activeElement).toBe(section);
+    });
+
+    it("replaces the failure with the list, focus staying on the section", () => {
+      const { view, section, card } = pressRetry();
+      view.rerender(card([{ id: "p1", name: "api", path: "/srv/api" }]));
+      expect(screen.getByRole("button", { name: `Open api on ${row.name}` })).toBeTruthy();
+      expect(section.textContent).not.toContain("Couldn't load");
+      expect(projectsRegion()).toBe(section);
+      expect(document.activeElement).toBe(section);
+    });
+
+    it("hands focus to the new Retry when the host fails again", () => {
+      const { view, card } = pressRetry();
+      view.rerender(card(null));
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: retryName }));
+    });
+
+    it("leaves focus where the person moved it while waiting", () => {
+      const { view, card } = pressRetry();
+      const elsewhere = screen.getByRole("button", { name: `Switch to ${row.name}` });
+      elsewhere.focus();
+      view.rerender(card(null));
+      expect(document.activeElement).toBe(elsewhere);
+    });
+
+    it("hands focus to the card's host button when the host drops while asked", () => {
+      const { view, onRetryProjects } = pressRetry();
+      view.rerender(
+        <HostCard
+          row={{ ...row, connection: { status: "unreachable", lastSeenAt: null, detail: null } }}
+          history={[]}
+          onSwitch={() => {}}
+          onRetryProjects={onRetryProjects}
+        />
+      );
+      expect(screen.queryByRole("region", { name: `Projects on ${row.name}` })).toBeNull();
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: `Switch to ${row.name}` })
+      );
+    });
+  });
+
+  it("takes no focus for an answer nobody pressed Retry for", () => {
+    const row = makeRow({});
+    const { rerender } = render(
+      <HostCard row={row} history={[]} onSwitch={() => {}} onRetryProjects={() => {}} />
+    );
+    rerender(
+      <HostCard
+        row={row}
+        history={[]}
+        onSwitch={() => {}}
+        projects={null}
+        onRetryProjects={() => {}}
+      />
+    );
+    expect(document.activeElement).toBe(document.body);
+  });
 });
