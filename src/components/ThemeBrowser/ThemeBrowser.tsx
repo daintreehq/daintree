@@ -290,18 +290,14 @@ export function ThemeBrowser() {
     [effectiveSchemes]
   );
 
-  const [keyboardIndex, setKeyboardIndex] = useState<number>(() => {
-    const i = filteredThemes.findIndex((s) => s.id === selectedSchemeId);
-    return i >= 0 ? i : 0;
-  });
-
-  // Keep keyboardIndex within bounds when the filtered list changes (e.g.,
-  // on query/filter edits). Without this the roving tabindex can point at a
-  // row that no longer exists.
-  useEffect(() => {
-    if (filteredThemes.length === 0) return;
-    setKeyboardIndex((prev) => Math.min(prev, filteredThemes.length - 1));
-  }, [filteredThemes.length]);
+  // The cursor IS the highlighted row, read back from the list rather than kept
+  // as a number of its own. A stored index outlives the list it was counted in:
+  // after a filter hid the highlighted row it still pointed at whatever row sat
+  // at that position, so the arrows skipped the first match or jumped to the
+  // last. -1 when nothing visible is highlighted, which `stepListboxCursor`
+  // already answers by entering at the first row (Down) or the last (Up). A
+  // click moves it too, because it moves the highlight.
+  const activeIndex = filteredThemes.findIndex((s) => s.id === activeSchemeId);
 
   const revertPreview = useCallback(() => {
     const state = useAppThemeStore.getState();
@@ -332,9 +328,20 @@ export function ThemeBrowser() {
     (id: string, debounceAnnounce?: boolean) => {
       const state = useAppThemeStore.getState();
       if (state.previewSchemeId === id) return;
-      // Nothing to preview when it is already on screen, which in a project with
-      // its own theme is not the global selection.
-      if (state.previewSchemeId === null && resolveCommittedScheme(state).id === id) return;
+      // Nothing to preview when the highlighted global selection is already on
+      // screen. In a project with its own theme the screen shows the project's
+      // theme, so the global selection still previews, and so does the project's
+      // own row: the arrows step from the highlight, so that row has to take it
+      // or they could never move past it. Repainting it is cheap, and writing
+      // claims the latest theme intent, which keeps an older deferred paint from
+      // landing on top of the row the user picked.
+      if (
+        state.previewSchemeId === null &&
+        id === state.selectedSchemeId &&
+        resolveCommittedScheme(state).id === id
+      ) {
+        return;
+      }
       const scheme = resolveAppTheme(id, selectSelectableSchemes(state));
       setPreviewSchemeId(id);
       injectSchemeToDOM(scheme);
@@ -437,11 +444,11 @@ export function ThemeBrowser() {
   }, []);
 
   // Scroll the committed theme into view on open so the user lands at their
-  // current choice, not the top of the list. Keyboard index is already
-  // initialized to the committed row via useState lazy init above — no need
-  // to re-set it here. Reads from useAppThemeStore.getState() so the effect
-  // has no reactive dependencies and won't re-run (and re-scroll) while the
-  // user edits the search or filter.
+  // current choice, not the top of the list. The cursor follows the highlight,
+  // which already rests on the committed row, so there is nothing to set here.
+  // Reads from useAppThemeStore.getState() so the effect has no reactive
+  // dependencies and won't re-run (and re-scroll) while the user edits the
+  // search or filter.
   useLayoutEffect(() => {
     const committedId = useAppThemeStore.getState().selectedSchemeId;
     const node = rowRefs.current.get(committedId);
@@ -464,51 +471,45 @@ export function ThemeBrowser() {
   const handleListKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       if (filteredThemes.length === 0) return;
-      // A persistent list: the arrows stop at its ends. The search field forwards
-      // only the arrows, so there Home and End stay with the caret.
-      const next = keyBelongsToField(e)
-        ? null
-        : stepListboxCursor(e.key, keyboardIndex, filteredThemes.length, { wrap: false });
-      if (next !== null) {
-        e.preventDefault();
-        setKeyboardIndex(next);
-        const scheme = filteredThemes[next];
+      const lastIndex = filteredThemes.length - 1;
+      const landOn = (index: number) => {
+        const scheme = filteredThemes[index];
         if (scheme && scheme.id !== activeSchemeId) {
           handlePreview(scheme.id, true);
           revealRow(scheme.id);
         }
-      } else if (e.key === "PageDown") {
+      };
+      // A persistent list: the arrows stop at its ends. The search field forwards
+      // only the arrows, so there Home and End stay with the caret.
+      const next = keyBelongsToField(e)
+        ? null
+        : stepListboxCursor(e.key, activeIndex, filteredThemes.length, { wrap: false });
+      if (next !== null) {
         e.preventDefault();
-        const sampleItem = rowRefs.current.values().next().value ?? null;
-        const pageSize = computeListPageSize(listRef.current, sampleItem);
-        const next = Math.min(keyboardIndex + pageSize, filteredThemes.length - 1);
-        if (next !== keyboardIndex) {
-          setKeyboardIndex(next);
-          const scheme = filteredThemes[next];
-          if (scheme && scheme.id !== activeSchemeId) {
-            handlePreview(scheme.id, true);
-            revealRow(scheme.id);
-          }
-        }
-      } else if (e.key === "PageUp") {
+        landOn(next);
+      } else if (e.key === "PageDown" || e.key === "PageUp") {
         e.preventDefault();
-        const sampleItem = rowRefs.current.values().next().value ?? null;
-        const pageSize = computeListPageSize(listRef.current, sampleItem);
-        const next = Math.max(keyboardIndex - pageSize, 0);
-        if (next !== keyboardIndex) {
-          setKeyboardIndex(next);
-          const scheme = filteredThemes[next];
-          if (scheme && scheme.id !== activeSchemeId) {
-            handlePreview(scheme.id, true);
-            revealRow(scheme.id);
-          }
+        const down = e.key === "PageDown";
+        if (activeIndex < 0) {
+          // Nothing highlighted: enter where the arrow in that direction does,
+          // rather than paging from a position the list does not show.
+          landOn(down ? 0 : lastIndex);
+        } else {
+          const sampleItem = rowRefs.current.values().next().value ?? null;
+          const pageSize = computeListPageSize(listRef.current, sampleItem);
+          landOn(
+            down ? Math.min(activeIndex + pageSize, lastIndex) : Math.max(activeIndex - pageSize, 0)
+          );
         }
       } else if (e.key === "Enter") {
         e.preventDefault();
-        handleCommit();
+        // With nothing highlighted the list offers no theme to save: the saved
+        // one may be filtered out of it, and Enter must never apply a theme the
+        // list does not show (#15057). "Set theme" stays available for it.
+        if (activeIndex >= 0) handleCommit();
       }
     },
-    [filteredThemes, revealRow, handleCommit, handlePreview, keyboardIndex, activeSchemeId]
+    [filteredThemes, revealRow, handleCommit, handlePreview, activeIndex, activeSchemeId]
   );
 
   const handleSearchKeyDown = useCallback(
@@ -526,24 +527,10 @@ export function ThemeBrowser() {
     [handleListKeyDown]
   );
 
-  // A pointer click is a navigation event too: without this the keyboard
-  // cursor stays where it was, so clicking the last row and pressing ArrowDown
-  // jumps back to the second row instead of continuing from the click.
-  const handleSelect = useCallback(
-    (id: string) => {
-      const index = filteredThemes.findIndex((s) => s.id === id);
-      if (index >= 0) setKeyboardIndex(index);
-      handlePreview(id);
-    },
-    [filteredThemes, handlePreview]
-  );
-
   // The option the combobox points at. Only meaningful while that option is
   // actually in the filtered list — a stale id would leave screen readers
   // announcing a row the user can no longer see.
-  const activeRowId = filteredThemes.some((s) => s.id === activeSchemeId)
-    ? rowDomId(activeSchemeId)
-    : undefined;
+  const activeRowId = activeIndex >= 0 ? rowDomId(activeSchemeId) : undefined;
 
   const isEmpty = filteredThemes.length === 0;
   const registerRowRef = useCallback((id: string, el: HTMLDivElement | null) => {
@@ -693,7 +680,7 @@ export function ThemeBrowser() {
                   effectiveScheme={effectiveSchemes.get(scheme.id) ?? scheme}
                   isCommitted={scheme.id === selectedSchemeId}
                   isActive={scheme.id === activeSchemeId}
-                  onSelect={handleSelect}
+                  onSelect={handlePreview}
                   warnings={warningsByScheme.get(scheme.id) ?? EMPTY_WARNINGS}
                   onRowRef={registerRowRef}
                 />
