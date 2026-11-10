@@ -72,6 +72,7 @@ const WHEN_DONE_ROWS: ReadonlyArray<{ choice: TerminalWhenDone; label: string }>
 /** Copy, paste and what the pointer or the selection found in the output. */
 export function TerminalSelectionMenuItems({
   hasSelection,
+  pasteLocked = false,
   hoveredUrl,
   hoveredUrlPluginName,
   hoveredFilePath,
@@ -85,6 +86,8 @@ export function TerminalSelectionMenuItems({
   onAction,
 }: {
   hasSelection: boolean;
+  /** Input is locked, so `terminal.paste` would do nothing. */
+  pasteLocked?: boolean;
   hoveredUrl: string | null;
   hoveredUrlPluginName: string | null;
   hoveredFilePath: string | null;
@@ -123,6 +126,7 @@ export function TerminalSelectionMenuItems({
         Copy clean text
       </ContextMenuItem>
       <ContextMenuItem
+        disabled={pasteLocked}
         onSelect={() => onAction("paste")}
         aria-keyshortcuts={comboToAriaKeyshortcuts(clipboardCombos.paste, mac)}
       >

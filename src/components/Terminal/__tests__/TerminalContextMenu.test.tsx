@@ -79,6 +79,7 @@ const {
   liveHoveredLink,
   liveSelection,
   liveTerminal,
+  managedLocked,
   liveLayout,
   openLink,
   hoveredFilePath,
@@ -108,6 +109,7 @@ const {
   liveSelection: { current: "" },
   // A terminal with real rows behind its selection, and the width they were laid out at.
   liveTerminal: { current: null as Record<string, unknown> | null },
+  managedLocked: { current: false },
   liveLayout: { current: null as Record<string, unknown> | null },
   openLink: vi.fn(),
   hoveredFilePath: { current: null as string | null },
@@ -159,6 +161,7 @@ vi.mock("@/services/TerminalInstanceService", () => {
       terminal: liveTerminal.current ?? { getSelection: () => liveSelection.current },
       commandLinksDisposable: liveLayout.current,
       hoveredLink: liveHoveredLink.current,
+      isInputLocked: managedLocked.current,
     }),
     getTerminal: () => undefined,
     getSelection: () => "",
@@ -526,6 +529,46 @@ function openMenu(options: {
   });
   return result;
 }
+
+describe("TerminalContextMenu — Paste on a locked terminal (#16668)", () => {
+  afterEach(() => {
+    managedLocked.current = false;
+  });
+
+  function pasteRow() {
+    return screen.getByText("Paste").closest("button")!;
+  }
+
+  it("disables Paste when the panel is input-locked", () => {
+    openMenu({ hovered: null });
+    cleanup();
+    panelsById.current = {
+      "panel-1": { ...(panelsById.current["panel-1"] as object), isInputLocked: true },
+    };
+    const result = render(
+      <TerminalContextMenu terminalId="panel-1">
+        <div>Panel body</div>
+      </TerminalContextMenu>
+    );
+    act(() => {
+      result.container
+        .querySelector('[data-context-trigger="panel-1"]')!
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+    expect(pasteRow().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("disables Paste when only the managed terminal is locked", () => {
+    managedLocked.current = true;
+    openMenu({ hovered: null });
+    expect(pasteRow().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("keeps Paste enabled when unlocked", () => {
+    openMenu({ hovered: null });
+    expect(pasteRow().getAttribute("aria-disabled")).toBeNull();
+  });
+});
 
 describe("TerminalContextMenu — open in file browser (#11483)", () => {
   afterEach(() => {
