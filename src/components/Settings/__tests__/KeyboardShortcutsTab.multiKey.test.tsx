@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, within } from "@testing-library/react";
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -58,13 +58,16 @@ vi.mock("@/components/KeyboardShortcuts", () => ({
     onCapture,
     onCancel,
     currentCombo,
+    validateCombo,
   }: {
     onCapture: (combo: string) => void;
     onCancel: () => void;
     currentCombo?: string;
+    validateCombo?: (combo: string) => React.ReactNode | null;
   }) => (
     <div data-testid="shortcut-capture">
       <span data-testid="capture-current">{currentCombo}</span>
+      <span data-testid="capture-validation">{validateCombo?.(captured.combo)}</span>
       <button type="button" onClick={() => onCapture(captured.combo)}>
         Capture combo
       </button>
@@ -81,6 +84,7 @@ vi.mock("@/components/KeyboardShortcuts", () => ({
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
+import { parseChord } from "@/lib/kbdShortcut";
 import { KeyboardShortcutsTab } from "../KeyboardShortcutsTab";
 
 let store: Record<string, string[]> = {};
@@ -131,6 +135,19 @@ async function renderTab() {
 }
 
 const editButtons = (name: RegExp) => screen.getAllByRole("button", { name });
+const ARM = /^Edit shortcut for Toggle arm focused terminal/;
+const glyphs = (combo: string) => parseChord(combo, true).flat().join("");
+
+/** Each of the action's rows as its label, scope note and keys read. */
+function armRows() {
+  return screen
+    .getAllByTestId("shortcut-row")
+    .filter((row) => within(row).queryByRole("button", { name: ARM }) !== null)
+    .map((row) => ({
+      label: row.querySelector("[data-settings-row-label]")?.textContent,
+      text: row.textContent ?? "",
+    }));
+}
 
 async function click(el: HTMLElement) {
   await act(async () => {
@@ -168,5 +185,89 @@ describe("KeyboardShortcutsTab — an action with two keys", () => {
     await click(screen.getByRole("button", { name: "Remove shortcut" }));
 
     expect(keybindingService.getTriggerCombos("terminal.contextMenu")).toEqual(["ContextMenu"]);
+  });
+
+  it("says before a save from the grid row that its key will apply across the app", async () => {
+    await renderTab();
+    await click(editButtons(/grid only/)[0]!);
+    expect(screen.getByText("A shortcut saved here applies across the app")).toBeTruthy();
+  });
+
+  it("names the grid key that a change on the Cmd+J row would widen", async () => {
+    await renderTab();
+    await click(editButtons(/Join the fleet/)[0]!);
+    const editor = screen.getByTestId("shortcut-capture").closest("[data-testid=shortcut-row]")!;
+    expect(editor.textContent).toContain("After a change here,");
+    expect(editor.textContent).toContain(`${glyphs("X")} applies across the app`);
+  });
+
+  it("refuses to record the action's other key on a row", async () => {
+    await renderTab();
+    // The row's own key is the recorder's "already the current shortcut", not a refusal.
+    captured.combo = "X";
+    await click(editButtons(/grid only/)[0]!);
+    expect(screen.getByTestId("capture-validation").textContent).toBe("");
+    await click(screen.getByRole("button", { name: "Cancel capture" }));
+
+    captured.combo = "Cmd+J";
+    await click(editButtons(/grid only/)[0]!);
+    expect(screen.getByTestId("capture-validation").textContent).toBe(
+      "Already a shortcut for this action"
+    );
+  });
+
+  it("after a save, every row says where its key really applies and focus is on the new one", async () => {
+    await renderTab();
+    await click(editButtons(/grid only/)[0]!);
+    await click(screen.getByRole("button", { name: "Capture combo" }));
+
+    const rows = armRows();
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.label === "Toggle arm focused terminal (Join the fleet)")).toBe(
+      true
+    );
+    expect(rows.every((row) => row.text.includes("Across the app"))).toBe(true);
+    expect(screen.queryByText("In an expanded worktree card")).toBeNull();
+    expect(document.activeElement?.textContent).toContain(glyphs("Cmd+Shift+K"));
+  });
+
+  it("after a removal, the remaining key keeps its row and focus", async () => {
+    await renderTab();
+    await click(editButtons(/grid only/)[0]!);
+    await click(screen.getByRole("button", { name: "Remove shortcut" }));
+
+    const rows = armRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.text).toContain(glyphs("Cmd+J"));
+    expect(rows[0]!.text).not.toContain("Across the app");
+    expect(document.activeElement?.textContent).toContain(glyphs("Cmd+J"));
+  });
+
+  it("Reset from either row puts back both default keys and their scopes", async () => {
+    await renderTab();
+    await click(editButtons(/grid only/)[0]!);
+    await click(screen.getByRole("button", { name: "Capture combo" }));
+
+    await click(
+      screen.getAllByRole("button", { name: /^Reset Toggle arm focused terminal/ }).at(-1)!
+    );
+
+    expect(keybindingService.hasOverride("fleet.armFocused")).toBe(false);
+    expect(keybindingService.getTriggerCombos("fleet.armFocused")).toEqual(["Cmd+J", "X"]);
+    expect(screen.getByText("In an expanded worktree card")).toBeTruthy();
+    expect(editButtons(/grid only/)).toHaveLength(1);
+  });
+
+  it("edits a key of an already-overridden action without touching its other key", async () => {
+    await keybindingService.setOverride("window.zoomIn", ["Cmd+=", "Cmd+0"]);
+    await renderTab();
+    const zoomRows = editButtons(/^Edit shortcut for Zoom in/);
+    expect(zoomRows).toHaveLength(2);
+    await click(zoomRows[0]!);
+    expect(screen.getByTestId("capture-current").textContent).toBe("Cmd+=");
+
+    await click(screen.getByRole("button", { name: "Remove shortcut" }));
+
+    expect(keybindingService.getTriggerCombos("window.zoomIn")).toEqual(["Cmd+0"]);
   });
 });

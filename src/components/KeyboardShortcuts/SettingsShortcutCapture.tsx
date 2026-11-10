@@ -395,78 +395,34 @@ export function SettingsShortcutCapture({
     onCancel();
   };
 
-  const handleUnbindConflict = async (conflict: {
-    actionId: string;
-    description?: string;
-    combo?: string;
-  }) => {
+  const handleUnbindConflict = async (conflict: { actionId: string; description?: string }) => {
     const { actionId } = conflict;
     setIsUnbinding(true);
 
     try {
       const currentOverride = keybindingService.getOverride(actionId);
-      const defaultCombo = keybindingService.getDefaultCombo(actionId);
-
-      let conflictingCombo: string | undefined;
-      let isOverrideConflict = false;
-      let newOverrideCombos: string[] | undefined;
-
-      if (currentOverride) {
-        // Platform-aware compare so a stored "Cmd+Shift+E" override is matched
-        // when the user captures "Ctrl+Shift+E" on Windows/Linux. (#7941)
-        const matchingOverride = currentOverride.find((combo) =>
-          combosFieldsEqual(combo, capturedCombo!)
-        );
-        if (matchingOverride) {
-          conflictingCombo = matchingOverride;
-          isOverrideConflict = true;
-          newOverrideCombos = currentOverride.filter(
-            (combo) => !combosFieldsEqual(combo, capturedCombo!)
-          );
-        }
-      }
-
-      if (!conflictingCombo && defaultCombo) {
-        if (combosFieldsEqual(defaultCombo, capturedCombo!)) {
-          conflictingCombo = defaultCombo;
-        }
-      }
-
-      // A plugin or second scoped registration isn't in the shipped defaults; the
-      // conflict itself carries the combo that clashed.
-      if (
-        !conflictingCombo &&
-        conflict.combo &&
-        combosFieldsEqual(conflict.combo, capturedCombo!)
-      ) {
-        conflictingCombo = conflict.combo;
-      }
-
-      if (isOverrideConflict) {
-        // Removing the last custom combo stores an empty binding rather than
-        // dropping the override: dropping it would bring back the default, which
-        // can be the very combo being freed, or another one the user never asked for.
-        const setResult = await actionService.dispatch(
-          "keybinding.setOverride",
-          { actionId, combo: newOverrideCombos ?? [] },
-          { source: "user" }
-        );
-        if (!setResult.ok) {
-          throw new Error(setResult.error?.message || "Failed to update keybinding");
-        }
-      } else if (conflictingCombo) {
-        const setResult = await actionService.dispatch(
-          "keybinding.setOverride",
-          { actionId, combo: [] },
-          { source: "user" }
-        );
-        if (!setResult.ok) {
-          throw new Error(setResult.error?.message || "Failed to update keybinding");
-        }
-      } else {
+      // An override is one key list for the whole action, so freeing this combo
+      // writes every key the action has without it: storing an empty list would
+      // also take a second default (Zoom in's Cmd+= beside Cmd+Shift+=), and
+      // dropping the override would bring back a default that may be this very
+      // combo. Platform-aware, so a stored "Cmd+Shift+E" is freed when the user
+      // captures "Ctrl+Shift+E" on Windows/Linux. (#7941)
+      const combos = keybindingService.getTriggerCombos(actionId);
+      const remaining = combos.filter((combo) => !combosFieldsEqual(combo, capturedCombo!));
+      if (remaining.length === combos.length) {
+        // Already freed elsewhere since the list was drawn; redraw it.
         logWarn("Could not identify conflicting combo");
-        setIsUnbinding(false);
+        setConflictRefreshKey((prev) => prev + 1);
         return;
+      }
+
+      const setResult = await actionService.dispatch(
+        "keybinding.setOverride",
+        { actionId, combo: remaining },
+        { source: "user" }
+      );
+      if (!setResult.ok) {
+        throw new Error(setResult.error?.message || "Failed to update keybinding");
       }
 
       setConflictRefreshKey((prev) => prev + 1);

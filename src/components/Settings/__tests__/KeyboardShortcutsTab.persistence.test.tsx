@@ -100,6 +100,7 @@ vi.mock("@/services/KeybindingService", () => ({
       },
     ],
     hasOverride: (actionId: string) => overrides.has(actionId),
+    getTriggerCombos: () => ["Cmd+S"],
     formatComboForDisplay: (combo: string) => combo,
     loadOverrides,
     subscribe: () => () => {},
