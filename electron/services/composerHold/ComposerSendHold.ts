@@ -215,8 +215,9 @@ export class ComposerSendHold {
       this.end(entry, { kind: "dropped", reason });
       return { outcome: "dropped" };
     };
-    if (request.inputBlocked) return drop("input-blocked");
+    // Main's word on who drives first: a view blocked for that reason says so.
     if (!safely(request.authorize)) return drop("driven-elsewhere");
+    if (request.inputBlocked) return drop("input-blocked");
     let info: NotifyTerminalInfo | null;
     try {
       info = await this.deps.readTerminal(request.terminalId);

@@ -88,14 +88,19 @@ function setup() {
       authorize: () => driving.value,
     });
   const ended = () => published.flatMap((change) => (change.ended ? [change.ended.outcome] : []));
-  const sendNow = (token: string, overrides: { inputBlocked?: boolean; drives?: boolean } = {}) =>
-    hold.sendNow({
+  const sendNow = (
+    token: string,
+    overrides: { inputBlocked?: boolean; drives?: boolean | (() => boolean) } = {}
+  ) => {
+    const { drives = true } = overrides;
+    return hold.sendNow({
       terminalId: T,
       token,
       projectId: PROJECT,
       inputBlocked: overrides.inputBlocked ?? false,
-      authorize: () => overrides.drives ?? true,
+      authorize: typeof drives === "function" ? drives : () => drives,
     });
+  };
   return {
     hold,
     wakes,
@@ -372,8 +377,16 @@ describe("ComposerSendHold", () => {
       expect(h.hold.withdraw(T, token, PROJECT)).toBe(false);
       expect(h.ended()).toEqual([]);
 
-      h.submissions.set(submissionToken, "pty_written");
+      // Another line's write says nothing of this one.
+      h.readTerminal.mockImplementationOnce(async () => ({
+        ...atPrompt(),
+        submission: { token: "another-line", phase: "pty_written" },
+      }));
       await vi.advanceTimersByTimeAsync(100);
+      expect(h.ended()).toEqual([]);
+
+      h.submissions.set(submissionToken, "pty_written");
+      await vi.advanceTimersByTimeAsync(250);
       expect(h.ended()).toEqual([{ kind: "delivered" }]);
       expect(h.submit).toHaveBeenCalledTimes(1);
       expect(h.request("next").ok).toBe(true);
@@ -410,8 +423,14 @@ describe("ComposerSendHold", () => {
       expect(blocked.published.at(-1)?.ended).toMatchObject({ text: "held text" });
 
       const driven = setup();
-      await driven.sendNow(held(driven), { drives: false });
+      await driven.sendNow(held(driven), { drives: false, inputBlocked: true });
       expect(driven.ended()).toEqual([{ kind: "dropped", reason: "driven-elsewhere" }]);
+
+      const lostDuringRead = setup();
+      let reads = 0;
+      await lostDuringRead.sendNow(held(lostDuringRead), { drives: () => ++reads === 1 });
+      expect(reads).toBe(2);
+      expect(lostDuringRead.ended()).toEqual([{ kind: "dropped", reason: "driven-elsewhere" }]);
 
       const holderLeft = setup();
       const holderToken = held(holderLeft);
@@ -437,7 +456,7 @@ describe("ComposerSendHold", () => {
       await typed.sendNow(typedToken);
       expect(typed.ended()).toEqual([{ kind: "dropped", reason: "typed" }]);
 
-      for (const h of [blocked, driven, holderLeft, gone, restarted, typed]) {
+      for (const h of [blocked, driven, lostDuringRead, holderLeft, gone, restarted, typed]) {
         expect(h.submit).not.toHaveBeenCalled();
       }
     });
@@ -463,6 +482,12 @@ describe("ComposerSendHold", () => {
       await vi.advanceTimersByTimeAsync(100);
       expect(failed.ended()).toEqual([{ kind: "dropped", reason: "unconfirmed" }]);
 
+      const lost = setup();
+      await lost.sendNow(held(lost));
+      lost.submissions.set(lost.submit.mock.calls[0]![2], "unknown");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(lost.ended()).toEqual([{ kind: "dropped", reason: "unconfirmed" }]);
+
       const silent = setup();
       await silent.sendNow(held(silent));
       silent.submissions.set(silent.submit.mock.calls[0]![2], "writing");
@@ -478,6 +503,13 @@ describe("ComposerSendHold", () => {
       vi.spyOn(console, "error").mockImplementation(() => {});
       await expect(threw.sendNow(held(threw))).resolves.toEqual({ outcome: "dropped" });
       expect(threw.ended()).toEqual([{ kind: "dropped", reason: "unconfirmed" }]);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      for (const h of [refused, exited, failed, lost, silent, threw]) {
+        expect(h.submit).toHaveBeenCalledTimes(1);
+        expect(h.ended()).toHaveLength(1);
+        expect(h.wakes[0]!.beforeType()).toBe(false);
+      }
     });
 
     it("touches nothing for another project's send, another token, or one that ended", async () => {
@@ -500,13 +532,29 @@ describe("ComposerSendHold", () => {
       h.hold.withdraw(T, token, PROJECT);
       await expect(h.sendNow(token)).resolves.toEqual({ outcome: "not-held" });
       expect(h.submit).not.toHaveBeenCalled();
+
+      // …nor for one withdrawn while Send now reads the terminal.
+      const raced = setup();
+      const racedToken = held(raced);
+      let release!: (info: NotifyTerminalInfo) => void;
+      raced.readTerminal.mockImplementationOnce(
+        () => new Promise<NotifyTerminalInfo>((resolve) => (release = resolve))
+      );
+      const answer = raced.sendNow(racedToken);
+      expect(raced.hold.withdraw(T, racedToken, PROJECT)).toBe(true);
+      release(working());
+      await expect(answer).resolves.toEqual({ outcome: "not-held" });
+      expect(raced.submit).not.toHaveBeenCalled();
+      expect(raced.ended()).toEqual([{ kind: "withdrawn" }]);
     });
 
     it("stops following a send typed now once disposed", async () => {
       vi.useFakeTimers();
       const h = setup();
       await h.sendNow(held(h));
+      expect(vi.getTimerCount()).toBe(1);
       h.hold.dispose();
+      expect(vi.getTimerCount()).toBe(0);
       expect(h.ended()).toEqual([{ kind: "dropped", reason: "stopped" }]);
       const reads = h.readTerminal.mock.calls.length;
       await vi.advanceTimersByTimeAsync(60_000);

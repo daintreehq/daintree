@@ -2071,6 +2071,7 @@ function TerminalPaneComponent({
                   isBackendDisconnected ||
                   isBackendRecovering ||
                   isInputLocked ||
+                  isRestarting ||
                   inputBlock !== null
                 }
               />

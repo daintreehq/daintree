@@ -16,7 +16,12 @@ vi.mock("../../../services/composerHold/composerSendHoldLive.js", () => ({
   getComposerSendHold: async () => queue,
   peekComposerSendHold: () => queue,
 }));
-vi.mock("../../../services/DriveLeaseService.js", () => ({ peekDriveLeaseService: () => null }));
+const lease = vi.hoisted(() => ({
+  service: null as null | { isDriving: (projectId: string, endpoint: unknown) => boolean },
+}));
+vi.mock("../../../services/DriveLeaseService.js", () => ({
+  peekDriveLeaseService: () => lease.service,
+}));
 vi.mock("../../../../shared/config/agentRegistry.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../../../shared/config/agentRegistry.js")>();
@@ -129,7 +134,22 @@ describe("handleSendNow", () => {
   const ctx = { projectId: "project-1", endpoint: undefined } as unknown as IpcContext;
 
   beforeEach(() => {
+    lease.service = null;
     queue.sendNow.mockReset().mockResolvedValue({ outcome: "sending" });
+  });
+
+  it("asks the drive lease, each time, whether the asking screen drives", async () => {
+    const driving = { value: true };
+    lease.service = { isDriving: (projectId) => projectId === "project-1" && driving.value };
+    const local = {
+      projectId: "project-1",
+      endpoint: { kind: "local", endpointId: "view-1" },
+    } as unknown as IpcContext;
+    await handleSendNow(local, "term-1", "token-1");
+    const [request] = queue.sendNow.mock.calls[0]!;
+    expect(request.authorize()).toBe(true);
+    driving.value = false;
+    expect(request.authorize()).toBe(false);
   });
 
   it("sends this view's own project's held send, with the view's word on its input", async () => {
