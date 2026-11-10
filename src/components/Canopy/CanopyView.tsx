@@ -19,6 +19,7 @@ import { clientErrorCode } from "@/utils/clientAppError";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useEffectiveCombo } from "@/hooks";
+import { isTerminalReservedCombo } from "@/services/terminalReservedKeys";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -385,8 +386,12 @@ function CanopyShortcuts() {
   const step = isMac() ? "Cmd" : "Alt";
   // The user's own binding, and double-Shift while on.
   const toggle = useEffectiveCombo("canopy.toggle");
-  // The window closes by its menu's Close Window, whatever the user's close
-  // binding, and has nothing to hand the pane its close.
+  // Cmd+W closes the window from the list, as its menu's Close Window does,
+  // whatever the user's close binding. In the agent's pane the close binding
+  // trashes its terminal: a chord can't reach the pane, and a key the terminal
+  // owns (Ctrl+W off the Mac) stays the shell's there.
+  const boundClose = useEffectiveCombo("terminal.close");
+  const paneClose = boundClose !== undefined && !boundClose.includes(" ") ? boundClose : undefined;
   const doubleShift = usePreferencesStore((s) => s.doubleShiftOpensCanopy);
   const groups: Array<{ heading: string; rows: ShortcutRow[] }> = [
     {
@@ -457,6 +462,16 @@ function CanopyShortcuts() {
         { keys: ["Shift+Enter"], label: "New line in a reply" },
         ...(canGoTo ? [{ keys: [REPLY_GO_TO_TERMINAL], label: "In a reply: go to terminal" }] : []),
         { keys: ["Escape"], label: "Back to the list from a reply" },
+        ...(paneClose
+          ? [
+              {
+                keys: [paneClose],
+                label: isTerminalReservedCombo(paneClose)
+                  ? "In a reply: trash the agent's terminal; Z takes it back"
+                  : "Trash the agent's terminal; Z takes it back",
+              },
+            ]
+          : []),
       ],
     },
   ];

@@ -3,6 +3,7 @@ import {
   isTerminalClipboardCopyKey,
   isTerminalClipboardPasteKey,
   isTerminalReservedKey,
+  isTerminalReservedCombo,
   isTuiReservedKey,
   isWindowsTerminalCopyKey,
   isWindowsTerminalPasteKey,
@@ -67,6 +68,36 @@ describe("isTuiReservedKey", () => {
 
   it("does not reserve Ctrl+C — SIGINT never routes through the app at all", () => {
     expect(isTuiReservedKey(keyEvent({ key: "c", ctrlKey: true }))).toBe(false);
+  });
+});
+
+// The shortcut help names a binding the terminal keeps only where it works.
+describe("isTerminalReservedCombo", () => {
+  it("agrees with the keystroke check on Linux, where Cmd is the Ctrl key", () => {
+    setPlatform("Linux x86_64");
+    expect(isTerminalReservedCombo("Cmd+W")).toBe(true);
+    expect(isTerminalReservedCombo("Ctrl+W")).toBe(true);
+    expect(isTerminalReservedCombo("Cmd+Shift+V")).toBe(true);
+    expect(isTerminalReservedCombo("Shift+Insert")).toBe(true);
+    expect(isTerminalReservedCombo("Shift+insert")).toBe(true);
+    expect(isTerminalReservedCombo("Cmd+Shift+W")).toBe(false);
+    expect(isTerminalReservedCombo("Cmd+Alt+W")).toBe(false);
+    expect(isTerminalReservedCombo("Cmd+V")).toBe(false);
+    expect(isTerminalReservedCombo("W")).toBe(false);
+  });
+
+  it("keeps Windows' plain Ctrl+C and Ctrl+V for the terminal", () => {
+    setPlatform("Win32");
+    expect(isTerminalReservedCombo("Cmd+V")).toBe(true);
+    expect(isTerminalReservedCombo("Cmd+C")).toBe(true);
+  });
+
+  it("reserves only the Control key on the Mac, never Cmd", () => {
+    setPlatform("MacIntel");
+    expect(isTerminalReservedCombo("Cmd+W")).toBe(false);
+    expect(isTerminalReservedCombo("Ctrl+W")).toBe(true);
+    expect(isTerminalReservedCombo("Cmd+Ctrl+W")).toBe(false);
+    expect(isTerminalReservedCombo("Cmd+Shift+V")).toBe(false);
   });
 });
 

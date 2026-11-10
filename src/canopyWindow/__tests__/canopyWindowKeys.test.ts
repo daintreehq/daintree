@@ -17,6 +17,7 @@ vi.mock("@/services/keybindingWhenContext", () => ({
 }));
 vi.mock("@/utils/logger", () => ({ logError }));
 
+import { CLOSE_OWNER_ATTR, CLOSE_REQUEST_EVENT } from "@/lib/closeRequest";
 import { keybindingService } from "@/services/KeybindingService";
 import { returnToLastProjectWindow, startCanopyWindowKeys } from "../canopyWindowKeys";
 
@@ -293,5 +294,275 @@ describe("Canopy's own key in its window (#16578)", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(focusLastProjectWindow).not.toHaveBeenCalled();
+  });
+});
+
+describe("Cmd+W in the Canopy window (#16618)", () => {
+  let closeWindow: ReturnType<typeof vi.fn>;
+  let pane: HTMLElement;
+  let paneReply: HTMLDivElement;
+  let paneHeader: HTMLButtonElement;
+  let paneTerminal: HTMLTextAreaElement;
+  let search: HTMLInputElement;
+  let trashed: number;
+
+  beforeEach(() => {
+    closeWindow = vi.fn(async () => {});
+    Object.defineProperty(window, "electron", {
+      value: { canopyWindow: { focusLastProjectWindow }, window: { close: closeWindow } },
+      configurable: true,
+      writable: true,
+    });
+    trashed = 0;
+    pane = document.createElement("section");
+    pane.setAttribute(CLOSE_OWNER_ATTR, "");
+    pane.addEventListener(CLOSE_REQUEST_EVENT, (event) => {
+      event.preventDefault();
+      trashed += 1;
+    });
+    paneHeader = document.createElement("button");
+    paneReply = document.createElement("div");
+    paneReply.contentEditable = "true";
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    paneTerminal = document.createElement("textarea");
+    xterm.append(paneTerminal);
+    pane.append(paneHeader, paneReply, xterm);
+    search = document.createElement("input");
+    document.body.append(search, pane);
+    for (const element of [paneReply, paneHeader, paneTerminal, search]) {
+      element.addEventListener("keydown", (event) => reached.push(event));
+    }
+  });
+
+  it("trashes the agent's terminal from its reply and its title bar, and keeps the window", () => {
+    for (const target of [paneReply, paneHeader]) {
+      const event = press(target, "w");
+      expect(event.defaultPrevented).toBe(true);
+    }
+
+    expect(trashed).toBe(2);
+    expect(closeWindow).not.toHaveBeenCalled();
+    expect(reached).toEqual([]);
+  });
+
+  it("closes the window from the list and the search, with no pane in hand", () => {
+    for (const target of [document.body, search]) {
+      const event = press(target, "w");
+      expect(event.defaultPrevented).toBe(true);
+    }
+
+    expect(closeWindow).toHaveBeenCalledTimes(2);
+    expect(trashed).toBe(0);
+  });
+
+  it("leaves Ctrl+W in the terminal to the shell off the Mac, closing nothing", () => {
+    const event = press(paneTerminal, "w");
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(reached).toEqual([event]);
+    expect(trashed).toBe(0);
+    expect(closeWindow).not.toHaveBeenCalled();
+  });
+
+  it("trashes on a rebound close, the terminal included, and never closes the window from a pane", () => {
+    keybindingService.applyOverrides({ "terminal.close": ["Cmd+Shift+W"] });
+
+    const rebound = press(paneTerminal, "W", { ctrlKey: true, shiftKey: true });
+    expect(rebound.defaultPrevented).toBe(true);
+    expect(trashed).toBe(1);
+    expect(closeWindow).not.toHaveBeenCalled();
+
+    // Out of a pane the rebound key has nothing to close, and goes on.
+    const onList = press(search, "W", { ctrlKey: true, shiftKey: true });
+    expect(onList.defaultPrevented).toBe(false);
+
+    // Close Window's own key is no longer the pane's, and the window stays.
+    const old = press(paneReply, "w");
+    expect(old.defaultPrevented).toBe(false);
+    expect(closeWindow).not.toHaveBeenCalled();
+    expect(trashed).toBe(1);
+
+    // From the list it still closes the window, whatever the binding.
+    press(document.body, "w");
+    expect(closeWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a chord-bound close out of the pane, and the window open there", () => {
+    keybindingService.applyOverrides({ "terminal.close": ["Cmd+K Cmd+W"] });
+
+    const first = press(paneReply, "k");
+    const second = press(paneReply, "w");
+
+    expect(first.defaultPrevented).toBe(false);
+    expect(second.defaultPrevented).toBe(false);
+    expect(keybindingService.getPendingChord()).toBeNull();
+    expect(trashed).toBe(0);
+    expect(closeWindow).not.toHaveBeenCalled();
+  });
+
+  it("leaves Cmd+W to a chord it begins, closing nothing and starting no chord", () => {
+    keybindingService.applyOverrides({
+      "terminal.close": ["Cmd+Shift+W"],
+      "action.palette.open": ["Cmd+W Cmd+X"],
+    });
+
+    const event = press(document.body, "w");
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(keybindingService.getPendingChord()).toBeNull();
+    expect(closeWindow).not.toHaveBeenCalled();
+  });
+
+  it("keeps the window open when the pane doesn't take the close", () => {
+    const loose = document.createElement("section");
+    loose.setAttribute(CLOSE_OWNER_ATTR, "");
+    const field = document.createElement("input");
+    loose.append(field);
+    document.body.append(loose);
+
+    const event = press(field, "w");
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(closeWindow).not.toHaveBeenCalled();
+  });
+
+  it("leaves Cmd+W to another binding that outranks the close, closing nothing", () => {
+    // The portal's close-tab binding holds Cmd+W at a higher priority in its scope.
+    keybindingService.setScope("portal");
+    try {
+      const inPane = press(paneReply, "w");
+      const onList = press(document.body, "w");
+
+      expect(inPane.defaultPrevented).toBe(false);
+      expect(onList.defaultPrevented).toBe(false);
+      expect(reached).toEqual([inPane]);
+      expect(trashed).toBe(0);
+      expect(closeWindow).not.toHaveBeenCalled();
+    } finally {
+      keybindingService.restoreScope("portal");
+    }
+  });
+
+  it("leaves Cmd+W to another binding that wins it from the list", () => {
+    keybindingService.applyOverrides({
+      "action.palette.open": ["Cmd+W"],
+      "terminal.close": ["Cmd+Shift+W"],
+    });
+
+    const onList = press(document.body, "w");
+
+    expect(onList.defaultPrevented).toBe(false);
+    expect(closeWindow).not.toHaveBeenCalled();
+  });
+
+  it("closes nothing on Cmd+Shift+W, which Close Window doesn't answer", () => {
+    keybindingService.applyOverrides({ "terminal.watch": [] });
+
+    const event = press(document.body, "W", { ctrlKey: true, shiftKey: true });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(closeWindow).not.toHaveBeenCalled();
+  });
+
+  it("leaves a close bound without Cmd or Ctrl to what is typed into, taking it on the title bar", () => {
+    keybindingService.applyOverrides({ "terminal.close": ["Q"] });
+    const rename = document.createElement("input");
+    const note = document.createElement("textarea");
+    // jsdom has no isContentEditable of its own.
+    Object.defineProperty(paneReply, "isContentEditable", { value: true });
+    pane.append(rename, note);
+
+    for (const target of [paneTerminal, rename, note, paneReply]) {
+      const typed = press(target, "q", {});
+      expect(typed.defaultPrevented).toBe(false);
+    }
+    expect(trashed).toBe(0);
+
+    const onHeader = press(paneHeader, "q", {});
+    expect(onHeader.defaultPrevented).toBe(true);
+    expect(trashed).toBe(1);
+  });
+
+  it("takes Canopy's own key first when the user binds it to Cmd+W", () => {
+    keybindingService.applyOverrides({
+      "canopy.toggle": ["Cmd+W"],
+      "terminal.close": ["Cmd+Shift+W"],
+    });
+
+    press(document.body, "w");
+
+    expect(focusLastProjectWindow).toHaveBeenCalledTimes(1);
+    expect(closeWindow).not.toHaveBeenCalled();
+  });
+
+  it("ignores a held Cmd+W's repeats and a shortcut being recorded", () => {
+    press(paneReply, "w", { ctrlKey: true, repeat: true });
+    press(document.body, "w", { ctrlKey: true, repeat: true });
+    const capture = vi.spyOn(keybindingService, "isCapturingShortcut").mockReturnValue(true);
+    press(document.body, "w");
+    capture.mockRestore();
+
+    expect(trashed).toBe(0);
+    expect(closeWindow).not.toHaveBeenCalled();
+  });
+
+  it("logs a close main refused", async () => {
+    const failure = new Error("refused");
+    closeWindow.mockRejectedValueOnce(failure);
+
+    press(document.body, "w");
+    await vi.waitFor(() => expect(logError).toHaveBeenCalledTimes(1));
+
+    expect(logError.mock.calls[0]![1]).toBe(failure);
+  });
+
+  describe("on the Mac", () => {
+    let platform: { mockRestore: () => void };
+    beforeEach(() => {
+      platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    });
+    afterEach(() => {
+      platform.mockRestore();
+    });
+
+    it("trashes from the terminal on Cmd+W, which no shell keeps, and closes from the list", () => {
+      for (const target of [paneTerminal, paneReply, paneHeader]) {
+        const event = press(target, "w", { metaKey: true });
+        expect(event.defaultPrevented).toBe(true);
+      }
+      expect(trashed).toBe(3);
+      expect(closeWindow).not.toHaveBeenCalled();
+
+      press(search, "w", { metaKey: true });
+      expect(closeWindow).toHaveBeenCalledTimes(1);
+      expect(trashed).toBe(3);
+    });
+
+    it("leaves a close bound to Ctrl+W to the shell in the terminal, trashing from the reply", () => {
+      keybindingService.applyOverrides({ "terminal.close": ["Ctrl+W"] });
+
+      const inTerminal = press(paneTerminal, "w", { ctrlKey: true });
+      expect(inTerminal.defaultPrevented).toBe(false);
+      expect(trashed).toBe(0);
+
+      const inReply = press(paneReply, "w", { ctrlKey: true });
+      expect(inReply.defaultPrevented).toBe(true);
+      expect(trashed).toBe(1);
+      expect(closeWindow).not.toHaveBeenCalled();
+    });
+  });
+
+  it("answers no Cmd+W once stopped", () => {
+    stop?.();
+    stop = null;
+
+    const inPane = press(paneReply, "w");
+    const onList = press(document.body, "w");
+
+    expect(inPane.defaultPrevented).toBe(false);
+    expect(onList.defaultPrevented).toBe(false);
+    expect(trashed).toBe(0);
+    expect(closeWindow).not.toHaveBeenCalled();
   });
 });
