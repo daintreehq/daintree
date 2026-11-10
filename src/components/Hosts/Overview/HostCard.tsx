@@ -222,6 +222,20 @@ export function HostCard({
   const retryRef = useRef<HTMLButtonElement>(null);
   const switchRef = useRef<HTMLButtonElement>(null);
   const holdFocus = useRef(false);
+  // Focus held on the section says nothing of what replaced its contents, so
+  // once Retry is pressed the card announces how its listing went. An answer
+  // nobody asked for here stays quiet, as several hosts may fail at once.
+  const [retried, setRetried] = useState(false);
+  const announcement =
+    !retried || !live
+      ? ""
+      : projects === undefined
+        ? `Listing projects on ${row.name}`
+        : projects === null
+          ? `Couldn't load projects on ${row.name}`
+          : projects.length === 0
+            ? `No projects on ${row.name} yet`
+            : `${pluralize(projects.length, "project")} on ${row.name}`;
 
   useLayoutEffect(() => {
     if (!holdFocus.current || listing) return;
@@ -239,6 +253,7 @@ export function HostCard({
       holdFocus.current = true;
       section.focus({ preventScroll: true });
     }
+    setRetried(true);
     onRetryProjects?.();
   };
 
@@ -340,7 +355,6 @@ export function HostCard({
             <ProjectList hostName={row.name} projects={projects} onOpenProject={onOpenProject} />
           ) : projects === null ? (
             <InlineError
-              role="alert"
               action={
                 onRetryProjects && (
                   <Button
@@ -364,6 +378,9 @@ export function HostCard({
           )}
         </section>
       )}
+      <span role="status" className="sr-only">
+        {announcement}
+      </span>
 
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
         {summary &&

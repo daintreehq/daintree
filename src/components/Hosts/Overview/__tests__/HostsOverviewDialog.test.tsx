@@ -170,14 +170,15 @@ describe("HostsOverviewDialog projects", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("asks only the failed host again from its card's Retry, keeping the overview open", () => {
+  it("routes each card's Retry to its own host, keeping the overview open", () => {
+    h.projects.set("local", null);
     h.projects.set("studio-01", null);
     const onClose = vi.fn();
     render(<HostsOverviewDialog onClose={onClose} />);
-    expect(screen.queryByText("retry local")).toBeNull();
     fireEvent.click(screen.getByText("retry studio-01"));
-    expect(h.retryHostProjects).toHaveBeenCalledTimes(1);
-    expect(h.retryHostProjects).toHaveBeenCalledWith("studio-01");
+    expect(h.retryHostProjects.mock.calls).toEqual([["studio-01"]]);
+    fireEvent.click(screen.getByText("retry local"));
+    expect(h.retryHostProjects.mock.calls).toEqual([["studio-01"], ["local"]]);
     expect(onClose).not.toHaveBeenCalled();
     expect(h.switchToHost).not.toHaveBeenCalled();
   });
