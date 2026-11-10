@@ -1,10 +1,171 @@
 # Changelog
 
-## [Unreleased]
+## [0.50.0] - 2026-11-10
+
+Canopy moves into a window of its own beside your project windows and is on by default, its 21 MB reader model now shipped inside Daintree. Schedules can start each run in a fresh worktree, Claude Code and Codex panes show the context they carry, a composer send waits for a busy agent's prompt, Jira Cloud joins the issues providers, new worktrees can copy-on-write clone `node_modules` from the main checkout (40k files in 0.8 s), cloning runs in the background, and every agent with an inline mode launches inline.
 
 ### Breaking Changes
 
-- The `terminal.info.get` action no longer returns `outputBufferSize`, and Terminal Info no longer shows an Output buffer row: the number counted characters up to a 2,000 cap, so it read the same for any agent that had printed more than a screenful. Plugins that dispatch the action should drop any read of the field; nothing replaces it (#16426)
+- Canopy is on by default and its reader model (about 21 MB) ships inside Daintree instead of downloading on first use, so after updating Canopy reads agent terminals even if you had turned reading off (only a hidden Canopy stays hidden): turn it off again under Settings › Canopy › Read agent terminals, or switch off Show Canopy to hide it as well; model copies earlier versions downloaded are deleted 30 seconds after launch (#16518)
+- Canopy no longer opens as a dialog inside a project window: once it's on, its toolbar button, `Cmd+E` (`Ctrl+Shift+O` on Windows and Linux), double-Shift and the command palette open the Canopy window or bring it forward, and the dialog's "This project" scope is gone, so the inbox always lists every project and Mark all read (`canopy.markAllRead`) marks every project's agents; search for a project's name to narrow the list. With Canopy off, its toolbar button, `Cmd+E` and the command palette open the offer to turn it on, replacing the inbox callout and the status bar's "Turn on reading" link (#16353, #16585, #16589)
+- The "Use alt-screen mode" setting is gone, with the per-agent and per-preset Alt-screen mode control and its row in a host's work settings: Codex, Grok and OpenCode always launch inline (Daintree's scrollback, search and clean resize), a saved Grok `--fullscreen` is rewritten to the inline flag on restart, restore and resume, and Claude Code stays on the main screen at every launch whatever its `tui` setting or `CLAUDE_CODE_NO_FLICKER` say (nothing under `~/.claude/` is touched; an in-session `/tui fullscreen` lasts until the pane's next launch). `agent.createPreset` and `agent.updatePreset` no longer accept `inlineMode`, so drop it from MCP calls (#16547, #16501)
+- With Settings › CLI agents › Skip permission prompts on, Antigravity, Gemini (`--yolo`), Grok, Cursor, Open Interpreter, Amp, Aider, Qwen Code, Kimi, Crush and Kiro now launch with their bypass flags as well, where they launched without them while their Skip permissions row read Default (Off), "Inherited from global setting". To keep one of them asking, set Skip permissions to Off on its page in Settings › CLI agents; an agent with no bypass flag now says "The global setting doesn't apply to this agent" (#16483)
+- The `terminal.info.get` action no longer returns `outputBufferSize`, and Terminal Info no longer shows an Output buffer row: the number counted characters up to a 2,000 cap, so it read the same for any agent that had printed more than a screenful. Plugins that dispatch the action should drop any read of the field; nothing replaces it (#16426, #16463)
+- Plugin manifests can no longer claim `notes` as a `contributes.contextProviders` prefix, now the composer's own `@notes`, and a plugin provider claiming `issue` is refused while Daintree's own Issues provider is on in that project (switching it off under Project settings › Plugins › Context providers hands the prefix back): give such a provider another prefix (#16558, #16545)
+
+### Features
+
+**Canopy**
+
+- Canopy has a window of its own listing every project's and host's agents, so it sits beside your project windows instead of covering one: it reopens where it was on the next launch, behind the window you're in, Go to terminal brings forward the project window holding the run or opens one (a Remote Host's run opens that host's project window), its terminals leave the agent at its pane's size until you click or type in them, the dictation key replies to the selected agent, and Canopy's own key takes you back to the project window you were last in (#16348, #16351, #16358, #16530, #16548, #16576, #16582, #16596, #16604, #16619)
+- Canopy's search takes a list: a comma or line break separates alternatives while spaces still require every word (`a b, c` finds runs with both a and b, or with c), so a column of pane names pasted from the Assistant finds each one, up to 50 alternatives; with a search active, Trash results… on the Inbox bar (or `Cmd+A`, `Ctrl+A` on Windows and Linux, on a list row) lists the results ticked except runs seen working or with a draft, and one confirm sends up to 50 to the Trash across hosts, with one Undo (Z) bringing them all back (#16531, #16549)
+- A run listed under Needs you because its Decisions answer couldn't be delivered carries a warning band in its pane saying Daintree won't type the answer in on its own and replying there won't handle it, with Review answers to open Answers needing attention on that answer; Review answers… also heads the row's right-click menu (#16719)
+- While Canopy is on it checks Hugging Face once a launch for a newer revision of its reader model, downloads it in the background while the shipped copy keeps reading, and switches only once the download matches its published hashes and reads a screen; Settings › Canopy › Model shows the revision in use and an update's progress, and nothing is checked or downloaded with Canopy off (#16572)
+
+**Terminals and agents**
+
+- Claude Code and Codex pane headers show how much context the agent's latest request carried, read from the transcript or rollout the CLI already writes (`127k context`, or `192k context · 41%` for Codex when its rollout states the window), with the exact count and when it was recorded on hover; it refreshes when the agent finishes a turn, a Remote Host pane is read on the host, and the chip stays hidden whenever the reading can't be trusted (#16512, #16564)
+- Sending from a pane's composer while its agent is working holds the message and types it in once the agent is back at its own prompt, for every agent that doesn't queue input itself (Claude Code and Codex still send at once): a row above the composer says what it's waiting on with Edit and Withdraw, a held send lasts up to an hour, and one dropped by typing in the terminal, a restart or the pane closing says why and keeps the text (#16561)
+- `@issue:` in an agent's composer lists the open issues from the project's issues provider (GitHub, GitLab, Linear, Jira or Beads) and searches every state by number, key or text, and sending replaces the chip with the issue's title, link, state and description, plus its latest comments from GitHub and Jira; `@notes` takes every pending diff note in the agent's worktree (`@notes:src/a.ts` takes one file's), reads `3 notes · clears on send`, clears them only once the text reaches the terminal, and gives each fleet target its own worktree's notes (#16545, #16558)
+- Keep your own prompt templates: a Markdown file in `~/.daintree/templates/` (frontmatter `title`, `description` and `args`, the rest is the prompt) appears in the `/` menu's Prompt templates band of every agent composer in every project, badged You, and opens its argument form or fills the draft without sending; Settings › CLI agents › General › Prompt templates has Open folder and names any file that failed to load and why (#16534)
+- An agent pane running full-screen carries a notice that Daintree's scrollback and search don't apply while it does, adding how to switch back where the agent has an inline mode (`/tui default` for Claude Code); it goes when the agent returns to the main screen, and dismissing it lasts for that pane (#16543)
+- Each agent's settings page gets a Detected CLI section listing every copy of its CLI found on PATH, native install paths, PyPI and npm global, with its path and version and the copy that launches marked; once more than one turns up you choose which launches for that agent, kept by the machine the agents run on, a chosen copy that's gone reads as missing instead of another copy launching quietly, and the duplicate-install toast gains View copies (#16516, #16573)
+- Every Claude Code and Codex account choice shows its tightest known quota ("Weekly limit 82% used · resets Tue 14:05", old readings marked Stale) in Session › Switch account, the rate-limit chip, the toolbar agent menu, the dock launcher and Settings, Claude Code's Account quota section shows the usage messages its panes printed per login in place of "Live quota unavailable", and a preset's fallback chain takes up to 8 presets instead of 3, enough to rotate through several accounts on usage limits (#16514, #16553, #16593)
+- Launch prompts keep their line breaks and tabs, so briefs, recipe steps, scheduled runs and issue text reach the agent as written instead of as one run-on line, in POSIX shells, PowerShell, fish 3.1 or later and nushell (#16520)
+- Install commands Daintree won't run itself (a `sudo`, a `curl … | bash`, an `&&` chain) get a button that opens them in a new terminal in the missing-prerequisite banner, the setup wizard, the missing-CLI gate and Settings › CLI agents, typing the command at a new terminal's prompt without running it and re-checking the tool once it has run; Claude Code's install help adds the native installer and Homebrew on macOS and the PowerShell installer and WinGet on Windows beside npm, and the missing-CLI gate no longer points at an executable field agent settings don't have (#16529, #16508, #16496)
+
+**Schedules**
+
+- A schedule can start each run in a new worktree on a new branch from a chosen base (Worktree › New worktree for each run), so a nightly run no longer piles onto one branch or works in the checkout you're using: exactly one worktree is made per run even across crashes and quits, a failed create or a setup that fails, waits for approval or runs past 10 minutes is recorded as a refused run, and each run's history row names its branch, or says the worktree no longer exists once it's deleted; Assistant schedules don't offer it (#16515, #16555)
+- An empty Schedules tab offers four starter schedules (nightly bug hunt, daily summary of changes, weekly missing-tests check, weekly dependency check) that open the editor filled in, with prompts written for an unwatched run that never push, merge or delete anything (#16505)
+
+**Assistant**
+
+- A project's Daintree Assistant can message the global Assistant on the same machine (`assistant.list` reports it under `global`, and a send arrives stamped with the project and machine it came from), a `terminal.sendCommandOwned` with `whenBusy: "queue"` to an Assistant that is mid-turn is held for its next prompt with a `queuedSendToken` instead of refused with `ASSISTANT_BUSY`, and the global Assistant can reopen an exited agent session as a pane it owns with `agent.resumeOwned`, so after a restart it can bring a fleet back, with `agentSessionHistory.list` saying who closed a session and which pane held it (#16524, #16621, #16347)
+
+**Remote Hosts**
+
+- Remote Hosts redial as soon as the network changes (rejoining Wi-Fi, a VPN or tailnet coming up) or a host's window comes to the front, instead of waiting out up to 30 s of backoff, and a link that died with the old network is noticed within 3 s rather than about 20 s; hosts that aren't answering move to a quiet Unavailable section of the host chip menu and its submenus with when they were last seen, and leave the sidebar's across-hosts list until they answer again, while refused logins and incompatible builds keep their warning (#16535, #16607)
+- With Zed as your editor, Open in editor from a remote window opens an ssh host's file or folder in Zed's SSH remoting at the line and column, where it used to copy the host path; WSL hosts still copy the path (#16542)
+
+**Worktrees and files**
+
+- On macOS, a project in a cloud folder (Dropbox, iCloud Drive, OneDrive or Google Drive) whose `.git` is still online-only no longer sits on "Checking status…": the card reads "Waiting for files to download", a banner counts what's left ("Dropbox hasn't downloaded 479 files in .git and 206 project files yet") and points to the provider's Make available offline with Show in Finder, and git status runs on its own once `.git` is down; counting never downloads a file (#16477, #16533)
+- List gitignored folders under `cloneIgnored` in `.daintree/config.json` (for example `["node_modules", ".venv"]`) and each new worktree gets a copy-on-write clone of them from the main checkout before its setup script runs, so setup refreshes dependencies instead of installing from scratch: `clonefile` on APFS (a 40k-file tree in 0.8 s), `cp --reflink=always` on Btrfs and XFS, skipped on ext4, other volumes and Windows; only folders git ignores in both trees qualify, nothing already there is overwritten, and a skip never fails setup (#16527)
+- The Worktrees overview shows each worktree's size on disk (`≈ 4.2 GB`, or Unknown when a scan can't finish), measured only while the overview is open and counting nested worktrees once, and its Size heading orders the list largest first (#16551)
+- `Cmd+F` (`Ctrl+F` on Windows and Linux) finds in rendered Markdown in the file browser, file panel and file viewer, highlighting every match with a count, Match case and Enter or `Cmd+G` (`Ctrl+G`) to step, without switching to Source; the file viewer and Markdown editor's find bar reports `3 of 12`, `No matches` or `Invalid regex` like the terminal's, with Daintree's own toggles in place of CodeMirror's lowercase buttons (#16712, #16726, #16731)
+- Diff line notes are reachable from the keyboard: line numbers are one Tab stop per file where arrows move, Shift+arrows select a range, Enter or Space opens a note and Shift+Enter extends an open draft, and hovering a line number shows "Click to add a note" (#16510)
+- The recipe editor shows and edits each step's environment variables, masking values that look like secrets; for a team recipe the names go to the repository and the values stay on this machine, where they now survive a reload (#16522)
+
+**Review Hub and forge**
+
+- Jira Cloud ships as a built-in issues provider (off by default; enable it in the Plugin Manager and choose it as the project's issues provider): Settings › Code forge takes the `*.atlassian.net` site URL, account email and API token and shows who it signed in as, the Jira project key is set per project, and Jira issues get the issue picker, worktrees with `ENG-12-fix-the-login` branches, the issue on the worktree card and in Review Hub, Assign to me with Undo, and readable comments; Jira Server, Data Center and custom domains aren't supported (#16521, #16560)
+- New worktree from an issue with a first agent offers "Include #42" (or the tracker key, such as `ENG-123`) in the Prompt row: the agent gets the issue's title, link, state, labels and description, plus the newest five comments from GitHub and Jira, quoted as data ahead of your prompt and capped at 6,000 characters, with Preview showing the exact text (#16550)
+- Review Hub's Changed vs <base> view offers Send review threads to agent when listed files carry unresolved PR review threads, telling the agent not to commit, push, reply to or resolve them unless asked, and on GitHub, Merge without waiting appears when your branch protection lets you bypass a blocked or behind PR with no conflicts and no required merge queue, never as the default, with a confirm listing what's still unmet (#16544, #16557)
+- Review Hub's No PR chip opens the forge's new pull request page for a pushed branch (No MR on GitLab) and reads No PR · not pushed when the remote has no such branch, the checks popover tells same-named checks apart as `Workflow / job`, and the toolbar's pull request and issue lists put State, Involvement and Sort by behind one View options menu, with Mine and Needs my review for pull requests and a line saying what a narrowed list shows (#16570, #16507, #16539, #16586)
+
+**Plugins**
+
+- `contributes.agents` entries can declare `permissionBypassArgs` (added only when Skip permission prompts resolves on, and named in the install, update and Permissions consent), `nativePaths` and `packages.npm`/`packages.pypi` so Daintree finds a CLI off its PATH, `initialPromptForm`, and `resume.assignSessionIdArgs` so two panes of one plugin agent in a worktree reopen their own conversations; a plugin agent pane restored at startup now keeps its session instead of starting fresh (#16484, #16546, #16566, #16556)
+- Typing a plugin agent's command (such as `pi`) in a plain terminal turns the pane into that agent as built-in agents do, with `executableNames` for other names (launchers like `npx` and names a built-in owns are refused), and an agent's `iconId` can point at a packaged SVG tinted with its colour, where a missing icon used to show Claude's mark (#16559, #16552)
+- App-wide plugins can offer up to five panel views to the Canopy window with `contributes.canopyViews`, listed under Plugins below the inbox; `agentMcp` tools see `consumer: "assistant"` when a call carries the Daintree Assistant's credential (provenance, not a security boundary); and forge provider plugins can supply `buildNewPRUrl` and `pullRequestTerm`, with `workflow` and `app` on `CheckRun` (#16554, #16346, #16570, #16507)
+
+**Projects and settings**
+
+- Clone repository runs in the background as its own project: the dialog closes and the project opens at once, its grid following git's progress with Stop clone while the rest of the app stays usable, the project switcher reads Cloning…, Clone failed or Clone stopped, a failed clone keeps git's error with Retry and Sign in to <forge> when a known forge refused the sign-in, and Location starts at your home folder so a pasted URL clones on Enter; a window on a remote host keeps the blocking dialog (#16563, #16672, #16720)
+- Shortcut labels for punctuation keys follow the active keyboard layout, so on AZERTY, QWERTZ or Nordic layouts Daintree's tooltips, in-app menus, palettes, Settings › Keyboard and the shortcut recorder name the key you actually press, and the keyboard shortcut reference lists the fixed shortcuts that were only in Settings › Keyboard (worktree list navigation, `Option+Up`/`Option+Down` reordering, `Alt` on Windows and Linux, panel and tab reordering, double-tap Shift) (#16509, #16504, #16701)
+- In the project switcher, the glyph marking a project open in another window moves to the right of its row and, where the row offers Go to window, takes you to that window, unread finished agents use the app's unread colour instead of a second green, the header says "2 agents running", and idle hosts under Other hosts drop the repeated "Not connected" (#16617, #16729)
+
+**Appearance**
+
+- A consistency pass over the whole app: the title bar, sidebar, grid, dock, menus, palettes, dialogs and Settings share one set of insets, control heights and dividers, agents are named in their brand colour, failures use the error glyph so amber always means caution, Retry and Reload on error banners are no longer red, the current host or project reads Current everywhere, "Daintree Assistant" replaces help panel and help agent, and the worktree sidebar is calmer, with full-strength titles only on cards with a live agent, neutral issue and PR glyphs, ages in one column and long branch names keeping their tail (#16590, #16606, #16519, #16613, #16608, #16733)
+- The grid object has one name: menus, shortcuts and palette titles say panel ("Close focused panel", New panel… in the worktree menu where it said New session…), terminal only for commands that need the shell process, and session only for an agent conversation; every control that restarts a terminal reads Restart terminal, the Assistant's Restart conversation is Clear conversation, the diff surface is Review Hub everywhere, and old titles still find the commands in the palette (#16615, #16537, #16538)
+- The canvas home lines every band up on one rail, gives New terminal and Browse files their own row, shows the project settings gear at rest and lays four recipes out 2×2, and the notification center no longer lists pinned items twice: they show only under Needs attention and the rest under Everything else, naming a row's source only when it's another project, worktree, machine or plugin (#16728, #16735)
+
+**Memory and stability**
+
+- The "Daintree is taking longer than expected" startup card adds Restart in safe mode beside Reload app, after a confirm since it stops every terminal, so a stuck startup no longer takes three failed launches to reach safe mode (#16482)
+
+### Bug Fixes
+
+**Terminals and agents**
+
+- A terminal whose output keeps stalling recovers on its own by refreshing from the host's copy instead of raising a Reset queue banner (the banner now appears only when that fails, with Retry, and several stalled terminals share one notice), busy agents in a project no window shows no longer stall in back-to-back 10-second pauses or drop output behind a data-loss marker, and the terminal host's memory budget scales with RAM (up to 2 GB from 64 GB) instead of a fixed 512 MB that a few busy agents could push into pausing every terminal (#16526, #16528, #16502)
+- Fleet confirms for restart, kill, trash, interrupt and reject take Enter and Escape from the focused terminal, where Enter used to be broadcast to every armed pane, show Cancel and Confirm buttons, and lapse on your next key, a click elsewhere or after 30 seconds; Fleet ribbon presets with a count of 0 are disabled instead of disbanding the fleet with no undo (#16474, #16671)
+- The Background pill lists every panel sent to the background, not only terminals, so a file, diff, browser, dev preview, review or plugin panel can be restored from it (Remove instead of Kill, with the unsaved-work prompt), and a restored dev preview starts its server again (#16478)
+- Claude Code panes resume the conversation they ended in after `/resume` or `/clear` instead of the one they launched with, the slash menu describes `/clear` and `/new` in each CLI's own words (Claude's `/clear` read "Reset display and attention buffer"), full-screen programs (Crush, Goose, `vim`, `less`, `htop`) take the pane's size again after a project switch, the scrollback-restore banner's Restart terminal asks before restarting a working agent, the find bar remembers Match whole word, and Paste is disabled while a terminal's input is locked (#16471, #16540, #16480, #16674, #16686, #16684)
+
+**Canopy**
+
+- An agent shown in Canopy and in its pane elsewhere no longer flips between the two sizes with Claude Code and Codex redrawing their scrollback at every swap: a pane on screen always sets the agent's size, a minimized window hands it back, and a Canopy on another machine no longer leaves a Remote Host agent's pane garbled; arrow keys in Canopy's list also stop on the Archived bar instead of skipping it (#16350, #16738, #16673)
+
+**Assistant**
+
+- The session picker opens tabs only for sessions in use, instead of filling with unnamed "Session N" tabs from scheduled runs until it read "6 of 6 open" and disabled New session, the global Assistant shows the same launching state as the project Assistant with a Cancel, dictating into one session and switching to another no longer replaces the second session's draft, and at the six-session limit, New session with… in the Assistant's More actions menu and the toolbar button's right-click menu says why it's disabled (6 of 6 open) (#16523, #16612, #16574, #16725)
+
+**Schedules**
+
+- Two schedules in one project that use the same agent and fall due together both run, where the second was recorded as refused and that occurrence lost, and the hint under "Run when Daintree isn't running" names each switch that's off and where to find it (#16464, #16536)
+
+**Decisions**
+
+- Decisions recovers by itself after the disk runs low, where a brief dip in free space left it disconnected and new panes launching without `daintree-decisions` until it was switched off and on, with a toast while agents can't ask; Mark handled under Answers needing attention asks first while the answer can still be resumed or sent elsewhere (#16614, #16705)
+
+**Remote Hosts**
+
+- Two computers updating one host at once take turns ("Another device is updating the host") instead of one deleting the other's rollback copy, and an update that fails mid-swap on a full disk or a failed move always leaves a whole old or new build rather than a partial AppImage or nothing; both computers need this version to take turns (#16493, #16565)
+- The sidebar keeps a host's agent counts while agents the Assistant launched there run, instead of falling back to Not connected after five idle minutes, the project pill in a remote window opens the project switcher again, the host switch dialog no longer claims "This project isn't on <host> yet" before it has checked, and in Hosts overview a failed project list offers Retry, Observed ticks instead of reading "just now" forever, and Add a project focuses Repository URL (#16513, #16591, #16706, #16709, #16694, #16714)
+
+**Worktrees and files**
+
+- A git status that can't finish is killed and retried after 30 seconds, doubling to 5 minutes, instead of stacking one more stuck git on every poll; a card with no status yet reads Git status not answered instead of Checking status… forever, and one with an earlier status keeps it marked stale (#16485)
+- A failed push, pull-and-rebase or force push says so wherever it started (a rejected push from `Cmd+K Cmd+P`, `Ctrl+K Ctrl+P` on Windows and Linux, showed nothing), offering Force push… when the remote moved, Review Hub's `Cmd+Enter` (`Ctrl+Enter`) commits from the file list as its chip says, and the diff panel's `[`, `]` and `v` keep working after clicking its buttons (#16692, #16699, #16675)
+- A worktree card's menus pick up recipes you add, rename or delete, recipe `{{issue_number}}` gives a tracker issue's own key (Linear `ENG-42`, a Beads id) instead of `#42` and `{{issue_title}}` gives its title, Import from file… asks Team or Global before writing anything, and a deleted worktree's countdown row stays when a filter or search leaves nothing else (#16455, #16472, #16721, #16669)
+
+**MCP Server**
+
+- An agent's `worktree.delete`, `worktree.deleteOwned` or `worktree.retireOwned` on a worktree whose submodule commits aren't on a known remote can no longer be approved only to fail: the confirm's approve button is disabled with the local delete dialog's hint, and Retry re-runs the check (#16475)
+
+**Projects and settings**
+
+- Closing Settings with Escape, the X or a click outside saves a valid pending External editor, Image viewer, MCP port or Records kept value instead of discarding it, Hardware acceleration asks before it restarts Daintree instead of relaunching on a click with agents mid-turn, and in Settings › Keyboard editing one of an action's two keys no longer replaces or removes the other (#16479, #16670, #16689)
+- Reload configuration rereads `config.json`, so hand edits to agent accounts or the custom agent registry are no longer overwritten by the next settings save, the Auto-restart threshold commits on blur or Enter instead of saving 1638 while you type 16384, importing a `.env` into a preset no longer hides the agent's inherited variables, Enter saves a Settings › Code forge credential, and the setup wizard's Privacy step shows what a crash report contains instead of opening a preview behind the wizard (#16592, #16460, #16690, #16718, #16695)
+- Opening a project another window holds (an Assistant running there, unsaved work) says so and offers Show in other window instead of a folder error whose Try again never worked, Stop project's confirm counts what it ends like Sleep's, Remove in the project switcher says what it deletes and that the folder and `.daintree/recipes/` stay, and switcher rows no longer keep stale counts such as "3 agents unread" (#16734, #16503, #16704, #16473, #16486)
+- `Cmd+K Cmd+C` (`Ctrl+K Ctrl+C` on Windows and Linux) opens Review Hub instead of doing nothing, Shift+Home and Shift+End in a palette's search select text, palette footers name Enter and Backspace on Windows and Linux instead of Mac glyphs, Enter on "Enter to search projects" carries what you typed into the project switcher, and the Logs tab's Auto-scroll, the theme browser's arrow keys and Set log level's search behave as they say (#16700, #16454, #16611, #16683, #16697, #16662, #16685, #16693, #16696)
+
+**Voice**
+
+- A dictation start stuck with the mic open gives up after 10 seconds with "Dictation didn't start" and Retry, releasing the mic, and dictating with Grok no longer briefly blanks the last few words of the preview every few seconds (#16462, #16583, #16715)
+
+**Dev preview**
+
+- View terminal opens the drawer on Output and works when the drawer is already open, the crash and not-responding banners say Restart dev server instead of Hard restart, and stopping a load shows a neutral "Loading stopped" with Reload instead of a red error, in the Browser panel too (#16698, #16717, #16732)
+
+**Notifications and panels**
+
+- The dock holds still: chips keep room for their status glyph, scroll chevrons carry the waiting ring when an agent needing you is scrolled off, tab group previews no longer open blank, the `+` launcher and status tray no longer paint white on light themes, right-clicking an Errors row opens the terminal menu, and the empty Trash pill says drop to close instead of drop to delete; cancelling Empty trash? goes back to the Trash popover, and a Diagnostics Events context filter shows as a chip you can clear instead of quietly narrowing the timeline (#16499, #16736, #16456, #16713, #16727)
+
+**Plugins**
+
+- Turning off a project's plugins, or one project plugin, asks Discard changes or Cancel when their panels hold unsaved work instead of losing it, installing a plugin selects it and opens its details instead of only refreshing the list, the update confirm says Update plugin, and the archive install confirm says the plugin and its permissions apply in every project (#16687, #16722, #16711, #16349)
+
+**Appearance**
+
+- A theme picked in the theme palette or with the theme toggle turns Match system off and joins your recent themes, instead of being replaced at the next OS light or dark switch, and the canvas home's chips and recipe cards have visible edges on Svalbard, Hokkaido and Serengeti (#16459, #16730)
+
+**Memory and stability**
+
+- A project in Dropbox, iCloud Drive or OneDrive with online-only files no longer freezes dictation, project switching and the app's own file loads while the provider downloads them: on macOS Daintree's own reads of a placeholder fail at once (terminals and agents still download what they read), and on every platform a stalled project folder such as a dead network mount holds up only that project (#16491)
+- Relaunching brings back the windows you had: a window left on the project picker no longer returns as another empty window every launch (a launch with only pickers opens the last-active project), on macOS a restored background window no longer stacks over the focused one and makes the relaunch look like the picker, and a maximized or full-screen window reopens on the display it was on, Move to iPad included (#16742, #16741, #16584)
+- Recovery actions that fail on the error list, the terminal host crash banner, the watchdog banner and safe mode's reset say so and stay available to retry instead of quietly going idle, and the crash recovery list shows each agent panel's own mark, with one unreadable panel no longer emptying it (#16465, #16610)
+
+### Performance
+
+- Background fetches and commits no longer run `git status` in every watched worktree (each no-op fetch every 30 s on git 2.48 or later did, as did a commit or `git switch -c` in any linked worktree), git status in a worktree Daintree creates no longer runs 5–16x slower through its first agent's working stretch, a saved tracked file refreshes status sooner, untracked binaries are judged from their first 8 KiB, and opening a project reads git remotes once instead of once per worktree (#16691, #16703, #16707, #16500, #16490, #16506)
+- File bursts in a worktree (an install into a nested `node_modules`, a build, a checkout) no longer pin the file watcher until macOS drops events and Daintree falls back to a full refresh: ignored folders are matched with one pattern instead of 19 (#16702)
+- The terminal host no longer forces two full disk flushes on each process-ledger write on the thread that pumps every terminal's output (about 0.2 ms a write instead of 4 ms), and prompt detection scans only the trailing lines of each output chunk (#16688, #16489)
+- The app's interface code is about 30% smaller (10 MB less JavaScript, 3.7 MB less loaded at first render) now that production builds minify identifiers again (#16494)
+- A terminal ping re-renders only its own worktree card instead of every card twice, arming a pane for the fleet re-renders only the panes whose role changed, saving a project's settings writes `config.json` once instead of once per secure environment variable, and window positions are read from memory instead of from disk at each window open and save (#16488, #16481, #16487)
 
 ## [0.49.0] - 2026-11-06
 

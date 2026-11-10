@@ -188,6 +188,20 @@
       "when": 1794009600000,
       "breakpoints": true,
       "sha256": "caba9cc2cff5eaf42d994941467a2a671d9f801cfe0cb1be683f964e356c9bd0"
+    },
+    {
+      "idx": 27,
+      "tag": "0027_scheduled_run_worktree_claims",
+      "when": 1794096000000,
+      "breakpoints": true,
+      "sha256": "5e9d8a8024c6d6e83b2e811ccf96d2dc1a04ecde9c24d85115fdfd1bc727d6d2"
+    },
+    {
+      "idx": 28,
+      "tag": "0028_add_project_clone_state",
+      "when": 1794182400000,
+      "breakpoints": true,
+      "sha256": "87861b3543f2c8257375a07de076973c1bf9659cbb97282c3cad4d5201341755"
     }
   ]
 }
