@@ -10,6 +10,12 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+// The restart gate has its own test (ScrollbackRestoreErrorBanner.restartGate);
+// here the hook is a pass-through so this file stays about what the banner says.
+vi.mock("../useScrollbackRestoreRestart", () => ({
+  useScrollbackRestoreRestart: (_panelId: string, restart: () => void) => restart,
+}));
+
 import { ScrollbackRestoreErrorBanner } from "../ScrollbackRestoreErrorBanner";
 
 beforeAll(() => {
@@ -105,10 +111,10 @@ describe("ScrollbackRestoreErrorBanner", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("invokes onRestart with the terminal id when reset is clicked", () => {
+  it("invokes onRestart with the terminal id when restart is clicked", () => {
     const onRestart = vi.fn();
     renderBanner("error", { onRestart });
-    fireEvent.click(screen.getByRole("button", { name: /reset terminal/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart terminal" }));
     expect(onRestart).toHaveBeenCalledWith("t-1");
   });
 
@@ -119,9 +125,19 @@ describe("ScrollbackRestoreErrorBanner", () => {
     expect(onDismiss).toHaveBeenCalledWith("t-1");
   });
 
-  it("disables reset and shows aria-busy when isRestarting is true", () => {
+  it("gives its one action the same words as a label, an accessible name and a tooltip", () => {
+    renderBanner("error");
+    const button = screen.getByRole("button", { name: "Restart terminal" });
+    const name = button.getAttribute("aria-label") ?? "";
+    expect(button.textContent).toContain(name);
+    // The tooltip content renders inline under the mock, so it shows up as a
+    // second node carrying the same words when it matches.
+    expect(screen.getAllByText(name)).toHaveLength(2);
+  });
+
+  it("disables restart and shows aria-busy when isRestarting is true", () => {
     renderBanner("error", { isRestarting: true });
-    const button = screen.getByRole("button", { name: /reset terminal/i });
+    const button = screen.getByRole("button", { name: "Restart terminal" });
     // Loading keeps focus on the control (no native disabled) and blocks activation.
     expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(button.getAttribute("aria-busy")).toBe("true");
