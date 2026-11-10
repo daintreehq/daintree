@@ -92,6 +92,23 @@ export function useFittedBranchName(name: string) {
 
 /** Fewest characters of head worth keeping before the tail gives way as well. */
 const MIN_HEAD = 4;
+const SHORTER_TAIL_MIN = 4;
+
+/** The word-aligned tails inside `tail`, longest first: "token-refresh-race" → ["refresh-race", "race"]. */
+function shorterTails(tail: string): string[] {
+  const chars = Array.from(tail);
+  const out: string[] = [];
+  for (let i = 1; i < chars.length; i++) {
+    if (
+      /[-_/.]/.test(chars[i - 1]!) &&
+      !/[-_/.]/.test(chars[i]!) &&
+      chars.length - i >= SHORTER_TAIL_MIN
+    ) {
+      out.push(chars.slice(i).join(""));
+    }
+  }
+  return out;
+}
 
 /**
  * A mono branch name cut to its box in whole characters: the head gives way
@@ -130,9 +147,20 @@ export function useFittedBranchText(name: string) {
       const headRoom = fits - tailLength - 1;
       if (tail && headRoom >= MIN_HEAD) {
         setShown(`${Array.from(head).slice(0, headRoom).join("")}…${tail}`);
-      } else {
-        setShown(`${chars.slice(0, fits - 1).join("")}…`);
+        return;
       }
+      // The preferred tail leaves too little head: keep a shorter word of the
+      // tail rather than cutting the end off, which loses the part that tells
+      // `issue-12-token-refresh-race` from `issue-12-token-refresh-retry`.
+      for (const shorter of shorterTails(tail)) {
+        const length = Array.from(shorter).length;
+        const shorterHeadRoom = fits - length - 1;
+        if (shorterHeadRoom >= MIN_HEAD) {
+          setShown(`${chars.slice(0, shorterHeadRoom).join("")}…${shorter}`);
+          return;
+        }
+      }
+      setShown(`${chars.slice(0, fits - 1).join("")}…`);
     };
     fit();
     // The first pass can measure the fallback face; the mono face is narrower.

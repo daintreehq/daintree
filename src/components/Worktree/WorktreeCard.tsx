@@ -1055,15 +1055,18 @@ export function WorktreeCard({
   // Details is closed: two disclosures that each used a full row to say one
   // line. Opening Sessions keeps its trigger in that row and lays the list out
   // beneath, so the control does not move out from under the click.
-  // The pinned main card takes the compact footer in either density: it never
-  // scrolls away, so every row it spends is a row the list below loses. Not on
-  // a card showing setup recovery: that block sits under the summary row and
-  // needs the card's full width, not the width left beside the trigger.
-  const hasInlineFooter =
-    (isCompactCard || (variant === "sidebar" && isMainWorktree)) && lifecycleAlarm === null;
+  // Compact only, the main card included: one sessions form per density. The
+  // comfortable main card used to take this footer too, which put its age left
+  // of the column every other card's age ends on and drew its sessions as a
+  // bare trigger where its neighbours had a row. Not on a card showing setup
+  // recovery: that block sits under the summary row and needs the card's full
+  // width, not the width left beside the trigger.
+  const hasInlineFooter = isCompactCard && lifecycleAlarm === null;
   const isSessionsFooterInline = hasInlineFooter && !isExpanded && terminalCounts.total > 0;
   // A card with no sessions keeps the trigger's slot empty on that row, so the
   // age column sits on the same x on every card with the shared footer. Only
+  // from 20rem: narrower, the commit subject needs the room more than the age
+  // needs its column. Only
   // the compact density gives every card that footer; in comfortable the pinned
   // main card is the only one, and an empty slot there pushed its age off the
   // column every other card's age ends on.
@@ -1527,7 +1530,7 @@ export function WorktreeCard({
                     : variant !== "sidebar"
                       ? "pt-2"
                       : isCompactCard
-                        ? "pt-3"
+                        ? "pt-2.5"
                         : "pt-3.5",
                   variant === "grid" && "pr-5"
                 )}
@@ -1614,7 +1617,7 @@ export function WorktreeCard({
                     variant !== "sidebar"
                       ? "pb-2.5 pt-2"
                       : isCompactCard
-                        ? "pb-3 pt-1"
+                        ? "pb-2.5 pt-1"
                         : "pb-3.5 pt-2",
                     // The pinned main card never scrolls with the list, so an
                     // opened Details or Sessions could take the whole sidebar
@@ -1633,12 +1636,15 @@ export function WorktreeCard({
                       wslGitEligible={worktree.wslGitEligible}
                     />
                   )}
-                  {/* Stacked below 20rem, where one row cannot hold a summary,
-                      a time and the sessions trigger without losing the words. */}
+                  {/* Stacked below 15rem, where one row cannot hold a summary,
+                      a time and the sessions trigger without losing the words.
+                      At 15-20rem the summary truncates instead: a stacked
+                      trigger spent a whole line on "1" at the widths Compact
+                      is most likely to be used at. */}
                   <div
                     className={cn(
                       (isSessionsFooterInline || reservesSessionsSlot) &&
-                        "flex flex-col @xs/card:flex-row @xs/card:flex-wrap @xs/card:items-center @xs/card:gap-x-1"
+                        "flex flex-col @[15rem]/card:flex-row @[15rem]/card:flex-wrap @[15rem]/card:items-center @[15rem]/card:gap-x-1"
                     )}
                   >
                     <div
@@ -1727,7 +1733,7 @@ export function WorktreeCard({
                     {reservesSessionsSlot && (
                       <div
                         aria-hidden="true"
-                        className="hidden w-[3.625rem] shrink-0 @xs/card:block"
+                        className="hidden w-[3.625rem] shrink-0 @[20rem]/card:block"
                       />
                     )}
                   </div>

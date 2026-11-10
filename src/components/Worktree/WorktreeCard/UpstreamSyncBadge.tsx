@@ -46,15 +46,16 @@ interface UpstreamSyncBadgeProps {
 const FLASH_DURATION_MS = 250;
 
 /**
- * A drift count: the hue on the arrow, the number in the line's own ink.
- * Status hues miss 4.5:1 as text on several themes, and as a shape they only
- * owe 3:1, so the glyph carries the direction's colour and the figure stays
- * readable everywhere.
+ * A drift count: the number in the line's own ink. The ahead arrow keeps git's
+ * green, the notation every surface that draws a drift count shares. The
+ * behind arrow is neutral: falling behind a moving base is a fact to weigh when
+ * rebasing, not an alarm, and an amber arrow on every card spent the waiting
+ * agent's hue on the most routine line in the list. Failures keep their mark.
  */
 function Count({ arrow, value }: { arrow: "↑" | "↓"; value: number | null | undefined }) {
   return (
     <span className="shrink-0 text-text-secondary">
-      <span className={arrow === "↑" ? "text-status-success" : "text-status-warning"}>{arrow}</span>
+      <span className={cn(arrow === "↑" && "text-status-success")}>{arrow}</span>
       {value}
     </span>
   );

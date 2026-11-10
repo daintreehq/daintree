@@ -8,6 +8,7 @@ import {
 } from "react";
 import { ChevronRight } from "lucide-react";
 import type { HostId } from "@shared/types/remoteHosts";
+import type { FleetBand } from "@shared/utils/fleetBands";
 import { PilotRunState } from "@/components/Pilot/PilotRunState";
 import { pluralize, pluralNoun } from "@/lib/pluralize";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -88,12 +89,14 @@ interface ProjectHostsGroupProps {
 
 /**
  * Every row of the section sits on the sidebar footer's grid, at every width:
- * the footer's 16px inset, its 12px glyph column, then the text, and the Run
- * command toggle's 12px on the right. So the header's chevron, each host's
- * platform mark and the footer's status dot share one column, and the header,
- * the host names and "N projects active" start on one edge.
+ * the footer's 16px inset, its 12px glyph column, then the text, and 16px on
+ * the right. So the header's chevron, each host's platform mark and the
+ * footer's status dot share one column, the header, the host names and "N
+ * projects active" start on one edge, and the counts end on the edge the
+ * filter button, the scroll pill and the cards' sessions rows end on rather
+ * than 4px past it.
  */
-const GRID_CLASS = "flex w-full min-w-0 items-center gap-2 pl-4 pr-3 text-left";
+const GRID_CLASS = "flex w-full min-w-0 items-center gap-2 px-4 text-left";
 
 const FOCUS_CLASS =
   "outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-selection-outline";
@@ -238,10 +241,9 @@ function CountCells({
 }
 
 interface Totals {
-  asking: number;
-  working: number;
-  /** Whether any of the asking agents is blocked, so the total wears that mark as a row would. */
-  blocked: boolean;
+  counts: Counts;
+  /** How many of the asking agents are blocked. */
+  blocked: number;
 }
 
 const BAND_WORDS: Record<RowBand, string> = {
@@ -260,15 +262,37 @@ function describeCounts(counts: Counts): string {
 }
 
 function describeTotals(totals: Totals): string {
+  const { counts, blocked } = totals;
   const parts: string[] = [];
-  if (totals.asking > 0) parts.push(`${totals.asking} asking`);
-  if (totals.working > 0) parts.push(`${totals.working} working`);
+  if (blocked > 0) parts.push(`${blocked} blocked`);
+  if (counts.asking - blocked > 0) parts.push(`${counts.asking - blocked} asking`);
+  for (const band of ROW_BANDS) {
+    if (band !== "asking" && counts[band] > 0) parts.push(`${counts[band]} ${BAND_WORDS[band]}`);
+  }
   return `${parts.join(", ")} on other hosts (observed)`;
 }
 
-/** The collapsed header's totals, in the footer readout's type so the two rows read as a pair. */
+function hasCounts(counts: Counts): boolean {
+  return ROW_BANDS.some((band) => counts[band] > 0);
+}
+
+/**
+ * The collapsed header's totals, in the footer readout's type so the two rows
+ * read as a pair. Every band a row counts, so collapsing the section never
+ * hides a hand-back nobody has read or a run gone quiet that a row would show.
+ * Blocked agents get a count of their own: a row's asking count may wear the
+ * blocked mark for one blocked agent among several, but summed over every
+ * host that mark beside the total would claim them all.
+ */
 function CollapsedTotals({ totals }: { totals: Totals }) {
-  if (totals.asking === 0 && totals.working === 0) return null;
+  if (!hasCounts(totals.counts)) return null;
+  const cells: { key: string; band: FleetBand; n: number }[] = [
+    { key: "blocked", band: "blocked", n: totals.blocked },
+    { key: "asking", band: "needs-you", n: totals.counts.asking - totals.blocked },
+    { key: "quiet", band: "quiet", n: totals.counts.quiet },
+    { key: "review", band: "review", n: totals.counts.review },
+    { key: "running", band: "running", n: totals.counts.running },
+  ];
   return (
     <span
       data-testid="project-hosts-totals"
@@ -278,18 +302,19 @@ function CollapsedTotals({ totals }: { totals: Totals }) {
       <span id={TOTALS_ID} className="sr-only">
         {describeTotals(totals)}
       </span>
-      {totals.asking > 0 && (
-        <span aria-hidden="true" data-total="asking" className="flex items-center gap-0.5">
-          <PilotRunState band={totals.blocked ? "blocked" : "needs-you"} agentState={undefined} />
-          {totals.asking}
-        </span>
-      )}
-      {totals.working > 0 && (
-        <span aria-hidden="true" data-total="working" className="flex items-center gap-0.5">
-          <PilotRunState band="running" agentState={undefined} />
-          {totals.working}
-        </span>
-      )}
+      {cells
+        .filter((cell) => cell.n > 0)
+        .map((cell) => (
+          <span
+            key={cell.key}
+            aria-hidden="true"
+            data-total={cell.key}
+            className="flex items-center gap-0.5"
+          >
+            <PilotRunState band={cell.band} agentState={undefined} />
+            {cell.n}
+          </span>
+        ))}
     </span>
   );
 }
@@ -357,7 +382,16 @@ function HostRow({ host, summary, columns, newWindowKey: key, onOpen }: HostRowP
               // is down steps to secondary ink, still above the contrast floor and
               // still a row you can click, so the live machines are the ones the
               // eye lands on.
-              className={cn("font-normal", host.away ? "text-text-secondary" : "text-text-primary")}
+              // A connected host with nothing to count dims the same way: its
+              // reason is in the tooltip and the spoken name, and a dimmed name
+              // is still one click to switch. The window's own host keeps
+              // primary ink, as its fill already marks it.
+              className={cn(
+                "font-normal",
+                host.away || (status.kind === "quiet" && !host.isCurrent)
+                  ? "text-text-secondary"
+                  : "text-text-primary"
+              )}
             />
           </span>
           {status.kind === "counts" && summary ? (
@@ -492,17 +526,18 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
   const columns = ROW_BANDS.filter((band) =>
     [...summaries.values()].some((summary) => summary.counts[band] > 0)
   );
-  let otherTotals: Totals = { asking: 0, working: 0, blocked: false };
+  let otherTotals: Totals = { counts: NO_COUNTS, blocked: 0 };
   let foldedCounts = NO_COUNTS;
   let foldedBlocked = false;
   for (const host of ordered) {
     const summary = summaries.get(host.hostId);
     if (!summary) continue;
-    if (!host.isLocal) {
+    // Other than this window's host, which a window switched to a remote
+    // host makes This Mac one of.
+    if (!host.isCurrent) {
       otherTotals = {
-        asking: otherTotals.asking + summary.counts.asking,
-        working: otherTotals.working + summary.counts.running,
-        blocked: otherTotals.blocked || summary.askingBand === "blocked",
+        counts: addCounts(otherTotals.counts, summary.counts),
+        blocked: otherTotals.blocked + (summary.observed.get("blocked") ?? 0),
       };
     }
     if (folded.includes(host)) {
@@ -565,9 +600,7 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
         aria-expanded={expanded}
         aria-controls={LIST_ID}
         aria-label={`${title} across hosts`}
-        aria-describedby={
-          !expanded && (otherTotals.asking > 0 || otherTotals.working > 0) ? TOTALS_ID : undefined
-        }
+        aria-describedby={!expanded && hasCounts(otherTotals.counts) ? TOTALS_ID : undefined}
         onClick={() => setProjectHostsExpanded(!expanded)}
         className={cn(
           GRID_CLASS,
@@ -585,8 +618,22 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
           />
         </GlyphSlot>
         <span className="flex min-w-0 flex-1 text-2xs font-medium text-text-secondary select-none group-hover/toggle:text-text-primary">
+          {/* At narrow widths the header is the project's name alone (the
+              button's name keeps the whole phrase), so it never shows " across
+              hosts" with no project in front of it, and never two ellipses in
+              one label. Collapsed with totals beside it, that starts at 20rem:
+              five count cells leave the name no room before then. */}
           <span className="min-w-0 truncate">{title}</span>
-          <span className="shrink-0 whitespace-pre"> across hosts</span>
+          <span
+            className={cn(
+              "shrink-0 whitespace-pre",
+              !expanded && hasCounts(otherTotals.counts)
+                ? "@max-[20rem]/hosts:hidden"
+                : "@max-[15rem]/hosts:hidden"
+            )}
+          >
+            {" across hosts"}
+          </span>
         </span>
         {!expanded && <CollapsedTotals totals={otherTotals} />}
       </button>

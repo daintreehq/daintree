@@ -39,6 +39,13 @@ interface PRBadgeProps {
    * a custom title displaced does (#13409).
    */
   prTitle?: string;
+  /**
+   * Draw the state glyph in the line's own ink. The sidebar does: its colour
+   * belongs to live agent state, and an open or merged reference's hue on every card
+   * was the most frequent saturated mark in the list while saying nothing
+   * that changes. The glyph's shape and the hover card still carry the state.
+   */
+  neutral?: boolean;
 }
 
 export function PRBadge({
@@ -53,6 +60,7 @@ export function PRBadge({
   worktreeLabel,
   prDetectionPaused,
   prTitle,
+  neutral = false,
 }: PRBadgeProps) {
   const { data, loading, error, missingCredential, providerId, fetchTooltip, reset } = usePRTooltip(
     worktreePath,
@@ -140,7 +148,7 @@ export function PRBadge({
           <PrStateGlyph
             className={cn(
               "w-3 h-3 shrink-0",
-              missingCredential ? "text-text-secondary" : prStateColor
+              missingCredential || neutral ? "text-text-secondary" : prStateColor
             )}
             aria-hidden="true"
           />
