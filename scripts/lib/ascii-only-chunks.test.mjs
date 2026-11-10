@@ -87,6 +87,14 @@ describe("findEscapableTwoByteCharacters", () => {
     expect(offsets).toEqual([code.indexOf("/😀") + 1, code.indexOf("/😀") + 2, code.indexOf("—")]);
   });
 
+  it("draws the line between U+00FF and U+0100", () => {
+    expect(found("var a=/[éÿĀ—]/u;")).toEqual(["Ā", "—"]);
+  });
+
+  it("finds one in a comment the minifier keeps", () => {
+    expect(found("/*! © — */var a=1;\n//# sourceURL=….js")).toEqual(["—", "…"]);
+  });
+
   it("passes Latin-1 and escaped text without parsing it", () => {
     expect(found('var a=/[\\u2014é]/u,b="café";')).toEqual([]);
     expect(found("var a = `é")).toEqual([]);
