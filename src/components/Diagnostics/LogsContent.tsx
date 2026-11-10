@@ -241,20 +241,31 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
   useEffect(() => {
     if (!listMounted) reachedBottomRef.current = false;
   }, [listMounted]);
+  // Synchronous twin of `atBottom`: the store flag and this state update on
+  // different React lanes, so an effect reacting to the flag can't trust the
+  // state to already say where the list is.
+  const atBottomRef = useRef(true);
   const handleAtBottomChange = useCallback(
     (bottom: boolean) => {
+      const firstArrival = !reachedBottomRef.current;
       if (bottom) reachedBottomRef.current = true;
-      else if (!reachedBottomRef.current) return;
+      else if (firstArrival) return;
+      // Only a return after a departure is the user scrolling back down. The
+      // first report of a mount says nothing about whether they want to follow.
+      const returned = bottom && !firstArrival && !atBottomRef.current;
+      atBottomRef.current = bottom;
       setAtBottom(bottom);
+      const following = useLogsStore.getState().autoScroll;
       if (bottom) {
         setNewCount(0);
         pauseBoundaryTsRef.current = undefined;
+        if (returned && !following) setAutoScroll(true);
       } else {
         pauseBoundaryTsRef.current = mainLogs[mainLogs.length - 1]?.timestamp;
-        if (autoScroll) setAutoScroll(false);
+        if (following) setAutoScroll(false);
       }
     },
-    [autoScroll, setAutoScroll, mainLogs]
+    [setAutoScroll, mainLogs]
   );
 
   useEffect(() => {
@@ -271,15 +282,32 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
     setNewCount(count);
   }, [mainLogs, atBottom]);
 
-  const scrollToBottom = useCallback(() => {
-    setAutoScroll(true);
+  const jumpToLatest = useCallback(() => {
     setNewCount(0);
     pauseBoundaryTsRef.current = undefined;
     virtuosoRef.current?.scrollToIndex({
       index: "LAST",
       behavior: prefersReducedMotion() ? "auto" : "smooth",
     });
-  }, [setAutoScroll]);
+  }, []);
+
+  // The header's Auto-scroll toggle lives outside this component and only sets
+  // the flag, so turning it on while the list is scrolled away has to bring the
+  // newest line into view here. At the bottom there is nothing to bring: that
+  // includes the flag coming back on because the user scrolled down by hand.
+  const prevAutoScrollRef = useRef(autoScroll);
+  useEffect(() => {
+    const wasFollowing = prevAutoScrollRef.current;
+    prevAutoScrollRef.current = autoScroll;
+    if (autoScroll && !wasFollowing && !atBottomRef.current) jumpToLatest();
+  }, [autoScroll, jumpToLatest]);
+
+  const scrollToBottom = useCallback(() => {
+    // Off to on is handled by the effect above; only a flag that is already on
+    // (the list fell behind it) needs the scroll issued here.
+    if (useLogsStore.getState().autoScroll) jumpToLatest();
+    else setAutoScroll(true);
+  }, [jumpToLatest, setAutoScroll]);
 
   const previousSessionTail = previousSessionEntry
     ? String(previousSessionEntry.context?.tail || "")

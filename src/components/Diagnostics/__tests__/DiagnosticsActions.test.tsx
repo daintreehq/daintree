@@ -184,6 +184,32 @@ describe("LogsActions — clear confirmation", () => {
   });
 });
 
+describe("LogsActions — auto-scroll toggle", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    logsState.autoScroll = false;
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  it("shows the flag as pressed and asks for the opposite value when clicked", () => {
+    const { rerender } = render(<LogsActions />);
+    const toggle = screen.getByText("Auto-scroll").closest("button");
+    expect(toggle?.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(toggle!);
+    expect(logsState.setAutoScroll).toHaveBeenLastCalledWith(true);
+
+    logsState.autoScroll = true;
+    rerender(<LogsActions />);
+    expect(screen.getByText("Auto-scroll").closest("button")?.getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+
+    fireEvent.click(screen.getByText("Auto-scroll"));
+    expect(logsState.setAutoScroll).toHaveBeenLastCalledWith(false);
+  });
+});
+
 describe("EventsActions — ConfirmDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
