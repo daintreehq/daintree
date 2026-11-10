@@ -476,14 +476,17 @@ describe("GitFileWatcher", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("refreshes once when a ref lock is renamed onto the ref", async () => {
+  it("refreshes when a ref lock is renamed onto the ref, not for the lock", async () => {
     const { fire, onChange } = await armOriginWatch();
 
     fire("rename", "main.lock");
+    fire("change", "main.lock");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(onChange).not.toHaveBeenCalled();
+
     fire("rename", "main");
     fire("rename", "HEAD.lock");
     await vi.advanceTimersByTimeAsync(150);
-
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 

@@ -40,6 +40,7 @@ function gitVersionAtLeast(major: number, minor: number): boolean {
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const DEBOUNCE_MS = 100;
 
 function commit(repo: string, content: string): void {
   fs.writeFileSync(path.join(repo, "file.txt"), content);
@@ -57,14 +58,22 @@ function scheduledFetch(repo: string): void {
  * records every name the platform reports, so a quiet watcher can be told
  * apart from a fetch that touched nothing.
  */
-async function arm(repo: string): Promise<{ changes: () => number; names: string[] }> {
+async function arm(
+  repo: string
+): Promise<{ changes: () => number; membershipChanges: () => number; names: string[] }> {
   let changes = 0;
+  let membershipChanges = 0;
   const watcher = new GitFileWatcher({
     worktreePath: repo,
     branch: "main",
-    debounceMs: 100,
+    debounceMs: DEBOUNCE_MS,
     onChange: () => {
       changes++;
+    },
+    // Every git-internal route but the remote-refs one reports membership, so
+    // this stays zero only when the refresh came from refs/remotes/origin.
+    onPathMembershipChanged: () => {
+      membershipChanges++;
     },
   });
   watchers.push(watcher);
@@ -80,10 +89,11 @@ async function arm(repo: string): Promise<{ changes: () => number; names: string
   await delay(500);
   names.length = 0;
   changes = 0;
-  return { changes: () => changes, names };
+  membershipChanges = 0;
+  return { changes: () => changes, membershipChanges: () => membershipChanges, names };
 }
 
-beforeEach(() => {
+function setUp(): void {
   // The Windows temp directory can use an 8.3 alias that git expands.
   root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-remote-refs-")));
   fs.mkdirSync(path.join(root, "home"));
@@ -100,43 +110,51 @@ beforeEach(() => {
   git(seed, "remote", "add", "origin", path.join(root, "remote.git"));
   git(seed, "push", "-q", "origin", "main");
   git(root, "clone", "-q", path.join(root, "remote.git"), "work");
-});
+}
 
-afterEach(() => {
-  for (const watcher of watchers.splice(0)) watcher.dispose();
-  for (const probe of probes.splice(0)) probe.close();
-  vi.unstubAllEnvs();
-  fs.rmSync(root, { recursive: true, force: true });
-});
+// `init -b` needs 2.28 and `--no-write-fetch-head` 2.29.
+describe.skipIf(!gitVersionAtLeast(2, 29))(
+  "refs/remotes/origin watch against a real fetch (#16677)",
+  () => {
+    beforeEach(setUp);
 
-describe("refs/remotes/origin watch against a real fetch (#16677)", () => {
-  it.skipIf(!gitVersionAtLeast(2, 48))(
-    "requests no status refresh for a fetch that moves no ref",
-    async () => {
+    afterEach(() => {
+      for (const watcher of watchers.splice(0)) watcher.dispose();
+      for (const probe of probes.splice(0)) probe.close();
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it.skipIf(!gitVersionAtLeast(2, 48))(
+      "requests no status refresh for a fetch that moves no ref",
+      async () => {
+        const work = path.join(root, "work");
+        const { changes, names } = await arm(work);
+
+        scheduledFetch(work);
+        // The probe shares the watcher's directory, so once it has heard the
+        // fetch the watcher has too; then outlast the debounce.
+        await vi.waitFor(() => expect(names.length).toBeGreaterThan(0), { timeout: 5000 });
+        await delay(DEBOUNCE_MS * 5);
+
+        // The fetch did reach the directory, as a lock and nothing else.
+        expect(names.every((name) => name.endsWith(".lock"))).toBe(true);
+        expect(changes()).toBe(0);
+      }
+    );
+
+    it("requests a status refresh when the fetch advances origin/main", async () => {
       const work = path.join(root, "work");
-      const { changes, names } = await arm(work);
+      const before = git(work, "rev-parse", "refs/remotes/origin/main").trim();
+      commit(path.join(root, "seed"), "two");
+      git(path.join(root, "seed"), "push", "-q", "origin", "main");
+      const { changes, membershipChanges } = await arm(work);
 
       scheduledFetch(work);
-      await delay(1000);
 
-      // The fetch did reach the directory, as a lock and nothing else.
-      expect(names.length).toBeGreaterThan(0);
-      expect(names.every((name) => name.endsWith(".lock"))).toBe(true);
-      expect(changes()).toBe(0);
-    }
-  );
-
-  it("requests a status refresh when the fetch advances origin/main", async () => {
-    const work = path.join(root, "work");
-    const before = git(work, "rev-parse", "refs/remotes/origin/main").trim();
-    commit(path.join(root, "seed"), "two");
-    git(path.join(root, "seed"), "push", "-q", "origin", "main");
-    const { changes } = await arm(work);
-
-    scheduledFetch(work);
-    await delay(1000);
-
-    expect(git(work, "rev-parse", "refs/remotes/origin/main").trim()).not.toBe(before);
-    expect(changes()).toBeGreaterThan(0);
-  });
-});
+      expect(git(work, "rev-parse", "refs/remotes/origin/main").trim()).not.toBe(before);
+      await vi.waitFor(() => expect(changes()).toBeGreaterThan(0), { timeout: 5000 });
+      expect(membershipChanges()).toBe(0);
+    });
+  }
+);

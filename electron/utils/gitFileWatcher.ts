@@ -842,8 +842,9 @@ export class GitFileWatcher {
    * directory is a conservative "refs may have moved" signal, but lock files
    * are not: git 2.48+ takes `HEAD.lock` on every `git fetch <remote>` to
    * follow the remote HEAD, even when no ref moves, and every watched worktree
-   * shares this directory (#16677). A real update renames its lock onto the
-   * ref's final name, and that event is the signal.
+   * shares this directory (#16677). A committed write renames its lock onto
+   * the ref's own name and a deletion removes that name, so a moved ref always
+   * reports a non-lock event.
    */
   private watchRemoteRefsDir(dirPath: string): void {
     try {
