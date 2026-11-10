@@ -423,6 +423,27 @@ describe("createSessionServerDeps", () => {
     expect(sessionDeps.relay?.global).toBeUndefined();
   });
 
+  // #16620: any assistant reaching another through `host.call` reads and withdraws what it holds.
+  it.each([
+    ["a project assistant's relay session", { relay: RELAY }, true],
+    [
+      "this machine's project assistant reaching another project",
+      { relay: { ...RELAY, local: true as const } },
+      true,
+    ],
+    ["the global Assistant's relay session", { relay: { ...RELAY, global: true as const } }, true],
+    ["a direct session", {}, false],
+  ])("hands %s the held-send reads as it should", (_label, capture, expected) => {
+    const workerSteerQueue = { status: vi.fn(), cancel: vi.fn() };
+    const deps = fakeSource();
+    (deps as { workerSteerQueue?: unknown }).workerSteerQueue = workerSteerQueue;
+    const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+      sessionId: "s",
+      ...capture,
+    });
+    expect(sessionDeps.workerSteerQueue).toBe(expected ? workerSteerQueue : undefined);
+  });
+
   it("names the external client the host reports at dispatch time, not at build", async () => {
     const deps = fakeSource();
     const { state, host } = mutableHost();

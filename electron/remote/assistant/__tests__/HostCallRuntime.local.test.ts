@@ -71,6 +71,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
   }>;
   let asked: RelayApprovalQuestion[];
   let retired: Array<[string, string]>;
+  let heldEnded: string[];
   let ids: number;
   let local: LocalMcpRelay;
   let latestSummary: (() => HostMetricsSummary | null) | undefined;
@@ -92,6 +93,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
     queued = [];
     asked = [];
     retired = [];
+    heldEnded = [];
     ids = 0;
     local = createLocalMcpRelay({
       machineName: () => "greg-mbp",
@@ -111,6 +113,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
         } satisfies RelayMcpSession;
       },
       retirePrincipal: (senderId, helpSessionId) => retired.push([senderId, helpSessionId]),
+      endHeldSends: (helpSessionId) => heldEnded.push(helpSessionId),
       receiveNotices: (payload) => runtime.receiveNotices("local", payload),
       receiveApproval: (payload) => runtime.receiveApproval("local", payload),
       newId: () => `notice-${++ids}`,
@@ -781,5 +784,24 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
 
     expect(opened[0]!.closed).toBe(true);
     expect(retired).toEqual([[LOCAL_RELAY_SENDER_ID, "a"]]);
+    // What it held for a busy agent goes at once, not when its principal retires (#16620).
+    expect(heldEnded).toEqual(["a"]);
+  });
+
+  it("drops what an ended help session held at once, while another of its calls is still out", async () => {
+    let release!: () => void;
+    answer = () =>
+      new Promise((resolve) => {
+        release = () => resolve({ content: [], structuredContent: {} });
+      });
+    const call = runtime.call("a", LIST, { tier: "core" });
+    await vi.waitFor(() => expect(opened[0]?.calls).toHaveLength(1));
+
+    local.endHelpSession("a");
+
+    expect(heldEnded).toEqual(["a"]);
+    expect(retired).toEqual([]);
+    release();
+    await call;
   });
 });

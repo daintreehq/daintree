@@ -386,9 +386,33 @@ describe("AssistantTerminalControl (#13496)", () => {
       hold.mockImplementation(() => {
         throw new HoldRefusedError("this host is shutting down");
       });
-      await expect(send()).rejects.toThrow(/shutting down/);
+      const refused = await send().catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(AssistantTargetError);
+      expect(refused).toMatchObject({ code: "ASSISTANT_BUSY" });
+      expect((refused as Error).message).toMatch(/shutting down/);
+
       control = new AssistantTerminalControl(deps);
-      await expect(send()).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      await expect(send()).rejects.toThrow(/can't hold a message/);
+      expect(mocks.submit).not.toHaveBeenCalled();
+    });
+
+    it("holds nothing for a run never seen settling, or one replaced while it was read", async () => {
+      byTerminal("t-one")!.record = busyRun({ lastStateChange: undefined });
+      await expect(send()).rejects.toThrow(/hasn't been seen settling/);
+
+      byTerminal("t-one")!.record = busyRun();
+      const read = deps.getTerminal;
+      control = new AssistantTerminalControl({
+        ...deps,
+        queue: () => ({ hold }),
+        getTerminal: async (terminalId) => {
+          const record = await read(terminalId);
+          byTerminal(terminalId)!.generation = 4;
+          return record;
+        },
+      });
+      await expect(send()).rejects.toMatchObject({ code: "ASSISTANT_RESTARTED" });
+      expect(hold).not.toHaveBeenCalled();
     });
 
     it("is written only while the session it named still runs there and the drive rule allows", async () => {
@@ -401,22 +425,85 @@ describe("AssistantTerminalControl (#13496)", () => {
       expect(request.authorize()).toMatchObject({ code: "ASSISTANT_NOT_FOUND" });
     });
 
-    it("waits while keys are going into the assistant", async () => {
+    it("waits while keys are planned and pressed, or an interrupt is read, however they end", async () => {
+      let isWriting!: () => boolean;
+      let duringRead: boolean | undefined;
+      let releaseRead: (() => void) | undefined;
+      control = new AssistantTerminalControl({
+        ...deps,
+        queue: () => ({ hold }),
+        serializedState: async () => {
+          duringRead ??= isWriting();
+          if (releaseRead === undefined) return { data: "screen" };
+          await new Promise<void>((resolve) => {
+            const go = releaseRead!;
+            releaseRead = () => {
+              resolve();
+              go();
+            };
+          });
+          return { data: "screen" };
+        },
+      });
       await send();
-      const { isWriting } = hold.mock.calls[0]![0];
+      isWriting = hold.mock.calls[0]![0].isWriting;
       expect(isWriting()).toBe(false);
+
       byTerminal("t-one")!.record = atPrompt({ waitingReason: "approval" });
+      const keys = () =>
+        control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+          keys: ["enter"],
+          choose: undefined,
+          generation: 3,
+        });
       let seen: boolean | undefined;
       mocks.write.mockImplementation(() => {
         seen = isWriting();
       });
-      await control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
-        keys: ["enter"],
-        choose: undefined,
-        generation: 3,
-      });
+      await keys();
+      // From the first read on, not only once the keys go in.
+      expect(duringRead).toBe(true);
       expect(seen).toBe(true);
       expect(isWriting()).toBe(false);
+
+      // Two at once count as two, and a throw still lets go.
+      releaseRead = () => {};
+      const first = keys();
+      await vi.waitFor(() => expect(isWriting()).toBe(true));
+      const parked = releaseRead;
+      releaseRead = undefined;
+      mocks.write.mockImplementation(() => {
+        throw new Error("pty gone");
+      });
+      await expect(keys()).rejects.toThrow("pty gone");
+      expect(isWriting()).toBe(true);
+      parked();
+      await expect(first).rejects.toThrow("pty gone");
+      expect(isWriting()).toBe(false);
+
+      byTerminal("t-one")!.record = busyRun();
+      let duringInterrupt: boolean | undefined;
+      mocks.doubleEscape.mockImplementation(() => {
+        duringInterrupt = isWriting();
+      });
+      await control.interrupt(LOCAL, control.require(LOCAL, "t-one"));
+      expect(duringInterrupt).toBe(true);
+      expect(isWriting()).toBe(false);
+    });
+
+    it("presses no keys while a submission is still going in", async () => {
+      byTerminal("t-one")!.record = atPrompt({
+        waitingReason: "approval",
+        hasPendingSubmission: true,
+      });
+      await expect(
+        control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+          keys: ["enter"],
+          choose: undefined,
+          generation: 3,
+        })
+      ).rejects.toThrow(/still being written/);
+      expect(mocks.write).not.toHaveBeenCalled();
     });
 
     it("holds one up to the global Assistant under its upward stamp", async () => {

@@ -41,6 +41,12 @@ export interface LocalMcpRelayDeps extends Pick<
   receiveNotices(payload: RelayNoticesPayload): void;
   /** Ends what the person handed one of this machine's help sessions (#14161). */
   releaseHandOvers?(helpSessionId: string): void;
+  /**
+   * Drops what one of this machine's help sessions held for a busy agent
+   * (#16187, #16620), fenced, at once: its principal retires only once its
+   * calls still out have settled, and a held send must not outlive it.
+   */
+  endHeldSends?(helpSessionId: string): void;
   /** Puts one confirm-gated local call to the person, as a host's question would be. */
   receiveApproval(
     payload: RelayApprovePayload | RelayApproveTimedPayload
@@ -169,6 +175,7 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
     },
     endHelpSession: (helpSessionId) => {
       deps.releaseHandOvers?.(helpSessionId);
+      deps.endHeldSends?.(helpSessionId);
       // Its throwaway runs go now, not at their time limits (#14447).
       deps
         .throwawayRuns?.()

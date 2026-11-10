@@ -678,7 +678,7 @@ export class AssistantTerminalControl {
       queuedSendToken: held!.queuedSendToken,
       expiresAt: held!.expiresAt,
       ...(held!.supersededToken ? { supersededToken: held!.supersededToken } : {}),
-      message: `Held, not sent: it is typed the next time the assistant waits at its own prompt with nothing typed there, and dropped if anyone else sends it input or the run changes first.${superseded} Check it with terminal.getStatus and this queuedSendToken; withdraw it with terminal.cancelQueuedSend.`,
+      message: `Held, not sent: it is typed the next time the assistant waits at its own prompt with nothing typed there, and dropped if anyone else puts a prompt or a draft there, the run changes, or it expires first.${superseded} Check it with terminal.getStatus and this queuedSendToken; withdraw it with terminal.cancelQueuedSend.`,
     };
   }
 
@@ -691,6 +691,21 @@ export class AssistantTerminalControl {
    * caller's own earlier keys don't count (#16094), and the receipt says so.
    */
   async sendKeys(
+    caller: AssistantCaller,
+    target: AssistantTarget,
+    request: {
+      keys: string[] | undefined;
+      choose: string | undefined;
+      generation: number | undefined;
+    }
+  ): ReturnType<AssistantTerminalControl["pressKeys"]> {
+    requireProjectScope(target);
+    // A send held for this assistant waits until the keys are in (#16620),
+    // from the reads that plan them on.
+    return this.whileWriting(target.terminalId, () => this.pressKeys(caller, target, request));
+  }
+
+  private async pressKeys(
     caller: AssistantCaller,
     target: AssistantTarget,
     request: {
@@ -763,52 +778,8 @@ export class AssistantTerminalControl {
       typedSinceSettle(record, inputOwner) === "own-keys"
         ? { inputSinceSettle: "own-keys" as const }
         : {};
-    // A send held for this assistant waits until the keys are in (#16620).
-    this.writing.set(target.terminalId, (this.writing.get(target.terminalId) ?? 0) + 1);
-    try {
-      return await this.pressKeys(caller, target, request, {
-        keys,
-        inputOwner,
-        foreignBefore,
-        admittedOver,
-        before,
-        pressed: [],
-      });
-    } finally {
-      const left = (this.writing.get(target.terminalId) ?? 1) - 1;
-      if (left > 0) this.writing.set(target.terminalId, left);
-      else this.writing.delete(target.terminalId);
-    }
-  }
-
-  private async pressKeys(
-    caller: AssistantCaller,
-    target: AssistantTarget,
-    request: { generation: number | undefined },
-    pass: {
-      keys: string[];
-      inputOwner: string;
-      foreignBefore: number | undefined;
-      admittedOver: { inputSinceSettle?: "own-keys" };
-      before: string | null;
-      pressed: string[];
-    }
-  ): Promise<{
-    terminalId: string;
-    keys: string[];
-    screen?: string;
-    screenChanged?: boolean;
-    inputSinceSettle?: "own-keys";
-  }> {
-    const { keys, inputOwner, foreignBefore, admittedOver, before, pressed } = pass;
-    const readScreen = async (lines: number) => {
-      const snapshot = await readTailSnapshot(
-        (options) => this.deps.serializedState(target.terminalId, options),
-        lines
-      );
-      return snapshot === null ? null : tailCapturedOutput(snapshot.data, lines, true).content;
-    };
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const pressed: string[] = [];
     const stopPartway = (code: string, why: string): never => {
       throw new AssistantTargetError(
         code,
@@ -857,6 +828,17 @@ export class AssistantTerminalControl {
     };
   }
 
+  private async whileWriting<T>(terminalId: string, run: () => Promise<T>): Promise<T> {
+    this.writing.set(terminalId, (this.writing.get(terminalId) ?? 0) + 1);
+    try {
+      return await run();
+    } finally {
+      const left = (this.writing.get(terminalId) ?? 1) - 1;
+      if (left > 0) this.writing.set(terminalId, left);
+      else this.writing.delete(terminalId);
+    }
+  }
+
   private requireKeysAdmitted(
     target: AssistantTarget,
     record: AssistantTerminalRecord,
@@ -866,6 +848,12 @@ export class AssistantTerminalControl {
       throw new AssistantTargetError(
         ASSISTANT_TARGET_REFUSALS.busy,
         `Assistant terminal '${target.terminalId}' has no running process to press keys in. Nothing was pressed.`
+      );
+    }
+    if (record.hasPendingSubmission === true) {
+      throw new AssistantTargetError(
+        ASSISTANT_TARGET_REFUSALS.busy,
+        `A submission is still being written to assistant terminal '${target.terminalId}'. Nothing was pressed.`
       );
     }
     if (typedSinceSettle(record, inputOwner) === "someone") {
@@ -878,6 +866,15 @@ export class AssistantTerminalControl {
 
   /** The double Escape is filed under `caller` (#16094), so it never locks the caller's next keys out. */
   async interrupt(
+    caller: AssistantCaller,
+    target: AssistantTarget
+  ): ReturnType<AssistantTerminalControl["interruptNow"]> {
+    requireProjectScope(target);
+    // A send held for it never starts the turn this escape was read for (#16620).
+    return this.whileWriting(target.terminalId, () => this.interruptNow(caller, target));
+  }
+
+  private async interruptNow(
     caller: AssistantCaller,
     target: AssistantTarget
   ): Promise<{

@@ -95,7 +95,7 @@ export const WhenBusyArgSchema = z
   .enum(["refuse", "queue"])
   .optional()
   .describe(
-    "An assistant, or an agent you didn't launch, mid-turn: `refuse` (default) sends nothing; `queue` holds the text for its next prompt."
+    "Another assistant, or a worker you neither launched nor were handed, mid-turn: `refuse` (default) sends nothing; `queue` holds the text for its next prompt."
   );
 
 export const QueueTtlSecondsArgSchema = z

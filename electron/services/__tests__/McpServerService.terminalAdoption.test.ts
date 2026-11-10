@@ -46,7 +46,7 @@ import type { OrchestratorPaneIdentity } from "../McpPaneConfigService.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "../pty/PtyEventRouter.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 import type { McpHttpSession } from "../mcp-server/shared.js";
-import { helpNotifyKey } from "../mcp-server/terminalNotify.js";
+import { helpNotifyKey, paneNotifyKey, workerNotifyKey } from "../mcp-server/terminalNotify.js";
 
 const ORCHESTRATOR: OrchestratorPaneIdentity = {
   principalId: "principal-orch",
@@ -700,15 +700,24 @@ describe("McpServerService terminal hand-over to the global assistant (#14161)",
 
   it("holds a prompt for an assistant on its own notice line, a worker's on the worker's (#16620)", () => {
     service.setSessionIdResolver((id) => (id === "terminal-headless" ? "help-headless" : null));
+    service.setWorkerPrincipalResolver((id) => (id === "terminal-loose" ? null : "principal-w"));
     try {
-      // The key the assistant's own notices and incoming wakes ride.
+      // The key the assistant's own notices and incoming wakes ride, ahead of any launcher's.
       expect(service.workerNoticePane("terminal-headless")).toEqual({
         key: helpNotifyKey("help-headless"),
         terminalId: "terminal-headless",
       });
-      expect(service.workerNoticePane("terminal-1").key).not.toBe(helpNotifyKey("help-headless"));
+      expect(service.workerNoticePane("terminal-1")).toEqual({
+        key: paneNotifyKey("principal-w"),
+        terminalId: "terminal-1",
+      });
+      expect(service.workerNoticePane("terminal-loose")).toEqual({
+        key: workerNotifyKey("terminal-loose"),
+        terminalId: "terminal-loose",
+      });
     } finally {
       service.setSessionIdResolver(() => null);
+      service.setWorkerPrincipalResolver(null);
     }
   });
 
