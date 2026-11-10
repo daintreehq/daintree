@@ -70,6 +70,7 @@ const pendingBackgroundRestores = new Map<number, string[]>();
  * which point the restored projects are represented by their own views.
  */
 export function setPendingBackgroundRestores(windowId: number, ids: readonly string[]): void {
+  handOffHeldBackgrounds(windowId, ids);
   if (ids.length === 0) {
     pendingBackgroundRestores.delete(windowId);
     return;
@@ -161,6 +162,7 @@ export function addPendingRemoteBackgroundRestores(
   windowId: number,
   keys: readonly string[]
 ): void {
+  handOffHeldBackgrounds(windowId, keys);
   const current = pendingRemoteBackgroundRestores.get(windowId) ?? [];
   const merged = [...current, ...keys.filter((key) => !current.includes(key))];
   if (merged.length > 0) pendingRemoteBackgroundRestores.set(windowId, merged);
@@ -216,6 +218,24 @@ export function markWindowRecreationSetupFailed(windowId: number): void {
 
 export function clearPendingWindowRecreation(windowId: number): void {
   pendingWindowRecreations.delete(windowId);
+}
+
+/**
+ * The background restore took these projects from a held record: from here
+ * they are its to track, settling, slept or let go, and the record stops
+ * naming them. Otherwise a window whose setup stalls on after queuing them
+ * would keep saving a project the person has since put to sleep.
+ */
+function handOffHeldBackgrounds(windowId: number, taken: readonly string[]): void {
+  const held = pendingWindowRecreations.get(windowId);
+  const ids = held?.record.backgroundProjectIds;
+  if (!held || !ids || taken.length === 0) return;
+  const remaining = ids.filter((id) => !taken.includes(id));
+  if (remaining.length === ids.length) return;
+  held.record =
+    remaining.length > 0
+      ? { projectId: held.record.projectId, backgroundProjectIds: remaining }
+      : { projectId: held.record.projectId };
 }
 
 /**

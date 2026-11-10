@@ -245,6 +245,22 @@ describe("restoreFleetAfterCrash", () => {
     expect(events).toEqual(["suppress", "canopy", "create:a", "enable", "resume:true"]);
   });
 
+  it("reopens the Canopy window beside a manifest of picker windows (#16740)", async () => {
+    // Pickers name no workspace, so the reader reports no manifest, but the
+    // Canopy window and the saves a clean restore lifts still follow.
+    const restoreCanopyWindow = vi.fn();
+    const { deps, createWindow } = harness({
+      readManifest: () => ({ hadManifest: false, records: [], canopyWindow: true }),
+      restoreCanopyWindow,
+    });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(createWindow).not.toHaveBeenCalled();
+    expect(restoreCanopyWindow).toHaveBeenCalledTimes(1);
+    expect(deps.enableSaves).toHaveBeenCalledTimes(1);
+  });
+
   it("opens no Canopy window the manifest didn't have open", async () => {
     const restoreCanopyWindow = vi.fn();
     const { deps } = harness({ restoreCanopyWindow });

@@ -293,8 +293,8 @@ export function serializeOpenWindowsManifest(
  * the orphan sweep gave the most-recently-focused window. Those go to the first
  * window that stays, after its own, the way a dropped duplicate's go to the
  * window that kept its project. With no window left to take them, one picker
- * carries them all, so a session of pickers still opens one window and its
- * running projects still come back.
+ * record carries them all: the launch still opens one window, and they come
+ * back behind it.
  */
 export function dropPickerWindows(records: readonly OpenWindowRecord[]): OpenWindowRecord[] {
   const kept = records.filter((record) => record.projectId !== null);
@@ -306,9 +306,12 @@ export function dropPickerWindows(records: readonly OpenWindowRecord[]): OpenWin
   );
   if (carried.length === 0) return kept;
 
+  // Another window's foreground is filtered from the window's own list too,
+  // before the cap: left in, it would take a slot the restore later frees, and
+  // the carried project it pushed out would be lost.
   const [first, ...rest] = kept;
   const backgroundProjectIds = capBackgroundProjectIds(
-    [...(first?.backgroundProjectIds ?? []), ...carried],
+    [...(first?.backgroundProjectIds ?? []), ...carried].filter((id) => !foregrounds.has(id)),
     first?.projectId ?? null
   );
   return [{ projectId: first?.projectId ?? null, backgroundProjectIds }, ...rest];

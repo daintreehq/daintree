@@ -167,9 +167,11 @@ describe("buildOpenWindowRecords", () => {
           ["own", 1],
         ],
       },
+      { windowId: 3, projectId: "b", views: [["b", 1]] },
     ]);
     expect(buildOpenWindowRecords(registry, undefined, new Set(["running"]))).toEqual([
       { projectId: "a", backgroundProjectIds: ["own", "warm", "running"] },
+      { projectId: "b" },
     ]);
   });
 
@@ -249,10 +251,12 @@ describe("buildOpenWindowRecords", () => {
     const disposing: FakeWindow = { windowId: 2, projectId: "b", views: [["warm", 1]] };
     const registry = makeRegistry([{ windowId: 1, projectId: "a" }, disposing]);
     buildOpenWindowRecords(registry);
+    disposing.projectId = "c";
+    buildOpenWindowRecords(registry);
 
     disposing.throwsOnRead = true;
     // Its background list goes with the manager that can't answer for it.
-    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "a" }, { projectId: "b" }]);
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "a" }, { projectId: "c" }]);
   });
 
   it("gives a throwing manager no workspace it was never seen showing", () => {
@@ -458,11 +462,47 @@ describe("createWindowHoldingRecord", () => {
     expect(buildOpenWindowRecords(registry)).toEqual([
       { projectId: "b", backgroundProjectIds: ["c"] },
     ]);
+    // What the window shows wins while setup still runs; back on the picker,
+    // the record is still what it is becoming.
+    win.projectId = "x";
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "x", backgroundProjectIds: ["c"] },
+    ]);
+    win.projectId = null;
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "b", backgroundProjectIds: ["c"] },
+    ]);
 
     // Setup found the workspace gone and left the window on the picker.
     finish();
     await expect(created).resolves.toBe("ok");
     expect(buildOpenWindowRecords(registry)).toEqual([]);
+  });
+
+  it("stops naming background projects once the restore has taken them", async () => {
+    // A setup that stalls after queuing them must not keep saving a project the
+    // person has since slept: the restore tracks them from here.
+    const host = `studio-01:${"h".repeat(64)}`;
+    const registry = makeRegistry([{ windowId: 7, projectId: null }]);
+    let finish!: () => void;
+    const created = createWindowHoldingRecord(
+      { projectId: "b", backgroundProjectIds: ["c", "d", host] },
+      (onRegistered) =>
+        new Promise<void>((resolve) => {
+          onRegistered(7);
+          finish = resolve;
+        })
+    );
+
+    setPendingBackgroundRestores(7, ["c", "d"]);
+    addPendingRemoteBackgroundRestores(7, [host]);
+    // "c" restored; "d" was slept and the queue let it go.
+    setPendingBackgroundRestores(7, []);
+    removePendingRemoteBackgroundRestores(7, (key) => key === host);
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "b" }]);
+
+    finish();
+    await created;
   });
 
   it("keeps the record after a setup that threw, until the window shows a workspace", async () => {

@@ -284,7 +284,9 @@ describe("readOpenWindowsManifestSync", () => {
 
     expect(onProjectQuery).not.toHaveBeenCalled();
     expect(onScratchQuery).not.toHaveBeenCalled();
-    expect(ids(result.records)).toEqual([]);
+    // It named a window that nothing vouched for, which opens a picker, never
+    // the last-active project.
+    expect(result).toEqual({ hadManifest: true, records: [] });
   });
 
   it("binds one placeholder per deduplicated project id", () => {
@@ -553,17 +555,49 @@ describe("picker windows in a stored manifest (#16740)", () => {
   });
 
   it("hands a dropped picker's background projects to the first window that stays", () => {
+    // The first window named was deleted: the picker's projects go to the
+    // first one the existence check kept, and the others stay as they were.
     withDb({
       manifest: manifestJson([
         { projectId: null, backgroundProjectIds: [PROJECT_B, SCRATCH_A] },
+        { projectId: PROJECT_GONE, backgroundProjectIds: [SCRATCH_GONE] },
         { projectId: PROJECT_A, backgroundProjectIds: [SCRATCH_B] },
+        { projectId: SCRATCH_GONE },
+        { projectId: SCRATCH_B },
       ]),
       existingProjectIds: [PROJECT_A, PROJECT_B],
       liveScratchIds: [SCRATCH_A, SCRATCH_B],
     });
     expect(readOpenWindowsManifestSync().records).toEqual([
-      { projectId: PROJECT_A, backgroundProjectIds: [SCRATCH_B, PROJECT_B, SCRATCH_A] },
+      { projectId: PROJECT_A, backgroundProjectIds: [PROJECT_B, SCRATCH_A] },
+      { projectId: SCRATCH_B },
     ]);
+  });
+
+  it("opens the last-active project with a picker's background projects behind it", () => {
+    withDb({
+      manifest: manifestJson([
+        { projectId: null },
+        { projectId: null, backgroundProjectIds: [PROJECT_B, PROJECT_GONE] },
+      ]),
+      existingProjectIds: [PROJECT_A, PROJECT_B],
+    });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect({ hadManifest, records }).toEqual({
+      hadManifest: false,
+      records: [{ projectId: null, backgroundProjectIds: [PROJECT_B] }],
+    });
+    expect(resolvePrimaryRestoreProjectId(records, hadManifest, "last-active")).toBe("last-active");
+  });
+
+  it("opens the last-active project when a picker's background projects were all deleted", () => {
+    withDb({
+      manifest: manifestJson([{ projectId: null, backgroundProjectIds: [PROJECT_GONE] }]),
+      existingProjectIds: [PROJECT_A],
+    });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect({ hadManifest, records }).toEqual({ hadManifest: false, records: [] });
+    expect(resolvePrimaryRestoreProjectId(records, hadManifest, "last-active")).toBe("last-active");
   });
 
   it("opens a picker, not the last-active project, when the pickers sat beside deleted projects", () => {

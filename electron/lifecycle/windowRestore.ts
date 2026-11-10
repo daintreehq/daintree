@@ -115,14 +115,17 @@ export interface RestoreWindowFleetDeps {
  *
  * `hadManifest` is false both when nothing was stored and when what was stored
  * named zero windows, so closing every window still relaunches into the
- * last-active project rather than a picker.
+ * last-active project rather than a picker. A manifest of picker windows names
+ * no workspace either (#16740): when one of them carried background projects,
+ * the window opens on the last-active project with them behind it.
  */
 export function resolvePrimaryRestoreProjectId(
   records: OpenWindowRecord[],
   hadManifest: boolean,
   fallbackProjectId: string | undefined
 ): string | undefined {
-  if (records.length > 0) return localSeedOf(records[0]);
+  const [first] = records;
+  if (first && (hadManifest || first.projectId !== null)) return localSeedOf(first);
   if (hadManifest) return undefined;
   return fallbackProjectId;
 }
@@ -280,9 +283,14 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
     // I was in paints first, the rest fill in behind it" hold across windows.
     const background = deps.primaryAlreadyOpen ? records : records.slice(1);
     if (!deps.primaryAlreadyOpen) {
+      // Filtered for a picker's background list carried onto the last-active
+      // project, which may be one of them.
+      const primaryBackground = records[0]?.backgroundProjectIds?.filter(
+        (id) => id !== primaryProjectId
+      );
       const primaryResult = await deps.createWindow(primaryProjectId, {
         ...remoteRestoreOpts(records[0]),
-        backgroundProjectIds: records[0]?.backgroundProjectIds,
+        backgroundProjectIds: primaryBackground?.length ? primaryBackground : undefined,
         ...(background.length > 0 ? { awaitHydrationMs: RESTORE_HYDRATION_WAIT_MS } : {}),
       });
       if (primaryResult !== "ok") return;

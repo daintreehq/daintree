@@ -77,8 +77,10 @@ export async function restoreFleetAfterCrash(deps: CrashFleetRestoreDeps): Promi
   const requesterLive = await deps.waitForRequesterHydrated();
   if (!requesterLive || deps.isShuttingDown()) return;
 
+  // Nothing stored, or nothing worth bringing back. A manifest of pickers
+  // names no workspace (#16740) but can still hold the Canopy window.
   const { hadManifest, records, canopyWindow } = deps.readManifest();
-  if (!hadManifest) return;
+  if (!hadManifest && records.length === 0 && !canopyWindow) return;
 
   // Picker windows have nothing to restore, and the recovery window already
   // gives the user one.

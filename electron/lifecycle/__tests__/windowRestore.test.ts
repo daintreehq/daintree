@@ -89,6 +89,14 @@ describe("resolvePrimaryRestoreProjectId", () => {
     ).toBeUndefined();
   });
 
+  // A manifest of pickers names no workspace, so it launches like none (#16740).
+  it("opens the last-active project for a picker that only carries background projects", () => {
+    const carrier = { projectId: null, backgroundProjectIds: ["x"] };
+    expect(resolvePrimaryRestoreProjectId([carrier], false, "last-active")).toBe("last-active");
+    // Beside workspaces that were deleted, it is still a picker.
+    expect(resolvePrimaryRestoreProjectId([carrier], true, "last-active")).toBeUndefined();
+  });
+
   it("opens a picker, not a local lookup of the key, for a window that was on a host", () => {
     expect(
       resolvePrimaryRestoreProjectId([record(`studio-01:${"a".repeat(64)}`)], true, "other")
@@ -661,10 +669,10 @@ describe("restoreWindowFleet", () => {
       expect(h.openedProjects()).toEqual(["last"]);
     });
 
-    it("opens one picker carrying the background projects no window with a workspace can take", async () => {
+    it("opens one window on the last-active project, with the pickers' background projects behind it", async () => {
       h = harness({
         records: [
-          { projectId: null, backgroundProjectIds: ["x"] },
+          { projectId: null, backgroundProjectIds: ["x", "last"] },
           { projectId: null, backgroundProjectIds: ["y"] },
         ],
         hadManifest: false,
@@ -672,8 +680,9 @@ describe("restoreWindowFleet", () => {
       });
       await restoreWindowFleet(h.deps);
       expect(h.createWindow).toHaveBeenCalledTimes(1);
+      // The project it opens on is never also queued behind it.
       expect(h.createWindow.mock.calls[0]).toEqual([
-        undefined,
+        "last",
         expect.objectContaining({ backgroundProjectIds: ["x", "y"] }),
       ]);
     });
