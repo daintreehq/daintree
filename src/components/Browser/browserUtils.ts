@@ -58,6 +58,10 @@ export function clampZoom(value: number): number {
 
 export type LoadErrorKind = "timeout" | "cancelled" | "cert" | "network" | "generic";
 
+/** A load the user stopped, worded once so the Browser and dev preview panes read the same. */
+export const STOPPED_LOAD_TITLE = "Loading stopped";
+export const STOPPED_LOAD_MESSAGE = "You stopped this page before it finished loading.";
+
 export type LoadError = {
   kind: LoadErrorKind;
   message: string;

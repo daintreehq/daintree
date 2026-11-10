@@ -1736,8 +1736,8 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       expect(webview.stop).toHaveBeenCalledTimes(1);
-      expect(container.textContent).toContain("Load cancelled");
-      expect(container.textContent).toContain("Retry");
+      expect(container.textContent).toContain("Loading stopped");
+      expect(container.textContent).toContain("Reload");
     });
 
     it("timeout error overlay shows Retry and Open External buttons", () => {

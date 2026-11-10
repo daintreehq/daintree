@@ -1,13 +1,18 @@
-import { useState } from "react";
-import { Check, Copy, ExternalLink, Globe, Info, RefreshCw, XCircle } from "lucide-react";
+import { useState, type Ref } from "react";
+import { Check, Copy, ExternalLink, Globe, Info, RefreshCw, RotateCw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { COPIED_LABEL, COPY_FAILED_LABEL } from "@/components/ui/CopyButton";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { PanePlaceholder, PaneState, PaneStateActions } from "@/components/ui/PaneState";
+import {
+  PanePlaceholder,
+  PaneState,
+  PaneStateActions,
+  withInlineCode,
+} from "@/components/ui/PaneState";
 import { PaneLoadingState } from "@/components/ui/PaneLoadingState";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
-import type { LoadError } from "./browserUtils";
+import { STOPPED_LOAD_TITLE, type LoadError } from "./browserUtils";
 
 const EXAMPLE_HOSTS = ["localhost:3000", "localhost:5173", "localhost:8080"];
 
@@ -80,7 +85,7 @@ function loadErrorTitle(kind: LoadError["kind"]): string {
   return kind === "timeout"
     ? "Page load timed out"
     : kind === "cancelled"
-      ? "Load cancelled"
+      ? STOPPED_LOAD_TITLE
       : kind === "cert"
         ? "Certificate error"
         : kind === "network"
@@ -92,31 +97,44 @@ export function BrowserLoadErrorOverlay({
   loadError,
   onRetry,
   onOpenExternal,
+  stoppedActionRef,
 }: {
   loadError: LoadError;
   onRetry: () => void;
   onOpenExternal: () => void;
+  /** Takes focus when the loading overlay's Cancel unmounted under it. */
+  stoppedActionRef?: Ref<HTMLButtonElement>;
 }) {
+  // A load the user stopped is not a failure: the neutral mark, a polite status,
+  // and Reload rather than Retry.
+  const stopped = loadError.kind === "cancelled";
   return (
     <PaneState
-      live={loadError.kind === "cancelled" ? "status" : "alert"}
+      live={stopped ? "status" : "alert"}
+      announceAfterMount={stopped}
       className="z-30"
       icon={
-        // A load the user stopped is not a failure: it keeps the neutral mark.
-        loadError.kind === "cancelled" ? (
+        stopped ? (
           <Info className="text-text-secondary" />
         ) : (
           <XCircle className="text-status-error" />
         )
       }
       title={loadErrorTitle(loadError.kind)}
-      description={loadError.message}
+      description={withInlineCode(loadError.message)}
     >
       <PaneStateActions>
-        <Button onClick={onRetry} variant="outline" size="sm">
-          <RefreshCw />
-          Retry
-        </Button>
+        {stopped ? (
+          <Button ref={stoppedActionRef} onClick={onRetry} variant="outline" size="sm">
+            <RotateCw />
+            Reload
+          </Button>
+        ) : (
+          <Button onClick={onRetry} variant="outline" size="sm">
+            <RefreshCw />
+            Retry
+          </Button>
+        )}
         <Button onClick={onOpenExternal} variant="ghost" size="sm">
           <ExternalLink />
           Open in external browser

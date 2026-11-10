@@ -130,6 +130,54 @@ describe("DevPreviewWebviewOverlays — reconnect + load-error", () => {
   });
 });
 
+describe("DevPreviewWebviewOverlays — a stopped load is not a failure", () => {
+  it("draws a stopped load as a polite status with the info mark, and offers Reload", () => {
+    const onRetryWebviewLoad = vi.fn();
+    const error: WebviewLoadError = {
+      code: "aborted",
+      message: "You stopped this page before it finished loading.",
+    };
+    const { container } = render(
+      <DevPreviewWebviewOverlays {...baseProps({ webviewLoadError: error, onRetryWebviewLoad })} />
+    );
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("polite");
+    expect(container.querySelector("svg.lucide-info")).not.toBeNull();
+    expect(container.querySelector("svg.lucide-circle-x")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^retry$/i })).toBeNull();
+    screen.getByRole("button", { name: /^reload$/i }).click();
+    expect(onRetryWebviewLoad).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["timeout", "connection_refused", "cert", "failed"] as const)(
+    "draws a %s failure as an alert with the error mark",
+    (code) => {
+      const error: WebviewLoadError = { code, message: "The load failed." };
+      const { container } = render(
+        <DevPreviewWebviewOverlays {...baseProps({ webviewLoadError: error })} />
+      );
+      expect(container.querySelector('[role="alert"]')).not.toBeNull();
+      expect(container.querySelector("svg.lucide-circle-x")).not.toBeNull();
+      expect(container.querySelector("svg.lucide-info")).toBeNull();
+      expect(screen.queryByRole("button", { name: /^reload$/i })).toBeNull();
+    }
+  );
+
+  it("keeps the certificate failure's copy and retry actions", () => {
+    const onRetryWebviewLoad = vi.fn();
+    const error: WebviewLoadError = { code: "cert", message: "Run `mkcert -install`." };
+    const { container } = render(
+      <DevPreviewWebviewOverlays {...baseProps({ webviewLoadError: error, onRetryWebviewLoad })} />
+    );
+    expect(screen.getByRole("button", { name: /copy mkcert -install/i })).toBeTruthy();
+    screen.getByRole("button", { name: /^retry$/i }).click();
+    expect(onRetryWebviewLoad).toHaveBeenCalledTimes(1);
+    // The command is drawn as code, not between literal backticks.
+    expect(container.querySelector("code")?.textContent).toBe("mkcert -install");
+    expect(container.textContent).not.toContain("`");
+  });
+});
+
 describe("DevPreviewWebviewOverlays — crash banners", () => {
   it("renders the crashed banner with details and wires reload/close/hard-restart", () => {
     const onHardReload = vi.fn();

@@ -18,6 +18,7 @@ import {
   isValidBrowserUrl,
   clampZoom,
   focusWebviewPage,
+  STOPPED_LOAD_MESSAGE,
   type LoadError,
 } from "./browserUtils";
 import {
@@ -50,6 +51,7 @@ import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { logError } from "@/utils/logger";
 import { buildBrowserPartition, partitionProjectKey } from "@shared/utils/partitionUtils";
 import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
+import { useStoppedLoadFocus } from "@/hooks/useStoppedLoadFocus";
 import { notify } from "@/lib/notify";
 import { panelNotificationAddress } from "@/lib/notificationAddress";
 import {
@@ -812,6 +814,7 @@ export function BrowserPane({
     }
   }, [isEvicted]);
 
+  const stoppedLoadFocus = useStoppedLoadFocus();
   const handleCancelLoad = useCallback(() => {
     if (loadTimeoutRef.current) {
       clearTimeout(loadTimeoutRef.current);
@@ -826,7 +829,7 @@ export function BrowserPane({
         // Webview detached
       }
     }
-    setLoadError({ kind: "cancelled", message: "Load cancelled" });
+    setLoadError({ kind: "cancelled", message: STOPPED_LOAD_MESSAGE });
   }, []);
 
   const handleRetryFromError = useCallback(() => {
@@ -1117,6 +1120,7 @@ export function BrowserPane({
                 loadError={loadError}
                 onRetry={handleRetryFromError}
                 onOpenExternal={handleOpenExternal}
+                stoppedActionRef={stoppedLoadFocus.actionRef}
               />
             )}
             {crashState === "crashed" && (
@@ -1204,7 +1208,7 @@ export function BrowserPane({
                 <BrowserLoadingOverlay
                   key={loadAttempt}
                   isLoading={isLoading}
-                  onCancel={handleCancelLoad}
+                  onCancel={stoppedLoadFocus.wrapCancel(handleCancelLoad)}
                 />
               )}
               {findInPage.isOpen && <FindBar find={findInPage} />}

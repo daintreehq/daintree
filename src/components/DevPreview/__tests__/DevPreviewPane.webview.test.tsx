@@ -1489,7 +1489,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(webview.stop).toHaveBeenCalledTimes(1);
-      expect(container.textContent).toContain("Load cancelled");
+      expect(container.textContent).toContain("Loading stopped");
     });
 
     it("Retry from timeout clears error and loads current URL", () => {

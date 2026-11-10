@@ -8,6 +8,7 @@ import { useDevPreviewNavigation } from "../useDevPreviewNavigation";
 import { initializeBrowserHistory } from "../../Browser/historyUtils";
 import { actionService } from "@/services/ActionService";
 import type { BrowserHistory } from "@shared/types/browser";
+import { STOPPED_LOAD_MESSAGE } from "../../Browser/browserUtils";
 
 const PANE_ID = "pane-1";
 
@@ -346,7 +347,7 @@ describe("useDevPreviewNavigation — reload/cancel/retry", () => {
     expect(webview.stop).toHaveBeenCalledTimes(1);
     expect(setWebviewLoadError).toHaveBeenCalledWith({
       code: "aborted",
-      message: "Load cancelled.",
+      message: STOPPED_LOAD_MESSAGE,
     });
   });
 
