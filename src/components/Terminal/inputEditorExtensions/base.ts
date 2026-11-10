@@ -1083,15 +1083,15 @@ export function formatChipLabel(filePath: string): string {
   // A host's inbox names a pasted image by its own clock (`clipboard-YYYYMMDD-HHMMSS-…`);
   // this machine's paste uses epoch milliseconds.
   const stamped = filePath.match(/clipboard-\d{8}-(\d{2})(\d{2})\d{2}-/);
-  if (stamped) return `Screenshot ${stamped[1]}:${stamped[2]}`;
+  if (stamped) return `Image ${stamped[1]}:${stamped[2]}`;
   const match = filePath.match(/clipboard-(\d+)-/);
   if (match) {
     const date = new Date(Number(match[1]));
     if (!isNaN(date.getTime())) {
       const hh = String(date.getHours()).padStart(2, "0");
       const mm = String(date.getMinutes()).padStart(2, "0");
-      return `Screenshot ${hh}:${mm}`;
+      return `Image ${hh}:${mm}`;
     }
   }
-  return "Screenshot";
+  return "Image";
 }

@@ -149,7 +149,7 @@ export function createImageChipTooltip() {
     return chipTooltip(entry, ".cm-image-chip", () => {
       const img = document.createElement("img");
       img.src = entry.thumbnailUrl;
-      img.alt = "Screenshot preview";
+      img.alt = "Image preview";
       img.className = "block max-h-[180px] max-w-[240px] rounded-[var(--radius-sm)] object-contain";
       const path = chipCardPath(entry.filePath);
       path.classList.add("mt-1.5");
