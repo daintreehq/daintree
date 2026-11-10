@@ -26,7 +26,9 @@ vi.mock("react-virtuoso", async () => {
       props: { data: unknown[] } & NonNullable<typeof virtuoso.props>,
       ref: React.Ref<{ scrollToIndex: typeof virtuoso.scrollToIndex }>
     ) {
-      virtuoso.props = props;
+      React.useLayoutEffect(() => {
+        virtuoso.props = props;
+      });
       React.useImperativeHandle(ref, () => ({ scrollToIndex: virtuoso.scrollToIndex }));
       return <div data-testid="virtuoso" data-count={props.data.length} />;
     }),
@@ -170,6 +172,10 @@ describe("LogsContent — failed reads", () => {
 
 describe("LogsContent — auto-scroll follows the toggle and the scroll position", () => {
   const reportBottom = (bottom: boolean) => act(() => virtuoso.props?.atBottomStateChange(bottom));
+  const followFor = (isAtBottom: boolean) => {
+    const follow = virtuoso.props?.followOutput;
+    return typeof follow === "function" ? follow(isAtBottom) : follow;
+  };
   const setFlag = (value: boolean) => act(() => useLogsStore.getState().setAutoScroll(value));
   const renderList = async () => {
     const view = render(<LogsContent />);
@@ -201,8 +207,8 @@ describe("LogsContent — auto-scroll follows the toggle and the scroll position
     reportBottom(true);
     expect(queryByText("Jump to latest")).toBeNull();
     expect(useLogsStore.getState().autoScroll).toBe(true);
-    expect(virtuoso.props?.followOutput).toBeTypeOf("function");
-    expect((virtuoso.props?.followOutput as FollowOutput)(true)).not.toBe(false);
+    expect(followFor(true)).not.toBe(false);
+    expect(followFor(false)).toBe(false);
   });
 
   it("scrolls once when the pill resumes following", async () => {
@@ -263,9 +269,9 @@ describe("LogsContent — auto-scroll follows the toggle and the scroll position
     expect(await findByText("1 new")).not.toBeNull();
 
     setFlag(true);
+    expect(queryByText("1 new")).toBeNull();
     reportBottom(true);
 
-    expect(queryByText("1 new")).toBeNull();
     expect(queryByText("Jump to latest")).toBeNull();
   });
 
@@ -285,6 +291,30 @@ describe("LogsContent — auto-scroll follows the toggle and the scroll position
     reportBottom(true);
     setFlag(false);
 
+    reportBottom(true);
+
+    expect(useLogsStore.getState().autoScroll).toBe(false);
+  });
+
+  it("ignores the not-at-bottom report from the first layout", async () => {
+    await renderList();
+
+    reportBottom(false);
+    reportBottom(true);
+
+    expect(useLogsStore.getState().autoScroll).toBe(true);
+  });
+
+  it("does not resume following when a remounted list reports its first bottom", async () => {
+    await renderList();
+    reportBottom(true);
+    reportBottom(false);
+    expect(useLogsStore.getState().autoScroll).toBe(false);
+
+    act(() => useLogsStore.setState({ filters: { levels: ["debug"] } }));
+    await waitFor(() => expect(document.querySelector("[data-testid=virtuoso]")).toBeNull());
+    act(() => useLogsStore.setState({ filters: {} }));
+    await waitFor(() => expect(document.querySelector("[data-testid=virtuoso]")).not.toBeNull());
     reportBottom(true);
 
     expect(useLogsStore.getState().autoScroll).toBe(false);
