@@ -1,5 +1,6 @@
 import { dialog } from "electron";
 import fs from "fs/promises";
+import path from "node:path";
 import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { safeRecipeFilename } from "../../utils/recipeFilename.js";
@@ -183,19 +184,25 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
   );
 
   handlers.push(
-    typedHandleWithContext(CHANNELS.RECIPE_IMPORT_FILE, async (ctx): Promise<string | null> => {
-      const win = ctx.senderWindow ?? undefined;
-      const dialogOptions: Electron.OpenDialogOptions = {
-        title: "Import recipe",
-        filters: [{ name: "Recipe Files", extensions: ["json"] }],
-        properties: ["openFile"],
-      };
-      const { filePaths, canceled } = win
-        ? await dialog.showOpenDialog(win, dialogOptions)
-        : await dialog.showOpenDialog(dialogOptions);
-      if (canceled || filePaths.length === 0) return null;
-      return fs.readFile(filePaths[0]!, "utf-8");
-    })
+    typedHandleWithContext(
+      CHANNELS.RECIPE_IMPORT_FILE,
+      async (ctx): Promise<{ fileName: string; json: string } | null> => {
+        const win = ctx.senderWindow ?? undefined;
+        const dialogOptions: Electron.OpenDialogOptions = {
+          title: "Import recipe",
+          filters: [{ name: "Recipe Files", extensions: ["json"] }],
+          properties: ["openFile"],
+        };
+        const { filePaths, canceled } = win
+          ? await dialog.showOpenDialog(win, dialogOptions)
+          : await dialog.showOpenDialog(dialogOptions);
+        if (canceled || filePaths.length === 0) return null;
+        const filePath = filePaths[0]!;
+        // The base name only: the renderer shows which file was picked, and the
+        // full path says nothing more about the recipe.
+        return { fileName: path.basename(filePath), json: await fs.readFile(filePath, "utf-8") };
+      }
+    )
   );
 
   const handleProjectGetInRepoRecipes = async (projectId: string): Promise<TerminalRecipe[]> => {

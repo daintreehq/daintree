@@ -165,7 +165,7 @@ import { usePanelLimitStore } from "../panelLimitStore";
 import { getPanelSlotReservations } from "../slices/panelRegistry/panelSlotReservations";
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
-import { RecipeImportDropsTerminalsError } from "@/utils/recipeImport";
+import { RecipeImportDropsTerminalsError, RecipeImportInvalidError } from "@/utils/recipeImport";
 import {
   buildLaunchCommandFromFlags,
   stripAssignedSessionIdArgs,
@@ -225,10 +225,10 @@ describe("recipeStore", () => {
     }));
   });
 
-  it("rejects malformed recipe json", async () => {
-    await expect(useRecipeStore.getState().importRecipe("project-1", "{bad-json")).rejects.toThrow(
-      "Invalid JSON format"
-    );
+  it("rejects malformed recipe json as content to fix, not a failed save", async () => {
+    const attempt = useRecipeStore.getState().importRecipe("project-1", "{bad-json");
+    await expect(attempt).rejects.toBeInstanceOf(RecipeImportInvalidError);
+    await expect(attempt).rejects.toThrow("That isn't valid JSON");
   });
 
   it("sanitizes imported terminals and strips empty commands", async () => {
@@ -4590,35 +4590,93 @@ describe("recipeStore", () => {
       expect("whenDone" in imported.terminals[1]!).toBe(false);
     });
 
-    it("importRecipeFromFile reports a cancelled pick", async () => {
+    it("readRecipeFile reports a cancelled pick", async () => {
       importRecipeFromFileMock.mockResolvedValueOnce(null);
-      const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
+      const result = await useRecipeStore.getState().readRecipeFile();
       expect(result).toEqual({ status: "cancelled" });
     });
 
-    it("importRecipeFromFile imports a clean file straight away", async () => {
-      importRecipeFromFileMock.mockResolvedValueOnce(
-        JSON.stringify({ name: "From file", terminals: [{ type: "terminal", command: "ls" }] })
-      );
-      const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
-      expect(result).toEqual({ status: "imported" });
-      expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+    // Where a file goes is the user's choice, so reading one saves nothing (#16658).
+    it("readRecipeFile shows a clean file as it would be saved, and saves nothing", async () => {
+      const before = useRecipeStore.getState().recipes;
+      importRecipeFromFileMock.mockResolvedValueOnce({
+        fileName: "from-file.json",
+        json: JSON.stringify({
+          name: "From file",
+          terminals: [
+            { type: "terminal", command: " ls " },
+            { type: "claude", title: "Lead" },
+          ],
+        }),
+      });
+
+      const result = await useRecipeStore.getState().readRecipeFile();
+
+      expect(result.status).toBe("ready");
+      if (result.status !== "ready") return;
+      expect(result.fileName).toBe("from-file.json");
+      expect(result.recipe.name).toBe("From file");
+      // The sanitized terminals the save would write, not the file's raw ones.
+      expect(result.recipe.terminals.map((t) => [t.type, t.command, t.title])).toEqual([
+        ["terminal", "ls", undefined],
+        ["claude", undefined, "Lead"],
+      ]);
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+      expect(globalAddRecipeMock).not.toHaveBeenCalled();
+      expect(useRecipeStore.getState().recipes).toBe(before);
     });
 
-    it("importRecipeFromFile hands back a file that would lose terminals, unsaved (#15044)", async () => {
+    it("readRecipeFile hands back a file that would lose terminals, unsaved (#15044)", async () => {
       const json = JSON.stringify({
         name: "From file",
         terminals: [{ type: "terminal", command: "ls" }, { type: "acme-agent" }],
       });
-      importRecipeFromFileMock.mockResolvedValueOnce(json);
+      importRecipeFromFileMock.mockResolvedValueOnce({ fileName: "from-file.json", json });
 
-      const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
+      const result = await useRecipeStore.getState().readRecipeFile();
 
       expect(result.status).toBe("refused");
       if (result.status !== "refused") return;
       expect(result.json).toBe(json);
       expect(result.error).toBeInstanceOf(RecipeImportDropsTerminalsError);
       expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+    });
+
+    it("readRecipeFile refuses an empty file instead of treating it as a cancelled pick", async () => {
+      importRecipeFromFileMock.mockResolvedValueOnce({ fileName: "empty.json", json: "  \n" });
+
+      const result = await useRecipeStore.getState().readRecipeFile();
+
+      expect(result.status).toBe("refused");
+      if (result.status !== "refused") return;
+      expect(result.fileName).toBe("empty.json");
+      expect(result.error).toBeInstanceOf(RecipeImportInvalidError);
+    });
+
+    it("readRecipeFile refuses JSON that isn't a recipe as content to fix", async () => {
+      importRecipeFromFileMock.mockResolvedValueOnce({
+        fileName: "settings.json",
+        json: JSON.stringify({ theme: "bondi" }),
+      });
+
+      const result = await useRecipeStore.getState().readRecipeFile();
+
+      expect(result.status).toBe("refused");
+      if (result.status !== "refused") return;
+      expect(result.error).toBeInstanceOf(RecipeImportInvalidError);
+      expect((result.error as RecipeImportInvalidError).title).toBe("This JSON isn't a recipe");
+    });
+
+    it("importRecipe resolves to the recipe it saved", async () => {
+      const saved = await useRecipeStore
+        .getState()
+        .importRecipe(
+          undefined,
+          JSON.stringify({ name: "Saved", terminals: [{ type: "terminal" }] })
+        );
+      expect(saved.name).toBe("Saved");
+      expect(saved.projectId).toBeUndefined();
+      expect(useRecipeStore.getState().globalRecipes.some((r) => r.id === saved.id)).toBe(true);
     });
   });
 
