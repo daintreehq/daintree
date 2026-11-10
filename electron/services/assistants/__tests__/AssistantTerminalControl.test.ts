@@ -426,7 +426,7 @@ describe("AssistantTerminalControl (#13496)", () => {
     });
 
     it("waits while keys are planned and pressed, or an interrupt is read, however they end", async () => {
-      let isWriting!: () => boolean;
+      let isWriting: () => boolean = () => false;
       let duringRead: boolean | undefined;
       let releaseRead: (() => void) | undefined;
       control = new AssistantTerminalControl({

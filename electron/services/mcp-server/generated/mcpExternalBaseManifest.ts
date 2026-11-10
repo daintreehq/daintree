@@ -2601,7 +2601,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         whenBusy: {
           description:
-            "Another assistant, or a worker you neither launched nor were handed, mid-turn: `refuse` (default) sends nothing; `queue` holds the text for its next prompt.",
+            "Busy assistant, or worker you neither launched nor were handed: `refuse` (default) sends nothing; `queue` holds it for its next prompt.",
           type: "string",
           enum: ["refuse", "queue"],
         },
