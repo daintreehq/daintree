@@ -330,14 +330,15 @@ export function useProjectSwitcherPalette({
   }, [query]);
 
   const open = useCallback(
-    (nextMode: ProjectSwitcherMode = "modal") => {
+    (nextMode: ProjectSwitcherMode = "modal", options?: { query?: string }) => {
+      const initialQuery = options?.query ?? "";
       setMode(nextMode);
       if (nextMode === "modal") {
         usePaletteStore.getState().openPalette("project-switcher");
       } else {
         setDropdownIsOpen(true);
       }
-      setQuery("");
+      setQuery(initialQuery);
       // A closed palette renders against held stats, so the freeze is cut from
       // the store's current map rather than this render's rows.
       const stats = useProjectStatsStore.getState().stats;
@@ -372,6 +373,12 @@ export function useProjectSwitcherPalette({
       // can see. With every band folded there is nothing to preselect, and
       // `null` is the honest answer — arrows and Enter both no-op on an empty
       // list rather than committing something offscreen.
+      // A handed-over query opens on a ranked search, whose default is its top
+      // match; the browse preselect would point at a row the query may not keep.
+      if (initialQuery.trim()) {
+        setSelectedRowId(null);
+        return;
+      }
       const selectable = liveOrder.filter(
         (project) => !isBandCollapsed(collapsedBands, project.section)
       );

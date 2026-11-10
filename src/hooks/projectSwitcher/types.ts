@@ -339,7 +339,11 @@ export interface UseProjectSwitcherPaletteReturn {
    * scratches, other hosts.
    */
   cycleRequest: number;
-  open: (mode?: ProjectSwitcherMode) => void;
+  /**
+   * `query` opens the palette already searching for that text, for a surface
+   * handing over what the user typed. Every other opening starts empty.
+   */
+  open: (mode?: ProjectSwitcherMode, options?: { query?: string }) => void;
   close: () => void;
   toggle: (mode?: ProjectSwitcherMode) => void;
   setQuery: (query: string) => void;

@@ -131,7 +131,14 @@ type ActionPaletteProps = Pick<
   | "hideAction"
   | "argPrompt"
   | "argBack"
->;
+> & {
+  /**
+   * Opens the project switcher already searching for `query`. Bound to the
+   * switcher's own `open()` so the hand-off gets its mode, layout freeze and
+   * selection, which a bare `openPalette` id skips.
+   */
+  onSearchProjects: (query: string) => void;
+};
 
 export function ActionPalette({
   isOpen,
@@ -153,6 +160,7 @@ export function ActionPalette({
   hideAction,
   argPrompt,
   argBack,
+  onSearchProjects,
 }: ActionPaletteProps) {
   const handleSelect = useCallback(
     (item: ActionPaletteItemType) => {
@@ -384,7 +392,7 @@ export function ActionPalette({
 
       if (e.key === "Enter" && offersProjectSearch) {
         e.preventDefault();
-        usePaletteStore.getState().openPalette("project-switcher");
+        onSearchProjects(query);
         return;
       }
 
@@ -438,6 +446,7 @@ export function ActionPalette({
       hideAction,
       canHideIndex,
       offersProjectSearch,
+      onSearchProjects,
     ]
   );
 

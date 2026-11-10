@@ -1194,6 +1194,74 @@ describe("useProjectSwitcherPalette", () => {
       });
       expect(result.current.results).toHaveLength(3);
     });
+
+    // The action palette's "Enter to search projects" hands its typed text
+    // over rather than making the user type it again (#16631).
+    it("opens on a handed-over query, ranked for it, with the top match selected", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("modal", { query: "repos/other" });
+      });
+
+      expect(usePaletteStore.getState().activePaletteId).toBe("project-switcher");
+      expect(result.current.isOpen).toBe(true);
+      expect(result.current.query).toBe("repos/other");
+      await waitFor(() => {
+        expect(result.current.results[0]?.id).toBe("project-2");
+      });
+      expect(result.current.results.length).toBeLessThan(searchProjects.length);
+      expect(result.current.selectedIndex).toBe(0);
+    });
+
+    it("never carries a handed-over query into a later opening", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("modal", { query: "repos/other" });
+      });
+      act(() => {
+        result.current.close();
+      });
+      act(() => {
+        result.current.open();
+      });
+
+      expect(result.current.query).toBe("");
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(searchProjects.length);
+      });
+    });
+
+    it("shows the modal for a hand-off even after the toolbar dropdown was the last surface", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("dropdown");
+      });
+      act(() => {
+        result.current.close();
+      });
+      act(() => {
+        result.current.open("modal", { query: "repos/other" });
+      });
+
+      expect(result.current.mode).toBe("modal");
+      expect(result.current.isOpen).toBe(true);
+      expect(result.current.query).toBe("repos/other");
+    });
   });
 
   describe("search activity freeze — issue #11861", () => {

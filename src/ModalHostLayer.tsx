@@ -657,6 +657,7 @@ export function ModalHostLayer({
               hideAction={actionPalette.hideAction}
               argPrompt={actionPalette.argPrompt}
               argBack={actionPalette.argBack}
+              onSearchProjects={(query) => projectSwitcherPalette.open("modal", { query })}
             />
           </Suspense>
         )}
