@@ -589,7 +589,9 @@ const MOD_ENTER = "Cmd+Enter";
 export function getProjectSwitcherEnterHint(
   row: ProjectSwitcherRow | undefined,
   modifierHeld: boolean,
-  canOpenWindow: boolean
+  canOpenWindow: boolean,
+  /** Agents the highlighted row's resume mark promises; 0 when it draws none. */
+  resumableAgentCount = 0
 ): { keys: string; label: string } | null {
   if (!row) return null;
   // A missing project's Enter opens the relocation dialog, not a switch.
@@ -610,20 +612,13 @@ export function getProjectSwitcherEnterHint(
     return { keys: MOD_ENTER, label: "to open in new window" };
   }
   // The resume mark's meaning, said where Enter's consequence already is: the
-  // mark is a 6px dot, and nothing else on screen explains it. Decided by the
-  // test that draws the mark, so the two can never disagree about a row.
-  // "Resume" alone, since every Enter here switches; with "switch and" it no
-  // longer fits the dropdown's footer beside the section keys. The clock only
-  // feeds the line's ages, never whether the row may promise a resume.
-  const status =
-    row.kind === "project"
-      ? getProjectRowStatus(row, Date.now())
-      : getScratchRowStatus(row, Date.now());
-  if (showResumableAgentMark(status, row)) {
-    return {
-      keys: "Enter",
-      label: `to resume ${pluralize(row.resumableAgentCount ?? 0, "agent")}`,
-    };
+  // mark is a 6px dot, and nothing else on screen explains it. The caller
+  // counts it with the test that draws the mark (`showResumableAgentMark`), so
+  // the two can never disagree about a row. "Resume" alone, since every Enter
+  // here switches; with "switch and" it no longer fits the dropdown's footer
+  // beside the section keys.
+  if (resumableAgentCount > 0) {
+    return { keys: "Enter", label: `to resume ${pluralize(resumableAgentCount, "agent")}` };
   }
   return { keys: "Enter", label: "to switch" };
 }

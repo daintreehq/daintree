@@ -1268,7 +1268,7 @@ describe("formatFleetLiveness", () => {
     // covering both would answer neither question it is asked. Matched as whole
     // phrases — a bare `toContain("3")` also passes on "32 agents running".
     expect(both).not.toContain("5");
-    expect(both).toMatch(/\b3 running\b/);
+    expect(both).toMatch(/\b3 agents running\b/);
     expect(both).toMatch(/\b2 assistants working\b/);
   });
 

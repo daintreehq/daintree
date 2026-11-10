@@ -207,21 +207,23 @@ function FoldedRollup({
 }) {
   if (activeAgentCount <= 0 && workingAssistantCount <= 0) return null;
   return (
-    <span
-      className="flex min-w-0 items-center gap-1 normal-case tracking-normal text-text-secondary"
-      data-testid={`band-running-rollup-${bandKey.replace(":", "-")}`}
-    >
+    <>
+      {/* The folded label's ", 2 projects" ends without a break, so the
+          option's name ran on into "2 projects1 agent running". */}
+      <span className="sr-only">, </span>
       <span
-        className="workspace-mark h-1.5 w-1.5 shrink-0 rounded-full bg-activity-working"
-        aria-hidden="true"
-      />
-      <span className="truncate">
-        {/* The folded label's ", 2 projects" ends without a break, so the
-            option's name ran on into "2 projects1 agent running". */}
-        <span className="sr-only">, </span>
-        {formatFoldedLiveness(activeAgentCount, workingAssistantCount)}
+        className="flex min-w-0 items-center gap-1 normal-case tracking-normal text-text-secondary"
+        data-testid={`band-running-rollup-${bandKey.replace(":", "-")}`}
+      >
+        <span
+          className="workspace-mark h-1.5 w-1.5 shrink-0 rounded-full bg-activity-working"
+          aria-hidden="true"
+        />
+        <span className="truncate">
+          {formatFoldedLiveness(activeAgentCount, workingAssistantCount)}
+        </span>
       </span>
-    </span>
+    </>
   );
 }
 

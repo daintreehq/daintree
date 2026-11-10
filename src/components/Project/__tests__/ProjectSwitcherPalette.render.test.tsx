@@ -1108,7 +1108,7 @@ describe("ProjectSwitcherPalette modal mode", () => {
     expect(screen.queryByText("Create new folder…")).toBeNull();
   });
 
-  it("shows the Sections hint but not Remove shortcut in modal mode browse footer", () => {
+  it("shows the section-keys hint but not Remove shortcut in modal mode browse footer", () => {
     // On a row elsewhere, as the hook opens: Enter on the current row closes.
     render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} selectedIndex={1} />);
     const footer = screen.getByTestId("palette-footer");
@@ -1117,7 +1117,7 @@ describe("ProjectSwitcherPalette modal mode", () => {
     // Browse spends the rail on band jumps; the right-click rail is for search,
     // where there are no headers to jump between.
     const bandKeys = within(footer).getByTestId("project-switcher-band-keys-hint");
-    expect(bandKeys.textContent).toContain("Sections");
+    expect(bandKeys.textContent).toContain("to jump sections");
     expect(bandKeys.textContent).toMatch(/(Option|Alt) plus up or down arrow/);
     expect(footer.textContent).not.toContain("Right-click for more");
   });

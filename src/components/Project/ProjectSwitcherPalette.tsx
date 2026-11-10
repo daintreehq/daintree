@@ -9,7 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Kbd, KbdChord } from "@/components/ui/Kbd";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
-import { formatFleetLiveness } from "@/lib/projectRowStatus";
+import {
+  formatFleetLiveness,
+  getProjectRowStatus,
+  getScratchRowStatus,
+} from "@/lib/projectRowStatus";
+import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useOverlayClaim } from "@/hooks";
@@ -45,6 +50,7 @@ import {
   getOtherHostEnterHint,
   getProjectSwitcherEnterHint,
   modEnterOpensWindow,
+  showResumableAgentMark,
 } from "./ProjectSwitcherRows";
 import {
   bandOptionId,
@@ -194,6 +200,23 @@ function useWaitAgeTick(active: boolean): void {
  * rather than naming affordances it doesn't have: ⌘↵ falls back to a plain
  * switch, and a search-mode scratch row carries no context menu.
  */
+/**
+ * How many agents the row's resume mark promises: the mark's own test, so the
+ * footer names exactly the dot the row draws.
+ */
+function resumableAgentCount({
+  row,
+  nowMs,
+}: {
+  row: ProjectSwitcherRow | undefined;
+  nowMs: number;
+}): number {
+  if (!row) return 0;
+  const status =
+    row.kind === "project" ? getProjectRowStatus(row, nowMs) : getScratchRowStatus(row, nowMs);
+  return showResumableAgentMark(status, row) ? (row.resumableAgentCount ?? 0) : 0;
+}
+
 function ProjectSwitcherFooter({
   selectedRow,
   hostOption,
@@ -201,7 +224,10 @@ function ProjectSwitcherFooter({
   inBrowse = false,
   canOpenWindow,
   onOpenPilot,
+  nowMs,
 }: {
+  /** The palette's minute clock, for the highlighted row's status (#11823). */
+  nowMs: number;
   /**
    * Browse, where the list has bands: the footer teaches the band keys, which
    * nothing else on screen would. A search has no bands, so it keeps the
@@ -233,7 +259,12 @@ function ProjectSwitcherFooter({
     ? hintOverride
     : hostOption
       ? getOtherHostEnterHint(hostOption, modifiers.meta)
-      : getProjectSwitcherEnterHint(selectedRow, modifiers.meta, canOpenWindow);
+      : getProjectSwitcherEnterHint(
+          selectedRow,
+          modifiers.meta,
+          canOpenWindow,
+          resumableAgentCount({ row: selectedRow, nowMs })
+        );
   // "to go to window" (15) still fits beside the keys in the dropdown; "to
   // resume 2 agents" and a host's name do not.
   const longHint = hint !== null && (hint.host !== undefined || hint.label.length > 15);
@@ -1141,6 +1172,9 @@ function ProjectPaletteInner({
     }
   };
 
+  // The footer reads the highlighted row's status, so it needs the clock the
+  // rows render against rather than a reading of its own.
+  const footerClock = useGlobalMinuteClock();
   const footerRow: ProjectSwitcherRow | undefined =
     cursor?.kind === "row"
       ? cursor.row
@@ -1440,6 +1474,7 @@ function ProjectPaletteInner({
                 : undefined
           }
           canOpenWindow={onSelectNewWindow !== undefined}
+          nowMs={footerClock}
           onOpenPilot={() => {
             onClose();
             usePilotStore.getState().open();

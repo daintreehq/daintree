@@ -631,9 +631,7 @@ export function OtherHostsSection({
       {!foldable ? (
         // The chevron's room kept, so the label sits where every band label
         // above it does rather than out on the status column.
-        <div
-          className={cn("flex min-h-6 items-center gap-1.5 px-2", PALETTE_SECTION_LABEL_CLASS)}
-        >
+        <div className={cn("flex min-h-6 items-center gap-1.5 px-2", PALETTE_SECTION_LABEL_CLASS)}>
           <span className="w-3 shrink-0" aria-hidden="true" />
           {label}
         </div>
