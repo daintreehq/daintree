@@ -4,15 +4,16 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { BAND_GLYPH_TONE, PilotRunState } from "@/components/Pilot/PilotRunState";
 import { Archive, ArchiveRestore, Mic } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AskingCircle, Clock } from "@/components/icons";
 import type { CanopyCategory } from "@shared/types/ipc/canopy";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { formatTimeAgo } from "@/utils/timeAgo";
-import { pluralize } from "@/lib/pluralize";
 import {
   answerOptions,
   itemAgentNeedHolds,
+  answerAttentionLabel,
   itemAnswerAttention,
   itemContextWarning,
   itemFacts,
@@ -241,7 +242,11 @@ export function itemDetail(item: CanopyItem): {
 
 /** The meta line's separator: the same space either side, wherever it falls. */
 export function MetaDot() {
-  return <span className="shrink-0 px-1">·</span>;
+  return (
+    <span className="shrink-0 px-1">
+      <FactSeparator />
+    </span>
+  );
 }
 
 /**
@@ -498,12 +503,7 @@ export function CanopyRow({
   const agentWords = agentNeedWords(item);
   const agentNote = agentWords !== null && agentWords !== status ? agentWords : null;
   const answers = itemAnswerAttention(item);
-  const answerNote =
-    answers === 0
-      ? null
-      : answers === 1
-        ? "Answer needs attention"
-        : `${pluralize(answers, "answer")} need attention`;
+  const answerNote = answers === 0 ? null : answerAttentionLabel(answers);
   const statusTail = [
     agentNote,
     answerNote,

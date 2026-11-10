@@ -7,7 +7,6 @@ import {
   SHELL_IDENTITY_FALLBACK_SCAN_LINES,
 } from "../../../electron/services/pty/IdentityWatcher";
 import {
-  OUTPUT_BUFFER_SIZE,
   SEMANTIC_BUFFER_MAX_LINES,
   SEMANTIC_BUFFER_MAX_LINE_LENGTH,
   type TerminalInfo,
@@ -28,8 +27,7 @@ import type { ProcessDetector } from "../../../electron/services/ProcessDetector
  *  - `TerminalForensicsBuffer`, the 4,000-char crash-forensics ring,
  *  - `SemanticBufferManager`, the 50-line semantic ring with its 1,000-char
  *    per-line truncation,
- *  - the inline agent output ring (`OUTPUT_BUFFER_SIZE`, 2,000 chars) and
- *    `getLiveAgentId`, whose ANSWER is graded rather than merely counted: the
+ *  - `getLiveAgentId`, whose ANSWER is graded rather than merely counted: the
  *    fixture plants a `detectedAgentId` that disagrees with `launchAgentId`, so
  *    the precedence rule ("detection wins") is what the queued id proves,
  *  - `IdentityWatcher.observeOutput`, the prompt-return demotion scan.
@@ -117,8 +115,6 @@ export interface PipelinePlan {
   expectedPromptDecoys: number;
   /** Last 4,000 chars of the stream — what the forensics ring must hold. */
   expectedForensicTail: string;
-  /** Last 2,000 chars of the stream — what the agent output ring must hold. */
-  expectedOutputTail: string;
   /** The final non-empty line, which the semantic ring must end on. */
   expectedLastSemanticLine: string;
   totalChars: number;
@@ -145,6 +141,20 @@ const OUTPUT_LINES = [
 ] as const;
 
 export const OSC_11_QUERY = "\x1b]11;?\x07";
+
+/** The final non-empty line of a stream, as the semantic ring stores it. */
+export function lastSemanticLine(stream: string): string {
+  const lines = stream.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]!;
+    if (line.length > 0) {
+      return line.length > SEMANTIC_BUFFER_MAX_LINE_LENGTH
+        ? `${line.substring(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH)}... [truncated]`
+        : line;
+    }
+  }
+  return "";
+}
 /** OSC 12 (cursor colour) — passes the `\x1b]1` gate, is not a colour query. */
 const OSC_12_DECOY = "\x1b]12;?\x07";
 
@@ -170,18 +180,6 @@ class PipelinePlanBuilder {
 
   build(): PipelinePlan {
     const stream = this.parts.join("");
-    const lines = stream.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-    let lastLine = "";
-    for (let i = lines.length - 1; i >= 0; i -= 1) {
-      const line = lines[i]!;
-      if (line.length > 0) {
-        lastLine =
-          line.length > SEMANTIC_BUFFER_MAX_LINE_LENGTH
-            ? `${line.substring(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH)}... [truncated]`
-            : line;
-        break;
-      }
-    }
     return {
       frames: this.frames,
       stream,
@@ -190,8 +188,7 @@ class PipelinePlanBuilder {
       expectedPromptReturns: this.promptReturns,
       expectedPromptDecoys: this.promptDecoys,
       expectedForensicTail: stream.slice(-4000),
-      expectedOutputTail: stream.slice(-OUTPUT_BUFFER_SIZE),
-      expectedLastSemanticLine: lastLine,
+      expectedLastSemanticLine: lastSemanticLine(stream),
       totalChars: this.chars,
     };
   }
@@ -289,7 +286,6 @@ export interface PipelineObservation {
   /** Demotions on a chunk that had no clean prompt — the decoy half. */
   promptReturnsSpurious: number;
   forensicTail: string;
-  outputTail: string;
   semanticLines: string[];
   chunksFed: number;
 }
@@ -347,7 +343,6 @@ export function createPipelineHarness(
   const terminalInfo = {
     id: terminalId,
     ptyProcess: fakePty,
-    outputBuffer: "",
     semanticBuffer: [] as string[],
     detectedAgentId: DETECTED_AGENT_ID,
     launchAgentId: LAUNCH_AGENT_ID,
@@ -512,7 +507,6 @@ export function createPipelineHarness(
         promptReturnsMissed,
         promptReturnsSpurious,
         forensicTail: forensicsBuffer.getRecentOutput(),
-        outputTail: terminalInfo.outputBuffer,
         semanticLines: terminalInfo.semanticBuffer,
         chunksFed,
       };
@@ -592,8 +586,6 @@ export interface PipelineMissCounts {
   promptReturnMisses: number;
   /** The 4,000-char forensics ring does not hold the stream's tail. */
   forensicRingMisses: number;
-  /** The 2,000-char agent output ring does not hold the stream's tail. */
-  outputRingMisses: number;
   /** Line cap, tail line, or the 1,000-char truncation is wrong. */
   semanticRingMisses: number;
 }
@@ -608,8 +600,8 @@ export interface PipelineMissCounts {
  * longer.
  *
  * The ring expectations are arithmetic over the corpus the fixture itself
- * built — `stream.slice(-4000)` and `stream.slice(-2000)` — not a second read
- * of the rings. A ring that never trimmed and a ring that dropped a chunk both
+ * built — `stream.slice(-4000)` and the final line — not a second read of the
+ * rings. A ring that never trimmed and a ring that dropped a chunk both
  * fail, in opposite directions, against the same string.
  */
 export function pipelinePassMisses(
@@ -639,7 +631,6 @@ export function pipelinePassMisses(
     oscStripMisses: observed.oscStripLeaks + observed.oscOverStrips,
     promptReturnMisses: observed.promptReturnsMissed + observed.promptReturnsSpurious,
     forensicRingMisses: observed.forensicTail === plan.expectedForensicTail ? 0 : 1,
-    outputRingMisses: observed.outputTail === plan.expectedOutputTail ? 0 : 1,
     semanticRingMisses,
   };
 }
@@ -656,7 +647,6 @@ export function emptyPipelineMisses(): PipelineMissCounts {
     oscStripMisses: 0,
     promptReturnMisses: 0,
     forensicRingMisses: 0,
-    outputRingMisses: 0,
     semanticRingMisses: 0,
   };
 }
@@ -675,7 +665,6 @@ export function addPipelineMisses(
   into.oscStripMisses += from.oscStripMisses;
   into.promptReturnMisses += from.promptReturnMisses;
   into.forensicRingMisses += from.forensicRingMisses;
-  into.outputRingMisses += from.outputRingMisses;
   into.semanticRingMisses += from.semanticRingMisses;
   return into;
 }

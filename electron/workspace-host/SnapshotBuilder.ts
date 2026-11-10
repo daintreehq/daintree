@@ -10,7 +10,7 @@ import type {
 } from "../../shared/types/worktree.js";
 import type { CIStatusState } from "../../shared/types/forge.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
-import type { WorktreeChanges, RepoState } from "../../shared/types/git.js";
+import type { GitStatusUnanswered, WorktreeChanges, RepoState } from "../../shared/types/git.js";
 import type { PluginWorktreeLinked } from "../../shared/types/plugin.js";
 import { issueNumberBelongsToLinkedPr } from "../../shared/utils/worktreeIssueProjection.js";
 import type { IssueClaimProvenance } from "../services/issueBranchClaim.js";
@@ -79,6 +79,8 @@ export interface SnapshotBuilderHost {
   readonly pathMembershipChangedAt: number;
   readonly fetchAuthFailed: boolean;
   readonly fetchNetworkFailed: boolean;
+  readonly gitStatusUnanswered: GitStatusUnanswered | null;
+  readonly gitStatusWaitingForDownload: boolean;
   readonly hasRemote: boolean | undefined;
   readonly isFetchInFlight: boolean;
   readonly matchedForgeProviderId: string | null;
@@ -231,6 +233,8 @@ export class SnapshotBuilder {
       pathMembershipChangedAt: this.host.pathMembershipChangedAt || undefined,
       fetchAuthFailed: this.host.fetchAuthFailed || undefined,
       fetchNetworkFailed: this.host.fetchNetworkFailed || undefined,
+      gitStatusUnanswered: this.host.gitStatusUnanswered ?? undefined,
+      gitStatusWaitingForDownload: this.host.gitStatusWaitingForDownload || undefined,
       // Verbatim: `false` is the answer that matters, so it must survive.
       hasRemote: this.host.hasRemote,
       // Read in-flight state authoritatively at snapshot time (lesson #1700)

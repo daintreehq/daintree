@@ -11,6 +11,7 @@ import type { DisplayIdentity } from "@shared/types/displayIdentity";
 import { displayIdentityLabel, normalizeDisplayIdentity } from "@shared/utils/displayIdentity";
 import { pluralize } from "@/lib/pluralize";
 import { agoPhrase } from "@/lib/projectRowStatus";
+import type { CanopySearchAlternatives } from "./canopySearch";
 
 /** Which runs Canopy lists: its workers, the Daintree Assistants, or both. */
 export type CanopyRoleFilter = "all" | "workers" | "assistants";
@@ -151,12 +152,6 @@ export function buildAssistantItems(
     /** This machine's name, when the list spans hosts; nothing otherwise. */
     hostName?: string | null;
     seen: AssistantHandbacksSeen;
-    /**
-     * Only this project's, when the panel shows one project. The global
-     * assistant stays: it belongs to no project, and is the one that acts on
-     * any of them.
-     */
-    projectId?: string | null;
     /** Epoch ms to hold confirmations against; the read's own time when not given. */
     now?: number;
   }
@@ -171,9 +166,6 @@ export function buildAssistantItems(
     if (entry.state !== "live" || entry.role !== "assistant") continue;
     const { subject } = entry;
     const projectId = subject.scope.kind === "project" ? subject.scope.projectId : null;
-    if (options.projectId != null && projectId !== null && projectId !== options.projectId) {
-      continue;
-    }
     const id = canopyAssistantId(subject);
     const session = assistantSessionLabel(subject.lane);
     const projectName =
@@ -362,8 +354,11 @@ export function assistantStatus(item: CanopyAssistantItem): string {
   }
 }
 
-export function assistantMatches(item: CanopyAssistantItem, terms: readonly string[]): boolean {
-  if (terms.length === 0) return true;
+export function assistantMatches(
+  item: CanopyAssistantItem,
+  alternatives: CanopySearchAlternatives
+): boolean {
+  if (alternatives.length === 0) return true;
   const haystack = [
     "assistant",
     item.scopeLabel,
@@ -379,5 +374,5 @@ export function assistantMatches(item: CanopyAssistantItem, terms: readonly stri
   ]
     .join(" ")
     .toLowerCase();
-  return terms.every((term) => haystack.includes(term.toLowerCase()));
+  return alternatives.some((words) => words.every((word) => haystack.includes(word.toLowerCase())));
 }

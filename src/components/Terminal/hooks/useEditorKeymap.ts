@@ -5,7 +5,9 @@ import type { Compartment } from "@codemirror/state";
 import type { AutocompleteItem } from "../AutocompleteMenu";
 import type { ActiveCompletionContext } from "../hybridInputParsing";
 import { currentContextReferenceProvidersEffects } from "../inputEditorExtensions/contextReferenceChip";
+import { currentDiffNotesChipEffects } from "../inputEditorExtensions/notesChip";
 import { clearComposerHistory } from "../inputEditorExtensions/composerHistory";
+import { rebindToComposer } from "../inputEditorExtensions/composerBindings";
 import { advanceComposerDraft } from "../inputEditorExtensions/composerDraftGeneration";
 import { isComposerSendHeld } from "../uploads/pendingUploads";
 import { rescanForgeReferences } from "../inputEditorExtensions/forgeReference";
@@ -64,6 +66,8 @@ interface UseEditorKeymapParams {
     terminalId: string,
     projectId?: string
   ) => EditorView["state"] | undefined;
+  /** A popped stash replaces the editor's state past its listener, so its text is told here. */
+  onStashPopped: (text: string) => void;
   setActiveCompletionContext: Dispatch<SetStateAction<ActiveCompletionContext | null>>;
   setIsExpanded: Dispatch<SetStateAction<boolean>>;
   setSelectedIndex: Dispatch<SetStateAction<number>>;
@@ -101,6 +105,7 @@ export function useEditorKeymap({
   hasPendingVoiceCorrection,
   stashEditorState,
   popStashedEditorState,
+  onStashPopped,
   setActiveCompletionContext,
   setIsExpanded,
   setSelectedIndex,
@@ -376,7 +381,8 @@ export function useEditorKeymap({
       if (!stashed) return false;
       // Kept apart from the history clear, which would drop the stash's own steps.
       advanceComposerDraft(view);
-      view.setState(stashed);
+      view.setState(rebindToComposer(view, stashed));
+      onStashPopped(view.state.doc.toString());
       // The stashed state carries the editable flag, the chip providers and
       // the references of when it was stashed, and none of a dictation's
       // caret; all are brought back to now.
@@ -384,6 +390,7 @@ export function useEditorKeymap({
         effects: [
           editableCompartmentRef.current.reconfigure(EditorView.editable.of(!latest.disabled)),
           ...currentContextReferenceProvidersEffects(view),
+          ...currentDiffNotesChipEffects(view),
           ...currentVoiceCaretEffects(view),
         ],
       });

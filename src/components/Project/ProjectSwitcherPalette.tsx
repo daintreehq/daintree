@@ -4,13 +4,17 @@ import { FolderOpen, FolderPlus, Settings } from "lucide-react";
 import { FolderDown } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
-import { describeKeyCap } from "@/lib/kbdShortcut";
-import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { KbdChord } from "@/components/ui/Kbd";
+import { Kbd, KbdChord } from "@/components/ui/Kbd";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
-import { formatFleetLiveness } from "@/lib/projectRowStatus";
+import {
+  formatFleetLiveness,
+  getProjectRowStatus,
+  getScratchRowStatus,
+} from "@/lib/projectRowStatus";
+import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useOverlayClaim } from "@/hooks";
@@ -46,6 +50,7 @@ import {
   getOtherHostEnterHint,
   getProjectSwitcherEnterHint,
   modEnterOpensWindow,
+  showResumableAgentMark,
 } from "./ProjectSwitcherRows";
 import {
   bandOptionId,
@@ -195,6 +200,23 @@ function useWaitAgeTick(active: boolean): void {
  * rather than naming affordances it doesn't have: ⌘↵ falls back to a plain
  * switch, and a search-mode scratch row carries no context menu.
  */
+/**
+ * How many agents the row's resume mark promises: the mark's own test, so the
+ * footer names exactly the dot the row draws.
+ */
+function resumableAgentCount({
+  row,
+  nowMs,
+}: {
+  row: ProjectSwitcherRow | undefined;
+  nowMs: number;
+}): number {
+  if (!row) return 0;
+  const status =
+    row.kind === "project" ? getProjectRowStatus(row, nowMs) : getScratchRowStatus(row, nowMs);
+  return showResumableAgentMark(status, row) ? (row.resumableAgentCount ?? 0) : 0;
+}
+
 function ProjectSwitcherFooter({
   selectedRow,
   hostOption,
@@ -202,7 +224,10 @@ function ProjectSwitcherFooter({
   inBrowse = false,
   canOpenWindow,
   onOpenPilot,
+  nowMs,
 }: {
+  /** The palette's minute clock, for the highlighted row's status (#11823). */
+  nowMs: number;
   /**
    * Browse, where the list has bands: the footer teaches the band keys, which
    * nothing else on screen would. A search has no bands, so it keeps the
@@ -234,7 +259,15 @@ function ProjectSwitcherFooter({
     ? hintOverride
     : hostOption
       ? getOtherHostEnterHint(hostOption, modifiers.meta)
-      : getProjectSwitcherEnterHint(selectedRow, modifiers.meta, canOpenWindow);
+      : getProjectSwitcherEnterHint(
+          selectedRow,
+          modifiers.meta,
+          canOpenWindow,
+          resumableAgentCount({ row: selectedRow, nowMs })
+        );
+  // "to go to window" (15) still fits beside the keys in the dropdown; "to
+  // resume 2 agents" and a host's name do not.
+  const longHint = hint !== null && (hint.host !== undefined || hint.label.length > 15);
 
   return (
     // Container-queried rather than fixed: the same footer serves the anchored
@@ -252,17 +285,16 @@ function ProjectSwitcherFooter({
     <div className="@container/switcher-footer w-full flex items-center justify-between gap-3">
       {hint ? (
         <span className="flex min-w-0 items-center">
-          <span className="sr-only">{describeKeyCap(hint.keys, isMac())}</span>
-          <kbd aria-hidden="true" className={cn(KBD_CLASS, "shrink-0")}>
-            {hint.keys}
-          </kbd>
+          <KbdChord shortcut={hint.keys} className="shrink-0" />
           {hint.host ? (
             <span className="ml-1.5 flex min-w-0">
               <span className="shrink-0 whitespace-pre">{`${hint.label} `}</span>
               <HostNameText name={hint.host} />
             </span>
           ) : (
-            <span className="ml-1.5 whitespace-nowrap">{hint.label}</span>
+            // Gives way with an ellipsis, as the palette footers' primary chip
+            // does: off a Mac the keys are spelled out and take more room.
+            <span className="ml-1.5 min-w-0 truncate">{hint.label}</span>
           )}
         </span>
       ) : (
@@ -273,17 +305,29 @@ function ProjectSwitcherFooter({
       <div className="flex shrink-0 items-center gap-3">
         {inBrowse && (
           <span
-            className="hidden shrink-0 items-center @min-[400px]/switcher-footer:inline-flex"
+            className={cn(
+              "hidden shrink-0 items-center",
+              // The section keys are teaching, the Enter hint is the row's own
+              // consequence: when that runs long ("to resume 2 agents", "to
+              // open on studio-01") the keys give it their room in the
+              // dropdown, and come back on the next plain row.
+              longHint
+                ? "@min-[560px]/switcher-footer:inline-flex"
+                : "@min-[400px]/switcher-footer:inline-flex"
+            )}
             data-testid="project-switcher-band-keys-hint"
           >
             <span className="sr-only">
               {isMac() ? "Option" : "Alt"} plus up or down arrow to jump between sections
             </span>
-            <kbd aria-hidden="true" className={KBD_CLASS}>
-              {isMac() ? "⌥↑↓" : "Alt ↑↓"}
-            </kbd>
+            {/* Keys as chips the way `KbdChord` draws a chord: the modifier, then
+                the arrow pair as one key cap, since either arrow does it. */}
+            <span aria-hidden="true" className="inline-flex items-center gap-0.5">
+              <Kbd>{isMac() ? "⌥" : "Alt"}</Kbd>
+              <Kbd>↑↓</Kbd>
+            </span>
             <span aria-hidden="true" className="ml-1.5">
-              Sections
+              to jump sections
             </span>
           </span>
         )}
@@ -296,7 +340,9 @@ function ProjectSwitcherFooter({
         <button
           type="button"
           onClick={onOpenPilot}
-          className="inline-flex items-center shrink-0 text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
+          // `py-1 -my-1`: a 24px pointer target (WCAG 2.5.8) that keeps the
+          // footer at the keycaps' height.
+          className="-my-1 inline-flex items-center shrink-0 py-1 text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
           data-testid="project-switcher-open-pilot"
           {...(pilotShortcut ? { "aria-keyshortcuts": pilotShortcut } : {})}
         >
@@ -1126,6 +1172,9 @@ function ProjectPaletteInner({
     }
   };
 
+  // The footer reads the highlighted row's status, so it needs the clock the
+  // rows render against rather than a reading of its own.
+  const footerClock = useGlobalMinuteClock();
   const footerRow: ProjectSwitcherRow | undefined =
     cursor?.kind === "row"
       ? cursor.row
@@ -1193,7 +1242,17 @@ function ProjectPaletteInner({
         // would make the reader parse a number to learn nothing.
         trailing={
           fleetSummary ? (
-            <span data-testid="fleet-liveness-summary">{fleetSummary}</span>
+            // Led by the run's own mark, as a folded band's rollup is: plain
+            // secondary text lost to the bordered keycaps beside it.
+            <span className="inline-flex items-center gap-1.5">
+              {(fleetLiveness?.runningAgentCount ?? 0) > 0 && (
+                <span
+                  className="workspace-mark h-1.5 w-1.5 shrink-0 rounded-full bg-activity-working"
+                  aria-hidden="true"
+                />
+              )}
+              <span data-testid="fleet-liveness-summary">{fleetSummary}</span>
+            </span>
           ) : undefined
         }
       >
@@ -1246,7 +1305,7 @@ function ProjectPaletteInner({
               ? "max-h-[min(60vh,calc(85vh-12rem))]"
               : undefined
         }
-        scrollClassName="space-y-0"
+        scrollClassName="p-2 space-y-0"
         // The short fade: at the full 32px a live row sliding under the edge
         // read as disabled rather than as more list.
         compactFade
@@ -1312,9 +1371,16 @@ function ProjectPaletteInner({
         />
         {showScratchSection && (
           <>
-            {/* Nothing above it to separate from once Scratch is the first content. */}
+            {/* Nothing above it to separate from once Scratch is the first
+                content — standing alone, or below a project list that drew
+                nothing because another host's projects answer instead, where it
+                doubled the search field's rule. */}
             <AppPaletteDialog.Divider
-              hidden={isRankedSearch || (scratchesStandAlone && viewResults.length === 0)}
+              hidden={
+                isRankedSearch ||
+                (viewResults.length === 0 &&
+                  (scratchesStandAlone || (bandAnswersSearch && (viewBands?.length ?? 0) === 0)))
+              }
             />
             <ScratchSection
               scratches={pinnedScratches}
@@ -1402,12 +1468,13 @@ function ProjectPaletteInner({
           inBrowse={!isRankedSearch && query === "" && stops.length > 1}
           hintOverride={
             cursor?.kind === "band"
-              ? { keys: "↵", label: isFoldedBand(cursor.bandKey) ? "to expand" : "to collapse" }
+              ? { keys: "Enter", label: isFoldedBand(cursor.bandKey) ? "to expand" : "to collapse" }
               : cursor?.kind === "scratch-create"
-                ? { keys: "↵", label: "to create" }
+                ? { keys: "Enter", label: "to create" }
                 : undefined
           }
           canOpenWindow={onSelectNewWindow !== undefined}
+          nowMs={footerClock}
           onOpenPilot={() => {
             onClose();
             usePilotStore.getState().open();

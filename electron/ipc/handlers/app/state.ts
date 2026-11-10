@@ -25,6 +25,7 @@ import {
   getProjectLayoutSeed,
 } from "../../../services/plugin/projectLayoutSeeds.js";
 import { relaunchApp } from "../../../lifecycle/appRelaunch.js";
+import { endStartupTracking, startupStepper } from "../../startupInvokeTracker.js";
 import { getDatabaseMaintenanceService } from "../../../services/DatabaseMaintenanceService.js";
 import { noteDatabaseNoticeRendererReady } from "../../../services/databaseBackupNotice.js";
 import { USAGE_WINDOW_MS, MAX_USES_PER_ENTRY } from "../../../../shared/utils/actionUsage.js";
@@ -60,6 +61,7 @@ import {
   isGpuAngleFallbackApplied,
 } from "../../../services/GpuCrashMonitorService.js";
 import { readGpuDisabledFlagData } from "../../../services/gpuDisabledFlag.js";
+import { peekDecisionsModule } from "../../../window/serviceRefs.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerService.js";
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
@@ -71,6 +73,7 @@ import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { readHydrateTerminalConfig } from "../../../services/AppHydrationService.js";
 import { consumePrefetchedHydrateResult } from "../../../services/prefetchHydrateCache.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
+import { isProjectlessAppView } from "../../../window/projectlessViews.js";
 import { notifyAppViewPainted } from "../../../setup/deepLinkInstall.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import { getValidatedOverrides } from "../keybinding.js";
@@ -307,14 +310,22 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // The GPU half of the answer is kept by the view for its lifetime; read
     // before the GPU process reports it is the provisional all-disabled status.
     // Only the first few hundred milliseconds of a session ever wait here.
+    // Each awaited step is labelled for the stuck card's report (#16401).
+    const step = startupStepper(ctx?.webContentsId);
+    step("gpu-report");
     await whenGpuReported(GPU_REPORT_WAIT_MS);
     const { project: currentProject, workspaceId } = resolveWorkspaceForHydration(ctx);
     // Before any read of the saved panes, the prefetch cache included: agents an
     // unclean end cut short come back held, whichever screen restores them.
+    step("host-end-hold");
     const hostEnds = await applyHostEndHold(workspaceId);
     // A remote Shell merges only this machine's host half of the answer, so
     // nothing addressed to this machine's own windows may be consumed for it.
     const forRemoteShell = ctx?.endpoint?.kind === "remote-view";
+    // Nor for a view that holds no project: it has nowhere to show any of them,
+    // and the project window that does would never hear.
+    const leavesOneShots =
+      forRemoteShell || (ctx !== undefined && isProjectlessAppView(ctx.webContentsId));
 
     // Until the legacy global record has an owner, the prefetch cache cannot
     // stand in for this handler: `buildSwitchHydrateResult` performs no writes,
@@ -340,7 +351,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // likely to be waiting.
     const crashService = getCrashRecoveryService();
     const canUseCrashPanelFilter =
-      !forRemoteShell &&
+      !leavesOneShots &&
       (!workspaceId ||
         (currentProject !== null &&
           (persistedLegacyOwnerId === undefined || persistedLegacyOwnerId === workspaceId)));
@@ -410,10 +421,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         skippedPanelCount: 0,
         crashCount: cacheGuard.getCrashCount(),
         lastCrashAt: cacheGuard.getLastCrashTimestamp(),
-        settingsRecovery: forRemoteShell ? null : consumePendingSettingsRecovery(),
+        settingsRecovery: leavesOneShots ? null : consumePendingSettingsRecovery(),
         // Boot-time DB recovery is one-shot and predates the prefetch, so it is
         // consumed live here — the cached payload always carries a null for it.
-        databaseRecovery: forRemoteShell ? null : getDatabaseMaintenanceService().consumeRecovery(),
+        databaseRecovery: leavesOneShots ? null : getDatabaseMaintenanceService().consumeRecovery(),
         // Crash-loop quarantine notifications are gated on safe mode; the
         // fast path runs only when safe mode is inactive, so clear the field.
         crashLoopStateRecovery: null,
@@ -531,6 +542,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     let draftInputsToUse: Record<string, string> | undefined;
 
     if (workspaceId) {
+      step("project-state-read");
       const {
         state: projectState,
         quarantinedPath,
@@ -600,6 +612,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           focusPanelStateToUse = globalAppState.focusPanelState;
 
           // Save the migrated focus mode to per-project state
+          step("project-state-write");
           await projectStore.enqueueProjectStateUpdate(workspaceId, (existing) => ({
             ...(existing ?? projectState),
             focusMode: focusModeToUse,
@@ -668,6 +681,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             : undefined;
 
           // Include focus mode in migration
+          step("project-state-write");
           await projectStore.enqueueProjectStateUpdate(workspaceId, (existing) => ({
             ...(existing ?? {}),
             projectId: workspaceId,
@@ -697,6 +711,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             : undefined;
 
           // No terminals to migrate but still save empty state to mark migration complete
+          step("project-state-write");
           await projectStore.enqueueProjectStateUpdate(workspaceId, (existing) => ({
             ...(existing ?? {}),
             projectId: workspaceId,
@@ -727,6 +742,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         // every other row starts clean, or the record it never owned would be
         // written straight onto its first save (#11651). `sidebarWidth` is a
         // genuinely app-global preference and rides along either way.
+        step("project-state-write");
         await projectStore.enqueueProjectStateUpdate(
           workspaceId,
           (existing) =>
@@ -873,8 +889,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       `[AppHydrate] Project: ${currentProject?.name ?? (workspaceId ? "scratch" : "none")} - terminals from ${terminalsSource} (${terminalsToUse.length} valid), focusMode: ${focusModeToUse}`
     );
 
+    // The only await left is the in-repo presets read in the payload below.
+    step("project-presets");
     return {
-      ...readShellHydrateFields({ consumeOneShots: !forRemoteShell }),
+      ...readShellHydrateFields({ consumeOneShots: !leavesOneShots }),
       ...readHostPlatformFields(),
       appState: appState as import("../../../../shared/types/ipc/app.js").AppState,
       terminalConfig: readHydrateTerminalConfig(),
@@ -1303,8 +1321,13 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         webContentsId: ctx.webContentsId,
       });
       signalFirstInteractive(ctx.webContentsId);
+      endStartupTracking(ctx.webContentsId);
       // A backup suspension raised while no window could show it waits for this one.
       noteDatabaseNoticeRendererReady(ctx.webContentsId);
+      // So does a Decisions storage outage (#16605), only if Decisions is already loaded.
+      peekDecisionsModule()
+        ?.then((decisions) => decisions.noteDecisionsRendererReady(ctx.webContentsId))
+        .catch(() => {});
       // So does the notice explaining why this view just reloaded.
       if (ctx.event) releaseReloadNotice(ctx.event.sender);
       // Close the cold-start timeline for a view this window's manager

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { render, fireEvent, act, screen, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -273,7 +274,7 @@ function restartConversationButton(container: HTMLElement): HTMLButtonElement | 
   const overflow = container.querySelector('[data-testid="overflow-menu"]');
   return (
     Array.from(overflow?.querySelectorAll("button") ?? []).find((b) =>
-      b.textContent?.includes("Restart conversation")
+      b.textContent?.includes("Clear conversation")
     ) ?? null
   );
 }
@@ -335,21 +336,24 @@ vi.mock("@/components/Terminal/XtermAdapter", () => ({
   XtermAdapter: () => <div data-testid="xterm-adapter" />,
 }));
 
-vi.mock("@/components/Terminal/HybridInputBar", () => ({
-  HybridInputBar: ({
-    terminalId,
-    onSend,
-    onSendKey,
-    disabled,
-  }: {
-    terminalId: string;
-    onSend?: (payload: { data: string; trackerData: string; text: string }) => void;
-    onSendKey?: (key: string) => void;
-    disabled?: boolean;
-  }) => (
+function ComposerStub({
+  terminalId,
+  onSend,
+  onSendKey,
+  disabled,
+}: {
+  terminalId: string;
+  onSend?: (payload: { data: string; trackerData: string; text: string }) => void;
+  onSendKey?: (key: string) => void;
+  disabled?: boolean;
+}) {
+  // The terminal this instance was mounted for, which a reused one outlives.
+  const [mountedFor] = useState(terminalId);
+  return (
     <div
       data-testid="hybrid-input-bar"
       data-terminal-id={terminalId}
+      data-mounted-for={mountedFor}
       data-disabled={disabled ? "true" : "false"}
     >
       <button
@@ -363,7 +367,11 @@ vi.mock("@/components/Terminal/HybridInputBar", () => ({
         key
       </button>
     </div>
-  ),
+  );
+}
+
+vi.mock("@/components/Terminal/HybridInputBar", () => ({
+  HybridInputBar: ComposerStub,
 }));
 
 vi.mock("@/clients", () => ({
@@ -913,8 +921,8 @@ describe("HelpPanel — + New session destructive reset", () => {
 
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
     expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
-    expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
-    expect(getByTestId("dialog-confirm").textContent).toBe("Restart conversation");
+    expect(getByTestId("dialog-title").textContent).toBe("Clear this conversation?");
+    expect(getByTestId("dialog-confirm").textContent).toBe("Clear conversation");
     expectStaysInPastSessions(getByTestId("dialog-description").textContent);
   });
 
@@ -925,7 +933,7 @@ describe("HelpPanel — + New session destructive reset", () => {
     const { container, getByTestId } = renderPanel();
     fireEvent.click(restartConversationButton(container)!);
 
-    expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
+    expect(getByTestId("dialog-title").textContent).toBe("Clear this conversation?");
     expectNoPastSessionsNote(getByTestId("dialog-description").textContent);
   });
 
@@ -936,7 +944,7 @@ describe("HelpPanel — + New session destructive reset", () => {
     fireEvent.click(restartConversationButton(container)!);
 
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
-    expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
+    expect(getByTestId("dialog-title").textContent).toBe("Clear this conversation?");
   });
 
   it("keeps the session intact when the user cancels the confirm dialog", () => {
@@ -1153,11 +1161,9 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
 
     const { container, getByTestId } = await renderPaused();
 
-    expect(getByTestId("help-restart-paused-conversation").textContent).toBe(
-      "Restart conversation"
-    );
+    expect(getByTestId("help-restart-paused-conversation").textContent).toBe("Clear conversation");
     expect(restartConversationButton(container)).not.toBeNull();
-    expect(tabMenuItem(container, 0, "Restart conversation")).not.toBeNull();
+    expect(tabMenuItem(container, 0, "Clear conversation")).not.toBeNull();
     // Stop still needs something running to stop.
     expect(
       Array.from(container.querySelectorAll("button")).find((b) =>
@@ -1172,7 +1178,7 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
     const { getByTestId } = await renderPaused();
     fireEvent.click(getByTestId("help-restart-paused-conversation"));
 
-    expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
+    expect(getByTestId("dialog-title").textContent).toBe("Clear this conversation?");
     const description = getByTestId("dialog-description").textContent;
     expect(description).toMatch(
       /^This session starts a new conversation\. .*stays in past sessions/
@@ -1301,7 +1307,7 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
     expect(queryByTestId("help-resume-assistant")).toBeNull();
     expect(queryByTestId("help-restart-paused-conversation")).toBeNull();
     expect(restartConversationButton(container)).toBeNull();
-    expect(tabMenuItem(container, 1, "Restart conversation")).toBeNull();
+    expect(tabMenuItem(container, 1, "Clear conversation")).toBeNull();
   });
 
   it("offers no restart when the captured agent is no longer installed", async () => {
@@ -1315,7 +1321,7 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
 
     expect(queryByTestId("help-restart-paused-conversation")).toBeNull();
     expect(restartConversationButton(container)).toBeNull();
-    expect(tabMenuItem(container, 0, "Restart conversation")).toBeNull();
+    expect(tabMenuItem(container, 0, "Clear conversation")).toBeNull();
   });
 });
 
@@ -1579,6 +1585,23 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     return button;
   }
 
+  it("gives each session its own composer across a switch and back (#16571)", async () => {
+    setupTwoLanes();
+    const { findByTestId } = renderPanel();
+    const composer = await findByTestId("hybrid-input-bar");
+    expect(composer.getAttribute("data-mounted-for")).toBe("term-1");
+
+    selectLane(1);
+    const switched = await findByTestId("hybrid-input-bar");
+    expect(switched.getAttribute("data-terminal-id")).toBe("term-2");
+    expect(switched.getAttribute("data-mounted-for")).toBe("term-2");
+
+    selectLane(0);
+    const returned = await findByTestId("hybrid-input-bar");
+    expect(returned.getAttribute("data-terminal-id")).toBe("term-1");
+    expect(returned.getAttribute("data-mounted-for")).toBe("term-1");
+  });
+
   it("labels lanes by durable slot and names the body after the selected lane", () => {
     // Sparse slots on purpose: lanes 0 and 2 with 1 closed. Position-based labels would
     // read "Session 1 / Session 2" here and rename a live conversation; slot-based ones
@@ -1628,8 +1651,8 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(confirmFocus.restore?.()).toBe(picker);
     fireEvent.click(getByTestId("dialog-cancel"));
 
-    fireEvent.click(pickerItem(container, "Restart conversation")!);
-    expect(getByTestId("dialog-confirm").textContent).toBe("Restart conversation");
+    fireEvent.click(pickerItem(container, "Clear conversation")!);
+    expect(getByTestId("dialog-confirm").textContent).toBe("Clear conversation");
     expect(confirmFocus.restore?.()).toBe(picker);
   });
 
@@ -1948,7 +1971,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
       const { container, queryByTestId } = renderPanel();
       // Picked outside the act: its redraw has to land before the item is read.
-      const restart = tabMenuItem(container, 1, "Restart conversation")!;
+      const restart = tabMenuItem(container, 1, "Clear conversation")!;
       await act(async () => {
         fireEvent.click(restart);
       });
@@ -1983,11 +2006,11 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       const back = vi.spyOn(acquireHelpSessionController(1), "newSession");
 
       const { container, getByTestId } = renderPanel();
-      fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
+      fireEvent.click(tabMenuItem(container, 1, "Clear conversation")!);
 
       expect(back).not.toHaveBeenCalled();
-      expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
-      expect(getByTestId("dialog-confirm").textContent).toBe("Restart conversation");
+      expect(getByTestId("dialog-title").textContent).toBe("Clear this conversation?");
+      expect(getByTestId("dialog-confirm").textContent).toBe("Clear conversation");
       expectStaysInPastSessions(getByTestId("dialog-description").textContent);
 
       await act(async () => {
@@ -2009,9 +2032,9 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
         helpPanelState.sessions[1]!.agentId = back;
 
         const { container, getByTestId } = renderPanel();
-        fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
+        fireEvent.click(tabMenuItem(container, 1, "Clear conversation")!);
 
-        expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
+        expect(getByTestId("dialog-title").textContent).toBe("Clear this conversation?");
         const description = getByTestId("dialog-description").textContent;
         if (listed) expectStaysInPastSessions(description);
         else expectNoPastSessionsNote(description);
@@ -2023,9 +2046,9 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       const back = vi.spyOn(acquireHelpSessionController(1), "newSession");
 
       const { container, getByTestId } = renderPanel();
-      fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
+      fireEvent.click(tabMenuItem(container, 1, "Clear conversation")!);
 
-      expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
+      expect(getByTestId("dialog-title").textContent).toBe("Clear this conversation?");
       expect(back).not.toHaveBeenCalled();
       expect(panelStoreState.removePanel).not.toHaveBeenCalled();
     });
@@ -2037,7 +2060,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
       const { container, queryByTestId } = renderPanel();
       // Picked outside the act: its redraw has to land before the item is read.
-      const restart = tabMenuItem(container, 1, "Restart conversation")!;
+      const restart = tabMenuItem(container, 1, "Clear conversation")!;
       await act(async () => {
         fireEvent.click(restart);
       });
@@ -2051,7 +2074,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       const back = vi.spyOn(acquireHelpSessionController(1), "newSession");
 
       const { container, getByTestId, queryByTestId } = renderPanel();
-      fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
+      fireEvent.click(tabMenuItem(container, 1, "Clear conversation")!);
       fireEvent.click(getByTestId("dialog-cancel"));
 
       expect(queryByTestId("confirm-dialog")).toBeNull();
@@ -2069,8 +2092,8 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
       const { container } = renderPanel();
 
-      expect(tabMenuItem(container, 0, "Restart conversation")).not.toBeNull();
-      expect(tabMenuItem(container, 1, "Restart conversation")).toBeNull();
+      expect(tabMenuItem(container, 0, "Clear conversation")).not.toBeNull();
+      expect(tabMenuItem(container, 1, "Clear conversation")).toBeNull();
       expect(tabMenuItem(container, 1, "Close session")).not.toBeNull();
     });
 

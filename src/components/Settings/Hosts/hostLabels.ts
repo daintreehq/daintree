@@ -84,8 +84,8 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
     case "disconnected":
       return "Not connected";
     case "connecting":
-      if (state.restarting) return "Restarting";
-      return state.attempt > 1 ? `Connecting (attempt ${state.attempt})` : "Connecting";
+      if (state.restarting) return "Restarting…";
+      return state.attempt > 1 ? `Connecting… (attempt ${state.attempt})` : "Connecting…";
     case "connected": {
       if (state.quietSince !== undefined) {
         return `Connected · no reply since ${new Date(state.quietSince).toLocaleTimeString()}`;
@@ -94,10 +94,9 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
       return state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
     }
     case "unreachable":
-      if (state.restarting) return "Restarting";
-      if (state.hostModeOff) {
-        return `Daintree isn't listening there · ${formatSeen(state.lastSeenAt, now)}`;
-      }
+      if (state.restarting) return "Restarting…";
+      // The host menus' word for the same state.
+      if (state.hostModeOff) return `Not listening · ${formatSeen(state.lastSeenAt, now)}`;
       // What was seen, when there is something: ssh's own words for why it couldn't reach it.
       return [
         "Unreachable",

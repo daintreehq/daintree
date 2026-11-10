@@ -10,7 +10,6 @@ import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import type { AgentVersionService } from "../services/AgentVersionService.js";
 import type { AgentModelCatalogService } from "../services/AgentModelCatalogService.js";
-import type { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 import type { ResourceProfileService } from "../services/ResourceProfileService.js";
 import type { WorktreePortBroker } from "../services/WorktreePortBroker.js";
 import type { CcrConfigService } from "../services/CcrConfigService.js";
@@ -46,7 +45,6 @@ let workspaceClient: WorkspaceClient | null = null;
 let cliAvailabilityService: CliAvailabilityService | null = null;
 let agentVersionService: AgentVersionService | null = null;
 let agentModelCatalogService: AgentModelCatalogService | null = null;
-let agentUpdateHandler: AgentUpdateHandler | null = null;
 let cleanupIpcHandlers: (() => void) | null = null;
 let cleanupErrorHandlers: (() => void) | null = null;
 let stopEventLoopLagMonitor: (() => void) | null = null;
@@ -214,12 +212,6 @@ export function getAgentModelCatalogService(): AgentModelCatalogService | null {
 export function setAgentModelCatalogService(v: AgentModelCatalogService | null): void {
   agentModelCatalogService = v;
 }
-export function getAgentUpdateHandler(): AgentUpdateHandler | null {
-  return agentUpdateHandler;
-}
-export function setAgentUpdateHandler(v: AgentUpdateHandler | null): void {
-  agentUpdateHandler = v;
-}
 export function getResourceProfileService(): ResourceProfileService | null {
   return resourceProfileService;
 }
@@ -277,6 +269,11 @@ export function loadDecisionsModule(
     });
   }
   return decisionsModule;
+}
+
+/** Decisions' entry module if something already loaded it (or is loading it); never loads it. */
+export function peekDecisionsModule(): Promise<typeof DecisionsModule> | null {
+  return decisionsModuleSealed ? null : decisionsModule;
 }
 
 function fieldOf(value: unknown, key: string): unknown {

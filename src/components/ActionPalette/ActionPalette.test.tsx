@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 interface MockSearchablePaletteProps {
@@ -9,6 +9,11 @@ interface MockSearchablePaletteProps {
   emptyContent?: React.ReactNode;
   [key: string]: unknown;
 }
+
+// Draws the sectioned body inside the mocked palette, so the component's own
+// reveal effect sees a mounted listbox. Off by default: other tests render
+// `renderBody` themselves.
+const drawBodyInline = { current: false };
 
 const lastSearchablePaletteProps: { current: MockSearchablePaletteProps | null } = {
   current: null,
@@ -35,6 +40,9 @@ vi.mock("@/components/ui/SearchablePalette", () => ({
       <div data-testid="searchable-palette">
         {(props.inputPrefix as React.ReactNode) ?? null}
         {props.beforeList ?? null}
+        {drawBodyInline.current
+          ? (props.renderBody as (() => React.ReactNode) | undefined)?.()
+          : null}
         {showEmptyContent ? (
           props.emptyMessage ? (
             <p>{props.emptyMessage as string}</p>
@@ -116,6 +124,7 @@ const baseProps = {
   hideAction: noopHide,
   argPrompt: null,
   argBack: () => {},
+  onSearchProjects: noop,
 };
 
 function fireKey(
@@ -201,6 +210,61 @@ describe("ActionPalette", () => {
     expect(typeof lastSearchablePaletteProps.current?.renderBody).toBe("function");
   });
 
+  describe("sectioned body reveal", () => {
+    const rows = [makeItem("a.one", "One"), makeItem("b.two", "Two"), makeItem("c.three", "Three")];
+    const sections = [{ id: "category:general", label: "General", start: 0, count: 3 }];
+    const realMatches = Element.prototype.matches;
+    const realScrollIntoView = Element.prototype.scrollIntoView;
+    let scrollIntoView: ReturnType<typeof vi.fn>;
+    let hovered: Element | null = null;
+
+    beforeEach(() => {
+      drawBodyInline.current = true;
+      hovered = null;
+      scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView as unknown as typeof realScrollIntoView;
+      // jsdom has no pointer, so `:hover` is stubbed onto the row being pointed at.
+      Element.prototype.matches = function (this: Element, selector: string) {
+        if (selector === ":hover") return this === hovered;
+        return realMatches.call(this, selector);
+      } as typeof realMatches;
+    });
+
+    afterEach(() => {
+      drawBodyInline.current = false;
+      Element.prototype.matches = realMatches;
+      Element.prototype.scrollIntoView = realScrollIntoView;
+    });
+
+    const palette = (selectedIndex: number) => (
+      <ActionPalette
+        {...baseProps}
+        results={rows}
+        totalResults={rows.length}
+        sections={sections}
+        selectedIndex={selectedIndex}
+      />
+    );
+
+    it("does not scroll a row the pointer just claimed, but does for a key-driven move", () => {
+      const { container, rerender } = render(palette(0));
+      const rowEl = (id: string) => container.querySelector(`[data-action-id="${id}"]`)!;
+      scrollIntoView.mockClear();
+
+      hovered = rowEl("b.two");
+      fireEvent.pointerMove(hovered);
+      rerender(palette(1));
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      // A key step onto the row beneath a resting pointer still owes the reveal.
+      hovered = rowEl("c.three");
+      fireEvent.keyDown(document.body, { key: "ArrowDown" });
+      rerender(palette(2));
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(rowEl("c.three"));
+    });
+  });
+
   it("does NOT pass a renderBody callback when a query is typed", () => {
     render(
       <ActionPalette
@@ -254,9 +318,72 @@ describe("ActionPalette", () => {
   });
 
   it("keeps the projects hint's promise: Enter hands a path-shaped query to the project switcher", () => {
-    render(<ActionPalette {...baseProps} query="src/foo" results={[]} totalResults={0} />);
-    fireKey("Enter");
+    const onSearchProjects = vi.fn();
+    render(
+      <ActionPalette
+        {...baseProps}
+        query="work/api"
+        results={[]}
+        totalResults={0}
+        onSearchProjects={onSearchProjects}
+      />
+    );
+    expect(fireKey("Enter")).toBe(true);
+    expect(onSearchProjects).toHaveBeenCalledTimes(1);
+    expect(onSearchProjects).toHaveBeenCalledWith("work/api");
+  });
+
+  it("routes '/' from an empty field without handing the switcher any text", () => {
+    const onSearchProjects = vi.fn();
+    render(<ActionPalette {...baseProps} onSearchProjects={onSearchProjects} />);
+    expect(fireKey("/")).toBe(true);
     expect(usePaletteStore.getState().activePaletteId).toBe("project-switcher");
+    expect(onSearchProjects).not.toHaveBeenCalled();
+  });
+
+  describe("leaves Enter alone on a path-shaped query when projects aren't offered", () => {
+    it.each([
+      ["a matching action", { results: [makeItem("a.action", "Alpha")], totalResults: 1 }],
+      ["results still catching up", { isStale: true }],
+      [
+        "a plugin command's argument field",
+        {
+          argPrompt: {
+            actionTitle: "Open",
+            fieldTitle: "Path",
+            step: 1,
+            total: 1,
+            kind: "string" as const,
+          },
+        },
+      ],
+    ])("with %s", (_label, overrides) => {
+      const onSearchProjects = vi.fn();
+      render(
+        <ActionPalette
+          {...baseProps}
+          query="work/api"
+          onSearchProjects={onSearchProjects}
+          {...overrides}
+        />
+      );
+      expect(fireKey("Enter")).toBe(false);
+      expect(onSearchProjects).not.toHaveBeenCalled();
+      expect(usePaletteStore.getState().activePaletteId).toBe("action");
+    });
+
+    it("inside the commands scope", () => {
+      const onSearchProjects = vi.fn();
+      const { rerender } = render(
+        <ActionPalette {...baseProps} onSearchProjects={onSearchProjects} />
+      );
+      fireKey(">");
+      rerender(
+        <ActionPalette {...baseProps} query="work/api" onSearchProjects={onSearchProjects} />
+      );
+      expect(fireKey("Enter")).toBe(false);
+      expect(onSearchProjects).not.toHaveBeenCalled();
+    });
   });
 
   it("draws no footer band over an empty result list it can't act on", () => {
@@ -270,7 +397,11 @@ describe("ActionPalette", () => {
   it("offers no Enter hint on a row Enter won't run", () => {
     const disabled = { ...makeItem("d.action", "Delta"), enabled: false };
     render(<ActionPalette {...baseProps} query="del" results={[disabled]} totalResults={1} />);
-    expect(screen.queryByText(/^to /)).toBeNull();
+    // Every hint reads "to …", so the row's own pin chord still does; what must
+    // be missing is the Enter key and the verb it would have named.
+    expect(screen.queryByText("to delta")).toBeNull();
+    const caps = Array.from(document.querySelectorAll("kbd"), (kbd) => kbd.textContent);
+    expect(caps).not.toContain("Enter");
   });
 
   it("names the selected command in commands mode rather than a generic verb", () => {
@@ -282,8 +413,14 @@ describe("ActionPalette", () => {
       />
     );
     fireKey(">");
-    expect(screen.getByText("to alpha run")).toBeTruthy();
-    expect(screen.getByText("exit scope")).toBeTruthy();
+    // jsdom reports no Mac platform, so the keys are spelled out.
+    const capsOf = (label: string) =>
+      Array.from(
+        screen.getByText(label).parentElement!.querySelectorAll("kbd"),
+        (kbd) => kbd.textContent
+      );
+    expect(capsOf("to alpha run")).toEqual(["Enter"]);
+    expect(capsOf("to exit scope")).toEqual(["Backspace"]);
   });
 
   it("offers Backspace to exit the scope only while Backspace would do that", () => {
@@ -295,7 +432,7 @@ describe("ActionPalette", () => {
       />
     );
     fireKey(">");
-    expect(screen.getByText("exit scope")).toBeTruthy();
+    expect(screen.getByText("to exit scope")).toBeTruthy();
     rerender(
       <ActionPalette
         {...baseProps}
@@ -304,7 +441,7 @@ describe("ActionPalette", () => {
         totalResults={1}
       />
     );
-    expect(screen.queryByText("exit scope")).toBeNull();
+    expect(screen.queryByText("to exit scope")).toBeNull();
   });
 
   it("does not surface the projects hint when results exist", () => {
@@ -488,8 +625,8 @@ describe("ActionPalette", () => {
     it("keeps the scope-exit hint but not the close convention in commands mode", () => {
       render(<ActionPalette {...baseProps} />);
       fireKey(">");
-      expect(screen.getByText("exit scope")).toBeTruthy();
-      expect(screen.queryByText("close")).toBeNull();
+      expect(screen.getByText("to exit scope")).toBeTruthy();
+      expect(screen.queryByText(/close$/)).toBeNull();
     });
   });
 
@@ -713,20 +850,27 @@ describe("ActionPalette", () => {
 
     it("surfaces both chords in the footer while the active row offers them", () => {
       renderRows();
-      expect(screen.getByText("pin")).toBeTruthy();
-      expect(screen.getByText("hide")).toBeTruthy();
+      const capsOf = (label: string) =>
+        Array.from(
+          screen.getByText(label).parentElement!.querySelectorAll("kbd"),
+          (kbd) => kbd.textContent
+        );
+      // jsdom reports no Mac platform: the chords are named the way Windows and
+      // Linux name them, not as the ⌥ glyph.
+      expect(capsOf("to pin")).toEqual(["Alt", "P"]);
+      expect(capsOf("to hide")).toEqual(["Alt", "H"]);
     });
 
     it("drops the hide hint when the active row can't be hidden", () => {
       renderRows({ query: "", sections: SECTIONED });
-      expect(screen.getByText("pin")).toBeTruthy();
-      expect(screen.queryByText("hide")).toBeNull();
+      expect(screen.getByText("to pin")).toBeTruthy();
+      expect(screen.queryByText("to hide")).toBeNull();
     });
 
     it("names the inverse once the active row is pinned", () => {
       useActionPrefsStore.setState({ pinnedActionIds: ["b.beta"] });
       renderRows();
-      expect(screen.getByText("unpin")).toBeTruthy();
+      expect(screen.getByText("to unpin")).toBeTruthy();
     });
   });
   describe("collecting plugin command arguments", () => {

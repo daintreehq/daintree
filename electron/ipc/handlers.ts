@@ -73,9 +73,11 @@ import { installCachedViewFlushListeners } from "../services/cachedViewFlush.js"
 import { registerProjectGroupsHandlers } from "./handlers/projectGroups.js";
 import { registerRunHistoryHandlers } from "./handlers/runHistory.js";
 import { registerCopyTreeHistoryHandlers } from "./handlers/copyTreeHistory.js";
+import { registerWorktreeDiskUsageHandlers } from "./handlers/worktreeDiskUsage.js";
 import { registerScheduledRunsHandlers } from "./handlers/scheduledRuns.js";
 import { registerFleetHandlers } from "./handlers/fleet.js";
 import { registerCanopyHandlers } from "./handlers/canopy.js";
+import { registerCanopyWindowHandlers } from "./handlers/canopyWindow.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerVoiceDictionaryHandlers } from "./handlers/voiceDictionary.js";
 import { registerRecentDictationsHandlers } from "./handlers/recentDictations.js";
@@ -130,14 +132,18 @@ import { registerPluginProjectPresenceHandlers } from "./handlers/pluginProjectP
 import { registerConnectivityHandlers } from "./handlers/connectivity.js";
 import { registerAgentDefaultsHandlers } from "./handlers/agentDefaults.js";
 import { registerAgentToolbarPinsHandlers } from "./handlers/agentToolbarPins.js";
+import { registerUserPromptTemplatesHandlers } from "./handlers/userPromptTemplates.js";
+import { registerProjectCloneHandlers } from "./handlers/projectClone.js";
 import { registerAgentAccountsHandlers } from "./handlers/agentAccounts.js";
 import { registerProjectPresenceHandlers } from "./handlers/projectPresence.js";
+import { registerOnlineOnlyFilesHandlers } from "./handlers/onlineOnlyFiles.js";
 import { registerProjectPresentationHandlers } from "./handlers/projectPresentation.js";
 import { registerProjectThemeHandlers } from "./handlers/projectTheme.js";
 import { registerWorktreeTitlesHandlers } from "./handlers/worktreeTitles.js";
 import { registerReviewMarksHandlers } from "./handlers/reviewMarks.js";
 import { registerSchedulesHandlers } from "./handlers/schedules.js";
 import { registerTerminalWhenDoneHandlers } from "./handlers/terminalWhenDone.js";
+import { registerComposerHoldHandlers } from "./handlers/composerHold.js";
 import { registerScratchHandlers } from "./handlers/scratch/index.js";
 import { events } from "../services/events.js";
 import {
@@ -259,9 +265,11 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerProjectGroupsHandlers());
     register(() => registerRunHistoryHandlers());
     register(() => registerCopyTreeHistoryHandlers(deps));
+    register(() => registerWorktreeDiskUsageHandlers(deps));
     register(() => registerScheduledRunsHandlers());
     register(() => registerFleetHandlers());
     register(() => registerCanopyHandlers());
+    register(() => registerCanopyWindowHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerVoiceDictionaryHandlers());
     register(() => registerRecentDictationsHandlers());
@@ -297,14 +305,18 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerConnectivityHandlers());
     register(() => registerAgentDefaultsHandlers());
     register(() => registerAgentToolbarPinsHandlers());
+    register(() => registerUserPromptTemplatesHandlers());
+    register(() => registerProjectCloneHandlers());
     register(() => registerAgentAccountsHandlers());
     register(() => registerProjectPresenceHandlers(deps));
+    register(() => registerOnlineOnlyFilesHandlers(deps));
     register(() => registerProjectPresentationHandlers());
     register(() => registerProjectThemeHandlers());
     register(() => registerWorktreeTitlesHandlers());
     register(() => registerReviewMarksHandlers(deps));
     register(() => registerSchedulesHandlers());
     register(() => registerTerminalWhenDoneHandlers());
+    register(() => registerComposerHoldHandlers());
     register(() => registerDecisionsHandlers());
     register(() => registerScratchHandlers(deps));
 

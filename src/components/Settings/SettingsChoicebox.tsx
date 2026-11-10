@@ -14,6 +14,8 @@ export interface ChoiceboxOption<T extends string = string> {
   resolvedLabel?: string;
   /** Renders the option as a softer, subordinate slot (e.g. a reset/inherit default). */
   muted?: boolean;
+  /** Marks the option the setting falls back to, drawn as a muted "Default" beside the label. */
+  isDefault?: boolean;
 }
 
 interface SettingsChoiceboxProps<T extends string = string> extends Omit<
@@ -182,6 +184,7 @@ export function SettingsChoicebox<T extends string = string>({
             const isOptionDisabled = disabled || option.disabled;
             const optionLabelId = `${id}-option-${index}-label`;
             const optionDescriptionId = `${id}-option-${index}-description`;
+            const optionDefaultId = `${id}-option-${index}-default`;
 
             return (
               <button
@@ -193,7 +196,14 @@ export function SettingsChoicebox<T extends string = string>({
                 // Named by the label (and what an inherit slot resolves to) alone; the
                 // option's description is announced as a description, not a run-on name.
                 aria-labelledby={optionLabelId}
-                aria-describedby={option.description ? optionDescriptionId : undefined}
+                aria-describedby={
+                  [
+                    option.isDefault ? optionDefaultId : null,
+                    option.description ? optionDescriptionId : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" ") || undefined
+                }
                 tabIndex={index === initiallyFocusableIndex ? 0 : -1}
                 disabled={isOptionDisabled}
                 data-value={option.value}
@@ -222,21 +232,28 @@ export function SettingsChoicebox<T extends string = string>({
                   {isSelected && <span className="h-2 w-2 rounded-full bg-text-primary" />}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span
-                    id={optionLabelId}
-                    className={cn(
-                      "block text-text-primary",
-                      option.muted ? "font-normal" : "font-medium"
-                    )}
-                  >
-                    {option.label}
-                    {option.resolvedLabel && (
-                      <>
-                        {" "}
-                        <span className="text-xs font-normal text-text-secondary">
-                          {option.resolvedLabel}
-                        </span>
-                      </>
+                  <span className="flex items-baseline gap-2">
+                    <span
+                      id={optionLabelId}
+                      className={cn(
+                        "block text-text-primary",
+                        option.muted ? "font-normal" : "font-medium"
+                      )}
+                    >
+                      {option.label}
+                      {option.resolvedLabel && (
+                        <>
+                          {" "}
+                          <span className="text-xs font-normal text-text-secondary">
+                            {option.resolvedLabel}
+                          </span>
+                        </>
+                      )}
+                    </span>
+                    {option.isDefault && (
+                      <span id={optionDefaultId} className="shrink-0 text-xs text-text-secondary">
+                        Default
+                      </span>
                     )}
                   </span>
                   {option.description && (
@@ -311,6 +328,9 @@ export function SettingsChoicebox<T extends string = string>({
         {options.map((option, index) => {
           const isSelected = option.value === value;
           const isOptionDisabled = disabled || option.disabled;
+          const optionLabelId = `${id}-option-${index}-label`;
+          const optionDescriptionId = `${id}-option-${index}-description`;
+          const optionDefaultId = `${id}-option-${index}-default`;
 
           return (
             <button
@@ -319,6 +339,16 @@ export function SettingsChoicebox<T extends string = string>({
               role="radio"
               aria-checked={isSelected}
               aria-disabled={isOptionDisabled}
+              // A default marker is announced as a description, not folded into the name;
+              // options without one keep naming themselves from their content.
+              aria-labelledby={option.isDefault ? optionLabelId : undefined}
+              aria-describedby={
+                option.isDefault
+                  ? [optionDefaultId, option.description ? optionDescriptionId : null]
+                      .filter(Boolean)
+                      .join(" ")
+                  : undefined
+              }
               // One tab stop for the whole group: the selected option, or the first
               // enabled one when nothing selectable is selected.
               tabIndex={index === initiallyFocusableIndex ? 0 : -1}
@@ -340,18 +370,30 @@ export function SettingsChoicebox<T extends string = string>({
                 />
                 <div className="min-w-0 flex-1">
                   <div className={option.muted ? "font-normal" : "font-medium"}>
-                    {option.label}
-                    {option.resolvedLabel && (
-                      <>
-                        {" "}
-                        <span className="text-xs font-normal text-text-secondary">
-                          {option.resolvedLabel}
-                        </span>
-                      </>
+                    <span id={optionLabelId}>
+                      {option.label}
+                      {option.resolvedLabel && (
+                        <>
+                          {" "}
+                          <span className="text-xs font-normal text-text-secondary">
+                            {option.resolvedLabel}
+                          </span>
+                        </>
+                      )}
+                    </span>
+                    {option.isDefault && (
+                      <span
+                        id={optionDefaultId}
+                        className="ml-2 text-xs font-normal text-text-secondary"
+                      >
+                        Default
+                      </span>
                     )}
                   </div>
                   {option.description && (
-                    <div className="text-xs text-text-secondary mt-0.5">{option.description}</div>
+                    <div id={optionDescriptionId} className="text-xs text-text-secondary mt-0.5">
+                      {option.description}
+                    </div>
                   )}
                 </div>
               </div>

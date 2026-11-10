@@ -6,7 +6,6 @@ const buildResumeLatestCommandMock = vi.hoisted(() => vi.fn());
 const reconcileBypassFlagsMock = vi.hoisted(() => vi.fn());
 const resolveEffectiveBypassMock = vi.hoisted(() => vi.fn());
 const reconcileInlineModeFlagMock = vi.hoisted(() => vi.fn());
-const resolveEffectiveInlineModeMock = vi.hoisted(() => vi.fn());
 // Outermost reconcile in the chain; a pass-through keeps every assertion on
 // the inline-mode mock's return value intact.
 const reconcileDecorationFlagsMock = vi.hoisted(() => vi.fn((flags: string[]) => flags));
@@ -26,13 +25,21 @@ const panelState = vi.hoisted(() => ({
   addPanel: addPanelMock,
 }));
 
+// The launch executable comes from this view's CLI detection, which these tests
+// don't load: the registry command stands.
+vi.mock("@/utils/agentLaunchCommand", () => ({
+  resolveCurrentAgentLaunchBaseCommand: vi.fn(async () => undefined),
+  getCurrentLaunchCliDetail: vi.fn(async () => undefined),
+  resolveAgentLaunchBaseCommand: vi.fn((registryCommand: string) => registryCommand),
+}));
+
 vi.mock("@shared/types/agentSettings", () => ({
   buildResumeCommand: buildResumeCommandMock,
   buildResumeLatestCommand: buildResumeLatestCommandMock,
   reconcileBypassFlags: reconcileBypassFlagsMock,
+  getPluginBypassArgHistory: () => [],
   resolveEffectiveBypass: resolveEffectiveBypassMock,
   reconcileInlineModeFlag: reconcileInlineModeFlagMock,
-  resolveEffectiveInlineMode: resolveEffectiveInlineModeMock,
   reconcileDecorationFlags: reconcileDecorationFlagsMock,
   resolveKeepDecorations: resolveKeepDecorationsMock,
 }));
@@ -49,6 +56,7 @@ import {
   resumeSessionIntoPanel,
   RESUME_UNAVAILABLE_MESSAGE,
 } from "../agentResume";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 
 const baseSession: AgentSessionRecord = {
   sessionId: "s-1",
@@ -72,7 +80,6 @@ beforeEach(() => {
   reconcileBypassFlagsMock.mockReturnValue(["--dangerously-skip-permissions"]);
   // Inline reconciliation is layered after bypass; pass the flags through so the
   // existing resume-command assertions (bypass token) still hold (#10876).
-  resolveEffectiveInlineModeMock.mockReturnValue(false);
   reconcileInlineModeFlagMock.mockImplementation((flags: string[]) => flags);
   getEffectiveAgentConfigMock.mockReturnValue({ name: "Claude", command: "claude" });
   buildResumeCommandMock.mockReturnValue("claude --resume s-1");
@@ -110,7 +117,8 @@ describe("reconcileResumeLaunchFlags", () => {
       ["--dangerously-skip-permissions"],
       "claude",
       true,
-      "--dangerously-skip-permissions"
+      "--dangerously-skip-permissions",
+      []
     );
     expect(result).toEqual(["--dangerously-skip-permissions"]);
   });
@@ -121,14 +129,15 @@ describe("reconcileResumeLaunchFlags", () => {
       [],
       "claude",
       true,
-      "--dangerously-skip-permissions"
+      "--dangerously-skip-permissions",
+      []
     );
   });
 
   it("passes undefined dangerousArgs when the agent has no settings entry", () => {
     reconcileResumeLaunchFlags({ agentId: "gemini" });
     expect(resolveEffectiveBypassMock).toHaveBeenCalledWith({}, "gemini", true);
-    expect(reconcileBypassFlagsMock).toHaveBeenCalledWith([], "gemini", true, undefined);
+    expect(reconcileBypassFlagsMock).toHaveBeenCalledWith([], "gemini", true, undefined, []);
   });
 
   // #13046: the caller's verbatim tail never reaches the reconcile, and comes
@@ -144,7 +153,8 @@ describe("reconcileResumeLaunchFlags", () => {
       ["--dangerously-skip-permissions"],
       "claude",
       true,
-      "--dangerously-skip-permissions"
+      "--dangerously-skip-permissions",
+      []
     );
     expect(result).toEqual(["--dangerously-skip-permissions", "--effort", "high"]);
   });
@@ -154,9 +164,12 @@ describe("buildResumePanelOptions", () => {
   it("builds terminal options with the reconciled resume command and seeds agentSessionId", () => {
     const options = buildResumePanelOptions(baseSession, { cwd: "/active", worktreeId: "wt-1" });
 
-    expect(buildResumeCommandMock).toHaveBeenCalledWith("claude", "s-1", [
-      "--dangerously-skip-permissions",
-    ]);
+    expect(buildResumeCommandMock).toHaveBeenCalledWith(
+      "claude",
+      "s-1",
+      ["--dangerously-skip-permissions"],
+      undefined
+    );
     expect(options).toEqual({
       kind: "terminal",
       launchAgentId: "claude",
@@ -191,10 +204,25 @@ describe("buildResumePanelOptions", () => {
       { ...baseSession, agentLaunchFlags: undefined },
       { cwd: "/active" }
     );
-    expect(buildResumeCommandMock).toHaveBeenCalledWith("claude", "s-1", [
-      "--dangerously-skip-permissions",
-    ]);
+    expect(buildResumeCommandMock).toHaveBeenCalledWith(
+      "claude",
+      "s-1",
+      ["--dangerously-skip-permissions"],
+      undefined
+    );
     expect(options?.agentLaunchFlags).toBeUndefined();
+  });
+
+  // The copy the host detected, or the one chosen for this agent, rather than
+  // whichever copy PATH reaches first (#16399).
+  it("starts the given executable when one is passed", () => {
+    buildResumePanelOptions(baseSession, { cwd: "/active" }, "'/opt/claude-2/bin/claude'");
+    expect(buildResumeCommandMock).toHaveBeenCalledWith(
+      "claude",
+      "s-1",
+      ["--dangerously-skip-permissions"],
+      "'/opt/claude-2/bin/claude'"
+    );
   });
 
   it("falls back to buildResumeLatestCommand when no exact-session command exists", () => {
@@ -290,6 +318,18 @@ describe("resumeSessionIntoPanel", () => {
     const result = await resumeSessionIntoPanel(baseSession, target);
     expect(result).toEqual({ terminalId: "term-new", outcome: "created", worktreeId: "wt-1" });
     expect(addPanelMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes with the executable a launch of this agent starts now (#16399)", async () => {
+    vi.mocked(resolveCurrentAgentLaunchBaseCommand).mockResolvedValueOnce("'/chosen/claude'");
+    await resumeSessionIntoPanel(baseSession, target);
+    expect(resolveCurrentAgentLaunchBaseCommand).toHaveBeenCalledWith("claude");
+    expect(buildResumeCommandMock).toHaveBeenCalledWith(
+      "claude",
+      "s-1",
+      expect.any(Array),
+      "'/chosen/claude'"
+    );
   });
 
   it("focuses the live pane instead of opening a second agent on one transcript", async () => {

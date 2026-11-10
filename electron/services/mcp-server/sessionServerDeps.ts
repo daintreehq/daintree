@@ -258,6 +258,14 @@ export interface SessionServerDepsSource {
     /** Asked once more right before the spawn; throws to refuse (#13493). */
     authorize?: () => void
   ) => Promise<import("../../../shared/types/projectCommand.js").ProjectCommandRunResult>;
+  /** `projectId` is the session's bound project, resolved by {@link createSessionServerDeps}. */
+  handleAgentResumeOwned: (
+    rawArgs: unknown,
+    projectId: string | null,
+    signal: AbortSignal,
+    /** Asked once more right before the spawn, for the project it runs in; throws to refuse. */
+    authorize?: (projectId: string) => void
+  ) => Promise<import("./agentResumeOwned.js").AgentResumeOwnedAnswer>;
   handleTerminalGetStatusViewless: import("./sessionServer.js").SessionServerDeps["handleTerminalGetStatusViewless"];
   handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
   /** How this machine names itself to people, for the stamp on what its assistants send. */
@@ -1102,6 +1110,8 @@ export function createSessionServerDeps(
     handleSkillsLoad: (rawArgs) => deps.handleSkillsLoad(rawArgs, { projectId: skillsProjectId() }),
     handleProjectRunCheck: deps.handleProjectRunCheck,
     handleProjectRunCommand: deps.handleProjectRunCommand,
+    handleAgentResumeOwned: (rawArgs, signal, authorize) =>
+      deps.handleAgentResumeOwned(rawArgs, skillsProjectId(), signal, authorize),
     handleTerminalGetStatusViewless: deps.handleTerminalGetStatusViewless,
     handleTerminalReadLastMessageOwned: deps.handleTerminalReadLastMessageOwned,
     isTerminalIdInUse: deps.isTerminalIdInUse,
@@ -1127,8 +1137,9 @@ export function createSessionServerDeps(
     isTerminalInPinnedWorkspace,
     ...(deps.replyWaiter !== undefined ? { replyWaiter: deps.replyWaiter } : {}),
     ...(deps.terminalNotify !== undefined ? { terminalNotify: deps.terminalNotify } : {}),
-    // Only a session relayed for a Shell's global Assistant holds any (#16187).
-    ...(deps.workerSteerQueue !== undefined && relay?.global === true
+    // Only a relayed session holds any: a global Assistant's for a worker
+    // (#16187), or any assistant's for another assistant (#16620).
+    ...(deps.workerSteerQueue !== undefined && relay !== undefined
       ? { workerSteerQueue: deps.workerSteerQueue }
       : {}),
     // A relayed session is never this machine's assistant: no lane, and no
@@ -1191,6 +1202,17 @@ export function createSessionServerDeps(
                 },
               }
             : {}),
+          refuseViewWrite: (named) => {
+            const projectId = named ?? skillsProjectId();
+            if (projectId === null) return null;
+            const standing = relayWriteStanding(projectId, null, true);
+            if (standing.kind === "vacant" || standing.kind === "own-view") return null;
+            const refused =
+              standing.kind === "unavailable"
+                ? new DriveHolderUnavailableError(projectId)
+                : new RelayDrivenElsewhereError(projectId, standing.holderName, { local: true });
+            return { code: "DRIVEN_ELSEWHERE", message: refused.message };
+          },
           // Whichever help session this transport is bound to; the runtime decides if it may (#13493).
           hostControl: bindHostControl(() => deps.sessionStore.sessionHelpIdMap.get(sessionId)),
         }),

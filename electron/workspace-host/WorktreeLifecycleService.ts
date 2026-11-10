@@ -78,6 +78,12 @@ export type AttachmentConfig = z.infer<typeof AttachmentConfigSchema>;
 
 const DaintreeLifecycleConfigSchema = z.object({
   setup: optionalStringArray,
+  // Gitignored directories (`node_modules`, `.venv`) carried from the main
+  // checkout into each new worktree as copy-on-write clones before `setup`
+  // runs. No approval: it runs nothing, and only ignored paths qualify.
+  // Dropped rather than failing the file when malformed: a typo here must not
+  // cost the file its setup commands.
+  cloneIgnored: z.catch(optionalStringArray, undefined),
   teardown: optionalStringArray,
   resource: z.optional(ResourceConfigSchema),
   resources: z.optional(ResourcesConfigSchema),

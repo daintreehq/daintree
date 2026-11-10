@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
+import { LinkMark } from "@/components/Hosts/LinkMark";
+import { hostLinkTone } from "@/components/Hosts/hostModel";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { InlineError } from "@/components/ui/field";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -191,6 +194,7 @@ export default function HostsSettingsTab() {
       data-testid="hosts-add-host"
       onClick={() => setAddOpen(true)}
     >
+      <Plus aria-hidden="true" />
       Add host
     </Button>
   );
@@ -241,13 +245,35 @@ export default function HostsSettingsTab() {
                     label={descriptor.name}
                     description={
                       <>
-                        {formatHostConnection(descriptor.connection)} ·{" "}
+                        {formatHostConnection(descriptor.connection)} <FactSeparator />{" "}
                         {descriptor.platform
                           ? platformLabel(descriptor.platform, null)
                           : "Not seen yet"}
-                        <br />
-                        {connectionLabel(connection)}
-                        {wake && <> · {wake}</>}
+                        {/* The mark the host menus and sidebar draw beside the same state. */}
+                        <span className="flex items-start gap-1.5">
+                          <LinkMark
+                            tone={hostLinkTone({
+                              hostId: descriptor.id,
+                              name: descriptor.name,
+                              isLocal: false,
+                              platform: descriptor.platform,
+                              connection,
+                              lastSeenAt: null,
+                              summary: null,
+                              isCurrent: false,
+                            })}
+                            className="h-4"
+                          />
+                          <span className="min-w-0">
+                            {connectionLabel(connection)}
+                            {wake && (
+                              <>
+                                {" "}
+                                <FactSeparator /> {wake}
+                              </>
+                            )}
+                          </span>
+                        </span>
                       </>
                     }
                     error={said ? <span role="alert">{said}</span> : undefined}

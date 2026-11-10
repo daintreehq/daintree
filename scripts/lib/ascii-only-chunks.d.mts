@@ -5,6 +5,9 @@ import type { Plugin } from "vite";
 /** True when the code holds a code unit above U+00FF. */
 export function hasTwoByteCharacters(code: string): boolean;
 
+/** Offsets of the code units above U+00FF outside tagged template quasis. */
+export function findEscapableTwoByteCharacters(fileName: string, code: string): number[];
+
 /** Re-prints a minified ES module chunk with non-ASCII characters escaped. */
 export function escapeChunkToAscii(fileName: string, code: string): string;
 

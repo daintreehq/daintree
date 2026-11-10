@@ -2484,3 +2484,51 @@ describe("ResourceGovernor", () => {
     });
   });
 });
+
+// HEAP_BUDGET_MB resolves at import, so each case stubs the env and loads a
+// fresh module. The warning event's utilizationPercent shows which budget the
+// governor actually divides by: heap against HEAP_BUDGET_MB, heap + external
+// against that budget plus its scaled external headroom.
+describe("ResourceGovernor heap budget from DAINTREE_PTY_HEAP_BUDGET_MB", () => {
+  beforeEach(() => {
+    mockFdMonitorSupported = false;
+    mockSample = vi.fn().mockReturnValue({ ...defaultFdSample });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ["2048", 1600, 0, 78],
+    ["2048", 300, 1900, 72],
+    ["1024", 800, 0, 78],
+    ["99999", 400, 0, 78],
+    [undefined, 400, 0, 78],
+  ])(
+    "budget env %s: %i MB heap + %i MB external reads as %i%% utilization",
+    async (budget, heapMb, externalMb, expectedPercent) => {
+      vi.stubEnv("DAINTREE_PTY_HEAP_BUDGET_MB", budget);
+      vi.resetModules();
+      const { ResourceGovernor: FreshGovernor } = await import("../ResourceGovernor.js");
+      vi.useFakeTimers();
+      mockMemoryUsage(heapMb, externalMb);
+      const deps = createMockDeps();
+
+      const governor = new FreshGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "host-memory-warning",
+          isWarning: true,
+          utilizationPercent: expectedPercent,
+        })
+      );
+      governor.dispose();
+    }
+  );
+});

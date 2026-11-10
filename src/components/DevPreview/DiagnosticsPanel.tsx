@@ -311,7 +311,7 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
             <p role="alert" className="text-text-secondary">
               Couldn't load diagnostics for this preview.
             </p>
-            <Button variant="subtle" size="xs" onClick={fetchDiagnostics}>
+            <Button variant="outline" size="xs" onClick={fetchDiagnostics}>
               Retry
             </Button>
           </div>
@@ -324,7 +324,7 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
                 <p role="alert" className="text-text-secondary">
                   Couldn't refresh diagnostics. Showing the last snapshot.
                 </p>
-                <Button variant="subtle" size="xs" onClick={fetchDiagnostics}>
+                <Button variant="outline" size="xs" onClick={fetchDiagnostics}>
                   Retry
                 </Button>
               </div>

@@ -20,7 +20,7 @@ import { notify } from "@/lib/notify";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
-import { formatTimeAgo } from "@/utils/timeAgo";
+import { formatMediumDate, formatTimeAgo } from "@/utils/timeAgo";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 
 const SYNC_MODE_POLL_MS = 250;
@@ -70,10 +70,17 @@ interface TerminalInfoDialogProps {
   terminalId: string;
 }
 
+// The contract's named-month date, never a numeric one, with the exact time a
+// diagnostic needs beside it. The year always stays: this text is copied into
+// reports that are read long after the day they were taken.
 function formatTimestamp(timestamp: number): string {
   if (timestamp === 0) return "Never";
-  const date = new Date(timestamp);
-  return date.toLocaleString();
+  const time = new Date(timestamp).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  return `${formatMediumDate(timestamp)}, ${time}`;
 }
 
 function formatLastActivity(timestamp: number): string {
@@ -671,7 +678,6 @@ Activity:
   Activity tier: ${info?.activityTier ?? UNAVAILABLE}
 
 Performance:
-  Output buffer: ${info?.outputBufferSize != null ? `${info.outputBufferSize} lines` : UNAVAILABLE}
   Semantic buffer: ${info?.semanticBufferLines != null ? `${info.semanticBufferLines} lines` : UNAVAILABLE}
   Synchronized output (DEC 2026): ${formatSyncMode(peekTerminalService()?.getSynchronizedOutputMode(terminalId) ?? null)}
 `;
@@ -1119,13 +1125,6 @@ Performance:
             expanded={performanceOpen}
             onToggle={() => setPerformanceOpen((v) => !v)}
           >
-            <Row
-              label="Output buffer"
-              value={info?.outputBufferSize != null ? `${info.outputBufferSize} lines` : undefined}
-              mono
-              pending={pending}
-              fallback={UNAVAILABLE}
-            />
             <Row
               label="Semantic buffer"
               value={

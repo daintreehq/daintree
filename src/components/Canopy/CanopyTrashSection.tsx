@@ -37,6 +37,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SectionBar } from "./CanopySectionBar";
 import { CanopyWhereLine } from "./CanopyRow";
 import type { CanopyApi } from "./canopyHostSource";
+import type { CanopySearchAlternatives } from "./canopySearch";
 import {
   buildCanopyTrash,
   canopyTrashDomId,
@@ -97,7 +98,7 @@ export function CanopyTrashSection({
   ref,
   entries,
   workspaces,
-  terms,
+  alternatives,
   api,
   scopeKey,
   onLeaveUp,
@@ -110,8 +111,8 @@ export function CanopyTrashSection({
   /** The host's trash as its snapshot has it, newest first. */
   entries: readonly CanopyTrashEntry[];
   workspaces: ReadonlyMap<string, PilotWorkspaceMeta>;
-  /** The search's words: a search shows the rows it matches, open. */
-  terms: readonly string[];
+  /** The search's alternatives: a search shows the rows it matches, open. */
+  alternatives: CanopySearchAlternatives;
   api: Pick<CanopyApi, "restoreTrashed" | "removeTrashed" | "emptyTrash">;
   /** The host or hosts shown: another's trash starts afresh, its departures unsaid. */
   scopeKey: string;
@@ -132,7 +133,7 @@ export function CanopyTrashSection({
 }) {
   const expanded = useCanopyStore((s) => s.trashExpanded);
   const setExpanded = useCanopyStore((s) => s.setTrashExpanded);
-  const searching = terms.length > 0;
+  const searching = alternatives.length > 0;
   const open = expanded || searching;
 
   // Named and placed as each run's inbox row was. The clock behind the rows'
@@ -142,8 +143,8 @@ export function CanopyTrashSection({
     [entries, workspaces]
   );
   const shown = useMemo(
-    () => (searching ? items.filter((item) => trashMatches(item, terms)) : items),
-    [items, terms, searching]
+    () => (searching ? items.filter((item) => trashMatches(item, alternatives)) : items),
+    [items, alternatives, searching]
   );
   const rowsShown = open && shown.length > 0;
 
@@ -487,7 +488,6 @@ export function useTrashExpiryAnnouncer({
   entries,
   workspaces,
   scopeKey,
-  dockAnnounces,
   isBackInFleet,
 }: {
   /** The panel is open: a closed one says nothing. */
@@ -495,7 +495,6 @@ export function useTrashExpiryAnnouncer({
   entries: readonly CanopyTrashEntry[];
   workspaces: ReadonlyMap<string, PilotWorkspaceMeta>;
   scopeKey: string;
-  dockAnnounces: (workspaceId: string) => boolean;
   /** The run is in the fleet again: it left the trash restored, whatever its deadline. */
   isBackInFleet: (runId: string) => boolean;
 }): TrashActed {
@@ -534,7 +533,6 @@ export function useTrashExpiryAnnouncer({
       if (actedRef.current.delete(key)) continue;
       if (now < item.expiresAt - EXPIRY_SLACK_MS) continue;
       if (item.ended && now > item.expiresAt + EXPIRY_ANNOUNCE_WITHIN_MS) continue;
-      if (dockAnnounces(item.row.run.workspaceId)) continue;
       expired.push(item);
     }
     if (expired.length === 0) return;
@@ -546,7 +544,7 @@ export function useTrashExpiryAnnouncer({
       useAnnouncerStore.getState().announce(expiredAnnouncement(gone.map((item) => item.subject)));
     }, EXPIRY_CONFIRM_MS);
     timers.current.add(timer);
-  }, [active, items, scopeKey, dockAnnounces]);
+  }, [active, items, scopeKey]);
   return useMemo(
     () => ({
       mark: (item) => actedRef.current.add(trashKey(item)),

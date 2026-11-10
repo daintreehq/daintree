@@ -662,7 +662,7 @@ test.describe("Core: Settings", () => {
       const { window } = ctx;
       const canopyButton = window
         .getByRole("toolbar", { name: "Main toolbar" })
-        .locator('button[aria-haspopup="dialog"][aria-label^="Canopy"]');
+        .getByRole("button", { name: /^Canopy/ });
       const canopyDialog = window.locator('[data-testid="canopy-dialog"]');
       const shortcut = process.platform === "darwin" ? "Meta+E" : "Control+Shift+O";
       const setShown = async (shown: boolean) => {
@@ -692,13 +692,42 @@ test.describe("Core: Settings", () => {
       };
 
       try {
+        const readingPanel = await openSettingsTab(window, "canopy");
+        const read = readingPanel.getByRole("switch", { name: "Read agent terminals" });
+        await read.check();
+        await expect(read).toBeChecked({ timeout: T_SHORT });
+        await closeSettingsWithEscape(window);
         await expect(canopyButton).toBeVisible({ timeout: T_MEDIUM });
-        // Shown: the shortcut is Canopy's, and opens it.
+        // Reading: the shortcut opens the standalone inbox, not an in-project dialog.
         const owned = await pressIntoField();
-        await expect(canopyDialog).toBeVisible({ timeout: T_SHORT });
+        let inbox: Page | undefined;
+        await expect
+          .poll(
+            async () => {
+              for (const page of ctx.app.windows()) {
+                if (await page.locator("[data-canopy-standalone]").count()) {
+                  inbox = page;
+                  return true;
+                }
+              }
+              return false;
+            },
+            { timeout: T_MEDIUM }
+          )
+          .toBe(true);
+        if (!inbox) throw new Error("Canopy's standalone inbox did not open");
+        await expect(inbox.locator("[data-canopy-standalone]")).toBeVisible();
+        await expect(canopyDialog).toHaveCount(0);
         await expect(owned).toHaveAttribute("data-presses", "0");
-        await window.keyboard.press("Escape");
-        await expect(canopyDialog).toHaveCount(0, { timeout: T_SHORT });
+        // Its header draws no close of its own: the window closes as its OS control does.
+        const closing = await ctx.app.evaluate(({ BrowserWindow }) => {
+          const canopy = BrowserWindow.getAllWindows().find((win) => win.getTitle() === "Canopy");
+          canopy?.close();
+          return canopy !== undefined;
+        });
+        expect(closing, "the Canopy window is found by its title").toBe(true);
+        await expect.poll(() => inbox?.isClosed(), { timeout: T_SHORT }).toBe(true);
+        await window.bringToFront();
 
         const panel = await setShown(false);
         await expect(panel.getByRole("switch", { name: "Read agent terminals" })).toBeDisabled();
@@ -714,6 +743,7 @@ test.describe("Core: Settings", () => {
         await setShown(true);
         await closeSettingsWithEscape(window);
         await expect(canopyButton).toBeVisible({ timeout: T_SHORT });
+        // Showing it again leaves reading off and offers to turn it on here.
         await pressIntoField();
         await expect(canopyDialog).toBeVisible({ timeout: T_SHORT });
         await window.keyboard.press("Escape");
@@ -930,8 +960,8 @@ test.describe("Core: Settings", () => {
         // excludes the action being edited) must flag it.
         const { recordPrompt } = await openShortcutRecorder(
           window,
-          "Reopen last closed terminal",
-          "Reopen last closed terminal"
+          "Reopen last closed panel",
+          "Reopen last closed panel"
         );
         await recordPrompt.click();
         // The recorder reads event.code; Cmd maps to Meta on macOS, Ctrl elsewhere.

@@ -54,11 +54,10 @@ export function registerAppConfigActions(
     resultSchema: z.object({
       agents: z.record(z.string(), AgentSettingsEntrySchema),
       settingsVersion: z.number().optional(),
-      // The two root-level global switches. Both are live overrides OR-ed in at
-      // flag-generation time, so an agent reading its own launch conditions needs
-      // them; dispatch strips whatever isn't declared here (#11539).
+      // The root-level global switch, a live override OR-ed in at
+      // flag-generation time, so an agent reading its own launch conditions
+      // needs it; dispatch strips whatever isn't declared here (#11539).
       globalSkipPermissions: z.boolean().optional(),
-      globalUseAltScreen: z.boolean().optional(),
       // What restored agent panes do after a restart (#13509).
       resumeOnRestart: z.enum(RESUME_ON_RESTART_VALUES).optional(),
     }),

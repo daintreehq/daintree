@@ -455,6 +455,39 @@ describe("archiveInstallIntent", () => {
     });
   });
 
+  it("names the agents that can run without permission prompts (#16374)", async () => {
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    const agent = { command: "acme", color: "#3366ff", iconId: "claude" };
+    archiveMock.readArchiveManifest.mockResolvedValue(
+      manifest({
+        contributes: {
+          agents: [
+            { ...agent, id: "hermes", name: "Her\u202Emes", permissionBypassArgs: ["--yolo"] },
+            { ...agent, id: "plain", name: "Plain" },
+          ],
+        },
+      } as unknown as Partial<PluginManifest>)
+    );
+
+    const { enqueueArchiveInstallIntent } = await importFresh();
+    await enqueueArchiveInstallIntent(P("agents.dntr"));
+
+    const [intent] = intentsFrom(painted.sent);
+    expect(intent).toMatchObject({ manifest: { permissionBypassAgents: ["Hermes"] } });
+  });
+
+  it("names no agents for a manifest that contributes none (#16374)", async () => {
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+
+    const { enqueueArchiveInstallIntent } = await importFresh();
+    await enqueueArchiveInstallIntent(P("plain.dntr"));
+
+    const [intent] = intentsFrom(painted.sent);
+    expect(intent).toMatchObject({ manifest: { permissionBypassAgents: [] } });
+  });
+
   it("skips the archive entry scan when no template is declared (#13825)", async () => {
     const painted = makePainted();
     deepLinkMock.painted = painted.wc;

@@ -60,7 +60,11 @@ export function WorktreeActivityChip({
           tabIndex={0}
         >
           <ActivityLight lastActivityTimestamp={activityTimestamp} />
-          <LiveTimeAgo timestamp={activityTimestamp} noTooltip />
+          {/* Three characters wide at least, right-aligned, so "5s" and "34s"
+              leave the dot and the commit button beside them on one column. */}
+          <span className="min-w-[3ch] text-right tabular-nums">
+            <LiveTimeAgo timestamp={activityTimestamp} noTooltip />
+          </span>
         </div>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="p-3">

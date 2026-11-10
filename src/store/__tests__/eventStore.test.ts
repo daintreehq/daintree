@@ -34,4 +34,25 @@ describe("eventStore", () => {
     expect(events[0]?.id).toBe("evt-6");
     expect(events[events.length - 1]?.id).toBe("evt-1005");
   });
+
+  it("clearFilters drops context filters and signals the bar to drop its drafts", () => {
+    const store = useEventStore.getState();
+    store.setFilters({ agentId: "claude-1", worktreeId: "/w/feature", search: "state" });
+    const before = useEventStore.getState().filtersResetCount;
+
+    useEventStore.getState().clearFilters();
+
+    expect(useEventStore.getState().filters).toEqual({});
+    expect(useEventStore.getState().filtersResetCount).toBe(before + 1);
+  });
+
+  it("clearEvents keeps the filters, so the bar still has them to show", () => {
+    useEventStore.getState().setEvents([makeEvent("1", { payload: { agentId: "claude-1" } })]);
+    useEventStore.getState().setFilters({ agentId: "claude-1" });
+
+    useEventStore.getState().clearEvents();
+
+    expect(useEventStore.getState().events).toEqual([]);
+    expect(useEventStore.getState().filters).toEqual({ agentId: "claude-1" });
+  });
 });

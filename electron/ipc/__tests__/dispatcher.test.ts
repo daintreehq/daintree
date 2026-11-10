@@ -304,24 +304,26 @@ describe("invokeForEndpoint", () => {
     expect(raw).not.toHaveBeenCalled();
   });
 
-  it.each([SHELL_CHANNEL, UNCLASSIFIED_CHANNEL])(
-    "refuses %s over a link even with a context handler",
-    async (channel) => {
-      const handler = vi.fn(() => "ran");
-      getIpcDispatcher().registerInvoke(channel, handler);
-      const { endpoint } = makeRemoteEndpoint();
+  it.each([
+    SHELL_CHANNEL,
+    UNCLASSIFIED_CHANNEL,
+    "user-prompt-templates:list",
+    "user-prompt-templates:open-folder",
+  ])("refuses %s over a link even with a context handler", async (channel) => {
+    const handler = vi.fn(() => "ran");
+    getIpcDispatcher().registerInvoke(channel, handler);
+    const { endpoint } = makeRemoteEndpoint();
 
-      const envelope = await getIpcDispatcher().invokeForEndpoint(
-        { endpoint, client: REMOTE_CLIENT },
-        channel,
-        []
-      );
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      channel,
+      []
+    );
 
-      expect(envelope.ok).toBe(false);
-      if (!envelope.ok) expect(envelope.error.code).toBe("CHANNEL_NOT_REMOTABLE");
-      expect(handler).not.toHaveBeenCalled();
-    }
-  );
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.error.code).toBe("CHANNEL_NOT_REMOTABLE");
+    expect(handler).not.toHaveBeenCalled();
+  });
 
   it("refuses a hybrid channel over a link until a split admits it", async () => {
     const handler = vi.fn(() => "host-half");
@@ -445,6 +447,37 @@ describe("remote router", () => {
     cleanups.push(typedHandle(SHELL_CHANNEL as never, (() => "local") as never));
     await expect(invokeLocal(SHELL_CHANNEL, makeEvent())).resolves.toEqual(wrapSuccess("local"));
     expect(router.forwardInvoke).not.toHaveBeenCalled();
+  });
+
+  // A person's prompt templates are this machine's, even in a window on a host
+  // (#16398), while the plugin templates beside them come from that host.
+  it.each(["user-prompt-templates:list", "user-prompt-templates:open-folder"])(
+    "answers %s from this machine for a window driving a host",
+    async (channel) => {
+      const router = installRouter();
+      const handler = vi.fn(() => "from-this-machine");
+      cleanups.push(typedHandle(channel as never, handler as never));
+
+      await expect(invokeLocal(channel, makeEvent())).resolves.toEqual(
+        wrapSuccess("from-this-machine")
+      );
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(router.forwardInvoke).not.toHaveBeenCalled();
+    }
+  );
+
+  it("sends a window driving a host to that host for its plugins, templates included", async () => {
+    const router = installRouter();
+    const local = vi.fn(() => "this-machine's plugins");
+    ipcMainMock.handle("plugin:list", local);
+
+    await expect(invokeLocal("plugin:list", makeEvent())).resolves.toEqual(
+      wrapSuccess("from-host")
+    );
+
+    expect(router.forwardInvoke).toHaveBeenCalledWith("box", 5, "plugin:list", []);
+    expect(local).not.toHaveBeenCalled();
   });
 
   it("leaves senders that are not remote-bound untouched", async () => {
@@ -1168,6 +1201,19 @@ describe("remote scope gate", () => {
     expect((await ask(endpoint, "claude:list-subagents", [{ terminalId: " t2 " }])).ok).toBe(false);
     expect((await ask(endpoint, "claude:list-subagents", [{ terminalId: "t1" }])).ok).toBe(true);
   });
+
+  it.each(["claude:read-context-usage", "codex:read-context-usage"])(
+    "holds a remote view's %s to its own project's panes",
+    async (channel) => {
+      installScope();
+      const read = handle(channel);
+      const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+      expect((await ask(endpoint, channel, [{ terminalId: "t1" }])).ok).toBe(true);
+      const other = await ask(endpoint, channel, [{ terminalId: "t2" }]);
+      expect(other.ok ? null : other.error.code).toBe("PERMISSION");
+      expect(read).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("leaves terminal info host-wide, for the processes list", async () => {
     installScope();

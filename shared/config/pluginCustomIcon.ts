@@ -1,8 +1,8 @@
 /**
  * Plugin-shipped SVG icons (#13143). A plugin opts in by writing a relative
  * path where a generic icon id would go — `"iconId": "./icons/flutter.svg"` on
- * a panel, toolbar button or process tool — rather than through a new manifest
- * key. Every contribution schema is `.strict()`, so a sibling key would make an
+ * a panel, toolbar button, process tool or agent — rather than through a new
+ * manifest key. Every contribution schema is `.strict()`, so a sibling key would make an
  * older host reject the whole manifest; a path in `iconId` is just an
  * unrecognized id there, and renders the fallback glyph like any other.
  *
@@ -12,7 +12,7 @@
 
 /**
  * Longest reference honoured. Matches the `processTools[].iconId` schema cap,
- * so a reference that works on one contribution type works on all three and
+ * so a reference that works on one contribution type works on all of them and
  * still parses on an older host.
  */
 export const PLUGIN_CUSTOM_ICON_MAX_REF_LENGTH = 64;

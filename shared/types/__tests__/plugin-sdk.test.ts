@@ -13,6 +13,7 @@ import type {
   PanelContribution,
   ToolbarButtonContribution,
   ToolbarButtonPopover,
+  CanopyViewContribution,
   PluginPanelBadge,
   PluginPanelBadgeColor,
   MenuItemContribution,
@@ -637,7 +638,7 @@ describe("plugin-sdk boundary", () => {
       // view built against it still runs on a host that predates it.
       expectTypeOf(props.hostContext).toEqualTypeOf<PluginViewHostContext | undefined>();
       expectTypeOf<PluginViewHostKind>().toEqualTypeOf<
-        "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover"
+        "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover" | "canopy"
       >();
       // A file editor view's host-owned document (#13809), a named SDK type.
       expectTypeOf(props.fileDocument).toEqualTypeOf<PluginFileDocument | undefined>();
@@ -662,6 +663,13 @@ describe("plugin-sdk boundary", () => {
         actionId: "acme.run";
       }>().toMatchTypeOf<ToolbarButtonContribution>();
       expectTypeOf<ToolbarButtonPopover>().toEqualTypeOf<{ viewId: string }>();
+    });
+
+    it("lets a plugin name the panel views the Canopy window offers", () => {
+      expectTypeOf<CanopyViewContribution>().toEqualTypeOf<{ viewId: string }>();
+      expectTypeOf<PluginManifest["contributes"]["canopyViews"]>().toEqualTypeOf<
+        CanopyViewContribution[] | undefined
+      >();
     });
 
     it("exposes the panel lifecycle contract as named SDK types", () => {

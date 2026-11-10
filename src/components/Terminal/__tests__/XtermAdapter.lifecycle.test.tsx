@@ -197,6 +197,7 @@ vi.mock("@/services/KeybindingService", () => ({
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: vi.fn(),
+    get: vi.fn(() => null),
   },
 }));
 
@@ -922,6 +923,52 @@ describe("XtermAdapter lifecycle", () => {
       vi.mocked(keybindingService.resolveKeybinding).mockReturnValueOnce(resolution(true));
 
       expect(keyHandler(optionArrow("ArrowLeft"))).toBe(false);
+      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a shortcut bound to an action whose palette pick redirects", () => {
+    beforeEach(() => {
+      vi.mocked(keybindingService.getPendingChord).mockReset().mockReturnValue("Cmd+K");
+      vi.mocked(keybindingService.resolveKeybinding)
+        .mockReset()
+        .mockReturnValue({
+          match: { actionId: "git.commit" },
+          chordPrefix: false,
+          shouldConsume: true,
+        } as KeybindingResolutionResult);
+      vi.mocked(actionService.get).mockImplementation(((actionId: string) =>
+        actionId === "git.commit"
+          ? { enabled: true, paletteRedirectTo: "worktree.openReviewHub" }
+          : null) as unknown as typeof actionService.get);
+      vi.mocked(actionService.dispatch).mockResolvedValue({ ok: true, result: undefined });
+    });
+
+    afterEach(() => {
+      vi.mocked(keybindingService.getPendingChord).mockReset().mockReturnValue(null);
+      vi.mocked(keybindingService.resolveKeybinding)
+        .mockReset()
+        .mockReturnValue({ match: undefined, chordPrefix: false, shouldConsume: false });
+      vi.mocked(actionService.get).mockReset().mockReturnValue(null);
+      vi.mocked(actionService.dispatch).mockReset();
+    });
+
+    it("runs the redirect target and keeps the key from the terminal", async () => {
+      renderAdapter();
+      await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+      const keyHandler = mocks.getKeyHandler()!;
+
+      const handled = keyHandler(
+        new KeyboardEvent("keydown", { key: "c", metaKey: true, bubbles: true, cancelable: true })
+      );
+
+      expect(handled).toBe(false);
+      expect(actionService.dispatch).toHaveBeenCalledTimes(1);
+      expect(actionService.dispatch).toHaveBeenCalledWith(
+        "worktree.openReviewHub",
+        undefined,
+        expect.objectContaining({ source: "keybinding" })
+      );
       expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
     });
   });

@@ -6,6 +6,7 @@ import { getLocalAgentDirectory } from "../../services/assistants/localAgentDire
 import { events } from "../../services/events.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
 import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
+import { isProjectlessAppView } from "../../window/projectlessViews.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { setHostControlRuntime } from "../../services/mcp-server/hostControlTools.js";
 import { readAssistantConfirmationsSkipped } from "../../services/mcp-server/assistantConfirmationsPreference.js";
@@ -47,6 +48,7 @@ declare module "../runtime.js" {
       | "skipsRelayedDispatch"
       | "awaitsNotices"
       | "holdsThrowawayRuns"
+      | "holdsLaunchedAgents"
       | "receiveNotices"
       | "noticeCalls"
       | "receiveNoticeStatus"
@@ -198,6 +200,12 @@ export interface HostControlInstallDeps {
    * `host.watch` (#16188); held only while one is armed, and never dials.
    */
   watchHostAgents?(listener: AgentWaitingListener): () => void;
+  /**
+   * A host's agent terminals as it lists them, over a link already up and
+   * never dialing (#16492): how a host's link held for agents its assistant
+   * launched there is let go once they have ended.
+   */
+  listAgentTargets?: HostCallRuntimeDeps["listAgentTargets"];
 }
 
 /**
@@ -253,6 +261,15 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
           logger.warn("Couldn't release what was handed to an ended assistant", { error });
         });
     },
+    endHeldSends: (helpSessionId) => {
+      void mcpServer()
+        .then(({ mcpServerService }) =>
+          mcpServerService.endRelayHeldSends(LOCAL_RELAY_SENDER_ID, helpSessionId)
+        )
+        .catch((error: unknown) => {
+          logger.warn("Couldn't drop what an ended assistant held for busy agents", { error });
+        });
+    },
     retirePrincipal: (senderId, helpSessionId) => {
       void mcpServer()
         .then(({ mcpServerService }) =>
@@ -273,7 +290,10 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     const webContentsId = isGlobalAssistantId(
       helpSessionService.getSessionLane(helpSessionId)?.projectId ?? ""
     )
-      ? (peekGlobalAssistantService()?.presenterWebContentsId() ?? null)
+      ? (peekGlobalAssistantService()?.presenterWebContentsId(
+          // The Canopy window shows the assistant but mounts no approval dialog.
+          (id) => !isProjectlessAppView(id)
+        ) ?? null)
       : helpSessionService.getWebContentsIdForSessionId(helpSessionId);
     return webContentsId === null || isRemoteEndpointHandle(webContentsId) ? null : webContentsId;
   };
@@ -302,6 +322,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     noteAnswered: (answer) => noteHostCallAnswer(answer, deps.listHostProjects),
     ...(deps.watchHosts ? { watchHosts: deps.watchHosts } : {}),
     watchAgents: (listener) => watchAgentsHere(listener, deps.watchHostAgents),
+    ...(deps.listAgentTargets ? { listAgentTargets: deps.listAgentTargets } : {}),
     // A host's question about a call it would run itself goes to the person in
     // the window of the assistant that made the call (#13501), never the
     // focused one: an assistant a remote Shell's view runs here has none.
@@ -482,16 +503,19 @@ function openDatabase(): Database.Database | null {
 /**
  * Whether this Shell's assistants still use `hostId`'s link: a relayed call
  * running, the notices those calls armed until their host has nothing more
- * for them (#13500, #13930), or a throwaway run one of them launched that may
- * still be going, which the host ends with the link (#15878). Holding the
- * link never keeps the host awake.
+ * for them (#13500, #13930), a throwaway run one of them launched that may
+ * still be going, which the host ends with the link (#15878), or agents one
+ * of them launched there that the host still lists, so every window here
+ * shows the host's counts of them (#16492). Holding the link never keeps
+ * the host awake.
  */
 export function assistantsUseHost(hostId: HostId): boolean {
   const relay = getRemoteService("hostCallRelayClient");
   return (
     relay?.hasCallInFlight(hostId) === true ||
     relay?.awaitsNotices(hostId) === true ||
-    relay?.holdsThrowawayRuns(hostId) === true
+    relay?.holdsThrowawayRuns(hostId) === true ||
+    relay?.holdsLaunchedAgents(hostId) === true
   );
 }
 

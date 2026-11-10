@@ -287,6 +287,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- canopyActions --
   "canopy.toggle",
+  "canopy.openWindow",
   "canopy.markAllRead",
   "project.getAll",
   "project.getCurrent",
@@ -421,6 +422,7 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.listModels",
   "agentSessionHistory.list",
   "agentSessionHistory.resume",
+  "agent.resumeOwned",
   // -- session bookmarks (#11288) --
   "session.bookmarkAndClose",
   "session.bookmark.promote",
@@ -673,6 +675,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "project.runCheck",
   // Runs a shell command the caller names; held to Daintree's own assistants.
   "project.runCommand",
+  // Main checks the drive lease and records the pane; nothing in its `run()` does.
+  "agent.resumeOwned",
   // Launches an agent with a schedule's preset, which a plugin's launch may not choose (#15978).
   "schedules.runNow",
   // Arming types the handback instruction into the agent, and close ends it (#16171).

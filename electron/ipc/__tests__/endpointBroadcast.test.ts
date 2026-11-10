@@ -33,6 +33,7 @@ import {
   broadcastSlicedToProjectRenderers,
   broadcastToProjectRenderers,
   getProjectPushTargets,
+  hasBroadcastAudience,
   broadcastToProjectRenderersExcept,
   broadcastToRemoteEndpoints,
   broadcastToRenderer,
@@ -114,6 +115,43 @@ describe("broadcast helpers with no remote endpoints", () => {
     ]);
     expect(getRemote).not.toHaveBeenCalled();
     expect(getForProject).not.toHaveBeenCalled();
+  });
+});
+
+describe("hasBroadcastAudience (#16409)", () => {
+  it("is false with no view at all, as on a host nobody has attached to", () => {
+    expect(hasBroadcastAudience("a:b", 1)).toBe(false);
+  });
+
+  it("is true for a local view that may hear the push", () => {
+    localViews.push(localView(1));
+    expect(hasBroadcastAudience("a:b", 1)).toBe(true);
+  });
+
+  it("is false when every local view is withheld from it, and asks about this push", () => {
+    localViews.push(localView(1));
+    const filter = vi.fn(() => false);
+    const uninstall = setRemoteBoundViewFilter(filter);
+    try {
+      expect(hasBroadcastAudience("a:b", 1)).toBe(false);
+      expect(filter).toHaveBeenCalledWith(1, "a:b", [1]);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("ignores a destroyed view", () => {
+    localViews.push({ ...localView(1), isDestroyed: () => true });
+    expect(hasBroadcastAudience("a:b", 1)).toBe(false);
+  });
+
+  it("is true for an attached remote view, and false once it has closed", () => {
+    const attached = endpoint(1, null);
+    getEndpointRegistry().add(attached);
+    expect(hasBroadcastAudience("a:b", 1)).toBe(true);
+
+    attached.isClosed = () => true;
+    expect(hasBroadcastAudience("a:b", 1)).toBe(false);
   });
 });
 

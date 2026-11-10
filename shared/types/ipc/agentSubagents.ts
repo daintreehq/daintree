@@ -175,7 +175,7 @@ export type CodexFolderSessionsResult = CodexFolderSessionsOk | AgentSubagentsUn
 export interface CodexRestoreMatchPane {
   /** The saved pane id; echoed back on a match. */
   key: string;
-  /** SHA-256 hex of the prompt in the form the CLI received it (`launchPromptArgText`). */
+  /** SHA-256 hex of the prompt in the form restore compares it (`launchPromptMatchText`). */
   promptHash: string;
   /** Epoch ms the prompt was delivered at launch. */
   at: number;

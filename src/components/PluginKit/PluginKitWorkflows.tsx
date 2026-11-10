@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { InlineError } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/Spinner";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { pluralize } from "@/lib/pluralize";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
@@ -346,11 +347,17 @@ function KitAttachmentList({
                     item.status === "failed" ? "text-text-primary" : "text-text-secondary"
                   )}
                 >
-                  {item.status === "failed"
-                    ? item.detail
-                      ? `Failed · ${item.detail}`
-                      : "Failed"
-                    : (item.detail ?? (item.status === "pending" ? "Uploading" : null))}
+                  {item.status === "failed" ? (
+                    item.detail ? (
+                      <>
+                        Failed <FactSeparator /> {item.detail}
+                      </>
+                    ) : (
+                      "Failed"
+                    )
+                  ) : (
+                    (item.detail ?? (item.status === "pending" ? "Uploading" : null))
+                  )}
                 </span>
                 {removeItem ? (
                   <button
@@ -430,7 +437,9 @@ function KitEntityChip({
         {name}
       </span>
       {available || state === "loading" ? null : (
-        <span className="shrink-0 text-text-secondary">· {UNAVAILABLE_WORD[state]}</span>
+        <span className="shrink-0 text-text-secondary">
+          <FactSeparator /> {UNAVAILABLE_WORD[state]}
+        </span>
       )}
     </>
   );
@@ -937,7 +946,13 @@ function KitUnsavedChangesBar({
         >
           {nonEmpty(discardLabel) ?? "Discard"}
         </Button>
-        <Button size="sm" loading={busy} disabled={!save || count === 0} onClick={runSave}>
+        <Button
+          variant="contrast"
+          size="sm"
+          loading={busy}
+          disabled={!save || count === 0}
+          onClick={runSave}
+        >
           {nonEmpty(saveLabel) ?? "Save"}
         </Button>
       </div>

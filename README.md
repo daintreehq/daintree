@@ -26,7 +26,13 @@ Claude Code, Codex, Antigravity, OpenCode and [13&nbsp;more](#agent-clis) run as
 
 ## Download
 
-Get the latest build at **[daintree.org/download](https://daintree.org/download)**.
+Get the latest build at **[daintree.org/download](https://daintree.org/download)**, or on macOS install it with [Homebrew](https://brew.sh):
+
+```bash
+brew install --cask daintreehq/tap/daintree
+```
+
+Daintree updates itself, and Homebrew never reinstalls over a copy that already has.
 
 | Platform | Package |
 | --- | --- |
@@ -207,7 +213,7 @@ npm run dev
 
 The `postinstall` step rebuilds `node-pty` for Electron. If you see PTY errors, run `npm run rebuild`.
 
-Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md).
+Daintree doesn't accept external pull requests: the code is written by AI coding agents through an in-house workflow. Issues are very welcome, and every one is read. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to write a useful one.
 
 <details>
 <summary>Package installers</summary>

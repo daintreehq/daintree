@@ -14,6 +14,7 @@ import { isAssistantFocused } from "@/store/macroFocusStore";
 import { countPanelLimitUsage } from "@/store/slices/panelRegistry/panelCount";
 import { isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 
 export interface SpawnPanelsOptions {
   terminals: RecipeTerminal[];
@@ -104,6 +105,15 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
       }
     }
 
+    // Each agent's executable, read before any panel spawns: an await between the
+    // abort check and a spawn would let later panels past an earlier one's abort.
+    const agentBaseCommands = new Map<string, string | undefined>();
+    for (const t of terminals.slice(0, allowed)) {
+      if (isAgentRecipeType(t.type) && !agentBaseCommands.has(t.type)) {
+        agentBaseCommands.set(t.type, await resolveCurrentAgentLaunchBaseCommand(t.type));
+      }
+    }
+
     // One batch for the whole burst: each `addPanel` commits `panelsById`
     // immediately but defers the `panelIds` append, collapsing N grid reflows
     // into one at flush. Skip opening it when the limit leaves no room. (#9165)
@@ -143,10 +153,9 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
           } else if (isAgentRecipeType(t.type)) {
             const agentId = t.type;
             const agentConfig = getAgentConfig(agentId);
-            const baseCommand = agentConfig?.command ?? "";
+            const baseCommand = agentBaseCommands.get(agentId) ?? agentConfig?.command ?? "";
             const entry = agentSettings?.agents?.[agentId] ?? {};
             const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
-            const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
             // One id per spawned pane (#11782) — a recipe fans out several
             // panes at once, and reusing an id across them would collide.
             const assignedSessionId = mintAssignedSessionId(agentId);
@@ -159,7 +168,6 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
               systemPromptArgs: extractSystemPromptArgs(t.agentLaunchFlags, agentId),
               recipeArgs: t.args?.trim() || undefined,
               globalSkipPermissions,
-              globalUseAltScreen,
               sessionId: assignedSessionId,
             });
             // Preserve flags the caller already captured (the clone-layout path
@@ -175,7 +183,6 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
                 modelId: t.agentModelId,
                 recipeArgs: t.args,
                 globalSkipPermissions,
-                globalUseAltScreen,
               });
 
             panelId = await store.addPanel({

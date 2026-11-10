@@ -1242,7 +1242,7 @@ export function BulkCreateWorktreeDialog({
       data-testid="bulk-create-worktree-dialog"
       icon={
         isExecuting ? (
-          <Spinner size="lg" className="text-activity-working" />
+          <Spinner size="lg" className="text-text-secondary" />
         ) : isDone ? (
           succeededCount === 0 && failedCount > 0 ? (
             <Icon name="circle-x" className="w-5 h-5 text-status-error" />
@@ -1461,7 +1461,7 @@ export function BulkCreateWorktreeDialog({
                   <div key={item.item.number} className="px-3 py-2 flex items-start gap-3 text-sm">
                     <div className="mt-0.5 shrink-0">
                       {isInProgress ? (
-                        <Spinner size="md" className="text-activity-working" />
+                        <Spinner size="md" className="text-text-secondary" />
                       ) : itemStatus?.stage === "succeeded" ? (
                         <Icon name="circle-check" className="w-4 h-4 text-status-success" />
                       ) : itemStatus?.stage === "failed" ? (

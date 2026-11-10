@@ -207,6 +207,7 @@ class Destination {
       handleSkillsLoad: vi.fn(),
       handleProjectRunCheck: vi.fn(),
       handleProjectRunCommand: vi.fn(),
+      handleAgentResumeOwned: vi.fn(),
       handleTerminalGetStatusViewless: vi.fn(),
       handleTerminalReadLastMessageOwned: vi.fn(),
       isTerminalIdInUse: (id: string) => this.terminals.has(id),

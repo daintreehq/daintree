@@ -21,7 +21,7 @@ describe("buildHandbackInstruction", () => {
     expect(instruction).not.toContain(HANDBACK_CODE_TOKEN);
   });
 
-  it("stays on one line, so a launch that flattens newlines keeps it intact", () => {
+  it("stays on one line, so restore can still find it in a first message read as one", () => {
     expect(instruction).not.toMatch(/[\r\n]/);
   });
 

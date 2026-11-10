@@ -8,9 +8,10 @@ import { HANDSHAKE } from "./fixtures";
 const h = vi.hoisted(() => ({
   hosts: [] as unknown[],
   paritySummary: vi.fn(),
-  projects: new Map<string, Array<{ id: string; name: string; path: string }>>(),
+  projects: new Map<string, Array<{ id: string; name: string; path: string }> | null>(),
   listed: [] as string[][],
   switchToHost: vi.fn(),
+  retryHostProjects: vi.fn(),
 }));
 
 vi.mock("../../hostList", () => ({
@@ -26,6 +27,7 @@ vi.mock("../../hostProjects", () => ({
     h.listed.push([...ids]);
     return new Map(ids.flatMap((id) => (h.projects.has(id) ? [[id, h.projects.get(id)!]] : [])));
   },
+  retryHostProjects: h.retryHostProjects,
 }));
 vi.mock("../HostAddProjectDialog", () => ({
   HostAddProjectDialog: (props: {
@@ -61,13 +63,20 @@ vi.mock("../HostCard", () => ({
     children,
     projects,
     onOpenProject,
+    onRetryProjects,
   }: {
     row: { hostId: string };
     children?: ReactNode;
-    projects?: Array<{ id: string; name: string }>;
+    projects?: Array<{ id: string; name: string }> | null;
     onOpenProject?: (projectId: string, newWindow: boolean) => void;
+    onRetryProjects?: () => void;
   }) => (
     <div data-testid={`card-${row.hostId}`}>
+      {projects === null && (
+        <button type="button" onClick={onRetryProjects}>
+          {`retry ${row.hostId}`}
+        </button>
+      )}
       {projects?.map((project) => (
         <button key={project.id} type="button" onClick={() => onOpenProject?.(project.id, false)}>
           {`${row.hostId}/${project.name}`}
@@ -147,6 +156,7 @@ describe("HostsOverviewDialog projects", () => {
     ]);
     h.listed = [];
     h.switchToHost.mockClear();
+    h.retryHostProjects.mockClear();
   });
 
   it("lists each reachable host's projects on its card, and opens one on its host", () => {
@@ -158,6 +168,19 @@ describe("HostsOverviewDialog projects", () => {
     fireEvent.click(screen.getByText("studio-01/api"));
     expect(h.switchToHost).toHaveBeenCalledWith("studio-01", false, "s1");
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("routes each card's Retry to its own host, keeping the overview open", () => {
+    h.projects.set("local", null);
+    h.projects.set("studio-01", null);
+    const onClose = vi.fn();
+    render(<HostsOverviewDialog onClose={onClose} />);
+    fireEvent.click(screen.getByText("retry studio-01"));
+    expect(h.retryHostProjects.mock.calls).toEqual([["studio-01"]]);
+    fireEvent.click(screen.getByText("retry local"));
+    expect(h.retryHostProjects.mock.calls).toEqual([["studio-01"], ["local"]]);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(h.switchToHost).not.toHaveBeenCalled();
   });
 
   it("offers Add project… on every reachable host, each cloning onto that host", () => {

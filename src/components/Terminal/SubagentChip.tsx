@@ -81,6 +81,7 @@ import {
 } from "@/components/ui/popoverHeader";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { pluralize } from "@/lib/pluralize";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 // Replies are almost always markdown, and the renderer pulls react-markdown in,
 // so it loads the first time a child is opened rather than with the header.
@@ -268,7 +269,7 @@ function TranscriptBody({
         <p className="text-xs text-text-secondary">
           {subagentUnavailableMessage(transcript.reason, SUBAGENT_PROVIDERS[provider].label)}
         </p>
-        <Button variant="link" onClick={onRetry} className="text-xs">
+        <Button variant="outline" size="sm" onClick={onRetry}>
           Retry
         </Button>
       </div>
@@ -396,7 +397,7 @@ function SubagentDetail({
           </span>
           {subagent.updatedAt > 0 && (
             <>
-              <span aria-hidden="true">·</span>
+              <FactSeparator />
               <span>
                 Updated <TimeAgo timestamp={subagent.updatedAt} />
               </span>
@@ -733,7 +734,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
       <p className="flex-1 min-w-0 text-2xs text-text-secondary">
         Couldn't refresh: {refreshErrorMessage}. Showing what was last read.
       </p>
-      <Button variant="link" onClick={retryRefresh} className="shrink-0 text-2xs">
+      <Button variant="outline" size="xs" onClick={retryRefresh} className="shrink-0">
         Retry
       </Button>
     </div>

@@ -48,6 +48,7 @@ import {
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { comboToAriaKeyshortcuts, describeChord } from "@/lib/kbdShortcut";
+import { useKeyLabels } from "@/lib/keyboardLayout";
 import { notify } from "@/lib/notify";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
@@ -70,6 +71,9 @@ import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import { resolveEffectiveAccountId, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 import { resolveSettledSavedPreset } from "@shared/utils/agentPresets";
 import { getMergedPresets } from "@/config/agents";
+import { AccountHeadroomHint } from "@/components/Terminal/AccountHeadroomHint";
+import { useAgentAccountHeadroom } from "@/hooks/useAgentAccountHeadroom";
+import { presetNamesAccountFolder, type AccountHeadroom } from "@/utils/agentAccountHeadroom";
 import { actionService } from "@/services/ActionService";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
@@ -149,7 +153,12 @@ const PLACEMENT_CONFIG = {
     tooltipSide: "top",
     triggerVariant: "pill",
     triggerSize: "sm",
-    triggerClassName: "px-2",
+    // The chips' box, not a 28px circle: the launcher sits in the chip row and
+    // shares its height and corner. It rests on the chips' own surface and edge
+    // (the pill variant's panel fill paints white on light themes, where white
+    // is the dock's open state), and open wears the chips' neutral open lift.
+    triggerClassName:
+      "h-[var(--dock-item-height)] w-[var(--dock-item-height)] px-0 rounded-[var(--radius-md)] ring-inset bg-[var(--dock-item-bg)] ring-[var(--dock-item-border)] hover:bg-[var(--dock-item-bg-hover)] hover:ring-[var(--dock-item-border)] aria-expanded:bg-[var(--dock-item-bg-active)] aria-expanded:ring-[var(--dock-item-border-active)] aria-expanded:text-text-primary",
     iconClassName: "w-3.5 h-3.5",
     label: "Open launcher",
     surface: "dock",
@@ -556,6 +565,43 @@ export function DockLaunchButton({
     });
 
   const clearQuery = useCallback(() => setQuery(""), [setQuery]);
+
+  // The tightest known quota window of each account row (#16407), read only
+  // while the launcher is open and an agent's accounts are expanded.
+  const accountRowAgentId = open
+    ? results.find(
+        (row): row is Extract<DockLaunchRow, { kind: "account" }> => row.kind === "account"
+      )?.item.agent.id
+    : undefined;
+  const accountHeadroomFor = useAgentAccountHeadroom(
+    accountRowAgentId,
+    accountRowAgentId !== undefined
+  );
+  // The default login still runs the preset a plain launch settles on, so a
+  // folder that preset names is the login's.
+  const defaultLoginNamesFolder = useMemo(() => {
+    if (!accountRowAgentId) return false;
+    const presets = getMergedPresets(
+      accountRowAgentId,
+      agentSettings?.agents?.[accountRowAgentId]?.customPresets,
+      ccrPresetsByAgent[accountRowAgentId],
+      projectPresetsByAgent[accountRowAgentId]
+    );
+    return presetNamesAccountFolder(
+      accountRowAgentId,
+      resolveSettledSavedPreset(
+        presets,
+        agentSettings?.agents?.[accountRowAgentId],
+        activeWorktreeId
+      )
+    );
+  }, [
+    accountRowAgentId,
+    activeWorktreeId,
+    agentSettings,
+    ccrPresetsByAgent,
+    projectPresetsByAgent,
+  ]);
 
   // The hook reconciles `selectedIndex` in an effect, so the render right after
   // the results change still holds the old index — which browsing can now leave
@@ -1086,6 +1132,15 @@ export function DockLaunchButton({
           onToggleExpanded={toggleExpanded}
           placement={placement}
           isRecent={row.kind === "item" && recentKeys.has(row.item.key)}
+          accountHeadroom={
+            row.kind === "account"
+              ? accountHeadroomFor(
+                  row.account.accountId === null
+                    ? { kind: "default", presetNamesFolder: defaultLoginNamesFolder }
+                    : { kind: "account", accountId: row.account.accountId }
+                )
+              : undefined
+          }
         />
       )}
     </Fragment>
@@ -1553,6 +1608,8 @@ interface DockLaunchOptionProps {
   placement: DockLaunchPlacement;
   /** Launched recently — true in search too, where the recent band is gone. */
   isRecent: boolean;
+  /** An account row's tightest known quota window, while its agent is expanded. */
+  accountHeadroom?: AccountHeadroom;
 }
 
 function DockLaunchOption({
@@ -1570,6 +1627,7 @@ function DockLaunchOption({
   onToggleExpanded,
   placement,
   isRecent,
+  accountHeadroom,
 }: DockLaunchOptionProps) {
   const item = row.kind === "cue" ? undefined : row.item;
   const agent = item?.category === "agent" ? item.agent : undefined;
@@ -1593,6 +1651,7 @@ function DockLaunchOption({
   // per-key chips and `describeChord` speaks. `displayCombo` is already
   // formatted for the platform and stays the human-readable tooltip string.
   const effectiveCombo = useEffectiveCombo(comboActionId);
+  const keyLabels = useKeyLabels();
 
   // A filtered row must carry the same warnings as its unfiltered twin: an
   // agent that lands on the recovery panel instead of a session, or a shadowed
@@ -1681,6 +1740,7 @@ function DockLaunchOption({
           ? [
               `${row.item.agent.name} account`,
               row.account.isSelected ? "Current default" : undefined,
+              accountHeadroom?.text,
             ]
               .filter(Boolean)
               .join(" · ")
@@ -1899,7 +1959,7 @@ function DockLaunchOption({
         // name — with an `aria-label` present it computes as the description, so
         // the warning is announced once and still shows as the mouse tooltip.
         aria-label={optionLabel}
-        aria-keyshortcuts={comboToAriaKeyshortcuts(effectiveCombo, isMac())}
+        aria-keyshortcuts={comboToAriaKeyshortcuts(effectiveCombo, isMac(), keyLabels)}
         aria-expanded={
           (row.kind === "item" && rowHasPresets(row)) || isMore ? isExpanded : undefined
         }
@@ -1997,8 +2057,16 @@ function DockLaunchOption({
             where a mark that means "this agent just appeared" sat among the
             marks that mean state — and stopped reading as attached to the name
             it qualifies. */}
-        <span className="flex min-w-0 flex-1 items-center">
+        <span
+          className={cn(
+            "flex min-w-0 flex-1",
+            row.kind === "account" && accountHeadroom ? "flex-col" : "items-center"
+          )}
+        >
           <span className="truncate">{displayName}</span>
+          {row.kind === "account" && (
+            <AccountHeadroomHint headroom={accountHeadroom} className="max-w-none text-2xs" />
+          )}
           {/* Only on the agent's own row. The dot marks the AGENT as newly
               detected, and repeating it on each of its preset children said the
               same thing four times about one thing. */}

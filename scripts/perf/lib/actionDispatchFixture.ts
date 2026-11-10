@@ -475,8 +475,12 @@ function probeDefinitions(): unknown[] {
  *   surface can draw, which needs a claim from main and a registered panel
  *   kind. The window here has neither, which is also every project without a
  *   Home plugin.
+ * - Canopy's own window is offered only once Canopy is on, which main tells a
+ *   view over IPC. The window here hears nothing, so Canopy stays unset, which
+ *   is also every user who never turns it on.
  */
 export const CONTEXT_GATED_ACTION_IDS: ReadonlySet<string> = new Set([
+  "canopy.openWindow",
   "host.switch",
   "host.overview.open",
   "project.openOnHost",

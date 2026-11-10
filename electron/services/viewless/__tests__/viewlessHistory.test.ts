@@ -60,6 +60,27 @@ describe("session history with no frontend (#14549)", () => {
     });
   });
 
+  it("says what ended a session and which pane it came from (#16341)", async () => {
+    const { deps } = historyDeps({
+      [CHANNELS.AGENT_SESSION_LIST]: [
+        {
+          ...RECORD,
+          closedBy: "exit",
+          terminal: { id: "terminal-1", spawnedAt: 42 },
+          trash: { expiresAt: 9, closedAt: 8 },
+        },
+      ],
+    });
+
+    const result = await executeViewlessAction(request("agentSessionHistory.list", {}), deps);
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: { sessions: [{ closedBy: "exit", terminal: { id: "terminal-1", spawnedAt: 42 } }] },
+    });
+    expect(result).not.toHaveProperty("result.sessions.0.trash");
+  });
+
   it("pages the journal and narrows to a named worktree", async () => {
     const records = [1, 2, 3].map((n) => ({ ...RECORD, sessionId: `s${n}` }));
     const { deps, invoke } = historyDeps({ [CHANNELS.AGENT_SESSION_LIST]: records });

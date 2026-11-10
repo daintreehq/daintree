@@ -43,17 +43,32 @@ export const ScheduleCadenceSchema = z.strictObject({
   }),
 });
 
+/** Each run starts in a new worktree on a new branch from this base (#16369). */
+export const ScheduleNewWorktreeSchema = z.strictObject({
+  baseBranch: nonblank("Choose a base branch"),
+  /** The base is a remote branch (`origin/develop`), as the worktree create reads it. */
+  fromRemote: z.boolean(),
+});
+
 export const ScheduleLaunchSchema = z.strictObject({
   agentId: IdSchema,
   /** Null launches with no preset, as `agent.launch` reads an explicit null. */
   presetId: IdSchema.nullable(),
   prompt: nonblank("Enter a prompt for the agent"),
-  /** Null is the project's main checkout, never whichever worktree is active. */
+  /**
+   * Null is the project's main checkout, never whichever worktree is active,
+   * unless `newWorktree` gives each run its own.
+   */
   worktreeId: IdSchema.nullable(),
+  /** Null launches in `worktreeId`. Set, `worktreeId` is null. */
+  newWorktree: ScheduleNewWorktreeSchema.nullable(),
 });
 
 export const SchedulePreconditionSchema = z.strictObject({
-  /** Run in a shell in the launch worktree; the run goes ahead only on exit 0. */
+  /**
+   * Run in a shell in the launch worktree, or in the project's folder for a
+   * schedule with no worktree yet (`newWorktree`); the run goes ahead only on exit 0.
+   */
   command: nonblank("Enter a command, or turn the check off"),
 });
 
@@ -81,6 +96,13 @@ export const ScheduleSchema = z
     updatedAt: EpochMsSchema,
   })
   .superRefine((schedule, ctx) => {
+    if (schedule.launch?.newWorktree && schedule.launch.worktreeId !== null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["launch", "newWorktree"],
+        message: "A run starts in a chosen worktree or a new one, not both",
+      });
+    }
     // The Assistant (#16169) starts in its own session folder with its own
     // settings, in a tab of its own: no preset, no worktree, no grid to leave.
     if (!isScheduleAssistantAgentId(schedule.launch?.agentId)) return;
@@ -95,6 +117,13 @@ export const ScheduleSchema = z
       ctx.addIssue({
         code: "custom",
         path: ["launch", "worktreeId"],
+        message: "The Daintree Assistant works across the project; name a worktree in the prompt",
+      });
+    }
+    if (schedule.launch.newWorktree) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["launch", "newWorktree"],
         message: "The Daintree Assistant works across the project; name a worktree in the prompt",
       });
     }
@@ -138,6 +167,7 @@ export type ScheduleOverlapPolicy = (typeof SCHEDULE_OVERLAP_POLICIES)[number];
 export type ScheduleDonePolicy = (typeof SCHEDULE_DONE_POLICIES)[number];
 export type ScheduleCadence = z.infer<typeof ScheduleCadenceSchema>;
 export type ScheduleLaunch = z.infer<typeof ScheduleLaunchSchema>;
+export type ScheduleNewWorktree = z.infer<typeof ScheduleNewWorktreeSchema>;
 export type SchedulePrecondition = z.infer<typeof SchedulePreconditionSchema>;
 export type SchedulePolicies = z.infer<typeof SchedulePoliciesSchema>;
 export type Schedule = z.infer<typeof ScheduleSchema>;
@@ -292,6 +322,18 @@ export const ScheduledRunResumeSchema = z.strictObject({
 });
 
 /**
+ * The worktree a run of a new-worktree schedule was given (#16369). What ran in
+ * it is `resume`, which a refused run doesn't have; this says what was made.
+ */
+export const ScheduledRunNewWorktreeSchema = z.strictObject({
+  /** The branch generated for the run. */
+  branch: z.string().min(1),
+  baseBranch: z.string().min(1),
+  /** Null when no worktree was confirmed: creating it failed or went unanswered. */
+  worktreeId: IdSchema.nullable(),
+});
+
+/**
  * A worker an Assistant run launched (#16169), as its launch was answered:
  * a terminal the answer named, never one inferred from what runs.
  */
@@ -336,6 +378,8 @@ export const ScheduledRunSchema = z
     }),
     pane: ScheduledRunPaneSchema,
     resume: ScheduledRunResumeSchema.nullable(),
+    /** The worktree made for the run (#16369); absent for a run of any other schedule. */
+    newWorktree: ScheduledRunNewWorktreeSchema.optional(),
     /** The run launched the project's Daintree Assistant (#16169); absent for an agent's run. */
     assistant: z.literal(true).optional(),
     /** An Assistant run's workers, as each launch was seen; only on an Assistant's run. */
@@ -453,5 +497,6 @@ export type ScheduledRunSettlement = z.infer<typeof ScheduledRunSettlementSchema
 export type ScheduledRunProcess = z.infer<typeof ScheduledRunProcessSchema>;
 export type ScheduledRunPane = z.infer<typeof ScheduledRunPaneSchema>;
 export type ScheduledRunResume = z.infer<typeof ScheduledRunResumeSchema>;
+export type ScheduledRunNewWorktree = z.infer<typeof ScheduledRunNewWorktreeSchema>;
 export type ScheduledRun = z.infer<typeof ScheduledRunSchema>;
 export type ScheduledRunWorker = z.infer<typeof ScheduledRunWorkerSchema>;

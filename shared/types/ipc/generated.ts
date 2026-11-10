@@ -40,6 +40,18 @@ export interface GeneratedIpcInvokeMap {
     args: [agentId: string];
     result: boolean;
   };
+  "agent-cli-copies:choose": {
+    args: [agentId: string, path: string];
+    result: void;
+  };
+  "agent-cli-copies:list": {
+    args: [agentId: string];
+    result: import("./system.js").AgentCliCopy[];
+  };
+  "agent-cli-copies:reset": {
+    args: [agentId: string];
+    result: void;
+  };
   "agent-defaults:get": {
     args: [];
     result: import("./agentDefaults.js").AgentDefaultsSnapshot;
@@ -110,10 +122,6 @@ export interface GeneratedIpcInvokeMap {
     args: [value: boolean];
     result: import("../agentSettings.js").AgentSettings;
   };
-  "agent-settings:set-global-inline": {
-    args: [value: boolean];
-    result: import("../agentSettings.js").AgentSettings;
-  };
   "agent-settings:set-resume-on-restart": {
     args: [value: "never" | "always" | "on-focus"];
     result: import("../agentSettings.js").AgentSettings;
@@ -137,6 +145,14 @@ export interface GeneratedIpcInvokeMap {
   "app:get-version-info": {
     args: [];
     result: import("./app.js").AppVersionInfo;
+  };
+  "app:report-startup-stuck": {
+    args: [rendererStage: string];
+    result: void;
+  };
+  "app:restart-in-safe-mode": {
+    args: [];
+    result: { started: boolean };
   };
   "artifact:apply-patch": {
     args: [options: import("./agent.js").ApplyPatchOptions];
@@ -174,6 +190,7 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:get-snapshot"
         | "canopy:mark-all-read"
         | "canopy:mark-seen"
+        | "canopy:read-input-lines"
         | "canopy:refresh"
         | "canopy:remove-trashed"
         | "canopy:rename"
@@ -194,8 +211,10 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:terminal-send-key"
         | "canopy:terminal-submit"
         | "canopy:trash"
+        | "canopy:trash-batch"
         | "canopy:unarchive"
         | "canopy:untrash"
+        | "canopy:untrash-batch"
         | "canopy:unwatch-terminal"
         | "canopy:watch-terminal"
         | "fleet:get-snapshot",
@@ -212,6 +231,9 @@ export interface GeneratedIpcInvokeMap {
       | import("./canopy.js").CanopyReadMark[]
       | import("./fleet.js").FleetSnapshot
       | import("./canopy.js").CanopyRestoreOutcome
+      | import("./canopy.js").CanopyInputLineReading[]
+      | import("./canopy.js").CanopyTrashOutcome[]
+      | import("./canopy.js").CanopyUntrashOutcome[]
       | null;
   };
   "canopy-host:list-assistants": {
@@ -255,6 +277,22 @@ export interface GeneratedIpcInvokeMap {
       },
     ];
     result: import("./canopy.js").CanopyTerminalView;
+  };
+  "canopy-window:focus": {
+    args: [];
+    result: boolean;
+  };
+  "canopy-window:focus-last-project-window": {
+    args: [];
+    result: boolean;
+  };
+  "canopy-window:go-to-run": {
+    args: [__1: { workspaceId: string; runId: string }];
+    result: void;
+  };
+  "canopy-window:open": {
+    args: [];
+    result: void;
   };
   "canopy:answer": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, label: string];
@@ -359,6 +397,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../assistantWork.js").AssistantWorkReading;
   };
+  "canopy:read-input-lines": {
+    args: [targets: import("./canopy.js").CanopyRunTarget[]];
+    result: import("./canopy.js").CanopyInputLineReading[];
+  };
   "canopy:refresh": {
     args: [];
     result: void;
@@ -448,6 +490,10 @@ export interface GeneratedIpcInvokeMap {
     args: [runIds: string[]];
     result: void;
   };
+  "canopy:set-visible-pane-terminals": {
+    args: [terminalIds: string[]];
+    result: void;
+  };
   "canopy:submit-reply": {
     args: [
       runId: string,
@@ -455,6 +501,14 @@ export interface GeneratedIpcInvokeMap {
       text: string,
       imagePaths?: string[] | undefined,
     ];
+    result: void;
+  };
+  "canopy:take-terminal-size": {
+    args: [terminalId: string];
+    result: void;
+  };
+  "canopy:terminal-claim-size": {
+    args: [watchId: number];
     result: void;
   };
   "canopy:terminal-input": {
@@ -477,6 +531,10 @@ export interface GeneratedIpcInvokeMap {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
     result: number | null;
   };
+  "canopy:trash-batch": {
+    args: [targets: import("./canopy.js").CanopyRunTarget[]];
+    result: import("./canopy.js").CanopyTrashOutcome[];
+  };
   "canopy:unarchive": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
     result: void;
@@ -484,6 +542,10 @@ export interface GeneratedIpcInvokeMap {
   "canopy:untrash": {
     args: [receipt: number];
     result: void;
+  };
+  "canopy:untrash-batch": {
+    args: [receipts: number[]];
+    result: import("./canopy.js").CanopyUntrashOutcome[];
   };
   "canopy:unwatch-terminal": {
     args: [watchId?: number | undefined];
@@ -514,9 +576,17 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;
   };
+  "claude:read-context-usage": {
+    args: [__0: { terminalId: string }];
+    result: import("./agentContextUsage.js").AgentContextUsageResult;
+  };
   "claude:read-subagent-transcript": {
     args: [__0: { terminalId: string; subagentId: string }];
     result: import("./agentSubagents.js").AgentSubagentTranscriptResult;
+  };
+  "claude:read-usage": {
+    args: [];
+    result: import("./agentQuota.js").ClaudeUsageAccount[];
   };
   "cli:get-status": {
     args: [];
@@ -576,6 +646,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./agentSubagents.js").CodexRestoreMatchResult;
   };
+  "codex:read-context-usage": {
+    args: [__0: { terminalId: string }];
+    result: import("./agentContextUsage.js").AgentContextUsageResult;
+  };
   "codex:read-quota": {
     args: [];
     result: import("./agentQuota.js").CodexQuotaProfile[];
@@ -591,6 +665,18 @@ export interface GeneratedIpcInvokeMap {
   "codex:resolve-resume-latest-session": {
     args: [__0: { cwd: string }];
     result: string | null;
+  };
+  "composer-hold:hold": {
+    args: [terminalId: string, text: string, imagePaths?: string[] | undefined];
+    result: import("./composerHold.js").ComposerHoldResult;
+  };
+  "composer-hold:list": {
+    args: [];
+    result: import("./composerHold.js").HeldComposerSend[];
+  };
+  "composer-hold:withdraw": {
+    args: [terminalId: string, token: string];
+    result: import("./composerHold.js").ComposerHoldWithdrawResult;
   };
   "config-bundle:apply-import": {
     args: [payload: { bundleJson: string }];
@@ -1931,6 +2017,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; numbers: number[] }];
     result: import("../forge.js").Issue[];
   };
+  "forge:get-new-pr-link": {
+    args: [payload: import("./forge.js").ForgeNewPRLinkRequest];
+    result: import("./forge.js").ForgeNewPRLink;
+  };
   "forge:get-pr-review-threads": {
     args: [payload: { cwd: string; prNumber: number }];
     result: import("../forge.js").ReviewThread[];
@@ -2180,6 +2270,10 @@ export interface GeneratedIpcInvokeMap {
   "help:global-assistant-attach": {
     args: [eligible?: boolean | undefined];
     result: import("./help.js").GlobalAssistantAttachment;
+  };
+  "help:global-assistant-cancel-launch": {
+    args: [expectedGeneration?: number | undefined];
+    result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-claim-input": {
     args: [attachmentId: string, from?: string | undefined];
@@ -2640,6 +2734,14 @@ export interface GeneratedIpcInvokeMap {
     args: [tourId: string, update: import("./maps.js").TourProgressUpdate];
     result: import("./maps.js").TourOnboardingState;
   };
+  "online-only-files:unwatch": {
+    args: [];
+    result: void;
+  };
+  "online-only-files:watch": {
+    args: [];
+    result: import("../onlineOnlyFiles.js").ProjectOnlineOnlyFiles | null;
+  };
   "operations:cancel": {
     args: [payload: import("./operations.js").OperationIdPayload];
     result: boolean;
@@ -2860,7 +2962,7 @@ export interface GeneratedIpcInvokeMap {
     result: string | undefined;
   };
   "plugin:agents-get": {
-    args: [];
+    args: [options?: { forRestore?: boolean | undefined } | undefined];
     result: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
   };
   "plugin:artifact-source": {
@@ -3376,6 +3478,22 @@ export interface GeneratedIpcInvokeMap {
     args: [targets: import("../processes.js").ClosedProcessKillTarget[]];
     result: import("../processes.js").ClosedProcessKillResult;
   };
+  "project-clone:get-job": {
+    args: [projectId: string];
+    result: import("./projectClone.js").ProjectCloneJobSnapshot | null;
+  };
+  "project-clone:retry": {
+    args: [projectId: string];
+    result: void;
+  };
+  "project-clone:start": {
+    args: [request: import("./projectClone.js").ProjectCloneStartRequest];
+    result: import("./projectClone.js").ProjectCloneStartResult;
+  };
+  "project-clone:stop": {
+    args: [projectId: string];
+    result: void;
+  };
   "project-groups:create": {
     args: [name: string];
     result: import("../project.js").ProjectGroup;
@@ -3613,9 +3731,9 @@ export interface GeneratedIpcInvokeMap {
       status:
         | "cancelled"
         | "unreachable"
+        | "started"
         | "connected"
         | "woken"
-        | "started"
         | "not_wakeable"
         | "not_startable"
         | "version_mismatch"
@@ -3961,6 +4079,7 @@ export interface GeneratedIpcInvokeMap {
         agentModelId: string | null;
         agentPresetId: string | null;
       } | null;
+      newWorktree?: { branch: string; baseBranch: string; worktreeId: string | null } | undefined;
       assistant?: true | undefined;
       workers?:
         | {
@@ -4082,6 +4201,7 @@ export interface GeneratedIpcInvokeMap {
         agentModelId: string | null;
         agentPresetId: string | null;
       } | null;
+      newWorktree?: { branch: string; baseBranch: string; worktreeId: string | null } | undefined;
       assistant?: true | undefined;
       workers?:
         | {
@@ -4573,6 +4693,14 @@ export interface GeneratedIpcInvokeMap {
     args: [id: string];
     result: void;
   };
+  "user-prompt-templates:list": {
+    args: [];
+    result: import("./userPromptTemplates.js").UserPromptTemplatesSnapshot;
+  };
+  "user-prompt-templates:open-folder": {
+    args: [];
+    result: import("./userPromptTemplates.js").UserPromptTemplatesFolderResult;
+  };
   "voice-dictionary:accept-suggestion": {
     args: [__0: { word: string; utterance?: string | undefined }];
     result: import("./api.js").VoiceDictionaryChange;
@@ -4814,6 +4942,14 @@ export interface GeneratedIpcInvokeMap {
   "worktree-config:set-wsl-git": {
     args: [payload: { worktreeId: string; enabled: boolean }];
     result: void;
+  };
+  "worktree-disk-usage:cancel": {
+    args: [request: import("./worktreeDiskUsage.js").WorktreeDiskUsageCancelRequest];
+    result: void;
+  };
+  "worktree-disk-usage:measure": {
+    args: [request: import("./worktreeDiskUsage.js").WorktreeDiskUsageMeasureRequest];
+    result: import("./worktreeDiskUsage.js").WorktreeDiskUsageResult;
   };
   "worktree-titles:hydrate": {
     args: [legacyTitles: Record<string, string>];

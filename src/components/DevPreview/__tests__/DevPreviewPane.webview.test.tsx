@@ -139,6 +139,7 @@ const {
     setBrowserZoom: vi.fn(),
     setDevPreviewConsoleOpen: vi.fn(),
     setDevPreviewConsoleTab: vi.fn(),
+    showDevPreviewOutput: vi.fn(),
     setViewportPreset: vi.fn(),
     setDevPreviewCommand: vi.fn(),
     setDevPreviewScrollPosition: vi.fn(
@@ -1454,11 +1455,12 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         vi.advanceTimersByTime(8000);
       });
 
-      // The hint surfaces and names the current phase via its message prop,
-      // rather than the generic "Still working…" copy.
+      // The hint surfaces with the escalation copy; the caption above already
+      // names the phase, so the hint doesn't repeat it.
       const hint = container.querySelector(".animate-hint-fade-in");
       expect(hint).not.toBeNull();
-      expect(hint?.textContent).toContain("Loading preview");
+      expect(hint?.textContent).toContain("Still working");
+      expect(hint?.textContent).not.toContain("Loading preview");
     });
 
     it("Cancel appears after action threshold and stops the webview", () => {
@@ -1488,7 +1490,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(webview.stop).toHaveBeenCalledTimes(1);
-      expect(container.textContent).toContain("Load cancelled");
+      expect(container.textContent).toContain("Loading stopped");
     });
 
     it("Retry from timeout clears error and loads current URL", () => {
@@ -1933,6 +1935,37 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       render(<DevPreviewPane {...baseProps} />);
       expect(latestToolbarProps().canOpenExternal).toBe(false);
       expect(latestToolbarProps().canToggleConsole).toBe(true);
+    });
+
+    it("reveals the Output tab when the server errors", () => {
+      seedHistory("");
+      terminalStoreState.showDevPreviewOutput.mockClear();
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "error",
+        url: null,
+        terminalId: "dev-terminal-1",
+        error: { type: "permission", message: "EACCES" },
+      };
+      render(<DevPreviewPane {...baseProps} />);
+      expect(terminalStoreState.showDevPreviewOutput).toHaveBeenCalledWith("dev-preview-panel-1");
+    });
+
+    it("reveals the Output tab when a start stalls without an address", () => {
+      seedHistory("");
+      terminalStoreState.showDevPreviewOutput.mockClear();
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "starting",
+        url: null,
+        terminalId: "dev-terminal-1",
+      };
+      render(<DevPreviewPane {...baseProps} />);
+      expect(terminalStoreState.showDevPreviewOutput).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+      expect(terminalStoreState.showDevPreviewOutput).toHaveBeenCalledWith("dev-preview-panel-1");
     });
 
     it("keeps Open in browser available for a retained URL while the webview is not ready", () => {

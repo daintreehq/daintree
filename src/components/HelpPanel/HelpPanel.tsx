@@ -9,7 +9,15 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ExternalLink, History, MessageCircle, RotateCw, Settings2, Sparkles } from "lucide-react";
+import {
+  Eraser,
+  ExternalLink,
+  History,
+  MessageCircle,
+  RefreshCw,
+  Settings2,
+  Sparkles,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { reportCanopySent } from "@/lib/canopySeen";
 import { Button } from "@/components/ui/button";
@@ -41,7 +49,7 @@ import {
   acquireHelpSessionController,
   useHelpSessionController,
 } from "@/controllers/helpSessionControllerRegistry";
-import { assistantSlotKey } from "@shared/config/assistantSlots";
+import { ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import {
   closeSessionDescription,
@@ -56,6 +64,14 @@ import { HelpPanelResizeHandle } from "./HelpPanelResizeHandle";
 import { useHelpPanelResize } from "./useHelpPanelResize";
 import { useHelpPanelRevealFocus } from "./useHelpPanelRevealFocus";
 import { useHelpSessionLanes, type PausedLane } from "./useHelpSessionLanes";
+import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
+import {
+  canStartOverKeptLane,
+  freshSessionLaunch,
+  pickNewSessionSlot,
+  readKeptLanes,
+  withMirroredLanes,
+} from "./keptLanes";
 import { useGlobalAssistantActivity } from "./useGlobalAssistantActivity";
 import { FigureRail } from "./FigureRail";
 import { useHelpPanelStore, selectSlot } from "@/store/helpPanelStore";
@@ -87,6 +103,7 @@ import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 import { isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { hidePaneTerminal } from "@/services/terminal/visiblePaneTerminals";
 import {
   useGlobalAssistantIdentity,
   useProjectAssistantIdentity,
@@ -785,6 +802,15 @@ export function HelpPanel({
     });
   }, [isOpen, isVisible, hasDomFocus, terminalId]);
 
+  // Closed or gesture-hidden, the panel slides off-canvas with its terminal
+  // still attached, and nothing the terminal service sees says so. Its pane
+  // isn't shown, so a Canopy panel may size the session again (#16737).
+  const paneShown = isOpen && isVisible;
+  useEffect(() => {
+    if (!terminalId || paneShown) return undefined;
+    return hidePaneTerminal(terminalId);
+  }, [paneShown, terminalId]);
+
   const { isResizing, handleResizeStart, handleResizeKeyDown, handleResetWidth } =
     useHelpPanelResize({ width, setWidth, onResizeStart, onResizeEnd });
 
@@ -1024,17 +1050,57 @@ export function HelpPanel({
   // new tab itself rather than leaving that to the tab's auto-launch, which only
   // runs with "Start when the panel opens" on (#14976). Queued before the tab's
   // first input sync; with several agents and no default, the tab asks instead.
-  // A tab that turns out to hold a captured conversation (a cold view whose
-  // lanes are still being listed) is left to offer its own Resume: the default
-  // agent started there would replace that conversation.
+  //
+  // A lane that only holds a captured conversation has no tab (#16495), so the
+  // tab opens in a slot nothing is kept for, and one no launch has claimed. With
+  // none of those left it starts a new conversation over one past sessions keeps.
+  // Any other tab holding a conversation, and every one when main's lanes couldn't
+  // be read, is left to offer its own Resume or Start: a plain launch there would
+  // resume that conversation, or take its place.
   const handleNewSession = useCallback(() => {
-    const slot = handleOpenParallelSession();
-    if (slot === null || !launchableAgentId) return;
-    const { hibernateSessions } = useHelpPanelStore.getState();
-    if (activeWorkspaceId && hibernateSessions[assistantSlotKey(activeWorkspaceId, slot)]) return;
-    acquireHelpSessionController(slot).launchWhenReady({
-      agentId: launchableAgentId,
-      replaceExisting: true,
+    const workspaceId = activeWorkspaceId;
+    const reading = workspaceId
+      ? readKeptLanes(workspaceId).catch((err) => {
+          logWarn("HelpPanel: failed to read kept lanes for a new session", err);
+          return "unread" as const;
+        })
+      : Promise.resolve(null);
+    void reading.then((read) => {
+      const mainKept = read === "unread" ? null : read;
+      const { sessions, hibernateSessions } = useHelpPanelStore.getState();
+      const kept =
+        mainKept && workspaceId
+          ? withMirroredLanes(mainKept, workspaceId, hibernateSessions)
+          : null;
+      const isTaken = (slot: number) =>
+        slot in sessions ||
+        (workspaceId !== null && claimedHelpLaneKeys.has(assistantSlotKey(workspaceId, slot)));
+      const picked = kept ? pickNewSessionSlot(kept, isTaken) : null;
+      const pick =
+        picked?.replacesKept && !(launchableAgentId && canStartOverKeptLane(launchableAgentId))
+          ? null
+          : picked;
+      const target = pick?.slot ?? ASSISTANT_SLOTS.find((slot) => !isTaken(slot));
+      if (target === undefined) return;
+      const slot = handleOpenParallelSession(target);
+      if (slot === null || !launchableAgentId || read === "unread") return;
+      const controller = acquireHelpSessionController(slot);
+      if (pick?.slot === slot) {
+        controller.launchWhenReady(
+          pick.replacesKept
+            ? freshSessionLaunch(launchableAgentId)
+            : { agentId: launchableAgentId, replaceExisting: true }
+        );
+        return;
+      }
+      if (
+        workspaceId &&
+        (kept?.some((lane) => lane.slot === slot) ||
+          hibernateSessions[assistantSlotKey(workspaceId, slot)])
+      ) {
+        return;
+      }
+      controller.launchWhenReady({ agentId: launchableAgentId, replaceExisting: true });
     });
   }, [activeWorkspaceId, handleOpenParallelSession, launchableAgentId]);
 
@@ -1191,7 +1257,7 @@ export function HelpPanel({
       }}
       className={cn(
         "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
-        "bg-surface-canvas border-l border-border-default transition-[border-left-color,box-shadow] duration-150",
+        "bg-surface-canvas border-l border-divider transition-[border-left-color,box-shadow] duration-150",
         isHighlighted && "assistant-focused",
         !isVisible && "pointer-events-none"
       )}
@@ -1230,6 +1296,7 @@ export function HelpPanel({
         isFocused={isHighlighted}
         newSessionAgentIds={supportedInstalledAgentIds}
         canStartNewSession={canStartSessionWithAgent}
+        openSessionCount={openSlots.length}
         onNewSessionWithAgent={handleOpenSessionWithAgent}
       />
 
@@ -1372,6 +1439,10 @@ export function HelpPanel({
               {showHybridInputBar && (
                 <Suspense fallback={null}>
                   <LazyHybridInputBar
+                    // Each session's own composer, so what's in flight at a
+                    // switch stays with the session it was typed or dictated
+                    // into, and a send waiting on it goes there or not at all.
+                    key={terminalId}
                     ref={inputBarRef}
                     terminalId={terminalId}
                     cwd={terminalPty?.cwd ?? ""}
@@ -1473,9 +1544,10 @@ export function HelpPanel({
                   {/* Recovery resume — the eviction/crash path killed the PTY on
                       switch-away, but the conversation can be picked back up.
                       Does not record auto-launch consent (#10699). This is the
-                      single load-bearing accent here. */}
+                      single primary here. */}
                   <Button
                     type="button"
+                    variant="contrast"
                     onClick={handleResumeAssistant}
                     data-testid="help-resume-assistant"
                   >
@@ -1493,8 +1565,8 @@ export function HelpPanel({
                       onClick={handleRestartActiveSlot}
                       data-testid="help-restart-paused-conversation"
                     >
-                      <RotateCw aria-hidden="true" />
-                      Restart conversation
+                      <Eraser aria-hidden="true" />
+                      Clear conversation
                     </Button>
                   )}
                 </div>
@@ -1502,9 +1574,10 @@ export function HelpPanel({
                 <div className="flex flex-col items-center gap-4 w-full max-w-[34ch]">
                   {/* Explicit start — opening the panel no longer auto-bills a
                       session (#10699); the user kicks it off here. This is the
-                      single load-bearing accent in the idle focus region. */}
+                      single primary in the idle focus region. */}
                   <Button
                     type="button"
+                    variant="contrast"
                     onClick={() => handleStartAssistant()}
                     data-testid="help-start-assistant"
                   >
@@ -1562,6 +1635,7 @@ export function HelpPanel({
                         )
                     }
                   >
+                    <RefreshCw aria-hidden="true" />
                     Retry
                   </Button>
                 </div>
@@ -1622,9 +1696,9 @@ export function HelpPanel({
         // old wording ("Start a new session?") described the outcome as a gain when
         // the thing being confirmed is a loss, and it collided with the strip's own
         // new-session control.
-        title="Restart this conversation?"
+        title="Clear this conversation?"
         description={restartDescription}
-        confirmLabel="Restart conversation"
+        confirmLabel="Clear conversation"
         onConfirm={handleConfirmRestartSlot}
         onClose={handleCancelRestartSlot}
         variant="destructive"

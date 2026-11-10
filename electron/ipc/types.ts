@@ -6,7 +6,6 @@ import type { CliAvailabilityService } from "../services/CliAvailabilityService.
 import type { PortalManager } from "../services/PortalManager.js";
 import type { TypedEventBus } from "../services/events.js";
 import type { AgentVersionService } from "../services/AgentVersionService.js";
-import type { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
@@ -38,7 +37,6 @@ export interface HandlerDependencies {
   portalManager?: PortalManager;
   events?: TypedEventBus;
   agentVersionService?: AgentVersionService;
-  agentUpdateHandler?: AgentUpdateHandler;
   projectSwitchService?: ProjectSwitchService;
   isDemoMode?: boolean;
   windowRegistry?: WindowRegistry;

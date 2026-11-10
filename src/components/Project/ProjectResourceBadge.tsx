@@ -931,7 +931,7 @@ export function ProjectResourceBadge({
         {trailing != null && (
           <div
             data-sidebar-status-bar=""
-            className="flex items-center justify-end shrink-0 w-full min-h-7"
+            className="flex items-center justify-end shrink-0 w-full min-h-11 px-2"
           >
             {trailing}
           </div>
@@ -986,8 +986,13 @@ export function ProjectResourceBadge({
       <Popover open={open} onOpenChange={setOpen}>
         {/* The footer owns the surface and the top divider; this row is its
           bottom line, with the readout on the left and whatever the footer
-          pins to the right. */}
-        <div data-sidebar-status-bar="" className="flex items-center shrink-0 w-full min-h-7">
+          pins to the right. 44px, the dock's height beside it, so the two
+          bottom rails share one centre line; the controls are inset 28px
+          boxes whose text lands on the column's 16px edge. */}
+        <div
+          data-sidebar-status-bar=""
+          className="flex items-center gap-1 shrink-0 w-full min-h-11 px-2"
+        >
           <PopoverTrigger asChild>
             <button
               ref={readoutRef}
@@ -996,7 +1001,7 @@ export function ProjectResourceBadge({
               aria-label={`${announcement}${
                 memoryState === "critical" ? ", high app memory" : ""
               } — open resource usage`}
-              className="group/readout px-4 py-1.5 flex items-center flex-1 min-w-0 self-stretch hover:bg-overlay-soft data-[state=open]:bg-overlay-soft transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              className="group/readout h-7 px-2 rounded-[var(--radius-md)] flex items-center flex-1 min-w-0 hover:bg-overlay-soft data-[state=open]:bg-overlay-soft transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             >
               <div className="flex items-center gap-2 min-w-0">
                 {/* Decorative: the working/idle state it encodes is carried in
@@ -1013,17 +1018,15 @@ export function ProjectResourceBadge({
                   />
                 </SidebarFooterGlyph>
                 <span className="text-2xs tabular-nums text-text-secondary font-medium truncate group-hover/readout:text-text-primary group-data-[state=open]/readout:text-text-primary">
-                  {/* The row shares its width with Run command, so at the 200px
-                    floor the count drops its noun ("7 active") rather than
-                    truncating mid-word. One string either way, so the text
-                    never exists twice. */}
+                  {/* The row shares its width with Run command, so below 280px
+                    the count drops "active" ("7 projects") rather than
+                    truncating mid-word. It keeps its noun: "7 active" sat under
+                    the cards' own terminal counts and read as one more of them.
+                    One string either way, so the text never exists twice. */}
                   {stats.runningProjects > 0 ? (
                     <>
-                      {stats.runningProjects}
-                      <span className="@max-[280px]/footer:hidden">
-                        {` ${pluralNoun(stats.runningProjects, "project")}`}
-                      </span>
-                      {" active"}
+                      {`${stats.runningProjects} ${pluralNoun(stats.runningProjects, "project")}`}
+                      <span className="@max-[280px]/footer:hidden">{" active"}</span>
                     </>
                   ) : (
                     readoutLabel

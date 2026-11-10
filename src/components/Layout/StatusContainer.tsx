@@ -28,6 +28,7 @@ import { pluralize } from "@/lib/pluralize";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 
 export interface StatusContainerConfig {
@@ -210,48 +211,50 @@ function ErroredAgentRow({
     typeof terminal.exitCode === "number" ? `Exit ${terminal.exitCode}` : fallbackLabel;
 
   return (
-    <button
-      type="button"
-      data-dock-row=""
-      onClick={onActivate}
-      onFocus={(e) => setRevealClipped(e.currentTarget.matches(":focus-visible"))}
-      onBlur={() => setRevealClipped(false)}
-      aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""} — ${exitText.toLowerCase()}`}
-      className={cn(
-        "flex items-center gap-2 w-full h-7 px-2 rounded-[var(--radius-sm)] text-left outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
-        DOCK_POPOVER_ROW_HOVER_CLASS
-      )}
-    >
-      <TerminalIcon
-        kind={terminal.kind}
-        chrome={deriveTerminalChrome(terminal)}
-        className="h-3 w-3 shrink-0"
-      />
-      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-        <span className="min-w-0 truncate text-xs font-medium text-text-primary">{title}</span>
-        {context && (
-          <TruncatedTooltip
-            content={context}
-            focusable={false}
-            open={revealClipped || undefined}
-            onOpenChange={(open) => !open && setRevealClipped(false)}
-            side="bottom"
-            align="start"
-          >
-            <span className="min-w-16 flex-1 basis-0 truncate text-xs text-text-secondary">
-              {context}
-            </span>
-          </TruncatedTooltip>
+    <TerminalContextMenu terminalId={terminal.id} proxy>
+      <button
+        type="button"
+        data-dock-row=""
+        onClick={onActivate}
+        onFocus={(e) => setRevealClipped(e.currentTarget.matches(":focus-visible"))}
+        onBlur={() => setRevealClipped(false)}
+        aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""} — ${exitText.toLowerCase()}`}
+        className={cn(
+          "flex items-center gap-2 w-full h-7 px-2 rounded-[var(--radius-sm)] text-left outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+          DOCK_POPOVER_ROW_HOVER_CLASS
         )}
-      </span>
-      <span className="shrink-0 text-3xs text-text-secondary tabular-nums">{exitText}</span>
-      {terminal.lastStateChange != null && (
-        <LiveTimeAgo
-          timestamp={terminal.lastStateChange}
-          noTooltip
-          className="min-w-6 shrink-0 text-right text-3xs text-text-secondary tabular-nums"
+      >
+        <TerminalIcon
+          kind={terminal.kind}
+          chrome={deriveTerminalChrome(terminal)}
+          className="h-3 w-3 shrink-0"
         />
-      )}
-    </button>
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span className="min-w-0 truncate text-xs font-medium text-text-primary">{title}</span>
+          {context && (
+            <TruncatedTooltip
+              content={context}
+              focusable={false}
+              open={revealClipped || undefined}
+              onOpenChange={(open) => !open && setRevealClipped(false)}
+              side="bottom"
+              align="start"
+            >
+              <span className="min-w-16 flex-1 basis-0 truncate text-xs text-text-secondary">
+                {context}
+              </span>
+            </TruncatedTooltip>
+          )}
+        </span>
+        <span className="shrink-0 text-3xs text-text-secondary tabular-nums">{exitText}</span>
+        {terminal.lastStateChange != null && (
+          <LiveTimeAgo
+            timestamp={terminal.lastStateChange}
+            noTooltip
+            className="min-w-6 shrink-0 text-right text-3xs text-text-secondary tabular-nums"
+          />
+        )}
+      </button>
+    </TerminalContextMenu>
   );
 }

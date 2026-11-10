@@ -377,7 +377,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
-      "Read this machine's Codex quota as Codex reports it, and the last Claude Code usage-limit message per limit its panes showed (not a live reading).",
+      "Read this machine's Codex quota as Codex reports it, and the last Claude Code usage-limit message per limit its terminals showed (not a live reading).",
     enabled: true,
     id: "agent.readQuota",
     inputSchema: {
@@ -545,6 +545,103 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
+      "Reopen a closed session as a new panel you own. `launched` means it is starting, not that the agent is ready. `existing`: a live panel holds it, so nothing launched and this call doesn't make it yours. `refused` gives the reason.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          worktreeId: "wt-1",
+          agentId: "claude",
+          sessionId: "sess-abc123",
+        },
+        description: "Reopen one journaled session in the worktree it ran in",
+      },
+    ],
+    id: "agent.resumeOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          type: "string",
+          minLength: 1,
+          description: "The worktree the session ran in.",
+        },
+        agentId: {
+          type: "string",
+          minLength: 1,
+          description: "The session record's `agentId`.",
+        },
+        sessionId: {
+          type: "string",
+          minLength: 1,
+          description: "The session record's `sessionId`, exactly.",
+        },
+      },
+      required: ["worktreeId", "agentId", "sessionId"],
+    },
+    kind: "command",
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: false,
+    },
+    name: "agent.resumeOwned",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["launched", "existing", "refused"],
+        },
+        terminalId: {
+          type: ["string", "null"],
+        },
+        savedInLayout: {
+          type: ["boolean", "null"],
+        },
+        reason: {
+          anyOf: [
+            {
+              type: "string",
+              enum: [
+                "no-session-id",
+                "unknown-agent",
+                "no-resume-support",
+                "unknown-project",
+                "history-unavailable",
+                "worktrees-unavailable",
+                "worktree-gone",
+                "other-worktree",
+                "terminals-unavailable",
+                "panel-limit",
+                "missing-cli",
+                "spawn-failed",
+                "cancelled",
+                "not-authorized",
+              ],
+            },
+            {
+              type: "null",
+            },
+          ],
+        },
+        message: {
+          type: ["string", "null"],
+        },
+      },
+      required: ["status", "terminalId", "savedInLayout", "reason", "message"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Resume agent session as an owned panel",
+  },
+  {
+    band: "reversible",
+    category: "agent",
+    danger: "safe",
+    description:
       "List closed agent sessions that can be relaunched, from the on-disk journal: which sessions exist, no transcript text. Needs a worktree or project scope and fails when none resolves. Old sessions are pruned, so absence proves nothing.",
     enabled: true,
     examples: [
@@ -663,6 +760,23 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 required: ["bookmarkedAt", "label"],
                 additionalProperties: false,
               },
+              closedBy: {
+                type: "string",
+                enum: ["user", "kill", "restart", "shutdown", "sleep", "exit", "bookmark"],
+              },
+              terminal: {
+                type: "object",
+                properties: {
+                  id: {
+                    type: "string",
+                  },
+                  spawnedAt: {
+                    type: "number",
+                  },
+                },
+                required: ["id", "spawnedAt"],
+                additionalProperties: false,
+              },
             },
             required: ["sessionId", "agentId", "worktreeId", "title", "projectId", "savedAt"],
             additionalProperties: false,
@@ -686,7 +800,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "help",
     danger: "safe",
     description:
-      "List the other Daintree Assistants running in this project, and its vacant slots. Address one by its terminalId with the agent messaging tools; a send passes its generation.",
+      "List the other Daintree Assistants running in this project, its vacant slots and the global one. Address one by its terminalId with the agent messaging tools; a send passes its generation.",
     enabled: true,
     id: "assistant.list",
     inputSchema: {
@@ -780,8 +894,41 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           },
           description: "Slots a start may use.",
         },
+        global: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                terminalId: {
+                  type: "string",
+                },
+                generation: {
+                  type: "number",
+                },
+                agentState: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      enum: ["idle", "working", "waiting", "directing", "completed", "exited"],
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                  description: "As last observed; not proof of what it is doing.",
+                },
+              },
+              required: ["terminalId", "generation", "agentState"],
+              additionalProperties: false,
+            },
+            {
+              type: "null",
+            },
+          ],
+          description: "This machine's global Assistant: send and status only. Null if none runs.",
+        },
       },
-      required: ["projectId", "assistants", "vacantSlots"],
+      required: ["projectId", "assistants", "vacantSlots", "global"],
       additionalProperties: false,
     },
     requiresArgs: false,
@@ -2406,7 +2553,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
       },
     },
-    keywords: ["trash", "hide", "dismiss", "remove"],
+    keywords: ["trash", "hide", "dismiss", "remove", "close terminal"],
     kind: "command",
     name: "terminal.close",
     outputSchema: {
@@ -2448,7 +2595,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "Close terminal",
+    title: "Close panel",
   },
   {
     band: "reversible",
@@ -2578,7 +2725,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Queue text as one submission to a terminal: a shell runs it, an agent pane takes it as its next prompt. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
+      "Queue text as one submission to a terminal: a shell runs it, an agent panel takes it as its next prompt. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
     enabled: true,
     id: "terminal.sendCommand",
     inputSchema: {
@@ -2599,7 +2746,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         handback: {
           description:
-            "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only.",
+            "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panels only.",
           type: "boolean",
         },
         generation: {
@@ -2780,7 +2927,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           terminalIds: ["term-abc123"],
           endGrace: true,
         },
-        description: "You closed your panes and their processes must be gone before the delete.",
+        description: "You closed your panels and their processes must be gone before the delete.",
       },
     ],
     id: "terminal.waitForExit",
@@ -2980,9 +3127,9 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "worktree",
     danger: "confirm",
     dangerRationale:
-      "Closes the session's own panes in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
+      "Closes the session's own panels in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
     description:
-      "Delete a worktree this session created, after the user confirms, once it is clean, every commit is on a remote, and no terminal you don't own runs there. Closes your panes there and waits for their processes to exit first. Never forces or deletes the branch.",
+      "Delete a worktree this session created, after the user confirms, once it is clean, every commit is on a remote, and no terminal you don't own runs there. Closes your panels there and waits for their processes to exit first. Never forces or deletes the branch.",
     enabled: true,
     id: "worktree.retireOwned",
     inputSchema: {

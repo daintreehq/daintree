@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 
 vi.mock("@/services/TerminalInstanceService", () => {
@@ -73,6 +74,7 @@ describe("TerminalSearchBar", () => {
       searches: [],
       caseSensitive: false,
       regexEnabled: false,
+      wholeWord: false,
     });
   });
 
@@ -83,6 +85,7 @@ describe("TerminalSearchBar", () => {
       searches: [],
       caseSensitive: false,
       regexEnabled: false,
+      wholeWord: false,
     });
   });
 
@@ -119,7 +122,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
 
     await act(() => {
       fireEvent.change(input, { target: { value: "hello" } });
@@ -140,7 +143,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
 
     await act(() => {
       fireEvent.change(input, { target: { value: "hello" } });
@@ -164,7 +167,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
 
     await act(() => {
       fireEvent.change(input, { target: { value: "hello" } });
@@ -188,7 +191,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
 
     await act(() => {
       fireEvent.change(input, { target: { value: "hello" } });
@@ -215,7 +218,7 @@ describe("TerminalSearchBar", () => {
     const next = screen.getByLabelText("Next match") as HTMLButtonElement;
     expect(next.disabled).toBe(true);
 
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
     await act(() => {
       fireEvent.change(input, { target: { value: "nonexistent" } });
     });
@@ -236,7 +239,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
     await act(() => {
       fireEvent.change(input, { target: { value: "hello" } });
     });
@@ -264,7 +267,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
     await act(() => {
       fireEvent.change(input, { target: { value: "hello" } });
     });
@@ -286,7 +289,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
 
     await act(() => {
       fireEvent.change(input, { target: { value: "nonexistent" } });
@@ -307,7 +310,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
 
     const regexButton = screen.getByLabelText("Use regular expression");
     await act(() => {
@@ -333,7 +336,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
 
     await act(() => {
       fireEvent.change(input, { target: { value: "hello" } });
@@ -362,7 +365,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
 
     await act(() => {
       fireEvent.click(screen.getByLabelText("Use regular expression"));
@@ -390,7 +393,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+    const input = screen.getByPlaceholderText("Find in terminal…") as HTMLInputElement;
 
     await act(() => {
       fireEvent.click(screen.getByLabelText("Use regular expression"));
@@ -418,7 +421,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
 
     // User types — schedules the 150ms debounce
     await act(() => {
@@ -446,7 +449,7 @@ describe("TerminalSearchBar", () => {
     );
 
     renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+    const input = screen.getByPlaceholderText("Find in terminal…") as HTMLInputElement;
 
     await act(() => {
       fireEvent.click(screen.getByLabelText("Use regular expression"));
@@ -494,7 +497,7 @@ describe("TerminalSearchBar", () => {
       );
 
       renderSearchBar();
-      const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+      const input = screen.getByPlaceholderText("Find in terminal…") as HTMLInputElement;
       expect(input.value).toBe("recent");
     });
 
@@ -536,7 +539,7 @@ describe("TerminalSearchBar", () => {
       );
 
       renderSearchBar();
-      const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+      const input = screen.getByPlaceholderText("Find in terminal…") as HTMLInputElement;
 
       // Replace pre-populated term with a draft.
       await act(() => {
@@ -582,7 +585,7 @@ describe("TerminalSearchBar", () => {
       );
 
       renderSearchBar();
-      const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+      const input = screen.getByPlaceholderText("Find in terminal…") as HTMLInputElement;
 
       await act(() => {
         fireEvent.keyDown(input, { key: "ArrowUp" });
@@ -597,7 +600,7 @@ describe("TerminalSearchBar", () => {
       );
 
       renderSearchBar();
-      const input = screen.getByPlaceholderText("Find in terminal");
+      const input = screen.getByPlaceholderText("Find in terminal…");
 
       await act(() => {
         fireEvent.change(input, { target: { value: "hello" } });
@@ -617,7 +620,7 @@ describe("TerminalSearchBar", () => {
       );
 
       render(<TerminalSearchBar terminalId="test-terminal" onClose={onClose} />);
-      const input = screen.getByPlaceholderText("Find in terminal");
+      const input = screen.getByPlaceholderText("Find in terminal…");
       await act(() => {
         fireEvent.change(input, { target: { value: "world" } });
       });
@@ -638,7 +641,7 @@ describe("TerminalSearchBar", () => {
       );
 
       render(<TerminalSearchBar terminalId="test-terminal" onClose={onClose} />);
-      const input = screen.getByPlaceholderText("Find in terminal");
+      const input = screen.getByPlaceholderText("Find in terminal…");
       await act(() => {
         fireEvent.change(input, { target: { value: "needle" } });
       });
@@ -663,7 +666,7 @@ describe("TerminalSearchBar", () => {
       );
 
       renderSearchBar();
-      const input = screen.getByPlaceholderText("Find in terminal");
+      const input = screen.getByPlaceholderText("Find in terminal…");
 
       await act(() => {
         fireEvent.change(input, { target: { value: "beta" } });
@@ -682,7 +685,7 @@ describe("TerminalSearchBar", () => {
       );
 
       render(<TerminalSearchBar terminalId="test-terminal" onClose={vi.fn()} />);
-      const input = screen.getByPlaceholderText("Find in terminal");
+      const input = screen.getByPlaceholderText("Find in terminal…");
 
       await act(() => {
         fireEvent.change(input, { target: { value: "   " } });
@@ -730,6 +733,155 @@ describe("TerminalSearchBar", () => {
       expect(toggle.getAttribute("aria-pressed")).toBe("true");
     });
 
+    it("persists whole-word toggle state across mounts", async () => {
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      const { unmount } = renderSearchBar();
+      await act(() => {
+        fireEvent.click(screen.getByLabelText("Match whole word"));
+      });
+      expect(useTerminalSearchHistoryStore.getState().wholeWord).toBe(true);
+      unmount();
+
+      renderSearchBar();
+      const toggle = screen.getByLabelText("Match whole word");
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it.each([
+      ["Match case", "caseSensitive"],
+      ["Use regular expression", "regexEnabled"],
+      ["Match whole word", "wholeWord"],
+    ] as const)(
+      "%s keeps the toggles another bar changed while this one was open",
+      async (label, key) => {
+        const mock = createMockManaged(true);
+        vi.mocked(terminalInstanceService.get).mockReturnValue(
+          mock as unknown as ReturnType<typeof terminalInstanceService.get>
+        );
+
+        renderSearchBar();
+        act(() => {
+          useTerminalSearchHistoryStore.setState({
+            caseSensitive: true,
+            regexEnabled: true,
+            wholeWord: true,
+            [key]: false,
+          });
+        });
+        await act(() => {
+          fireEvent.click(screen.getByLabelText(label));
+        });
+
+        expect(useTerminalSearchHistoryStore.getState()).toMatchObject({
+          caseSensitive: true,
+          regexEnabled: true,
+          wholeWord: true,
+        });
+      }
+    );
+
+    it("turning whole word off persists and searches without it", async () => {
+      useTerminalSearchHistoryStore.setState({ searches: ["recent"], wholeWord: true });
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      const { unmount } = renderSearchBar();
+      await act(async () => Promise.resolve());
+      await act(() => {
+        fireEvent.click(screen.getByLabelText("Match whole word"));
+      });
+
+      expect(useTerminalSearchHistoryStore.getState().wholeWord).toBe(false);
+      expect(screen.getByLabelText("Match whole word").getAttribute("aria-pressed")).toBe("false");
+      const lastCall = mock.searchAddon.findNext.mock.calls.at(-1) as unknown[];
+      expect(lastCall[0]).toBe("recent");
+      expect(lastCall[1]).not.toHaveProperty("wholeWord", true);
+      unmount();
+
+      renderSearchBar();
+      expect(screen.getByLabelText("Match whole word").getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("searches the restored query with the persisted whole-word toggle", async () => {
+      useTerminalSearchHistoryStore.setState({ searches: ["recent"], wholeWord: true });
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      renderSearchBar();
+      await act(async () => Promise.resolve());
+
+      expect(mock.searchAddon.findNext).toHaveBeenCalledWith(
+        "recent",
+        expect.objectContaining({ wholeWord: true })
+      );
+    });
+
+    it("opens a bar over a given terminal with the whole-word toggle another pane set", async () => {
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+      const { unmount } = renderSearchBar();
+      await act(() => {
+        fireEvent.click(screen.getByLabelText("Match whole word"));
+      });
+      unmount();
+
+      const own = createMockManaged(true);
+      render(
+        <TerminalSearchBar
+          search={{
+            ensureSearchAddon: async () => own.searchAddon as never,
+            getSearchAddon: () => own.searchAddon as never,
+          }}
+          onClose={vi.fn()}
+        />
+      );
+      const toggle = screen.getByLabelText("Match whole word");
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("runs one search and one store write per toggle click under StrictMode", async () => {
+      useTerminalSearchHistoryStore.setState({ searches: ["recent"] });
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+      render(
+        <StrictMode>
+          <TerminalSearchBar terminalId="test-terminal" onClose={vi.fn()} />
+        </StrictMode>
+      );
+      await act(async () => Promise.resolve());
+      mock.searchAddon.findNext.mockClear();
+      const writes = vi.fn();
+      const unsubscribe = useTerminalSearchHistoryStore.subscribe(writes);
+
+      for (const label of ["Match case", "Use regular expression", "Match whole word"]) {
+        await act(() => {
+          fireEvent.click(screen.getByLabelText(label));
+        });
+      }
+      unsubscribe();
+
+      expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(3);
+      expect(writes).toHaveBeenCalledTimes(3);
+      const lastCall = mock.searchAddon.findNext.mock.calls.at(-1) as unknown[];
+      expect(lastCall[1]).toMatchObject({
+        caseSensitive: true,
+        regex: true,
+        wholeWord: true,
+      });
+    });
+
     it("typing exits history-navigation mode (subsequent ArrowDown does not restore draft)", async () => {
       useTerminalSearchHistoryStore.setState({
         searches: ["second", "first"],
@@ -742,7 +894,7 @@ describe("TerminalSearchBar", () => {
       );
 
       renderSearchBar();
-      const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+      const input = screen.getByPlaceholderText("Find in terminal…") as HTMLInputElement;
 
       // ArrowUp into history.
       await act(() => {
@@ -775,7 +927,7 @@ describe("TerminalSearchBar", () => {
       );
 
       renderSearchBar();
-      const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+      const input = screen.getByPlaceholderText("Find in terminal…") as HTMLInputElement;
 
       // Replace pre-populated term so we can detect navigation.
       await act(() => {
@@ -802,7 +954,7 @@ describe("TerminalSearchBar", () => {
     };
     vi.mocked(terminalInstanceService.ensureSearchAddon).mockClear();
     const view = render(<TerminalSearchBar search={target} onClose={vi.fn()} />);
-    const input = screen.getByPlaceholderText("Find in terminal");
+    const input = screen.getByPlaceholderText("Find in terminal…");
     await act(() => {
       fireEvent.change(input, { target: { value: "hello" } });
     });

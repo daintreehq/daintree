@@ -49,7 +49,10 @@ export const MAX_PLUGIN_VIEW_STATE_ENTRIES = 200;
 export interface PluginViewStateIdentity {
   /** `"local"`, or the remote host the window belongs to. */
   hostId: string;
-  /** The project or scratch workspace, or `"user"` for state that follows the user. */
+  /**
+   * The project or scratch workspace, `"user"` for state that follows the
+   * user, or `"canopy"` for the Canopy window, which has no workspace.
+   */
   workspaceId: string;
   /** The plugin's runtime instance key. */
   pluginId: string;

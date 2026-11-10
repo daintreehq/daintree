@@ -6,8 +6,9 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { actionService } from "@/services/ActionService";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
-import { SAFE_MODE_BANNER_COPY } from "./recoveryCopy";
+import { RECOVERY_FAILURE_COPY, SAFE_MODE_BANNER_COPY } from "./recoveryCopy";
 import type { QuarantinedPanelSummary } from "@shared/types/ipc/crashRecovery";
 import { pluralize } from "@/lib/pluralize";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -83,6 +84,7 @@ export function SafeModeBanner() {
   const quarantinedPanels = useSafeModeStore((s) => s.quarantinedPanels);
   const dismiss = useSafeModeStore((s) => s.dismiss);
   const [isRestarting, setIsRestarting] = useState(false);
+  const [restartFailed, setRestartFailed] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
 
   if (!safeMode || dismissed) return null;
@@ -90,11 +92,16 @@ export function SafeModeBanner() {
   const handleRestart = async () => {
     if (isRestarting) return;
     setIsRestarting(true);
+    setRestartFailed(false);
     try {
       await window.electron.app.resetAndRelaunch();
     } catch (error) {
       logError("Failed to restart from safe mode", error);
       setIsRestarting(false);
+      setRestartFailed(true);
+      // The dialog stays open over the banner, so this is where the user is
+      // looking, and a footer hint appearing is not announced on its own.
+      useAnnouncerStore.getState().announce(RECOVERY_FAILURE_COPY.safeModeRestart, "polite");
     }
   };
 
@@ -173,6 +180,7 @@ export function SafeModeBanner() {
     <>
       <InlineStatusBanner
         title={SAFE_MODE_BANNER_COPY.title}
+        description={restartFailed ? RECOVERY_FAILURE_COPY.safeModeRestart : undefined}
         severity="warning"
         role="status"
         trailingSlot={detailsPopover}
@@ -196,6 +204,8 @@ export function SafeModeBanner() {
         // restart takes back nothing a normal quit wouldn't.
         description="Daintree restarts with this session: the layout, terminal scrollback and agent conversations come back, along with the panels safe mode skipped. Whatever is running in a terminal stops, including a turn an agent is in the middle of."
         confirmLabel="Restart normally"
+        hint={restartFailed ? RECOVERY_FAILURE_COPY.safeModeRestart : undefined}
+        hintPlacement="above"
         variant="default"
         onConfirm={handleRestart}
         isConfirmLoading={isRestarting}

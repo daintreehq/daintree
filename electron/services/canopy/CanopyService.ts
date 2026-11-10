@@ -189,9 +189,9 @@ export interface CanopyServiceDeps {
   /** One reading of a screen by the local model: its verdict and its words together. */
   read: (input: CanopyScreenInput, signal: AbortSignal) => Promise<CanopyReading>;
   /**
-   * The model is on this machine and screens can be read. While it isn't —
-   * downloading, or not chosen yet — rows show the screen's own words and
-   * nothing is read. Absent, always.
+   * The model checked out and screens can be read. While it hasn't — still
+   * being checked, or missing or damaged — rows show the screen's own words
+   * and nothing is read. Absent, always.
    */
   readerReady?: () => boolean;
   /** The model's name, for the status bar. */
@@ -585,7 +585,7 @@ export class CanopyService {
     if (this.watching && this.readerReady) void this.scan();
   }
 
-  /** Where the model stands changed — a download moving on — with nothing read differently. */
+  /** Where the model stands changed with nothing read differently. */
   modelChanged(): void {
     if (!this.disposed) this.scheduleBroadcast();
   }
@@ -2778,7 +2778,9 @@ function onlyRedrawn(before: readonly string[] | null, after: readonly string[])
 export function failureMessage(error: unknown): string {
   if (!(error instanceof CanopyProviderError)) return "Canopy couldn't read some screens.";
   const message = error.message;
-  if (/model not downloaded/.test(message)) return "Canopy's model isn't downloaded yet.";
+  if (/model not available/.test(message)) {
+    return "Canopy's model is missing or damaged. Reinstalling Daintree puts it back.";
+  }
   if (/newer version/.test(message)) return "Canopy's model needs a newer version of Daintree.";
   if (/keeps failing|stopped/.test(message)) {
     return "Canopy's model stopped running. Turn Canopy off and on to try again.";

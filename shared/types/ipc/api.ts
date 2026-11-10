@@ -137,8 +137,6 @@ import type {
   AgentCliDetails,
   AgentVersionInfo,
   AgentUpdateSettings,
-  StartAgentUpdatePayload,
-  StartAgentUpdateResult,
   SystemHealthCheckResult,
   PrerequisiteSpec,
   PrerequisiteCheckResult,
@@ -169,6 +167,8 @@ import type {
   ForgeFirstPageCachePayload,
   ForgeProjectHealthPayload,
   IssueLinkTarget,
+  ForgeNewPRLink,
+  ForgeNewPRLinkRequest,
 } from "./forge.js";
 import type { TerminalConfig } from "./config.js";
 import type { KeepAwakeState } from "./keepAwake.js";
@@ -596,7 +596,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     refreshAgentVersions(): Promise<AgentVersionInfo[]>;
     getAgentUpdateSettings(): Promise<AgentUpdateSettings>;
     setAgentUpdateSettings(settings: AgentUpdateSettings): Promise<void>;
-    startAgentUpdate(payload: StartAgentUpdatePayload): Promise<StartAgentUpdateResult>;
     healthCheck(
       options?: import("./system.js").SystemHealthCheckOptions
     ): Promise<SystemHealthCheckResult>;
@@ -644,6 +643,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * re-hydrate the panel in the current session.
      */
     clearQuarantinedPanel(panelId: string): Promise<{ cleared: boolean }>;
+    /**
+     * Restart into safe mode after a native confirm, from the startup stuck
+     * card. `started: false` when the user cancelled or another quit or restart
+     * already owns the exit.
+     */
+    restartInSafeMode(): Promise<{ started: boolean }>;
+    /** Log, once per document, what startup was still waiting on when the stuck card appeared. */
+    reportStartupStuck(rendererStage: string): Promise<void>;
     /** Fire-and-forget skeleton-parsed reveal signal sent before module-graph eval. */
     skeletonParsed(): void;
     notifyFirstInteractive(): Promise<void>;
@@ -765,6 +772,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         focusIntent?: import("./project.js").ProjectFocusOnActivateIntent;
         trace?: import("./project.js").ProjectSwitchTrace;
         ignoreMemoryPressure?: boolean;
+        /** The person chose to go to the project in the window keeping it cached (#16724). */
+        showInOtherWindow?: boolean;
       }
     ): Promise<ProjectSwitchResult>;
     /**
@@ -833,6 +842,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       options?: {
         trace?: import("./project.js").ProjectSwitchTrace;
         ignoreMemoryPressure?: boolean;
+        /** The person chose to go to the project in the window keeping it cached (#16724). */
+        showInOtherWindow?: boolean;
       }
     ): Promise<ProjectSwitchResult>;
     getStats(projectId: string): Promise<ProjectStats>;
@@ -869,7 +880,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): Promise<void>;
     deleteRecipe(projectId: string, recipeId: string): Promise<void>;
     exportRecipeToFile(name: string, json: string): Promise<boolean>;
-    importRecipeFromFile(): Promise<string | null>;
+    importRecipeFromFile(): Promise<{ fileName: string; json: string } | null>;
     getInRepoRecipes(projectId: string): Promise<TerminalRecipe[]>;
     syncInRepoRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void>;
     updateInRepoRecipe(
@@ -967,8 +978,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       focusMode: boolean,
       focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
     ): Promise<void>;
-    readClaudeMd(projectId: string): Promise<string | null>;
-    writeClaudeMd(projectId: string, content: string): Promise<void>;
     /**
      * Enable in-repo settings mode: writes current identity and settings to .daintree/,
      * then sets project.inRepoSettings = true.
@@ -1084,12 +1093,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * dot-path leaf so per-agent records aren't rewritten with defaults.
      */
     setGlobal(value: boolean): Promise<AgentSettings>;
-    /**
-     * Set the global "use alt-screen mode by default" override (#10876).
-     * Persisted as a dot-path leaf so per-agent records aren't rewritten with
-     * defaults.
-     */
-    setGlobalInline(value: boolean): Promise<AgentSettings>;
     /** Set what restored agent panes do after a restart (#13509). */
     setResumeOnRestart(value: ResumeOnRestart): Promise<AgentSettings>;
     reset(agentId?: AgentId): Promise<AgentSettings>;
@@ -1129,15 +1132,31 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (snapshot: import("./agentDefaults.js").AgentDefaultsSnapshot) => void
     ): () => void;
   };
+  // list / choose / reset come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  agentCliCopies: GeneratedElectronAPI["agentCliCopies"] & {
+    onChanged(callback: (change: { agentId: string }) => void): () => void;
+  };
   // get / set come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
   agentToolbarPins: GeneratedElectronAPI["agentToolbarPins"] & {
     onChanged(
       callback: (snapshot: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot) => void
     ): () => void;
   };
+  // start / getJob / stop / retry come from GeneratedElectronAPI; onJobUpdated is a renderer-only subscription.
+  projectClone: GeneratedElectronAPI["projectClone"] & {
+    onJobUpdated(
+      callback: (snapshot: import("./projectClone.js").ProjectCloneJobSnapshot) => void
+    ): () => void;
+  };
   // getSnapshot comes from GeneratedElectronAPI; onChanged is a renderer-only subscription.
   projectPresence: GeneratedElectronAPI["projectPresence"] & {
     onChanged(callback: () => void): () => void;
+  };
+  // watch / unwatch come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  onlineOnlyFiles: GeneratedElectronAPI["onlineOnlyFiles"] & {
+    onChanged(
+      callback: (files: import("../onlineOnlyFiles.js").ProjectOnlineOnlyFiles) => void
+    ): () => void;
   };
   // get / setLevel / answerSuggestion come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
   projectPresentation: GeneratedElectronAPI["projectPresentation"] & {
@@ -1197,6 +1216,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (query: import("./terminalWhenDone.js").TerminalWhenDoneInUseQuery) => void
     ): () => void;
     sendInUseReply(reply: import("./terminalWhenDone.js").TerminalWhenDoneInUseReply): void;
+  };
+  // hold / withdraw / list come from GeneratedElectronAPI (#16379).
+  composerHold: GeneratedElectronAPI["composerHold"] & {
+    onChanged(
+      callback: (change: import("./composerHold.js").ComposerHoldChange) => void
+    ): () => void;
   };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.
@@ -1803,7 +1828,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
           color?: string;
           dangerousEnabled?: boolean;
           customFlags?: string;
-          inlineMode?: boolean | "inherit" | "on" | "off";
         }>;
       }) => void
     ): () => void;
@@ -1923,6 +1947,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * or `null` when the provider doesn't implement the optional `buildRepoUrl`.
      */
     getRepoUrl(payload: { cwd: string }): Promise<string | null>;
+    /**
+     * What the "No PR" chip can offer for a branch: the forge's new pull
+     * request page, the fact that the branch isn't pushed, or nothing.
+     */
+    getNewPRLink(payload: ForgeNewPRLinkRequest): Promise<ForgeNewPRLink>;
     /**
      * Assign an issue to a user via the resolved forge provider, returning the
      * issue's resulting assignee list. Forges may silently drop an assignee the

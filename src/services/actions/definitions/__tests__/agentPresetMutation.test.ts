@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentPreset } from "@shared/config/agentRegistry";
+import { FALLBACK_CHAIN_MAX, type AgentPreset } from "@shared/config/agentRegistry";
 import type { AgentSettings, AgentSettingsEntry } from "@shared/types/agentSettings";
 import {
   agentPresetMutationFingerprint,
@@ -76,7 +76,6 @@ describe("agent.createPreset", () => {
         args: ["-c", "model_reasoning_effort=high"],
         customFlags: "--search",
         dangerousMode: "off",
-        inlineMode: "on",
         color: "#abc",
         displayTitle: "Full tab",
         fallbacks: [WORK.id],
@@ -93,7 +92,6 @@ describe("agent.createPreset", () => {
       // The legacy boolean mirrors the mode, as Settings' editor writes it.
       dangerousMode: "off",
       dangerousEnabled: false,
-      inlineMode: "on",
       color: "#abc",
       displayTitle: "Full tab",
       fallbacks: [WORK.id],
@@ -162,6 +160,46 @@ describe("agent.createPreset", () => {
         from
       ).preset.fallbacks
     ).toEqual([WORK.id, OTHER.id]);
+  });
+
+  it("takes a chain as long as the cap and refuses a longer one, naming the cap", () => {
+    const rotation: AgentPreset[] = Array.from({ length: FALLBACK_CHAIN_MAX + 1 }, (_, i) => ({
+      id: `user-account-${i}`,
+      name: `Account ${i}`,
+    }));
+    const from = sources({ customPresets: rotation });
+    const ids = rotation.map((p) => p.id);
+    expect(
+      plan(
+        "agent.createPreset",
+        { agentId: "codex", name: "Rotation", fallbacks: ids.slice(1) },
+        from
+      ).preset.fallbacks
+    ).toEqual(ids.slice(1));
+    expect(
+      refusal("agent.createPreset", { agentId: "codex", name: "Rotation", fallbacks: ids }, from)
+    ).toContain(`up to ${FALLBACK_CHAIN_MAX} distinct preset ids`);
+  });
+
+  it("lets an update set the cap's worth of fallbacks and refuses one more", () => {
+    const rotation: AgentPreset[] = Array.from({ length: FALLBACK_CHAIN_MAX + 1 }, (_, i) => ({
+      id: `user-account-${i}`,
+      name: `Account ${i}`,
+    }));
+    const from = sources({ customPresets: [WORK, ...rotation] });
+    const ids = rotation.map((p) => p.id);
+    expect(
+      updated(
+        plan(
+          "agent.updatePreset",
+          { agentId: "codex", presetId: WORK.id, fallbacks: ids.slice(1) },
+          from
+        )
+      ).fallbacks
+    ).toEqual(ids.slice(1));
+    expect(
+      refusal("agent.updatePreset", { agentId: "codex", presetId: WORK.id, fallbacks: ids }, from)
+    ).toContain(`up to ${FALLBACK_CHAIN_MAX} distinct preset ids`);
   });
 
   it("refuses a fallback that names no preset of this agent", () => {
@@ -261,7 +299,6 @@ describe("agent.updatePreset", () => {
       args: ["--a"],
       dangerousMode: "on",
       dangerousEnabled: true,
-      inlineMode: "off",
       displayTitle: "Work tab",
       fallbacks: [OTHER.id],
       fallbackOnRateLimit: true,
@@ -274,7 +311,6 @@ describe("agent.updatePreset", () => {
         args: [],
         customFlags: null,
         dangerousMode: "inherit",
-        inlineMode: "inherit",
         color: "",
         displayTitle: "",
         fallbacks: [],
@@ -303,6 +339,28 @@ describe("agent.updatePreset", () => {
       sources({ customPresets: [legacy] })
     );
     expect(updated(mutation)).toMatchObject({ name: "Renamed", customFlags: "--a; --b" });
+  });
+
+  it("offers no screen mode, and still edits a preset an older build stored one on (#16356)", () => {
+    for (const inlineMode of ["on", "off", "inherit"]) {
+      refusal(
+        "agent.updatePreset",
+        { agentId: "codex", presetId: WORK.id, inlineMode },
+        sources({ customPresets: [WORK] })
+      );
+      refusal(
+        "agent.createPreset",
+        { agentId: "codex", name: "Alt", inlineMode },
+        sources(undefined)
+      );
+    }
+    const legacy = { ...WORK, inlineMode: "off" } as AgentPreset;
+    const mutation = plan(
+      "agent.updatePreset",
+      { agentId: "codex", presetId: WORK.id, name: "Renamed", dangerousMode: "on" },
+      sources({ customPresets: [legacy] })
+    );
+    expect(updated(mutation)).toMatchObject({ name: "Renamed", dangerousMode: "on" });
   });
 
   it("asks for a name when the stored one is missing, and accepts the repair", () => {

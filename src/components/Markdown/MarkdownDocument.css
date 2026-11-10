@@ -398,6 +398,36 @@
   min-width: 0;
 }
 
+/* Find in rendered mode (renderedFind.ts) paints matches as custom highlights.
+   Every match takes the editor's search wash, as the source view's find does,
+   with body ink so a highlighted link or code token keeps its contrast. The
+   current one is a solid fill of the search ink in canvas colour, the ink the
+   terminal marks its current match with: a change of fill and of text, not of
+   hue alone. A highlight can't take a border or outline, which is what the
+   source view and the diff mark their current match with instead. */
+.markdown-document::highlight(daintree-find-match),
+.markdown-document ::highlight(daintree-find-match) {
+  background-color: var(--color-search-highlight-background);
+  color: var(--color-text-primary);
+}
+
+.markdown-document::highlight(daintree-find-current),
+.markdown-document ::highlight(daintree-find-current) {
+  background-color: var(--color-search-highlight-text);
+  color: var(--color-surface-canvas);
+}
+
+/* Chromium paints every custom highlight in the system Highlight pair under
+   forced colours, so the other matches aren't painted there at all
+   (renderedFind.ts) and the current one is the system's own selection. */
+@media (forced-colors: active) {
+  .markdown-document::highlight(daintree-find-current),
+  .markdown-document ::highlight(daintree-find-current) {
+    background-color: Highlight;
+    color: HighlightText;
+  }
+}
+
 /* A message rather than a document: an agent's reply or prompt read inside a
    popover or list. Its headings are section labels, not page titles, so the
    ladder steps down to just above body size and loses the document rule under

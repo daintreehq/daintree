@@ -60,6 +60,7 @@ import {
 } from "../../../../shared/utils/layoutMerge.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { Project } from "../../../types/index.js";
+import { isAwaitingClone } from "../../../../shared/types/project.js";
 import type {
   ProjectSwitchOutgoingState,
   ProjectSwitchResult,
@@ -82,6 +83,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       focusIntent?: ProjectFocusOnActivateIntent;
       trace?: ProjectSwitchTrace;
       ignoreMemoryPressure?: boolean;
+      showInOtherWindow?: boolean;
     }
   ): Promise<ProjectSwitchResult> => {
     if (typeof projectId !== "string" || !projectId) {
@@ -103,7 +105,9 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     markMainReceived(trace, operation);
     supersedePendingHostSwitch(operation.windowId);
 
-    const owner = releaseCachedOwner(findOwnerElsewhere(deps, operation), projectId, project.name);
+    const owner = releaseCachedOwner(findOwnerElsewhere(deps, operation), projectId, project.name, {
+      showInOtherWindow: options?.showInOtherWindow === true,
+    });
     if (owner) return redirectToProjectOwner(owner, project, options?.focusIntent);
 
     const releaseClaim = claimProjectActivation(projectId, operation.windowId);
@@ -195,7 +199,11 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     ctx: IpcContext,
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
-    options?: { trace?: ProjectSwitchTrace; ignoreMemoryPressure?: boolean }
+    options?: {
+      trace?: ProjectSwitchTrace;
+      ignoreMemoryPressure?: boolean;
+      showInOtherWindow?: boolean;
+    }
   ): Promise<ProjectSwitchResult> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
@@ -224,7 +232,9 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     markMainReceived(trace, operation);
     supersedePendingHostSwitch(operation.windowId);
 
-    const owner = releaseCachedOwner(findOwnerElsewhere(deps, operation), projectId, project.name);
+    const owner = releaseCachedOwner(findOwnerElsewhere(deps, operation), projectId, project.name, {
+      showInOtherWindow: options?.showInOtherWindow === true,
+    });
     if (owner) return redirectToProjectOwner(owner, project);
 
     const releaseClaim = claimProjectActivation(projectId, operation.windowId);
@@ -438,6 +448,8 @@ function trackOutgoingPersist(projectId: string | null, persist: Promise<void>):
  */
 async function assertProjectRepositoryIntact(project: Project): Promise<void> {
   if (project.gitBacked === false) return;
+  // A project still awaiting its clone has no folder yet by design (#16352).
+  if (isAwaitingClone(project)) return;
   if ((await probeGitMarker(project.path)) !== "missing") return;
 
   const classification = await projectStore.classifyGitBacking(project.path);
@@ -804,7 +816,16 @@ async function activateProjectView(
   // worktree IPC from the newly-active view.
   let loadWorktrees: Promise<HostLoadKind> | null = null;
   let statusTimingDeadlineAt: number | undefined;
-  if (deps.worktreeService && windowId !== undefined) {
+  // A project still awaiting its clone has no checkout to load (#16352). The
+  // window lets go of whatever workspace it was attached to, so the previous
+  // project's worktree events stop reaching this view; the clone's success
+  // loads the workspace for every window then showing the project.
+  // Read again rather than from the captured row: the clone may have landed
+  // during the checks this switch awaited before getting here.
+  const awaitingClone = isAwaitingClone(projectStore.getProjectById(projectId) ?? project);
+  if (awaitingClone && deps.worktreeService && windowId !== undefined) {
+    deps.worktreeService.unregisterWindow(windowId);
+  } else if (deps.worktreeService && windowId !== undefined) {
     statusTimingDeadlineAt = projectSwitchStatusTiming.begin(
       trace.switchId,
       projectId,
@@ -853,7 +874,7 @@ async function activateProjectView(
     // restore (first switch from the welcome view, or the previous project
     // was deleted mid-switch) release the window's mapping entirely, undoing
     // the early load's attachment.
-    if (loadWorktrees && deps.worktreeService && windowId !== undefined) {
+    if ((loadWorktrees || awaitingClone) && deps.worktreeService && windowId !== undefined) {
       const worktreeService = deps.worktreeService;
       // Restore THIS window's mapping to the project THIS window was showing —
       // from the captured operation, not the global pointer, which in a second
@@ -869,7 +890,7 @@ async function activateProjectView(
       const previousPath = outgoingProjectId
         ? projectStore.getProjectById(outgoingProjectId)?.path
         : undefined;
-      void loadWorktrees
+      void (loadWorktrees ?? Promise.resolve())
         .catch(() => {})
         .then(() => {
           if (windowSwitchEpochs.get(windowId) !== switchEpoch) return undefined;
@@ -1056,6 +1077,30 @@ async function activateProjectView(
           projectId,
           worktreeLoadError,
         });
+      }
+    }
+
+    // The clone landed after this switch decided there was nothing to load. Its
+    // completion skipped this window because the switch was still in flight,
+    // so the load, and the ports a ready project's view needs, fall to the
+    // switch, unless a newer one has taken the window since.
+    if (
+      awaitingClone &&
+      windowId !== undefined &&
+      !isAwaitingClone(projectStore.getProjectById(projectId)) &&
+      windowSwitchEpochs.get(windowId) === switchEpoch
+    ) {
+      try {
+        await deps.worktreeService.loadProject(project.path, windowId);
+        if (windowSwitchEpochs.get(windowId) === switchEpoch && !view.webContents.isDestroyed()) {
+          deps.worktreeService.attachDirectPort(windowId, view.webContents);
+          const host = deps.worktreeService.getHostForProject(project.path);
+          if (host && deps.worktreePortBroker) {
+            deps.worktreePortBroker.brokerPort(host, view.webContents);
+          }
+        }
+      } catch (err) {
+        console.error(`${options.logPrefix} Failed to load the cloned project:`, err);
       }
     }
 

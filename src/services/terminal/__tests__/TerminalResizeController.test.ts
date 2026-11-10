@@ -2696,9 +2696,13 @@ describe("TerminalResizeController", () => {
       expect(managed.lastHeight).toBe(800);
     });
 
-    it("refuses an alt-screen pane outright, leaving both grids untouched", () => {
+    it("leaves an alt-screen pane's grids untouched and owes it a reveal repair (#16359)", () => {
+      // The window-ratio box is an estimate; sizing a full-screen TUI to it
+      // buys a second full redraw when reveal measures the real box. What it
+      // must not do is forget the box changed.
       const managed = createManagedTerminal();
       managed.isAltBuffer = true;
+      managed.attachGeneration = 4;
       Object.assign(managed.terminal, {
         _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
       });
@@ -2710,6 +2714,8 @@ describe("TerminalResizeController", () => {
       expect(resizeMock).not.toHaveBeenCalled();
       expect(managed.lastWidth).toBe(800);
       expect(managed.lastHeight).toBe(600);
+      expect(managed.revealPendingRepair).toBe(true);
+      expect(managed.revealPendingGeneration).toBe(4);
     });
 
     it("drops a lock-stashed resize when the pane entered the alternate screen meanwhile", () => {
@@ -2731,6 +2737,8 @@ describe("TerminalResizeController", () => {
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(resizeMock).not.toHaveBeenCalled();
       expect(managed.pendingBackgroundResize).toBeUndefined();
+      // The stash is dropped, the debt it carried is not (#16359).
+      expect(managed.revealPendingRepair).toBe(true);
     });
 
     it("replays a lock-stashed resize for a pane still on the main buffer", () => {
@@ -3153,25 +3161,48 @@ describe("TerminalResizeController", () => {
       expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
     });
 
-    it("does NOT reflow a live alt-screen TUI even when the grid drifted (OpenCode clobber regression)", () => {
+    it("hands a drifted alt-screen pane its new size: xterm then the PTY, in one step (#16359)", () => {
+      // A full-screen TUI whose box changed while its project was hidden (box
+      // proposes 100x30, grid is still 80x24). Both grids move together, xterm
+      // first, so the SIGWINCH reaches the app for a grid the parser already
+      // holds and the app's own redraw repaints the frame.
       const managed = createManagedTerminal();
       managed.isAltBuffer = true;
-      // Same stale-grid setup as above (box proposes 100x30, grid is 80x24): a
-      // main-buffer pane gets reflowed, but an alt-screen pane must be left
-      // untouched — an out-of-band xterm resize mangles its absolutely-positioned
-      // frame (the "settled OpenCode goes weird on click" corruption, #10632).
       managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      const order: string[] = [];
+      const dataBuffer = {
+        flushForTerminal: vi.fn(() => order.push("flush")),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      };
+      managed.terminal.resize.mockImplementation(function (
+        this: { cols: number; rows: number },
+        cols: number,
+        rows: number
+      ) {
+        order.push("xterm");
+        this.cols = cols;
+        this.rows = rows;
+      });
+      resizeMock.mockImplementation(() => order.push("pty"));
 
-      const controller = makeController(managed);
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: dataBuffer as any,
+      });
       const ok = controller.reconcileGeometryFresh("term-1");
 
-      // Reports success so the reveal repaint does not retry-loop, but resizes
-      // neither xterm nor the PTY.
       expect(ok).toBe(true);
-      expect(managed.terminal.resize).not.toHaveBeenCalled();
-      expect(resizeMock).not.toHaveBeenCalled();
-      // The alt-buffer early return sits above the pin — never scroll a live
-      // full-screen TUI (#11316).
+      expect(managed.terminal.cols).toBe(100);
+      expect(managed.terminal.rows).toBe(30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      // Bytes the app emitted for the old grid parse at the old grid.
+      expect(order).toEqual(["flush", "xterm", "pty"]);
+      expect(managed.latestCols).toBe(100);
+      expect(managed.latestRows).toBe(30);
+      // The frame is the app's to repaint: no viewport pin on a live TUI
+      // (#11316).
       expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
     });
 
@@ -3324,21 +3355,120 @@ describe("TerminalResizeController", () => {
       expect(order).toEqual(["resize", "resume"]);
     });
 
-    it("force does not reflow a live alt-screen TUI (#10805 survives the bypass)", () => {
+    it("does not hold a streaming alt-screen pane to the main buffer's quiet window (#16359)", () => {
+      // The quiescence gate guards scrollback re-wrap, which the alternate
+      // buffer has none of — and a full-screen TUI redraws often enough that
+      // waiting for quiet would strand it at the old size indefinitely. A
+      // batch that landed a moment ago is parsed, so the frame is finished.
       const managed = createManagedTerminal();
       managed.isAltBuffer = true;
       managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
-      (managed as { pendingWrites?: number }).pendingWrites = 3;
+      (managed as { lastWriteAt?: number }).lastWriteAt = Date.now();
 
       const controller = makeController(managed);
-      const ok = controller.reconcileGeometryFresh("term-1", { force: true });
 
-      // force buys past write-quiescence and nothing else: the alt-buffer early
-      // return sits ABOVE the streaming gate, so a full-screen TUI's frame is
-      // still never mangled out from under its own SIGWINCH redraw.
-      expect(ok).toBe(true);
+      expect(controller.reconcileGeometryFresh("term-1")).toBe(true);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+    });
+
+    it.each([
+      ["a batch still parsing", { pendingWrites: 1, queuedBytes: 0 }],
+      ["ingest bytes still held", { pendingWrites: 0, queuedBytes: 512 }],
+    ])(
+      "waits for an alt-screen pane's output to reach xterm before moving its grid: %s",
+      (_label, { pendingWrites, queuedBytes }) => {
+        // xterm's resize() parses pending writes before it moves the grid, so
+        // bytes not yet parsed could open a synchronized frame (or leave the
+        // alternate buffer) after the block check passed. Nothing may be left
+        // to parse when an alt pane's grid moves.
+        const managed = createManagedTerminal();
+        managed.isAltBuffer = true;
+        managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+        (managed as { pendingWrites?: number }).pendingWrites = pendingWrites;
+        const dataBuffer = {
+          flushForTerminal: vi.fn(),
+          resetForTerminal: vi.fn(),
+          getQueuedBytes: vi.fn(() => queuedBytes),
+          resumeFlush: vi.fn(),
+        };
+        const controller = new TerminalResizeController({
+          getInstance: vi.fn(() => managed),
+          dataBuffer: dataBuffer as any,
+        });
+
+        expect(controller.reconcileGeometryFresh("term-1")).toBe(false);
+        expect(managed.terminal.resize).not.toHaveBeenCalled();
+        expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
+        expect(resizeMock).not.toHaveBeenCalled();
+        expect(managed.latestCols).toBe(80);
+
+        // An explicit Redraw is the escape hatch for a pane whose output never
+        // lets the parser catch up: it lands, both grids together.
+        expect(controller.reconcileGeometryFresh("term-1", { force: true })).toBe(true);
+        expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+        expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      }
+    );
+
+    it("still reflows a main-buffer pane while a synchronized block is open", () => {
+      // The block wait is an alt-screen rule. The main buffer's callers gate
+      // on the block themselves, and an explicit Redraw must still land.
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      Object.assign(managed.terminal, { modes: { synchronizedOutputMode: true } });
+
+      const controller = makeController(managed);
+
+      expect(controller.reconcileGeometryFresh("term-1")).toBe(true);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
+    });
+
+    it("waits out an open synchronized block on an alt-screen pane, even under force", () => {
+      // An open DEC 2026 block is a frame the app is still painting for the old
+      // grid. Moving the grid now crops it mid-paint — the #10805 hazard a
+      // Redraw must not buy past either.
+      const managed = createManagedTerminal();
+      managed.isAltBuffer = true;
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      Object.assign(managed.terminal, { modes: { synchronizedOutputMode: true } });
+
+      const controller = makeController(managed);
+
+      expect(controller.reconcileGeometryFresh("term-1")).toBe(false);
+      expect(controller.reconcileGeometryFresh("term-1", { force: true })).toBe(false);
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(resizeMock).not.toHaveBeenCalled();
+      // Refused before the caches, so the next attempt still sees the drift.
+      expect(managed.latestCols).toBe(80);
+      expect(managed.lastWidth).toBe(800);
+    });
+
+    it("never resizes an alt-screen pane that already holds the measured grid", () => {
+      // A reveal of an unchanged pane is the common case: nothing may reach
+      // xterm, so the frame is left exactly as the app drew it. The PTY
+      // re-assert is a same-size request the pty-host answers as unchanged.
+      const managed = createManagedTerminal();
+      managed.isAltBuffer = true;
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }));
+      Object.assign(managed.terminal, { modes: { synchronizedOutputMode: true } });
+      const dataBuffer = {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      };
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: dataBuffer as any,
+      });
+
+      expect(controller.reconcileGeometryFresh("term-1")).toBe(true);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 80, 24);
       expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
     });
 

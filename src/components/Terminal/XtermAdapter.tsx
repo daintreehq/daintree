@@ -55,6 +55,7 @@ import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
 import { terminalUploadSurface } from "./uploads/pendingUploads";
 import type { TerminalFocusTarget } from "./terminalFocus";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
+import { resolveInteractiveActionId } from "@/services/actions/resolveInteractiveActionId";
 
 export interface XtermAdapterProps {
   terminalId: string;
@@ -686,15 +687,15 @@ export function XtermAdapter({
               event.stopPropagation();
 
               if (result.match) {
-                // Dispatch the matched action
+                // Resolved like the global handler: a redirecting action runs
+                // its interactive sibling, since a shortcut carries no args.
+                const dispatchId = resolveInteractiveActionId(
+                  result.match.actionId as Parameters<typeof actionService.dispatch>[0]
+                );
                 void actionService
-                  .dispatch(
-                    result.match.actionId as Parameters<typeof actionService.dispatch>[0],
-                    undefined,
-                    {
-                      source: "keybinding",
-                    }
-                  )
+                  .dispatch(dispatchId, undefined, {
+                    source: "keybinding",
+                  })
                   .then((dispatchResult) => {
                     // A destructive action that parked a confirmation reports
                     // CONFIRMATION_REQUIRED rather than a silent ok (#12120).
@@ -702,11 +703,9 @@ export function XtermAdapter({
                     // when the terminal has focus, so logging that as a failure
                     // would fire on the normal "the dialog opened" path.
                     if (!dispatchResult.ok && !isStagedConfirmation(dispatchResult.error)) {
-                      logError(
-                        `[XtermKeybinding] Action "${result.match!.actionId}" failed`,
-                        undefined,
-                        { error: dispatchResult.error }
-                      );
+                      logError(`[XtermKeybinding] Action "${dispatchId}" failed`, undefined, {
+                        error: dispatchResult.error,
+                      });
                     }
                   })
                   .catch((error) => {

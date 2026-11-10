@@ -43,12 +43,17 @@ import {
   contextReferenceChipProviders,
   type ContextReferenceChipProvider,
 } from "./inputEditorExtensions/contextReferenceChip";
+import { applyDiffNotesChipSource } from "./inputEditorExtensions/notesChip";
+import { useComposerDiffNotes } from "./hooks/useComposerDiffNotes";
+import { hasPendingDiffNotes } from "@/components/Worktree/diffNotes";
 import { PromptTemplateForm } from "@/components/Commands/PromptTemplateForm";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import { usePluginPromptTemplates } from "@/hooks/usePluginPromptTemplates";
+import { usePromptTemplates } from "@/hooks/usePromptTemplates";
+import { actionService } from "@/services/ActionService";
+import { useUserPromptTemplateStore } from "@/store/userPromptTemplateStore";
 import { renderPromptTemplate } from "@shared/utils/pluginPromptTemplates";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
@@ -59,7 +64,7 @@ import type {
 } from "@/store/voiceRecordingStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
-import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { DictationCancelConfirmOverlay, useDictationCancelConfirm } from "./DictationCancelConfirm";
 import { DICTATION_CANCEL_CONFIRM_PROMPT } from "@/lib/pressAgain";
@@ -92,6 +97,7 @@ import {
   voiceSubmitWaitStatus,
   type VoiceSubmitWaitKeys,
 } from "./VoiceSubmitProgress";
+import { useKeyLabels } from "@/lib/keyboardLayout";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import {
   registerInputController,
@@ -160,6 +166,7 @@ import { useContextDetection } from "./hooks/useContextDetection";
 import {
   draftUnchangedSince,
   useTokenResolution,
+  type ComposerSubmitOutcome,
   type SendTextOptions,
 } from "./hooks/useTokenResolution";
 import { useEditorKeymap, type ComposerSendRoute } from "./hooks/useEditorKeymap";
@@ -174,6 +181,7 @@ import {
 import { useComposerMeasure } from "./hooks/useComposerMeasure";
 import { useEditorScrollEdges } from "./hooks/useEditorScrollEdges";
 import { useAutocompleteApply } from "./hooks/useAutocompleteApply";
+import { useFleetMembership } from "./hooks/useFleetMembership";
 import { useFleetMirror } from "./hooks/useFleetMirror";
 import { useSendHandBack, type SendHandBack } from "./hooks/useSendHandBack";
 import { useEditorDomHandlers } from "./hooks/useEditorDomHandlers";
@@ -252,7 +260,7 @@ export interface HybridInputBarHandle {
    */
   submitWithInstruction: (
     instruction: string,
-    submit: (text: string) => Promise<boolean>
+    submit: (text: string) => Promise<ComposerSubmitOutcome>
   ) => Promise<boolean>;
 }
 
@@ -305,8 +313,16 @@ export interface HybridInputBarProps {
    * Sends the composer's text and says whether the terminal took it, in place
    * of the fire-and-forget `onSend`: the draft is cleared and kept in history
    * only once it resolves `true`, so a refused send leaves the text in place.
+   *
+   * `submissionToken` comes with a send carrying `@notes`, whose notes clear
+   * once the terminal reports it written. Only a composer that isn't `isolated`
+   * has the token asked of it.
    */
-  submitText?: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+  submitText?: (
+    text: string,
+    imagePaths: readonly string[],
+    submissionToken?: string
+  ) => Promise<boolean>;
   /**
    * Whether this composer's surface is the selected one, for a host whose
    * selection is not the grid's (the Assistant sidebar). Grid panes leave it
@@ -431,6 +447,18 @@ const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
 const NO_CONTEXT_CHIP_PROVIDERS: ReadonlyMap<string, ContextReferenceChipProvider> = new Map();
 const NO_CONTEXT_ITEMS: ContextProviderItem[] = [];
 const NO_TEMPLATE_ITEMS: AutocompleteItem[] = [];
+
+/** A file left out of the templates folder would otherwise just be absent from the menu. */
+const TEMPLATE_PROBLEMS_NOTE = {
+  text: "Some prompt templates weren't loaded. See why in Settings > CLI agents",
+  onClick: () => {
+    void actionService.dispatch(
+      "app.settings.openTab",
+      { tab: "agents", subtab: "general", sectionId: "agents-prompt-templates" },
+      { source: "user" }
+    );
+  },
+};
 // As long as a scratch refusal stays, counted from when the border shows it.
 const FILE_REFERENCE_NOTE_MS = 6_000;
 
@@ -459,6 +487,8 @@ const SEND_HELD_STATUS = "Not sent. The draft is still here.";
 const DISABLED_CONTROL_MIX = "45%";
 const DISABLED_CONTROL_INK = "color-mix(in oklab, var(--ib-fg) 45%, var(--ib-bg))";
 const SPOKEN_SEND_TOO_SHORT_CAPTION = "Too short to send by voice · Enter to send";
+const NO_DIFF_NOTES_CAPTION = "Not sent · No notes to send";
+const NO_DIFF_NOTES_STATUS = "Not sent: there are no diff notes to send. The draft is still here.";
 const CROSS_HOST_CAPTION: Record<CrossHostRefusal, string> = {
   context: "Not sent · Context can't reach another host",
   image: "Not sent · Images can't reach another host",
@@ -635,13 +665,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const panelOwnTitle = usePanelStore((s) => s.panelsById[terminalId]?.title);
     // Selects the drawn label, not the snapshot: the agent's own git-status
     // passes replace the snapshot while the user is typing here.
-    const panelWorktreeLabel = useWorktreeStore((s) => {
+    // Optional: Canopy's reply can stand outside any project, with no worktrees to name.
+    const panelWorktreeLabel = useWorktreeStoreOptional((s) => {
       const worktree = panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined;
       return worktree?.isMainWorktree ? worktree.name : worktree?.branch || worktree?.name;
-    });
-    const panelWorktreePath = useWorktreeStore((s) =>
-      panelWorktreeId ? s.worktrees.get(panelWorktreeId)?.path : undefined
+    }, undefined);
+    const panelWorktreePath = useWorktreeStoreOptional(
+      (s) => (panelWorktreeId ? s.worktrees.get(panelWorktreeId)?.path : undefined),
+      undefined
     );
+    // An isolated composer stands apart from its agent's worktree and submits
+    // over its own stream; a host without `submitText` can't report delivery.
+    const takesDiffNotes = !thisMachineOff && !isolated && submitText !== undefined;
+    const pendingDiffNotes = useComposerDiffNotes(terminalId, panelWorktreePath, takesDiffNotes);
     const isVoiceRecording = activeVoicePanelId === voiceId && voiceStatus === "recording";
     const isVoiceConnecting = activeVoicePanelId === voiceId && voiceStatus === "connecting";
     const isVoiceReconnecting = activeVoicePanelId === voiceId && voiceStatus === "reconnecting";
@@ -688,6 +724,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
       contextChipTooltipCompartmentRef,
+      notesChipTooltipCompartmentRef,
       forgeReferenceTooltipCompartmentRef,
       autoSizeCompartmentRef,
       themeCompartmentRef,
@@ -835,19 +872,24 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [terminalId, projectId, getDraftInput]);
 
     // Fleet hybrid-input mirroring
-    const armedIds = useFleetArmingStore((s) => s.armedIds);
-    const isArmed = !isolated && armedIds.has(terminalId);
-    const fleetSize = armedIds.size;
-    const isFleetPrimary = isFocusedTerminal && isArmed && fleetSize >= 2;
-    const isFleetFollower = !isFocusedTerminal && isArmed && fleetSize >= 2;
+    const { isArmed, isFleetComposing } = useFleetMembership(terminalId, { isolated });
+    const isFleetPrimary = isFocusedTerminal && isFleetComposing;
+    const isFleetFollower = !isFocusedTerminal && isFleetComposing;
 
     const wasFollowingDriverRef = useRef(followsDriver);
     const wasFleetFollowerRef = useRef(isFleetFollower);
+    const writtenDraftKeyRef = useRef(draftKey);
     useEffect(() => {
       const wasFollowing = wasFollowingDriverRef.current;
       wasFollowingDriverRef.current = followsDriver;
       const wasFleetFollower = wasFleetFollowerRef.current;
       wasFleetFollowerRef.current = isFleetFollower;
+      const movedToAnotherDraft = writtenDraftKeyRef.current !== draftKey;
+      writtenDraftKeyRef.current = draftKey;
+      // This pass's value is the previous draft's text, with the load above on
+      // its way. Written back, it would land in the draft just moved to, and
+      // the outside-write sync below would bring it into the editor (#16571).
+      if (movedToAnotherDraft) return;
       // Written back, the text a render behind would land over a newer draft
       // the host just sent. That holds for the pass that stops following too:
       // the store has the host's latest, and the outside-write effect below
@@ -873,7 +915,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       );
       setDraftInput(terminalId, value, projectId);
       syncedDraftRef.current = value;
-    }, [terminalId, value, projectId, setDraftInput, followsDriver, isFleetFollower]);
+    }, [terminalId, value, projectId, draftKey, setDraftInput, followsDriver, isFleetFollower]);
 
     const { isApplyingExternalValueRef } = useFleetMirror({
       editorViewRef,
@@ -953,7 +995,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         : null;
     }, [triggerChar, completionQuery, contextProviderEntries]);
     const atClaim =
-      triggerChar === "@" && contextClaim === null ? getDaintreeAtClaim(completionQuery) : null;
+      triggerChar === "@" && contextClaim === null
+        ? getDaintreeAtClaim(completionQuery, hasPendingDiffNotes(pendingDiffNotes))
+        : null;
     const isFileMode = triggerChar === "@" && atClaim === null && contextClaim === null;
     // A token is being completed. Whether its menu shows is decided once its
     // rows are known: the `#` menu opens only on rows (`isAutocompleteOpen`).
@@ -1033,13 +1077,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const { commandMap } = useSlashCommandList({ agentId, projectPath: cwd });
 
-    // A plugin's prompt templates (#13799) share the `/` menu, in a band of
-    // their own after the agent's commands.
-    const promptTemplates = usePluginPromptTemplates(currentProjectId);
+    // Prompt templates (#13799, #16398) share the `/` menu, in a band of their
+    // own after the agent's commands.
+    const promptTemplates = usePromptTemplates(currentProjectId);
+    const hasTemplateProblems = useUserPromptTemplateStore((s) => s.problems.length > 0);
     const isSlashMenuOpen = isCompleting && triggerChar === "/";
-    // A plugin attached in dev mode announces itself without a provenance event.
+    // A plugin attached in dev mode announces itself without a provenance event,
+    // and a file saved in the templates folder doesn't announce itself at all. An
+    // expanded composer keeps its menu open across a trip to another app, which is
+    // where such a file gets saved.
     useEffect(() => {
-      if (isSlashMenuOpen) usePluginRuntimeStore.getState().refresh();
+      if (!isSlashMenuOpen) return;
+      usePluginRuntimeStore.getState().refresh();
+      const readTemplates = () => useUserPromptTemplateStore.getState().refresh();
+      readTemplates();
+      window.addEventListener("focus", readTemplates);
+      return () => window.removeEventListener("focus", readTemplates);
     }, [isSlashMenuOpen]);
     const templateItems = useMemo(
       () =>
@@ -1050,6 +1103,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     // Held by key and read back through the live list, so a plugin that is
     // disabled, unloaded or changed while its form is open takes the form with it.
+    // So does a template file found gone by the next read of the folder.
     const [activeTemplateKey, setActiveTemplateKey] = useState<string | null>(null);
     useEffect(() => {
       if (activeTemplateKey !== null && !promptTemplates.some((t) => t.key === activeTemplateKey)) {
@@ -1075,6 +1129,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       contextItems,
       isContextLoading,
       forgeReferences,
+      pendingDiffNotes,
     });
     // `#` is ordinary text far more often than a reference, so with nothing to
     // offer — no forge, no credential, nothing matching — it stays just a
@@ -1269,6 +1324,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       cwd,
       agentId,
       expandContext: !thisMachineOff,
+      takesDiffNotes,
     });
 
     // The outside-write revision the effect below last brought into the editor.
@@ -1444,6 +1500,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       refused: boolean;
       tooShort?: true;
       crossHost?: CrossHostRefusal;
+      noDiffNotes?: true;
       retires?: VoiceScratchRefusal | VoiceFileReferenceNote | null;
     } | null>(null);
     const dropSendRefusal = (dictationKeepsReply = false) =>
@@ -1454,13 +1511,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       );
     const submitAttemptRef = useRef(0);
     const notingRefusal = useCallback(
-      (submit: (outgoing: string) => Promise<boolean>, dictated: boolean) =>
-        async (outgoing: string): Promise<boolean> => {
+      (
+        submit: (outgoing: string, submissionToken?: string) => Promise<boolean>,
+        dictated: boolean
+      ) =>
+        async (outgoing: string, submissionToken?: string): Promise<boolean> => {
           const attempt = ++submitAttemptRef.current;
           setSendNote(dictated ? null : { terminalId, refused: false });
           let accepted: boolean;
           try {
-            accepted = await submit(outgoing);
+            accepted = await (submissionToken === undefined
+              ? submit(outgoing)
+              : submit(outgoing, submissionToken));
           } catch {
             accepted = false;
           }
@@ -1485,6 +1547,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       ++submitAttemptRef.current;
       setSendNote({ terminalId, refused: true, crossHost: reason });
     };
+    const noteNoDiffNotes = () => {
+      ++submitAttemptRef.current;
+      const retires = standingVoiceNote(voiceId);
+      setSendNote({ terminalId, refused: true, noDiffNotes: true, retires });
+    };
 
     // Every way this composer sends — Enter, a picked slash command, a prompt
     // from the command picker — goes through `submitText` when it is given, so
@@ -1507,7 +1574,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // The host's as it stands when the text goes, not at the press: an
           // expansion awaited in between can outlast a lock or a restart.
           submit: notingRefusal(
-            (outgoing) => submitTextRef.current?.(outgoing, imagePaths) ?? Promise.resolve(false),
+            (outgoing, submissionToken) =>
+              (submissionToken === undefined
+                ? submitTextRef.current?.(outgoing, imagePaths)
+                : submitTextRef.current?.(outgoing, imagePaths, submissionToken)) ??
+              Promise.resolve(false),
             dictated
           ),
         });
@@ -1624,6 +1695,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         keepDraft,
         dictationSessions: voiceSend?.sessions,
         dictated: voiceSend !== undefined,
+        onNothingToSend: noteNoDiffNotes,
         ...(departed && { departed: true }),
         // Routed at its key press: through the route, in place of `submitText`.
         ...(route && {
@@ -1663,6 +1735,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // anywhere in the page, unless a dictation running elsewhere takes the
     // press first.
     const stopAndSendCombo = useEffectiveCombo("voiceInput.stopAndSend");
+    const keyLabels = useKeyLabels();
     const voiceSessionTakesStopAndSend = useVoiceRecordingStore(
       (s) => s.activeTarget !== null && s.status !== "finishing" && isActiveVoiceSession(s.status)
     );
@@ -1748,12 +1821,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       ? SPOKEN_SEND_TOO_SHORT_CAPTION
       : ownSendNote?.crossHost
         ? CROSS_HOST_CAPTION[ownSendNote.crossHost]
-        : "Not sent";
+        : ownSendNote?.noDiffNotes
+          ? NO_DIFF_NOTES_CAPTION
+          : "Not sent";
     const sendRefusedStatus = ownSendNote?.tooShort
       ? SPOKEN_SEND_TOO_SHORT_STATUS
       : ownSendNote?.crossHost
         ? CROSS_HOST_STATUS[ownSendNote.crossHost]
-        : SEND_HELD_STATUS;
+        : ownSendNote?.noDiffNotes
+          ? NO_DIFF_NOTES_STATUS
+          : SEND_HELD_STATUS;
     // A refused send retires the voice note it found on the border, never a
     // newer one. One the send took outlives it: it says what went out.
     const retiredNote = isSendRefused ? (ownSendNote?.retires ?? null) : null;
@@ -1848,7 +1925,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // note shows: nothing else says the earlier words haven't gone (#15703).
     const voiceSubmitStatus = voiceSubmitWait
       ? showVoiceSubmitStatus
-        ? voiceSubmitWaitStatus(voiceSubmitWait, voiceSubmitKeys)
+        ? voiceSubmitWaitStatus(voiceSubmitWait, voiceSubmitKeys, keyLabels)
         : ""
       : voiceSendUncleaned
         ? VOICE_SEND_UNCLEANED_STATUS[voiceSendUncleaned]
@@ -1872,7 +1949,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const expandedSubmitLabel =
       voiceSubmitWait && showVoiceSubmitStatus ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
-          {voiceSubmitWaitCaption(voiceSubmitWait, voiceSubmitKeys)}
+          {voiceSubmitWaitCaption(voiceSubmitWait, voiceSubmitKeys, keyLabels)}
         </span>
       ) : showScratchRefusalCaption ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
@@ -2292,10 +2369,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // A popped stash replaces the editor's state outright, past the
       // document-change listener that drops the note.
       popStashedEditorState: (terminalId, projectId) => {
+        // A send waiting on this draft reads it when it goes: restored now, the
+        // stash would go in place of what Enter was pressed on. It stays stashed.
+        if (useTerminalInputStore.getState().isVoiceSubmitting(voiceId)) return undefined;
         const stashed = popStashedEditorState(terminalId, projectId);
         if (stashed) dropSendRefusal();
         return stashed;
       },
+      // The draft takes it now: left to the next keystroke, a switch of session
+      // first would lose it, the stash being spent.
+      onStashPopped: (text) => applyEditorValue(text),
       setActiveCompletionContext,
       setIsExpanded,
       setSelectedIndex,
@@ -2392,9 +2475,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
       contextChipTooltipCompartmentRef,
+      notesChipTooltipCompartmentRef,
       forgeReferenceTooltipCompartmentRef,
       isAutocompleteOpen,
     });
+    // After the factory, so a composer opening on a draft that names `@notes`
+    // draws its count on the first paint.
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (view) applyDiffNotesChipSource(view, pendingDiffNotes);
+    }, [pendingDiffNotes, editorViewRef, terminalId]);
 
     const { expanded: isListboxExpanded, activeOptionId } = getComboboxState({
       isOpen: isAutocompleteOpen,
@@ -2689,9 +2779,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         ? "Terminal output"
                         : atClaim === "selection"
                           ? "Terminal selection"
-                          : atClaim === "diff"
-                            ? "Diffs"
-                            : "Files"
+                          : atClaim === "notes"
+                            ? "Diff notes"
+                            : atClaim === "diff"
+                              ? "Diffs"
+                              : "Files"
               }
               ariaLabel={
                 triggerChar === "/"
@@ -2704,9 +2796,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         ? "Terminal autocomplete"
                         : atClaim === "selection"
                           ? "Selection autocomplete"
-                          : atClaim === "diff"
-                            ? "Diff autocomplete"
-                            : "File autocomplete"
+                          : atClaim === "notes"
+                            ? "Diff note autocomplete"
+                            : atClaim === "diff"
+                              ? "Diff autocomplete"
+                              : "File autocomplete"
               }
               emptyMessage={
                 triggerChar === "/"
@@ -2717,6 +2811,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       ? "No files match"
                       : "No matches"
               }
+              note={isSlashMenuOpen && hasTemplateProblems ? TEMPLATE_PROBLEMS_NOTE : undefined}
             />
             {isDragOverCompact && <FileDropOverlay className="rounded-md" />}
             {/* A prompt marker, not a control: it is what makes the box read as
@@ -2876,7 +2971,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     <button
                       type="button"
                       onClick={handlePopStash}
-                      disabled={disabled}
+                      disabled={disabled || isVoiceSubmitting}
                       // 24px to clear the WCAG 2.5.8 floor. The spacing
                       // exception cannot rescue a smaller one here — its circle
                       // overlaps the attach and mic targets either side.
@@ -3010,7 +3105,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           <PromptTemplateForm
             key={activeTemplate.key}
             title={activeTemplate.template.title}
-            pluginName={activeTemplate.pluginName}
+            attribution={activeTemplate.attribution}
             args={activeTemplate.template.args}
             onSubmit={handleTemplateSubmit}
             onCancel={() => setActiveTemplateKey(null)}

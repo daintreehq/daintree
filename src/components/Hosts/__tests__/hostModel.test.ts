@@ -7,6 +7,7 @@ import type {
 } from "@shared/types/remoteHosts";
 import {
   buildHostMenuRows,
+  describeAwayHost,
   describeHostAgentClis,
   describeHostMenuState,
   describeHostRowStatus,
@@ -14,6 +15,8 @@ import {
   hostChipStatusText,
   hostMenuNoteAge,
   hostMenuRowHasTrouble,
+  isHostMenuRowAway,
+  isHostNotAnswering,
   updateActionLabel,
   updateTargetFor,
 } from "../hostModel";
@@ -371,5 +374,48 @@ describe("updateTargetFor", () => {
     expect(
       updateActionLabel({ kind: "version", local: "1.3.0", remote: "1.4.0" }, "studio-01")
     ).toBe("Update this machine");
+  });
+});
+
+describe("away hosts", () => {
+  const unreachable: HostConnectionState = { status: "unreachable", lastSeenAt: 50, detail: null };
+  const cases: Array<[string, HostConnectionState, boolean, boolean]> = [
+    // [what, connection, not answering, away in the menus]
+    ["unreachable", unreachable, true, true],
+    ["re-dialling after a failure", { status: "connecting", attempt: 2 }, true, true],
+    ["dialling for the first time", { status: "connecting", attempt: 1 }, false, false],
+    ["restarting", { status: "connecting", attempt: 4, restarting: true }, false, false],
+    ["not listening", { ...unreachable, hostModeOff: true, stoppedRetrying: true }, true, true],
+    ["refusing the login", { ...unreachable, stoppedRetrying: true }, true, false],
+    ["silent", { ...CONNECTED, quietSince: 40 }, false, true],
+    ["not connected", { status: "disconnected" }, false, false],
+    ["connected", CONNECTED, false, false],
+  ];
+
+  it.each(cases)("sorts a host that is %s", (_what, connection, notAnswering, away) => {
+    const [, row] = rowsFor([entry("h1", "studio-01", connection)]);
+    expect(isHostNotAnswering(row!)).toBe(notAnswering);
+    expect(isHostMenuRowAway(row!)).toBe(away);
+  });
+
+  it("never counts the window's own host or this machine as away", () => {
+    const [local, current] = rowsFor([entry("h1", "studio-01", unreachable)], "h1");
+    for (const row of [local!, current!]) {
+      expect(isHostNotAnswering(row)).toBe(false);
+      expect(isHostMenuRowAway(row)).toBe(false);
+    }
+  });
+
+  it("gives an away host one line: its age, or what it said instead", () => {
+    const line = (connection: HostConnectionState, lastSeenAt: number | null = 50) =>
+      describeAwayHost(rowsFor([entry("h1", "studio-01", connection, null, { lastSeenAt })])[1]!);
+    expect(line(unreachable)).toEqual({ state: null, at: 50 });
+    expect(line({ status: "connecting", attempt: 3 }, 20)).toEqual({ state: null, at: 20 });
+    expect(line({ ...unreachable, lastSeenAt: null }, null)).toEqual({
+      state: "Unreachable",
+      at: null,
+    });
+    expect(line({ ...unreachable, hostModeOff: true })).toEqual({ state: "Not listening", at: 50 });
+    expect(line({ ...CONNECTED, quietSince: 40 })).toEqual({ state: "No reply", at: 40 });
   });
 });

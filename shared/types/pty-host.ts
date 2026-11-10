@@ -18,7 +18,6 @@ import type {
 } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 import type { PowerPolicyLevel } from "./powerPolicy.js";
-import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
 import type { AgentEndObservation, AgentFallbackTriggeredPayload } from "./ipc/agent.js";
@@ -886,6 +885,14 @@ export type PtyHostEvent =
       usedPercent: number | null;
       resetsAt: number | null;
       observedAt: number;
+      /**
+       * The Claude Code config folder the pane launched on, as its
+       * `claudeConfigDir`: which account the reading is for (#16370). Null
+       * when the launch env named one that can't be resolved.
+       */
+      configDir: string | null;
+      /** The shell the pane started, whose startup files may have changed that folder. */
+      shell: string | null;
       timestamp: number;
     }
   | {
@@ -1382,7 +1389,7 @@ export interface PtyHostTerminalInfo {
   /** Lifecycle-ledger generation this record belongs to, so a reader can tell it from a relaunch's. */
   launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
   /**
@@ -1459,6 +1466,7 @@ export type SpawnErrorCode =
   | "TERMINAL_ALREADY_LIVE" // Spawn rejected: the id already has a live owner (#11341)
   | "SPAWN_TIMEOUT" // No spawn result from the pty-host within the confirmation window (#12754)
   | "REQUIRED_PLUGIN_TOOLS" // Agent launch refused: plugin tools it requires weren't ready (#14096)
+  | "PROJECT_NOT_READY" // Spawn refused: the project's repository is still being cloned (#16352)
   | "UNKNOWN"; // Unknown error
 
 /** Result of a spawn operation */
@@ -1493,6 +1501,14 @@ export interface SpawnError {
 /** Crash type classification based on exit codes */
 export type CrashType =
   "OUT_OF_MEMORY" | "ASSERTION_FAILURE" | "SIGNAL_TERMINATED" | "UNKNOWN_CRASH" | "CLEAN_EXIT";
+
+/**
+ * `reason` on a `data-loss` status when the only views that missed the bytes
+ * were cached: the host skipped live output for a project no window shows.
+ * The pane repaints from the host snapshot once its view is back, so it gets
+ * no discontinuity marker.
+ */
+export const HIDDEN_VIEW_SKIP_REASON = "hidden-view-skip";
 
 /** Payload for terminal status events (flow control) */
 export interface TerminalStatusPayload {

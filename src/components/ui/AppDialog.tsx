@@ -119,7 +119,8 @@ function resolveRestoreFocusTarget(target: RestoreFocusTarget | undefined): HTML
 }
 
 interface AppDialogContextValue {
-  onClose: () => void;
+  /** Absent in window chrome: there the window's own controls close it. */
+  onClose?: () => void;
   titleId: string;
   descriptionId: string;
   variant: DialogVariant;
@@ -143,6 +144,36 @@ interface BodyEdges {
 }
 
 const AppDialogContext = createContext<AppDialogContextValue | null>(null);
+
+const NO_DESCRIPTION = () => () => {};
+const NO_BODY_EDGES = () => {};
+
+/**
+ * A window dialog's header and title for a host that fills its own window:
+ * none of the dialog around them, so no portal, focus trap, or Escape layer.
+ * The host draws the surface, and the window closes by its own controls, so
+ * nothing here closes it: a close button composed in anyway shows unavailable.
+ */
+export function AppDialogWindowChrome({ children }: { children: React.ReactNode }) {
+  const titleId = useId();
+  const descriptionId = useId();
+  return (
+    <AppDialogContext.Provider
+      value={{
+        titleId,
+        descriptionId,
+        variant: "default",
+        dismissible: false,
+        registerDescription: NO_DESCRIPTION,
+        placement: "window",
+        bodyEdges: null,
+        reportBodyEdges: NO_BODY_EDGES,
+      }}
+    >
+      {children}
+    </AppDialogContext.Provider>
+  );
+}
 
 export interface AppDialogProps {
   isOpen: boolean;
@@ -1036,9 +1067,10 @@ interface AppDialogBodyProps {
 
 /**
  * Claims the header and footer rules for this body: none on the first paint,
- * then whichever edges its content actually runs past.
+ * then whichever edges its content actually runs past. Exported for a dialog
+ * that scrolls its own column instead of composing `AppDialog.Body`.
  */
-function useBodyEdgesReport(): ((edges: BodyEdges) => void) | undefined {
+export function useBodyEdgesReport(): ((edges: BodyEdges) => void) | undefined {
   const report = useContext(AppDialogContext)?.reportBodyEdges;
   useLayoutEffect(() => {
     if (!report) return;

@@ -11,7 +11,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+W",
     scope: "global",
     priority: 10,
-    description: "Close focused terminal",
+    description: "Close focused panel",
     category: "Terminal",
   },
   {
@@ -67,7 +67,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+T",
     scope: "global",
     priority: 0,
-    description: "Reopen last closed terminal",
+    description: "Reopen last closed panel",
     category: "Terminal",
   },
   {
@@ -83,7 +83,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+K Cmd+W",
     scope: "global",
     priority: 0,
-    description: "Close all terminals",
+    description: "Close all panels",
     category: "Terminal",
   },
   {
@@ -99,7 +99,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+K Cmd+Q",
     scope: "global",
     priority: 0,
-    description: "Kill focused terminal",
+    description: "Remove focused panel",
     category: "Terminal",
   },
   {
@@ -131,7 +131,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+K Cmd+L",
     scope: "global",
     priority: 0,
-    description: "Rename focused terminal",
+    description: "Rename focused panel",
     category: "Terminal",
   },
   {
@@ -187,7 +187,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Alt+M",
     scope: "global",
     priority: 0,
-    description: "Toggle focused terminal dock state",
+    description: "Toggle focused panel dock state",
     category: "Terminal",
   },
   {
@@ -195,7 +195,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+Alt+M",
     scope: "global",
     priority: 0,
-    description: "Toggle all terminals dock state",
+    description: "Toggle all panels dock state",
     category: "Terminal",
   },
   {
@@ -203,7 +203,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Ctrl+Tab",
     scope: "global",
     priority: 0,
-    description: "Focus next terminal",
+    description: "Focus next panel",
     category: "Terminal",
   },
   {
@@ -211,7 +211,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Ctrl+Shift+Tab",
     scope: "global",
     priority: 0,
-    description: "Focus previous terminal",
+    description: "Focus previous panel",
     category: "Terminal",
   },
   {
@@ -253,7 +253,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Ctrl+Shift+F",
     scope: "global",
     priority: 0,
-    description: "Toggle maximize terminal",
+    description: "Toggle maximize panel",
     category: "Terminal",
   },
   {
@@ -261,7 +261,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+Alt+ArrowLeft",
     scope: "global",
     priority: 0,
-    description: "Move terminal left in grid or dock",
+    description: "Move panel left in grid or dock",
     category: "Terminal",
   },
   {
@@ -269,7 +269,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+Alt+ArrowRight",
     scope: "global",
     priority: 0,
-    description: "Move terminal right in grid or dock",
+    description: "Move panel right in grid or dock",
     category: "Terminal",
   },
   {
@@ -277,7 +277,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+Alt+ArrowUp",
     scope: "global",
     priority: 0,
-    description: "Move terminal up in grid",
+    description: "Move panel up in grid",
     category: "Terminal",
   },
   {
@@ -285,7 +285,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+Alt+ArrowDown",
     scope: "global",
     priority: 0,
-    description: "Move terminal down in grid",
+    description: "Move panel down in grid",
     category: "Terminal",
   },
   {
@@ -293,7 +293,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+Alt+D",
     scope: "global",
     priority: 0,
-    description: "Move terminal to dock",
+    description: "Move panel to dock",
     category: "Terminal",
   },
   {
@@ -301,7 +301,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+Alt+G",
     scope: "global",
     priority: 0,
-    description: "Move terminal to grid",
+    description: "Move panel to grid",
     category: "Terminal",
   },
   {
@@ -317,7 +317,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Alt+C",
     scope: "global",
     priority: 0,
-    description: "Launch Claude Code agent",
+    description: "Launch Claude agent",
     category: "Agents",
   },
   {
@@ -484,7 +484,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+J",
     scope: "global",
     priority: 0,
-    description: "Toggle arm focused pane (Join the fleet)",
+    description: "Toggle arm focused terminal (Join the fleet)",
     category: "Fleet",
   },
   {
@@ -492,7 +492,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "X",
     scope: "worktreeGrid",
     priority: 5,
-    description: "Toggle arm focused pane (no modifier, grid only)",
+    description: "Toggle arm focused terminal (no modifier, grid only)",
     category: "Fleet",
   },
   {
@@ -556,7 +556,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Alt+ArrowUp",
     scope: "global",
     priority: 0,
-    description: "Focus terminal above",
+    description: "Focus panel above",
     category: "Terminal",
   },
   {
@@ -564,7 +564,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Alt+ArrowDown",
     scope: "global",
     priority: 0,
-    description: "Focus terminal below",
+    description: "Focus panel below",
     category: "Terminal",
   },
   {
@@ -572,7 +572,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Alt+ArrowLeft",
     scope: "global",
     priority: 0,
-    description: "Focus terminal to the left",
+    description: "Focus panel to the left",
     category: "Terminal",
   },
   {
@@ -580,7 +580,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Alt+ArrowRight",
     scope: "global",
     priority: 0,
-    description: "Focus terminal to the right",
+    description: "Focus panel to the right",
     category: "Terminal",
   },
   // Index-based terminal navigation (Cmd+1-9)
@@ -589,7 +589,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+1",
     scope: "global",
     priority: 0,
-    description: "Focus terminal 1",
+    description: "Focus panel 1",
     category: "Terminal",
   },
   {
@@ -597,7 +597,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+2",
     scope: "global",
     priority: 0,
-    description: "Focus terminal 2",
+    description: "Focus panel 2",
     category: "Terminal",
   },
   {
@@ -605,7 +605,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+3",
     scope: "global",
     priority: 0,
-    description: "Focus terminal 3",
+    description: "Focus panel 3",
     category: "Terminal",
   },
   {
@@ -613,7 +613,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+4",
     scope: "global",
     priority: 0,
-    description: "Focus terminal 4",
+    description: "Focus panel 4",
     category: "Terminal",
   },
   {
@@ -621,7 +621,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+5",
     scope: "global",
     priority: 0,
-    description: "Focus terminal 5",
+    description: "Focus panel 5",
     category: "Terminal",
   },
   {
@@ -629,7 +629,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+6",
     scope: "global",
     priority: 0,
-    description: "Focus terminal 6",
+    description: "Focus panel 6",
     category: "Terminal",
   },
   {
@@ -637,7 +637,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+7",
     scope: "global",
     priority: 0,
-    description: "Focus terminal 7",
+    description: "Focus panel 7",
     category: "Terminal",
   },
   {
@@ -645,7 +645,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+8",
     scope: "global",
     priority: 0,
-    description: "Focus terminal 8",
+    description: "Focus panel 8",
     category: "Terminal",
   },
   {
@@ -653,7 +653,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+9",
     scope: "global",
     priority: 0,
-    description: "Focus terminal 9",
+    description: "Focus panel 9",
     category: "Terminal",
   },
   {
@@ -1014,7 +1014,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+H",
     scope: "global",
     priority: 0,
-    description: "Launch help agent",
+    description: "Launch Daintree Assistant",
     category: "Help",
   },
   {
@@ -1232,24 +1232,24 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+K Cmd+M",
     scope: "global",
     priority: 0,
-    description: "Dock all sessions in active worktree",
-    category: "Worktree sessions",
+    description: "Dock all panels in active worktree",
+    category: "Worktree panels",
   },
   {
     actionId: "worktree.sessions.maximizeAll",
     combo: "Cmd+K Cmd+X",
     scope: "global",
     priority: 0,
-    description: "Move all sessions to grid in active worktree",
-    category: "Worktree sessions",
+    description: "Move all panels to grid in active worktree",
+    category: "Worktree panels",
   },
   {
     actionId: "worktree.sessions.resetRenderers",
     combo: "Cmd+K Cmd+V",
     scope: "global",
     priority: 0,
-    description: "Reset renderers for all sessions in active worktree",
-    category: "Worktree sessions",
+    description: "Redraw all terminals in active worktree",
+    category: "Worktree panels",
   },
 ];
 
@@ -1275,7 +1275,7 @@ const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Ctrl+F4",
     scope: "global",
     priority: 10,
-    description: "Close focused terminal",
+    description: "Close focused panel",
     category: "Terminal",
   },
   {
@@ -1405,7 +1405,7 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Ctrl+Shift+ArrowUp",
     scope: "global",
     priority: 0,
-    description: "Focus terminal above",
+    description: "Focus panel above",
     category: "Terminal",
     when: "!textInputFocused && !modalOpen",
   },
@@ -1414,7 +1414,7 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Ctrl+Shift+ArrowDown",
     scope: "global",
     priority: 0,
-    description: "Focus terminal below",
+    description: "Focus panel below",
     category: "Terminal",
     when: "!textInputFocused && !modalOpen",
   },
@@ -1423,7 +1423,7 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Ctrl+Shift+ArrowLeft",
     scope: "global",
     priority: 0,
-    description: "Focus terminal to the left",
+    description: "Focus panel to the left",
     category: "Terminal",
     when: "!textInputFocused && !modalOpen",
   },
@@ -1432,7 +1432,7 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Ctrl+Shift+ArrowRight",
     scope: "global",
     priority: 0,
-    description: "Focus terminal to the right",
+    description: "Focus panel to the right",
     category: "Terminal",
     when: "!textInputFocused && !modalOpen",
   },
@@ -1481,7 +1481,7 @@ export const KEYBINDING_CATEGORY_ORDER: readonly string[] = [
   "Agents",
   "Fleet",
   "Worktrees",
-  "Worktree sessions",
+  "Worktree panels",
   "Panels",
   "Layout",
   "Search",

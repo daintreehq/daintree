@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { cn } from "@/lib/utils";
 import type { EventRecord, EventCategory } from "@/store/eventStore";
@@ -17,7 +17,7 @@ interface EventTimelineProps {
   onAutoScrollChange?: (autoScroll: boolean) => void;
   /** Events before filtering — tells "nothing captured" apart from "nothing matches". */
   totalCount?: number;
-  onClearFilters?: () => void;
+  onClearFilters?: (event: MouseEvent<HTMLButtonElement>) => void;
   className?: string;
 }
 

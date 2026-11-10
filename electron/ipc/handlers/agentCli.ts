@@ -1,17 +1,25 @@
 // eager-import-allow: reads agent CLI config via store.get synchronously in the IPC handler
 import { CHANNELS } from "../channels.js";
-import { getAgentIds } from "../../../shared/config/agentRegistry.js";
+import { defineIpcNamespace, op } from "../define.js";
+import { AGENT_CLI_COPIES_METHOD_CHANNELS } from "./agentCliCopies.preload.js";
+import { getAgentIds, getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import type {
   AgentAvailabilityState,
+  AgentCliCopy,
   AgentCliDetails,
   AgentInstallPayload,
 } from "../../../shared/types/ipc/system.js";
-import { sendToRendererContext, typedHandle, typedHandleWithContext } from "../utils.js";
+import {
+  broadcastToRenderer,
+  sendToRendererContext,
+  typedHandle,
+  typedHandleWithContext,
+} from "../utils.js";
 import { runAgentInstall } from "../../services/AgentInstallService.js";
 import type { HandlerDependencies } from "../types.js";
 
 export function registerAgentCliHandlers(deps: HandlerDependencies): () => void {
-  const { cliAvailabilityService, agentVersionService, agentUpdateHandler } = deps;
+  const { cliAvailabilityService, agentVersionService } = deps;
   const handlers: Array<() => void> = [];
 
   const handleSystemGetCliAvailability = async () => {
@@ -51,7 +59,8 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
       return {};
     }
 
-    let details = cliAvailabilityService.getDetails();
+    // Settled: views reread this when told a choice changed, and must hear the new copy.
+    let details = await cliAvailabilityService.getSettledDetails();
     if (!details) {
       // Details are populated by the same cycle as availability. If nothing
       // is cached yet, kick off the check so renderers can lazy-load the
@@ -108,6 +117,66 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
     typedHandle(CHANNELS.SYSTEM_REFRESH_AGENT_VERSIONS, handleSystemRefreshAgentVersions)
   );
 
+  // Every later launch, version and listing reads the choice through a check that
+  // has already seen it, and every view hears that it changed.
+  const applyCliChoice = async (agentId: string, path: string | null): Promise<void> => {
+    if (!cliAvailabilityService) throw new Error("CLI detection isn't available");
+    cliAvailabilityService.setChosenCopy(agentId, path);
+    agentVersionService?.invalidate(agentId);
+    try {
+      await cliAvailabilityService.refresh();
+      await cliAvailabilityService.getSettledDetails();
+    } finally {
+      broadcastToRenderer(CHANNELS.AGENT_CLI_COPIES_CHANGED, { agentId });
+    }
+  };
+
+  const agentCliCopiesNamespace = defineIpcNamespace({
+    name: "agentCliCopies",
+    ops: {
+      // Takes only an agent id: which files run is this machine's to decide.
+      list: op(
+        AGENT_CLI_COPIES_METHOD_CHANNELS.list,
+        async (agentId: string): Promise<AgentCliCopy[]> => {
+          if (typeof agentId !== "string" || !agentId) {
+            throw new Error("Invalid agentId");
+          }
+          return (await agentVersionService?.getCopies(agentId)) ?? [];
+        }
+      ),
+      // Only a copy this machine finds now can be chosen: a path the caller names
+      // is a key into that list, never a command of its own.
+      choose: op(
+        AGENT_CLI_COPIES_METHOD_CHANNELS.choose,
+        async (agentId: string, path: string): Promise<void> => {
+          if (typeof agentId !== "string" || !agentId) {
+            throw new Error("Invalid agentId");
+          }
+          if (typeof path !== "string" || !path) {
+            throw new Error("Invalid path");
+          }
+          if (!cliAvailabilityService) throw new Error("CLI detection isn't available");
+          const config = getEffectiveAgentConfig(agentId);
+          if (!config) throw new Error(`Unknown agent: ${agentId}`);
+          const found = await cliAvailabilityService.findCopies(agentId, config);
+          const copy = found.find((candidate) => candidate === path);
+          if (copy === undefined) {
+            throw new Error("That copy wasn't found on this machine. Re-check and choose again.");
+          }
+          await applyCliChoice(agentId, copy);
+        }
+      ),
+      reset: op(AGENT_CLI_COPIES_METHOD_CHANNELS.reset, async (agentId: string): Promise<void> => {
+        if (typeof agentId !== "string" || !agentId) {
+          throw new Error("Invalid agentId");
+        }
+        if (!getEffectiveAgentConfig(agentId)) throw new Error(`Unknown agent: ${agentId}`);
+        await applyCliChoice(agentId, null);
+      }),
+    },
+  });
+  handlers.push(agentCliCopiesNamespace.register());
+
   const handleSystemGetAgentUpdateSettings = async () => {
     const { store } = await import("../../store.js");
     return store.get("agentUpdateSettings", {
@@ -142,26 +211,6 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
   handlers.push(
     typedHandle(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS, handleSystemSetAgentUpdateSettings)
   );
-
-  const handleSystemStartAgentUpdate = async (
-    payload: import("../../types/index.js").StartAgentUpdatePayload
-  ) => {
-    if (!agentUpdateHandler) {
-      throw new Error("AgentUpdateHandler not available");
-    }
-
-    if (
-      !payload ||
-      !payload.agentId ||
-      typeof payload.agentId !== "string" ||
-      (payload.method !== undefined && typeof payload.method !== "string")
-    ) {
-      throw new Error("Invalid StartAgentUpdatePayload");
-    }
-
-    return await agentUpdateHandler.startUpdate(payload);
-  };
-  handlers.push(typedHandle(CHANNELS.SYSTEM_START_AGENT_UPDATE, handleSystemStartAgentUpdate));
 
   const handleSystemHealthCheck = async (
     options?: import("../../../shared/types/ipc/system.js").SystemHealthCheckOptions

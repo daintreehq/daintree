@@ -2,12 +2,17 @@ import { dirname, isAbsolute, resolve } from "path";
 import { promises as fs, type Stats } from "fs";
 import type { SimpleGit, StatusResult } from "simple-git";
 import type { FileChangeDetail, GitStatus, WorktreeChanges } from "../types/index.js";
-import { WorktreeRemovedError, toGitOperationError } from "./errorTypes.js";
+import {
+  GitStatusUnansweredError,
+  WorktreeRemovedError,
+  toGitOperationError,
+} from "./errorTypes.js";
 import { isMissingGitExecutableError } from "../../shared/utils/gitOperationErrors.js";
 import { logWarn, logError } from "./logger.js";
 import { Cache } from "./cache.js";
 import { createHardenedGit, createWslHardenedGit } from "./hardenedGit.js";
 import type { WslGitInvocation } from "./hardenedGit.js";
+import { hasStoppedGitChild } from "./gitProcessLifecycle.js";
 import { getGitDir } from "./gitUtils.js";
 import {
   beginDiffStatPass,
@@ -48,13 +53,11 @@ function realpathBounded(path: string): Promise<string> {
 
 // The signal reclaims the read's buffers once it times out; the race settles
 // the call even when the open itself never returns.
-async function readFileBounded(path: string): Promise<Buffer>;
-async function readFileBounded(path: string, encoding: "utf-8"): Promise<string>;
-async function readFileBounded(path: string, encoding?: "utf-8"): Promise<Buffer | string> {
+async function readFileBounded(path: string, encoding: "utf-8"): Promise<string> {
   const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS);
   try {
-    return await withTimeout<Buffer | string>(
-      encoding ? fs.readFile(path, { encoding, signal }) : fs.readFile(path, { signal }),
+    return await withTimeout(
+      fs.readFile(path, { encoding, signal }),
       FS_OP_TIMEOUT_MS,
       "readFile timed out"
     );
@@ -65,6 +68,54 @@ async function readFileBounded(path: string, encoding?: "utf-8"): Promise<Buffer
     throw error;
   } finally {
     dispose();
+  }
+}
+
+// The leading span the untracked line counter sniffs for a NUL byte.
+const BINARY_SNIFF_BYTES = 8192;
+
+interface UntrackedRead {
+  bytes: Buffer;
+  /** Only the sniff was read: it held a NUL and filled, so more may follow. */
+  sniffOnly: boolean;
+}
+
+// Bounded as a whole, as `readFileBounded` is, so a stalled open, read or
+// close costs one bound rather than one each.
+async function readUntrackedBounded(path: string): Promise<UntrackedRead> {
+  const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS);
+  try {
+    return await withTimeout(readUntracked(path, signal), FS_OP_TIMEOUT_MS, "readFile timed out");
+  } catch (error) {
+    if (signal.aborted && signal.reason instanceof TimeoutError) throw signal.reason;
+    throw error;
+  } finally {
+    dispose();
+  }
+}
+
+// A sniff holding a NUL ends the read, so a binary costs one sniff-sized read
+// however large it is. The sniff is positional, which leaves the handle at
+// byte 0, so the whole-file read after it starts at the first byte. A short
+// read is not EOF (network mounts return them), so the sniff fills until a
+// read returns nothing. `open`, `read` and `close` take no signal: a stalled
+// one is abandoned by the bound, and the handle is still closed once it
+// returns, without starting another read.
+async function readUntracked(path: string, signal: AbortSignal): Promise<UntrackedRead> {
+  const handle = await fs.open(path, "r");
+  try {
+    const sniff = Buffer.alloc(BINARY_SNIFF_BYTES);
+    let filled = 0;
+    while (filled < sniff.length) {
+      signal.throwIfAborted();
+      const { bytesRead } = await handle.read(sniff, filled, sniff.length - filled, filled);
+      if (bytesRead === 0) return { bytes: sniff.subarray(0, filled), sniffOnly: false };
+      filled += bytesRead;
+    }
+    if (sniff.indexOf(0) !== -1) return { bytes: sniff, sniffOnly: true };
+    return { bytes: await handle.readFile({ signal }), sniffOnly: false };
+  } finally {
+    await handle.close();
   }
 }
 
@@ -724,11 +775,18 @@ export interface GetWorktreeChangesOptions {
   signal?: AbortSignal;
   /**
    * Aborted when the caller stops waiting without stopping the owner (the
-   * poll watchdog). The read may still be stuck, so nothing joins it from
-   * then on and a late result is not cached. It does not kill the children:
-   * `signal` keys the reusable git instance.
+   * poll watchdog). Nothing joins the read from then on, a late result is not
+   * cached, and its git children are stopped: the instance it ran on is
+   * cancelled and dropped, so the next read builds a fresh one.
    */
   abandonSignal?: AbortSignal;
+}
+
+interface ChangesGit {
+  readonly git: SimpleGit;
+  /** Built into the instance's abort plugin; follows the owner's signal. */
+  readonly controller: AbortController;
+  readonly detach: () => void;
 }
 
 // One SimpleGit per (cancellation owner, route). Construction runs a
@@ -738,21 +796,40 @@ export interface GetWorktreeChangesOptions {
 // the abort plugin is bound at construction: a stopped-then-restarted monitor
 // gets a fresh signal and so a fresh instance, and the old entries go with the
 // dead signal. The per-pass `fs.stat(cwd)` still classifies a removed worktree
-// before any spawn.
-const GIT_FOR_CHANGES_BY_SIGNAL = new WeakMap<AbortSignal, Map<string, SimpleGit>>();
+// before any spawn. An abandoned read cancels its entry, which kills whatever
+// else is running on it too; only that owner's reads share it.
+const GIT_FOR_CHANGES_BY_SIGNAL = new WeakMap<AbortSignal, Map<string, ChangesGit>>();
 
-async function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): Promise<SimpleGit> {
-  const signal = opts.signal;
+async function buildChangesGit(
+  owner: AbortSignal | undefined,
+  create: (signal: AbortSignal) => Promise<SimpleGit>
+): Promise<ChangesGit> {
+  const controller = new AbortController();
+  const onOwnerAbort = () => controller.abort(owner?.reason);
+  if (owner?.aborted) controller.abort(owner.reason);
+  else owner?.addEventListener("abort", onOwnerAbort, { once: true });
+  const detach = () => owner?.removeEventListener("abort", onOwnerAbort);
+  try {
+    return { git: await create(controller.signal), controller, detach };
+  } catch (error) {
+    detach();
+    throw error;
+  }
+}
+
+async function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): Promise<ChangesGit> {
+  const owner = opts.signal;
   if (opts.wsl) {
-    const key = `wsl:${opts.wsl.distro}:${opts.wsl.uncPath}`;
-    const cached = signal ? GIT_FOR_CHANGES_BY_SIGNAL.get(signal)?.get(key) : undefined;
+    const wsl = opts.wsl;
+    const key = `wsl:${wsl.distro}:${wsl.uncPath}`;
+    const cached = owner ? GIT_FOR_CHANGES_BY_SIGNAL.get(owner)?.get(key) : undefined;
     if (cached) return cached;
     try {
       // `await` so a rejected factory promise lands in this catch and falls
       // back, matching the previous synchronous-throw behaviour.
-      const git = await createWslHardenedGit(opts.wsl, signal);
-      if (signal) cacheGitForChanges(signal, key, git);
-      return git;
+      const entry = await buildChangesGit(owner, (signal) => createWslHardenedGit(wsl, signal));
+      if (owner) cacheGitForChanges(owner, key, entry);
+      return entry;
     } catch {
       // Fall back to native git if the WSL invocation is rejected (e.g. wrong
       // platform, missing distro). Polling continues using the slower path.
@@ -760,20 +837,50 @@ async function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): Prom
     }
   }
   const key = `native:${cwd}`;
-  const cached = signal ? GIT_FOR_CHANGES_BY_SIGNAL.get(signal)?.get(key) : undefined;
+  const cached = owner ? GIT_FOR_CHANGES_BY_SIGNAL.get(owner)?.get(key) : undefined;
   if (cached) return cached;
-  const git = await createHardenedGit(cwd, signal);
-  if (signal) cacheGitForChanges(signal, key, git);
-  return git;
+  const entry = await buildChangesGit(owner, (signal) => createHardenedGit(cwd, signal));
+  if (owner) cacheGitForChanges(owner, key, entry);
+  return entry;
 }
 
-function cacheGitForChanges(signal: AbortSignal, key: string, git: SimpleGit): void {
-  let bySignal = GIT_FOR_CHANGES_BY_SIGNAL.get(signal);
-  if (!bySignal) {
-    bySignal = new Map();
-    GIT_FOR_CHANGES_BY_SIGNAL.set(signal, bySignal);
+function cacheGitForChanges(owner: AbortSignal, key: string, entry: ChangesGit): void {
+  let byOwner = GIT_FOR_CHANGES_BY_SIGNAL.get(owner);
+  if (!byOwner) {
+    byOwner = new Map();
+    GIT_FOR_CHANGES_BY_SIGNAL.set(owner, byOwner);
   }
-  bySignal.set(key, git);
+  byOwner.set(key, entry);
+}
+
+/** Stop everything running on `entry` and make sure no later read reuses it. */
+function cancelChangesGit(owner: AbortSignal | undefined, entry: ChangesGit): void {
+  const byOwner = owner ? GIT_FOR_CHANGES_BY_SIGNAL.get(owner) : undefined;
+  if (byOwner) {
+    for (const [key, cached] of byOwner) {
+      if (cached === entry) byOwner.delete(key);
+    }
+  }
+  entry.detach();
+  entry.controller.abort(new Error("git status read abandoned"));
+}
+
+/**
+ * A git this host stopped in the worktree is still running, so a new status
+ * would only queue behind it on the same files (a File Provider download, a
+ * dead mount). The caller backs off and asks again later.
+ */
+function hasStoppedGitIn(cwd: string, wsl: WslGitInvocation | undefined): boolean {
+  return hasStoppedGitChild(cwd) || (wsl !== undefined && hasStoppedGitChild(wsl.uncPath));
+}
+
+/** simple-git's block timeout: git produced no output for `GIT_BLOCK_TIMEOUT_MS`. */
+function isGitBlockTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as { plugin?: unknown }).plugin === "timeout" &&
+    error.message === "block timeout reached"
+  );
 }
 
 export async function getWorktreeChangesWithStats(
@@ -808,6 +915,9 @@ export async function getWorktreeChangesWithStats(
   }
 
   const fetchPromise = (async () => {
+    if (hasStoppedGitIn(cwd, options.wsl)) {
+      throw new GitStatusUnansweredError("previous-still-running", cwd);
+    }
     const MAX_UNTRACKED_FILES = 200;
     // stat instead of access: the (dev, ino) pair doubles as the validity
     // check for the static-info cache below. Error mapping is unchanged; a
@@ -823,9 +933,21 @@ export async function getWorktreeChangesWithStats(
       }
       throw accessError;
     }
+    options.abandonSignal?.throwIfAborted();
+
+    let changesGit: ChangesGit | undefined;
+    const abandon = () => {
+      if (changesGit) cancelChangesGit(options.signal, changesGit);
+    };
+    options.abandonSignal?.addEventListener("abort", abandon, { once: true });
 
     try {
-      const git: SimpleGit = await gitForChanges(cwd, options);
+      changesGit = await gitForChanges(cwd, options);
+      if (options.abandonSignal?.aborted) abandon();
+      const git: SimpleGit = changesGit.git;
+      // Aborted when the owner stops or this read is abandoned.
+      const readSignal = changesGit.controller.signal;
+      readSignal.throwIfAborted();
 
       // Fast path: with the static facts (toplevel, realpath) cached for this
       // exact directory inode AND an unambiguous fs-resolved HEAD OID, the
@@ -840,6 +962,7 @@ export async function getWorktreeChangesWithStats(
           : undefined;
 
       const status: StatusResult = await git.status();
+      readSignal.throwIfAborted();
       const fsOid = staticInfo ? await resolveHeadOidFromFs(cwd) : null;
 
       let headOid: string;
@@ -892,7 +1015,7 @@ export async function getWorktreeChangesWithStats(
             );
       // The fallback above also swallows a cancellation; an empty log from a
       // killed child must not sit in the cache as this commit's answer.
-      options.signal?.throwIfAborted();
+      readSignal.throwIfAborted();
       // Only a real answer is cached: the cache never expires, so a transient
       // failure stored here would blank this commit's metadata until eviction.
       if (headOid && logSucceeded) {
@@ -1025,7 +1148,7 @@ export async function getWorktreeChangesWithStats(
           ]);
           for (const rel of batch) diffedPaths.push(rel);
         } catch (error) {
-          if (options.signal?.aborted) throw error;
+          if (readSignal.aborted) throw error;
           logWarn("Failed to read numstat diff; continuing without line stats", {
             cwd,
             message: (error as Error).message,
@@ -1075,27 +1198,26 @@ export async function getWorktreeChangesWithStats(
           // Untracked line counts and binary verdicts (`null`) are a pure
           // function of file content, so their identity deliberately excludes
           // HEAD OID: commits must not discard them. Remembering the binary
-          // verdict is what keeps an unchanged binary from being read whole on
-          // every pass.
+          // verdict is what keeps an unchanged binary from being sniffed again
+          // on every pass.
           const cached = diffStatPass.lookupUntracked(filePath, stats.mtimeMs, stats.size);
           if (cached !== undefined) {
             diffStatPass.keepUntracked(filePath, stats.mtimeMs, stats.size, cached);
             return cached;
           }
 
-          const buffer = await perFile(() => readFileBounded(filePath));
+          const { bytes, sniffOnly } = await perFile(() => readUntrackedBounded(filePath));
 
           let verdict: number | null = null;
-          const sampleSize = Math.min(buffer.length, 8192);
-          if (buffer.subarray(0, sampleSize).indexOf(0) === -1) {
+          if (bytes.subarray(0, BINARY_SNIFF_BYTES).indexOf(0) === -1) {
             // Count newline bytes directly — decoding up to 10MB to a string
             // would double the allocation for no benefit (0x0A is unambiguous
             // in UTF-8).
             verdict = 0;
-            for (let i = 0; i < buffer.length; i++) {
-              if (buffer[i] === 0x0a) verdict++;
+            for (let i = 0; i < bytes.length; i++) {
+              if (bytes[i] === 0x0a) verdict++;
             }
-            if (buffer.length > 0 && buffer[buffer.length - 1] !== 0x0a) {
+            if (bytes.length > 0 && bytes[bytes.length - 1] !== 0x0a) {
               verdict++;
             }
           }
@@ -1103,8 +1225,9 @@ export async function getWorktreeChangesWithStats(
           // A read that raced a writer (or a replacement) still gives this
           // pass its best answer, but the bytes may not belong to the identity
           // the first stat saw, so it is kept only when the read returned
-          // exactly that many bytes and the file still stats the same after.
-          if (buffer.length === stats.size) {
+          // exactly what that size implies (the whole file, or a full sniff of
+          // a file at least that long) and the file still stats the same after.
+          if (sniffOnly ? stats.size >= bytes.length : bytes.length === stats.size) {
             const after = await perFile(() => statBounded(filePath)).catch(() => undefined);
             if (after && isSameFileVersion(stats, after)) {
               diffStatPass.keepUntracked(filePath, stats.mtimeMs, stats.size, verdict);
@@ -1270,21 +1393,28 @@ export async function getWorktreeChangesWithStats(
         tracking,
       };
 
-      // Other enrichment steps degrade instead of throwing; a cancelled run
-      // must not publish what it half-read.
-      options.signal?.throwIfAborted();
-      if (!options.abandonSignal?.aborted) {
-        diffStatPass.publish();
-        GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
-      }
+      // Other enrichment steps degrade instead of throwing; a cancelled or
+      // abandoned run must not publish what it half-read.
+      readSignal.throwIfAborted();
+      diffStatPass.publish();
+      GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
       return result;
     } catch (error) {
       if (error instanceof WorktreeRemovedError) {
         throw error;
       }
-      // Cancelled by the caller: expected, not a git failure worth logging.
-      if (options.signal?.aborted) {
+      // Cancelled by the caller, or abandoned: expected, not a git failure
+      // worth logging.
+      if (options.signal?.aborted || changesGit?.controller.signal.aborted) {
         throw error;
+      }
+
+      // Git was stopped for not answering. Not seeing an answer is not proof
+      // the worktree is gone, so this never reaches the removal checks below.
+      if (isGitBlockTimeout(error)) {
+        const gitError = toGitOperationError(error, { cwd, op: "status" });
+        logError("Git worktree changes operation failed", gitError, { cwd });
+        throw new GitStatusUnansweredError("timed-out", cwd, gitError);
       }
 
       // A spawn into a directory removed after the stat above also reports
@@ -1319,6 +1449,8 @@ export async function getWorktreeChangesWithStats(
       const gitError = toGitOperationError(error, { cwd, op: "status" });
       logError("Git worktree changes operation failed", gitError, { cwd });
       throw gitError;
+    } finally {
+      options.abandonSignal?.removeEventListener("abort", abandon);
     }
   })();
 

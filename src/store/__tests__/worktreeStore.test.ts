@@ -698,6 +698,7 @@ describe("worktreeStore", () => {
         recipeId: null,
         agentId: "claude",
         prompt: "fix the login bug",
+        includeIssue: true,
       };
       const store = useWorktreeSelectionStore.getState();
       store.addPendingCreation("/abs/path", request);

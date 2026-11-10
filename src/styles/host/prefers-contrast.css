@@ -347,6 +347,13 @@
     border-width: 0;
   }
 
+  /* A primary-ink rim on a 6px quiet cell outshone the active days' fills, so
+     the gaps in the run read louder than the run. Secondary ink keeps the
+     track visible and quieter than the days that carry it. */
+  .pulse-mini-ribbon .pulse-heat-cell:not([data-heat-level]) {
+    border-color: var(--color-text-secondary);
+  }
+
   /* File-browser type icons (issue #11596). Entry icons paint in the secondary
    * text token so they sit under the filename they label, but that token is
    * tuned for restraint rather than contrast. Under Increase Contrast the

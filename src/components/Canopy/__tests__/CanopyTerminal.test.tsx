@@ -10,6 +10,10 @@ import {
   type MockInstance,
 } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  selectEffectiveTheme,
+  useTerminalColorSchemeStore,
+} from "@/store/terminalColorSchemeStore";
 import type { ILinkHandler } from "@xterm/xterm";
 import type { CanopyTerminalData, CanopyTerminalView } from "@shared/types/ipc/canopy";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
@@ -27,21 +31,53 @@ const xterm = vi.hoisted(() => ({
     widths: string[];
     resizes: Array<[number, number]>;
     emitData: (data: string) => void;
+    options: Record<string, unknown>;
+    /** What the program has drawn: the shown screen's text from its top row, and the cursor's row. */
+    draw: (screen: string[], cursorRow: number, cursorShown?: boolean) => void;
+    /** xterm painting the rows, as it does in its own animation frame. */
+    render: () => void;
+    /** The program entering or leaving the alternate screen. */
+    switchBuffer: (type: "normal" | "alternate") => void;
+    /** The renderer measuring a new cell size, as after a font change. */
+    remeasure: () => void;
   },
 }));
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     options: Record<string, unknown>;
+    private screen: string[] = [];
     buffer = {
-      active: { baseY: 0, cursorY: 0, getLine: () => ({ translateToString: () => "" }) },
-      onBufferChange: () => ({ dispose() {} }),
+      active: {
+        baseY: 0,
+        viewportY: 0,
+        cursorY: 0,
+        getLine: (y: number) => ({ translateToString: () => this.screen[y] ?? "" }),
+      },
+      onBufferChange: (listener: (buffer: { type: "normal" | "alternate" }) => void) => {
+        this.bufferListeners.add(listener);
+        return { dispose: () => this.bufferListeners.delete(listener) };
+      },
     };
     private onDataListener: ((data: string) => void) | null = null;
+    private renderListeners = new Set<(rows: { start: number; end: number }) => void>();
+    private bufferListeners = new Set<(buffer: { type: "normal" | "alternate" }) => void>();
+    private dimensionListeners = new Set<() => void>();
     unicode = { activeVersion: "6" };
-    modes = { bracketedPasteMode: false };
+    modes = { bracketedPasteMode: false, showCursor: true };
     cols = 80;
     rows = 24;
+    /** The renderer's layout, once it has measured a cell. */
+    get dimensions() {
+      if (cell.current === null) return undefined;
+      const { width, height } = cell.current;
+      return {
+        css: {
+          cell: { width, height },
+          canvas: { width: this.cols * width, height: this.rows * height },
+        },
+      };
+    }
     constructor(options: Record<string, unknown>) {
       this.options = { ...options };
       xterm.current = {
@@ -50,6 +86,21 @@ vi.mock("@xterm/xterm", () => ({
         widths: [],
         resizes: [],
         emitData: (data) => this.onDataListener?.(data),
+        options: this.options,
+        draw: (screen, cursorRow, cursorShown = true) => {
+          this.screen = screen;
+          this.buffer.active.cursorY = cursorRow;
+          this.modes.showCursor = cursorShown;
+        },
+        render: () => {
+          for (const listener of this.renderListeners) listener({ start: 0, end: this.rows - 1 });
+        },
+        switchBuffer: (type) => {
+          for (const listener of this.bufferListeners) listener({ type });
+        },
+        remeasure: () => {
+          for (const listener of this.dimensionListeners) listener();
+        },
       };
     }
     element: HTMLElement | undefined;
@@ -91,8 +142,13 @@ vi.mock("@xterm/xterm", () => ({
       this.rows = rows;
       xterm.current!.resizes.push([cols, rows]);
     }
-    onDimensionsChange() {
-      return { dispose() {} };
+    onDimensionsChange(listener: () => void) {
+      this.dimensionListeners.add(listener);
+      return { dispose: () => this.dimensionListeners.delete(listener) };
+    }
+    onRender(listener: (rows: { start: number; end: number }) => void) {
+      this.renderListeners.add(listener);
+      return { dispose: () => this.renderListeners.delete(listener) };
     }
     attachCustomKeyEventHandler() {}
     onData(listener: (data: string) => void) {
@@ -107,20 +163,13 @@ const cell = vi.hoisted(() => ({ current: null as null | { width: number; height
 vi.mock("@/services/terminal/TerminalResizeController", () => ({
   getXtermCellDimensions: () => cell.current,
 }));
-const pane = vi.hoisted(() => ({ events: [] as string[] }));
 const reportError = vi.hoisted(() => vi.fn());
 vi.mock("@/utils/rendererGlobalErrorHandlers", () => ({
   reportRendererGlobalError: reportError,
 }));
 vi.mock("@/services/TerminalInstanceService", () => {
-  const terminalInstanceService = {
-    holdGeometry: (id: string) => {
-      pane.events.push(`hold ${id}`);
-      return () => pane.events.push(`release ${id}`);
-    },
-  };
   return {
-    createTerminalPaintPlane: () => terminalInstanceService,
+    createTerminalPaintPlane: () => ({}),
   };
 });
 
@@ -167,7 +216,6 @@ import {
 import type { CanopyTerminalApi } from "../canopyHostSource";
 import { ownCanopyTerminalApi } from "../canopyHostSource";
 import { TerminalLinkHandler } from "@/services/terminal/TerminalLinkHandler";
-import { actionService } from "@/services/ActionService";
 import { useCanopyStore } from "@/store/canopyStore";
 
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -179,6 +227,7 @@ let pushChunk: (chunk: CanopyTerminalData) => void = () => {};
 let openStream: (view: CanopyTerminalView) => void = () => {};
 const terminalInput = vi.fn(async () => {});
 const terminalResize = vi.fn(async (_watchId: number, _cols: number, _rows: number) => {});
+const terminalClaimSize = vi.fn(async (_watchId: number) => {});
 
 beforeAll(() => {
   if (typeof globalThis.ResizeObserver === "undefined") {
@@ -196,7 +245,7 @@ beforeAll(() => {
 beforeEach(() => {
   _resetCanopyWatchBurstForTests();
   terminalInput.mockClear();
-  pane.events.length = 0;
+  terminalClaimSize.mockClear();
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -210,6 +259,7 @@ beforeEach(() => {
         unwatchTerminal: vi.fn(async () => {}),
         terminalInput,
         terminalResize,
+        terminalClaimSize,
       },
     },
   });
@@ -246,6 +296,7 @@ function mount(onGoTo?: () => void) {
 /** Fractional, as layout reports it: 838.6 × 504.6 holds no more than 838 × 504. */
 const paneRect = () =>
   ({ width: 838.6, height: 504.6, top: 0, left: 0, right: 838.6, bottom: 504.6 }) as DOMRect;
+const narrowerRect = () => ({ ...paneRect(), width: 638.6, right: 638.6 });
 
 /** Past the pane's size settle, so a hold it would ask for has been asked for. */
 const PAST_SIZE_SETTLE_MS = 200;
@@ -258,6 +309,24 @@ async function open(view: CanopyTerminalView) {
 }
 
 describe("CanopyTerminal", () => {
+  it("follows a palette changed elsewhere, and stops following once gone", async () => {
+    const view = mount();
+    await vi.waitFor(() => expect(xterm.current).not.toBeNull());
+    const options = xterm.current!.options;
+    const before = options.theme;
+    const scheme = useTerminalColorSchemeStore.getState().selectedSchemeId;
+
+    act(() => useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula"));
+
+    expect(options.theme).not.toBe(before);
+    expect(options.theme).toBe(selectEffectiveTheme(useTerminalColorSchemeStore.getState()));
+
+    const shown = options.theme;
+    view.unmount();
+    act(() => useTerminalColorSchemeStore.getState().setSelectedSchemeId(scheme));
+    expect(options.theme).toBe(shown);
+  });
+
   it("paints the snapshot, then only the early output it does not already hold", async () => {
     mount();
     // Arrives before the call that opened the stream has returned.
@@ -712,6 +781,137 @@ describe("CanopyTerminal", () => {
       expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
     });
 
+    it("asks for a grid the PTY already has, as holding it is what stills the other views", async () => {
+      cell.current = { width: 8, height: 16 };
+      const view = mount();
+      view.frame.getBoundingClientRect = paneRect;
+      await open({ watchId: 7, snapshot: { data: "", cols: 99, rows: 30 } });
+      await settle();
+      expect(terminalResize).toHaveBeenCalledTimes(1);
+      expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
+    });
+
+    describe("while another surface has the size (#16333)", () => {
+      const following = (cols: number, rows: number) =>
+        act(async () =>
+          pushChunk({ kind: "resize", watchId: 7, runId: "run-1", cols, rows, following: true })
+        );
+
+      it("draws the PTY's grid and asks for nothing, whatever moves", async () => {
+        const view = await openSized();
+        terminalResize.mockClear();
+        await following(140, 40);
+        await settle();
+        expect(xterm.current!.resizes.at(-1)).toEqual([140, 40]);
+
+        // The panel's own box moves, and the PTY with it: neither is the user's doing here.
+        view.frame.getBoundingClientRect = narrowerRect;
+        await following(120, 36);
+        await settle();
+        expect(terminalResize).not.toHaveBeenCalled();
+        expect(xterm.current!.resizes.at(-1)).toEqual([120, 36]);
+      });
+
+      it("takes the size on a click, not on the other buttons", async () => {
+        const view = await openSized();
+        await following(140, 40);
+        fireEvent.mouseDown(view.frame, { button: 1 });
+        fireEvent.mouseDown(view.frame, { button: 2 });
+        expect(terminalClaimSize).not.toHaveBeenCalled();
+        fireEvent.mouseDown(view.frame, { button: 0 });
+        expect(terminalClaimSize).toHaveBeenCalledWith(7);
+      });
+
+      it("takes the size on a keystroke, never on what a program or a glance sends", async () => {
+        const view = await openSized();
+        await following(140, 40);
+        // Window focus tells the program, and it asks where the cursor is: no gesture at all.
+        xterm.current!.emitData("\x1b[I");
+        xterm.current!.emitData("\x1b[24;1R");
+        expect(terminalClaimSize).not.toHaveBeenCalled();
+        // Hovering over a program that asks for every motion goes out as input.
+        fireEvent.mouseMove(view.frame, { buttons: 0 });
+        xterm.current!.emitData("\x1b[<35;14;5M");
+        expect(terminalInput).toHaveBeenCalledWith(7, "\x1b[<35;14;5M");
+        expect(terminalClaimSize).not.toHaveBeenCalled();
+
+        fireEvent.keyDown(view.frame, { key: "y" });
+        xterm.current!.emitData("y");
+        expect(terminalClaimSize).toHaveBeenCalledWith(7);
+      });
+
+      it("stays on the PTY's grid when a claim is refused, and claims again on the next click", async () => {
+        const view = await openSized();
+        await following(140, 40);
+        terminalResize.mockClear();
+        terminalClaimSize.mockRejectedValueOnce(new Error("refused"));
+
+        fireEvent.mouseDown(view.frame, { button: 0 });
+        await settle();
+        expect(terminalResize).not.toHaveBeenCalled();
+        expect(xterm.current!.resizes.at(-1)).toEqual([140, 40]);
+
+        fireEvent.mouseDown(view.frame, { button: 0 });
+        expect(terminalClaimSize).toHaveBeenCalledTimes(2);
+      });
+
+      it("claims nothing while it has the size", async () => {
+        const view = await openSized();
+        fireEvent.mouseDown(view.frame, { button: 0 });
+        fireEvent.keyDown(view.frame, { key: "y" });
+        xterm.current!.emitData("y");
+        expect(terminalClaimSize).not.toHaveBeenCalled();
+      });
+
+      it("asks for its grid once main says the size is its again, even one the PTY has", async () => {
+        await openSized();
+        await following(99, 30);
+        terminalResize.mockClear();
+        await settle();
+        expect(terminalResize).not.toHaveBeenCalled();
+
+        await act(async () =>
+          pushChunk({ kind: "resize", watchId: 7, runId: "run-1", cols: 99, rows: 30 })
+        );
+        await settle();
+        expect(terminalResize).toHaveBeenCalledTimes(1);
+        expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
+      });
+    });
+
+    describe("shown where only use takes the size (#16339)", () => {
+      it("draws the PTY's grid from the start when main says it follows, and takes the size on a click", async () => {
+        cell.current = { width: 8, height: 16 };
+        const view = mount();
+        view.frame.getBoundingClientRect = paneRect;
+        await open({ watchId: 7, snapshot: { data: "", cols: 200, rows: 60 }, following: true });
+        await settle();
+        expect(terminalResize).not.toHaveBeenCalled();
+        expect(xterm.current!.resizes.at(-1)).toEqual([200, 60]);
+
+        fireEvent.mouseDown(view.frame, { button: 0 });
+        expect(terminalClaimSize).toHaveBeenCalledWith(7);
+        // Main says the size is the panel's now, and it asks for its grid.
+        await act(async () =>
+          pushChunk({ kind: "resize", watchId: 7, runId: "run-1", cols: 200, rows: 60 })
+        );
+        await settle();
+        expect(terminalResize).toHaveBeenCalledTimes(1);
+        expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
+      });
+
+      it("claims once the stream opens for a click made while it was opening", async () => {
+        cell.current = { width: 8, height: 16 };
+        const view = mount();
+        view.frame.getBoundingClientRect = paneRect;
+        fireEvent.mouseDown(view.frame, { button: 0 });
+        expect(terminalClaimSize).not.toHaveBeenCalled();
+
+        await open({ watchId: 7, snapshot: { data: "", cols: 200, rows: 60 }, following: true });
+        expect(terminalClaimSize).toHaveBeenCalledWith(7);
+      });
+    });
+
     it("puts its grid back to the PTY's when the size is refused", async () => {
       await openSized(async () => {
         throw new Error("rate limited");
@@ -721,33 +921,217 @@ describe("CanopyTerminal", () => {
     });
   });
 
-  it("freezes the terminal's own pane while streaming, and lets it go only once main has the PTY back", async () => {
-    let handBack: () => void = () => {};
-    window.electron.canopy.unwatchTerminal = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          handBack = () => {
-            pane.events.push("handed back");
-            resolve();
-          };
-        })
-    );
-    const { unmount } = mount();
-    expect(pane.events).toEqual([]);
-    await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
-    expect(pane.events).toEqual(["hold run-1"]);
+  describe("a followed grid taller than its pane (#16595)", () => {
+    // 504 − 24 inset = 480px of pane, 30 rows of 16; the PTY's own pane gave it 60.
+    const AVAILABLE = 480;
+    const ROWS = 60;
+    const ROW_HEIGHT = 16;
+    const SHOWN = AVAILABLE / ROW_HEIGHT;
+    /** A fresh Claude Code: its banner and prompt in the top dozen rows, nothing below. */
+    const FRESH = Array.from({ length: 12 }, (_, row) => `banner and prompt ${row}`);
+    const FULL = Array.from({ length: ROWS }, (_, row) => `output ${row}`);
 
-    unmount();
-    expect(pane.events).toEqual(["hold run-1"]);
-    await act(async () => handBack());
-    expect(pane.events).toEqual(["hold run-1", "handed back", "release run-1"]);
+    const realResizeObserver = globalThis.ResizeObserver;
+    /** The pane laid out at a content height, as the browser reports it after layout. */
+    let layOut: (height?: number) => void = () => {};
+    beforeEach(() => {
+      vi.useFakeTimers();
+      cell.current = { width: 8, height: ROW_HEIGHT };
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(private readonly callback: ResizeObserverCallback) {}
+          observe() {
+            layOut = (height = AVAILABLE) =>
+              this.callback(
+                [{ contentRect: { height } } as ResizeObserverEntry],
+                this as unknown as ResizeObserver
+              );
+          }
+          unobserve() {}
+          disconnect() {}
+        }
+      );
+    });
+    afterEach(() => {
+      vi.stubGlobal("ResizeObserver", realResizeObserver);
+      vi.useRealTimers();
+    });
+
+    /** A stream opening on the PTY's taller grid, which xterm then paints. */
+    async function paintFollowed(screen: string[], cursorRow: number, cursorShown = true) {
+      xterm.current!.draw(screen, cursorRow, cursorShown);
+      await open({
+        watchId: 7,
+        snapshot: { data: "SCREEN", cols: 200, rows: ROWS },
+        following: true,
+      });
+      // The grid the PTY's own pane gave it, not one this pane fits.
+      expect(xterm.current!.resizes.at(-1)).toEqual([200, ROWS]);
+      xterm.current!.render();
+    }
+    /** The pane laid out, then a followed stream opened and painted in it. */
+    async function openFollowed(screen: string[], cursorRow: number, cursorShown = true) {
+      const view = mount();
+      const frame = view.frame as HTMLElement;
+      frame.getBoundingClientRect = paneRect;
+      act(() => layOut());
+      await paintFollowed(screen, cursorRow, cursorShown);
+      return { ...view, frame };
+    }
+    const settle = () =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+    /** The rows wholly inside the pane: the grid sits at its top, moved by its own top margin. */
+    function shownRows(
+      frame: HTMLElement,
+      { rows = ROWS, available = AVAILABLE, rowHeight = ROW_HEIGHT } = {}
+    ): { first: number; last: number } {
+      const top = Number.parseFloat((frame.firstElementChild as HTMLElement).style.marginTop) || 0;
+      return {
+        first: Math.max(0, Math.ceil(-top / rowHeight)),
+        last: Math.min(rows - 1, Math.floor((available - top) / rowHeight) - 1),
+      };
+    }
+
+    it("shows a fresh agent's top rows, where all it has drawn is, and sizes nothing", async () => {
+      const { frame } = await openFollowed(FRESH, 11);
+      await settle();
+      expect(shownRows(frame)).toEqual({ first: 0, last: SHOWN - 1 });
+      expect(terminalResize).not.toHaveBeenCalled();
+      expect(terminalClaimSize).not.toHaveBeenCalled();
+    });
+
+    it("keeps a full screen's bottom rows in view", async () => {
+      const { frame } = await openFollowed(FULL, ROWS - 1);
+      await settle();
+      expect(shownRows(frame)).toEqual({ first: ROWS - SHOWN, last: ROWS - 1 });
+    });
+
+    it("is in place as xterm paints the rows, waiting on no timer or render of its own", async () => {
+      const { frame } = await openFollowed(FULL, ROWS - 1);
+      expect(shownRows(frame)).toEqual({ first: ROWS - SHOWN, last: ROWS - 1 });
+    });
+
+    it("keeps a shown cursor's row in view below the last row with text", async () => {
+      const { frame } = await openFollowed(FRESH, 40);
+      expect(shownRows(frame)).toEqual({ first: 41 - SHOWN, last: 40 });
+    });
+
+    it("keeps nothing for a hidden cursor below the last row with text", async () => {
+      const { frame } = await openFollowed(FRESH, 40, false);
+      expect(shownRows(frame)).toEqual({ first: 0, last: SHOWN - 1 });
+    });
+
+    it("follows the agent's drawing down the screen, and back up when it clears", async () => {
+      const { frame } = await openFollowed(FRESH, 11);
+
+      const longer = [...FRESH, ...Array.from({ length: 33 }, (_, row) => `reply ${row}`)];
+      xterm.current!.draw(longer, 44);
+      xterm.current!.render();
+      expect(shownRows(frame)).toEqual({ first: 45 - SHOWN, last: 44 });
+
+      xterm.current!.draw(FRESH.slice(0, 3), 2);
+      xterm.current!.render();
+      expect(shownRows(frame)).toEqual({ first: 0, last: SHOWN - 1 });
+    });
+
+    it("moves only with what xterm has painted, as the pane resizes under output it holds back", async () => {
+      const { frame } = await openFollowed(FULL, ROWS - 1);
+      const shorter = AVAILABLE - 2 * ROW_HEIGHT;
+      // Parsed, not painted: synchronized output holds the full screen on view.
+      xterm.current!.draw(FRESH, 11);
+      act(() => layOut(shorter));
+      expect(shownRows(frame, { available: shorter })).toEqual({
+        first: ROWS - SHOWN + 2,
+        last: ROWS - 1,
+      });
+
+      xterm.current!.render();
+      expect(shownRows(frame, { available: shorter })).toEqual({ first: 0, last: SHOWN - 3 });
+    });
+
+    it("places a grid xterm painted before the pane was laid out, as the layout arrives", async () => {
+      const frame = mount().frame as HTMLElement;
+      await paintFollowed(FULL, ROWS - 1);
+      act(() => layOut());
+      expect(shownRows(frame)).toEqual({ first: ROWS - SHOWN, last: ROWS - 1 });
+    });
+
+    it("rises again for a cell the renderer measures afresh, as after a font change", async () => {
+      const { frame } = await openFollowed(FULL, ROWS - 1);
+      cell.current = { width: 10, height: 20 };
+      xterm.current!.remeasure();
+      expect(shownRows(frame, { rowHeight: 20 })).toEqual({
+        first: ROWS - AVAILABLE / 20,
+        last: ROWS - 1,
+      });
+    });
+
+    it("sits at the top again once the grid fits the pane", async () => {
+      const { frame } = await openFollowed(FULL, ROWS - 1);
+      await act(async () =>
+        pushChunk({ kind: "resize", watchId: 7, runId: "run-1", cols: 99, rows: SHOWN })
+      );
+      xterm.current!.render();
+      await settle();
+      expect(shownRows(frame, { rows: SHOWN })).toEqual({ first: 0, last: SHOWN - 1 });
+    });
+
+    it("starts the terminal it reopens at the pane's top, on the normal buffer's padding", async () => {
+      let resync: () => void = () => {};
+      const api: CanopyTerminalApi = {
+        ...ownCanopyTerminalApi,
+        onResync: (callback) => {
+          resync = callback;
+          return () => {};
+        },
+      };
+      const view = render(<CanopyTerminal runId="run-1" spawnedAt={100} api={api} />);
+      const frame = view.container.querySelector<HTMLElement>("[data-canopy-terminal]")!;
+      frame.getBoundingClientRect = paneRect;
+      const host = frame.firstElementChild;
+      act(() => layOut());
+      await paintFollowed(FULL, ROWS - 1);
+      // A full-screen program, flush to the pane's edges on the alternate screen.
+      act(() => xterm.current!.switchBuffer("alternate"));
+      act(() => layOut(AVAILABLE + 24));
+      xterm.current!.render();
+      expect(frame.classList.contains("terminal-alt-buffer")).toBe(true);
+      expect(shownRows(frame, { available: AVAILABLE + 24 })).toEqual({
+        first: Math.ceil((ROWS * ROW_HEIGHT - AVAILABLE - 24) / ROW_HEIGHT),
+        last: ROWS - 1,
+      });
+
+      const reopened = xterm.current;
+      act(() => resync());
+      expect(xterm.current).not.toBe(reopened);
+      expect(frame.firstElementChild).toBe(host);
+      expect(frame.classList.contains("terminal-alt-buffer")).toBe(false);
+      expect(shownRows(frame)).toEqual({ first: 0, last: SHOWN - 1 });
+    });
+
+    it("never scrolls the grid in the pane, so a focus can't move it off its rise", async () => {
+      const { frame } = await openFollowed(FRESH, 11);
+      let scrollTop = 0;
+      Object.defineProperty(frame, "scrollTop", {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => (scrollTop = value),
+      });
+      // The textarea, at the cursor's row, revealed as it takes focus.
+      scrollTop = 64;
+      frame.dispatchEvent(new Event("scroll"));
+      expect(scrollTop).toBe(0);
+    });
   });
 
-  it("freezes no pane for a stream that opens only after the view went away", async () => {
+  it("lets go of a stream that opens only after the view went away", async () => {
     const { unmount } = mount();
     unmount();
     await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
-    expect(pane.events).toEqual([]);
     // Only the stream it was answered with: never a view-wide release, which
     // would end a stream another pane opened meanwhile (#14454).
     expect(vi.mocked(window.electron.canopy.unwatchTerminal).mock.calls).toEqual([[7]]);
@@ -768,7 +1152,7 @@ describe("CanopyTerminal", () => {
     ],
     ["anything else, reporting it", "[AppError|INTERNAL] stream lost", 1],
   ] as const)(
-    "lets its pane go when ending its stream fails on %s",
+    "ends quietly when ending its stream fails on %s",
     async (_case, message, reports) => {
       window.electron.canopy.unwatchTerminal = vi.fn(async () => {
         throw new Error(message);
@@ -779,7 +1163,6 @@ describe("CanopyTerminal", () => {
       await act(async () => {
         for (let i = 0; i < 5; i++) await Promise.resolve();
       });
-      expect(pane.events).toEqual(["hold run-1", "release run-1"]);
       expect(reportError).toHaveBeenCalledTimes(reports);
 
       reportError.mockClear();
@@ -822,6 +1205,7 @@ describe("CanopyTerminal", () => {
         unwatchTerminal: vi.fn(async () => {}),
         terminalInput: vi.fn(async () => {}),
         terminalResize: vi.fn(async () => {}),
+        terminalClaimSize: vi.fn(async () => {}),
         terminalSubmit: vi.fn(async () => {}),
         terminalSendKey: vi.fn(async () => {}),
         submitReply: vi.fn(async () => {}),
@@ -863,7 +1247,7 @@ describe("CanopyTerminal", () => {
       };
     }
 
-    it("sizes a terminal its host says it takes the size of, at the user's font, freezing no pane here (#14497)", async () => {
+    it("sizes a terminal its host says it takes the size of, at the user's font (#14497)", async () => {
       cell.current = { width: 8, height: 16 };
       const remote = remoteApi();
       const view = mountRemote(remote);
@@ -879,8 +1263,6 @@ describe("CanopyTerminal", () => {
         await new Promise((resolve) => setTimeout(resolve, PAST_SIZE_SETTLE_MS));
       });
       expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
-      // Its pane is frozen on its own host, never in this view.
-      expect(pane.events).toEqual([]);
       // Drawn at the host's grid until the host says the PTY took the new one.
       expect(xterm.current!.resizes).toEqual([[200, 60]]);
       await act(async () =>
@@ -890,7 +1272,7 @@ describe("CanopyTerminal", () => {
       expect(terminalResize).not.toHaveBeenCalled();
     });
 
-    it("follows the size the host's own window gave the terminal, freezing and sizing nothing", async () => {
+    it("follows the size the host's own window gave the terminal, sizing nothing", async () => {
       cell.current = { width: 8, height: 16 };
       const remote = remoteApi();
       const view = mountRemote(remote);
@@ -905,14 +1287,13 @@ describe("CanopyTerminal", () => {
       });
       expect(remote.api.terminalResize).not.toHaveBeenCalled();
       expect(xterm.current!.resizes).toEqual([[90, 30]]);
-      expect(pane.events).toEqual([]);
       remote.push({ kind: "data", watchId: 3, runId: "run-1", data: "x" });
       expect(xterm.current!.writes).toEqual(["S", "x"]);
       // Nor does the local window's own channel hear any of it.
       expect(terminalResize).not.toHaveBeenCalled();
     });
 
-    it("sizes and freezes by the terminal's own id when the route says the run is this machine's", async () => {
+    it("sizes the terminal when the route says the run is this machine's", async () => {
       cell.current = { width: 8, height: 16 };
       const remote = remoteApi();
       remote.api.ownSizedId = (key) => (key === "own:run-1" ? "run-1" : null);
@@ -932,8 +1313,101 @@ describe("CanopyTerminal", () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, PAST_SIZE_SETTLE_MS));
       });
-      expect(pane.events).toEqual(["hold run-1"]);
       expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
+    });
+
+    describe("in a window where only use takes the size (#16339)", () => {
+      function mountUnused(remote: ReturnType<typeof remoteApi>, uses = 0) {
+        const element = (count: number) => (
+          <CanopyTerminal
+            runId="run-1"
+            spawnedAt={100}
+            api={remote.api}
+            sizesOnUse
+            uses={count}
+            onStreamChange={() => {}}
+          />
+        );
+        const view = render(element(uses));
+        const frame = view.container.querySelector<HTMLElement>("[data-canopy-terminal]")!;
+        frame.getBoundingClientRect = paneRect;
+        return { ...view, frame, setUses: (count: number) => view.rerender(element(count)) };
+      }
+      const openSizable = (remote: ReturnType<typeof remoteApi>, index = 0) =>
+        act(async () =>
+          remote.opens[index]!({
+            watchId: 3 + index,
+            snapshot: { data: "S", cols: 200, rows: 60 },
+            holdsSize: true,
+          })
+        );
+      const pastSettle = () =>
+        act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, PAST_SIZE_SETTLE_MS));
+        });
+
+      beforeEach(() => {
+        cell.current = { width: 8, height: 16 };
+      });
+
+      it("sizes another host's terminal on no selection or hover, only on the user's first keystroke", async () => {
+        const remote = remoteApi();
+        const view = mountUnused(remote);
+        await openSizable(remote);
+        fireEvent.mouseMove(view.frame, { buttons: 0 });
+        xterm.current!.emitData("\x1b[<35;14;5M");
+        await pastSettle();
+        expect(remote.api.terminalResize).not.toHaveBeenCalled();
+        expect(xterm.current!.resizes).toEqual([[200, 60]]);
+
+        fireEvent.keyDown(view.frame, { key: "y" });
+        xterm.current!.emitData("y");
+        await pastSettle();
+        expect(remote.api.terminalResize).toHaveBeenCalledTimes(1);
+        expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
+      });
+
+      it("takes a send from beside the terminal as a use, but no count from before it opened", async () => {
+        const remote = remoteApi();
+        const view = mountUnused(remote, 2);
+        await openSizable(remote);
+        await pastSettle();
+        expect(remote.api.terminalResize).not.toHaveBeenCalled();
+
+        view.setUses(3);
+        await pastSettle();
+        expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
+      });
+
+      it("counts a send made while the stream was opening, once it opens", async () => {
+        const remote = remoteApi();
+        const view = mountUnused(remote, 2);
+        view.setUses(3);
+        await openSizable(remote);
+        await pastSettle();
+        expect(remote.api.terminalResize).toHaveBeenCalledTimes(1);
+        expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
+      });
+
+      it("waits for a use again on a stream opened afresh when the link comes back", async () => {
+        const remote = remoteApi();
+        const view = mountUnused(remote);
+        // Used while the first stream was still opening: that use is the first stream's alone.
+        fireEvent.mouseDown(view.frame, { button: 0 });
+        await openSizable(remote);
+        await pastSettle();
+        expect(remote.api.terminalResize).toHaveBeenCalledTimes(1);
+
+        await act(async () => remote.resync());
+        await openSizable(remote, 1);
+        await pastSettle();
+        expect(remote.api.terminalResize).toHaveBeenCalledTimes(1);
+
+        view.setUses(1);
+        await pastSettle();
+        expect(remote.api.terminalResize).toHaveBeenCalledTimes(2);
+        expect(remote.api.terminalResize).toHaveBeenLastCalledWith(4, 99, 30);
+      });
     });
 
     it("stops input while the link is down, says so, and starts again from a fresh screen", async () => {
@@ -1117,30 +1591,15 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     });
   });
 
-  it("views a selected path in the viewer dialog, over the panel rather than behind it", async () => {
-    const dispatch = vi
-      .spyOn(actionService, "dispatch")
-      .mockResolvedValue({ ok: true, result: undefined });
-    const { frame } = mount();
+  it("offers no file to open for a selected path, this machine's run or another host's", () => {
+    // Files open in a project window's viewer and panels, which the Canopy window has none of.
+    const own = mount();
     xterm.current!.selection = "/repo/src/app.ts";
-    openMenu(frame);
-    await act(async () => screen.getByText("View file").click());
-    // Once the menu has closed and handed the keyboard back to the terminal.
-    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
-    expect(dispatch).toHaveBeenCalledWith(
-      "file.view",
-      { path: "/repo/src/app.ts" },
-      expect.anything()
-    );
-    expect(dispatch).not.toHaveBeenCalledWith(
-      "file.openPanel",
-      expect.anything(),
-      expect.anything()
-    );
-    dispatch.mockRestore();
-  });
+    openMenu(own.frame);
+    expect(screen.getByText("Copy")).toBeTruthy();
+    expect(screen.queryByText("View file")).toBeNull();
+    own.unmount();
 
-  it("offers nothing to open for another host's selected path", () => {
     const { container } = render(<CanopyTerminal runId="r" spawnedAt={1} api={otherHostApi()} />);
     xterm.current!.selection = "/repo/src/app.ts";
     openMenu(container.querySelector("[data-canopy-terminal]")!);
@@ -1249,6 +1708,22 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
     openMenu(frame);
     await act(async () => screen.getByText("Paste").click());
+    expect(terminalInput).toHaveBeenCalledWith(7, "ls");
+  });
+
+  it("takes the size back for what it pastes from its menu (#16333)", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { readText: async () => "ls", writeText: async () => {} },
+    });
+    const { frame } = mount();
+    await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+    await act(async () =>
+      pushChunk({ kind: "resize", watchId: 7, runId: "run-1", cols: 80, rows: 24, following: true })
+    );
+    openMenu(frame);
+    await act(async () => screen.getByText("Paste").click());
+    expect(terminalClaimSize).toHaveBeenCalledWith(7);
     expect(terminalInput).toHaveBeenCalledWith(7, "ls");
   });
 

@@ -1,0 +1,61 @@
+{
+  "name": "daintree.jira",
+  "version": "0.1.0",
+  "displayName": "Jira Cloud",
+  "description": "First-party Jira Cloud issues provider — pick Jira issues for worktrees and use branch names that carry the issue key, while your code forge keeps pull requests and CI.",
+  "tagline": "Jira Cloud issues for your worktrees, alongside your code forge",
+  "category": "forge",
+  "main": "main/index.js",
+  "engines": {
+    "daintree": ">=0.11.0"
+  },
+  "capabilities": [],
+  "contributes": {
+    "settings": [
+      {
+        "id": "siteUrl",
+        "type": "string",
+        "label": "Jira Cloud site URL",
+        "description": "Your Jira Cloud address, like https://acme.atlassian.net. Set it with your email and API token in Settings → Code forge, which checks all three.",
+        "scope": "user"
+      },
+      {
+        "id": "email",
+        "type": "string",
+        "label": "Atlassian account email",
+        "description": "The email address of the Atlassian account the API token belongs to. Set it with your site URL and API token in Settings → Code forge, which checks all three.",
+        "scope": "user"
+      },
+      {
+        "id": "projectKey",
+        "type": "string",
+        "label": "Jira project key",
+        "description": "The key of the Jira project this project's issues live in, as it appears in issue keys (ENG for ENG-123).",
+        "scope": "project"
+      }
+    ],
+    "forgeProviders": [
+      {
+        "id": "jira",
+        "name": "Jira Cloud",
+        "matches": [],
+        "roles": ["issues"],
+        "capabilities": ["issues", "assignees", "identity"],
+        "credentialFields": [
+          {
+            "id": "token",
+            "label": "API token",
+            "type": "password",
+            "placeholder": "ATATT…",
+            "helpText": "Create under Atlassian account → Security → API tokens."
+          }
+        ],
+        "settingsScopeRef": "projectKey",
+        "slots": {
+          "settingsTab": "jira.forgeSettingsTab",
+          "icon": "jira.providerIcon"
+        }
+      }
+    ]
+  }
+}

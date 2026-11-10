@@ -13,6 +13,11 @@ import type {
   TabGroup,
 } from "@shared/types";
 import type { NotificationSettings } from "@shared/types/ipc/api";
+import type {
+  ProjectCloneJobSnapshot,
+  ProjectCloneStartRequest,
+  ProjectCloneStartResult,
+} from "@shared/types/ipc/projectClone";
 import type { RelocationPreview, RelocationRequest } from "@shared/types/projectRelocation";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import type { ProjectTemplateSelection } from "@shared/types/plugin";
@@ -56,6 +61,33 @@ let subscribed = false;
 const SETTINGS_TTL_MS = 500;
 const settingsInflight: Map<string, Promise<ProjectSettings>> = new Map();
 const settingsCache: Map<string, { value: ProjectSettings; expiresAt: number }> = new Map();
+
+// Per-project tail of the settings writes running in this view.
+const settingsWriteTails: Map<string, Promise<unknown>> = new Map();
+
+/**
+ * Runs a read-then-write of a project's settings file after any others from this
+ * view. Main queues each read and each write but not the pair, so two of these
+ * overlapping can write back a copy missing the other's change. The whole pair goes
+ * in here, reads included: queueing only the save would keep the stale read.
+ */
+export function withProjectSettingsWrite<T>(
+  projectId: string,
+  write: () => Promise<T>
+): Promise<T> {
+  const run = () => {
+    invalidateProjectSettingsCache(projectId);
+    return write();
+  };
+  // Both handlers: a write that failed answers its own caller, not the next in line.
+  const turn = (settingsWriteTails.get(projectId) ?? Promise.resolve()).then(run, run);
+  settingsWriteTails.set(projectId, turn);
+  const release = () => {
+    if (settingsWriteTails.get(projectId) === turn) settingsWriteTails.delete(projectId);
+  };
+  void turn.then(release, release);
+  return turn;
+}
 
 /**
  * Adds an approved host by reading the settings and saving them whole, as
@@ -171,6 +203,7 @@ export const projectClient = {
       focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent;
       trace?: ProjectSwitchTrace;
       ignoreMemoryPressure?: boolean;
+      showInOtherWindow?: boolean;
     }
   ): Promise<ProjectSwitchResult> => {
     invalidateCurrentCache();
@@ -295,7 +328,11 @@ export const projectClient = {
   reopen: (
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
-    options?: { trace?: ProjectSwitchTrace; ignoreMemoryPressure?: boolean }
+    options?: {
+      trace?: ProjectSwitchTrace;
+      ignoreMemoryPressure?: boolean;
+      showInOtherWindow?: boolean;
+    }
   ): Promise<ProjectSwitchResult> => {
     invalidateCurrentCache();
     return window.electron.project.reopen(projectId, outgoingState, options);
@@ -347,6 +384,27 @@ export const projectClient = {
     return window.electron.project.cancelClone(opId);
   },
 
+  /** Register the project and clone it in the background (#16352). */
+  startBackgroundClone: (request: ProjectCloneStartRequest): Promise<ProjectCloneStartResult> => {
+    return window.electron.projectClone.start(request);
+  },
+
+  getCloneJob: (projectId: string): Promise<ProjectCloneJobSnapshot | null> => {
+    return window.electron.projectClone.getJob(projectId);
+  },
+
+  stopBackgroundClone: (projectId: string): Promise<void> => {
+    return window.electron.projectClone.stop(projectId);
+  },
+
+  retryBackgroundClone: (projectId: string): Promise<void> => {
+    return window.electron.projectClone.retry(projectId);
+  },
+
+  onCloneJobUpdated: (callback: (snapshot: ProjectCloneJobSnapshot) => void): (() => void) => {
+    return window.electron.projectClone.onJobUpdated(callback);
+  },
+
   getRecipes: (
     projectId: string
   ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }> => {
@@ -377,7 +435,7 @@ export const projectClient = {
     return window.electron.project.exportRecipeToFile(name, json);
   },
 
-  importRecipeFromFile: (): Promise<string | null> => {
+  importRecipeFromFile: (): Promise<{ fileName: string; json: string } | null> => {
     return window.electron.project.importRecipeFromFile();
   },
 
@@ -463,14 +521,6 @@ export const projectClient = {
     removedIds?: string[]
   ): Promise<void> => {
     return window.electron.project.setTabGroups(projectId, tabGroups, changedIds, removedIds);
-  },
-
-  readClaudeMd: (projectId: string): Promise<string | null> => {
-    return window.electron.project.readClaudeMd(projectId);
-  },
-
-  writeClaudeMd: (projectId: string, content: string): Promise<void> => {
-    return window.electron.project.writeClaudeMd(projectId, content);
   },
 
   enableInRepoSettings: (projectId: string): Promise<Project> => {

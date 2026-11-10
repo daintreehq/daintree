@@ -330,6 +330,17 @@ export class PtyManager extends EventEmitter {
    * unfalsifiable telemetry #11674 is about. It still describes the shrink this
    * process applied and dispatched, not a worker's confirmation of it.
    */
+  /**
+   * Demote every terminal whose detected agent the replaced plugin agent
+   * registry no longer recognises, and drop evidence that would promote it
+   * again (#16469). Runs only when main replaces that registry.
+   */
+  revokeUnregisteredAgents(): void {
+    for (const terminal of this.registry.getAll()) {
+      terminal.revokeUnregisteredAgent();
+    }
+  }
+
   trimIdleAnalysisSessions(opts?: { now?: number; targetLines?: number; idleTrimMs?: number }): {
     trimmed: number;
     skipped: number;
@@ -1253,7 +1264,6 @@ export class PtyManager extends EventEmitter {
       lastOutputTime: terminalInfo.lastOutputTime,
       lastStateChange: terminalInfo.lastStateChange,
       activityTier: terminal.getActivityTier() === "active" ? "focused" : "background",
-      outputBufferSize: terminalInfo.outputBuffer.length,
       semanticBufferLines: terminalInfo.semanticBuffer.length,
       restartCount: terminalInfo.restartCount,
       agentIncarnation: terminalInfo.agentIncarnation,

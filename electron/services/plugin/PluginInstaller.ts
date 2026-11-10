@@ -46,6 +46,7 @@ import {
 } from "../../../shared/types/pluginCapabilityConsent.js";
 import type { PluginInstalledRecordsStore } from "./PluginInstalledRecordsStore.js";
 import { AGENT_LAUNCH_PRESET_CAPABILITY } from "../../../shared/utils/agentPresetLaunchConsent.js";
+import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
 
 // proper-lockfile is CJS-only and ships no bundled types. Require it via the
 // same createRequire interop as ajv and declare the narrow surface we use.
@@ -1280,6 +1281,11 @@ export class PluginInstaller {
         version: manifest.version,
         displayName: manifest.displayName,
         capabilities: manifest.capabilities ?? [],
+        // An update can add a bypass declaration, so its review names the
+        // agents that carry one (#16374). Author-controlled, so made safe to show.
+        permissionBypassAgents: (manifest.contributes?.agents ?? [])
+          .filter((agent) => (agent.permissionBypassArgs?.length ?? 0) > 0)
+          .map((agent) => displaySafeText(agent.name)),
         archiveHash: downloadedHash,
       };
     } finally {

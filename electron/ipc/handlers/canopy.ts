@@ -1,7 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { app, webContents } from "electron";
+import { app, webContents, type BrowserWindow } from "electron";
 import type {
   CanopyLookPlace,
   CanopyMode,
@@ -9,7 +9,9 @@ import type {
   CanopyPlan,
   CanopyReadMark,
   CanopyReadRestore,
+  CanopyInputLineReading,
   CanopyReadTarget,
+  CanopyRunTarget,
   CanopyScreenSearchTarget,
   CanopySnapshot,
   CanopyTarget,
@@ -23,7 +25,14 @@ import type {
   CanopyResumeRequest,
   CanopyTrashEntry,
   CanopyTrashRequest,
+  CanopyTrashOutcome,
   CanopyTrashTarget,
+  CanopyUntrashOutcome,
+} from "../../../shared/types/ipc/canopy.js";
+import {
+  CANOPY_SEARCH_MAX_ALTERNATIVES,
+  CANOPY_SEARCH_MAX_TERM_LENGTH,
+  CANOPY_SEARCH_MAX_TERMS,
 } from "../../../shared/types/ipc/canopy.js";
 import { getAgentNotificationServiceRef, getPtyClient } from "../../window/serviceRefs.js";
 import type { TerminalInputNotice } from "../../services/PtyClient.js";
@@ -53,10 +62,18 @@ import { getLifecycleLedger } from "../../services/pty/lifecycleLedger.js";
 import { attributeClose } from "../../services/pty/closeAttribution.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
+import { readInputLines } from "../../services/canopy/canopyInputLines.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
-import { CanopyLocalReader } from "../../services/canopy/canopyLocalReader.js";
-import { CANOPY_MODEL, CanopyModels, canopyModelName } from "../../services/canopy/canopyModels.js";
+import { CanopyLocalReader, tryReaderModel } from "../../services/canopy/canopyLocalReader.js";
+import {
+  CANOPY_MODEL,
+  CanopyModels,
+  canopyModelName,
+  removeDownloadedModels,
+  removeStaleUpdates,
+} from "../../services/canopy/canopyModels.js";
 import { store } from "../../store.js";
+import { isE2EMode, isSmokeTest } from "../../setup/runtimeFlags.js";
 import { hostInstanceId } from "../../services/hostInstance.js";
 import { traced } from "../../services/canopy/canopyTrace.js";
 import {
@@ -70,6 +87,7 @@ import {
 import type { IpcContext } from "../types.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
+import { isProjectlessAppView } from "../../window/projectlessViews.js";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { getIpcDispatcher } from "../dispatcher.js";
@@ -79,14 +97,20 @@ import {
   beginWatchRequest,
   isCurrentWatchRequest,
   followDriveLeaseChange,
+  forgetVisiblePaneTerminals,
+  claimWatchedRunSize,
+  claimWatchedSize,
   onSizeHoldsChange,
-  remoteSizeHolds,
+  releaseViewSizeHolds,
+  sizeHolds,
   stopAllTerminalWatches,
   stopWorkerTerminalWatches,
   resizeWatchedTerminal,
+  setVisiblePaneTerminals,
   stopTerminalWatch,
   stopTerminalWatchById,
   watchTerminal,
+  yieldSizeToPane,
   watchedTerminal,
 } from "./canopyTerminalWatch.js";
 import { isImageAttachmentPath } from "../../../shared/utils/imageAttachmentInput.js";
@@ -112,7 +136,7 @@ import { projectStore } from "../../services/ProjectStore.js";
 import { getDefaultPanelTitle } from "../../../shared/config/panelKindRegistry.js";
 import type { FleetRunRow } from "../../../shared/types/ipc/fleet.js";
 import type { PanelLocation } from "../../../shared/types/panel.js";
-import { TRASH_TTL_MS } from "../../../shared/config/trash.js";
+import { CANOPY_TRASH_LIMIT, TRASH_TTL_MS } from "../../../shared/config/trash.js";
 
 const MAX_INPUT_LENGTH = 64_000;
 const MAX_SUBMIT_LENGTH = 100_000;
@@ -160,19 +184,37 @@ function currentPlan(): CanopyPlan {
 
 let models: CanopyModels | null = null;
 let reader: CanopyLocalReader | null = null;
-/** Whether the model was ready when last told, so only a change wakes the service. */
-let modelWasReady = false;
+/** The folder the model was read from when last told, so only a change wakes the service. */
+let modelDirWas: string | null = null;
 
-/** Made on first use: a user who never turns Canopy on never looks for a model. */
+/**
+ * Where the app ships the reader model (#16415): its resources once packaged,
+ * else where the build fetched it.
+ */
+function bundledModelDir(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "canopy-reader")
+    : path.join(app.getAppPath(), "electron", "resources", "canopy-reader");
+}
+
+/**
+ * Where newer revisions fetched from Hugging Face live (#16416), or null where
+ * none are looked for: test runs read the shipped copy and nothing else.
+ */
+function modelUpdatesDir(): string | null {
+  if (isE2EMode || isSmokeTest) return null;
+  return path.join(app.getPath("userData"), "canopy", "reader-updates");
+}
+
+/** Made on first use: a user who never turns Canopy on never checks the model. */
 function getModels(): CanopyModels {
-  models ??= new CanopyModels(
-    path.join(app.getPath("userData"), "canopy", "models"),
-    onModelsChanged,
-    // An update replaces the files the reader has open, and what the last
-    // revision read is read again by the new one.
-    () => reader?.release(),
-    () => service?.readerChanged()
-  );
+  models ??= new CanopyModels(bundledModelDir(), onModelsChanged, {
+    updates: modelUpdatesDir(),
+    // An update is loaded and read with once in a reader of its own before
+    // the reader in use lets go of the copy that works.
+    trial: (dir, signal) => tryReaderModel(dir, signal),
+    build: app.getVersion(),
+  });
   return models;
 }
 
@@ -182,13 +224,19 @@ function getReader(): CanopyLocalReader {
 }
 
 function modelReady(): boolean {
-  return models?.state().status === "ready";
+  return models?.state()?.status === "ready";
 }
 
+/**
+ * A model that arrives, goes, or is replaced by an update has every screen
+ * read again by the one now in use; progress alone only tells the views.
+ */
 function onModelsChanged(): void {
-  const ready = modelReady();
-  if (ready !== modelWasReady) {
-    modelWasReady = ready;
+  const dir = models?.currentDir() ?? null;
+  if (dir !== modelDirWas) {
+    // The last copy's reader lets go of its files, so they can be deleted.
+    if (modelDirWas !== null) reader?.release();
+    modelDirWas = dir;
     service?.readerChanged();
   } else {
     service?.modelChanged();
@@ -196,19 +244,23 @@ function onModelsChanged(): void {
 }
 
 /**
- * With Canopy on, gets the model here if it isn't, or its newest revision if
- * an older one is, and once it is ready deletes any other: a model an earlier
- * Daintree chose included.
+ * With Canopy on, checks the model to read with, once a launch and never on
+ * the launch's own path, then looks for a newer revision on Hugging Face:
+ * nothing waits for either, screens are read once a copy checks out, and again
+ * once an update is in place (`onModelsChanged`).
  */
 function ensureModel(): void {
   if (readCanopyMode() !== "on") return;
   void getModels()
     .ensure()
-    .then(async () => {
-      if (models?.state().status === "ready") await models.remove(true);
-    })
-    .catch((error: unknown) => console.error("[Canopy] Model download failed:", error));
+    .catch((error: unknown) => console.error("[Canopy] Model check failed:", error));
 }
+
+/**
+ * How long after launch the models earlier versions downloaded into the user
+ * data folder are deleted: late enough to stay off the launch's own path.
+ */
+const DOWNLOADED_MODELS_CLEANUP_DELAY_MS = 30_000;
 
 /**
  * What Canopy shows with no service made since launch: nothing. Sequence 0,
@@ -252,6 +304,9 @@ const viewScopes = new Map<number, string | null>();
 const viewShown = new Map<number, ReadonlySet<string>>();
 /** Views that already carry lifecycle listeners, with the way to take them off. */
 const watchedViews = new Map<number, () => void>();
+/** The window each of those views sits in, for its put-away events to find them. */
+const viewWindows = new Map<number, BrowserWindow>();
+const heardWindows = new WeakSet<BrowserWindow>();
 /** Canopy views of another Shell, which no broadcast reaches: told each snapshot by name. */
 const snapshotObservers = new Set<(snapshot: CanopySnapshot) => void>();
 
@@ -305,7 +360,12 @@ export function changeCanopyMode(
   }
   if (mode !== was) modeRevision++;
   store.set("canopyMode", mode);
-  if (mode !== "on") stopWorkerTerminalWatches();
+  if (mode !== "on") {
+    stopWorkerTerminalWatches();
+    // An update under way stops, keeping what it fetched: a look begun
+    // before any service was made included.
+    models?.cancel();
+  }
   // Nothing was started, and nothing is wanted: no service to tell, but
   // every view still hears the change, as a service would have told them.
   if (!service && mode !== "on") {
@@ -318,9 +378,7 @@ export function changeCanopyMode(
   if (mode === "on") {
     ensureModel();
   } else {
-    // Off lets the model go; a download under way stops, keeping what it fetched.
     reader?.release();
-    models?.cancel();
   }
   return canopy.getSnapshot();
 }
@@ -481,11 +539,10 @@ function assertRunId(value: unknown): asserts value is string {
 
 /** The most runs one bulk read change may name. */
 const MAX_READ_BATCH = 500;
+/** The most terminals one view may report showing in its panes: far above any real grid. */
+const MAX_VISIBLE_PANES = 500;
 /** Every run a panel can list, the whole fleet across projects: far above any real one. */
 const MAX_SHOWN_RUNS = 10_000;
-/** The words one search may look for on a terminal, and how long each may be. */
-const MAX_SEARCH_TERMS = 16;
-const MAX_SEARCH_TERM_LENGTH = 200;
 /** How much of a terminal a search reads: its screen and the history the describer reads. */
 const SEARCH_MAX_BYTES = 96 * 1024;
 
@@ -496,17 +553,28 @@ function assertScreenSearchTarget(value: unknown): asserts value is CanopyScreen
   const target = value as Record<string, unknown>;
   assertRunId(target.runId);
   assertTarget(target);
-  const terms = target.terms;
+  const { terms, orTerms } = target;
   if (
-    !Array.isArray(terms) ||
-    terms.length === 0 ||
-    terms.length > MAX_SEARCH_TERMS ||
-    !terms.every(
-      (term) => typeof term === "string" && term.length > 0 && term.length <= MAX_SEARCH_TERM_LENGTH
-    )
+    !isSearchAlternative(terms) ||
+    (orTerms !== undefined &&
+      (!Array.isArray(orTerms) ||
+        orTerms.length + 1 > CANOPY_SEARCH_MAX_ALTERNATIVES ||
+        !orTerms.every(isSearchAlternative)))
   ) {
     throw new Error("Invalid search");
   }
+}
+
+function isSearchAlternative(terms: unknown): terms is string[] {
+  return (
+    Array.isArray(terms) &&
+    terms.length > 0 &&
+    terms.length <= CANOPY_SEARCH_MAX_TERMS &&
+    terms.every(
+      (term) =>
+        typeof term === "string" && term.length > 0 && term.length <= CANOPY_SEARCH_MAX_TERM_LENGTH
+    )
+  );
 }
 
 function isTurn(value: unknown): value is number {
@@ -549,6 +617,30 @@ function assertTarget(value: unknown): asserts value is CanopyTarget {
 }
 
 /**
+ * The most runs one bulk trash, its Undo or its input-line check may name: the
+ * Trash lists no more than this, so more would leave some with no way back.
+ */
+const MAX_BULK_TRASH = CANOPY_TRASH_LIMIT;
+
+function assertRunTargets(value: unknown): asserts value is CanopyRunTarget[] {
+  if (!Array.isArray(value) || value.length > MAX_BULK_TRASH) throw new Error("Invalid runs");
+  for (const target of value) {
+    if (typeof target !== "object" || target === null || Array.isArray(target)) {
+      throw new Error("Invalid run");
+    }
+    assertRunId((target as Record<string, unknown>).runId);
+    assertTarget(target);
+  }
+}
+
+/** Why one run of a bulk action was refused, in the words the user sees. */
+function refusalOf(error: unknown, fallback: string): string {
+  if (error instanceof AppError && error.userMessage) return error.userMessage;
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
+/**
  * Writes only ever reach the terminal the card was built from: a run the fleet
  * can see right now, in the same incarnation (ids are reused across respawns),
  * and not exited. The fleet is polled, so the PTY host's own record is the one
@@ -574,20 +666,25 @@ async function assertSameTerminal(runId: string, target: CanopyTarget): Promise<
  * The run the list showed is still this incarnation, alive or exited — for
  * acts on the pane rather than on its process.
  */
-async function assertSameIncarnation(runId: string, target: CanopyTarget): Promise<void> {
+async function assertSameIncarnation(
+  runId: string,
+  target: CanopyTarget
+): Promise<{ run: FleetRunRow; projectId: string | null }> {
   const snapshot = getFleetSnapshotService()?.getLastBroadcast();
   if (!snapshot || snapshot.degraded) {
     throw new Error("Agent state is unavailable right now — try again in a moment.");
   }
-  if (!snapshot.runs.some((run) => run.runId === runId && run.spawnedAt === target.spawnedAt)) {
-    throw new Error("That agent isn't there any more.");
-  }
+  const run = snapshot.runs.find(
+    (candidate) => candidate.runId === runId && candidate.spawnedAt === target.spawnedAt
+  );
+  if (!run) throw new Error("That agent isn't there any more.");
   const record = await requirePtyClient()
     .getTerminalAsync(runId)
     .catch(() => null);
   if (!record || record.spawnedAt !== target.spawnedAt) {
     throw new Error("That agent isn't there any more.");
   }
+  return { run, projectId: record.projectId || null };
 }
 
 /** The terminal a view's current stream is for, or a refusal naming nothing on screen. */
@@ -671,6 +768,20 @@ function trashThroughOwningViews(runId: string, spawnedAt: number): number | nul
     ?.getLastBroadcast()
     ?.runs.find((candidate) => candidate.runId === runId);
   if (!run) return null;
+  return moveTrashedPane(run, spawnedAt);
+}
+
+/**
+ * The same trash for a run already looked up in the fleet: one that leaves the
+ * fleet while it is trashed still gets its receipt and its views told.
+ */
+function trashListedRun(run: FleetRunRow, spawnedAt: number): number {
+  requirePtyClient().trash(run.runId);
+  return moveTrashedPane(run, spawnedAt);
+}
+
+function moveTrashedPane(run: FleetRunRow, spawnedAt: number): number {
+  const runId = run.runId;
   const receipt = ++trashReceipts;
   pruneTrashReceipts();
   const trashed: TrashedRun = {
@@ -1299,6 +1410,7 @@ function syncActive(): void {
 
 /** A view that stopped showing its panel without saying so (reload, crash, teardown). */
 function forgetView(id: number): void {
+  forgetVisiblePaneTerminals(id);
   stopTerminalWatch(id);
   viewScopes.delete(id);
   viewShown.delete(id);
@@ -1316,6 +1428,36 @@ function viewOf(ctx: IpcContext): ProjectPushTarget {
 }
 
 /**
+ * A window put away lets go of the sizes its views hold. Heard once per window,
+ * however many of its views open Canopy, and only once one has; the listeners
+ * go with the window and find no views once Canopy is done with them.
+ */
+function followWindow(viewId: number, win: BrowserWindow | null): void {
+  if (!win) return;
+  viewWindows.set(viewId, win);
+  if (heardWindows.has(win)) return;
+  heardWindows.add(win);
+  const letGo = () => {
+    for (const [id, owner] of viewWindows) if (owner === win) releaseViewSizeHolds(id);
+  };
+  win.on("minimize", letGo);
+  win.on("hide", letGo);
+}
+
+/**
+ * The Canopy window's own view, the one view here that holds no project. It
+ * stays open all day beside the agents' own panes, so its terminals follow the
+ * PTY's grid until the user works in them (#16339). A remote endpoint's id is
+ * its handle, not a WebContents', so only a local caller is looked up.
+ */
+const followsUntilUsed = (ctx: IpcContext): boolean =>
+  ctx.event !== null && isProjectlessAppView(ctx.webContentsId);
+
+/** A measure can land after the window went, ahead of nothing that would say so. */
+const isPutAway = (win: BrowserWindow | null): boolean =>
+  win !== null && (win.isMinimized() || !win.isVisible());
+
+/**
  * Forget a view's panel once it stops showing it without saying so: a local
  * view by its own lifecycle, a remote one when its endpoint closes. A remote
  * view's reload keeps its endpoint, so its panel is forgotten when it next
@@ -1325,6 +1467,7 @@ function watchView(ctx: IpcContext): void {
   const id = ctx.webContentsId;
   if (watchedViews.has(id)) return;
   const sender = ctx.event?.sender;
+  if (sender) followWindow(id, ctx.senderWindow);
   if (!sender) {
     const closed = ctx.endpoint.onClose(() => {
       watchedViews.delete(id);
@@ -1346,9 +1489,11 @@ function watchView(ctx: IpcContext): void {
   sender.on("render-process-gone", onGone);
   const unwatchDestroyed = onWebContentsDestroyed(sender, () => {
     watchedViews.delete(id);
+    viewWindows.delete(id);
     forgetView(id);
   });
   watchedViews.set(id, () => {
+    viewWindows.delete(id);
     sender.removeListener("did-start-navigation", onNavigate);
     sender.removeListener("render-process-gone", onGone);
     unwatchDestroyed();
@@ -1581,7 +1726,8 @@ export const canopyNamespace = defineIpcNamespace({
           throw new Error("That agent isn't running any more.");
         }
         const remote = isViewer(ctx);
-        if (remote) followDriveLease();
+        // A hold from here is published too, and the lease can take it away.
+        followDriveLease();
         const view = await watchTerminal(
           ptyClient,
           viewOf(ctx),
@@ -1592,7 +1738,9 @@ export const canopyNamespace = defineIpcNamespace({
           // Sizing follows typing: only while the view drives the run's project.
           () => drivesRun(ctx, runId),
           null,
-          remote
+          remote,
+          "detail",
+          followsUntilUsed(ctx)
         );
         // Says to a panel on another machine that this host takes its size;
         // one that predates it says nothing, and is never asked.
@@ -1627,6 +1775,7 @@ export const canopyNamespace = defineIpcNamespace({
         const binding = await resolveLiveAssistant(subject, await liveAssistantSources(), stamp);
         if (!isCurrentWatchRequest(viewId, ticket, slot)) return { watchId: null, snapshot: null };
         const ptyClient = requirePtyClient();
+        followDriveLease();
         const { terminalId } = binding.subject;
         return watchTerminal(
           ptyClient,
@@ -1640,7 +1789,8 @@ export const canopyNamespace = defineIpcNamespace({
           isViewer(ctx) ? () => false : () => drivesRun(ctx, terminalId) && binding.mayType(viewId),
           binding,
           false,
-          slot
+          slot,
+          followsUntilUsed(ctx)
         );
       },
       { withContext: true }
@@ -1788,36 +1938,99 @@ export const canopyNamespace = defineIpcNamespace({
 
     /** The model, and whether it is on this machine. */
     /**
-     * The terminals a panel on another machine holds at its own size, for a
-     * window here to freeze their panes. Not gated on Canopy: any window with
-     * the terminal open needs it, and with Canopy off the list is empty.
+     * The terminals a panel holds at its own size, for a window to draw their
+     * panes at the PTY's grid. Not gated on Canopy: any window with the
+     * terminal open needs it, and with Canopy off the list is empty.
      */
     getSizeHolds: op(CANOPY_METHOD_CHANNELS.getSizeHolds, async (): Promise<string[]> =>
-      remoteSizeHolds()
+      sizeHolds()
+    ),
+
+    /**
+     * The user typed or clicked in a terminal's own pane. Asked by whoever may
+     * type there, as `terminal:input` would let them; the view's own fit then
+     * moves the PTY, so no size is named here.
+     */
+    takeTerminalSize: op(
+      CANOPY_METHOD_CHANNELS.takeTerminalSize,
+      async (ctx, terminalId: string): Promise<void> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.takeTerminalSize, 60, 10_000);
+        assertRunId(terminalId);
+        if (isViewer(ctx) || !drivesRun(ctx, terminalId)) return;
+        const { endpoint } = ctx;
+        // A remote view may touch only its own project's terminals.
+        if (
+          endpoint.kind === "remote-view" &&
+          requirePtyClient().getTerminalProjectId(terminalId) !== endpoint.projectId
+        ) {
+          return;
+        }
+        yieldSizeToPane(terminalId);
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * The terminals a main window's view shows in a pane, all of them each
+     * time. Such a pane owns its terminal's size while its view may size it,
+     * and every Canopy panel follows meanwhile (#16737). Not gated on Canopy:
+     * a panel opened later must find the pane already there.
+     */
+    setVisiblePaneTerminals: op(
+      CANOPY_METHOD_CHANNELS.setVisiblePaneTerminals,
+      async (ctx, terminalIds: string[]): Promise<void> => {
+        // Not rate-limited, as `setShown` isn't: a dropped report would leave the
+        // view's last one standing, and the renderer sends one per change at most.
+        if (!Array.isArray(terminalIds) || terminalIds.length > MAX_VISIBLE_PANES) {
+          throw new Error("Invalid terminals");
+        }
+        for (const terminalId of terminalIds) assertRunId(terminalId);
+        // Canopy's own windows show panels, not panes.
+        if (isViewer(ctx) || followsUntilUsed(ctx)) return;
+        watchView(ctx);
+        followDriveLease();
+        const { endpoint } = ctx;
+        setVisiblePaneTerminals(ctx.webContentsId, terminalIds, (terminalId) => {
+          const ptyClient = getPtyClient();
+          if (!ptyClient) return false;
+          // A remote view sizes only its own project's terminals.
+          if (
+            endpoint.kind === "remote-view" &&
+            ptyClient.getTerminalProjectId(terminalId) !== endpoint.projectId
+          ) {
+            return false;
+          }
+          return drivesRun(ctx, terminalId);
+        });
+      },
+      { withContext: true }
     ),
 
     getModel: op(CANOPY_METHOD_CHANNELS.getModel, async (): Promise<CanopyModelInfo> =>
       getModels().info()
     ),
 
-    /** Tries a failed or stopped download again. */
+    /**
+     * Kept for Shells from before the model shipped with Daintree, which offer
+     * to retry its download: it checks the shipped model, once a launch, and
+     * fetches nothing.
+     */
     retryModel: op(CANOPY_METHOD_CHANNELS.retryModel, async (): Promise<CanopySnapshot> => {
       ensureModel();
       return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
     }),
 
     /**
-     * Deletes the downloaded model, at any time. With Canopy on that turns it
-     * off first, by the same guarded change as any other turn-off, so every view
-     * hears it and nothing downloads the model again on the next launch.
+     * Kept for Shells from before the model shipped with Daintree, which offer
+     * to delete it: the model is part of the app now, so nothing is deleted and
+     * Canopy stays as it is.
      */
     removeModels: op(CANOPY_METHOD_CHANNELS.removeModels, async (): Promise<CanopySnapshot> => {
-      checkRateLimit(CANOPY_METHOD_CHANNELS.removeModels, 10, 10_000);
-      if (readCanopyMode() === "on") changeCanopyMode("unset");
-      reader?.release();
-      models?.cancel();
-      await getModels().remove(false);
-      return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
+      throw new AppError({
+        code: "UNSUPPORTED",
+        message: "Canopy's model ships with Daintree",
+        userMessage: "Canopy's model comes with Daintree and can't be deleted on its own.",
+      });
     }),
 
     /** Raw keystrokes from the live view, for the terminal it is streaming. */
@@ -1856,7 +2069,27 @@ export const canopyNamespace = defineIpcNamespace({
         if (watched && !drivesRun(ctx, watched.runId)) return;
         // Another window's session to size: this one only reads it.
         if (watched && !watched.mayType) return;
+        if (isPutAway(ctx.senderWindow)) {
+          releaseViewSizeHolds(ctx.webContentsId);
+          return;
+        }
         resizeWatchedTerminal(requirePtyClient(), ctx.webContentsId, watchId, cols, rows);
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * The user clicked or typed in a panel that follows the PTY's grid. Typing
+     * sent through `terminalInput` doesn't claim by itself: that also carries
+     * the mouse reports of hovering over a program that asks for them.
+     */
+    terminalClaimSize: op(
+      CANOPY_METHOD_CHANNELS.terminalClaimSize,
+      async (ctx, watchId: number): Promise<void> => {
+        if (!Number.isSafeInteger(watchId)) throw new Error("Invalid watch");
+        const watched = watchedTerminal(ctx.webContentsId, watchId);
+        if (!watched || !watched.mayType || !drivesRun(ctx, watched.runId)) return;
+        claimWatchedSize(ctx.webContentsId, watchId);
       },
       { withContext: true }
     ),
@@ -1871,6 +2104,7 @@ export const canopyNamespace = defineIpcNamespace({
         const watched = requireWatched(ctx.webContentsId, watchId);
         assertMayType(watched);
         assertDrivesRun(ctx, watched.runId);
+        claimWatchedSize(ctx.webContentsId, watchId);
         requirePtyClient().sendKey(watched.runId, key);
         if (!watched.assistant && key === "enter") {
           service?.noteUserSent(watched.runId, watched.spawnedAt);
@@ -1904,6 +2138,7 @@ export const canopyNamespace = defineIpcNamespace({
         // Input may have moved to another window while the host answered.
         assertMayType(current);
         assertDrivesRun(ctx, watched.runId);
+        claimWatchedSize(ctx.webContentsId, watchId);
         submitTo(watched.runId, text, imagePaths);
         if (!watched.assistant) {
           service?.noteUserSent(watched.runId, watched.spawnedAt);
@@ -1944,6 +2179,7 @@ export const canopyNamespace = defineIpcNamespace({
         }
         // Control can move to another screen while the host answered.
         assertDrivesRun(ctx, runId);
+        claimWatchedRunSize(ctx.webContentsId, runId, target.spawnedAt);
         submitTo(runId, text, imagePaths);
         service?.noteUserSent(runId, target.spawnedAt);
         service?.markHandled(runId, target.spawnedAt);
@@ -1966,6 +2202,61 @@ export const canopyNamespace = defineIpcNamespace({
         // still there to clear away, as the pane says.
         await assertSameIncarnation(runId, target);
         return trashThroughOwningViews(runId, target.spawnedAt);
+      }
+    ),
+
+    /**
+     * Trash a set of runs the person reviewed and confirmed in the panel, each
+     * as `trash` would. One call for the set: `trash`'s own limit is for a key
+     * held down, and a set past it would stop halfway. A run this caller
+     * doesn't drive, or that has gone or respawned, is refused alone and named
+     * as such; the rest are trashed.
+     */
+    trashBatch: op(
+      CANOPY_METHOD_CHANNELS.trashBatch,
+      async (ctx, targets: CanopyRunTarget[]): Promise<CanopyTrashOutcome[]> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.trashBatch, 10, 10_000);
+        assertRunTargets(targets);
+        const outcomes: CanopyTrashOutcome[] = [];
+        const seen = new Set<string>();
+        for (const target of targets) {
+          if (seen.has(target.runId)) continue;
+          seen.add(target.runId);
+          try {
+            const { run, projectId } = await assertSameIncarnation(target.runId, target);
+            // As the lease gate finds a terminal's project, and checked with
+            // nothing awaited after it: control can move while the host is asked.
+            if (peekDriveLeaseService()) {
+              const owner = requirePtyClient().getTerminalProjectId(target.runId) ?? projectId;
+              if (owner === null || !drivesProject(ctx, owner)) throw drivenElsewhere(owner);
+            }
+            outcomes.push({ runId: target.runId, receipt: trashListedRun(run, target.spawnedAt) });
+          } catch (error) {
+            outcomes.push({ runId: target.runId, error: refusalOf(error, "It wasn't trashed.") });
+          }
+        }
+        return outcomes;
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * What each run's input box holds, so the panel's bulk trash can leave a
+     * typed draft unticked. Read here, on the machine the terminal runs on:
+     * only the state goes back, never the text. Only runs the fleet holds in
+     * the same incarnation are read.
+     */
+    readInputLines: op(
+      CANOPY_METHOD_CHANNELS.readInputLines,
+      async (targets: CanopyRunTarget[]): Promise<CanopyInputLineReading[]> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.readInputLines, 10, 10_000);
+        assertRunTargets(targets);
+        const runs = getFleetSnapshotService()?.getLastBroadcast()?.runs ?? [];
+        const live = new Set(runs.map((run) => `${run.runId}\u0000${run.spawnedAt}`));
+        const known = targets.filter((target) =>
+          live.has(`${target.runId}\u0000${target.spawnedAt}`)
+        );
+        return readInputLines(requirePtyClient(), known);
       }
     ),
 
@@ -2010,6 +2301,42 @@ export const canopyNamespace = defineIpcNamespace({
           throw drivenElsewhere(trashed.workspaceId);
         }
         await restoreThroughOwningViews(receipt, (held) => drivesProject(ctx, held.workspaceId));
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * Take back a bulk trash, by the receipts `trashBatch` gave, each as
+     * `untrash` would. A receipt that has left the trash, or whose project
+     * another screen drives, is refused alone; the rest come back.
+     */
+    untrashBatch: op(
+      CANOPY_METHOD_CHANNELS.untrashBatch,
+      async (ctx, receipts: number[]): Promise<CanopyUntrashOutcome[]> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.untrashBatch, 10, 10_000);
+        if (
+          !Array.isArray(receipts) ||
+          receipts.length > MAX_BULK_TRASH ||
+          !receipts.every((receipt) => Number.isSafeInteger(receipt) && receipt > 0)
+        ) {
+          throw new Error("Invalid trash receipts");
+        }
+        const outcomes: CanopyUntrashOutcome[] = [];
+        for (const receipt of new Set(receipts)) {
+          try {
+            const trashed = recentlyTrashed.get(receipt);
+            if (trashed && !drivesProject(ctx, trashed.workspaceId)) {
+              throw drivenElsewhere(trashed.workspaceId);
+            }
+            await restoreThroughOwningViews(receipt, (held) =>
+              drivesProject(ctx, held.workspaceId)
+            );
+            outcomes.push({ receipt });
+          } catch (error) {
+            outcomes.push({ receipt, error: refusalOf(error, "It wasn't restored.") });
+          }
+        }
+        return outcomes;
       },
       { withContext: true }
     ),
@@ -2231,6 +2558,7 @@ export const canopyNamespace = defineIpcNamespace({
         assertDrivesRun(ctx, runId);
         if (!isAnswerLabel(label)) throw new Error("Invalid option");
         await assertNotGlobalAssistant(runId);
+        claimWatchedRunSize(ctx.webContentsId, runId, target.spawnedAt);
         await answerRunByLabel({
           pty: requirePtyClient(),
           runId,
@@ -2428,7 +2756,12 @@ export const canopyNamespace = defineIpcNamespace({
       { withContext: true }
     ),
 
-    /** Read only this workspace's agents (its id), or every workspace's (null). */
+    /**
+     * Read only this workspace's agents (its id), or every workspace's (null).
+     * Only a renderer on an older build asks: its project dialog offered "This
+     * project", which no view has offered since the inbox moved to the Canopy
+     * window (#16581), so it is kept for a Shell that still does.
+     */
     setScope: op(
       CANOPY_METHOD_CHANNELS.setScope,
       async (ctx, workspaceId: string | null): Promise<void> => {
@@ -2509,8 +2842,26 @@ export function registerCanopyHandlers(): () => void {
       payload: terminalIds,
     })
   );
+  // Whatever Canopy's mode: a user who hid it has a downloaded model too, and
+  // an update an app update has made stale, deleted without a look online.
+  const stopCleanup = new AbortController();
+  const downloadedModelsCleanup = setTimeout(() => {
+    removeDownloadedModels(
+      path.join(app.getPath("userData"), "canopy", "models"),
+      stopCleanup.signal
+    ).catch((error: unknown) => console.warn("[Canopy] Couldn't delete downloaded models:", error));
+    const updates = modelUpdatesDir();
+    if (updates !== null) {
+      removeStaleUpdates(updates, stopCleanup.signal).catch((error: unknown) =>
+        console.warn("[Canopy] Couldn't delete stale model updates:", error)
+      );
+    }
+  }, DOWNLOADED_MODELS_CLEANUP_DELAY_MS);
+  downloadedModelsCleanup.unref?.();
   return () => {
     unregister();
+    clearTimeout(downloadedModelsCleanup);
+    stopCleanup.abort();
     offTrashed();
     offTrashCleared();
     offRestored();
@@ -2545,7 +2896,8 @@ export function registerCanopyHandlers(): () => void {
     service = null;
     reader?.release();
     reader = null;
-    models?.cancel();
+    models?.dispose();
     models = null;
+    modelDirWas = null;
   };
 }

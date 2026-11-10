@@ -238,7 +238,7 @@ export function GeneralTab({
         : `All ${installed.length} installed agents are ready to use`;
     }
     const ready = installed.length - attention.length;
-    return `${ready} of ${installed.length} installed agents are ready — ${pluralize(attention.length, "needs", "need")} attention`;
+    return `${ready} of ${installed.length} installed agents ready — ${pluralize(attention.length, "needs", "need")} attention`;
   })();
   const [shortcuts, setShortcuts] = useState<ShortcutCategory[]>([]);
   const [updateChannel, setUpdateChannel] = useState<"stable" | "nightly" | null>(null);

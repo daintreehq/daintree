@@ -6,6 +6,7 @@ import {
   registerWebContents,
   registerAppView,
 } from "./webContentsRegistry.js";
+import { markProjectlessView } from "./projectlessViews.js";
 import { attachActiveViewFocus } from "./activeViewFocus.js";
 import { attachUnresponsiveDialog } from "./unresponsiveDialog.js";
 import { getWindowRegistry } from "./windowRef.js";
@@ -14,7 +15,12 @@ import { toggleWindowFullscreen } from "./fullscreen.js";
 import { sendFullscreenChange } from "./fullscreenBroadcast.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import path from "path";
-import { createWindowWithState, disposeWindowStateTracking } from "../windowState.js";
+import {
+  createSeparateWindowWithState,
+  createWindowWithState,
+  disposeWindowStateTracking,
+} from "../windowState.js";
+import { CANOPY_BOUNDS_KEY } from "./windowBoundsKeys.js";
 import { store } from "../store.js";
 import type { AppColorScheme } from "../../shared/theme/index.js";
 import {
@@ -29,9 +35,9 @@ import { isWebviewSrcAllowed } from "./ProjectViewHandlers.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { gateAppViewKey } from "./appViewKeyGate.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
-import { findTerminalCycleAction, isRendererOwnedShortcut } from "../services/menuAccelerators.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
   buildSkeletonCss,
@@ -46,6 +52,7 @@ import {
   INITIAL_COLOR_SCHEME_ARG,
   INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
+import { CANOPY_WINDOW_ARG } from "../../shared/types/canopyWindow.js";
 import { getMinimumWindowSize, getPlatformWindowOptions } from "./platformWindowOptions.js";
 import { getLinuxWindowIconOption } from "./linuxWindowIcon.js";
 import { showWindowInactive } from "./showWindowInactive.js";
@@ -167,7 +174,16 @@ export interface SetupBrowserWindowOptions {
    * asked for and should get focus.
    */
   revealMode?: "show" | "showInactive";
+  /**
+   * What the window holds. A "canopy" window has one view and no project:
+   * bounds of its own (never the fallback a project window opens at, #16336),
+   * no webview tag, and its view is registered as belonging to no project.
+   */
+  kind?: "project" | "canopy";
 }
+
+/** Where a Canopy window starts: wide enough for its list beside a live terminal. */
+const CANOPY_WINDOW_SIZE = { width: 1280, height: 860 };
 
 export interface CreateWindowResult {
   win: BrowserWindow;
@@ -188,7 +204,9 @@ export function setupBrowserWindow(
     initialProjectId,
     remoteWorkspaceKey,
     revealMode = "show",
+    kind = "project",
   } = options;
+  const canopyWindow = kind === "canopy";
   let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
   let _smokeRendererUnresponsive = false;
 
@@ -244,17 +262,20 @@ export function setupBrowserWindow(
   // The BrowserWindow itself does NOT load the app — it's a shell.
   // The React app lives in a WebContentsView attached to win.contentView.
   console.log("[MAIN] Creating window...");
-  const win = createWindowWithState(
-    {
-      show: false,
-      ...getMinimumWindowSize(),
-      ...getPlatformWindowOptions(windowBg),
-      ...getLinuxWindowIconOption(),
-      backgroundColor: windowBg,
-    },
-    resolveBoundsKey(projectPath, initialProjectId ?? remoteWorkspaceKey),
-    appWindowStateTracking
-  );
+  const windowOptions = {
+    show: false,
+    ...getMinimumWindowSize(),
+    ...getPlatformWindowOptions(windowBg),
+    ...getLinuxWindowIconOption(),
+    backgroundColor: windowBg,
+  };
+  const win = canopyWindow
+    ? createSeparateWindowWithState(windowOptions, CANOPY_BOUNDS_KEY, CANOPY_WINDOW_SIZE)
+    : createWindowWithState(
+        windowOptions,
+        resolveBoundsKey(projectPath, initialProjectId ?? remoteWorkspaceKey),
+        appWindowStateTracking
+      );
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
 
   // Record the overlay colour the constructor just applied natively, so the
@@ -297,7 +318,7 @@ export function setupBrowserWindow(
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      webviewTag: true,
+      webviewTag: !canopyWindow,
       navigateOnDragDrop: false,
       // bypassHeatCheck writes the V8 code cache on the first load instead of
       // Chromium's default third-load heat check, so launch 2 after an
@@ -316,12 +337,14 @@ export function setupBrowserWindow(
         // forward main-process CLI switches), so window.electron.demo and the
         // demo overlay components are available when launched with --demo-mode.
         ...(isDemoMode ? ["--demo-mode"] : []),
+        ...(canopyWindow ? [CANOPY_WINDOW_ARG] : []),
       ],
     },
   });
 
   // Register the app view so IPC helpers route to the correct webContents
   registerAppView(win, appView);
+  if (canopyWindow) markProjectlessView(appView.webContents, win);
 
   // Attach the view to the window and size it to fill the content area.
   // Ongoing resize handling is delegated to ProjectViewManager (which tracks the active view).
@@ -549,34 +572,13 @@ export function setupBrowserWindow(
     webPreferences.partition = params.partition;
   });
 
-  // Prevent Cmd+W / Ctrl+W from closing the window, and route the terminal
-  // cycle shortcuts (Ctrl+Tab by default) for the initial app view. ProjectViewManager installs the
-  // same Ctrl+Tab bridge for cold-started project views.
-  appWebContents.on("before-input-event", (event, input) => {
-    const key = input.key.toLowerCase();
-    const terminalCycleAction = findTerminalCycleAction(input);
-    if (terminalCycleAction) {
-      event.preventDefault();
-      appWebContents.send(CHANNELS.MENU_ACTION, terminalCycleAction);
-      return;
-    }
-
-    const isMac = process.platform === "darwin";
-    const isCloseShortcut =
-      input.type === "keyDown" &&
-      key === "w" &&
-      ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
-      !input.alt;
-
-    // Renderer-owned menu accelerators (derived from effective keybindings)
-    // are suppressed per-event on every platform so the renderer's
-    // KeybindingService — scopes, priorities, rebinds, terminal-reserved
-    // keys — owns keyboard execution while this renderer has focus; the
-    // native item stays clickable and registered, which keeps the shortcut
-    // working when focus is in a guest webview or DevTools where this
-    // handler never fires.
-    appWebContents.setIgnoreMenuShortcuts(isCloseShortcut || isRendererOwnedShortcut(input));
-  });
+  // Cmd+W, renderer-owned accelerators and the terminal cycle keys are the
+  // renderer's, in the Canopy window too: its agent pane takes Cmd+W before
+  // Close Window (#16618). ProjectViewManager gates cold-started project views
+  // the same way.
+  appWebContents.on("before-input-event", (event, input) =>
+    gateAppViewKey(appWebContents, event, input)
+  );
 
   attachAppViewRendererGoneHandler({
     win,

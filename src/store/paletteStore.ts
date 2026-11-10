@@ -2,7 +2,6 @@ import { create } from "zustand";
 
 export type PaletteId =
   | "quick-switcher"
-  | "new-terminal"
   | "worktree"
   | "panel"
   | "action"

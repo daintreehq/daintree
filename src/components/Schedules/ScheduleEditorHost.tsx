@@ -130,6 +130,7 @@ export function ScheduleEditorHost() {
       schedule={editor.schedule}
       openingKey={editor.key}
       defaultAgentId={editor.schedule?.launch.agentId ?? agents[0]?.id ?? ""}
+      starter={editor.starter}
       worktrees={choices}
       now={now}
       osJobContext={osJob.status?.context ?? null}

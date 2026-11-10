@@ -3,6 +3,7 @@ import path from "path";
 import { constants as fsConstants } from "fs";
 import { AppError } from "../utils/errorTypes.js";
 import { TimeoutError, withTimeout } from "../utils/withTimeout.js";
+import { projectIo } from "./projectIoGate.js";
 
 /**
  * Pre-flight validation for a folder the user is trying to open as a project
@@ -30,11 +31,12 @@ export const PROJECT_DIRECTORY_STAT_TIMEOUT_MS = 5_000;
  * syscall rather than one each.
  *
  * `stat` takes no AbortSignal, so a timed-out call keeps its libuv worker (a
- * 4-thread pool) until the OS gives up on the mount. Sharing bounds that. The
- * share is deliberately dropped once a call times out, though: holding it would
- * pin every later attempt to the same doomed promise, so remounting the drive
- * would never take effect and the path would stay broken until the app
- * restarted.
+ * 4-thread pool) until the OS gives up on the mount. The syscalls go through
+ * the project I/O gate (#16361), which keeps that worker accounted for: until
+ * the stuck call returns, a retry for the same folder fails at once instead of
+ * pinning a second worker. The share itself is dropped once a call times out,
+ * so the first retry after the stuck call returns issues a fresh one and a
+ * remounted drive takes effect without a restart.
  */
 const inFlightProbes = new Map<string, Promise<DirectoryProbe>>();
 
@@ -54,15 +56,25 @@ function probeOnce(directoryPath: string): Promise<DirectoryProbe> {
   const pending = inFlightProbes.get(directoryPath);
   if (pending) return pending;
 
+  // One deadline for both syscalls, so an access that starts late can't hold
+  // the folder's gate slot unstalled past the caller's own timeout.
+  const bound = {
+    timeoutMs: PROJECT_DIRECTORY_STAT_TIMEOUT_MS,
+    deadline: performance.now() + PROJECT_DIRECTORY_STAT_TIMEOUT_MS,
+  };
   const started = (async (): Promise<DirectoryProbe> => {
-    const stats = await fs.stat(directoryPath);
+    const stats = await projectIo.run(directoryPath, () => fs.stat(directoryPath), bound);
     if (!stats.isDirectory()) return { isDirectory: false };
     // A successful stat says nothing about our access to the directory itself —
     // it only needs execute permission on the *parent*. A folder with its own
     // permission bits cleared stats fine and then fails when git tries to enter
     // it, which is precisely the "permission denied" case this classifier owes
     // an answer for.
-    await fs.access(directoryPath, fsConstants.R_OK | fsConstants.X_OK);
+    await projectIo.run(
+      directoryPath,
+      () => fs.access(directoryPath, fsConstants.R_OK | fsConstants.X_OK),
+      bound
+    );
     return { isDirectory: true };
   })().finally(() => {
     releaseProbe(directoryPath, started);
@@ -162,8 +174,8 @@ export async function probeGitMarker(projectRoot: string): Promise<GitMarkerProb
   // dead share must not each pin a libuv worker to it.
   let pending = inFlightMarkerProbes.get(markerPath);
   if (!pending) {
-    const started = fs
-      .lstat(markerPath)
+    const started = projectIo
+      .run(projectRoot, () => fs.lstat(markerPath), { timeoutMs: GIT_MARKER_STAT_TIMEOUT_MS })
       .then(() => true)
       .finally(() => {
         if (inFlightMarkerProbes.get(markerPath) === started) {

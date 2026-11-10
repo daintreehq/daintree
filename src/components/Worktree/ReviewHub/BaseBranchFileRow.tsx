@@ -1,5 +1,6 @@
 import type React from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
+import { Badge } from "@/components/ui/badge";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { FileDecoration } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
@@ -100,16 +101,14 @@ export function BaseBranchFileRow({
             aria-label={badgeLabel}
             disabled={!onBadgeClick}
             className={cn(
-              "shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 ml-2 rounded-full",
-              "text-3xs font-semibold tabular-nums",
-              "bg-status-warning/15 text-status-warning",
-              onBadgeClick
-                ? "hover:bg-status-warning/25 transition-colors cursor-pointer"
-                : "cursor-default",
+              "shrink-0 inline-flex ml-2 rounded-full",
+              onBadgeClick ? "cursor-pointer" : "cursor-default",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
             )}
           >
-            {unresolvedDecoration!.badge}
+            <Badge size="xs" tone="warning" shape="pill" className="tabular-nums">
+              {unresolvedDecoration!.badge}
+            </Badge>
           </button>
         )}
       </div>

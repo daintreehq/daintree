@@ -2,12 +2,12 @@
  * Palette family, everyday states.
  *
  * `palette-review.spec.ts` checks that the family shares one surface. This one
- * goes into the three palettes people open dozens of times a day — the action
- * palette, the quick switcher and the new-terminal launcher — and captures the
- * states that carry the design: the first-open prefix hint, the browse rail with
- * real Favorites and Recently used bands, ranked search, commands mode, the
- * destructive-row treatment, the path-shaped no-results hint, and each palette's
- * empty and no-match branches.
+ * goes into the two palettes people open dozens of times a day — the action
+ * palette and the quick switcher — and captures the states that carry the
+ * design: the first-open prefix hint, the browse rail with real Favorites and
+ * Recently used bands, ranked search, commands mode, the destructive-row
+ * treatment, the path-shaped no-results hint, and each palette's empty and
+ * no-match branches.
  *
  * Fixtures go through the real seams: Recently used is filled by running
  * actions from the palette, Favorites by the palette's own Alt+P, and the
@@ -301,23 +301,6 @@ test("palette family — everyday states", async () => {
       await settle(page, 350);
       await expect(page.locator(qs).getByText(/No matches for/)).toBeVisible();
       await snap(page, "13-quick-switcher-no-results", qs);
-    });
-
-    const nt = SEL.newTerminalPalette.dialog;
-    await step(page, "new-terminal", async () => {
-      await page.evaluate(() =>
-        window.dispatchEvent(new Event("daintree:open-new-terminal-palette"))
-      );
-      await page.locator(nt).waitFor({ state: "visible", timeout: 5000 });
-      await expect(page.locator(SEL.newTerminalPalette.options).first()).toBeVisible();
-      await snap(page, "14-new-terminal", nt);
-      await page.locator(SEL.newTerminalPalette.searchInput).pressSequentially("co", { delay: 20 });
-      await settle(page, 300);
-      await snap(page, "15-new-terminal-search", nt);
-      await page.locator(SEL.newTerminalPalette.searchInput).fill("qqxzv");
-      await settle(page, 300);
-      expect(await page.locator(SEL.newTerminalPalette.options).count()).toBe(0);
-      await snap(page, "16-new-terminal-no-results", nt);
     });
 
     expect(stepFailures, `palette-family capture steps failed in "${THEME}"`).toEqual([]);

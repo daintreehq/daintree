@@ -134,3 +134,10 @@ export function foreignPromptInputMoved(
   const now = foreignPromptInputAt(record, owner);
   return now !== undefined && (before === undefined || now > before);
 }
+
+/**
+ * The owner a held composer send's line is filed under once written (#16379):
+ * the person's prompt, so an Assistant's prompt held for the same pane drops
+ * as overtaken. NUL-led, so no Assistant principal can spell it.
+ */
+export const COMPOSER_PROMPT_OWNER = "\u0000composer";

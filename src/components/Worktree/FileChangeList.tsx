@@ -14,6 +14,8 @@ import { cn } from "../../lib/utils";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
 import { ExternalLink, Folder } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { PathTail } from "@/components/ui/PathTail";
 import { basename, dirname, isAbsolute, join } from "@shared/utils/path";
 import {
   buildWorkingTreeDiffModel,
@@ -568,7 +570,17 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
               className="flex items-center gap-1.5 text-2xs text-text-secondary mb-1"
             >
               <Folder className="w-3 h-3 shrink-0" />
-              <span className="min-w-0 truncate font-mono font-medium">{group.displayDir}</span>
+              {/* Cut from its start like the file paths, so the folder the
+                  files sit in survives; the whole path is disclosed whenever
+                  any of it is hidden. */}
+              <TruncatedTooltip
+                content={group.dir}
+                contentClassName="font-mono [overflow-wrap:anywhere]"
+                isTruncated={group.dir !== "" && group.displayDir !== group.dir ? true : undefined}
+                focusable={false}
+              >
+                <PathTail className="min-w-0 font-mono font-medium">{group.displayDir}</PathTail>
+              </TruncatedTooltip>
               <span
                 className={cn(
                   "ml-auto shrink-0 pl-2 text-text-secondary",

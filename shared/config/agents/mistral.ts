@@ -7,6 +7,11 @@ export const config: AgentConfig = {
   // Pass --trust by default so the first-launch trust-folder prompt doesn't
   // block the agent state machine.
   args: ["--trust"],
+  // Vibe: a bare positional seeds the TUI; headless needs --prompt.
+  initialPromptForm: {
+    interactive: { args: ["{prompt}"] },
+    headless: { args: ["--prompt", "{prompt}"] },
+  },
   color: "#FA500F",
   iconId: "mistral",
   supportsContextInjection: true,

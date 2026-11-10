@@ -4,15 +4,11 @@ import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { resolveScopeKind, stripCcrPrefix } from "./scopeUtils";
 import {
-  isAgentBypassSupported,
+  isAgentTerminalBypassSupported,
   resolveDangerousMode,
   combineDangerousModes,
-  resolveInlineMode,
-  combineInlineModes,
-  resolveEffectiveInlineMode,
   type AgentSettingsEntry,
   type DangerousMode,
-  type InlineMode,
 } from "@shared/types";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 
@@ -71,12 +67,6 @@ export function useAgentScope({
   }, [scopeKind, selectedPreset]);
 
   const agentCfg = getAgentConfig(agentId);
-  // Either polarity is enough to make the control do something: an agent may
-  // declare only `altScreenFlag` (forces full-screen) or only `inlineModeFlag`
-  // (forces inline) and still ride its CLI default in the other direction
-  // (#11423). Gating on `inlineModeFlag` alone would hide a working control.
-  const supportsInlineMode =
-    !!agentCfg?.capabilities?.inlineModeFlag || !!agentCfg?.capabilities?.altScreenFlag;
 
   const agentDefaultCustomFlags = activeEntry.customFlags ?? "";
 
@@ -90,12 +80,14 @@ export function useAgentScope({
   const dangerousMode: DangerousMode =
     scopeKind === "custom" ? (presetMode ?? "inherit") : agentMode;
 
-  // True when the global skip-permissions override (#10432) is forcing bypass
-  // on for this bypass-supporting agent — the baseline an "inherit" resolves to.
+  // True when the global skip-permissions switch (#10432) turns bypass on for
+  // this agent — the baseline an "inherit" resolves to. Only agents with a
+  // terminal bypass flag follow it (#16414).
   const globalSkipPermissions = useAgentSettingsStore(
     (s) => s.settings?.globalSkipPermissions ?? false
   );
-  const globalBypassActive = globalSkipPermissions && isAgentBypassSupported(agentId);
+  const globalBypassReachesAgent = isAgentTerminalBypassSupported(agentId);
+  const globalBypassActive = globalSkipPermissions && globalBypassReachesAgent;
 
   const resolveMode = (mode: DangerousMode): boolean =>
     mode === "on" ? true : mode === "off" ? false : globalBypassActive;
@@ -104,7 +96,12 @@ export function useAgentScope({
   // — drives the explanatory hint under the control.
   const agentResolvedDangerous = resolveMode(agentMode);
   const inheritResolvesToOn = scopeKind === "custom" ? agentResolvedDangerous : globalBypassActive;
-  const inheritOriginLabel = scopeKind === "custom" ? "agent default" : "global setting";
+  const inheritHint =
+    scopeKind === "custom"
+      ? "Inherited from agent default"
+      : globalBypassReachesAgent
+        ? "Inherited from global setting"
+        : "The global setting doesn't apply to this agent";
 
   // Final resolved bypass for the active scope (incl. the global baseline) —
   // drives the "<flag> added to command" chip.
@@ -113,44 +110,6 @@ export function useAgentScope({
   const effectiveSkipPerms = selectedPreset
     ? resolveMode(combineDangerousModes(agentMode, presetMode))
     : agentResolvedDangerous;
-
-  // Tri-state alt-screen mode (#10876), mirroring the bypass control above. The
-  // stored value polarity is "on" = inline, "off" = alt screen; "Default"
-  // (inherit) defers to the agent registry default and then the global
-  // "Use alt-screen mode by default" switch.
-  const globalUseAltScreen = useAgentSettingsStore((s) => s.settings?.globalUseAltScreen ?? false);
-  const agentInlineMode = resolveInlineMode(activeEntry);
-  const presetInlineMode = selectedPreset ? resolveInlineMode(selectedPreset) : undefined;
-  const inlineMode: InlineMode =
-    scopeKind === "custom" ? (presetInlineMode ?? "inherit") : agentInlineMode;
-
-  // Resolve a tri-state to the effective "is inline" decision via the SAME
-  // shared chokepoint the launch path uses, so the UI can't drift from behavior.
-  const resolveInline = (mode: InlineMode): boolean =>
-    resolveEffectiveInlineMode({ inlineMode: mode }, agentId, globalUseAltScreen);
-
-  const agentResolvedInline = resolveInline(agentInlineMode);
-  // What the inline "Default" (inherit) segment resolves to and where from.
-  const inlineInheritResolvesToInline =
-    scopeKind === "custom" ? agentResolvedInline : resolveInline("inherit");
-  // Mirror the three-tier precedence in `resolveEffectiveInlineMode`: a preset
-  // inherits from the agent Default scope; the agent Default scope inherits from
-  // the curated registry default (`capabilities.defaultInlineMode`) when one is
-  // declared, and only otherwise from the global switch. No shipped agent pins
-  // one today — they all follow the global switch so it stays user-overridable.
-  // Attributing a registry-shadowed value to the global setting (#10894) is wrong
-  // — the global toggle has no effect while the built-in default decides.
-  const hasRegistryInlineDefault = typeof agentCfg?.capabilities?.defaultInlineMode === "boolean";
-  const inlineInheritOriginLabel =
-    scopeKind === "custom"
-      ? "agent default"
-      : hasRegistryInlineDefault
-        ? "the agent's built-in default"
-        : "global setting";
-
-  const effectiveInlineMode = selectedPreset
-    ? resolveInline(combineInlineModes(agentInlineMode, presetInlineMode))
-    : agentResolvedInline;
 
   const isEditableScope = scopeKind === "default" || scopeKind === "custom";
   const customArgsValue =
@@ -324,19 +283,6 @@ export function useAgentScope({
     }
   };
 
-  const handleInlineModeChange = (mode: InlineMode) => {
-    if (scopeKind === "default") {
-      void (async () => {
-        await updateAgent(agentId, { inlineMode: mode } as Partial<AgentSettingsEntry>);
-        onSettingsChange?.();
-      })();
-    } else if (scopeKind === "custom" && selectedPreset) {
-      // "Default" clears the override (undefined, dropped on serialize) so the
-      // preset inherits the agent's resolved mode.
-      handleUpdatePreset(selectedPreset.id, { inlineMode: mode === "inherit" ? undefined : mode });
-    }
-  };
-
   const handleCustomFlagsChange = (value: string) => {
     if (scopeKind === "default") {
       void updateAgent(agentId, { customFlags: value } as Partial<AgentSettingsEntry>);
@@ -368,16 +314,11 @@ export function useAgentScope({
     selectedIsProject,
     selectedIsCcr,
     isEditableScope,
-    supportsInlineMode,
     dangerousMode,
     effectiveSkipPerms,
     globalBypassActive,
     inheritResolvesToOn,
-    inheritOriginLabel,
-    inlineMode,
-    effectiveInlineMode,
-    inlineInheritResolvesToInline,
-    inlineInheritOriginLabel,
+    inheritHint,
     customArgsValue,
     customArgsPlaceholder,
     customArgsDescription,
@@ -398,7 +339,6 @@ export function useAgentScope({
     handleCancelEdit,
     renameError,
     handleDangerousModeChange,
-    handleInlineModeChange,
     handleCustomFlagsChange,
     handleDisplayTitleChange,
     handleCustomFlagsOverrideReset,

@@ -10,8 +10,13 @@ import {
 } from "@/components/ui/context-menu";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { actionService } from "@/services/ActionService";
+import { getMergedPresets } from "@/config/agents";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import { useAgentAccountHeadroom } from "@/hooks/useAgentAccountHeadroom";
+import { presetNamesAccountFolder, type AccountHeadroom } from "@/utils/agentAccountHeadroom";
 import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import type { ActionSource } from "@shared/types/actions";
 import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
@@ -21,6 +26,7 @@ import {
   DestructiveConsequence,
   type DestructiveConfirmCopy,
 } from "./TerminalDestructiveActionConfirmDialog";
+import { AccountChoiceText } from "./AccountHeadroomHint";
 import { restartPanesOnPreset } from "./restartPanesOnPreset";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
@@ -29,6 +35,8 @@ export interface RestartAccountChoice {
   /** `null` is the CLI's default login. */
   id: string | null;
   name: string;
+  /** The tightest window known for the account, while its menu is open (#16407). */
+  headroom?: AccountHeadroom;
 }
 
 function quoted(name: string | undefined, fallback: string): string {
@@ -50,7 +58,7 @@ export function buildRestartOnAccountCopy(
     title: `Restart ${quoted(terminalTitle, "terminal")} on ${quoted(accountName, "another account")}?`,
     lead: agentWorking ? "Its agent is working and will be interrupted." : undefined,
     description: keepConversation
-      ? "It keeps its preset and reopens this conversation on that account, and the scrollback is discarded. If the account can't find the conversation, the pane offers a new one or the way back."
+      ? "It keeps its preset and reopens this conversation on that account, and the scrollback is discarded. If the account can't find the conversation, the panel offers a new one or the way back."
       : "It keeps its preset and starts a new conversation on that account, and the scrollback is discarded.",
     confirmLabel: "Restart on account",
   };
@@ -61,37 +69,78 @@ export function buildRestartOnAccountCopy(
  * agent's, with the default login among them. A pane still on an account
  * that has since been removed can always go back to the default login. None
  * for a pane on the default login when the agent has no saved account.
+ *
+ * Each carries the tightest quota window known for it while `open` (#16407),
+ * and the quota is read only then. A move to the default login keeps the
+ * pane's preset, so `presetId` says whether that preset puts the login's
+ * folder somewhere of its own.
  */
 export function useRestartAccountChoices(
   agentId: string | undefined,
-  currentAccountId: string | undefined
+  currentAccountId: string | undefined,
+  open = false,
+  presetId?: string
 ): RestartAccountChoice[] {
   const savedAccounts = useAgentSettingsStore((s) =>
     agentId ? s.settings?.agents?.[agentId]?.accounts : undefined
   );
-  return useMemo(() => {
+  const customPresets = useAgentSettingsStore((s) =>
+    agentId ? s.settings?.agents?.[agentId]?.customPresets : undefined
+  );
+  const ccrPresets = useCcrPresetsStore((s) =>
+    agentId ? s.ccrPresetsByAgent[agentId] : undefined
+  );
+  const projectPresets = useProjectPresetsStore((s) =>
+    agentId ? s.presetsByAgent[agentId] : undefined
+  );
+  const choices = useMemo(() => {
     if (!agentId || !getAgentConfigFolderAccount(agentId)) return [];
     const accounts = sanitizeAgentAccounts(savedAccounts);
     if (accounts.length === 0 && !currentAccountId) return [];
-    const choices: RestartAccountChoice[] = [
+    const all: RestartAccountChoice[] = [
       { id: null, name: "Default login" },
       ...accounts.map((account) => ({ id: account.id, name: account.name })),
     ];
-    return choices.filter((choice) => choice.id !== (currentAccountId ?? null));
+    return all.filter((choice) => choice.id !== (currentAccountId ?? null));
   }, [agentId, currentAccountId, savedAccounts]);
+
+  const headroomFor = useAgentAccountHeadroom(agentId, open && choices.length > 0);
+  // A preset that can't be found refuses the switch anyway; its folder is unknown.
+  const presetNamesFolder = useMemo(() => {
+    if (!agentId || presetId === undefined) return false;
+    const preset = getMergedPresets(agentId, customPresets, ccrPresets, projectPresets).find(
+      (candidate) => candidate.id === presetId
+    );
+    return preset === undefined || presetNamesAccountFolder(agentId, preset);
+  }, [agentId, presetId, customPresets, ccrPresets, projectPresets]);
+
+  return useMemo(() => {
+    if (!open) return choices;
+    return choices.map((choice) => {
+      const headroom = headroomFor(
+        choice.id === null
+          ? { kind: "default", presetNamesFolder }
+          : { kind: "account", accountId: choice.id }
+      );
+      return headroom ? { ...choice, headroom } : choice;
+    });
+  }, [choices, open, headroomFor, presetNamesFolder]);
 }
 
 /** "Switch account" in the pane menu; nothing when the agent has no other account. */
 export function RestartOnAccountSubmenu({
   agentId,
   currentAccountId,
+  currentPresetId,
   onPick,
 }: {
   agentId: string;
   currentAccountId: string | undefined;
+  currentPresetId?: string;
   onPick: (choice: RestartAccountChoice) => void;
 }) {
-  const choices = useRestartAccountChoices(agentId, currentAccountId);
+  // Menu content mounts only while open, so the quota is read only then.
+  const choices = useRestartAccountChoices(agentId, currentAccountId, true, currentPresetId);
   if (choices.length === 0) return null;
   return (
     <ContextMenuSub>
@@ -102,7 +151,7 @@ export function RestartOnAccountSubmenu({
       <ContextMenuSubContent>
         {choices.map((choice) => (
           <ContextMenuItem key={choice.id ?? "default"} onSelect={() => onPick(choice)}>
-            <span className="truncate">{choice.name}</span>
+            <AccountChoiceText name={choice.name} headroom={choice.headroom} />
           </ContextMenuItem>
         ))}
       </ContextMenuSubContent>
@@ -123,7 +172,7 @@ export function RestartOnAccountDropdownItems({
       {choices.map((choice) => (
         <DropdownMenuItem key={choice.id ?? "default"} onSelect={() => onPick(choice)}>
           <UserRound className={ICON_CLASS} aria-hidden="true" />
-          <span className="truncate">{choice.name}</span>
+          <AccountChoiceText name={choice.name} headroom={choice.headroom} />
         </DropdownMenuItem>
       ))}
     </>

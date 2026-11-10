@@ -39,7 +39,7 @@ export function getCurrentDiskSpaceStatus(): DiskSpacePayload {
 
 let currentDiskSpacePollIntervalMs = POLL_INTERVAL_MS;
 let rearmDiskSpaceTimer: (() => void) | null = null;
-let diskSpacePollFn: (() => Promise<void>) | null = null;
+let diskSpacePollFn: (() => Promise<boolean>) | null = null;
 
 export function setDiskSpaceMonitorPollInterval(ms: number): void {
   if (ms === currentDiskSpacePollIntervalMs) return;
@@ -48,21 +48,40 @@ export function setDiskSpaceMonitorPollInterval(ms: number): void {
 }
 
 export function refreshDiskSpaceMonitor(): void {
-  diskSpacePollFn?.();
+  void diskSpacePollFn?.();
+}
+
+/**
+ * Reads free space now and resolves with what that read saw, once the flag
+ * and every callback it caused have been published. A read already under way
+ * is the one waited for. Null when no monitor runs or the read failed, so a
+ * caller never takes the status from before as a fresh one.
+ */
+export async function checkDiskSpaceNow(): Promise<DiskSpacePayload | null> {
+  const poll = diskSpacePollFn;
+  if (!poll) return null;
+  const read = await poll().catch(() => false);
+  return read ? currentStatus : null;
 }
 
 export function startDiskSpaceMonitor(actions: DiskSpaceMonitorActions): () => void {
   let lastStatus: DiskSpaceStatus = "normal";
   let lastNotificationAt = 0;
   let disposed = false;
-  let polling = false;
+  let inFlight: Promise<boolean> | null = null;
   let removeSuspendListener: (() => void) | null = null;
   let removeWakeListener: (() => void) | null = null;
 
-  async function poll(): Promise<void> {
-    if (disposed || polling) return;
-    polling = true;
+  /** One read at a time: a poll asked for while one runs shares it. True once a read was published. */
+  function poll(): Promise<boolean> {
+    if (disposed) return Promise.resolve(false);
+    inFlight ??= read().finally(() => {
+      inFlight = null;
+    });
+    return inFlight;
+  }
 
+  async function read(): Promise<boolean> {
     let availableMb: number;
     try {
       const userDataPath = app.getPath("userData");
@@ -70,14 +89,10 @@ export function startDiskSpaceMonitor(actions: DiskSpaceMonitorActions): () => v
       availableMb = Number((stats.bavail * stats.bsize) / (1024n * 1024n));
     } catch (err) {
       logWarn("disk-space-poll-failed", { error: String(err) });
-      polling = false;
-      return;
+      return false;
     }
 
-    if (disposed) {
-      polling = false;
-      return;
-    }
+    if (disposed) return false;
 
     let status: DiskSpaceStatus;
     if (availableMb < CRITICAL_MB) {
@@ -146,7 +161,7 @@ export function startDiskSpaceMonitor(actions: DiskSpaceMonitorActions): () => v
       lastStatus = status;
     }
 
-    polling = false;
+    return true;
   }
 
   diskSpacePollFn = poll;

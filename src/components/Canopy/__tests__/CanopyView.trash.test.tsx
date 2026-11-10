@@ -49,6 +49,8 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 import { notify } from "@/lib/notify";
 import { CanopyView } from "../CanopyView";
+import type { CanopyFrame } from "../canopyFrame";
+import { canopyTestFrame } from "./canopyTestFrame";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
@@ -127,7 +129,6 @@ function installElectron(snapshot: CanopySnapshot) {
     setShown: vi.fn(async () => {}),
     archive: vi.fn(async () => null),
     unarchive: vi.fn(async () => {}),
-    setScope: vi.fn(async () => {}),
     markSeen: vi.fn(async () => {}),
     setRead: vi.fn(async () => null),
     markAllRead: vi.fn(async () => []),
@@ -162,13 +163,28 @@ function installElectron(snapshot: CanopySnapshot) {
   return canopy;
 }
 
-/** Shows the panel over `trash`, with the given runs in the inbox. */
-async function open(trash: CanopyTrashEntry[], runIds: string[] = ["live"]) {
-  const snapshot = { ...baseSnapshot, trash };
-  useFleetSnapshotStore.setState({ snapshot: fleet(runIds) });
+let frame: CanopyFrame;
+
+/** Shows the panel over `trash`, with the given runs in the inbox and `archived` ones under its bar. */
+async function open(
+  trash: CanopyTrashEntry[],
+  runIds: string[] = ["live"],
+  archived: string[] = []
+) {
+  const snapshot = {
+    ...baseSnapshot,
+    trash,
+    dispositions: archived.map((runId) => ({
+      runId,
+      spawnedAt: NOW - 3_600_000,
+      kind: "archived" as const,
+      at: NOW,
+    })),
+  };
+  useFleetSnapshotStore.setState({ snapshot: fleet([...runIds, ...archived]) });
   useCanopyStore.setState({ isOpen: true, snapshot, mode: "on" });
   const canopy = installElectron(snapshot);
-  render(<CanopyView />);
+  render(<CanopyView frame={frame} />);
   await frames();
   return canopy;
 }
@@ -183,6 +199,14 @@ function trashBar(): HTMLButtonElement | null {
   return document.querySelector<HTMLButtonElement>("button[aria-controls=canopy-trash]");
 }
 
+function archivedBar(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>("button[aria-controls=canopy-archived]");
+}
+
+function searchInput(): HTMLInputElement {
+  return document.querySelector<HTMLInputElement>("[data-canopy-standalone] input[role=combobox]")!;
+}
+
 function trashRows(): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>("[data-canopy-trash-row]")];
 }
@@ -192,6 +216,7 @@ function dialogButton(name: string): HTMLElement {
 }
 
 beforeEach(() => {
+  frame = canopyTestFrame();
   vi.stubGlobal("IntersectionObserver", IntersectionObserverStub);
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
   __resetCanopySeenForTests();
@@ -210,10 +235,10 @@ afterEach(() => {
     isOpen: false,
     snapshot: null,
     mode: "unset",
-    scope: "all",
-    orders: {},
+    order: null,
     unreadOnly: false,
     trashExpanded: false,
+    archivedExpanded: false,
   });
   window.localStorage.removeItem("daintree-canopy-order");
   vi.useRealTimers();
@@ -257,7 +282,7 @@ describe("CanopyView Trash", () => {
   it("shows a search's matching trash rows open, without unfolding the Trash for good", async () => {
     await open(TRASH);
     const input = document.querySelector<HTMLInputElement>(
-      "[data-testid=canopy-dialog] input[role=combobox]"
+      "[data-canopy-standalone] input[role=combobox]"
     )!;
     await act(async () => {
       fireEvent.change(input, { target: { value: "api" } });
@@ -267,6 +292,25 @@ describe("CanopyView Trash", () => {
     });
     expect(trashRows().map((row) => row.getAttribute("aria-label"))).toEqual(["Fix newer"]);
     expect(useCanopyStore.getState().trashExpanded).toBe(false);
+  });
+
+  it("shows the trash rows matching any item of a list", async () => {
+    await open(TRASH);
+    const input = document.querySelector<HTMLInputElement>(
+      "[data-canopy-standalone] input[role=combobox]"
+    )!;
+    const searchFor = async (value: string) => {
+      await act(async () => {
+        fireEvent.change(input, { target: { value } });
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, SEARCH_SETTLE_MS));
+      });
+      return trashRows().map((row) => row.getAttribute("aria-label"));
+    };
+    expect(await searchFor("fix newer, nowhere, older")).toEqual(["Fix newer", "Fix older"]);
+    // Whitespace still asks for every word of one item.
+    expect(await searchFor("newer older")).toEqual([]);
   });
 
   it("restores from the row's button, and selects the run once it is back in the inbox", async () => {
@@ -397,7 +441,7 @@ describe("CanopyView Trash", () => {
   it("goes down from a search that matches only the trash onto its first match, and back up", async () => {
     await open(TRASH);
     const input = document.querySelector<HTMLInputElement>(
-      "[data-testid=canopy-dialog] input[role=combobox]"
+      "[data-canopy-standalone] input[role=combobox]"
     )!;
     act(() => input.focus());
     await act(async () => {
@@ -512,10 +556,7 @@ describe("CanopyView Trash", () => {
       expect(vi.mocked(notify)).not.toHaveBeenCalled();
     });
 
-    it("opens the run's project to resume it there when no view of it is open", async () => {
-      const switchProject = vi
-        .spyOn(useProjectStore.getState(), "switchProject")
-        .mockResolvedValue(undefined);
+    it("hands a run only its project can resume to the frame, when no view of it is open", async () => {
       const canopy = await open([ended("older", 3_600_000)]);
       canopy.restoreTrashed.mockResolvedValueOnce({ open: { workspaceId: "p1" } });
       fireEvent.click(trashBar()!);
@@ -525,38 +566,15 @@ describe("CanopyView Trash", () => {
       await act(async () => {
         fireEvent.keyDown(trashRows()[0]!, { key: "Enter" });
       });
-      expect(switchProject).toHaveBeenCalledWith("p1", {
-        focusIntent: {
-          intent: "restore-trashed",
+      expect(frame.restoreElsewhere).toHaveBeenCalledTimes(1);
+      expect(frame.restoreElsewhere).toHaveBeenCalledWith(
+        expect.objectContaining({
           runId: "older",
           spawnedAt: NOW - 3_600_000,
           expiresAt: NOW - 3_600_000 + 20_000,
-        },
-      });
-      expect(useCanopyStore.getState().isOpen).toBe(false);
-    });
-
-    it("goes nowhere when the panel closed before main said where the run is", async () => {
-      const switchProject = vi
-        .spyOn(useProjectStore.getState(), "switchProject")
-        .mockResolvedValue(undefined);
-      const canopy = await open([ended("older", 3_600_000)]);
-      let answer: () => void = () => {};
-      canopy.restoreTrashed.mockImplementationOnce(
-        () =>
-          new Promise<CanopyRestoreOutcome>(
-            (resolve) => (answer = () => resolve({ open: { workspaceId: "p1" } }))
-          )
+        }),
+        { hostId: null, runId: "older", workspaceId: "p1" }
       );
-      fireEvent.click(trashBar()!);
-      await act(async () => {
-        fireEvent.click(trashRows()[0]!.querySelector<HTMLElement>("[data-canopy-trash-restore]")!);
-      });
-      await act(async () => {
-        useCanopyStore.setState({ isOpen: false });
-      });
-      await act(async () => answer());
-      expect(switchProject).not.toHaveBeenCalled();
     });
 
     it("takes the keyboard to a resumed run that reached the inbox before main answered", async () => {
@@ -693,7 +711,7 @@ describe("CanopyView Trash", () => {
     });
   });
 
-  it("says the last run's expiry even as the Trash goes with it, the panel scoped to another project", async () => {
+  it("says the last run's expiry even as the Trash goes with it, over an inbox with no agent running", async () => {
     const announce = vi
       .spyOn(useAnnouncerStore.getState(), "announce")
       .mockImplementation(() => {});
@@ -701,13 +719,12 @@ describe("CanopyView Trash", () => {
       ...trashed(runId, "p2", 20_000),
       expiresAt: Date.now(),
     });
-    // "This project" shows none of these runs: the inbox is empty, only the Trash is up.
-    useCanopyStore.setState({ scope: "project" });
+    // No agent is running: the inbox is empty, only the Trash is up.
     await open([due("expired"), due("restored")], []);
     expect(trashBar()).not.toBeNull();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await act(async () => {
-      // Restored elsewhere at its time: back in the fleet, outside the panel's scope.
+      // Restored elsewhere at its time: back in the fleet.
       useFleetSnapshotStore.setState({ snapshot: fleet(["restored"]) });
       useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [] } });
     });
@@ -749,5 +766,107 @@ describe("CanopyView Trash", () => {
       vi.advanceTimersByTime(EXPIRY_CONFIRMED_MS);
     });
     expect(expiries()).toEqual(["'Fix expired' expired and was removed permanently"]);
+  });
+});
+
+describe("CanopyView arrow order across the Archived and Trash bars", () => {
+  const card = (runId: string) => document.getElementById(`canopy-card-${runId}`)!;
+
+  it("walks the last inbox row, the Archived bar and the Trash bar in order, both folded", async () => {
+    await open(TRASH, ["live"], ["done"]);
+    expect(archivedBar()!.getAttribute("aria-expanded")).toBe("false");
+    expect(trashBar()!.getAttribute("aria-expanded")).toBe("false");
+    const last = card("live");
+    act(() => last.focus());
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(archivedBar());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(trashBar());
+    fireEvent.keyDown(trashBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(archivedBar());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("stops on a folded Archived bar below the last row when no Trash is showing", async () => {
+    await open([], ["live"], ["done"]);
+    expect(trashBar()).toBeNull();
+    const last = card("live");
+    act(() => last.focus());
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(archivedBar());
+    // Nothing below it to go on to.
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(archivedBar());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("goes up from the Archived bar to the search when the inbox is empty, and back down", async () => {
+    await open(TRASH, [], ["done"]);
+    expect(card("done")).toBeNull();
+    act(() => archivedBar()!.focus());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(searchInput());
+    fireEvent.keyDown(searchInput(), { key: "ArrowDown" });
+    expect(document.activeElement).toBe(archivedBar());
+  });
+
+  it("goes up from an open Archived bar to the row above it, not the archived row below", async () => {
+    await open(TRASH, ["live"], ["done"]);
+    fireEvent.click(archivedBar()!);
+    expect(card("done")).not.toBeNull();
+    act(() => archivedBar()!.focus());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(card("live"));
+  });
+
+  it("goes up from an open Archived bar to the search when the inbox is empty", async () => {
+    await open([], [], ["done"]);
+    fireEvent.click(archivedBar()!);
+    expect(archivedBar()!.getAttribute("aria-expanded")).toBe("true");
+    expect(card("done")).not.toBeNull();
+    act(() => archivedBar()!.focus());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(searchInput());
+  });
+
+  it("leaves an open Archived section's rows to carry on into the Trash and back", async () => {
+    await open(TRASH, ["live"], ["done", "older-done"]);
+    fireEvent.click(archivedBar()!);
+    const rows = [...document.querySelectorAll<HTMLElement>("#canopy-archived [data-canopy-card]")];
+    expect(rows).toHaveLength(2);
+    const [first, last] = [rows[0]!, rows[1]!];
+    act(() => archivedBar()!.focus());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(last);
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(trashBar());
+    fireEvent.keyDown(trashBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("goes down from a search's last match, archived ones shown open, to the Trash match", async () => {
+    await open([trashed("newer", "p1", 3_000)], ["live"], ["done"]);
+    const input = searchInput();
+    act(() => input.focus());
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "app" } });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, SEARCH_SETTLE_MS));
+    });
+    // The search shows its matches open, with no bar on either section.
+    expect(archivedBar()).toBeNull();
+    expect(trashBar()).toBeNull();
+    expect(card("done")).not.toBeNull();
+    expect(trashRows()).toHaveLength(1);
+    act(() => card("done").focus());
+    fireEvent.keyDown(card("done"), { key: "ArrowDown" });
+    expect(document.activeElement).toBe(trashRows()[0]);
+    fireEvent.keyDown(trashRows()[0]!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(card("done"));
   });
 });

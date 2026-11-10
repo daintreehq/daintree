@@ -3,6 +3,7 @@ import { Pin, PinOff, EyeOff, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { comboToAriaKeyshortcuts, parseChord } from "@/lib/kbdShortcut";
+import { useKeyLabels } from "@/lib/keyboardLayout";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import { paletteSummary } from "@/lib/paletteSummary";
@@ -169,9 +170,10 @@ function ActionPaletteItemInner({
     .filter(Boolean)
     .join(" ");
 
+  const keyLabels = useKeyLabels();
   const ariaKeyshortcuts = useMemo(
-    () => (item.shortcut ? comboToAriaKeyshortcuts(item.shortcut, isMac()) : undefined),
-    [item.shortcut]
+    () => (item.shortcut ? comboToAriaKeyshortcuts(item.shortcut, isMac(), keyLabels) : undefined),
+    [item.shortcut, keyLabels]
   );
 
   return (
@@ -318,7 +320,7 @@ function ActionPaletteItemInner({
                 // spoken text and its presentational keys into a doubled binding.
                 rootAttributes={{
                   id: shortcutId,
-                  "aria-label": parseChord(item.shortcut, isMac())
+                  "aria-label": parseChord(item.shortcut, isMac(), keyLabels)
                     .map((tokens) => tokens.join(isMac() ? "" : "+"))
                     .join(", "),
                 }}

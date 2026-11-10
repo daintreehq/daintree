@@ -171,6 +171,71 @@ function buildFixture(now: number): SeedHistoryEntry[] {
         { label: "Mute project", actionId: "app.settings.openTab", variant: "secondary" },
       ],
     },
+    // App-level rows: no project or worktree, so the source they could print
+    // is the app's own name. One is severe and unread, so it is pinned AND in
+    // the list below, carrying its action in both places.
+    {
+      id: "app-grok-copies",
+      type: "warning",
+      title: "Multiple Grok installations found",
+      message:
+        "Found 3 copies of grok on your PATH. Daintree launches /opt/homebrew/bin/grok; the others are ignored.",
+      timestamp: now - 1 * MINUTE,
+      seenAsToast: false,
+      context: { eventKind: "system" },
+      actions: [{ label: "View copies", actionId: "app.settings.openTab" }],
+    },
+    {
+      id: "app-build-mismatch",
+      type: "warning",
+      title: "Different build on studio-02",
+      message:
+        "Connected anyway: studio-02 runs a different build (167ae16). Most things work; anything that changed between the two builds may not.",
+      timestamp: now - 21 * MINUTE,
+      seenAsToast: false,
+      context: { eventKind: "system" },
+    },
+    // Rows from somewhere else: the only ones that should print a source.
+    {
+      id: "other-worktree-tests",
+      type: "error",
+      title: "Tests failed",
+      message: "12 of 480 tests failed in panelRestore.test.ts.",
+      timestamp: now - 25 * MINUTE,
+      seenAsToast: true,
+      context: {
+        projectId: PROJECT,
+        worktreeId: "/tmp/helios-worktrees/feature-panel-restore",
+        eventKind: "system",
+      },
+    },
+    {
+      id: "other-host-finished",
+      type: "success",
+      title: "Claude finished",
+      message: "Refactored the toolbar overflow menu on studio-02.",
+      timestamp: now - 28 * MINUTE,
+      seenAsToast: true,
+      context: { projectId: PROJECT, hostName: "studio-02", eventKind: "completed" },
+    },
+    {
+      id: "other-project-merged",
+      type: "info",
+      title: "Branch merged",
+      message: "feature/atlas-export merged into main.",
+      timestamp: now - 31 * MINUTE,
+      seenAsToast: true,
+      context: { projectId: "atlas-records-removed", eventKind: "git" },
+    },
+    {
+      id: "app-reopen-failed",
+      type: "error",
+      title: "Couldn't reopen project",
+      message: "The folder was moved or deleted since Daintree last opened it.",
+      timestamp: now - 62 * MINUTE,
+      seenAsToast: true,
+      context: { eventKind: "system" },
+    },
   ];
 
   // The chronological body. Varied heights, varied ages, a couple of action
@@ -309,7 +374,8 @@ function buildFixture(now: number): SeedHistoryEntry[] {
     context: { projectId: PROJECT, eventKind: "system" },
   });
 
-  return entries;
+  // Newest first, the order the store keeps.
+  return entries.sort((a, b) => b.timestamp - a.timestamp);
 }
 
 const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
@@ -462,9 +528,9 @@ async function measure(page: Page, label: string): Promise<void> {
       // The group-by toggle also carries aria-pressed and lives in the header,
       // so match on the chip's own label rather than the attribute alone — the
       // attribute picked the toggle at x=184 on the first run.
-      const firstChip = Array.from(popover.querySelectorAll("button[aria-pressed]")).find(
-        (b) => b.textContent?.trim() === "All"
-      ) as HTMLElement | undefined;
+      const firstChip = Array.from(
+        popover.querySelectorAll('[role="radio"], button[aria-pressed]')
+      ).find((b) => b.textContent?.trim() === "All") as HTMLElement | undefined;
       const pill = document.querySelector(pillSel);
       const sectionLabel = Array.from(popover.querySelectorAll("div")).find(
         (d) =>
@@ -797,7 +863,7 @@ test("notification center review — scrollport, rhythm, and chrome", async () =
           const list = document.querySelector(listSel) as HTMLElement | null;
           if (!list) return;
           const row = Array.from(list.querySelectorAll(rowSel)).find((r) =>
-            r.textContent?.includes("idle for 30 minutes")
+            r.textContent?.includes("Branch merged")
           ) as HTMLElement | undefined;
           let scroller: HTMLElement | null = list;
           while (scroller) {
@@ -814,6 +880,36 @@ test("notification center review — scrollport, rhythm, and chrome", async () =
       await settle(page, 300);
       await measure(page, "action-row-at-fold");
       await snap(page, "30-action-row-popover", POPOVER);
+    });
+
+    // 3b. "New since you last looked" with the rail above it: the watermark is
+    //     set while the panel is closed, since closing writes Date.now().
+    await step(page, "divider", async () => {
+      await closeCenter(page);
+      await page.evaluate(
+        (at) => {
+          (
+            window as unknown as {
+              __daintreeNotificationsE2E: { setCenterLastClosedAt: (t: number) => void };
+            }
+          ).__daintreeNotificationsE2E.setCenterLastClosedAt(at);
+        },
+        now - 15 * MINUTE
+      );
+      await page.locator(SEL.notifications.bellButton).click();
+      await page.locator(POPOVER).waitFor({ state: "visible", timeout: 8000 });
+      await settle(page, 500);
+      await snap(page, "32-divider-popover", POPOVER);
+    });
+
+    // 3c. The keyboard cursor on an unread row, beside its gutter dot.
+    await step(page, "cursor", async () => {
+      await page.locator(POPOVER).focus();
+      await page.keyboard.press("j");
+      await settle(page, 200);
+      await page.keyboard.press("j");
+      await settle(page, 300);
+      await snap(page, "33-cursor-popover", POPOVER);
     });
 
     // 4. The mute pill, driven through the real Pause menu rather than a

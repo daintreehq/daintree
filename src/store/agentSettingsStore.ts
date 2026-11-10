@@ -12,7 +12,7 @@ import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { getEffectiveAgentIds } from "../../shared/config/agentRegistry";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { setAgentSettingsEntryAccessor, setGlobalUseAltScreenAccessor } from "./storeAccessors";
+import { setAgentSettingsEntryAccessor } from "./storeAccessors";
 
 /**
  * In-memory normalization: once real CLI availability exists, every registered
@@ -72,12 +72,6 @@ interface AgentSettingsActions {
    * `dangerousEnabled`. Optimistic with rollback on IPC failure.
    */
   setGlobalSkipPermissions: (value: boolean) => Promise<void>;
-  /**
-   * Set the global "use alt-screen mode by default" override (#10876). Writes
-   * the root-level `globalUseAltScreen` field only — does not mutate any
-   * per-agent `inlineMode`. Optimistic with rollback on IPC failure.
-   */
-  setGlobalUseAltScreen: (value: boolean) => Promise<void>;
   /** Root-level `resumeOnRestart` (#13509); optimistic, rolled back on failure. */
   setResumeOnRestart: (value: ResumeOnRestart) => Promise<void>;
   /**
@@ -376,38 +370,6 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     }
   },
 
-  setGlobalUseAltScreen: async (value: boolean) => {
-    ++normalizeEpoch;
-    const myWrite = ++writeEpoch;
-    const heardAtStart = savedChangesHeard;
-    set({ error: null });
-    const previous = get().settings;
-    // Optimistic top-level spread — never route through updateAgent (which
-    // merges into the agents record and would not touch this root field, #5514).
-    // This must not mutate any per-agent `inlineMode`; it is a live override
-    // resolved at flag-generation time (#10876).
-    const release = holdPatch((settings) => ({ ...settings, globalUseAltScreen: value }));
-    if (previous) {
-      set({ settings: { ...previous, globalUseAltScreen: value } });
-    }
-    try {
-      await agentSettingsClient.setGlobalInline(value);
-      release();
-      // The IPC response echoes the persisted value; the renderer-normalized
-      // agents record is the source of truth for per-agent state, so only the
-      // field written is taken from it.
-      const next = settleRootWrite("globalUseAltScreen", value, heardAtStart, myWrite);
-      if (next) set({ settings: next });
-    } catch (e) {
-      release();
-      // Reported even when a newer snapshot has landed since.
-      const restored = rollBack(previous);
-      if (restored) set({ settings: restored });
-      set({ error: formatErrorMessage(e, "Failed to update global alt-screen setting") });
-      throw e;
-    }
-  },
-
   setResumeOnRestart: async (value: ResumeOnRestart) => {
     ++normalizeEpoch;
     const myWrite = ++writeEpoch;
@@ -551,4 +513,3 @@ export function cleanupAgentSettingsStore() {
 setAgentSettingsEntryAccessor(
   (agentId) => useAgentSettingsStore.getState().settings?.agents?.[agentId]
 );
-setGlobalUseAltScreenAccessor(() => useAgentSettingsStore.getState().settings?.globalUseAltScreen);

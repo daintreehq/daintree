@@ -4,6 +4,7 @@ import { delimiter, dirname, join } from "node:path";
 
 import type { AgentConfig } from "../../../shared/config/agentRegistry";
 import type { CliAvailability } from "../../../shared/types/ipc";
+import type { ClientEndpoint } from "../../../electron/ipc/endpoint";
 import { createPerfTempRoot } from "./tempRoots";
 
 /**
@@ -313,11 +314,31 @@ export const DUPLICATE_AGENT_ID = "claude";
 
 type RegistryModule = typeof import("../../../shared/config/agentRegistry");
 type ServiceModule = typeof import("../../../electron/services/CliAvailabilityService");
+type EndpointRegistryModule = typeof import("../../../electron/ipc/endpointRegistry");
 
 export interface CliModules {
   registry: Record<string, AgentConfig>;
   agentIds: readonly string[];
   CliAvailabilityService: ServiceModule["CliAvailabilityService"];
+}
+
+/**
+ * Someone for the duplicate-install warning to reach. Its milestone records having
+ * told someone (#16409), and this process has no window, so without a viewer the
+ * write PERF-394 grades would rightly never land.
+ */
+function perfViewer(): ClientEndpoint {
+  return {
+    endpointId: "perf-viewer",
+    clientId: "perf",
+    projectId: null,
+    kind: "remote-view",
+    handle: -1,
+    send: () => {},
+    request: () => Promise.resolve(undefined),
+    onClose: () => ({ dispose: () => {} }),
+    isClosed: () => false,
+  };
 }
 
 let modulesPromise: Promise<CliModules> | null = null;
@@ -330,6 +351,9 @@ export function loadCliModules(): Promise<CliModules> {
       const registryModule: RegistryModule = await import("../../../shared/config/agentRegistry");
       const serviceModule: ServiceModule =
         await import("../../../electron/services/CliAvailabilityService");
+      const endpointRegistryModule: EndpointRegistryModule =
+        await import("../../../electron/ipc/endpointRegistry");
+      endpointRegistryModule.getEndpointRegistry().add(perfViewer());
       const registry = registryModule.getEffectiveRegistry();
       return {
         registry,

@@ -409,6 +409,16 @@ jobs:
           rm e2e-build.tgz
           test -f dist/index.html
           test -f dist-electron/electron/bootstrap.js
+          node scripts/fetch-canopy-model.mjs --check
+
+      # Canopy's reader model (#16415): the build fetches it from its pinned
+      # revision and hashes whatever is here, restored or not.
+      - name: Cache Canopy reader model
+        if: inputs.prebuilt_artifact == ''
+        uses: actions/cache@v5
+        with:
+          path: electron/resources/canopy-reader
+          key: canopy-reader-${{ runner.os }}-${{ hashFiles('electron/services/canopy/canopy-reader-manifest.json') }}
 
       - name: Build app
         if: inputs.prebuilt_artifact == ''

@@ -177,3 +177,46 @@ describe("main.ts OOM recreation wiring (#15564)", () => {
     expect(clears).toHaveLength(1);
   });
 });
+
+// A restored window is saved as its record until its setup settles (#16740):
+// one still coming up when the restore lets saves resume would otherwise be
+// saved as a picker, which no longer comes back. Both restores create through
+// the same holding wrapper, and it hands the registration hook to createWindow.
+describe("main.ts restore wiring (#16740)", () => {
+  const createProperty = (restore: string): ts.Expression | undefined => {
+    const [call] = find(main, (node): node is ts.CallExpression => isCallTo(node, restore));
+    return property(call?.arguments[0], "createWindow");
+  };
+
+  it("creates every restored window through the record hold", () => {
+    const launch = createProperty("restoreWindowFleet");
+    const crash = createProperty("restoreFleetAfterCrash");
+    expect(launch && ts.isIdentifier(launch)).toBe(true);
+    expect(crash?.getText()).toBe(launch?.getText());
+
+    const [decl] = find(
+      main,
+      (node): node is ts.VariableDeclaration =>
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === launch?.getText()
+    );
+    const [hold] = find(decl ?? main, (node): node is ts.CallExpression =>
+      isCallTo(node, "createWindowHoldingRecord")
+    );
+    expect(decl && hold).toBeTruthy();
+    expect(hold?.arguments[0] && isCallTo(hold.arguments[0], "restoredWindowRecord")).toBe(true);
+
+    const [create] = find(hold?.arguments[1] ?? main, (node): node is ts.CallExpression =>
+      isCallTo(node, "createWindow")
+    );
+    const opts = create?.arguments[2];
+    expect(
+      opts !== undefined &&
+        ts.isObjectLiteralExpression(opts) &&
+        opts.properties.some(
+          (prop) => ts.isShorthandPropertyAssignment(prop) && prop.name.text === "onRegistered"
+        )
+    ).toBe(true);
+  });
+});

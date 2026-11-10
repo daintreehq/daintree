@@ -39,12 +39,13 @@ export type SettingEntry = SettingDeclaration | SplitSetting;
 
 /**
  * One place settings are kept: an electron-store file by its `name`, the
- * renderer's web storage by key, or a file in each project's local state
- * directory by its name. A renderer key ending in `*` declares every key that
- * starts with what precedes it.
+ * renderer's web storage by key, a file in each project's local state directory
+ * by its name, or a folder of files the person writes themselves. A renderer key
+ * ending in `*` declares every key that starts with what precedes it.
  */
 interface SettingStore {
-  readonly kind: "electron-store" | "localStorage" | "sessionStorage" | "project-state-file";
+  readonly kind:
+    "electron-store" | "localStorage" | "sessionStorage" | "project-state-file" | "user-folder";
   readonly entries: Readonly<Record<string, SettingEntry>>;
 }
 
@@ -135,6 +136,8 @@ export const SETTING_CATALOG = {
       notificationSettings: device,
       userAgentRegistry: host,
       agentUpdateSettings: host,
+      // A path on the machine the agents run on, so it is that machine's.
+      agentCliChoices: host,
       keybindingOverrides: device,
       projectEnv: hostPerProject,
       globalEnvironmentVariables: host,
@@ -290,7 +293,6 @@ export const SETTING_CATALOG = {
       "daintree-plugin-terminal-links": device,
       "help-panel-storage": device,
       "project-storage": device,
-      "daintree-canopy-scope": device,
       "daintree-canopy-all-hosts": device,
       "daintree-canopy-order": device,
       "daintree-canopy-role": device,
@@ -330,6 +332,14 @@ export const SETTING_CATALOG = {
     entries: {
       // Agents run on a schedule by this machine (#15975).
       schedules: hostPerProject,
+    },
+  },
+  // Folders in the person's home holding files they wrote themselves.
+  "user-folders": {
+    kind: "user-folder",
+    entries: {
+      // Follows the person, so a remote window reads the machine at the keyboard (#16398).
+      "prompt-templates": device,
     },
   },
 } as const satisfies Readonly<Record<string, SettingStore>>;
@@ -403,6 +413,17 @@ export function projectStateFileOwner(file: string): SettingOwner {
   const declaration = own<SettingEntry>(SETTING_CATALOG["project-state-files"].entries, file);
   if (!declaration || "fields" in declaration) {
     throw new Error(`No project state file is declared as "${file}"`);
+  }
+  return declaration.owner;
+}
+
+/** A folder of the person's own files, by its name in the catalog. */
+export type UserFolder = keyof (typeof SETTING_CATALOG)["user-folders"]["entries"] & string;
+
+export function userFolderOwner(folder: string): SettingOwner {
+  const declaration = own<SettingEntry>(SETTING_CATALOG["user-folders"].entries, folder);
+  if (!declaration || "fields" in declaration) {
+    throw new Error(`No user folder is declared as "${folder}"`);
   }
   return declaration.owner;
 }

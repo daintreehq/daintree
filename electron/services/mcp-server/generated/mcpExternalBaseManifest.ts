@@ -1202,7 +1202,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     dangerRationale:
       "Spawns the recipe's terminals, each running shell commands or launching agents. Agent-initiated runs are confirmation-gated so a single dispatch can't open many terminals unprompted.",
     description:
-      "Launch the terminals a saved recipe defines in one worktree, starting their commands or agents. For a single pane, launch an agent or terminal instead. An approved call starts every terminal, a pre-authorized one at most three, so check what started.",
+      "Launch the terminals a saved recipe defines in one worktree, starting their commands or agents. For a single panel, launch an agent or terminal instead. An approved call starts every terminal, a pre-authorized one at most three, so check what started.",
     enabled: true,
     id: "recipe.run",
     inputSchema: {
@@ -1407,7 +1407,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Close owned terminal",
+    title: "Close owned panel",
   },
   {
     band: "reversible",
@@ -1995,7 +1995,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         owned: {
           description:
-            "MCP only: true keeps only terminals you created or were handed; false or omitted, no filter. An agent pane keeps them across reconnects.",
+            "MCP only: true keeps only terminals you created or were handed; false or omitted, no filter. An agent panel keeps them across reconnects.",
           type: "boolean",
         },
         terminalId: {
@@ -2101,7 +2101,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 required: ["at", "disposition"],
                 additionalProperties: false,
                 description:
-                  "Set when restore rebuilt the pane (`at`, epoch ms). lastSeen: agent state saved before then, not proof a run ended.",
+                  "Set when restore rebuilt the panel (`at`, epoch ms). lastSeen: agent state saved before then, not proof a run ended.",
               },
             },
             required: [
@@ -2146,7 +2146,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "List terminals",
+    title: "List terminals and panels",
   },
   {
     band: "reversible",
@@ -2241,7 +2241,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Place owned terminal",
+    title: "Place owned panel",
   },
   {
     band: "reversible",
@@ -2420,7 +2420,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 "message-not-found",
               ],
               description:
-                "'provider-mismatch': an agent this cannot read. 'store-unknown': the pane's store is uncertain; nothing read. 'search-cap-reached': no reply within the bounded read; no older one substituted. 'message-not-found': no reply at that index, or the cursor's message changed.",
+                "'provider-mismatch': an agent this cannot read. 'store-unknown': the panel's store is uncertain; nothing read. 'search-cap-reached': no reply within the bounded read; no older one substituted. 'message-not-found': no reply at that index, or the cursor's message changed.",
             },
           },
           required: ["status", "reason"],
@@ -2494,7 +2494,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       properties: {
         terminalId: {
           type: "string",
-          description: "The pane, respawned in place.",
+          description: "The panel, respawned in place.",
         },
         agentPresetId: {
           type: "string",
@@ -2541,14 +2541,14 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "command",
     name: "terminal.revealOwned",
     requiresArgs: true,
-    title: "Reveal owned terminal",
+    title: "Reveal owned panel",
   },
   {
     band: "reversible",
     category: "terminal",
     danger: "safe",
     description:
-      "Queue text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent pane takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
+      "Queue text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent panel takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
     enabled: true,
     id: "terminal.sendCommandOwned",
     inputSchema: {
@@ -2568,7 +2568,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         handback: {
           description:
-            "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only.",
+            "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panels only.",
           type: "boolean",
         },
         generation: {
@@ -2601,7 +2601,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         whenBusy: {
           description:
-            "An agent you didn't launch and isn't at its prompt: `refuse` (default) sends nothing; `queue` holds the text for its next prompt.",
+            "Busy assistant, or worker you neither launched nor were handed: `refuse` (default) sends nothing; `queue` holds it for its next prompt.",
           type: "string",
           enum: ["refuse", "queue"],
         },
@@ -3247,7 +3247,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     dangerRationale:
       "Deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
     description:
-      "Delete a worktree this session created, and its directory, after the user confirms. Refuses any other, or while a terminal process runs in it, closed panes included. Never forces past uncommitted or untracked changes, deletes the branch, or closes terminals.",
+      "Delete a worktree this session created, and its directory, after the user confirms. Refuses any other, or while a terminal process runs in it, closed panels included. Never forces past uncommitted or untracked changes, deletes the branch, or closes terminals.",
     enabled: true,
     id: "worktree.deleteOwned",
     inputSchema: {

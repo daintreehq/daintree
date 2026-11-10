@@ -11,6 +11,7 @@ import {
   hasRegisteredProjectViews,
   isCachedViewWebContents,
 } from "../window/webContentsRegistry.js";
+import { isProjectlessAppView } from "../window/projectlessViews.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { isViewHydrated } from "../window/viewHydration.js";
 import type { IpcInvokeMap, IpcEventMap } from "../types/index.js";
@@ -501,6 +502,23 @@ export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
 }
 
 /**
+ * Whether {@link broadcastToRenderer} would reach anyone with this push right now.
+ * For a one-time notice: every view may be bound to a remote host that must not
+ * hear it, or a host may have no view attached yet.
+ */
+export function hasBroadcastAudience(channel: string, ...args: unknown[]): boolean {
+  const hasRemoteView = getEndpointRegistry()
+    .getRemote()
+    .some((endpoint) => endpoint.kind === "remote-view" && !endpoint.isClosed());
+  return (
+    hasRemoteView ||
+    getAllAppWebContents().some(
+      (wc) => !wc.isDestroyed() && !isWithheldFromView(wc.id, channel, args)
+    )
+  );
+}
+
+/**
  * Project-scoped broadcast for per-terminal hot streams (terminal data,
  * flow-status pulses, activity headlines): one structured clone + renderer IPC
  * task per VIEW OF THE OWNING PROJECT instead of per WebContents in the app.
@@ -534,7 +552,11 @@ export function getProjectRendererTargets(projectId: string | null): WebContents
   if (projectId !== null && hasRegisteredProjectViews()) {
     return getWebContentsForProject(projectId);
   }
-  return getAllAppWebContents().filter((wc) => !wc.isDestroyed());
+  // One project's push with no project view up yet goes to whatever may become
+  // one; a view that holds no project never will.
+  return getAllAppWebContents().filter(
+    (wc) => !wc.isDestroyed() && (projectId === null || !isProjectlessAppView(wc.id))
+  );
 }
 
 /**
@@ -639,6 +661,7 @@ function deliverToLocalProjectViews(
   for (const wc of targets) {
     // getWebContentsForProject already drops destroyed views.
     if (exclude?.has(wc.id) || (!scoped && wc.isDestroyed())) continue;
+    if (projectId !== null && isProjectlessAppView(wc.id)) continue;
     if (isWithheldFromView(wc.id, channel, args)) continue;
     try {
       wc.send(channel, ...args);
@@ -767,6 +790,7 @@ function isSingleTargetEligible(wc: WebContents, channel: string, args: unknown[
     !wc.isDestroyed() &&
     !wc.isCrashed() &&
     !isCachedViewWebContents(wc.id) &&
+    !isProjectlessAppView(wc.id) &&
     !isWithheldFromView(wc.id, channel, args)
   );
 }

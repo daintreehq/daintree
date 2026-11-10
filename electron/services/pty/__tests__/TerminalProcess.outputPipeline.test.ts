@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stubProcessKillForFile } from "../../../__tests__/helpers/processKillGuard.js";
 import type { IPty } from "node-pty";
@@ -5,7 +7,6 @@ import { RATE_LIMIT_SETTLE_MS, TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { events } from "../../events.js";
 import { AgentOutputForwarder } from "../AgentOutputForwarder.js";
-import { OUTPUT_BUFFER_SIZE } from "../types.js";
 
 vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
@@ -55,7 +56,8 @@ type TerminalProcessDeps = ConstructorParameters<typeof TerminalProcess>[3];
 function createTerminal(
   options?: Partial<TerminalProcessOptions>,
   callbacks?: Partial<TerminalProcessCallbacks>,
-  agentStateService?: Partial<TerminalProcessDeps["agentStateService"]>
+  agentStateService?: Partial<TerminalProcessDeps["agentStateService"]>,
+  spawnContext: SpawnContext = defaultSpawnContext()
 ): TerminalProcess {
   return new TerminalProcess(
     "t1",
@@ -77,7 +79,7 @@ function createTerminal(
       ptyPool: null,
       processTreeCache: null,
     },
-    defaultSpawnContext(),
+    spawnContext,
     createMockPty()
   );
 }
@@ -499,6 +501,10 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
         // 6pm UTC has passed today, so it's tomorrow's.
         resetsAt: Date.UTC(2026, 10, 2, 18, 0),
         observedAt: expect.any(Number),
+        // No CLAUDE_CONFIG_DIR in the launch env: Claude's own folder.
+        configDir: path.join(os.homedir(), ".claude"),
+        // The shell whose startup files could still move that folder.
+        shell: "/bin/zsh",
         timestamp: seen[0]?.observedAt,
       },
     ]);
@@ -506,6 +512,27 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
     expect(seen[0]?.observedAt).toBeGreaterThanOrEqual(now);
     expect(seen[0]?.observedAt).toBeLessThanOrEqual(Date.now());
 
+    terminal.dispose();
+  });
+
+  it.each([
+    [
+      "an account's folder",
+      { CLAUDE_CONFIG_DIR: path.join(os.tmpdir(), ".claude-work") },
+      path.join(os.tmpdir(), ".claude-work"),
+    ],
+    ["a folder that can't be resolved", { CLAUDE_CONFIG_DIR: "relative/claude" }, null],
+  ])("names the config folder the pane launched on: %s (#16370)", async (_name, env, expected) => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" }, undefined, undefined, {
+      ...defaultSpawnContext(),
+      env,
+    });
+
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(seen.map((payload) => payload.configDir)).toEqual([expected]);
     terminal.dispose();
   });
 
@@ -907,11 +934,21 @@ describe("TerminalProcess agent:output coalescing", () => {
 
     expect(received).toHaveLength(0);
     expect(queue).not.toHaveBeenCalled();
-    // The renderer and the host-local ring still get every byte.
+    // The renderer still gets every byte.
     expect(emitData.mock.calls.map((call) => call[1]).join("")).toBe(`agent output${big}`);
-    expect(terminal.getInfo().outputBuffer).toBe(`agent output${big}`.slice(-OUTPUT_BUFFER_SIZE));
 
     queue.mockRestore();
+    terminal.dispose();
+  });
+
+  // #16426: nothing read this ring, and each chunk paid to concatenate and slice it.
+  it("keeps no rolling copy of an agent's output on the terminal record", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!("agent output");
+
+    expect(terminal.getInfo()).not.toHaveProperty("outputBuffer");
+
     terminal.dispose();
   });
 

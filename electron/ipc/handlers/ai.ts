@@ -1,6 +1,6 @@
 // eager-import-allow: reads AI provider settings via store.get synchronously in the IPC handler
 import { CHANNELS } from "../channels.js";
-import { store } from "../../store.js";
+import { invalidateStoreValueCache, store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import {
   DEFAULT_AGENT_SETTINGS,
@@ -149,27 +149,6 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
           } as AgentSettings;
         }
       ),
-      // Sets the global "use alt-screen mode by default" override (#10876). Same
-      // dot-path leaf write as setGlobal so the rest of the agentSettings slice
-      // (per-agent records, version) isn't rewritten with first-launch defaults.
-      setGlobalInline: op(
-        CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE,
-        async (value: boolean): Promise<AgentSettings> => {
-          if (typeof value !== "boolean") {
-            throw new Error("Invalid globalUseAltScreen");
-          }
-          const currentSettings = normalizeAgentSettings(
-            store.get("agentSettings", DEFAULT_AGENT_SETTINGS)
-          );
-          store.set("agentSettings.globalUseAltScreen", value);
-          notifyAgentSettingsChanged();
-          return {
-            ...currentSettings.root,
-            globalUseAltScreen: value,
-            agents: currentSettings.agents,
-          } as AgentSettings;
-        }
-      ),
       // What restored agent panes do after a restart (#13509). Same dot-path
       // leaf write as the switches above.
       setResumeOnRestart: op(
@@ -238,7 +217,7 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
       // outside this slice, so a reset never touched it. Presence is kept too:
       // an unset default must stay unset, not become a clear.
       const current = store.get("agentSettings");
-      const reset: AgentSettings =
+      const defaults: AgentSettings =
         isPlainRecord(current) && Object.hasOwn(current, "defaultAgent")
           ? {
               ...DEFAULT_AGENT_SETTINGS,
@@ -247,6 +226,15 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
                 : null,
             }
           : DEFAULT_AGENT_SETTINGS;
+      // Cleanup data rather than a choice: a pane saved under a plugin's bypass
+      // declaration still needs it stripped after a reset (#16374).
+      const bypassHistory = isPlainRecord(current) ? current.pluginBypassArgHistory : undefined;
+      const reset: AgentSettings = isPlainRecord(bypassHistory)
+        ? {
+            ...defaults,
+            pluginBypassArgHistory: bypassHistory as AgentSettings["pluginBypassArgHistory"],
+          }
+        : defaults;
       store.set("agentSettings", reset);
       notifyAgentSettingsChanged();
       return reset;
@@ -318,6 +306,9 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
   );
 
   const handleReloadConfig = async () => {
+    // Pick up edits made outside the app: the store serves a cached snapshot,
+    // and the next write would otherwise save that snapshot over them.
+    invalidateStoreValueCache();
     userAgentRegistryService.reload();
 
     if (deps.mainWindow && !deps.mainWindow.isDestroyed()) {

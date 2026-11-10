@@ -35,10 +35,10 @@ import {
 import { parkIfSavedInBackground } from "./backgroundParking";
 import {
   buildResumeLatestCommand,
-  launchPromptArgText,
   resolveResumeOnRestart,
   supportsCrossDirectoryResume,
 } from "@shared/types/agentSettings";
+import { launchPromptMatchText } from "@shared/utils/launchPromptArg";
 import {
   findLaunchRoot,
   isFilingUnavailable,
@@ -50,6 +50,7 @@ import { sanitizeConversationCwd, sanitizeRestoreRecovery } from "@/utils/restor
 import { normalize as normalizePath } from "@shared/utils/path";
 import type { HydrationOptions } from "./";
 import { getAgentConfig } from "@/config/agents";
+import { loadSavedPanesPluginAgents } from "./savedPluginAgents";
 import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
@@ -502,7 +503,7 @@ function codexHomeOf(env: TerminalState["env"]): string | null | undefined {
 async function launchPromptHash(text: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(launchPromptArgText(text))
+    new TextEncoder().encode(launchPromptMatchText(text))
   );
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -642,7 +643,8 @@ function planCodexRestoreMatches(
       key: saved.id,
       at: prompt.at,
       text: prompt.text,
-      resolve: held && prompt.via === "launch" && !launchPromptArgText(prompt.text).startsWith("-"),
+      resolve:
+        held && prompt.via === "launch" && !launchPromptMatchText(prompt.text).startsWith("-"),
     });
   }
 
@@ -914,6 +916,8 @@ export async function restorePanelsPhase(
   // them to another project's worktree.
   const workspaceHasWorktrees = await workspaceHasWorktreesPromise;
   const effectiveActiveWorktreeId = workspaceHasWorktrees ? activeWorktreeId : null;
+
+  await loadSavedPanesPluginAgents(savedPanels, projectId);
 
   const restoreTasks: TerminalRestoreTask[] = [];
   const savedIdToRestoredId = new Map<string, string>();
@@ -1556,10 +1560,8 @@ export async function restorePanelsPhase(
                   nonPtyArgs.pendingDockWorktreeId = null;
                 }
               }
-              // Not re-parked: there is no process to keep alive, and the
-              // background list shows only terminals, so a parked browser or
-              // preview would be left with no way back. It returns to the
-              // grid/dock target the builder resolved.
+              // Not re-parked: there is no process to keep alive, so it returns
+              // to the grid/dock target the builder resolved.
               const nonPtyId = await addPanel(nonPtyArgs);
               restoredIdsByIndex.set(capturedIndex, nonPtyId);
             }

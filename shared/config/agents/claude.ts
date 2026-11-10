@@ -5,6 +5,11 @@ export const config: AgentConfig = {
   id: "claude",
   name: "Claude",
   command: "claude",
+  // Claude: a bare positional seeds the TUI; -p is print mode.
+  initialPromptForm: {
+    interactive: { args: ["{prompt}"] },
+    headless: { args: ["-p", "{prompt}"] },
+  },
   // Anthropic's native installer places the symlink at ~/.local/bin/claude
   // on macOS/Linux (with a versioned binary under ~/.local/share/claude) and
   // the binary at %USERPROFILE%\.local\bin\claude.exe on Windows. The first
@@ -60,13 +65,30 @@ export const config: AgentConfig = {
   update: {
     npm: "npm install -g @anthropic-ai/claude-code@latest",
   },
+  // The commands follow https://code.claude.com/docs/en/setup. npm stays each
+  // platform's first block, which is Agent Setup's one-click default, so an
+  // install that worked keeps working. The native installer comes next: a
+  // standalone binary in ~/.local/bin that needs no Node, no Homebrew and no
+  // root, which makes it what the npm permission callout offers when a system
+  // Node (apt, NodeSource, the nodejs.org installer) keeps its global packages
+  // in a root-owned folder. It pipes into a shell, so it stays copy-only. On
+  // macOS and Windows the package manager (Homebrew, WinGet), which runs without
+  // a shell, comes last.
   install: {
-    docsUrl: "https://github.com/anthropics/claude-code",
+    docsUrl: "https://code.claude.com/docs/en/setup",
     byOs: {
       macos: [
         {
           label: "npm",
           commands: ["npm install -g @anthropic-ai/claude-code"],
+        },
+        {
+          label: "curl",
+          commands: ["curl -fsSL https://claude.ai/install.sh | bash"],
+        },
+        {
+          label: "Homebrew",
+          commands: ["brew install --cask claude-code"],
         },
       ],
       windows: [
@@ -74,15 +96,26 @@ export const config: AgentConfig = {
           label: "npm",
           commands: ["npm install -g @anthropic-ai/claude-code"],
         },
+        {
+          label: "PowerShell",
+          commands: ["irm https://claude.ai/install.ps1 | iex"],
+        },
+        {
+          label: "winget",
+          // The agreement flags are part of the canonical command, as for every
+          // other winget install here, so the copied and the one-click command
+          // are the same string: without them winget waits on a source-agreement
+          // prompt that piped stdio never shows.
+          commands: [
+            "winget install --id Anthropic.ClaudeCode -e --source winget --accept-source-agreements --accept-package-agreements",
+          ],
+        },
       ],
       linux: [
         {
           label: "npm",
           commands: ["npm install -g @anthropic-ai/claude-code"],
         },
-        // Anthropic's native installer: a standalone binary in ~/.local/bin,
-        // no npm and no root, so it works where a system Node (apt,
-        // NodeSource) keeps its global packages in a root-owned folder.
         {
           label: "curl",
           commands: ["curl -fsSL https://claude.ai/install.sh | bash"],
@@ -91,7 +124,7 @@ export const config: AgentConfig = {
     },
     troubleshooting: [
       "Restart Daintree after installation to update PATH",
-      "For npm-based installation, ensure Node.js and npm are installed first",
+      "npm installs need Node.js 22 or later; the native installer, Homebrew and WinGet don't",
       "Verify installation with: claude --version",
       "Run 'claude auth login' to authenticate after installing",
     ],
@@ -111,6 +144,13 @@ export const config: AgentConfig = {
     scrollback: 10000,
     launchMcp: { format: "claude-mcp-config" },
     resizeStrategy: "default",
+    // Claude Code picks its fullscreen (alternate-screen) renderer from the
+    // user's `tui` setting, `CLAUDE_CODE_NO_FLICKER=1` or its own rollout gates.
+    // This variable outranks all three (verified against 2.1.319). Stripping
+    // DECSET 1049 instead would leave that renderer drawing absolute frames
+    // onto the main buffer, the garbling OpenCode hit.
+    inlineModeEnv: { CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN: "1" },
+    inlineModeCommand: "/tui default",
     supportsBracketedPaste: true,
     // Composer shows `[Image #N]` for a lone bracketed-pasted image path (#12792).
     imageInput: "bracketed-path",
@@ -194,6 +234,8 @@ export const config: AgentConfig = {
     // one), which makes the id stable for the life of the conversation. Until
     // the first message there is no conversation to resume, but the CLI accepts
     // the same id again, which is how spawn restores an untouched pane (#12371).
+    // The run can still leave it: `/resume` and `/clear` move the CLI to
+    // another id, which only the exit farewell names (#16377, 2.1.319).
     assignSessionIdArgs: (sessionId: string) => ["--session-id", sessionId],
   },
   help: {
@@ -215,7 +257,7 @@ export const config: AgentConfig = {
       label: "Claude CLI",
       versionArgs: ["--version"],
       severity: "fatal",
-      installUrl: "https://github.com/anthropics/claude-code",
+      installUrl: "https://code.claude.com/docs/en/setup",
     },
   ],
   envSuggestions: [

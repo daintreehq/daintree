@@ -12,6 +12,13 @@
   .diff-viewer .diff-gutter {
     border-right: 1px solid CanvasText;
   }
+  /* A selected range's fill is stripped too, and before a note opens that fill is
+     the only sign of how far a keyboard selection reaches. */
+  .diff-viewer tr td.diff-code-selected,
+  .diff-viewer tr td.diff-gutter-selected {
+    outline: 1px solid Highlight;
+    outline-offset: -1px;
+  }
   /* Split-view void cells: the hatch background is stripped to Canvas, so the
      "nothing exists on this side" cue rides a dotted system-color edge. */
   .diff-viewer .diff-code-omit {

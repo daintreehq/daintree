@@ -355,7 +355,6 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     cliDetail = await input.getCliDetail(agentId);
     const baseCommand = input.resolveBaseCommand(agentConfig.command, cliDetail);
     const globalSkipPermissions = input.settings?.globalSkipPermissions ?? false;
-    const globalUseAltScreen = input.settings?.globalUseAltScreen ?? false;
     assignedSessionId = isAgent ? mintAssignedSessionId(agentId) : undefined;
     command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
       initialPrompt: options?.prompt,
@@ -365,7 +364,6 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
       systemPromptArgs: options?.systemPromptArgs,
       presetArgs: preset?.args,
       globalSkipPermissions,
-      globalUseAltScreen,
       sessionId: assignedSessionId,
     });
 
@@ -376,7 +374,6 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
         systemPromptArgs: options?.systemPromptArgs,
         presetArgs: preset?.args,
         globalSkipPermissions,
-        globalUseAltScreen,
       });
     }
 

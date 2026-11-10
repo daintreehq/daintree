@@ -962,6 +962,17 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     expect(pluginMcpGrantRegistry.authenticate(bearer)).toBe(grant);
   });
 
+  it("never marks an agent launch's grant as the Assistant's, whatever the Assistant may use", async () => {
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+    setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+
+    await spawn({ id: "term-launched" });
+
+    const [grant] = pluginMcpGrantRegistry.listForTerminal("term-launched");
+    expect(grant).toMatchObject({ scope: READ_WRITE_SCOPE, launchAgentIdHint: "claude" });
+    expect(grant).not.toHaveProperty("consumer");
+  });
+
   it("hands a plugin-contributed agent the endpoints of the mechanism it declared", async () => {
     registerPluginAgents("acme.agents", [
       {

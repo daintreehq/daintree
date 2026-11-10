@@ -5,11 +5,10 @@ import {
 } from "../config/agentRegistry.js";
 import { hasShellMetachar } from "./shellEscape.js";
 import { isAccountId } from "./agentAccountId.js";
+import { isPresetHexColor } from "./presetColor.js";
 import {
   combineDangerousModes,
-  combineInlineModes,
   resolveDangerousMode,
-  resolveInlineMode,
   resolveEffectivePresetId,
   type AgentSettingsEntry,
 } from "../types/agentSettings.js";
@@ -48,6 +47,28 @@ export function sanitizeAgentEnv(
     sanitized[key] = value;
   }
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+/**
+ * The well-formed, distinct fallback ids a stored list names, in order and
+ * uncapped. `sanitizePreset` keeps the first `FALLBACK_CHAIN_MAX` of these, so
+ * a longer result is a chain the read cut short.
+ */
+export function validFallbackIds(fallbacks: unknown, selfId?: string): string[] {
+  if (!Array.isArray(fallbacks)) return [];
+  const seen = new Set<string>();
+  const safe: string[] = [];
+  for (const entry of fallbacks) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (!trimmed || trimmed.length > 100) continue;
+    if (!/^[a-zA-Z0-9_.-]+$/.test(trimmed)) continue;
+    if (trimmed === selfId) continue;
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    safe.push(trimmed);
+  }
+  return safe;
 }
 
 /**
@@ -104,20 +125,7 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
   };
 
   const sanitizeFallbacks = (fallbacks?: string[], selfId?: string): string[] | undefined => {
-    if (!Array.isArray(fallbacks)) return undefined;
-    const seen = new Set<string>();
-    const safe: string[] = [];
-    for (const entry of fallbacks) {
-      if (typeof entry !== "string") continue;
-      const trimmed = entry.trim();
-      if (!trimmed || trimmed.length > 100) continue;
-      if (!/^[a-zA-Z0-9_.-]+$/.test(trimmed)) continue;
-      if (trimmed === selfId) continue;
-      if (seen.has(trimmed)) continue;
-      seen.add(trimmed);
-      safe.push(trimmed);
-      if (safe.length >= FALLBACK_CHAIN_MAX) break;
-    }
+    const safe = validFallbackIds(fallbacks, selfId).slice(0, FALLBACK_CHAIN_MAX);
     return safe.length > 0 ? safe : undefined;
   };
 
@@ -138,18 +146,7 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
       typeof preset.customFlags === "string" && !hasShellMetachar(preset.customFlags)
         ? preset.customFlags.slice(0, 10000)
         : undefined,
-    inlineMode:
-      preset.inlineMode === "inherit" ||
-      preset.inlineMode === "on" ||
-      preset.inlineMode === "off" ||
-      typeof preset.inlineMode === "boolean"
-        ? preset.inlineMode
-        : undefined,
-    color:
-      typeof preset.color === "string" &&
-      /^#[0-9a-fA-F]{3,4}$|^#[0-9a-fA-F]{6}$|^#[0-9a-fA-F]{8}$/.test(preset.color)
-        ? preset.color
-        : undefined,
+    color: isPresetHexColor(preset.color) ? preset.color : undefined,
     displayTitle: sanitizeDisplayTitle(preset.displayTitle),
     fallbacks: sanitizeFallbacks(preset.fallbacks, preset.id),
     fallbackOnRateLimit: preset.fallbackOnRateLimit === true ? true : undefined,
@@ -440,17 +437,10 @@ export function applyPresetBehaviorOverrides(
     resolveDangerousMode(entry),
     resolveDangerousMode(preset)
   );
-  // Layer the preset's tri-state inline mode on top of the agent's resolved mode
-  // and bake the combined result onto the effective entry, so the single
-  // resolveEffectiveInlineMode chokepoint sees the final intent (#10876) — a
-  // preset "off" (alt-screen) vetoes an agent/global "on" (inline), just like
-  // the bypass tri-state above.
-  const combinedInline = combineInlineModes(resolveInlineMode(entry), resolveInlineMode(preset));
   return {
     ...entry,
     dangerousMode: combinedMode,
     dangerousEnabled: combinedMode === "on",
-    inlineMode: combinedInline,
     ...(preset.customFlags !== undefined && { customFlags: preset.customFlags }),
   };
 }

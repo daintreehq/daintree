@@ -9,6 +9,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { shouldVirtualizeFileList } from "@/lib/fileListWindowing";
 import { basename, dirname, join } from "@shared/utils/path";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { PathTail } from "@/components/ui/PathTail";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { SearchField } from "@/components/ui/SearchField";
@@ -225,10 +227,20 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
 
 /** The directory band above each run of files. Sticky on the windowed path. */
 function DiffShelfGroupHeader({ dir }: { dir: string }) {
+  const label = formatDiffDir(dir);
   return (
     <div className="flex items-center gap-1.5 bg-surface-sidebar px-1.5 py-1 text-2xs text-text-secondary">
       <Folder className="h-3 w-3 shrink-0" />
-      <span className="truncate font-mono">{formatDiffDir(dir)}</span>
+      {/* Cut from its start like the file paths, so the folder the files sit
+          in survives; the whole path is disclosed whenever any of it is hidden. */}
+      <TruncatedTooltip
+        content={dir}
+        contentClassName="font-mono [overflow-wrap:anywhere]"
+        isTruncated={dir !== "" && label !== dir ? true : undefined}
+        focusable={false}
+      >
+        <PathTail className="min-w-0 font-mono">{label}</PathTail>
+      </TruncatedTooltip>
     </div>
   );
 }

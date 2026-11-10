@@ -7,7 +7,7 @@ import {
 } from "@/components/ui/SegmentedRadioGroup";
 import { SettingsRow } from "../SettingsGroup";
 import type { ScopeKind } from "./scopeUtils";
-import type { DangerousMode, InlineMode } from "@shared/types";
+import type { DangerousMode } from "@shared/types";
 
 interface BehavioralControlsProps {
   scopeKind: ScopeKind;
@@ -18,22 +18,14 @@ interface BehavioralControlsProps {
   effectiveSkipPerms: boolean;
   /** What the "Default" (inherit) option resolves to, given the parent state. */
   inheritResolvesToOn: boolean;
-  /** Where "Default" inherits from — "global setting" or "agent default". */
-  inheritOriginLabel: string;
-  /** Current alt-screen mode for the active scope (agent Default or preset). */
-  inlineMode: InlineMode;
-  /** Whether the inline "Default" (inherit) option resolves to inline (vs alt screen). */
-  inlineInheritResolvesToInline: boolean;
-  /** Where the inline "Default" inherits from — "global setting", "agent default", or "the agent's built-in default" (a curated registry default that shadows the global switch, #10894). */
-  inlineInheritOriginLabel: string;
+  /** Where "Default" inherits from, or why the global setting doesn't reach this agent. */
+  inheritHint: string;
   customArgsValue: string;
   customArgsPlaceholder: string;
   customArgsDescription: string;
   customFlagsOverride: string | undefined;
-  supportsInlineMode: boolean;
   defaultDangerousArg: string;
   onDangerousModeChange: (mode: DangerousMode) => void;
-  onInlineModeChange: (mode: InlineMode) => void;
   onCustomFlagsChange: (value: string) => void;
   onCustomFlagsOverrideReset: () => void;
 }
@@ -44,18 +36,13 @@ export function BehavioralControls({
   dangerousMode,
   effectiveSkipPerms,
   inheritResolvesToOn,
-  inheritOriginLabel,
-  inlineMode,
-  inlineInheritResolvesToInline,
-  inlineInheritOriginLabel,
+  inheritHint,
   customArgsValue,
   customArgsPlaceholder,
   customArgsDescription,
   customFlagsOverride,
-  supportsInlineMode,
   defaultDangerousArg,
   onDangerousModeChange,
-  onInlineModeChange,
   onCustomFlagsChange,
   onCustomFlagsOverrideReset,
 }: BehavioralControlsProps) {
@@ -68,21 +55,6 @@ export function BehavioralControls({
       { value: "off", label: "Off" },
     ],
     [inheritResolvesToOn]
-  );
-
-  // Alt-screen tri-state. Labels describe the effect ("Inline" / "Alt screen")
-  // and are decoupled from the stored `inlineMode` value polarity ("on" = inline,
-  // "off" = alt screen) so the field name and its values stay self-consistent.
-  const inlineModeOptions = useMemo<SegmentedRadioOption<InlineMode>[]>(
-    () => [
-      {
-        value: "inherit",
-        label: `Default (${inlineInheritResolvesToInline ? "Inline" : "Alt screen"})`,
-      },
-      { value: "on", label: "Inline" },
-      { value: "off", label: "Alt screen" },
-    ],
-    [inlineInheritResolvesToInline]
   );
 
   return (
@@ -119,9 +91,7 @@ export function BehavioralControls({
           <>
             Auto-approve all file, command and network actions. Off overrides the global setting for
             this scope.
-            {dangerousMode === "inherit" && (
-              <span className="block mt-1">Inherited from {inheritOriginLabel}</span>
-            )}
+            {dangerousMode === "inherit" && <span className="block mt-1">{inheritHint}</span>}
             {effectiveSkipPerms && defaultDangerousArg && (
               <span className="flex items-center gap-1.5 mt-1.5">
                 <ShieldOff className="h-3.5 w-3.5 shrink-0 text-status-error" aria-hidden="true" />
@@ -145,36 +115,6 @@ export function BehavioralControls({
           />
         )}
       />
-
-      {supportsInlineMode && (
-        <SettingsRow
-          id="agents-inline-mode"
-          label="Alt-screen mode"
-          description={
-            <>
-              Alt screen uses the CLI&apos;s full-screen TUI; inline keeps output in Daintree&apos;s
-              scrollback with cleaner resizing. Choosing Inline or Alt screen overrides the
-              inherited setting for this scope.
-              {inlineMode === "inherit" && (
-                <span className="block mt-1">Inherited from {inlineInheritOriginLabel}</span>
-              )}
-            </>
-          }
-          isModified={inlineMode !== "inherit"}
-          onReset={() => onInlineModeChange("inherit")}
-          resetAriaLabel={`Reset alt-screen mode for ${scopeLabel} to default`}
-          control={({ descriptionId, disabled }) => (
-            <SegmentedRadioGroup<InlineMode>
-              aria-label="Alt-screen mode"
-              aria-describedby={descriptionId}
-              value={inlineMode}
-              onChange={onInlineModeChange}
-              options={inlineModeOptions}
-              disabled={disabled}
-            />
-          )}
-        />
-      )}
     </>
   );
 }

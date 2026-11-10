@@ -27,10 +27,10 @@ export type ActionScope = "renderer";
  * picked. `requiresArgs` only answers "does the schema reject zero args" — this
  * field answers "what should happen when a user picks this from the palette."
  *
- * Palette-only: `ActionService.list()` projects this onto the manifest, but
- * `dispatch()`/`get()` ignore it, so keybindings, context menus, and the MCP
- * tool surface are unaffected. Unset behaves as `"run"` (today's behavior:
- * dispatch the action with `{}`).
+ * `ActionService.list()`/`get()` project this onto the manifest, and
+ * `dispatch()` ignores it, so context menus and the MCP tool surface are
+ * unaffected. Unset behaves as `"run"` (today's behavior: dispatch the action
+ * with `{}`).
  *
  * - `hidden` — never list the action in the palette. Still dispatchable via
  *   keybinding / direct id and still visible to MCP (use `isVisible` instead to
@@ -40,7 +40,8 @@ export type ActionScope = "renderer";
  *   but dispatch `to` instead when picked. The companion UI action — typically a
  *   dialog-opener — is what actually runs. For headless arg-taking actions that
  *   have an interactive sibling (e.g. `worktree.createWithRecipe` →
- *   `worktree.createDialog.open`).
+ *   `worktree.createDialog.open`). Keybindings and the command HUD follow it
+ *   too (`resolveInteractiveActionId`): they dispatch with no args either.
  * - `requireContext` — list the action, but render it disabled-with-reason in
  *   the palette when `isReady(ctx)` is false (the palette no-ops a disabled row
  *   and shows `reason` inline). When ready, dispatch normally with `{}`. For
@@ -233,6 +234,18 @@ export interface ActionContext {
    */
   hostApprovedPresetWrite?: string;
   /**
+   * The caller shows this dispatch's failure itself, so an action that owns its
+   * failure toast stays quiet (#16667). Set by `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.callerReportsFailure}, stamped over whatever a
+   * `contextOverride` claimed, and never on any `argsSchema`: it would let an
+   * MCP client or a model silence the only signal a person gets.
+   *
+   * For a surface that already renders the failure in place, such as Review
+   * Hub's push banner, where a toast for the same failure would say it twice.
+   * The failure still comes back on the dispatch result.
+   */
+  callerReportsFailure?: boolean;
+  /**
    * When main gives up on the agent dispatch running this action, as epoch ms
    * on this machine's clock (#15648). Set by `ActionService.dispatch` from
    * {@link ActionDispatchOptions.dispatchDeadlineAt} on the same terms as
@@ -420,6 +433,10 @@ export interface ActionDefinition<
    * the `try`. A partial catch makes the claim false and silently swallows the
    * uncovered failures at the palette. Errors raised *before* `run()` (arg
    * validation, `NOT_FOUND`) carry a different code and still toast normally.
+   *
+   * The command HUD reads it on the same terms. An agent dispatch and one whose
+   * caller set {@link ActionContext.callerReportsFailure} are the two cases an
+   * action may stay quiet in, since neither has a generic toast to stand down.
    */
   selfNotifiesOnExecutionError?: boolean;
   run: (args: InferActionArgs<S>, ctx: ActionContext) => Promise<Result>;
@@ -533,9 +550,9 @@ export interface ActionManifestEntry {
   /** Set when the action is deprecated. Reported by `mcp.surface` (#11549). */
   deprecated?: ActionDeprecation;
   /**
-   * Projected from {@link ActionDefinition.palette}. Palette-only — these are
-   * read by the action-palette layer and ignored by `dispatch()`/MCP. See
-   * {@link PaletteBehavior}.
+   * Projected from {@link ActionDefinition.palette}. Read by the action palette
+   * (and, for `paletteRedirectTo`, by keybindings and the command HUD); ignored
+   * by `dispatch()`/MCP. See {@link PaletteBehavior}.
    */
   /** `palette.mode === "hidden"` — exclude from the palette listing. */
   paletteHidden?: boolean;
@@ -683,6 +700,8 @@ export interface ActionDispatchOptions {
    * bridge.
    */
   hostApprovedPresetWrite?: string;
+  /** See {@link ActionContext.callerReportsFailure}. */
+  callerReportsFailure?: boolean;
   /**
    * Main's deadline for the MCP dispatch this runs — NOT a client-supplied
    * value. See {@link ActionContext.dispatchDeadlineAt}. Set only by the MCP

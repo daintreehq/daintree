@@ -304,9 +304,11 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
   let manager: ProjectViewManager;
   let win: ReturnType<typeof createMockWindow>;
   let initialWc: MockWc;
+  let onViewWarmActivated: ReturnType<typeof vi.fn<(wc: Electron.WebContents) => void>>;
 
   beforeEach(() => {
     nextWebContentsId = 500;
+    onViewWarmActivated = vi.fn<(wc: Electron.WebContents) => void>();
     wcQueue = [];
     vi.mocked(logInfo).mockClear();
     vi.mocked(logWarn).mockClear();
@@ -327,6 +329,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       // below are written against the 150 ms bound.
       viewLoadTimeoutMs: 100,
       cachedProjectViews: 3,
+      onViewWarmActivated: (wc) => onViewWarmActivated(wc),
     });
 
     initialWc = createMockWebContents();
@@ -1306,6 +1309,70 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     manager.signalWarmViewPainted(initialWc.id);
     await switchBack;
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the warm-activation hook for the reactivated view after its wake trigger", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+    const order: string[] = [];
+    onViewWarmActivated.mockImplementation((wc) => {
+      order.push(`hook:${wc.id}`);
+    });
+
+    const firstSwitch = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await firstSwitch;
+    // A cold start replays through the ready hook, not this one.
+    expect(onViewWarmActivated).not.toHaveBeenCalled();
+
+    initialWc.send.mockImplementation((channel: string) => {
+      if (channel === CHANNELS.APP_VIEW_WARM_ACTIVATED) order.push(`wake:${initialWc.id}`);
+    });
+    const switchBack = manager.switchTo("proj-a", "/path/a");
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+
+    // A warm view reloads nothing, so this is its only replay point.
+    expect(onViewWarmActivated.mock.calls).toEqual([[initialWc]]);
+    expect(order).toEqual([`wake:${initialWc.id}`, `hook:${initialWc.id}`]);
+
+    manager.signalWarmViewPainted(initialWc.id);
+    await switchBack;
+    expect(onViewWarmActivated).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the warm-activation hook when a cached view is revealed with nothing to bridge", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+    const firstSwitch = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await firstSwitch;
+
+    // With the active view gone there is no outgoing view to bridge through,
+    // so the cached view is revealed on top straight away.
+    expect(manager.destroyView("proj-b")).toBe(true);
+    win.contentView.addChildView.mockClear();
+    const order: string[] = [];
+    initialWc.send.mockImplementation((channel: string) => {
+      if (channel === CHANNELS.APP_VIEW_WARM_ACTIVATED) order.push("wake");
+    });
+    onViewWarmActivated.mockImplementation(() => {
+      order.push("hook");
+    });
+
+    const result = await manager.switchTo("proj-a", "/path/a");
+
+    expect(result.isNew).toBe(false);
+    const reattach = win.contentView.addChildView.mock.calls.find(
+      ([view]) => (view as { webContents?: MockWc }).webContents === initialWc
+    );
+    expect(reattach).toBeDefined();
+    expect(reattach?.[1]).toBeUndefined();
+    expect(order).toEqual(["wake", "hook"]);
+    expect(onViewWarmActivated.mock.calls).toEqual([[initialWc]]);
   });
 
   it("hands a revived cached view the memory publish it missed while hidden (#13529)", async () => {

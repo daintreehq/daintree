@@ -468,11 +468,10 @@ describe("MoveOrRenameProjectDialog", () => {
     });
   });
 
-  it("swaps the focus ring to the error colour while the folder name is invalid", () => {
-    // Not an assertion about which colours are used. The rule is that a field
-    // whose focus outline is the accent must say what that outline becomes when
-    // the field is invalid — or an invalid focused field draws an accent ring
-    // around its red border, and the louder signal says nothing is wrong.
+  it("marks an invalid folder name the way the shared Input does: red border, normal focus outline", () => {
+    // The field follows `Input`'s `invalid` treatment: the border carries the
+    // error and the focus outline stays the one every other field draws, so
+    // focus and validity read as two separate signals rather than one red ring.
     openMove();
     render(<MoveOrRenameProjectDialog />);
     const field = screen.getByTestId("relocate-folder-input");
@@ -485,7 +484,8 @@ describe("MoveOrRenameProjectDialog", () => {
     const accentOutline = classes.some((c) => /^focus-visible:outline-accent/.test(c));
     const errorOutline = classes.some((c) => /^focus-visible:outline-status-error/.test(c));
     const errorBorder = classes.some((c) => /^border-status-error/.test(c));
-    expect(accentOutline && !errorOutline).toBe(false);
+    expect(accentOutline).toBe(true);
+    expect(errorOutline).toBe(false);
     expect(errorBorder).toBe(true);
   });
 

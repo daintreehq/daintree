@@ -59,6 +59,7 @@ declare global {
     __DAINTREE_INSTANCE_ROLE__?: { role: "attended" | "worker" };
     /** Paint-fabric surface-host role seeded by preload — non-null surfaceId mounts the minimal surface-host root (Phase 1V). */
     __DAINTREE_SURFACE_HOST__?: { surfaceId: string | null };
+    __DAINTREE_CANOPY_WINDOW__?: boolean;
     __daintreeDispatchAction?: (
       actionId: string,
       args?: unknown,

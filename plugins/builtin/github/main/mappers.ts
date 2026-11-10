@@ -455,6 +455,9 @@ export function toForgePR(node: Record<string, unknown>): PR {
     ...(typeof node.viewerCanDisableAutoMerge === "boolean"
       ? { viewerCanDisableAutoMerge: node.viewerCanDisableAutoMerge }
       : {}),
+    ...(typeof node.viewerCanMergeAsAdmin === "boolean"
+      ? { viewerCanMergeAsAdmin: node.viewerCanMergeAsAdmin }
+      : {}),
     ...(commitPreview ? { commits: commitPreview } : {}),
     createdAt: isoToMs(node.createdAt ?? node.updatedAt),
     updatedAt: isoToMs(node.updatedAt),

@@ -100,7 +100,7 @@ export const SEL = {
     searchStatus: "[data-terminal-search-status]",
     scrollIndicator: '[aria-label="New output below, scroll to latest output"]',
     agentStateChip: '[role="status"][aria-label^="Agent state:"]',
-    restartBannerAction: '[aria-label="Restart session"]',
+    restartBannerAction: '[aria-label="Restart terminal"]',
     reconnectRetryAction: '[aria-label="Retry reconnecting"]',
   },
   worktree: {
@@ -120,13 +120,13 @@ export const SEL = {
     searchInput: '[aria-label="Search worktrees"]',
     searchClear: '[aria-label="Clear search"]',
     // Prefix match, deliberately. The card builds this label from the worktree's
-    // review state (`WorktreeDetailsSection.reviewHubButtonLabel`): "Open Review &
-    // commit" normally, "Open Review & push" once the tree is clean but commits
+    // review state (`WorktreeDetailsSection.reviewHubButtonLabel`): "Review &
+    // commit" normally, "Review & push" once the tree is clean but commits
     // are unpushed. An exact selector silently stops matching the moment either
     // the verb or its casing shifts — which is what happened here, leaving every
     // ReviewHub spec unable to open the hub. Note the button is ABSENT entirely
     // when there is nothing to review and nothing to push.
-    reviewHubButton: '[aria-label^="Open Review &"]',
+    reviewHubButton: '[aria-label^="Review &"]',
     // Prefix-matched: the accessible name carries the active-filter count
     // ("…, 3 active") so the number is spoken as well as drawn.
     filterButton: '[aria-label^="Filter and sort worktrees"]',
@@ -178,7 +178,7 @@ export const SEL = {
     zoomIndicator: '[data-testid="browser-zoom-indicator"]',
     moreActions: '[data-testid="browser-more-actions"]',
     promoteToPortal: '[data-testid="browser-promote-portal"]',
-    findInput: 'input[placeholder="Find in page"]',
+    findInput: 'input[placeholder="Find in page…"]',
     findPrev: '[aria-label="Previous match"]',
     findNext: '[aria-label="Next match"]',
     findClose: '[aria-label="Close find bar"]',
@@ -361,8 +361,8 @@ export const SEL = {
     center: '[data-testid="notification-center"]',
     centerList: '[role="list"][aria-label="Notifications"]',
     centerRow: '[role="listitem"]',
-    centerFilter: (label: string) =>
-      `button[aria-pressed]:has([data-filter-chip-label]:text-is("${label}"))`,
+    // Segments carry `${testId}-${value}`; the value is the label lowercased.
+    centerFilter: (label: string) => `[data-testid="notification-filter-${label.toLowerCase()}"]`,
     markAllReadButton: 'button:text-is("Mark all read")',
     mutedPill: '[data-testid="notification-muted-pill"]',
     mutedEmptyState: '[data-testid="notification-muted-empty-state"]',
@@ -391,7 +391,7 @@ export const SEL = {
   },
   quickSwitcher: {
     dialog: '[role="dialog"][aria-label="Quick switcher"]',
-    searchInput: '[aria-label="Search panels, agents, and worktrees"]',
+    searchInput: '[aria-label="Find panels, agents, or worktrees"]',
     list: "#quick-switcher-list",
     options: '#quick-switcher-list [role="option"]',
   },
@@ -507,22 +507,12 @@ export const SEL = {
     clearSearch: '[aria-label="Clear search"]',
     clearTraceId: '[aria-label="Clear trace ID filter"]',
   },
-  newTerminalPalette: {
-    dialog: '[role="dialog"][aria-label="New terminal palette"]',
-    searchInput: '[aria-label="Select terminal type"]',
-    list: "#new-terminal-list",
-    options: '#new-terminal-list [role="option"]',
-    terminalOption: "#new-terminal-option-terminal",
-    browserOption: "#new-terminal-option-browser",
-    // Hardcoded count live region inside the dialog (reliable, not announcer-driven).
-    liveRegion:
-      '[role="dialog"][aria-label="New terminal palette"] [role="status"][aria-live="polite"]',
-  },
   panelPalette: {
     dialog: '[role="dialog"][aria-label="Panel palette"]',
     searchInput: '[aria-label="Select panel type"]',
     list: "#panel-list",
     options: '#panel-list [role="option"]',
+    browserOption: "#panel-option-browser",
   },
   themePalette: {
     dialog: '[role="dialog"][aria-label="Theme palette"]',

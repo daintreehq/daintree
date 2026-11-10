@@ -18,6 +18,7 @@ import { installSpawnCensusFromEnv } from "./utils/spawnCensus.js";
 import { getIsIdleHarness } from "./setup/runtimeFlags.js";
 import { isAttachStdioRequested } from "./boot/hostModeLaunch.js";
 import { isRemoteHostSupported } from "./remote/buildGate.js";
+import { applyMainFileIoPolicy } from "./setup/mainFileIoPolicy.js";
 
 // `--attach-stdio` carries a Shell's link to the Daintree already running here
 // (see remote/host/attachStdio.ts). It is dispatched before anything else
@@ -115,6 +116,10 @@ try {
 } catch (err) {
   showFatalStoreError(formatErrorMessage(err, "Unknown store initialization error"));
 }
+
+// Ahead of main.js, whose project reads would otherwise reach libuv's workers
+// first. Not awaited: it only queues pool work in front of theirs (#16361).
+void applyMainFileIoPolicy();
 
 await import("./main.js");
 

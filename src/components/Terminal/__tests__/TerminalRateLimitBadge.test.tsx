@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 const clock = vi.hoisted(() => ({ now: 0 }));
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
+const readQuota = vi.hoisted(() => vi.fn());
 vi.mock("@/clients/codexClient", () => ({
   codexClient: {
-    readQuota: vi.fn().mockResolvedValue([]),
+    readQuota: (...args: unknown[]) => readQuota(...args),
     refreshQuota: vi.fn().mockResolvedValue([]),
   },
 }));
@@ -35,6 +36,10 @@ function renderBadge(terminalId: string) {
     </TooltipProvider>
   );
 }
+
+beforeEach(() => {
+  readQuota.mockReset().mockResolvedValue([]);
+});
 
 afterEach(() => {
   cleanup();
@@ -144,5 +149,116 @@ describe("TerminalRateLimitBadge (#12797)", () => {
       { terminalId: "t1", presetId: "work", confirmed: true },
       { source: "user" }
     );
+  });
+
+  it("shows each account's known quota window in the switch menu, read only once it opens (#16407)", async () => {
+    const observedAt = 1_700_000_000_000;
+    clock.now = observedAt + 60_000;
+    useRateLimitObservationStore.setState({ observedAtByTerminalId: { t1: observedAt } });
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          codex: {
+            accounts: [{ id: "lab", name: "Lab", configDir: "/Users/me/.codex-lab" }],
+          },
+        },
+      } as AgentSettings,
+    });
+    readQuota.mockResolvedValue([
+      {
+        key: "lab",
+        isDefault: false,
+        presetNames: [],
+        accountIds: ["lab"],
+        result: {
+          status: "ok",
+          planType: null,
+          windows: [{ usedPercent: 35, windowDurationMins: 10080, resetsAt: null }],
+          fetchedAt: Date.now(),
+        },
+      },
+    ]);
+    const pane: PtyPanelData = {
+      id: "t1",
+      kind: "terminal",
+      title: "Codex",
+      cwd: "/repo",
+      cols: 80,
+      rows: 24,
+      location: "grid",
+      launchAgentId: "codex",
+    };
+    usePanelStore.setState({ panelsById: { t1: pane }, panelIds: ["t1"] });
+
+    renderBadge("t1");
+    await act(async () => {});
+    expect(readQuota).not.toHaveBeenCalled();
+
+    act(() => {
+      fireEvent.keyDown(screen.getByTestId("terminal-rate-limit-badge"), { key: "Enter" });
+    });
+    await act(async () => {});
+    expect(readQuota).toHaveBeenCalled();
+    const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
+    // The pane is on the default login, so the only move is to Lab.
+    expect(items).toEqual(["LabWeekly limit 35% used"]);
+  });
+
+  it("gives the default login no window when the pane's preset puts the folder elsewhere (#16407)", async () => {
+    const observedAt = 1_700_000_000_000;
+    clock.now = observedAt + 60_000;
+    useRateLimitObservationStore.setState({ observedAtByTerminalId: { t1: observedAt } });
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          codex: {
+            accounts: [
+              { id: "company", name: "Company", configDir: "/Users/me/.codex-company" },
+              { id: "lab", name: "Lab", configDir: "/Users/me/.codex-lab" },
+            ],
+            customPresets: [
+              { id: "legacy", name: "Legacy", env: { CODEX_HOME: "/Users/me/.codex-legacy" } },
+            ],
+          },
+        },
+      } as AgentSettings,
+    });
+    const quota = (key: string, patch: object, usedPercent: number) => ({
+      key,
+      isDefault: false,
+      presetNames: [],
+      ...patch,
+      result: {
+        status: "ok",
+        planType: null,
+        windows: [{ usedPercent, windowDurationMins: 10080, resetsAt: null }],
+        fetchedAt: Date.now(),
+      },
+    });
+    readQuota.mockResolvedValue([
+      quota("default", { isDefault: true }, 10),
+      quota("lab", { accountIds: ["lab"] }, 35),
+    ]);
+    const pane: PtyPanelData = {
+      id: "t1",
+      kind: "terminal",
+      title: "Codex",
+      cwd: "/repo",
+      cols: 80,
+      rows: 24,
+      location: "grid",
+      launchAgentId: "codex",
+      agentAccountId: "company",
+      agentPresetId: "legacy",
+    };
+    usePanelStore.setState({ panelsById: { t1: pane }, panelIds: ["t1"] });
+
+    renderBadge("t1");
+    act(() => {
+      fireEvent.keyDown(screen.getByTestId("terminal-rate-limit-badge"), { key: "Enter" });
+    });
+    await act(async () => {});
+    const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
+    expect(items).toEqual(["Default login", "LabWeekly limit 35% used"]);
   });
 });

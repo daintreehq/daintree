@@ -253,6 +253,17 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
             })}
           </ol>
           <div className="mt-7 flex min-h-8 w-full flex-wrap items-center justify-center gap-x-2 gap-y-3">
+            {cancellable ? (
+              <Button
+                ref={recovery ? undefined : primaryRef}
+                variant="ghost"
+                onClick={() => cancel(pending)}
+              >
+                Cancel
+              </Button>
+            ) : (
+              <p className="text-center text-sm text-text-secondary">{COMMITTED_NOTE}</p>
+            )}
             {recovery && (
               <Button
                 ref={primaryRef}
@@ -263,17 +274,6 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
               >
                 {recovery.label}
               </Button>
-            )}
-            {cancellable ? (
-              <Button
-                ref={recovery ? undefined : primaryRef}
-                variant="secondary"
-                onClick={() => cancel(pending)}
-              >
-                Cancel
-              </Button>
-            ) : (
-              <p className="text-center text-sm text-text-secondary">{COMMITTED_NOTE}</p>
             )}
           </div>
         </div>

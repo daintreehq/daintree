@@ -155,9 +155,10 @@ describe("ProjectPulseStrip", () => {
     expect(state.fetchPulse).toHaveBeenCalledWith("wt1");
     expect(state.fetchPulse).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole("button", { name: /collapse/i }));
+    // The toggle keeps its name in both states; expanded is what tells them apart.
+    fireEvent.click(screen.getByRole("button", { name: /^project pulse/i, expanded: true }));
     expect(screen.queryByTestId("pulse-card")).toBeNull();
-    expect(screen.getByRole("button", { name: /^project pulse/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^project pulse/i, expanded: false })).toBeTruthy();
   });
 
   it("mini ribbon drops invalid-date and before-project cells and never triggers a fetch", () => {

@@ -448,6 +448,39 @@ describe("projectStore addProject", () => {
       );
     });
 
+    it("offers the window that keeps the project for good, not another new window (#16724)", async () => {
+      projectClientMock.add.mockResolvedValueOnce(REPO);
+      const userMessage = '"repo" is open in another window (assistant).';
+      const details = { code: "PROJECT_HELD_ELSEWHERE", reason: "assistant", showable: true };
+      const thrown = new Error(
+        `[AppError|PROJECT_HELD_ELSEWHERE|${encodeURIComponent(userMessage)}|#${encodeURIComponent(JSON.stringify(details))}] Another window's cached view of repo can't be released`
+      );
+      // ActionService decodes the throw once, then hands that same object back as details.
+      const { isClientAppError } = await import("@/utils/clientAppError");
+      expect(isClientAppError(thrown)).toBe(true);
+      actionServiceDispatchMock.mockResolvedValueOnce({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: thrown.message, details: thrown },
+      });
+
+      await useProjectStore.getState().addProjectByPath("/tmp/repo", { disposition: "new" });
+      expect(projectClientMock.switch).not.toHaveBeenCalled();
+
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          message: userMessage,
+          actions: [expect.objectContaining({ label: "Show in other window" })],
+        })
+      );
+      actionServiceDispatchMock.mockClear();
+      clickToastAction();
+      await vi.waitFor(() => expect(projectClientMock.switch).toHaveBeenCalledTimes(1));
+      expect(projectClientMock.switch.mock.calls[0]![0]).toBe(REPO.id);
+      expect(projectClientMock.switch.mock.calls[0]![2]).toMatchObject({ showInOtherWindow: true });
+      expect(actionServiceDispatchMock).not.toHaveBeenCalled();
+    });
+
     it("keeps the choice through the git-init prompt a new folder chains into", async () => {
       projectClientMock.createFolder.mockResolvedValueOnce("/tmp/new-folder");
       projectClientMock.add.mockRejectedValueOnce(

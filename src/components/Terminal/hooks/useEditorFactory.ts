@@ -20,6 +20,8 @@ import {
   createFileDropChipTooltip,
   diffChipField,
   createDiffChipTooltip,
+  notesChipField,
+  createNotesChipTooltip,
   terminalChipField,
   createTerminalChipTooltip,
   selectionChipField,
@@ -50,6 +52,7 @@ import {
   announceCorrectionShown,
   rebaseCorrectionBaseline,
 } from "@/services/voiceCorrectionLanding";
+import { recordComposerBindings } from "../inputEditorExtensions/composerBindings";
 import { recordBuiltCompartmentConfig } from "./useCompartmentDriver";
 
 interface UseEditorFactoryParams {
@@ -78,6 +81,7 @@ interface UseEditorFactoryParams {
     terminalChipTooltipCompartmentRef: React.RefObject<Compartment>;
     selectionChipTooltipCompartmentRef: React.RefObject<Compartment>;
     contextChipTooltipCompartmentRef: React.RefObject<Compartment>;
+    notesChipTooltipCompartmentRef: React.RefObject<Compartment>;
     forgeReferenceTooltipCompartmentRef: React.RefObject<Compartment>;
     autoSizeCompartmentRef: React.RefObject<Compartment>;
     keymapCompartmentRef: React.RefObject<Compartment>;
@@ -150,91 +154,94 @@ export function useEditorFactory({
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
       contextChipTooltipCompartmentRef,
+      notesChipTooltipCompartmentRef,
       forgeReferenceTooltipCompartmentRef,
       autoSizeCompartmentRef,
       keymapCompartmentRef,
       comboboxCompartmentRef,
     } = compartments;
 
-    const state = EditorState.create({
-      doc: initialValueRef.current,
-      extensions: [
-        chipPendingDeleteField,
-        createChipBackspaceKeymap(),
-        createComposerHistory(),
-        themeCompartmentRef.current.of(buildInputBarTheme(effectiveTheme)),
-        chipEntranceTheme,
-        EditorView.lineWrapping,
-        createCursorBlink(),
-        createContentAttributes(),
-        comboboxCompartmentRef.current.of(createComboboxAttributes(null)),
-        autoSizeCompartmentRef.current.of(createAutoSize()),
-        placeholderCompartmentRef.current.of(createPlaceholder(placeholder)),
-        editableCompartmentRef.current.of(EditorView.editable.of(!disabled)),
-        chipCompartmentRef.current.of(createSlashChipField({ commandMap })),
-        tooltipCompartmentRef.current.of(!disabled ? createSlashTooltip(commandMap) : []),
-        createFileChipField(),
-        fileChipTooltipCompartmentRef.current.of(!disabled ? createFileChipTooltip() : []),
-        imageChipField,
-        imageChipTooltipCompartmentRef.current.of(!disabled ? createImageChipTooltip() : []),
-        fileDropChipField,
-        fileDropChipTooltipCompartmentRef.current.of(!disabled ? createFileDropChipTooltip() : []),
-        diffChipField,
-        diffChipTooltipCompartmentRef.current.of(!disabled ? createDiffChipTooltip() : []),
-        terminalChipField,
-        terminalChipTooltipCompartmentRef.current.of(!disabled ? createTerminalChipTooltip() : []),
-        selectionChipField,
-        selectionChipTooltipCompartmentRef.current.of(
-          !disabled ? createSelectionChipTooltip() : []
-        ),
-        contextReferenceChipField,
-        contextChipTooltipCompartmentRef.current.of(
-          !disabled ? createContextReferenceChipTooltip() : []
-        ),
-        forgeReferenceField,
-        forgeReferenceTooltipCompartmentRef.current.of(
-          !disabled ? createForgeReferenceTooltip() : []
-        ),
-        interimWidgetField,
-        dictationFollow,
-        voiceCaret,
-        createCaretTracker(() => draftKeyRef.current),
-        completionBoundary,
-        pendingAIField,
-        pendingLock,
-        voiceRewriteTracker,
-        createCorrectionReview({
-          onShown: announceCorrectionShown,
-          onSwapped: (review, now) => rebaseCorrectionBaseline(voiceIdRef.current, review, now),
-        }),
-        EditorView.updateListener.of((update) => contextUpdateRef.current(update)),
-        keymapCompartmentRef.current.of(
-          createCustomKeymap({
-            onEnter: () => keymapHandlersRef.current?.onEnter() ?? false,
-            onModEnter: () => keymapHandlersRef.current?.onModEnter() ?? false,
-            onEscape: () => keymapHandlersRef.current?.onEscape() ?? false,
-            onArrowUp: () => keymapHandlersRef.current?.onArrowUp() ?? false,
-            onArrowDown: () => keymapHandlersRef.current?.onArrowDown() ?? false,
-            onArrowLeft: () => keymapHandlersRef.current?.onArrowLeft() ?? false,
-            onArrowRight: () => keymapHandlersRef.current?.onArrowRight() ?? false,
-            onTab: () => keymapHandlersRef.current?.onTab() ?? false,
-            onCtrlC: (hasSelection: boolean) =>
-              keymapHandlersRef.current?.onCtrlC(hasSelection) ?? false,
-            onStash: () => keymapHandlersRef.current?.onStash() ?? false,
-            onPopStash: () => keymapHandlersRef.current?.onPopStash() ?? false,
-            onExpand: () => keymapHandlersRef.current?.onExpand() ?? false,
-            onHistorySearch: () => keymapHandlersRef.current?.onHistorySearch() ?? false,
-          })
-        ),
-        domEventHandlers,
-        imagePasteExtension,
-        filePasteExtension,
-        plainPasteKeymap,
-      ],
-    });
+    const extensions: Extension[] = [
+      chipPendingDeleteField,
+      createChipBackspaceKeymap(),
+      createComposerHistory(),
+      themeCompartmentRef.current.of(buildInputBarTheme(effectiveTheme)),
+      chipEntranceTheme,
+      EditorView.lineWrapping,
+      createCursorBlink(),
+      createContentAttributes(),
+      comboboxCompartmentRef.current.of(createComboboxAttributes(null)),
+      autoSizeCompartmentRef.current.of(createAutoSize()),
+      placeholderCompartmentRef.current.of(createPlaceholder(placeholder)),
+      editableCompartmentRef.current.of(EditorView.editable.of(!disabled)),
+      chipCompartmentRef.current.of(createSlashChipField({ commandMap })),
+      tooltipCompartmentRef.current.of(!disabled ? createSlashTooltip(commandMap) : []),
+      createFileChipField(),
+      fileChipTooltipCompartmentRef.current.of(!disabled ? createFileChipTooltip() : []),
+      imageChipField,
+      imageChipTooltipCompartmentRef.current.of(!disabled ? createImageChipTooltip() : []),
+      fileDropChipField,
+      fileDropChipTooltipCompartmentRef.current.of(!disabled ? createFileDropChipTooltip() : []),
+      diffChipField,
+      diffChipTooltipCompartmentRef.current.of(!disabled ? createDiffChipTooltip() : []),
+      terminalChipField,
+      terminalChipTooltipCompartmentRef.current.of(!disabled ? createTerminalChipTooltip() : []),
+      selectionChipField,
+      selectionChipTooltipCompartmentRef.current.of(!disabled ? createSelectionChipTooltip() : []),
+      contextReferenceChipField,
+      contextChipTooltipCompartmentRef.current.of(
+        !disabled ? createContextReferenceChipTooltip() : []
+      ),
+      notesChipField,
+      notesChipTooltipCompartmentRef.current.of(!disabled ? createNotesChipTooltip() : []),
+      forgeReferenceField,
+      forgeReferenceTooltipCompartmentRef.current.of(
+        !disabled ? createForgeReferenceTooltip() : []
+      ),
+      interimWidgetField,
+      dictationFollow,
+      voiceCaret,
+      createCaretTracker(() => draftKeyRef.current),
+      completionBoundary,
+      pendingAIField,
+      pendingLock,
+      voiceRewriteTracker,
+      createCorrectionReview({
+        onShown: announceCorrectionShown,
+        onSwapped: (review, now) => rebaseCorrectionBaseline(voiceIdRef.current, review, now),
+      }),
+      EditorView.updateListener.of((update) => contextUpdateRef.current(update)),
+      keymapCompartmentRef.current.of(
+        createCustomKeymap({
+          onEnter: () => keymapHandlersRef.current?.onEnter() ?? false,
+          onModEnter: () => keymapHandlersRef.current?.onModEnter() ?? false,
+          onEscape: () => keymapHandlersRef.current?.onEscape() ?? false,
+          onArrowUp: () => keymapHandlersRef.current?.onArrowUp() ?? false,
+          onArrowDown: () => keymapHandlersRef.current?.onArrowDown() ?? false,
+          onArrowLeft: () => keymapHandlersRef.current?.onArrowLeft() ?? false,
+          onArrowRight: () => keymapHandlersRef.current?.onArrowRight() ?? false,
+          onTab: () => keymapHandlersRef.current?.onTab() ?? false,
+          onCtrlC: (hasSelection: boolean) =>
+            keymapHandlersRef.current?.onCtrlC(hasSelection) ?? false,
+          onStash: () => keymapHandlersRef.current?.onStash() ?? false,
+          onPopStash: () => keymapHandlersRef.current?.onPopStash() ?? false,
+          onExpand: () => keymapHandlersRef.current?.onExpand() ?? false,
+          onHistorySearch: () => keymapHandlersRef.current?.onHistorySearch() ?? false,
+        })
+      ),
+      domEventHandlers,
+      imagePasteExtension,
+      filePasteExtension,
+      plainPasteKeymap,
+    ];
+    const state = EditorState.create({ doc: initialValueRef.current, extensions });
 
     const view = new EditorView({ state, parent: host });
     editorViewRef.current = view;
+    recordComposerBindings(view, {
+      extensions,
+      compartments: Object.values(compartments).map((ref) => ref.current),
+    });
     // Chip tooltips above are gated on `disabled` only, i.e. built as if
     // autocomplete were closed.
     recordBuiltCompartmentConfig(view, {

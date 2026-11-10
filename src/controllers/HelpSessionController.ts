@@ -20,14 +20,11 @@ import {
   buildResumeCommand,
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
-  resolveEffectiveInlineMode,
   resolveKeepDecorations,
 } from "@shared/types/agentSettings";
-import {
-  getAgentSettingsEntrySnapshot,
-  getGlobalUseAltScreenSnapshot,
-} from "@/store/storeAccessors";
+import { getAgentSettingsEntrySnapshot } from "@/store/storeAccessors";
 import { loadCustomLaunchFlags } from "@/lib/assistantLaunchFlags";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 import {
   type HelpSessionRef,
   provisionHelpSession,
@@ -272,6 +269,14 @@ export interface HelpLaunchOptions {
   checkVersion?: boolean;
   /** For run-anyway: bypass missing-CLI guard. */
   force?: boolean;
+  /**
+   * Provision only while nothing holds the lane (#16495): a new session started
+   * over a conversation main keeps for a slot with no tab, where another view's
+   * assistant or a scheduled run may have started since. With `requestedId` the
+   * lane's pointer isn't discarded up front: main replaces it once the new session
+   * spawns, so a refusal or a failed launch leaves that conversation in place.
+   */
+  vacantOnly?: boolean;
   /** For new-session / run-anyway: ask the dispatcher to activate the dock. */
   activateDock?: boolean;
   /** Remove the existing terminal+session before launching the new one. */
@@ -325,19 +330,14 @@ export interface HelpLaunchOptions {
 
 // Help sessions keep their own bypass and model settings, but a CLI's
 // decorative effects are the same pane-repaint cost whoever launched it, so
-// the per-agent "keep decorations" choice applies here too, and so does the
-// inline-mode choice: a resumed conversation must keep its scrollback in the
-// terminal buffer exactly like a fresh launch (#14186). Bypass is deliberately
+// the per-agent "keep decorations" choice applies here too. A resumed
+// conversation also launches inline, keeping its scrollback in the terminal
+// buffer exactly like a fresh launch (#14186, #16356). Bypass is deliberately
 // not reconciled. A backend that declares neither capability is a no-op.
 export function withResumeDisplayChoices(flags: string[], agentId: string): string[] {
   const entry = getAgentSettingsEntrySnapshot(agentId) ?? {};
-  const effectiveInline = resolveEffectiveInlineMode(
-    entry,
-    agentId,
-    getGlobalUseAltScreenSnapshot()
-  );
   return reconcileDecorationFlags(
-    reconcileInlineModeFlag(flags, agentId, effectiveInline),
+    reconcileInlineModeFlag(flags, agentId),
     agentId,
     resolveKeepDecorations(entry)
   );
@@ -438,6 +438,13 @@ export class HelpSessionController {
   private _lastResumeTarget: HelpLaunchOptions["resumeTarget"] = undefined;
   /** The agent the latest launch was pinned to (`pinAgent`), until it goes live. */
   private _lastPinnedAgentId: string | null = null;
+  /**
+   * The agent of the latest launch when it was a vacant-only fresh start
+   * (#16495), which Retry and a passed version recheck repeat as one: a plain
+   * relaunch would resume the conversation it was meant to leave alone, or take
+   * the lane from whoever holds it now.
+   */
+  private _lastVacantFresh: string | null = null;
 
   private readonly _versionGate = new HelpVersionGate({
     getSnapshot: () => this._snapshot,
@@ -450,7 +457,9 @@ export class HelpSessionController {
     // than an auto-launch, so once that agent is current it goes ahead.
     maybeAutoLaunch: (inputs) => {
       const pinned = this._lastPinnedAgentId;
-      if (pinned) this.launch({ agentId: pinned, replaceExisting: true, pinAgent: true });
+      const fresh = this._lastVacantFresh;
+      if (fresh) this._relaunchVacantFresh(fresh);
+      else if (pinned) this.launch({ agentId: pinned, replaceExisting: true, pinAgent: true });
       else this._maybeAutoLaunch(inputs);
     },
   });
@@ -599,11 +608,26 @@ export class HelpSessionController {
   retryLaunch(agentId: string): void {
     const resumeTarget = this._lastResumeTarget;
     const pinAgent = this._lastPinnedAgentId === agentId;
+    if (this._lastVacantFresh) {
+      this._relaunchVacantFresh(agentId);
+      return;
+    }
     this.launch(
       resumeTarget
         ? { agentId, replaceExisting: true, resumeTarget }
         : { agentId, ...(pinAgent ? { pinAgent } : {}) }
     );
+  }
+
+  private _relaunchVacantFresh(agentId: string): void {
+    this.launch({
+      agentId,
+      replaceExisting: true,
+      requestedId: `terminal-${crypto.randomUUID()}`,
+      checkVersion: true,
+      vacantOnly: true,
+      ...(this._lastPinnedAgentId === agentId ? { pinAgent: true } : {}),
+    });
   }
 
   /**
@@ -960,6 +984,8 @@ export class HelpSessionController {
     this._isLaunching = true;
     this._lastResumeTarget = options.resumeTarget;
     this._lastPinnedAgentId = options.pinAgent ? launchAgentId : null;
+    this._lastVacantFresh =
+      options.vacantOnly === true && options.requestedId !== undefined ? launchAgentId : null;
 
     // A launch supersedes any revoked-session banner — the user is starting a
     // fresh session, so the prior session's revocation no longer applies (#10017).
@@ -996,7 +1022,7 @@ export class HelpSessionController {
       // a live read would strand the scratch's entry (#11068).
       if (reservedId) {
         useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
-        this._discardConversation(launchProject.id);
+        if (!options.vacantOnly) this._discardConversation(launchProject.id);
         this._patch({ showResumeBanner: false });
       }
     }
@@ -1332,7 +1358,12 @@ export class HelpSessionController {
     // Resume in the session dir that owns the agent's config files.
     const cwd = session?.sessionPath ?? hibernated.cwd ?? folderPath;
 
-    const command = buildResumeCommand(launchAgentId, hibernated.sessionId, flags);
+    const command = buildResumeCommand(
+      launchAgentId,
+      hibernated.sessionId,
+      flags,
+      await resolveCurrentAgentLaunchBaseCommand(launchAgentId)
+    );
     if (!command) return null;
     // Bind the resumed session's project identity to the project captured at
     // launch, not live store state — otherwise a project switch mid-resume
@@ -1636,7 +1667,8 @@ export class HelpSessionController {
         launchProject,
         launchAgentId,
         launchContext,
-        this.slot
+        this.slot,
+        options.vacantOnly === true
       );
       if (gen !== this._launchGen) {
         if (outcome.ok) session = outcome.session;

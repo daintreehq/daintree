@@ -48,7 +48,7 @@ describe("TerminalRestartStatusBanner", () => {
     );
     expect(screen.getByText("Auto-restarting\u2026")).toBeTruthy();
     expect(screen.queryByText(/session exited/i)).toBeNull();
-    expect(screen.queryByRole("button", { name: /restart session/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /restart terminal/i })).toBeNull();
   });
 
   it("auto-restarting variant exposes a polite status live region", () => {
@@ -97,7 +97,7 @@ describe("TerminalRestartStatusBanner", () => {
         onDismiss={vi.fn()}
       />
     );
-    const button = screen.getByRole("button", { name: /restart session/i });
+    const button = screen.getByRole("button", { name: /restart terminal/i });
     fireEvent.click(button);
     expect(onRestart).toHaveBeenCalledOnce();
   });
@@ -155,7 +155,7 @@ describe("TerminalRestartStatusBanner", () => {
         />
       );
       expect(screen.queryByRole("button", { name: /start new session/i })).toBeNull();
-      expect(screen.queryByRole("button", { name: /restart session/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /restart terminal/i })).toBeNull();
       // Dismiss is the only control.
       expect(screen.getAllByRole("button")).toHaveLength(1);
     });

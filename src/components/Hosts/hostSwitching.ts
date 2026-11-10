@@ -53,6 +53,16 @@ export function followSwitchResult(result: SwitchWindowHostResult | null | undef
   });
 }
 
+/** Where a failed switch is told. */
+export interface HostSwitchFailureContext {
+  /**
+   * A window with no project shell (the Canopy window): no Settings and no
+   * host project list to send the person to, so only a recovery that runs
+   * anywhere is offered.
+   */
+  standalone?: boolean;
+}
+
 /** The one recovery a failed switch to a host offers. */
 export interface HostSwitchRecovery {
   kind: "retry" | "settings" | "setup" | "update" | "choose-project";
@@ -102,7 +112,8 @@ function whenSwitchScreenCancelled(error: unknown, callback: () => void): void {
 export function hostSwitchRecovery(
   hostId: HostId,
   error: unknown,
-  retry: () => void
+  retry: () => void,
+  { standalone = false }: HostSwitchFailureContext = {}
 ): HostSwitchRecovery {
   // Refused for its build: the update is what gets this host back, so it is
   // offered right here as well as in the host menu.
@@ -110,7 +121,9 @@ export function hostSwitchRecovery(
     isClientAppError(error) && error.code === "HOST_VERSION_MISMATCH"
       ? getHostListSnapshot().hosts.find((candidate) => candidate.descriptor.id === hostId)
       : undefined;
-  const update = entry ? hostUpdateOffer(entry) : null;
+  const offer = entry ? hostUpdateOffer(entry) : null;
+  // A host's own update runs from Settings, which a standalone window doesn't have.
+  const update = offer && (!standalone || offer.target === "local") ? offer : null;
   if (update) {
     const mismatch = entry?.connection.status === "version-mismatch" && entry.connection.mismatch;
     return {
@@ -125,6 +138,9 @@ export function hostSwitchRecovery(
         : {}),
     };
   }
+  // Setting up, Settings and the host's project list are a project window's:
+  // a standalone window falls back to trying the switch again.
+  if (standalone) return { kind: "retry", label: "Retry", run: retry };
   // Host mode off on a host this machine has never reached: setting it up is
   // what gets it working. One it has reached is set up already, and its
   // Daintree not listening is retried once it is running there again.
@@ -171,10 +187,10 @@ export function notifyHostSwitchFailure(
   hostId: HostId,
   error: unknown,
   retry: () => void,
-  options?: { title?: string }
+  options?: { title?: string } & HostSwitchFailureContext
 ): void {
   if (isFailureOnSwitchScreen(error)) return;
-  const recovery = hostSwitchRecovery(hostId, error, retry);
+  const recovery = hostSwitchRecovery(hostId, error, retry, options);
   notify({
     type: "error",
     context: { eventKind: "connectivity" },
@@ -200,6 +216,8 @@ export interface SwitchToHostOptions {
    * already had it — heard on a Retry from the failure toast as well.
    */
   onLanded?: () => void;
+  /** Asked from a window with no project shell; see {@link HostSwitchFailureContext}. */
+  standalone?: boolean;
 }
 
 /**
@@ -238,7 +256,8 @@ export async function switchToHost(
     notifyHostSwitchFailure(
       hostId,
       error,
-      () => void switchToHost(hostId, newWindow, projectId, options)
+      () => void switchToHost(hostId, newWindow, projectId, options),
+      { standalone: options?.standalone === true }
     );
   }
 }

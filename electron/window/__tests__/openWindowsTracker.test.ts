@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { OpenWindowRecord } from "../../services/persistence/windowManifest.js";
+import type {
+  OpenWindowRecord,
+  OpenWindowsManifestExtras,
+} from "../../services/persistence/windowManifest.js";
 
-const writeOpenWindowsManifest = vi.fn<(records: OpenWindowRecord[]) => void>();
+const writeOpenWindowsManifest =
+  vi.fn<(records: OpenWindowRecord[], extras?: OpenWindowsManifestExtras) => void>();
 const getActiveShutdown = vi.fn<() => { initiator: string; phase: string } | null>(() => null);
 
 // Both mocks use explicit factories rather than spreading `importOriginal()`:
@@ -10,7 +14,8 @@ const getActiveShutdown = vi.fn<() => { initiator: string; phase: string } | nul
 // locally and fails on CI. windowManifest.js itself is dependency-free, so the
 // constants below come from the real module.
 vi.mock("../../services/persistence/windowManifestStore.js", () => ({
-  writeOpenWindowsManifest: (records: OpenWindowRecord[]) => writeOpenWindowsManifest(records),
+  writeOpenWindowsManifest: (records: OpenWindowRecord[], extras?: OpenWindowsManifestExtras) =>
+    writeOpenWindowsManifest(records, extras),
 }));
 
 vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
@@ -25,6 +30,7 @@ import {
   clearPendingWindowRecreation,
   clearPendingRemoteRestore,
   clearPendingRemoteRestoresForHost,
+  createWindowHoldingRecord,
   enableOpenWindowsSaves,
   freezeAndSnapshotOpenWindows,
   initOpenWindowsTracker,
@@ -36,6 +42,7 @@ import {
   saveBeforeLastWindowCloses,
   saveOpenWindowsNow,
   scheduleOpenWindowsSave,
+  setCanopyWindowOpen,
   setPendingBackgroundRestores,
   setPendingRemoteRestore,
   setPendingWindowRecreation,
@@ -98,6 +105,12 @@ function lastWritten(): OpenWindowRecord[] {
   return calls[calls.length - 1][0];
 }
 
+/** Whether the last write recorded the Canopy window as open. */
+function lastWroteCanopyOpen(): boolean {
+  const calls = writeOpenWindowsManifest.mock.calls;
+  return calls[calls.length - 1][1]?.canopyWindowOpen === true;
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   writeOpenWindowsManifest.mockClear();
@@ -130,9 +143,59 @@ describe("buildOpenWindowRecords", () => {
     expect(buildOpenWindowRecords(registry)).toHaveLength(2);
   });
 
-  it("records a window with no project as a picker window", () => {
-    const registry = makeRegistry([{ windowId: 1, projectId: null }]);
-    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
+  // A picker holds nothing to restore, and one saved came back on every
+  // launch until it was closed by hand (#16740).
+  it("leaves windows on the picker out of the manifest", () => {
+    const registry = makeRegistry([
+      { windowId: 1, projectId: null },
+      { windowId: 2, projectId: "a" },
+      { windowId: 3, projectId: null },
+    ]);
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "a" }]);
+    // An OOM rebuild still reads the window as the picker it is.
+    expect(captureWindowRecord(registry, 1)).toEqual({ projectId: null });
+  });
+
+  it("hands a picker's background projects to the first window with a workspace", () => {
+    const registry = makeRegistry([
+      { windowId: 1, projectId: null, views: [["warm", 1]] },
+      {
+        windowId: 2,
+        projectId: "a",
+        views: [
+          ["a", 2],
+          ["own", 1],
+        ],
+      },
+      { windowId: 3, projectId: "b", views: [["b", 1]] },
+    ]);
+    expect(buildOpenWindowRecords(registry, undefined, new Set(["running"]))).toEqual([
+      { projectId: "a", backgroundProjectIds: ["own", "warm", "running"] },
+      { projectId: "b" },
+    ]);
+  });
+
+  it("keeps one picker to carry the background projects when no window has a workspace", () => {
+    const registry = makeRegistry([
+      { windowId: 1, projectId: null },
+      { windowId: 2, projectId: null, views: [["warm", 1]] },
+    ]);
+    expect(buildOpenWindowRecords(registry, undefined, new Set(["running"]))).toEqual([
+      { projectId: null, backgroundProjectIds: ["running", "warm"] },
+    ]);
+  });
+
+  it("gives every manifest slot to a window with a workspace, however many pickers are open", () => {
+    const registry = makeRegistry([
+      ...Array.from({ length: 3 }, (_, i) => ({ windowId: 100 + i, projectId: null })),
+      ...Array.from({ length: MAX_RESTORED_WINDOWS }, (_, i) => ({
+        windowId: i + 1,
+        projectId: `p${i}`,
+      })),
+    ]);
+    expect(buildOpenWindowRecords(registry).map((r) => r.projectId)).toEqual(
+      Array.from({ length: MAX_RESTORED_WINDOWS }, (_, i) => `p${i}`)
+    );
   });
 
   it("keeps naming a restored window's host project while it waits on the picker", () => {
@@ -146,7 +209,7 @@ describe("buildOpenWindowRecords", () => {
     win.projectId = "local";
     expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "local" }]);
     win.projectId = null;
-    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
+    expect(buildOpenWindowRecords(registry)).toEqual([]);
   });
 
   it("stops naming a removed host's projects for any window, and only that host's", () => {
@@ -159,11 +222,7 @@ describe("buildOpenWindowRecords", () => {
     setPendingRemoteRestore(2, `studio:${"b".repeat(64)}`);
     setPendingRemoteRestore(3, `studio-2:${"a".repeat(64)}`);
     clearPendingRemoteRestoresForHost("studio");
-    expect(buildOpenWindowRecords(registry)).toEqual([
-      { projectId: null },
-      { projectId: null },
-      { projectId: `studio-2:${"a".repeat(64)}` },
-    ]);
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: `studio-2:${"a".repeat(64)}` }]);
   });
 
   it("tells listeners when a window starts or stops waiting for a host's project", () => {
@@ -187,18 +246,65 @@ describe("buildOpenWindowRecords", () => {
     expect(listener).toHaveBeenCalledTimes(4);
   });
 
-  it("keeps a window whose manager throws, as a picker window", () => {
-    // Losing which project it was on beats losing the window entirely.
-    const registry = makeRegistry([
-      { windowId: 1, projectId: "a" },
-      { windowId: 2, projectId: "b", throwsOnRead: true },
-    ]);
-    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "a" }, { projectId: null }]);
+  it("keeps a window whose manager throws on the workspace it was last seen showing", () => {
+    // Pickers are left out, so recording it as one would lose the window.
+    const disposing: FakeWindow = { windowId: 2, projectId: "b", views: [["warm", 1]] };
+    const registry = makeRegistry([{ windowId: 1, projectId: "a" }, disposing]);
+    buildOpenWindowRecords(registry);
+    disposing.projectId = "c";
+    buildOpenWindowRecords(registry);
+
+    disposing.throwsOnRead = true;
+    // Its background list goes with the manager that can't answer for it.
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "a" }, { projectId: "c" }]);
   });
 
-  it("keeps a window whose manager is not built yet", () => {
+  it("gives a throwing manager no workspace it was never seen showing", () => {
+    const win: FakeWindow = { windowId: 2, projectId: "b" };
+    const registry = makeRegistry([{ windowId: 1, projectId: "a" }, win]);
+    expect(
+      buildOpenWindowRecords(
+        makeRegistry([
+          { windowId: 1, projectId: "a" },
+          { windowId: 2, projectId: "b", throwsOnRead: true },
+        ])
+      )
+    ).toEqual([{ projectId: "a" }]);
+
+    // Seen showing a workspace, then the picker: the picker is the last answer.
+    buildOpenWindowRecords(registry);
+    win.projectId = null;
+    buildOpenWindowRecords(registry);
+    win.throwsOnRead = true;
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "a" }]);
+  });
+
+  it("lets a host intent outrank the workspace a throwing manager was last seen showing", () => {
+    const remote = `studio-01:${"a".repeat(64)}`;
+    const win: FakeWindow = { windowId: 1, projectId: "local" };
+    const registry = makeRegistry([win]);
+    buildOpenWindowRecords(registry);
+    setPendingRemoteRestore(1, remote);
+    win.throwsOnRead = true;
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: remote }]);
+  });
+
+  it("forgets what a closed window was showing", () => {
+    const win: FakeWindow = { windowId: 2, projectId: "b" };
+    buildOpenWindowRecords(makeRegistry([{ windowId: 1, projectId: "a" }, win]));
+    // Closed: a save without it lets go of what it showed.
+    buildOpenWindowRecords(makeRegistry([{ windowId: 1, projectId: "a" }]));
+    win.throwsOnRead = true;
+    expect(buildOpenWindowRecords(makeRegistry([{ windowId: 1, projectId: "a" }, win]))).toEqual([
+      { projectId: "a" },
+    ]);
+  });
+
+  it("leaves out a window whose manager is not built yet unless it holds a record", () => {
     const registry = makeRegistry([{ windowId: 1, projectId: null, noManager: true }]);
-    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
+    expect(buildOpenWindowRecords(registry)).toEqual([]);
+    setPendingWindowRecreation(1, { projectId: "restoring" });
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "restoring" }]);
   });
 
   it("skips a destroyed window", () => {
@@ -306,7 +412,7 @@ describe("OOM recreation records (#15564)", () => {
     expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "x" }]);
     win.projectId = null;
     win.views = [];
-    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
+    expect(buildOpenWindowRecords(registry)).toEqual([]);
   });
 
   it("leaves a host-scoped replacement's pending host intent unspent", () => {
@@ -333,6 +439,88 @@ describe("OOM recreation records (#15564)", () => {
     expect(buildOpenWindowRecords(registry)).toEqual([
       { projectId: remote, backgroundProjectIds: ["c"] },
     ]);
+  });
+});
+
+// A restored window binds its workspace only once its setup gets there, and
+// one that stalls past its turn lets saves resume while it still shows the
+// picker (#16740).
+describe("createWindowHoldingRecord", () => {
+  it("saves a restored window as its record until its setup settles", async () => {
+    const win: FakeWindow = { windowId: 7, projectId: null };
+    const registry = makeRegistry([win]);
+    let finish!: () => void;
+    const created = createWindowHoldingRecord(
+      { projectId: "b", backgroundProjectIds: ["c"] },
+      (onRegistered) =>
+        new Promise<string>((resolve) => {
+          onRegistered(7);
+          finish = () => resolve("ok");
+        })
+    );
+
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "b", backgroundProjectIds: ["c"] },
+    ]);
+    // What the window shows wins while setup still runs; back on the picker,
+    // the record is still what it is becoming.
+    win.projectId = "x";
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "x", backgroundProjectIds: ["c"] },
+    ]);
+    win.projectId = null;
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "b", backgroundProjectIds: ["c"] },
+    ]);
+
+    // Setup found the workspace gone and left the window on the picker.
+    finish();
+    await expect(created).resolves.toBe("ok");
+    expect(buildOpenWindowRecords(registry)).toEqual([]);
+  });
+
+  it("stops naming background projects once the restore has taken them", async () => {
+    // A setup that stalls after queuing them must not keep saving a project the
+    // person has since slept: the restore tracks them from here.
+    const host = `studio-01:${"h".repeat(64)}`;
+    const registry = makeRegistry([{ windowId: 7, projectId: null }]);
+    let finish!: () => void;
+    const created = createWindowHoldingRecord(
+      { projectId: "b", backgroundProjectIds: ["c", "d", host] },
+      (onRegistered) =>
+        new Promise<void>((resolve) => {
+          onRegistered(7);
+          finish = resolve;
+        })
+    );
+
+    setPendingBackgroundRestores(7, ["c", "d"]);
+    addPendingRemoteBackgroundRestores(7, [host]);
+    // "c" restored; "d" was slept and the queue let it go.
+    setPendingBackgroundRestores(7, []);
+    removePendingRemoteBackgroundRestores(7, (key) => key === host);
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "b" }]);
+
+    finish();
+    await created;
+  });
+
+  it("keeps the record after a setup that threw, until the window shows a workspace", async () => {
+    const win: FakeWindow = { windowId: 7, projectId: null };
+    const registry = makeRegistry([win]);
+    const failure = new Error("setup threw");
+    await expect(
+      createWindowHoldingRecord({ projectId: "b" }, async (onRegistered) => {
+        onRegistered(7);
+        throw failure;
+      })
+    ).rejects.toBe(failure);
+
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "b" }]);
+    win.projectId = "x";
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "x" }]);
+    win.projectId = null;
+    expect(buildOpenWindowRecords(registry)).toEqual([]);
   });
 });
 
@@ -555,6 +743,24 @@ describe("saveOpenWindowsNow", () => {
       }
     );
 
+    it.each(["win32", "linux"])(
+      "lets go of a closed project window on %s while a picker window stays open (#16740)",
+      (value) => {
+        Object.defineProperty(process, "platform", { value });
+        initOpenWindowsTracker({
+          registry: makeRegistry([
+            { windowId: 1, projectId: "a" },
+            { windowId: 2, projectId: null },
+          ]),
+          readOnly: false,
+        });
+        // The picker leaves no record, but it is a window the session kept, so
+        // the save lands rather than leaving the closed project on disk.
+        saveOpenWindowsNow(1);
+        expect(lastWritten()).toEqual([]);
+      }
+    );
+
     it("leaves a closing window alone while another stays open", () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       initOpenWindowsTracker({
@@ -708,6 +914,126 @@ describe("freezeAndSnapshotOpenWindows", () => {
       throw new Error("db closed");
     });
     expect(() => freezeAndSnapshotOpenWindows()).not.toThrow();
+  });
+});
+
+describe("the Canopy window (#16336)", () => {
+  const platform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: platform });
+  });
+
+  const track = (wins: FakeWindow[], readOnly = false) =>
+    initOpenWindowsTracker({ registry: makeRegistry(wins), readOnly });
+
+  it("is saved open as it opens, beside the windows and never as one of them", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    setCanopyWindowOpen(true);
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+    expect(lastWritten()).toEqual([{ projectId: "a" }]);
+    expect(lastWroteCanopyOpen()).toBe(true);
+  });
+
+  it("is saved closed as it closes, and stays so in every later save", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    setCanopyWindowOpen(true);
+    setCanopyWindowOpen(false);
+    expect(lastWroteCanopyOpen()).toBe(false);
+    scheduleOpenWindowsSave();
+    vi.runAllTimers();
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(3);
+    expect(lastWroteCanopyOpen()).toBe(false);
+  });
+
+  it("writes nothing for a report that changes nothing", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    setCanopyWindowOpen(false);
+    setCanopyWindowOpen(true);
+    setCanopyWindowOpen(true);
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+  });
+
+  it("rides along in every save while it stands", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    setCanopyWindowOpen(true);
+    writeOpenWindowsManifest.mockClear();
+    scheduleOpenWindowsSave();
+    vi.runAllTimers();
+    expect(lastWroteCanopyOpen()).toBe(true);
+  });
+
+  it("stays open in the quit's snapshot, whatever closes after it", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    setCanopyWindowOpen(true);
+    writeOpenWindowsManifest.mockClear();
+    getActiveShutdown.mockReturnValue({ initiator: "app-quit", phase: "cleaning" });
+
+    freezeAndSnapshotOpenWindows();
+    setCanopyWindowOpen(false);
+    saveOpenWindowsNow(1);
+
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+    expect(lastWroteCanopyOpen()).toBe(true);
+  });
+
+  it("is not saved by a recovery launch, which never writes", () => {
+    track([{ windowId: 1, projectId: "a" }], true);
+    setCanopyWindowOpen(true);
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+  });
+
+  it("waits out the restore fan-out, and lands with the save that ends it", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    suppressOpenWindowsSaves();
+    setCanopyWindowOpen(true);
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+    resumeOpenWindowsSaves(true);
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+    expect(lastWroteCanopyOpen()).toBe(true);
+  });
+
+  it("leaves the stored manifest alone when the fan-out died partway", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    suppressOpenWindowsSaves();
+    setCanopyWindowOpen(true);
+    resumeOpenWindowsSaves(false);
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+  });
+
+  it.each(["win32", "linux"])(
+    "is saved with no project window beside it on %s, where it keeps the app running",
+    (value) => {
+      Object.defineProperty(process, "platform", { value });
+      track([{ windowId: 1, projectId: "a" }]);
+      setCanopyWindowOpen(true);
+
+      // The last project window closes while the Canopy window stays.
+      saveOpenWindowsNow(1);
+      expect(lastWritten()).toEqual([]);
+      expect(lastWroteCanopyOpen()).toBe(true);
+    }
+  );
+
+  it.each(["win32", "linux"])(
+    "keeps it open on %s when it is the last window to close, since that close is the quit",
+    (value) => {
+      Object.defineProperty(process, "platform", { value });
+      track([]);
+      setCanopyWindowOpen(true);
+      writeOpenWindowsManifest.mockClear();
+
+      setCanopyWindowOpen(false);
+      expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+    }
+  );
+
+  it("is saved closed on darwin when it closes with no project window, as the app runs on", () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    track([]);
+    setCanopyWindowOpen(true);
+    setCanopyWindowOpen(false);
+    expect(lastWritten()).toEqual([]);
+    expect(lastWroteCanopyOpen()).toBe(false);
   });
 });
 

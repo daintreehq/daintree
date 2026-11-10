@@ -18,6 +18,7 @@ import {
   type ProjectOpenSource,
 } from "./windowOpenPolicy.js";
 import { cachedViewBusy } from "./cachedViewBusy.js";
+import type { CachedViewReleaseBlock } from "../../shared/types/appError.js";
 import { setNewWindowOpener } from "./newWindowOpen.js";
 import {
   holdWindowForOpen,
@@ -75,6 +76,11 @@ export interface OpenDirHandlerDeps {
    * let it go — the open then switches to it there, as before.
    */
   releaseCachedView?: (projectId: string, windowId: number) => boolean;
+  /**
+   * What keeps the project's cached view in `windowId`, or null when nothing
+   * does: the reason a refused open gives the person (#16724).
+   */
+  cachedViewReleaseBlock?: (projectId: string, windowId: number) => CachedViewReleaseBlock | null;
   /**
    * Whether an open that has to make a new window may go ahead (#13638), asked
    * before anything moves: `open` when pressure isn't critical, `open-anyway`
@@ -228,7 +234,10 @@ export async function routeProjectOpen(
     decision.windowId !== routing.initiatingWindowId &&
     keepsOnlyCached(world, decision.windowId, project.id)
   ) {
-    throw cachedViewBusy(basename(project.path) || project.path);
+    throw cachedViewBusy(
+      basename(project.path) || project.path,
+      deps.cachedViewReleaseBlock?.(project.id, decision.windowId) ?? "unavailable"
+    );
   }
 
   const win =

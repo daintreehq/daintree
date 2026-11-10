@@ -12,6 +12,7 @@ import type { UnseenOutputSnapshot } from "../TerminalUnseenOutputTracker";
 import type { TerminalGeometry } from "@shared/types/terminal";
 import type { TerminalPaintPlane } from "../TerminalInstanceService";
 import type { OpenLinkOptions } from "../TerminalLinkHandler";
+import type { FetchAndRestoreOptions } from "../TerminalRestoreController";
 import type { BatchResizeOptions, ResizePassOptions } from "../TerminalResizePassScheduler";
 import type { TerminalPaddingPaint } from "../terminalPaddingPaint";
 import { logWarn } from "@/utils/logger";
@@ -575,7 +576,10 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.planes().forEach((plane) => plane.refreshWebGLMode());
   }
 
-  notifyUserInput(id: string, ...input: [data?: string, options?: { automatic?: boolean }]): void {
+  notifyUserInput(
+    id: string,
+    ...input: [data?: string, options?: { automatic?: boolean; takesSize?: boolean }]
+  ): void {
     this.plane(id).notifyUserInput(id, ...input);
   }
 
@@ -672,10 +676,6 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.plane(id).lockResize(id, locked, customTtlMs);
   }
 
-  holdGeometry(id: string): () => void {
-    return this.plane(id).holdGeometry(id);
-  }
-
   suppressResizesDuringLayoutTransition(panelIds: string[], durationMs: number): void {
     this.groupBySurface(panelIds).forEach(({ plane, ids }) =>
       plane.suppressResizesDuringLayoutTransition(ids, durationMs)
@@ -722,6 +722,10 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
 
   injectDataLossMarker(id: string, droppedBytes: number): void {
     this.plane(id).injectDataLossMarker(id, droppedBytes);
+  }
+
+  noteHiddenOutputSkipped(id: string): void {
+    this.plane(id).noteHiddenOutputSkipped(id);
   }
 
   async getOrCreate(
@@ -1219,8 +1223,8 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.plane(id).restoreFetchedState(id, serializedState, captureGeometry);
   }
 
-  fetchAndRestore(id: string): Promise<boolean> {
-    return this.plane(id).fetchAndRestore(id);
+  fetchAndRestore(id: string, options?: FetchAndRestoreOptions): Promise<boolean> {
+    return this.plane(id).fetchAndRestore(id, options);
   }
 
   /**

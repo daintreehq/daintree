@@ -10,7 +10,6 @@ import type {
 } from "../panel.js";
 import type { AgentId } from "../agent.js";
 import type { AgentState, WaitingReason } from "../agent.js";
-import type { BuiltInAgentId } from "../../config/agentIds.js";
 import type { ActionContext } from "../actions.js";
 
 /** Terminal spawn options */
@@ -323,7 +322,7 @@ export interface BackendTerminalInfo {
    * The single source of truth for chrome. Not persisted; rehydrated here on
    * reconnect. See `docs/architecture/terminal-identity.md`.
    */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
 }
@@ -373,7 +372,7 @@ export interface TerminalReconnectResult {
    */
   agentIncarnation?: number;
   /** Live detected identity; the single chrome source of truth. See `docs/architecture/terminal-identity.md`. */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
 }
@@ -413,7 +412,6 @@ export interface TerminalInfoPayload {
   lastOutputTime: number;
   lastStateChange?: number;
   activityTier: "focused" | "visible" | "background";
-  outputBufferSize: number;
   semanticBufferLines: number;
   restartCount: number;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
@@ -421,7 +419,7 @@ export interface TerminalInfoPayload {
   /** Captured agent session ID from graceful shutdown */
   agentSessionId?: string;
   /** Live detected identity — the agent currently running. Source of truth for chrome. */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   /**
    * The program reading the PTY has bracketed paste on, as the host's mirror
    * last parsed it. False when nothing reads the output.

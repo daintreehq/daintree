@@ -333,9 +333,9 @@ export function classifySessionMeta(firstLine: string, fileThreadId: string): Se
 }
 
 /** `lsof` prints a device as hex, the way `stat` holds it. */
-function sameDevice(listed: string, dev: number): boolean {
+function sameDevice(listed: string, dev: bigint): boolean {
   if (!/^0x[0-9a-f]+$/i.test(listed)) return false;
-  return Number.parseInt(listed.slice(2), 16) === dev;
+  return BigInt(listed) === dev;
 }
 
 /**
@@ -345,7 +345,7 @@ function sameDevice(listed: string, dev: number): boolean {
  * end inside the read.
  */
 async function readFirstRecord(candidate: OpenFileRecord): Promise<string | null> {
-  const checked = await lstat(candidate.name);
+  const checked = await lstat(candidate.name, { bigint: true });
   if (
     !checked.isFile() ||
     String(checked.ino) !== candidate.inode ||
@@ -358,9 +358,9 @@ async function readFirstRecord(candidate: OpenFileRecord): Promise<string | null
     fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
   );
   try {
-    const stats = await handle.stat();
+    const stats = await handle.stat({ bigint: true });
     if (!stats.isFile() || stats.ino !== checked.ino || stats.dev !== checked.dev) return null;
-    const buffer = Buffer.alloc(Math.min(SESSION_META_MAX_BYTES, Math.max(stats.size, 0)));
+    const buffer = Buffer.alloc(Math.min(SESSION_META_MAX_BYTES, Math.max(Number(stats.size), 0)));
     let filled = 0;
     while (filled < buffer.length) {
       const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, filled);
@@ -392,15 +392,29 @@ async function listCensus(run: ListingRunner, args: string[]) {
   return ps.exitCode === 0 ? parseCensus(ps.stdout) : null;
 }
 
+/** Which file the probe saw: its path, and the device and inode `lsof` listed for it. */
+export interface CodexRolloutIdentity {
+  path: string;
+  /** As `lsof` prints it: hex, `0x…`. */
+  device: string;
+  /** As `lsof` prints it: decimal. */
+  inode: string;
+}
+
+export type CodexRolloutObservation =
+  | ({ status: "observed"; sessionId: string } & CodexRolloutIdentity)
+  | Extract<AgentSessionFileResult, { status: "unknown" }>;
+
 /**
  * The rollout the pane's Codex under `rootPid` is writing: observed when that
  * process holds exactly one root session's rollout open for writing, unknown
- * otherwise.
+ * otherwise. Host-side only: it carries the file's identity, so a reader can
+ * open it and check that it holds the same file.
  */
-export async function probeCodexSessionFile(
+export async function observeCodexRollout(
   rootPid: number,
   deps: CodexSessionFileProbeDeps = {}
-): Promise<AgentSessionFileResult> {
+): Promise<CodexRolloutObservation> {
   const platform = deps.platform ?? process.platform;
   const run = deps.run ?? runListing;
   if (platform === "win32") return unknownSessionFile("unsupported-platform");
@@ -483,9 +497,25 @@ export async function probeCodexSessionFile(
   }
   return {
     status: "observed",
-    agentId: "codex",
     sessionId: root.threadId,
     path: root.record.name,
+    device: root.record.device,
+    inode: root.record.inode,
+  };
+}
+
+/** {@link observeCodexRollout} as the session-file answer a plugin gets (#16097). */
+export async function probeCodexSessionFile(
+  rootPid: number,
+  deps: CodexSessionFileProbeDeps = {}
+): Promise<AgentSessionFileResult> {
+  const observed = await observeCodexRollout(rootPid, deps);
+  if (observed.status !== "observed") return observed;
+  return {
+    status: "observed",
+    agentId: "codex",
+    sessionId: observed.sessionId,
+    path: observed.path,
     observedBy: "open-for-writing",
   };
 }

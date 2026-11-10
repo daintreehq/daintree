@@ -1,15 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useCallback, useRef, useState } from "react";
 import { CANOPY_LOCAL } from "@/components/Canopy/canopyTerms";
-import { formatModelBytes } from "@/components/Canopy/CanopyStatusBar";
+import { ProgressBar } from "@/components/ui/ProgressBar";
+import { formatBytes } from "@/lib/formatBytes";
 import { useCanopyStore } from "@/store/canopyStore";
-import type { CanopyMode, CanopyModelInfo } from "@shared/types/ipc/canopy";
+import type { CanopyMode } from "@shared/types/ipc/canopy";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
+
+/** A revision as Settings names it: the first seven characters of its commit, as Git shows it. */
+function shortRevision(revision: string): string {
+  return revision.slice(0, 7);
+}
 
 export function CanopySettingsTab() {
   const snapshot = useCanopyStore((s) => s.snapshot);
@@ -23,18 +27,6 @@ export function CanopySettingsTab() {
     run: () => Promise<Parameters<typeof applySnapshot>[0]>;
     message: string;
   } | null>(null);
-  const [info, setInfo] = useState<CanopyModelInfo | null>(null);
-
-  // Only what is on this machine: a failed look leaves the row out, nothing more.
-  const loadModels = useCallback(() => {
-    window.electron.canopy.getModel().then(setInfo, () => setInfo(null));
-  }, []);
-
-  // A download finishing changes what is on this machine.
-  const modelStatus = snapshot?.model?.status;
-  useEffect(() => {
-    loadModels();
-  }, [loadModels, modelStatus]);
 
   // A failure keeps the call it ran so Retry can run it again; a callback that
   // named itself as its own retry would be read before it is declared.
@@ -49,25 +41,23 @@ export function CanopySettingsTab() {
         )
         .finally(() => {
           pending.current = false;
-          loadModels();
         });
     },
-    [applySnapshot, loadModels]
+    [applySnapshot]
   );
 
   const setMode = useCallback(
     (next: CanopyMode) => act(() => window.electron.canopy.setMode(next)),
     [act]
   );
-  const retryModel = useCallback(() => act(() => window.electron.canopy.retryModel()), [act]);
-  const removeModels = useCallback(() => act(() => window.electron.canopy.removeModels()), [act]);
 
   const hidden = mode === "hidden";
   const activated = mode === "on";
   const model = snapshot?.model;
-  const installed = info?.installed === true ? info : null;
-  const installedSize = installed ? formatModelBytes(installed.bytes) : "";
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  // A host from before updates names no revision: nothing to show then.
+  const ready = model?.status === "ready" ? model : null;
+  const revision = ready?.revision ?? null;
+  const update = ready?.update ?? null;
 
   return (
     <div className="space-y-8">
@@ -97,7 +87,7 @@ export function CanopySettingsTab() {
             <SettingsSwitchCard
               id="canopy-read-terminals"
               title="Read agent terminals"
-              subtitle="Downloads a small model the first time. When off, Canopy lets the model go and deletes its readings."
+              subtitle="When off, Canopy lets its model go and deletes its readings"
               isEnabled={activated}
               onChange={() => setMode(activated ? "unset" : "on")}
             />
@@ -105,70 +95,56 @@ export function CanopySettingsTab() {
         </SettingsGroup>
       </SettingsSection>
 
-      {activated && model && model.status !== "ready" && (
+      {/* Which copy reads, and an update on its way: shown here and nowhere more prominent. */}
+      {activated && ready && revision && (
         <SettingsSection title="Model" id="canopy-model">
           <SettingsGroup>
             <SettingsRow
-              id="canopy-model-status"
-              label={
-                model.status === "downloading"
-                  ? "Downloading…"
-                  : model.status === "failed"
-                    ? "Download failed"
-                    : "Not downloaded yet"
-              }
+              id="canopy-model-revision"
+              label={`Revision ${shortRevision(revision)}`}
               description={
-                model.status === "downloading"
-                  ? `${formatModelBytes(model.received)} of ${formatModelBytes(model.total)}. Rows show the screen's own words until it's done.`
-                  : model.status === "failed"
-                    ? model.error
-                    : "Canopy downloads it as soon as it's on."
-              }
-              control={
-                model.status === "downloading" ? null : (
-                  <Button variant="outline" size="sm" onClick={retryModel}>
-                    {model.status === "failed" ? "Retry" : "Download"}
-                  </Button>
-                )
+                ready.source === "update"
+                  ? "An update from Hugging Face, newer than the copy that comes with Daintree"
+                  : "The copy that comes with Daintree"
               }
             />
+            {update && (
+              <SettingsRow
+                id="canopy-model-update"
+                label={`Downloading revision ${shortRevision(update.revision)}`}
+                description={
+                  <>
+                    <span className="block">
+                      {`${formatBytes(update.received)} of ${formatBytes(update.total)}. Canopy reads with revision ${shortRevision(revision)} until it's in place.`}
+                    </span>
+                    <ProgressBar
+                      className="mt-2"
+                      size="thin"
+                      value={update.received}
+                      max={update.total}
+                      label="Model update"
+                      valueText={`${formatBytes(update.received)} of ${formatBytes(update.total)}`}
+                    />
+                  </>
+                }
+              />
+            )}
           </SettingsGroup>
         </SettingsSection>
       )}
 
-      {installed && (
-        <SettingsSection title="Downloaded model" id="canopy-model-files">
+      {/* The model ships with Daintree: one that fails its check says so here. */}
+      {activated && model?.status === "failed" && (
+        <SettingsSection title="Model" id="canopy-model">
           <SettingsGroup>
             <SettingsRow
-              id="canopy-delete-model"
-              label={installed.name}
-              description={`${installedSize} on this computer${activated ? "" : ". Turning Canopy on again downloads it"}`}
-              control={
-                <Button variant="ghost-danger" size="sm" onClick={() => setConfirmDelete(true)}>
-                  Delete model
-                </Button>
-              }
+              id="canopy-model-status"
+              label="Model unavailable"
+              description={model.error}
             />
           </SettingsGroup>
         </SettingsSection>
       )}
-      <ConfirmDialog
-        isOpen={confirmDelete}
-        onClose={() => setConfirmDelete(false)}
-        variant="destructive"
-        title={`Delete '${installed?.name ?? ""}'?`}
-        description={
-          activated
-            ? `Frees ${installedSize}. Canopy turns off, and turning it on again downloads the model.`
-            : `Frees ${installedSize}. Turning Canopy on again downloads the model.`
-        }
-        confirmLabel="Delete model"
-        cancelLabel="Cancel"
-        onConfirm={() => {
-          setConfirmDelete(false);
-          removeModels();
-        }}
-      />
     </div>
   );
 }

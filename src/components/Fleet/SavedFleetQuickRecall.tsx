@@ -101,7 +101,7 @@ function SavedFleetChip({
         size="xs"
         aria-label={
           mode === "append"
-            ? `Add ${pluralize(count, "pane")} from ${scope.name}`
+            ? `Add ${pluralize(count, "terminal")} from ${scope.name}`
             : `Arm ${savedFleetAccessibleName(scope, count)}`
         }
         onClick={() => {

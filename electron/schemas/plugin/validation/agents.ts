@@ -2,6 +2,7 @@ import { z } from "zod";
 import { SAFE_ID_PATTERN } from "../../pluginIdentifiers.js";
 import { AGENT_MCP_MAX_TOOLS_PER_ENDPOINT } from "../../../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../../../shared/config/agentIds.js";
+import { LAUNCH_MCP_ENV_ONLY_FORMATS } from "../../../../shared/config/launchMcp.js";
 import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../../../shared/config/processToolRegistry.js";
 import { AGENT_CLI_NAMES } from "../../../services/ProcessDetector/registries.js";
 import { RESERVED_AGENT_MCP_TOOL_NAMES } from "../../../services/pluginAgentMcp/types.js";
@@ -140,6 +141,186 @@ export function validateAgentIds(manifest: ParsedPluginManifest, ctx: z.Refineme
       });
     }
   });
+}
+
+// A declared agent executable name is the identity a plain terminal promotes
+// to (#16469), so it may never be a name a built-in agent or tool already
+// owns: built-ins win at runtime, and the claim would validate and then never
+// fire. Two agents in one manifest declaring the same name is a typo, and at
+// runtime it would cost both of them the name.
+export function validateAgentExecutableNames(
+  manifest: ParsedPluginManifest,
+  ctx: z.RefinementCtx
+): void {
+  const claimedBy = new Map<string, string>();
+  manifest.contributes.agents.forEach((agent, index) => {
+    agent.executableNames?.forEach((name, nameIndex) => {
+      const path = ["contributes", "agents", index, "executableNames", nameIndex];
+      if (
+        Object.hasOwn(AGENT_CLI_NAMES, name) ||
+        Object.hasOwn(PROCESS_TOOL_ICON_BY_COMMAND, name)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path,
+          message: `Agent executable name "${name}" belongs to a built-in agent or tool — plugin agents must claim new names.`,
+          params: { errorCode: "agent_executable_name_reserved" },
+        });
+        return;
+      }
+      const owner = claimedBy.get(name);
+      if (owner !== undefined && owner !== agent.id) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path,
+          message: `Agent executable name "${name}" is already claimed by agent "${owner}" in this manifest.`,
+          params: { errorCode: "agent_executable_name_duplicate" },
+        });
+        return;
+      }
+      claimedBy.set(name, agent.id);
+    });
+  });
+}
+
+// A declared bypass flag rides only a launch the person's setting turns it on
+// for (#16374). The same flag in args every launch or resume carries would
+// skip prompts past an "off" veto, so none of them may hold a declared option
+// (with its value, when it takes one). `--approval ask` beside a declared
+// `--approval never` is a different setting and stays allowed.
+export function validateAgentPermissionBypass(
+  manifest: ParsedPluginManifest,
+  ctx: z.RefinementCtx
+): void {
+  manifest.contributes.agents.forEach((agent, index) => {
+    if (!agent.permissionBypassArgs) return;
+    const groups = optionGroups(agent.permissionBypassArgs);
+    const carriers: Array<[readonly (string | number)[], readonly string[] | undefined]> = [
+      [["args"], agent.args],
+      [["resume", "args"], agent.resume?.args],
+      [
+        ["resume", "assignSessionIdArgs"],
+        agent.resume?.kind === "session-id" ? agent.resume.assignSessionIdArgs : undefined,
+      ],
+      [
+        ["resume", "resumeLatestArgs"],
+        agent.resume?.kind === "session-id" ? agent.resume.resumeLatestArgs : undefined,
+      ],
+      [["initialPromptForm", "interactive", "args"], agent.initialPromptForm?.interactive.args],
+      [["initialPromptForm", "headless", "args"], agent.initialPromptForm?.headless.args],
+    ];
+    for (const [field, args] of carriers) {
+      if (!args) continue;
+      const carried = groups.find((group) =>
+        args.some((_, start) => group.every((token, offset) => args[start + offset] === token))
+      );
+      if (carried === undefined) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contributes", "agents", index, ...field],
+        message: `Agent "${agent.id}" carries its permission-bypass arg "${carried.join(" ")}" in ${field.join(".")}, which would skip permission prompts whatever the person chose — declare it only in permissionBypassArgs.`,
+        params: { errorCode: "agent_permission_bypass_in_args" },
+      });
+    }
+  });
+}
+
+// The launchers the probe appends to an extensionless native path on Windows.
+const APPENDED_LAUNCHER_SUFFIX = /\.(?:cmd|exe|bat|com)$/i;
+// What a command can already end in and be probed as written, so nothing is added.
+const COMMAND_LAUNCHER_SUFFIX = /\.(?:cmd|exe|bat|com|ps1)$/i;
+
+// A manifest declares where its own CLI lives, so a native path can't name some
+// other file (#16468). A `./` command is probed directly and never reaches
+// these layers, so declaring them beside one would read as accepted and do
+// nothing. A command already carrying a launcher suffix would have the package
+// layers look for `acme.cmd.cmd`, so it fails here rather than as a quiet miss.
+export function validateAgentDiscovery(manifest: ParsedPluginManifest, ctx: z.RefinementCtx): void {
+  manifest.contributes.agents.forEach((agent, index) => {
+    const { command, nativePaths, packages } = agent;
+    const issue = (path: readonly (string | number)[], message: string, errorCode: string) =>
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contributes", "agents", index, ...path],
+        message,
+        params: { errorCode },
+      });
+
+    if (command.startsWith("./")) {
+      for (const [field, declared] of [
+        ["nativePaths", nativePaths],
+        ["packages", packages],
+      ] as const) {
+        if (declared === undefined) continue;
+        issue(
+          [field],
+          `Agent "${agent.id}" has a bundled command, which is probed directly, so ${field} would never be read.`,
+          "agent_discovery_bundled_command"
+        );
+      }
+      return;
+    }
+
+    const hasLauncherSuffix = COMMAND_LAUNCHER_SUFFIX.test(command);
+    if (packages && hasLauncherSuffix) {
+      issue(
+        ["packages"],
+        `Agent "${agent.id}" declares packages, which need a command with no launcher suffix: write "${command.replace(COMMAND_LAUNCHER_SUFFIX, "")}", not "${command}".`,
+        "agent_discovery_suffixed_command"
+      );
+    }
+
+    nativePaths?.forEach((entry, pathIndex) => {
+      const fileName = entry.split(/[\\/]/).at(-1) as string;
+      const namesCommand =
+        fileName === command ||
+        (!hasLauncherSuffix && fileName.replace(APPENDED_LAUNCHER_SUFFIX, "") === command);
+      if (namesCommand) return;
+      issue(
+        ["nativePaths", pathIndex],
+        `Native path "${entry}" must end in the agent's own command "${command}"${hasLauncherSuffix ? "" : ", optionally with .cmd, .exe, .bat or .com"}.`,
+        "agent_native_path_not_command"
+      );
+    });
+  });
+}
+
+// A launch MCP format's flags join the command at spawn, after the prompt form.
+// Behind a form's `--` a CLI would read them as positionals, and the agent would
+// start without its tools. The env-var formats add no flags.
+export function validateAgentPromptFormTerminator(
+  manifest: ParsedPluginManifest,
+  ctx: z.RefinementCtx
+): void {
+  manifest.contributes.agents.forEach((agent, index) => {
+    const { initialPromptForm: form, launchMcp } = agent;
+    if (!form || !launchMcp || LAUNCH_MCP_ENV_ONLY_FORMATS.has(launchMcp.format)) return;
+    for (const mode of ["interactive", "headless"] as const) {
+      if (!form[mode].args.includes("--")) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contributes", "agents", index, "initialPromptForm", mode, "args"],
+        message: `Agent "${agent.id}" has "--" in its ${mode} prompt form, but launchMcp format "${launchMcp.format}" adds flags after the form, where the CLI would read them as positional arguments.`,
+        params: { errorCode: "agent_prompt_form_terminator" },
+      });
+    }
+  });
+}
+
+/** Pairs each option with the non-option value after it, as a launch reads bypass args. */
+function optionGroups(tokens: readonly string[]): string[][] {
+  const groups: string[][] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] as string;
+    const next = tokens[index + 1];
+    if (token.startsWith("-") && next !== undefined && !next.startsWith("-")) {
+      groups.push([token, next]);
+      index += 1;
+    } else {
+      groups.push([token]);
+    }
+  }
+  return groups;
 }
 
 // Plugin process-tool commands are additive for new commands only (#11613).

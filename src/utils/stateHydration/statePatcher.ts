@@ -1,5 +1,10 @@
 import type { PanelKind, AgentState } from "@/types";
-import { coerceAgentState, coerceWaitingReason, type WaitingReason } from "@shared/types/agent";
+import {
+  coerceAgentState,
+  coerceWaitingReason,
+  type AgentId,
+  type WaitingReason,
+} from "@shared/types/agent";
 import type { BrowserHistory } from "@shared/types/browser";
 import type {
   FileViewMode,
@@ -18,7 +23,6 @@ import type {
 } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
-import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { ResumeOnRestart } from "@shared/types/agentSettings";
 import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
 import { isAccountId } from "@shared/utils/agentAccounts";
@@ -31,11 +35,11 @@ import {
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
   mintAssignedSessionId,
+  getPluginBypassArgHistory,
   reconcileBypassFlags,
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
   resolveEffectiveBypass,
-  resolveEffectiveInlineMode,
   resolveKeepDecorations,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
@@ -319,7 +323,7 @@ interface BackendTerminalData {
    * never read absence as zero.
    */
   agentIncarnation?: number;
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   detectedProcessId?: string;
   /** False once the host's record outlived its process. */
   hasPty?: boolean;
@@ -348,14 +352,14 @@ interface ReconnectedTerminalData {
    * never read absence as zero.
    */
   agentIncarnation?: number;
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   detectedProcessId?: string;
 }
 
 interface AgentSettingsData {
   agents?: Record<string, Record<string, unknown>>;
   globalSkipPermissions?: boolean;
-  globalUseAltScreen?: boolean;
+  pluginBypassArgHistory?: Record<string, string[][]>;
 }
 
 export const inferKind: (saved: SavedTerminalData, projectId?: string | null) => PanelKind =
@@ -801,9 +805,7 @@ export function buildArgsForRespawn(
     // once it's toggled off, and vice-versa. Strip-and-re-add against the
     // current resolution so every restart/restore replays clean flags.
     const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
-    const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
     const effectiveBypass = resolveEffectiveBypass(effectiveEntry, agentId, globalSkipPermissions);
-    const effectiveInline = resolveEffectiveInlineMode(effectiveEntry, agentId, globalUseAltScreen);
     const dangerousArgs = effectiveEntry.dangerousArgs as string | undefined;
     const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
     // A stale preset voids the captured flags, but not the caller's standing
@@ -814,16 +816,22 @@ export function buildArgsForRespawn(
       ? extractSystemPromptArgs(savedBaseFlags, agentId)
       : [];
     const hasPersistedFlags = Boolean(rawPersistedFlags && rawPersistedFlags.length > 0);
-    // Reconcile the persisted snapshot against both live resolutions (#10432 the
-    // bypass token, #10876 the `--no-alt-screen` inline flag): a snapshot must
-    // not carry a stale flag forward once the global switch or per-agent choice
-    // is flipped. Applied together so restart/restore/resume replay clean flags.
+    // Reconcile the persisted snapshot against the live bypass resolution
+    // (#10432): a snapshot must not carry a stale bypass token forward once the
+    // global switch or per-agent choice is flipped. The screen-mode token is
+    // brought to inline whatever the snapshot held (#16356), so a pane saved
+    // with Grok's `--fullscreen` restores inline.
     const reconcileFlags = (base: string[]): string[] =>
       reconcileDecorationFlags(
         reconcileInlineModeFlag(
-          reconcileBypassFlags(base, agentId, effectiveBypass, dangerousArgs),
-          agentId,
-          effectiveInline
+          reconcileBypassFlags(
+            base,
+            agentId,
+            effectiveBypass,
+            dangerousArgs,
+            getPluginBypassArgHistory(agentSettings, agentId)
+          ),
+          agentId
         ),
         agentId,
         resolveKeepDecorations(effectiveEntry)
@@ -845,7 +853,6 @@ export function buildArgsForRespawn(
             modelId: saved.agentModelId,
             systemPromptArgs: staleSystemPromptArgs,
             globalSkipPermissions,
-            globalUseAltScreen,
           })
         ),
         ...callerLaunchFlags,
@@ -904,7 +911,6 @@ export function buildArgsForRespawn(
                 systemPromptArgs: staleSystemPromptArgs,
                 presetArgs: preset?.args,
                 globalSkipPermissions,
-                globalUseAltScreen,
               }),
               callerLaunchFlags
             )
@@ -953,7 +959,6 @@ export function buildArgsForRespawn(
             systemPromptArgs: staleSystemPromptArgs,
             presetArgs: preset?.args,
             globalSkipPermissions,
-            globalUseAltScreen,
             sessionId: mintFreshSessionId(),
           }),
           callerLaunchFlags
@@ -1037,7 +1042,6 @@ export function buildArgsForRespawn(
             systemPromptArgs: staleSystemPromptArgs,
             presetArgs: preset?.args,
             globalSkipPermissions,
-            globalUseAltScreen,
             sessionId: mintFreshSessionId(),
           }),
           callerLaunchFlags

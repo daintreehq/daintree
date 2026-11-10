@@ -2,9 +2,12 @@ import {
   AGENT_REGISTRY,
   canSelectAgentModel,
   getAgentDisplayTitle,
+  getAgentPromptForm,
   getEffectiveAgentConfig,
   isRetiredAgentModel,
+  PROMPT_FORM_PLACEHOLDER,
 } from "../config/agentRegistry.js";
+import type { AgentPromptForm } from "../config/agentRegistry.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import {
   agentCommandDialect,
@@ -15,6 +18,7 @@ import {
 } from "../utils/shellEscape.js";
 import { systemPromptArgPositions } from "../utils/agentSystemPrompt.js";
 import { hasUnclosedQuote, parseShellArgs } from "../utils/shellArgs.js";
+import { quoteLaunchPrompt } from "../utils/launchPromptArg.js";
 import { HOST_INBOX_DIR_NAME } from "./ipc/fileTransfer.js";
 
 /**
@@ -65,21 +69,6 @@ const RECIPE_ARGS_SLOT = "\0recipe-args";
 export type DangerousMode = "inherit" | "on" | "off";
 
 /**
- * Tri-state alt-screen intent, stored on the `inlineMode` field. `"on"` =
- * inline rendering (inject the agent's `inlineModeFlag`, e.g. `--no-alt-screen`);
- * `"off"` = full-screen alternate buffer (inject the agent's `altScreenFlag`,
- * e.g. `--fullscreen`, or no flag when it declares none and rides its own CLI
- * default); `"inherit"` defers to the next level up (preset → agent registry
- * default → the global "Use alt-screen mode by default" switch). Value polarity
- * intentionally matches the legacy
- * `inlineMode` boolean (`true` was inline), so a persisted boolean maps
- * literally — `true → "on"`, `false → "off"` (see {@link resolveInlineMode}).
- * The UI labels are decoupled from these values (the Settings control presents
- * the choice in alt-screen terms).
- */
-export type InlineMode = "inherit" | "on" | "off";
-
-/**
  * One of an agent's accounts (#16040): a config folder its CLI keeps
  * everything in, login included, handed to a launch through the variable the
  * agent's registry `account` declaration names. Daintree never writes inside
@@ -115,15 +104,6 @@ export interface AgentSettingsEntry {
    * top via {@link combineDangerousModes}.
    */
   dangerousMode?: DangerousMode;
-  /**
-   * Alt-screen rendering intent for this agent's Default scope (#10876). Tri-state
-   * {@link InlineMode}: `"on"` = inline (inject `inlineModeFlag`), `"off"` =
-   * alt-screen, `"inherit"`/absent defers to the agent registry default and then
-   * the global `globalUseAltScreen` switch. A persisted legacy boolean is read
-   * literally by {@link resolveInlineMode} (`true → "on"`, `false → "off"`);
-   * preset overrides layer on top via {@link combineInlineModes}.
-   */
-  inlineMode?: boolean | InlineMode;
   /** When true, inject --include-directories for the clipboard temp directory (Gemini only) */
   shareClipboardDirectory?: boolean;
   /**
@@ -166,14 +146,6 @@ export interface AgentSettingsEntry {
      */
     dangerousMode?: DangerousMode;
     customFlags?: string;
-    /**
-     * Tri-state alt-screen override for this preset ({@link InlineMode}), layered
-     * on top of the agent's resolved mode via {@link combineInlineModes}. `"off"`
-     * (alt-screen) vetoes an agent/global `"on"`; `"inherit"`/absent defers to the
-     * agent's Default scope. Legacy boolean is read literally by
-     * {@link resolveInlineMode}.
-     */
-    inlineMode?: boolean | InlineMode;
     color?: string;
     /** Ordered preset IDs to fall over to when provider is unreachable. */
     fallbacks?: string[];
@@ -218,30 +190,27 @@ export interface AgentSettings {
    */
   settingsVersion?: number;
   /**
-   * Global "skip permission prompts" override (#10432). When `true`, every
-   * agent whose config declares `supports.permissionBypass === true` launches
-   * in permission-bypass mode regardless of its per-agent/preset
-   * `dangerousEnabled` toggle. Default off — this is a high-blast-radius,
-   * opt-in switch. It is a *live override*, not a default: it is OR-ed into
-   * the effective bypass at flag-generation time (see {@link resolveEffectiveBypass})
-   * and never mutates per-agent `dangerousEnabled`, so toggling it off
-   * immediately stops injecting bypass flags on future spawns/restarts/resumes.
-   * Scoped to normal agent terminals; Daintree Assistant / help sessions keep
-   * their own independent bypass setting.
+   * Global "skip permission prompts" switch (#10432, #16414). When `true`,
+   * every agent with a terminal bypass flag (see
+   * {@link isAgentTerminalBypassSupported}) whose agent and preset modes are
+   * left on Default launches in permission-bypass mode; an explicit agent or
+   * preset `"off"` still vetoes it. Default off — this is a high-blast-radius,
+   * opt-in switch. It is resolved live at flag-generation time (see
+   * {@link resolveEffectiveBypass}) and never mutates per-agent settings, so
+   * toggling it off immediately stops injecting bypass flags on future
+   * spawns/restarts/resumes. Scoped to normal agent terminals; Daintree
+   * Assistant / help sessions keep their own independent bypass setting.
    */
   globalSkipPermissions?: boolean;
   /**
-   * Global "use alt-screen mode by default" override (#10876). Controls what an
-   * agent's `"inherit"` inline-mode resolves to when no per-agent/preset choice
-   * and no curated registry default apply. Default off — so `inlineMode`
-   * resolves to inline (no alt-screen) globally unless something overrides it,
-   * mirroring how `globalSkipPermissions` defaults off. A curated per-agent
-   * registry `defaultInlineMode` (when an agent declares one) still wins over this
-   * switch; an explicit per-agent/preset `"on"`/`"off"` always vetoes it. Like
-   * the bypass override it is a *live* value OR-ed in at flag-generation time
-   * (see {@link resolveEffectiveInlineMode}), never mutating per-agent state.
+   * Every set of permission-bypass args a plugin agent has registered, by agent
+   * id (#16374). Strip-only: restore, restart and resume remove these from a
+   * pane's saved flags, because a plugin's own declaration can be missing there
+   * (its catalog loads after restore), changed by an update, or overlaid by a
+   * user agent with the same id. Written by main when a plugin agent registers,
+   * kept through a settings reset, and never a source of flags to add.
    */
-  globalUseAltScreen?: boolean;
+  pluginBypassArgHistory?: Record<string, string[][]>;
   /**
    * What an agent pane does when Daintree restarts with no live process behind
    * it (#13509). Absent or unrecognised reads as `"always"`, today's behaviour —
@@ -318,11 +287,46 @@ function ownEntry<T>(map: Readonly<Record<string, T>>, agentId: string | undefin
   return agentId !== undefined && Object.hasOwn(map, agentId) ? map[agentId] : undefined;
 }
 
+/**
+ * The bypass flag an agent launches with when its settings name none: a
+ * built-in's {@link DEFAULT_DANGEROUS_ARGS} entry, or the args a plugin agent
+ * declares for its CLI (#16374), space-separated as `dangerousArgs` is.
+ */
+export function getDefaultDangerousArgs(agentId: string | undefined): string {
+  if (agentId === undefined) return "";
+  const builtIn = ownEntry(DEFAULT_DANGEROUS_ARGS, agentId);
+  if (builtIn !== undefined) return builtIn.trim();
+  return getEffectiveAgentConfig(agentId)?.permissionBypassArgs?.join(" ") ?? "";
+}
+
+/**
+ * The bypass args plugins have declared for `agentId` (#16374), from
+ * {@link AgentSettings.pluginBypassArgHistory}: strip candidates for
+ * {@link reconcileBypassFlags}, never args to add. Malformed entries are dropped.
+ */
+export function getPluginBypassArgHistory(
+  settings: { pluginBypassArgHistory?: unknown } | null | undefined,
+  agentId: string
+): string[][] {
+  const history = settings?.pluginBypassArgHistory;
+  if (history === null || typeof history !== "object" || !Object.hasOwn(history, agentId)) {
+    return [];
+  }
+  const declarations = (history as Record<string, unknown>)[agentId];
+  if (!Array.isArray(declarations)) return [];
+  return declarations.filter(
+    (args): args is string[] =>
+      Array.isArray(args) &&
+      args.length > 0 &&
+      args.every((arg) => typeof arg === "string" && arg.length > 0)
+  );
+}
+
 /** The written `dangerousArgs`, or the agent's default when unset or retired. */
 function resolveDangerousArgs(written: string | undefined, agentId: string | undefined): string {
   const value = written?.trim() ?? "";
   if (value && !ownEntry(RETIRED_DANGEROUS_ARGS, agentId)?.includes(value)) return value;
-  return ownEntry(DEFAULT_DANGEROUS_ARGS, agentId)?.trim() ?? "";
+  return getDefaultDangerousArgs(agentId);
 }
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
@@ -333,24 +337,17 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
         customFlags: "",
         dangerousArgs: DEFAULT_DANGEROUS_ARGS[id] ?? "",
         dangerousEnabled: false,
-        // `inlineMode` is intentionally NOT seeded (#10876). Leaving it absent
-        // means an untouched agent resolves to `"inherit"`, so the agent's
-        // curated registry `defaultInlineMode` and then the global
-        // `globalUseAltScreen` switch decide — a concrete seed here would pin
-        // every agent and make the new global toggle a no-op for new users.
-        // Existing persisted booleans are still honoured via resolveInlineMode.
       },
     ])
   ),
   globalSkipPermissions: false,
-  globalUseAltScreen: false,
 };
 
 /**
- * Whether an agent opts into permission-bypass via its config
+ * Whether an agent's Daintree Assistant wiring opts into permission bypass
  * (`supports.permissionBypass === true`). Strict — agents that omit the field
- * or set it `false` are NOT bypass-supported, so the global skip-permissions
- * override must never inject their dangerous flag (#10432).
+ * or set it `false` are NOT bypass-supported. This is the help-session
+ * capability; terminal launches ask {@link isAgentTerminalBypassSupported}.
  */
 export function isAgentBypassSupported(agentId: string | undefined): boolean {
   if (!agentId) return false;
@@ -358,6 +355,21 @@ export function isAgentBypassSupported(agentId: string | undefined): boolean {
   // `supports` is `AssistantSupports | false | undefined`; only the structured
   // form carries `permissionBypass`.
   return supports !== false && supports?.permissionBypass === true;
+}
+
+/**
+ * Whether the global "Skip permission prompts" switch reaches an agent's
+ * terminal launches (#16414): it has a default bypass flag from
+ * {@link getDefaultDangerousArgs} (a built-in's {@link DEFAULT_DANGEROUS_ARGS}
+ * entry, Gemini's `--yolo` included whatever its retired assistant wiring
+ * declares, or a plugin agent's `permissionBypassArgs`, #16374), or it opts in
+ * through `supports.permissionBypass`, the only way a user-defined agent can. A
+ * written `dangerousArgs` alone never makes an agent eligible, so OpenCode,
+ * whose bare TUI has no bypass flag, never gets one from the global switch.
+ */
+export function isAgentTerminalBypassSupported(agentId: string | undefined): boolean {
+  if (!agentId) return false;
+  return !!getDefaultDangerousArgs(agentId) || isAgentBypassSupported(agentId);
 }
 
 /**
@@ -389,126 +401,35 @@ export function combineDangerousModes(
 }
 
 /**
- * Reads the tri-state {@link InlineMode} from a settings entry or preset (#10876).
- * A persisted legacy boolean is mapped LITERALLY — `true → "on"` (inline),
- * `false → "off"` (alt-screen) — not `false → "inherit"` the way
- * {@link resolveDangerousMode} treats `dangerousEnabled`. The difference is
- * deliberate: `inlineMode` was historically seeded with a concrete per-agent
- * boolean (Grok `false`, Codex `true`), so a `false → "inherit"` mapping would
- * retroactively hand those established choices to the new global switch. Only a
- * genuinely-absent value resolves to `"inherit"`.
+ * Brings a persisted `agentLaunchFlags` snapshot to inline (#10876, #16356):
+ * one captured while alt-screen was still a choice can carry the agent's
+ * `altScreenFlag` (Grok's `--fullscreen`), or no inline flag at all. Exactly
+ * one token survives: the first of the agent's two screen-mode tokens found is
+ * rewritten in place to its `inlineModeFlag` (keeping its position, so an
+ * already-correct snapshot is untouched), later ones are dropped, and the
+ * inline flag is appended when the snapshot carried neither. Idempotent across
+ * every spawn/restart/restore/resume. An agent with no inline flag is left
+ * untouched: it rides its own CLI default, full-screen included (Crush, Goose).
  */
-export function resolveInlineMode(source: { inlineMode?: boolean | InlineMode }): InlineMode {
-  const value = source.inlineMode;
-  if (value === undefined) return "inherit";
-  if (typeof value === "boolean") return value ? "on" : "off";
-  return value;
-}
-
-/**
- * Layers a preset's inline mode on top of the agent's resolved mode: the preset
- * wins unless it defers (`"inherit"`). Mirrors {@link combineDangerousModes} —
- * a preset `"off"` (alt-screen) is a true veto over an agent `"on"` (inline).
- */
-export function combineInlineModes(agentMode: InlineMode, presetMode?: InlineMode): InlineMode {
-  return presetMode && presetMode !== "inherit" ? presetMode : agentMode;
-}
-
-/**
- * Resolves the effective alt-screen decision for a launch from the (already
- * preset-merged) entry's tri-state mode. Returns `true` when the agent should
- * render inline — i.e. when the agent's `inlineModeFlag` should be injected.
- *
- * - `"on"`  → inline (inject `inlineModeFlag`).
- * - `"off"` → alt-screen (inject `altScreenFlag` when the agent declares one,
- *   otherwise no flag); an explicit veto that beats the global switch.
- * - `"inherit"` → a curated per-agent registry `capabilities.defaultInlineMode`
- *   wins if declared (no shipped agent pins one today — they all follow the
- *   global switch so it stays user-overridable); otherwise defer to the global
- *   "Use alt-screen mode by default" switch (`globalUseAltScreen` on →
- *   alt-screen, off → inline).
- *
- * Callers that resolve a launch from a preset must bake the combined mode onto
- * the entry first (see `applyPresetBehaviorOverrides`) so this single chokepoint
- * sees the final intent.
- */
-export function resolveEffectiveInlineMode(
-  entry: AgentSettingsEntry,
-  agentId: string | undefined,
-  globalUseAltScreen?: boolean
-): boolean {
-  const mode = resolveInlineMode(entry);
-  if (mode === "on") return true;
-  if (mode === "off") return false;
-  const registryDefault = agentId
-    ? getEffectiveAgentConfig(agentId)?.capabilities?.defaultInlineMode
-    : undefined;
-  if (typeof registryDefault === "boolean") return registryDefault;
-  return !globalUseAltScreen;
-}
-
-/**
- * Picks the single screen-mode token a launch should carry, plus the full set
- * of tokens the launch path owns (and must therefore strip when they're stale).
- *
- * The two capabilities are opposite polarities of one decision: `inlineModeFlag`
- * (e.g. `--no-alt-screen`) forces inline, `altScreenFlag` (e.g. `--fullscreen`)
- * forces the alternate buffer. An agent may declare either, both, or neither.
- * `wanted` is `undefined` when the agent declares no flag for the resolved
- * direction — it then rides its own CLI default, which is exactly the
- * one-directional gap `altScreenFlag` exists to close (#11423).
- */
-function resolveScreenModeTokens(
-  capabilities: { inlineModeFlag?: string; altScreenFlag?: string } | undefined,
-  effectiveInline: boolean
-): { wanted: string | undefined; managed: string[] } {
+export function reconcileInlineModeFlag(flags: readonly string[], agentId: string): string[] {
+  const capabilities = getEffectiveAgentConfig(agentId)?.capabilities;
   const inlineFlag = capabilities?.inlineModeFlag;
-  const altFlag = capabilities?.altScreenFlag;
-  const managed = [...new Set([inlineFlag, altFlag].filter((f): f is string => !!f))];
-  return { wanted: effectiveInline ? inlineFlag : altFlag, managed };
-}
-
-/**
- * Reconciles a persisted `agentLaunchFlags` snapshot against the current
- * effective inline-mode decision (#10876) — the alt-screen analog of
- * {@link reconcileBypassFlags}'s "resume trap" fix.
- *
- * The agent's canonical single-token screen-mode flags (`inlineModeFlag` and,
- * since #11423, its opposite-polarity `altScreenFlag`) are baked into
- * `agentLaunchFlags` by the same `buildAgentLaunchFlags` that captures the
- * bypass flag, so a snapshot can carry a stale token forward after the user (or
- * the global switch) flips the decision. Exactly one token survives: the first
- * managed token found is rewritten in place to the wanted one (keeping its
- * position so an already-correct snapshot is untouched), later managed tokens
- * are dropped, and the wanted token is appended only when the snapshot carried
- * none — which is also how a pre-#11423 snapshot picks up its first
- * `--fullscreen`. Idempotent across every spawn/restart/restore/resume. Agents
- * declaring neither flag are left untouched.
- */
-export function reconcileInlineModeFlag(
-  flags: readonly string[],
-  agentId: string,
-  effectiveInline: boolean
-): string[] {
-  const { wanted, managed } = resolveScreenModeTokens(
-    getEffectiveAgentConfig(agentId)?.capabilities,
-    effectiveInline
-  );
-  if (managed.length === 0) return [...flags];
+  if (!inlineFlag) return [...flags];
+  const managed = new Set([inlineFlag, capabilities?.altScreenFlag].filter((f) => !!f));
 
   const reconciled: string[] = [];
   let placed = false;
   for (const flag of flags) {
-    if (!managed.includes(flag)) {
+    if (!managed.has(flag)) {
       reconciled.push(flag);
       continue;
     }
-    if (!placed && wanted) {
-      reconciled.push(wanted);
+    if (!placed) {
+      reconciled.push(inlineFlag);
       placed = true;
     }
   }
-  if (wanted && !placed) reconciled.push(wanted);
+  if (!placed) reconciled.push(inlineFlag);
   return reconciled;
 }
 
@@ -571,12 +492,13 @@ export function reconcileDecorationFlags(
  * Resolves the effective permission-bypass decision for a launch from the
  * (already preset-merged) effective entry's tri-state mode:
  *
- * - `"on"`  → bypass (unguarded — preserves per-agent toggles like Gemini's
- *   `--yolo` even for agents that don't declare `supports.permissionBypass`).
+ * - `"on"`  → bypass (unguarded — honours an explicit choice even for an
+ *   agent the global switch doesn't reach).
  * - `"off"` → no bypass; an explicit veto that beats the global override.
- * - `"inherit"` → defer to the global "Skip permission prompts for agents"
- *   switch, which only applies to agents that declare bypass support so it
- *   can't inject a dangerous flag into an agent that rejects it.
+ * - `"inherit"` → defer to the global "Skip permission prompts" switch, which
+ *   only applies to agents with a terminal bypass flag
+ *   ({@link isAgentTerminalBypassSupported}) so it can't inject a dangerous
+ *   flag into an agent that has none.
  *
  * Callers that resolve a launch from a preset must bake the combined mode onto
  * the entry first (see `applyPresetBehaviorOverrides`) so this single chokepoint
@@ -592,7 +514,7 @@ export function resolveEffectiveBypass(
   const mode = resolveDangerousMode(entry);
   if (mode === "on") return true;
   if (mode === "off") return false;
-  return !!globalSkipPermissions && isAgentBypassSupported(agentId);
+  return !!globalSkipPermissions && isAgentTerminalBypassSupported(agentId);
 }
 
 /** Splits args into options, each paired with the non-option value after it. */
@@ -624,11 +546,10 @@ function optionGroups(tokens: readonly string[]): string[][] {
  *
  * `effectiveBypass` is the single source of truth — it already encodes the full
  * tri-state decision (preset/agent `"on"`/`"off"` and the support-gated global
- * inherit, via {@link resolveEffectiveBypass}). So this applies uniformly even
- * to agents that don't declare `supports.permissionBypass`: their `"on"` flag
- * (e.g. Gemini's `--yolo`) is preserved when `effectiveBypass` is true, and an
+ * inherit, via {@link resolveEffectiveBypass}). So this applies uniformly to
+ * every agent: its flag is preserved when `effectiveBypass` is true, and an
  * explicit `"off"` veto strips a stale token when it is false. Agents with no
- * canonical token (no `DEFAULT_DANGEROUS_ARGS` entry and no `dangerousArgs`)
+ * canonical token (no default from {@link getDefaultDangerousArgs} and no `dangerousArgs`)
  * fall through the empty-strip-set guard below and are left untouched.
  *
  * Bypass args are matched one option group at a time — an option together with
@@ -639,28 +560,36 @@ function optionGroups(tokens: readonly string[]): string[][] {
  * whose other half another reconciler already rewrote is still recognised.
  *
  * @param bypassArgs - The agent's currently-resolved dangerous args (e.g.
- *   `entry.dangerousArgs`); falls back to `DEFAULT_DANGEROUS_ARGS[agentId]`.
+ *   `entry.dangerousArgs`); falls back to {@link getDefaultDangerousArgs}.
+ * @param pluginBypassArgHistory - Every bypass declaration a plugin has made for
+ *   the agent ({@link getPluginBypassArgHistory}), stripped but never re-added,
+ *   so a saved flag is recognised while the plugin's own declaration is absent.
  */
 export function reconcileBypassFlags(
   flags: readonly string[],
   agentId: string,
   effectiveBypass: boolean,
-  bypassArgs?: string
+  bypassArgs?: string,
+  pluginBypassArgHistory: readonly (readonly string[])[] = []
 ): string[] {
   const resolved = resolveDangerousArgs(bypassArgs, agentId);
   // Strip both the resolved args and the registry default: a snapshot may have
   // been captured before the user customized `dangerousArgs`, so cleaning only
   // the current value could leave a stale default flag behind.
   const groups: string[][] = [];
-  for (const source of [
-    resolved,
-    ownEntry(DEFAULT_DANGEROUS_ARGS, agentId),
-    ...(ownEntry(RETIRED_DANGEROUS_ARGS, agentId) ?? []),
-  ]) {
-    for (const group of optionGroups(source?.trim().split(/\s+/).filter(Boolean) ?? [])) {
+  const addGroups = (tokens: readonly string[]) => {
+    for (const group of optionGroups(tokens)) {
       if (!groups.some((known) => known.join(" ") === group.join(" "))) groups.push(group);
     }
+  };
+  for (const source of [
+    resolved,
+    getDefaultDangerousArgs(agentId),
+    ...(ownEntry(RETIRED_DANGEROUS_ARGS, agentId) ?? []),
+  ]) {
+    addGroups(source?.trim().split(/\s+/).filter(Boolean) ?? []);
   }
+  for (const declared of pluginBypassArgHistory) addGroups(declared);
   if (groups.length === 0) return [...flags];
   // Longest first, so an option/value pair wins over a lone token of its own.
   groups.sort((a, b) => b.length - a.length);
@@ -736,9 +665,9 @@ export interface GenerateAgentFlagsOptions {
   /** Absolute path to the clipboard temp directory (e.g. /tmp/daintree-clipboard) */
   clipboardDirectory?: string;
   /**
-   * Global skip-permissions override (#10432). When true, OR-ed into the
-   * effective bypass for agents that declare `supports.permissionBypass`, so
-   * the agent's dangerous flag is injected even when its per-agent toggle is off.
+   * Global skip-permissions switch (#10432). When true, an agent whose
+   * agent/preset mode is left on Default and that has a terminal bypass flag
+   * launches with it; see {@link resolveEffectiveBypass}.
    */
   globalSkipPermissions?: boolean;
 }
@@ -820,12 +749,6 @@ export interface GenerateAgentCommandOptions {
   /** Global skip-permissions override (#10432); forwarded to {@link generateAgentFlags}. */
   globalSkipPermissions?: boolean;
   /**
-   * Global "use alt-screen mode by default" override (#10876); resolves an
-   * agent's `"inherit"` inline mode when no per-agent/preset choice or curated
-   * registry default applies (see {@link resolveEffectiveInlineMode}).
-   */
-  globalUseAltScreen?: boolean;
-  /**
    * Session id to ASSIGN to this launch, for agents declaring
    * `resume.assignSessionIdArgs` (#11782). Mint it with
    * {@link mintAssignedSessionId} and persist the same value on the panel, so
@@ -838,15 +761,6 @@ export interface GenerateAgentCommandOptions {
    * declare the capability.
    */
   sessionId?: string;
-}
-
-/**
- * The text an agent receives as its launch prompt: trimmed, with a multi-line
- * prompt normalized to a single line. Restore compares a pane's recorded first
- * prompt in this form against the first message the agent stored (#15269).
- */
-export function launchPromptArgText(prompt: string): string {
-  return prompt.trim().replace(/\r\n/g, " ").replace(/\n/g, " ");
 }
 
 /**
@@ -878,6 +792,7 @@ export function generateAgentCommand(
     globalSkipPermissions: options?.globalSkipPermissions,
   });
   const parts: string[] = [baseCommand];
+  let registryArgsEnd = parts.length;
 
   // Add default args from agent registry (before user flags)
   if (agentId) {
@@ -892,21 +807,14 @@ export function generateAgentCommand(
         }
       }
     }
+    registryArgsEnd = parts.length;
 
-    // Add the screen-mode flag matching the resolved tri-state, when the agent
-    // declares one for that direction (#10876, #11423). resolveEffectiveInlineMode
-    // encodes the full chain: explicit on/off → preset (already baked onto the
-    // entry) → curated registry default → the global `globalUseAltScreen` switch.
-    // Screen mode only applies to the interactive TUI, so a headless one-shot
+    // Every agent with an inline flag launches inline (#16356). Screen mode
+    // only applies to the interactive TUI, so a headless one-shot
     // (`interactive: false` — e.g. opencode's `run` subcommand, which rejects
-    // `--mini`) must carry neither polarity.
-    if (options?.interactive ?? true) {
-      const { wanted: screenModeFlag } = resolveScreenModeTokens(
-        agentConfig?.capabilities,
-        resolveEffectiveInlineMode(entry, agentId, options?.globalUseAltScreen)
-      );
-      if (screenModeFlag) parts.push(screenModeFlag);
-    }
+    // `--mini`) carries none.
+    const inlineFlag = agentConfig?.capabilities?.inlineModeFlag;
+    if (inlineFlag && (options?.interactive ?? true)) parts.push(inlineFlag);
 
     // Pre-assigned session id (#11782). Emitted here — ahead of user flags and
     // well ahead of the positional prompt appended at the end — so the id can
@@ -962,162 +870,48 @@ export function generateAgentCommand(
     parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
   }
 
-  // Add initial prompt if provided
   const prompt = options?.initialPrompt?.trim();
   if (prompt) {
-    const interactive = options?.interactive ?? true;
-    const escapedPrompt = quoteAgentArg(launchPromptArgText(prompt));
-
-    switch (agentId) {
-      case "claude":
-        // Claude: -p for print mode (non-interactive), otherwise just the prompt
-        if (!interactive) {
-          parts.push("-p");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      case "gemini":
-        // Gemini: -i for interactive with prompt; bare positional launches
-        // the interactive TUI (verified on 0.41.2), so headless needs -p
-        if (interactive) {
-          parts.push("-i", escapedPrompt);
-        } else {
-          parts.push("-p", escapedPrompt);
-        }
-        break;
-
-      case "qwen":
-        // Qwen Code (Gemini-CLI fork): explicit -i/-p flags — bare-positional
-        // semantics have drifted between fork generations, flags are stable
-        if (interactive) {
-          parts.push("-i", escapedPrompt);
-        } else {
-          parts.push("-p", escapedPrompt);
-        }
-        break;
-
-      case "antigravity":
-        // Antigravity (agy): rejects bare positional prompts ("Error: empty
-        // prompt"), so the mode flag is mandatory — -i (--prompt-interactive)
-        // or -p (--print)
-        if (interactive) {
-          parts.push("-i", escapedPrompt);
-        } else {
-          parts.push("-p", escapedPrompt);
-        }
-        break;
-
-      case "codex":
-        // Codex: "exec" subcommand for non-interactive, otherwise just the prompt
-        if (!interactive) {
-          parts.push("exec");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      case "copilot":
-        // Copilot: -i for interactive prompt injection, -p for one-shot
-        if (interactive) {
-          parts.push("-i", escapedPrompt);
-        } else {
-          parts.push("-p", escapedPrompt);
-        }
-        break;
-
-      case "opencode":
-        // opencode: bare positional is a project PATH (verified on 1.14.48);
-        // --prompt seeds the TUI, the run subcommand is the one-shot path
-        if (interactive) {
-          parts.push("--prompt", escapedPrompt);
-        } else {
-          parts.push("run", escapedPrompt);
-        }
-        break;
-
-      case "aider":
-        // Aider: positionals are filenames; -m sends one message then exits
-        // (no interactive-with-prompt mode exists)
-        parts.push("-m", escapedPrompt);
-        break;
-
-      case "goose": {
-        // goose session accepts no prompt (verified on 1.33.1) — swap the
-        // registry's `session` arg (pushed shell-escaped above) for `run -t`,
-        // staying interactive after the initial input when requested
-        const sessionIdx = parts.findIndex(
-          (p) => p === "session" || p === quoteAgentArg("session")
-        );
-        if (sessionIdx !== -1) {
-          parts[sessionIdx] = "run";
-        } else {
-          parts.splice(1, 0, "run");
-        }
-        parts.push("-t", escapedPrompt);
-        if (interactive) {
-          parts.push("--interactive");
-        }
-        break;
-      }
-
-      case "amp":
-        // Amp: -x/--execute runs one-shot; the TUI ignores positionals, so
-        // interactive launches keep the (best-effort) positional form
-        if (!interactive) {
-          parts.push("-x");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      case "crush":
-        // Crush: the run subcommand is the only prompt path; the root TUI
-        // has no pre-seed flag, so interactive keeps the positional form
-        if (!interactive) {
-          parts.push("run");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      case "kimi":
-        // Kimi: no bare-positional prompt form; --prompt/-p runs the query
-        // in both modes
-        parts.push("-p", escapedPrompt);
-        break;
-
-      case "mistral":
-        // Vibe: bare positional seeds the TUI; headless needs --prompt
-        if (!interactive) {
-          parts.push("--prompt");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      case "kiro":
-        // Kiro: bare positional seeds the implicit chat TUI; headless needs
-        // the explicit chat --no-interactive form
-        if (!interactive) {
-          parts.push("chat", "--no-interactive");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      case "grok":
-        // Grok Build: a bare positional seeds the interactive TUI
-        // (`grok "fix the bug"`, per `grok --help`); headless one-shot uses
-        // -p/--single.
-        if (!interactive) {
-          parts.push("-p");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      default:
-        // Generic agent: just append the prompt
-        parts.push(escapedPrompt);
-    }
+    const form = getAgentPromptForm(
+      agentId,
+      (options?.interactive ?? true) ? "interactive" : "headless"
+    );
+    appendPromptForm(parts, registryArgsEnd, form, quoteLaunchPrompt(prompt));
   }
 
   return parts.join(" ");
+}
+
+/**
+ * Adds a launch prompt to `parts` in the agent's declared form. A form word is
+ * quoted unless it is an option or a plain word, so every built-in form stays
+ * bare and a declared word can never reach the shell unquoted.
+ */
+function appendPromptForm(
+  parts: string[],
+  registryArgsEnd: number,
+  form: AgentPromptForm,
+  quotedPrompt: string
+): void {
+  const word = (arg: string) => (isSafeShellOption(arg) ? arg : quoteAgentArgOptional(arg));
+  if (form.subcommand) {
+    // Only the registry's own args are searched: the same word in a preset,
+    // recipe or settings arg is a value there, not the subcommand.
+    const { name, replaces } = form.subcommand;
+    const quoted = quoteAgentArg(replaces);
+    const at = parts.findIndex(
+      (part, index) =>
+        index > 0 && index < registryArgsEnd && (part === replaces || part === quoted)
+    );
+    if (at !== -1) {
+      parts[at] = word(name);
+    } else {
+      parts.splice(1, 0, word(name));
+    }
+  }
+  for (const arg of form.args) {
+    parts.push(arg === PROMPT_FORM_PLACEHOLDER ? quotedPrompt : word(arg));
+  }
 }
 
 /**
@@ -1136,7 +930,6 @@ export function buildAgentLaunchFlags(
     presetArgs?: string[];
     recipeArgs?: string;
     globalSkipPermissions?: boolean;
-    globalUseAltScreen?: boolean;
   }
 ): string[] {
   const agentConfig = getEffectiveAgentConfig(agentId);
@@ -1147,15 +940,11 @@ export function buildAgentLaunchFlags(
     flags.push(...agentConfig.args);
   }
 
-  // Screen-mode flag matching the resolved tri-state, when the agent declares
-  // one for that direction (#10876, #11423) — same resolution chain as
-  // generateAgentCommand. No interactive gate: these flags are persisted for the
-  // interactive restart/resume paths that replay them.
-  const { wanted: screenModeFlag } = resolveScreenModeTokens(
-    agentConfig?.capabilities,
-    resolveEffectiveInlineMode(entry, agentId, options?.globalUseAltScreen)
-  );
-  if (screenModeFlag) flags.push(screenModeFlag);
+  // The inline flag, as in generateAgentCommand (#16356). No interactive gate:
+  // these flags are persisted for the interactive restart/resume paths that
+  // replay them.
+  const inlineFlag = agentConfig?.capabilities?.inlineModeFlag;
+  if (inlineFlag) flags.push(inlineFlag);
 
   // Model flag for per-panel model selection. These flags only ever replay a
   // restart or resume, so an agent whose flag is headless-only keeps none.
@@ -1425,6 +1214,25 @@ export function supportsSessionIdAssignment(agentId: string | undefined): boolea
 }
 
 /**
+ * Whether `agentId`'s assigning args are also its resume args (#16470): one flag
+ * that opens the id's conversation or creates it, like Pi's `--session-id`.
+ * Offering such an id again reopens the conversation instead of being refused,
+ * so a replay of the same pane has nothing to disarm. It says nothing about a
+ * copy, which is a new conversation whatever the CLI would accept.
+ */
+export function assignmentReopensSession(agentId: string | undefined): boolean {
+  if (!agentId) return false;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  if (resume?.kind !== "session-id" || !resume.assignSessionIdArgs) return false;
+  const assigning = resume.assignSessionIdArgs(SESSION_ID_SLOT);
+  const resuming = resume.args(SESSION_ID_SLOT);
+  return (
+    assigning.length === resuming.length &&
+    assigning.every((token, offset) => token === resuming[offset])
+  );
+}
+
+/**
  * Mints a session id for a fresh launch of `agentId`, or `undefined` when the
  * agent captures its id the old way (teardown scrape).
  *
@@ -1564,11 +1372,13 @@ export function stripConversationSelectorFlags(
 ): string[] {
   const resume = agentId ? getEffectiveAgentConfig(agentId)?.resume : undefined;
   if (!resume || resume.kind !== "session-id") return [...flags];
+  // A shape of nothing but the id (a plugin's `args: ["{sessionId}"]`) would
+  // match every word, so it can't pick anything out.
   const shapes = [
     resume.args(SESSION_ID_SLOT),
     resume.assignSessionIdArgs?.(SESSION_ID_SLOT) ?? [],
     resume.resumeLatestArgs ?? [],
-  ].filter((shape) => shape.length > 0);
+  ].filter((shape) => shape.some((token) => token !== SESSION_ID_SLOT));
   const kept: string[] = [];
   for (let i = 0; i < flags.length;) {
     const shape = shapes.find((candidate) =>
@@ -1582,6 +1392,47 @@ export function stripConversationSelectorFlags(
     i++;
   }
   return kept;
+}
+
+/**
+ * {@link stripConversationSelectorFlags} over a stored command, for a copy that
+ * can't be rebuilt (#16470). A restore stores its resume command, so the source
+ * can hold any selector, and each would open the source's conversation. The
+ * binary is never a candidate, and a quoted prompt stays one word that no
+ * selector matches.
+ */
+export function stripConversationSelectorArgs(
+  command: string,
+  agentId: string | undefined
+): string {
+  const [binary, ...args] = splitShellWords(command);
+  if (binary === undefined) return command;
+  const kept = stripConversationSelectorFlags(args, agentId);
+  return kept.length === args.length ? command : [binary, ...kept].join(" ");
+}
+
+/** Whether `word` holds `id` with no id character on either side of it. */
+function holdsSessionIdToken(word: string, id: string): boolean {
+  for (let at = word.indexOf(id); at !== -1; at = word.indexOf(id, at + 1)) {
+    if (!/[\w-]/.test(word[at - 1] ?? "") && !/[\w-]/.test(word[at + id.length] ?? "")) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a stored command's arguments name `sessionId`, in any form a selector
+ * can take when nothing could recognise it to strip (#16470). A captured id can
+ * be short, so it only counts as a token of its own, and a prompt that mentions
+ * it is prose rather than a selector.
+ */
+export function commandNamesSession(command: string, sessionId: string | undefined): boolean {
+  if (!sessionId) return false;
+  const [, ...args] = splitShellWords(command);
+  return args.some((word) => {
+    const bare = unquoteShellWord(word);
+    if (bare === sessionId || bare.endsWith(`=${sessionId}`)) return true;
+    return !/\s/.test(bare) && holdsSessionIdToken(bare, sessionId);
+  });
 }
 
 const MODEL_FLAG = "--model";
@@ -1781,6 +1632,11 @@ export function dropUnselectedAgentModel<
 
 const ASSIGNABLE_SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Whether `sessionId` has the one shape an id-assigning CLI takes or mints: a UUID. */
+export function isAssignableSessionId(sessionId: string): boolean {
+  return ASSIGNABLE_SESSION_ID_PATTERN.test(sessionId);
+}
 
 /** Drop one layer of matching quotes, the kind `escapeShellArg` wraps a word in. */
 function unquoteShellWord(word: string): string {

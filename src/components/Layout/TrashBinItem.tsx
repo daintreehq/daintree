@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { RotateCcw, Unlink, X } from "lucide-react";
+import { RotateCcw, Trash2, Unlink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { DOCK_POPOVER_ROW_HOVER_CLASS } from "./dockStatusPill";
@@ -10,6 +10,7 @@ import type { TrashedTerminal } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { isUselessTitle } from "@shared/utils/isUselessTitle";
 import { cleanTaskTitle } from "@shared/utils/taskTitle";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
@@ -119,16 +120,12 @@ export function TrashBinItem({
           <TrashCountdownLabel countdown={countdown} name={terminalName} />
           {worktreeName && showWorktree ? (
             <>
-              <span aria-hidden="true" className="text-text-muted">
-                &middot;
-              </span>
+              <FactSeparator />
               <span className="truncate text-text-secondary">{worktreeName}</span>
             </>
           ) : isOrphan && showWorktree ? (
             <>
-              <span aria-hidden="true" className="text-text-muted">
-                &middot;
-              </span>
+              <FactSeparator />
               {/* A glyph, not just a colour: at the final approach the deadline
                   beside it is warning-coloured too, and two warnings that differ
                   only in hue read as one. */}
@@ -182,7 +179,7 @@ export function TrashBinItem({
               onClick={handleKill}
               aria-label={`Remove ${terminalName} permanently`}
             >
-              <X aria-hidden="true" />
+              <Trash2 aria-hidden="true" />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>

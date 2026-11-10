@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { Check, CircleCheck } from "lucide-react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "@/components/ui/button";
 import { Callout, type CalloutSeverity } from "@/components/ui/Callout";
 import {
@@ -269,6 +270,8 @@ const STAGE_OF: Record<string, StageId> = {
   copying: "prepare",
   verifying: "prepare",
   "waiting-for-idle": "wait",
+  // Another Shell is updating the host: this one goes on once it has finished.
+  "waiting-for-host": "wait",
   stopping: "stop",
   installing: "install",
   restarting: "start",
@@ -1202,9 +1205,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           <p className="mb-2 text-sm font-medium text-text-primary">WSL distributions</p>
           {discoverError !== null ? (
             <div className="flex items-start justify-between gap-3">
-              <p role="alert" className="text-sm text-text-secondary select-text">
+              <InlineError role="alert">
                 Couldn&apos;t list WSL distributions: {discoverError}
-              </p>
+              </InlineError>
               <Button variant="outline" size="sm" onClick={retryDiscover}>
                 Retry
               </Button>
@@ -1259,7 +1262,14 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                         </span>
                         <span className="block truncate text-xs text-text-secondary">
                           {host.wsl?.version ? `WSL ${host.wsl.version}` : "WSL"}
-                          {host.wsl?.isDefault ? " · Default" : ""}
+                          {host.wsl?.isDefault ? (
+                            <>
+                              {" "}
+                              <FactSeparator /> Default
+                            </>
+                          ) : (
+                            ""
+                          )}
                         </span>
                       </span>
                       <span className="shrink-0 text-xs text-text-secondary">
@@ -1633,7 +1643,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           : plan?.delivery === "host-fetch"
             ? `Download ${version} on ${hostLabel}`
             : `Copy ${version} to ${hostLabel}`,
-        wait: `Wait for ${hostLabel}'s agents to go idle`,
+        wait:
+          progress?.stage === "waiting-for-host"
+            ? `Wait for another device to finish updating ${hostLabel}`
+            : `Wait for ${hostLabel}'s agents to go idle`,
         stop: `Stop Daintree on ${hostLabel}`,
         install: `Install ${version}`,
         start: `Start Daintree on ${hostLabel}`,

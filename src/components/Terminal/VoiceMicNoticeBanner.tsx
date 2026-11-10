@@ -154,7 +154,7 @@ export function VoiceMicNoticeBanner({ notice }: VoiceMicNoticeBannerProps) {
         description={`${notice.chosenLabel ?? "The selected microphone"} isn't available, so dictation is using the system default`}
         action={{
           id: "open-voice-settings",
-          label: "Open Voice settings",
+          label: "Open voice settings",
           onClick: openVoiceSettings,
         }}
       />
@@ -178,7 +178,7 @@ export function VoiceMicNoticeBanner({ notice }: VoiceMicNoticeBannerProps) {
           void switchToMicFromNotice(notice).finally(() => setIsSwitching(false));
         },
       }
-    : { id: "open-voice-settings", label: "Open Voice settings", onClick: openVoiceSettings };
+    : { id: "open-voice-settings", label: "Open voice settings", onClick: openVoiceSettings };
 
   return (
     <InlineStatusBanner

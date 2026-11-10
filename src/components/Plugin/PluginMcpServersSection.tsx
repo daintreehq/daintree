@@ -4,8 +4,10 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { InlineError } from "@/components/ui/field";
 import { Callout } from "@/components/ui/Callout";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { ChevronRight, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SeverityMark } from "@/lib/statusSeverity";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -31,12 +33,14 @@ const POLL_INTERVAL_MS = 3000;
  */
 type RowStatus = PluginMcpServerStatus | "not-started";
 
-const STATUS_DOT: Record<RowStatus, string> = {
-  spawning: "bg-status-warning",
+// As the MCP server tab draws its own server: running keeps the live-process
+// green, starting is neutral (an amber pulse reads as an agent waiting), and a
+// crash takes the error glyph.
+const STATUS_DOT: Record<Exclude<RowStatus, "crashed">, string> = {
+  spawning: "bg-text-secondary",
   ready: "bg-activity-working",
-  crashed: "bg-status-danger",
-  stopped: "bg-daintree-text/30",
-  "not-started": "bg-daintree-text/30",
+  stopped: "bg-text-secondary",
+  "not-started": "bg-text-secondary",
 };
 
 const STATUS_LABEL: Record<RowStatus, string> = {
@@ -298,17 +302,29 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
               className="rounded-[var(--radius-md)] border border-border-default overflow-hidden"
             >
               <div className="flex items-center gap-3 px-3 py-2.5">
-                <span
-                  className={`w-2 h-2 rounded-full shrink-0 ${STATUS_DOT[status]} ${
-                    isSpawning ? "animate-pulse" : ""
-                  }`}
-                  aria-hidden
-                />
+                {status === "crashed" ? (
+                  <SeverityMark
+                    severity="error"
+                    label="Crashed"
+                    className="h-3.5 w-3.5"
+                    decorative
+                  />
+                ) : (
+                  <span
+                    className={cn("status-mark w-2 h-2 rounded-full shrink-0", STATUS_DOT[status])}
+                    aria-hidden
+                  />
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="text-sm text-text-primary truncate">{row.name}</div>
                   <div className="text-2xs text-text-secondary">
                     {STATUS_LABEL[status]}
-                    {row.info?.pid != null && status === "ready" && ` · pid ${row.info.pid}`}
+                    {row.info?.pid != null && status === "ready" && (
+                      <>
+                        {" "}
+                        <FactSeparator /> pid {row.info.pid}
+                      </>
+                    )}
                   </div>
                 </div>
                 <Button

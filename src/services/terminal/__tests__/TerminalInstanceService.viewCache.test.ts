@@ -105,6 +105,10 @@ type ViewCacheTestService = {
     releaseContext: (id: string) => void;
     pinFocus: (id: string, managed: ManagedTerminal) => void;
   };
+  noteHiddenOutputSkipped: (id: string) => void;
+  restoreController: {
+    fetchAndRestore: (id: string, options?: { authoritative?: boolean }) => Promise<boolean>;
+  };
   dispose: () => void;
 };
 
@@ -580,5 +584,244 @@ describe("TerminalInstanceService built inside a cached or hidden view (#14267)"
 
     service.instances.clear();
     service.dispose();
+  });
+});
+
+describe("TerminalInstanceService repaint after a hidden-view skip (#16497)", () => {
+  let service: ViewCacheTestService;
+  let restores: Array<{ id: string; settle: (ok: boolean) => void }>;
+
+  async function settleMicrotasks(): Promise<void> {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+    viewCache.cached = false;
+    viewCache.hidden = false;
+    viewCache.listeners.clear();
+    viewCache.visibilityListeners.clear();
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as ViewCacheTestService;
+    service.instances.clear();
+    restores = [];
+    // Each restore stays open until the test settles it, so the order and
+    // overlap of restores is observable.
+    vi.spyOn(service.restoreController, "fetchAndRestore").mockImplementation(
+      (id: string) =>
+        new Promise<boolean>((resolve) => {
+          restores.push({ id, settle: resolve });
+        })
+    );
+  });
+
+  afterEach(() => {
+    service.instances.clear();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    service.dispose();
+  });
+
+  it("asks for an authoritative restore", async () => {
+    service.instances.set("a", makeManaged());
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+
+    expect(service.restoreController.fetchAndRestore).toHaveBeenCalledWith("a", {
+      authoritative: true,
+    });
+  });
+
+  it("keeps a failed repaint's obligation and retries it a bounded number of times", async () => {
+    vi.useFakeTimers();
+    service.instances.set("a", makeManaged());
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      expect(restores).toHaveLength(attempt);
+      restores.at(-1)!.settle(false);
+      await settleMicrotasks();
+      vi.advanceTimersByTime(999);
+      await settleMicrotasks();
+      expect(restores).toHaveLength(attempt);
+      vi.advanceTimersByTime(1);
+      await settleMicrotasks();
+    }
+    // Out of timed retries: the next reactivation tries again.
+    expect(restores).toHaveLength(3);
+    emit("revealed");
+    await settleMicrotasks();
+    expect(restores).toHaveLength(4);
+
+    restores.at(-1)!.settle(true);
+    await settleMicrotasks();
+    vi.advanceTimersByTime(5000);
+    emit("revealed");
+    await settleMicrotasks();
+    expect(restores).toHaveLength(4);
+  });
+
+  it("spends timed retries only on panes that have them left", async () => {
+    vi.useFakeTimers();
+    service.instances.set("a", makeManaged());
+    service.instances.set("b", makeManaged());
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      restores.at(-1)!.settle(false);
+      await settleMicrotasks();
+      vi.advanceTimersByTime(1000);
+      await settleMicrotasks();
+    }
+    expect(restores.map((r) => r.id)).toEqual(["a", "a", "a"]);
+
+    // Another pane's notice and its timed retry leave the exhausted one alone.
+    service.noteHiddenOutputSkipped("b");
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "a", "a", "b"]);
+    restores.at(-1)!.settle(false);
+    await settleMicrotasks();
+    vi.advanceTimersByTime(1000);
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "a", "a", "b", "b"]);
+
+    // A reactivation retries it.
+    restores.at(-1)!.settle(true);
+    await settleMicrotasks();
+    emit("revealed");
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "a", "a", "b", "b", "a"]);
+  });
+
+  it("lets a fresh notice's successful repaint stand over an earlier failure", async () => {
+    vi.useFakeTimers();
+    service.instances.set("a", makeManaged());
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+
+    // Another skip is reported while the first repaint is still running.
+    service.noteHiddenOutputSkipped("a");
+    restores[0]!.settle(false);
+    await settleMicrotasks();
+    expect(restores).toHaveLength(2);
+    restores[1]!.settle(true);
+    await settleMicrotasks();
+
+    vi.advanceTimersByTime(5000);
+    await settleMicrotasks();
+    expect(restores).toHaveLength(2);
+  });
+
+  it("runs a reactivation that arrives mid-pass once the pass ends", async () => {
+    vi.useFakeTimers();
+    service.instances.set("a", makeManaged());
+    service.instances.set("b", makeManaged());
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      restores.at(-1)!.settle(false);
+      await settleMicrotasks();
+      vi.advanceTimersByTime(1000);
+      await settleMicrotasks();
+    }
+    service.noteHiddenOutputSkipped("b");
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "a", "a", "b"]);
+
+    // The view is cached and comes back while b's repaint is in flight.
+    emit("cached");
+    emit("active");
+    restores.at(-1)!.settle(true);
+    await settleMicrotasks();
+
+    expect(restores.map((r) => r.id)).toEqual(["a", "a", "a", "b", "a"]);
+  });
+
+  it("does not hand a failed repaint to a pane recreated under the same id", async () => {
+    vi.useFakeTimers();
+    service.instances.set("a", makeManaged());
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+
+    service.instances.set("a", makeManaged());
+    restores[0]!.settle(false);
+    await settleMicrotasks();
+    vi.advanceTimersByTime(5000);
+    emit("revealed");
+    await settleMicrotasks();
+
+    expect(restores).toHaveLength(1);
+  });
+
+  it("waits for the view to come back, then repaints each skipped pane once, one at a time", async () => {
+    service.instances.set("a", makeManaged());
+    service.instances.set("b", makeManaged());
+    service.instances.set("c", makeManaged());
+    emit("cached");
+
+    service.noteHiddenOutputSkipped("a");
+    service.noteHiddenOutputSkipped("b");
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+    expect(restores).toHaveLength(0);
+
+    emit("active");
+    emit("revealed");
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a"]);
+
+    restores[0]!.settle(true);
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "b"]);
+
+    restores[1]!.settle(true);
+    await settleMicrotasks();
+    emit("revealed");
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "b"]);
+  });
+
+  it("repaints at once when the notice reaches a view that is already back", async () => {
+    service.instances.set("a", makeManaged());
+
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+
+    expect(restores.map((r) => r.id)).toEqual(["a"]);
+  });
+
+  it("leaves the rest for the next reactivation when the view is cached mid-repaint", async () => {
+    service.instances.set("a", makeManaged());
+    service.instances.set("b", makeManaged());
+    emit("cached");
+    service.noteHiddenOutputSkipped("a");
+    service.noteHiddenOutputSkipped("b");
+
+    emit("active");
+    await settleMicrotasks();
+    emit("cached");
+    restores[0]!.settle(true);
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a"]);
+
+    emit("active");
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "b"]);
+  });
+
+  it("skips a pane that went away before its view came back", async () => {
+    service.instances.set("a", makeManaged());
+    service.instances.set("b", makeManaged());
+    emit("cached");
+    service.noteHiddenOutputSkipped("a");
+    service.noteHiddenOutputSkipped("b");
+    service.instances.delete("a");
+
+    emit("active");
+    await settleMicrotasks();
+
+    expect(restores.map((r) => r.id)).toEqual(["b"]);
   });
 });

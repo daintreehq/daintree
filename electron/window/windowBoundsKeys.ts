@@ -20,6 +20,18 @@ import { isRemoteWorkspaceKey } from "../services/persistence/windowManifest.js"
 const SCRATCH_PREFIX = "scratch:";
 const HOST_PREFIX = "host:";
 
+/**
+ * The Canopy window's bounds (#16336). It shows no workspace, and its bounds
+ * are its own: never lent to a project window as a fallback, never borrowed
+ * from one, never evicted by the cap on workspace entries.
+ */
+export const CANOPY_BOUNDS_KEY = "canopy:window";
+
+/** A key whose bounds belong to one window alone (see {@link CANOPY_BOUNDS_KEY}). */
+export function isSeparateBoundsKey(key: string): boolean {
+  return key === CANOPY_BOUNDS_KEY;
+}
+
 export function scratchBoundsKey(scratchId: string): string {
   return `${SCRATCH_PREFIX}${scratchId}`;
 }

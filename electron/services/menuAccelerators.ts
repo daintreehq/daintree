@@ -252,6 +252,25 @@ export function isRendererOwnedShortcut(input: Electron.Input): boolean {
   );
 }
 
+/**
+ * The keystrokes an app renderer keeps from the native menu, per event
+ * (setIgnoreMenuShortcuts in createWindow.ts and ProjectViewHandlers.ts):
+ * renderer-owned accelerators, and Cmd+W (Ctrl+W off the Mac), which closes
+ * what the keyboard is in. That is a panel or dialog in a project window, and
+ * the focused agent's terminal or the window itself in the Canopy window,
+ * whose renderer closes it (#16618). Close Window's menu item and the OS close
+ * control close every window whatever this says.
+ */
+export function keepsKeyFromMenu(input: Electron.Input): boolean {
+  const mac = process.platform === "darwin";
+  const isCloseShortcut =
+    input.type === "keyDown" &&
+    input.key.toLowerCase() === "w" &&
+    (mac ? input.meta && !input.control : input.control && !input.meta) &&
+    !input.alt;
+  return isCloseShortcut || isRendererOwnedShortcut(input);
+}
+
 function acceleratorMatchesInput(
   acc: ParsedAccelerator,
   input: Electron.Input,

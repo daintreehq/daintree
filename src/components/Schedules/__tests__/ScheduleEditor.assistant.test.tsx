@@ -132,7 +132,44 @@ describe("ScheduleEditor: the Daintree Assistant (#16169)", () => {
           presetId: null,
           prompt: "Go.",
           worktreeId: null,
+          newWorktree: null,
         },
+      })
+    );
+  });
+
+  it("switching a new-worktree schedule to the Assistant drops the mode with its base", async () => {
+    const schedule = {
+      ...existing("claude"),
+      launch: {
+        agentId: "claude",
+        presetId: null,
+        prompt: "Go.",
+        worktreeId: null,
+        newWorktree: { baseBranch: "main", fromRemote: false },
+      },
+    };
+    clientMock.update.mockResolvedValue({
+      status: "saved",
+      schedule,
+      snapshot: { projectId: "p1", schedules: [], revision: 1 },
+    });
+    renderEditor(schedule);
+
+    Element.prototype.scrollIntoView ??= () => {};
+    HTMLElement.prototype.hasPointerCapture ??= () => false;
+    HTMLElement.prototype.releasePointerCapture ??= () => {};
+    const trigger = screen.getByRole("combobox", { name: "Agent" });
+    await act(async () => fireEvent.keyDown(trigger, { key: "Enter" }));
+    const assistant = await screen.findByRole("option", { name: "Daintree Assistant" });
+    await act(async () => fireEvent.keyDown(assistant, { key: "Enter" }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Save changes" })));
+
+    expect(clientMock.update).toHaveBeenCalledWith(
+      "s1",
+      schedule.updatedAt,
+      expect.objectContaining({
+        launch: expect.objectContaining({ worktreeId: null, newWorktree: null }),
       })
     );
   });
@@ -140,7 +177,13 @@ describe("ScheduleEditor: the Daintree Assistant (#16169)", () => {
   it("switching an agent's schedule to the Assistant drops its preset, worktree and background", async () => {
     const schedule = {
       ...existing("claude", "background"),
-      launch: { agentId: "claude", presetId: "fast", prompt: "Go.", worktreeId: "/wt" },
+      launch: {
+        agentId: "claude",
+        presetId: "fast",
+        prompt: "Go.",
+        worktreeId: "/wt",
+        newWorktree: null,
+      },
     };
     clientMock.update.mockResolvedValue({
       status: "saved",
@@ -173,6 +216,7 @@ describe("ScheduleEditor: the Daintree Assistant (#16169)", () => {
           presetId: null,
           prompt: "Go.",
           worktreeId: null,
+          newWorktree: null,
         },
         policies: expect.objectContaining({ onDone: "keep" }),
       })

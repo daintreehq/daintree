@@ -23,6 +23,11 @@ function setup(
 ) {
   const pty = makePty({ [terminal.id]: { projectId: PROJECT.id, cwd: "/repo", ...record } });
   const made = makeDeps({ getPtyReader: () => pty }, { state: stateWith(terminal) });
+  // Detection found Claude on PATH, and nothing for the other agents here.
+  made.deps.agents.getCliDetail = async (agentId) =>
+    agentId === "claude"
+      ? { state: "ready", resolvedPath: "/usr/local/bin/claude", via: "which" }
+      : undefined;
   made.invoke.mockImplementation(async (_projectId, channel, args) => {
     if (channel === CHANNELS.TERMINAL_GRACEFUL_KILL) return killAnswer;
     if (channel === CHANNELS.TERMINAL_SPAWN) return (args[0] as { id: string }).id;
@@ -90,7 +95,30 @@ describe("restartTerminalWithoutView", () => {
     );
 
     await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
-    expect(spawned(invoke).command).toBe("claude --model opus");
+    // The stored arguments, started with the copy a launch starts now.
+    expect(spawned(invoke).command).toBe("/usr/local/bin/claude --model opus");
+  });
+
+  // A pane launched before another copy was chosen starts over with the chosen
+  // one, prompt and arguments intact (#16399).
+  it("starts over with the copy chosen since the pane launched", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "claude",
+        command: "'/old copy/claude' --model opus 'Fix the login bug'",
+      },
+      { agentState: "working" }
+    );
+    deps.agents.getCliDetail = async () => ({
+      state: "missing",
+      resolvedPath: null,
+      via: null,
+      chosenPath: "/opt/chosen/claude",
+    });
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    expect(spawned(invoke).command).toBe("/opt/chosen/claude --model opus 'Fix the login bug'");
   });
 
   // #15977: the pane is still the scheduled run's, so the host's record keeps
@@ -170,6 +198,39 @@ describe("restartTerminalWithoutView", () => {
 
     await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("unsupported");
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("resumes inline from a snapshot saved with alt screen chosen (#16356)", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "grok",
+        command: "grok --fullscreen",
+        agentLaunchFlags: ["--fullscreen", "--model", "grok-build"],
+      },
+      { agentState: "working", launchAgentId: "grok" },
+      "sess-123"
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    const spawn = spawned(invoke);
+    const tokens = String(spawn.command).split(" ");
+    expect(tokens).toContain("--no-alt-screen");
+    expect(tokens).not.toContain("--fullscreen");
+    expect(spawn.agentLaunchFlags).toEqual(["--no-alt-screen", "--model", "grok-build"]);
+  });
+
+  it("keeps an empty snapshot empty, while the resume still launches inline (#16356)", async () => {
+    const { deps, invoke } = setup(
+      { id: "t1", launchAgentId: "codex", command: "codex", agentLaunchFlags: [] },
+      { agentState: "working", launchAgentId: "codex" },
+      "sess-123"
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    const spawn = spawned(invoke);
+    expect(String(spawn.command).split(" ")).toContain("--no-alt-screen");
+    expect(spawn.agentLaunchFlags).toEqual([]);
   });
 
   it("relaunches a Vibe pane that holds no model", async () => {

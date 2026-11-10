@@ -7,6 +7,7 @@ import { diffMediaClient } from "@/clients/diffMediaClient";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 import { formatBytes } from "@/lib/formatBytes";
@@ -251,7 +252,13 @@ function FactsLine({ parts, className }: { parts?: string[]; className?: string 
             <span key={part}>
               {/* The break falls before the dot, so it opens the next line
                   rather than dangling at the end of this one. */}
-              {index > 0 ? " \u00b7\u00a0" : null}
+              {index > 0 ? (
+                <>
+                  {" "}
+                  <FactSeparator />
+                  {"\u00a0"}
+                </>
+              ) : null}
               {part.replaceAll(" ", "\u00a0")}
             </span>
           ))
@@ -848,7 +855,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status, side }: ImageDi
           title="Couldn't load image versions"
           description="Neither version of this image could be read"
           action={
-            <Button variant="contrast" size="sm" onClick={retry}>
+            <Button variant="outline" size="sm" onClick={retry}>
               Retry
             </Button>
           }

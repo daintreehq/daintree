@@ -1,9 +1,34 @@
-import { useEffect } from "react";
+import { use, useEffect } from "react";
+import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
+import type { WorktreeViewStoreApi } from "@/store/createWorktreeStore";
 import type { ActionDispatchResult } from "@shared/types/actions";
 import { isPtyPanel } from "@shared/types/panel";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+
+/**
+ * How long a view waits to hear of a worktree main just made for a run. Well
+ * inside main's minute for an answer, so what it says about a view that never
+ * hears is the launcher's own refusal of an unknown worktree.
+ */
+const NEW_WORKTREE_ARRIVAL_TIMEOUT_MS = 20_000;
+
+/** Resolves once the view's store holds the worktree, or after the timeout. Never rejects. */
+function whenWorktreeArrives(store: WorktreeViewStoreApi, worktreeId: string): Promise<void> {
+  if (store.getState().worktrees.has(worktreeId)) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    };
+    const timer = setTimeout(finish, NEW_WORKTREE_ARRIVAL_TIMEOUT_MS);
+    const unsubscribe = store.subscribe((state) => {
+      if (state.worktrees.has(worktreeId)) finish();
+    });
+  });
+}
 
 /**
  * Launches the scheduled runs main hands this view (#15978), so a run's pane
@@ -16,17 +41,27 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
  * schedule. Main registers the run when the terminal spawns, and reads this
  * answer only for why a launch started nothing.
  *
+ * A worktree main just made for the run (#16369) reaches this view on its own
+ * port, so the launch waits to hear of it rather than refusing it as unknown.
+ *
  * It also drops the pane of a run main closed to replace it (#15980). Main
  * already ended the terminal and kept its session, so only the pane goes, and
  * only one that holds that run.
  */
 export function useScheduledRunLaunchBridge(): void {
+  const worktreeStore = use(WorktreeStoreContext);
   useEffect(() => {
     const schedules = window.electron?.schedules;
     if (!schedules?.onLaunchRequest) return;
     let disposed = false;
-    const cleanup = schedules.onLaunchRequest(({ requestId, args, scheduledRun }) => {
+    const cleanup = schedules.onLaunchRequest(({ requestId, args, scheduledRun, newWorktree }) => {
       void (async () => {
+        const { worktreeId } = args;
+        if (newWorktree && worktreeStore && typeof worktreeId === "string") {
+          await whenWorktreeArrives(worktreeStore, worktreeId);
+          // Main's wait runs out instead; nothing launches for a view that's gone.
+          if (disposed) return;
+        }
         let result: ActionDispatchResult;
         try {
           result = await actionService.dispatch("agent.launch", args, {
@@ -62,5 +97,5 @@ export function useScheduledRunLaunchBridge(): void {
       cleanup();
       cleanupClosed?.();
     };
-  }, []);
+  }, [worktreeStore]);
 }

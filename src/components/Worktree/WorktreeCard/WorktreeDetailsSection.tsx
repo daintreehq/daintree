@@ -1,6 +1,7 @@
 import type React from "react";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { DiffStat } from "@/components/ui/DiffStat";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { prefetchStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
@@ -441,7 +442,9 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                         />
                       </span>
                       {reviewChangeLine && (
-                        <span className="truncate text-text-secondary">· {reviewChangeLine}</span>
+                        <span className="truncate text-text-secondary">
+                          <FactSeparator /> {reviewChangeLine}
+                        </span>
                       )}
                     </span>
                   ) : (
@@ -471,7 +474,9 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       )}
                       <span className="truncate">{computedSubtitle.text}</span>
                       {reviewChangeLine && (
-                        <span className="truncate text-text-secondary">· {reviewChangeLine}</span>
+                        <span className="truncate text-text-secondary">
+                          <FactSeparator /> {reviewChangeLine}
+                        </span>
                       )}
                     </span>
                   )}
@@ -619,7 +624,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                         "-my-1 mr-0.5 flex min-h-6 min-w-6 items-center justify-center rounded-[var(--radius-md)] px-1.5",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                       )}
-                      aria-label={`Open ${reviewHubButtonLabel}`}
+                      aria-label={reviewHubButtonLabel}
                     >
                       <GitCommitHorizontal className="w-3.5 h-3.5" />
                     </button>

@@ -1,6 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { LAUNCH_MCP_FORMATS } from "../../../shared/config/launchMcp.js";
-import { AgentContributionSchema, getPluginManifestSchema } from "../plugin.js";
+import { PROMPT_FORM_PLACEHOLDER } from "../../../shared/config/agentRegistry.js";
+import {
+  LAUNCH_MCP_ENV_ONLY_FORMATS,
+  LAUNCH_MCP_FORMATS,
+} from "../../../shared/config/launchMcp.js";
+import {
+  AgentContributionSchema,
+  getPluginManifestSchema,
+  resolveAgentExecutableNames,
+} from "../plugin.js";
+import { AGENT_CLI_NAMES } from "../../services/ProcessDetector/registries.js";
+import {
+  PROCESS_TOOL_ICON_BY_COMMAND,
+  getProcessToolConfig,
+} from "../../../shared/config/processToolRegistry.js";
 
 const VALID_AGENT = {
   id: "acme-agent",
@@ -17,6 +30,52 @@ function manifestWith(overrides: Record<string, unknown>) {
     ...overrides,
   };
 }
+
+describe("a prompt form's -- beside launchMcp (#16404)", () => {
+  const schema = getPluginManifestSchema("user");
+  const terminated = { args: ["--", "{prompt}"] };
+  const flagged = { args: ["--task", "{prompt}"] };
+  const issues = (agent: Record<string, unknown>) =>
+    schema
+      .safeParse(
+        manifestWith({
+          capabilities: ["agent:register"],
+          contributes: { agents: [{ ...VALID_AGENT, ...agent }] },
+        })
+      )
+      .error?.issues.map((issue) => issue.path.join(".")) ?? [];
+
+  it("refuses it in either mode with a format that adds flags", () => {
+    const launchMcp = { format: "claude-mcp-config" };
+    expect(
+      issues({ launchMcp, initialPromptForm: { interactive: terminated, headless: flagged } })
+    ).toEqual(["contributes.agents.0.initialPromptForm.interactive.args"]);
+    expect(
+      issues({ launchMcp, initialPromptForm: { interactive: flagged, headless: terminated } })
+    ).toEqual(["contributes.agents.0.initialPromptForm.headless.args"]);
+  });
+
+  it.each([...LAUNCH_MCP_ENV_ONLY_FORMATS])("allows it with %s, which adds no flags", (format) => {
+    expect(
+      issues({
+        launchMcp: { format },
+        initialPromptForm: { interactive: terminated, headless: terminated },
+      })
+    ).toEqual([]);
+  });
+
+  it("allows it without launchMcp, and any other form with it", () => {
+    expect(
+      issues({ initialPromptForm: { interactive: terminated, headless: terminated } })
+    ).toEqual([]);
+    expect(
+      issues({
+        launchMcp: { format: "claude-mcp-config" },
+        initialPromptForm: { interactive: flagged, headless: flagged },
+      })
+    ).toEqual([]);
+  });
+});
 
 describe("AgentContributionSchema (issue #9560)", () => {
   it("accepts a minimal agent contribution and defaults supportsContextInjection to false", () => {
@@ -128,6 +187,129 @@ describe("AgentContributionSchema (issue #9560)", () => {
     });
   });
 
+  describe("initialPromptForm (#16404)", () => {
+    const FORM = { args: ["--task", "{prompt}"] };
+    const parse = (initialPromptForm: unknown) =>
+      AgentContributionSchema.safeParse({ ...VALID_AGENT, initialPromptForm });
+    const withInteractive = (interactive: unknown) => parse({ interactive, headless: FORM });
+    const message = (result: ReturnType<typeof parse>) => result.error?.issues[0]?.message;
+
+    it("accepts both modes with a subcommand and a caveat, and keeps every field", () => {
+      const declared = {
+        interactive: {
+          args: ["--", PROMPT_FORM_PLACEHOLDER],
+          caveat: "may-be-ignored",
+        },
+        headless: {
+          subcommand: { name: "run", replaces: "session" },
+          args: ["-t", PROMPT_FORM_PLACEHOLDER, "--quiet"],
+          caveat: "exits-after-reply",
+        },
+      };
+      const result = parse(declared);
+      expect(result.success).toBe(true);
+      expect(result.data?.initialPromptForm).toEqual(declared);
+    });
+
+    it("stays optional", () => {
+      const result = AgentContributionSchema.safeParse(VALID_AGENT);
+      expect(result.success).toBe(true);
+      expect(result.data).not.toHaveProperty("initialPromptForm");
+    });
+
+    it("needs both modes", () => {
+      expect(parse({ interactive: FORM }).success).toBe(false);
+      expect(parse({ headless: FORM }).success).toBe(false);
+      expect(parse({}).success).toBe(false);
+    });
+
+    it.each([
+      ["the declaration", { interactive: FORM, headless: FORM, oneShot: FORM }, [], "oneShot"],
+      [
+        "a mode",
+        { interactive: { ...FORM, build: "--task {prompt}" }, headless: FORM },
+        ["interactive"],
+        "build",
+      ],
+      [
+        "a subcommand",
+        {
+          interactive: { ...FORM, subcommand: { name: "run", replaces: "chat", at: 1 } },
+          headless: FORM,
+        },
+        ["interactive", "subcommand"],
+        "at",
+      ],
+    ])("names an unknown field on %s and where it is", (_level, declared, path, key) => {
+      const issue = parse(declared).error?.issues[0];
+      expect(issue?.path).toEqual(["initialPromptForm", ...path]);
+      expect(issue?.message).toContain(key);
+    });
+
+    it("rejects anything but plain data for the args", () => {
+      expect(withInteractive({ args: "--task {prompt}" }).success).toBe(false);
+      expect(withInteractive({ args: () => ["{prompt}"] }).success).toBe(false);
+      expect(withInteractive({ args: [] }).success).toBe(false);
+    });
+
+    it.each([
+      ["missing", ["--task"]],
+      ["repeated", ["{prompt}", "{prompt}"]],
+      ["embedded", ["--task={prompt}"]],
+      ["embedded beside a whole one", ["{prompt}", "--again={prompt}"]],
+    ])("rejects a {prompt} that is %s, saying how to write it", (_name, args) => {
+      expect(message(withInteractive({ args }))).toBe(
+        "A prompt form's args must contain {prompt} exactly once, as a whole arg"
+      );
+    });
+
+    it.each(["--a\nb", "--a\rb", "--a\0b", "--a\tb", "--a\u001bb", "--a\u007fb", "--a\u0085b"])(
+      "rejects the control character in %j",
+      (arg) => {
+        expect(message(withInteractive({ args: [arg, "{prompt}"] }))).toBe(
+          "A prompt form's args can't contain control characters"
+        );
+      }
+    );
+
+    it("bounds the args and their length", () => {
+      expect(withInteractive({ args: ["a".repeat(256), "{prompt}"] }).success).toBe(true);
+      const tooLong = withInteractive({ args: ["a".repeat(257), "{prompt}"] }).error?.issues[0];
+      expect(tooLong?.path).toEqual(["initialPromptForm", "interactive", "args", 0]);
+      expect(tooLong?.message).toContain("256");
+      expect(withInteractive({ args: ["", "{prompt}"] }).success).toBe(false);
+      const padding = Array.from({ length: 19 }, (_, index) => `-${index}`);
+      expect(withInteractive({ args: [...padding, "{prompt}"] }).success).toBe(true);
+      const tooMany = withInteractive({ args: [...padding, "-x", "{prompt}"] }).error?.issues[0];
+      expect(tooMany?.path).toEqual(["initialPromptForm", "interactive", "args"]);
+      expect(tooMany?.message).toContain("20");
+    });
+
+    it.each(["--id={sessionId}", "--token=${settings:apiToken}", "${HOME}"])(
+      "rejects the template in %s",
+      (arg) => {
+        expect(message(withInteractive({ args: [arg, "{prompt}"] }))).toContain("can't carry");
+      }
+    );
+
+    it.each([
+      ["an option", { name: "--run", replaces: "chat" }],
+      ["two words", { name: "ask it", replaces: "chat" }],
+      ["a template", { name: "${settings:mode}", replaces: "chat" }],
+      ["a placeholder", { name: "{prompt}", replaces: "chat" }],
+      ["an option to replace", { name: "run", replaces: "--chat" }],
+      ["a missing name", { replaces: "chat" }],
+      ["a missing word to replace", { name: "run" }],
+      ["an over-long word", { name: "a".repeat(65), replaces: "chat" }],
+    ])("rejects a subcommand with %s", (_name, subcommand) => {
+      expect(withInteractive({ ...FORM, subcommand }).success).toBe(false);
+    });
+
+    it("rejects a caveat the host doesn't define", () => {
+      expect(withInteractive({ ...FORM, caveat: "flaky" }).success).toBe(false);
+    });
+  });
+
   describe("resume (#13687)", () => {
     const parses = (resume: unknown) =>
       AgentContributionSchema.safeParse({ ...VALID_AGENT, resume }).success;
@@ -230,12 +412,84 @@ describe("AgentContributionSchema (issue #9560)", () => {
     });
 
     it("rejects unknown resume fields (strict)", () => {
-      expect(
-        parses({ kind: "session-id", args: ["{sessionId}"], assignSessionIdArgs: ["--id"] })
-      ).toBe(false);
+      expect(parses({ kind: "session-id", args: ["{sessionId}"], shutdownSignal: "ctrl-c" })).toBe(
+        false
+      );
       expect(
         parses({ kind: "project-scoped", args: ["--continue"], sessionIdPattern: "(x)" })
       ).toBe(false);
+      expect(
+        parses({
+          kind: "project-scoped",
+          args: ["--continue"],
+          assignSessionIdArgs: ["--session-id", "{sessionId}"],
+        })
+      ).toBe(false);
+    });
+
+    describe("assignSessionIdArgs (#16470)", () => {
+      const assigning = (assignSessionIdArgs: unknown) =>
+        parses({ kind: "session-id", args: ["--resume", "{sessionId}"], assignSessionIdArgs });
+
+      it("accepts a flag followed by the id, or a flag fused to it", () => {
+        expect(assigning(["--session-id", "{sessionId}"])).toBe(true);
+        expect(assigning(["--session-id={sessionId}"])).toBe(true);
+        expect(assigning(["-s", "{sessionId}"])).toBe(true);
+        expect(assigning(["--new", "--id", "{sessionId}"])).toBe(true);
+      });
+
+      it("keeps today's declarations valid without it", () => {
+        expect(
+          parses({
+            kind: "session-id",
+            args: ["--session", "{sessionId}"],
+            quitCommand: "/quit",
+            resumeLatestArgs: ["--continue"],
+          })
+        ).toBe(true);
+      });
+
+      it("accepts the same args as resume, for a CLI whose flag opens or creates", () => {
+        expect(
+          parses({
+            kind: "session-id",
+            args: ["--session-id", "{sessionId}"],
+            assignSessionIdArgs: ["--session-id", "{sessionId}"],
+          })
+        ).toBe(true);
+      });
+
+      it("needs the placeholder exactly once", () => {
+        expect(assigning(["--session-id"])).toBe(false);
+        expect(assigning(["--session-id", "{sessionId}", "{sessionId}"])).toBe(false);
+        expect(assigning(["--a={sessionId}", "--b={sessionId}"])).toBe(false);
+        expect(assigning([])).toBe(false);
+      });
+
+      it("refuses a placeholder with no flag to anchor it, which would match any word", () => {
+        expect(assigning(["{sessionId}"])).toBe(false);
+        expect(assigning(["{sessionId}", "--session-id"])).toBe(false);
+      });
+
+      it("refuses a fused form that isn't --option={sessionId}", () => {
+        expect(assigning(["--{sessionId}"])).toBe(false);
+        expect(assigning(["--session-{sessionId}"])).toBe(false);
+        expect(assigning(["--session-id={sessionId}.json"])).toBe(false);
+        expect(assigning(["session={sessionId}"])).toBe(false);
+      });
+
+      it("refuses a word a launch would quote, which couldn't be stripped back off", () => {
+        expect(assigning(["session", "--id", "{sessionId}"])).toBe(false);
+        expect(assigning(["--session id", "{sessionId}"])).toBe(false);
+        expect(assigning(["--session-id", "{sessionId}", "$(whoami)"])).toBe(false);
+      });
+
+      it("refuses control characters and oversized templates like any resume arg", () => {
+        expect(assigning(["--session-id\n", "{sessionId}"])).toBe(false);
+        expect(assigning([...Array.from({ length: 20 }, () => "-x"), "--id", "{sessionId}"])).toBe(
+          false
+        );
+      });
     });
   });
 
@@ -339,5 +593,569 @@ describe("manifest-level agent contribution gates (issue #9560)", () => {
       })
     );
     expect(result.success).toBe(false);
+  });
+});
+
+describe("permissionBypassArgs (#16374)", () => {
+  const parses = (permissionBypassArgs: unknown) =>
+    AgentContributionSchema.safeParse({ ...VALID_AGENT, permissionBypassArgs }).success;
+
+  it("accepts a flag, or an option with its value", () => {
+    expect(parses(["--yes-to-all"])).toBe(true);
+    expect(parses(["--approval", "never"])).toBe(true);
+    expect(parses(["-c", "approval_policy=never"])).toBe(true);
+  });
+
+  it("is optional and maps through unchanged", () => {
+    const parsed = AgentContributionSchema.safeParse({
+      ...VALID_AGENT,
+      permissionBypassArgs: ["--yolo"],
+    });
+    expect(parsed.success && parsed.data.permissionBypassArgs).toEqual(["--yolo"]);
+    expect(AgentContributionSchema.safeParse(VALID_AGENT).success).toBe(true);
+  });
+
+  it("bounds the args like other agent args", () => {
+    expect(parses([])).toBe(false);
+    expect(parses(Array.from({ length: 21 }, (_, i) => `--flag${i}`))).toBe(false);
+    expect(parses(Array.from({ length: 20 }, (_, i) => `--flag${i}`))).toBe(true);
+    expect(parses([`--${"a".repeat(254)}`])).toBe(true);
+    expect(parses([`--${"a".repeat(255)}`])).toBe(false);
+    expect(parses(["--bad\nflag"])).toBe(false);
+    expect(parses(["--bad\0flag"])).toBe(false);
+    expect(parses("--yolo")).toBe(false);
+  });
+
+  it("rejects an empty token, whitespace inside one, or a template a launch would expand", () => {
+    expect(parses([""])).toBe(false);
+    expect(parses(["--approval never"])).toBe(false);
+    expect(parses(["--approval\tnever"])).toBe(false);
+    expect(parses(["--session={sessionId}"])).toBe(false);
+    expect(parses(["--token=${settings:apiToken}"])).toBe(false);
+    expect(parses(["--home=${HOME}"])).toBe(false);
+  });
+
+  it("takes options only, each followed by at most one value", () => {
+    expect(parses(["yolo"])).toBe(false);
+    expect(parses(["--approval", "never", "always"])).toBe(false);
+    expect(parses(["--yes", "--approval", "never"])).toBe(true);
+    expect(parses(["-y"])).toBe(true);
+  });
+
+  describe("kept out of args every launch or resume carries", () => {
+    const schema = getPluginManifestSchema("user");
+    const withAgent = (agent: Record<string, unknown>) =>
+      schema.safeParse(
+        manifestWith({
+          capabilities: ["agent:register"],
+          contributes: { agents: [{ ...VALID_AGENT, ...agent }] },
+        })
+      );
+    const issuePaths = (agent: Record<string, unknown>) =>
+      withAgent(agent).error?.issues.map((issue) => issue.path.join(".")) ?? [];
+
+    it("rejects a declared flag in the default args", () => {
+      expect(issuePaths({ args: ["--tui", "--yolo"], permissionBypassArgs: ["--yolo"] })).toEqual([
+        "contributes.agents.0.args",
+      ]);
+      expect(
+        issuePaths({ args: ["--approval", "never"], permissionBypassArgs: ["--approval", "never"] })
+      ).toEqual(["contributes.agents.0.args"]);
+    });
+
+    it("rejects any one declared option, not only the whole declaration", () => {
+      expect(
+        issuePaths({ args: ["--yes"], permissionBypassArgs: ["--yes", "--approval", "never"] })
+      ).toEqual(["contributes.agents.0.args"]);
+      expect(
+        issuePaths({
+          args: ["--approval", "never"],
+          permissionBypassArgs: ["--yes", "--approval", "never"],
+        })
+      ).toEqual(["contributes.agents.0.args"]);
+    });
+
+    it("rejects a declared flag in resume args", () => {
+      expect(
+        issuePaths({
+          permissionBypassArgs: ["--yolo"],
+          resume: { kind: "project-scoped", args: ["--continue", "--yolo"] },
+        })
+      ).toEqual(["contributes.agents.0.resume.args"]);
+      expect(
+        issuePaths({
+          permissionBypassArgs: ["--yolo"],
+          resume: {
+            kind: "session-id",
+            args: ["--resume", "{sessionId}"],
+            resumeLatestArgs: ["--continue", "--yolo"],
+          },
+        })
+      ).toEqual(["contributes.agents.0.resume.resumeLatestArgs"]);
+      expect(
+        issuePaths({
+          permissionBypassArgs: ["--yolo"],
+          resume: { kind: "session-id", args: ["--resume", "{sessionId}", "--yolo"] },
+        })
+      ).toEqual(["contributes.agents.0.resume.args"]);
+      expect(
+        issuePaths({
+          permissionBypassArgs: ["--yolo"],
+          resume: {
+            kind: "session-id",
+            args: ["--resume", "{sessionId}"],
+            assignSessionIdArgs: ["--yolo", "--session-id", "{sessionId}"],
+          },
+        })
+      ).toEqual(["contributes.agents.0.resume.assignSessionIdArgs"]);
+    });
+
+    it("rejects a declared option carried in either prompt form", () => {
+      const clean = { args: ["{prompt}"] };
+      const carrying = { args: ["--approval", "never", "{prompt}"] };
+      const permissionBypassArgs = ["--approval", "never"];
+      expect(
+        issuePaths({
+          permissionBypassArgs,
+          initialPromptForm: { interactive: carrying, headless: clean },
+        })
+      ).toEqual(["contributes.agents.0.initialPromptForm.interactive.args"]);
+      expect(
+        issuePaths({
+          permissionBypassArgs,
+          initialPromptForm: { interactive: clean, headless: carrying },
+        })
+      ).toEqual(["contributes.agents.0.initialPromptForm.headless.args"]);
+      expect(
+        withAgent({
+          permissionBypassArgs,
+          initialPromptForm: {
+            interactive: { args: ["--approval", "ask", "{prompt}"] },
+            headless: clean,
+          },
+        }).success
+      ).toBe(true);
+    });
+
+    it("allows the same option with another value, and a shared option prefix", () => {
+      expect(
+        withAgent({ args: ["--approval", "ask"], permissionBypassArgs: ["--approval", "never"] })
+          .success
+      ).toBe(true);
+      expect(
+        withAgent({
+          args: ["-c", "model=fast"],
+          permissionBypassArgs: ["-c", "approval_policy=never"],
+        }).success
+      ).toBe(true);
+      expect(withAgent({ args: ["--tui"], permissionBypassArgs: ["--yolo"] }).success).toBe(true);
+      expect(withAgent({ permissionBypassArgs: ["--yolo"] }).success).toBe(true);
+      expect(withAgent({ args: ["--yolo"] }).success).toBe(true);
+    });
+  });
+});
+
+describe("discovery metadata (#16468)", () => {
+  const schema = getPluginManifestSchema("user");
+  const withAgent = (agent: Record<string, unknown>) =>
+    schema.safeParse(
+      manifestWith({
+        capabilities: ["agent:register"],
+        contributes: { agents: [{ ...VALID_AGENT, ...agent }] },
+      })
+    );
+  const errorCodes = (agent: Record<string, unknown>) =>
+    withAgent(agent).error?.issues.map(
+      (issue) => (issue as { params?: { errorCode?: string } }).params?.errorCode
+    ) ?? [];
+  const issuePaths = (agent: Record<string, unknown>) =>
+    withAgent(agent).error?.issues.map((issue) => issue.path.join(".")) ?? [];
+
+  it("accepts the Pi and mini-swe-agent shapes the issue names", () => {
+    expect(
+      withAgent({
+        id: "pi",
+        command: "pi",
+        packages: { npm: "@earendil-works/pi-coding-agent" },
+      }).success
+    ).toBe(true);
+    expect(
+      withAgent({
+        id: "mini-swe-agent",
+        command: "mini",
+        packages: { pypi: "mini-swe-agent" },
+        nativePaths: ["%USERPROFILE%\\.local\\bin\\mini.exe", "~/.local/bin/mini"],
+      }).success
+    ).toBe(true);
+  });
+
+  it("keeps both fields optional", () => {
+    const result = withAgent({});
+    expect(result.success).toBe(true);
+    const agent = result.data?.contributes.agents[0];
+    expect(agent).not.toHaveProperty("nativePaths");
+    expect(agent).not.toHaveProperty("packages");
+  });
+
+  describe("nativePaths", () => {
+    const parses = (nativePaths: unknown, command = "acme") =>
+      withAgent({ command, nativePaths }).success;
+
+    it.each([
+      "~/.acme/bin/acme",
+      "~/Library/Application Support/Acme (beta)/bin/acme",
+      "/opt/acme/bin/acme",
+      "/opt/@acme/c++_tools/acme",
+      "%USERPROFILE%\\.acme\\bin\\acme.exe",
+      "%LOCALAPPDATA%\\Programs\\Acme\\acme.cmd",
+      "%APPDATA%\\npm\\acme.cmd",
+      "%ProgramFiles%\\Acme\\acme.exe",
+      "%PROGRAMFILES%\\Acme\\acme.exe",
+      "%ProgramFiles(x86)%\\Acme\\acme.exe",
+      "%ProgramData%\\Acme\\acme.bat",
+    ])("accepts %s", (entry) => {
+      expect(parses([entry])).toBe(true);
+    });
+
+    it.each([
+      ["relative", "bin/acme"],
+      ["dot-relative", "./bin/acme"],
+      ["parent-relative", "../bin/acme"],
+      ["bare", "acme"],
+      ["another user's home", "~other/bin/acme"],
+      ["a bare tilde", "~"],
+      ["a drive path", "C:\\tools\\acme.exe"],
+      ["a forward-slash drive path", "C:/tools/acme.exe"],
+      ["drive-relative", "C:acme.exe"],
+      ["UNC", "\\\\server\\share\\acme.exe"],
+      ["forward-slash UNC", "//server/share/acme"],
+      ["mixed-slash UNC", "/\\server\\share\\acme"],
+      ["a device path", "\\\\?\\C:\\tools\\acme.exe"],
+      ["root-relative backslash", "\\tools\\acme.exe"],
+      ["a variable outside the list", "%TEMP%\\acme.exe"],
+      ["a variable that can name a network share", "%LOGONSERVER%\\share\\acme.exe"],
+      ["a variable holding a drive-relative path", "%HOMEPATH%\\acme.exe"],
+      ["a second variable", "%USERPROFILE%\\%APPDATA%\\acme.exe"],
+      ["a variable below a POSIX root", "~/%APPDATA%/acme"],
+      ["a variable with forward slashes", "%USERPROFILE%/bin/acme"],
+      ["a backslash in a POSIX entry", "/opt\\acme"],
+      ["a forward slash in a Windows entry", "%USERPROFILE%\\bin/acme.exe"],
+      ["traversal", "~/../../bin/acme"],
+      ["Windows traversal", "%USERPROFILE%\\..\\..\\acme.exe"],
+      ["a dot segment", "/opt/./acme"],
+      ["traversal Win32 would normalize", "%USERPROFILE%\\.. \\acme.exe"],
+      ["dots Win32 would normalize", "%USERPROFILE%\\...\\acme.exe"],
+      ["an empty segment", "/opt//acme"],
+      ["a trailing separator", "/opt/acme/"],
+      ["only a root", "~/"],
+      ["only a variable root", "%USERPROFILE%\\"],
+      ["an alternate data stream", "%USERPROFILE%\\acme.exe:stream\\acme.exe"],
+      ["a settings template", "~/${settings:dir}/acme"],
+      ["a shell expansion", "~/$HOME/acme"],
+      ["a newline", "~/bin\n/acme"],
+      ["NUL", "~/bin\0/acme"],
+      ["a non-ASCII lookalike", "~/bіn/acme"],
+    ])("refuses %s", (_name, entry) => {
+      // The field alone, so the rule about the command's name can't refuse it instead.
+      expect(
+        AgentContributionSchema.safeParse({ ...VALID_AGENT, nativePaths: [entry] }).success
+      ).toBe(false);
+    });
+
+    it("caps the count and the length", () => {
+      const entry = "~/bin/acme";
+      expect(parses(Array.from({ length: 16 }, () => entry))).toBe(true);
+      expect(parses(Array.from({ length: 17 }, () => entry))).toBe(false);
+      expect(parses([])).toBe(false);
+      const atCap = `~/${"a".repeat(256 - "~/".length - "/acme".length)}/acme`;
+      expect(atCap).toHaveLength(256);
+      expect(parses([atCap])).toBe(true);
+      expect(parses([`~/a${atCap.slice(2)}`])).toBe(false);
+    });
+
+    describe("each ending in the agent's own command", () => {
+      it.each([
+        ["acme", "~/bin/acme"],
+        ["acme", "~/bin/acme.exe"],
+        ["acme", "~/bin/acme.cmd"],
+        ["acme", "~/bin/acme.bat"],
+        ["acme", "~/bin/acme.com"],
+        ["acme", "%USERPROFILE%\\bin\\acme.EXE"],
+        ["acme.dev", "~/bin/acme.dev"],
+        ["acme.dev", "~/bin/acme.dev.exe"],
+        ["acme.cmd", "~/bin/acme.cmd"],
+        ["acme.ps1", "~/bin/acme.ps1"],
+      ])("a %s command accepts %s", (command, entry) => {
+        expect(parses([entry], command)).toBe(true);
+      });
+
+      it.each([
+        ["acme", "~/bin/notacme"],
+        ["acme", "~/bin/acme-beta"],
+        ["acme", "~/bin/acme.sh"],
+        ["acme", "~/bin/acme.ps1"],
+        ["acme", "~/bin/acme.exe.exe"],
+        ["acme", "~/acme/bin"],
+        ["acme", "~/bin/ACME"],
+        ["acme", "%USERPROFILE%\\bin\\ACME.exe"],
+        ["acme.cmd", "~/bin/acme"],
+        ["acme.cmd", "~/bin/acme.exe"],
+        ["acme.cmd", "~/bin/acme.cmd.cmd"],
+        ["acme.ps1", "~/bin/acme.ps1.exe"],
+      ])("a %s command refuses %s", (command, entry) => {
+        expect(parses([entry], command)).toBe(false);
+      });
+
+      it("points at the entry that doesn't", () => {
+        const agent = { nativePaths: ["~/bin/acme", "~/bin/other"] };
+        expect(issuePaths(agent)).toEqual(["contributes.agents.0.nativePaths.1"]);
+        expect(errorCodes(agent)).toEqual(["agent_native_path_not_command"]);
+      });
+    });
+  });
+
+  describe("packages", () => {
+    const parses = (packages: unknown) => withAgent({ packages }).success;
+
+    it.each([
+      "acme",
+      "acme-agent",
+      "acme_agent",
+      "acme.agent",
+      "@acme/agent",
+      "@earendil-works/pi-coding-agent",
+    ])("accepts the npm name %s", (npm) => {
+      expect(parses({ npm })).toBe(true);
+    });
+
+    it.each([
+      "",
+      "Acme",
+      "@Acme/agent",
+      "@acme",
+      "@acme/",
+      "/agent",
+      "acme/agent",
+      "@acme/agent/extra",
+      "@acme/../agent",
+      "acme@1.2.3",
+      "@acme/agent@latest",
+      "https://example.com/acme.tgz",
+      "git+ssh://git@example.com/acme.git",
+      "../acme",
+      ".acme",
+      "_acme",
+      "acme agent",
+      "acme\n",
+      "a".repeat(215),
+    ])("refuses the npm name %j", (npm) => {
+      expect(parses({ npm })).toBe(false);
+    });
+
+    it("accepts an npm name at npm's own length limit", () => {
+      expect(parses({ npm: "a".repeat(214) })).toBe(true);
+    });
+
+    it.each(["acme", "mini-swe-agent", "aider-chat", "a1-b2"])(
+      "accepts the PyPI name %s",
+      (pypi) => {
+        expect(parses({ pypi })).toBe(true);
+      }
+    );
+
+    it.each([
+      "",
+      // uv and pipx name their directories by the normalized form, so any other
+      // spelling would validate and then quietly never be found.
+      "Acme",
+      "acme_agent",
+      "acme.agent",
+      "acme--agent",
+      "-acme",
+      "acme-",
+      "acme[extra]",
+      "acme==1.2.3",
+      "acme>=1",
+      "../acme",
+      "acme/agent",
+      "acme\\agent",
+      "..",
+      "acme agent",
+      "acme\n",
+      "https://example.com/acme.whl",
+      "a".repeat(129),
+    ])("refuses the PyPI name %j", (pypi) => {
+      expect(parses({ pypi })).toBe(false);
+    });
+
+    it("accepts a PyPI name at the cap", () => {
+      expect(parses({ pypi: "a".repeat(128) })).toBe(true);
+    });
+
+    it("accepts both ecosystems together", () => {
+      expect(parses({ npm: "acme", pypi: "acme" })).toBe(true);
+    });
+
+    it("refuses other ecosystems and an empty declaration", () => {
+      expect(parses({})).toBe(false);
+      expect(parses({ brew: "acme" })).toBe(false);
+      expect(parses({ npm: "acme", cargo: "acme" })).toBe(false);
+    });
+  });
+
+  it("refuses fields that would run the agent or stand in for the declared ones", () => {
+    expect(withAgent({ supportsWsl: true }).success).toBe(false);
+    expect(withAgent({ npmGlobalPackage: "acme" }).success).toBe(false);
+  });
+
+  describe("beside a bundled command", () => {
+    const command = "./bin/acme";
+
+    it("refuses nativePaths, which is never probed for one", () => {
+      const agent = { command, nativePaths: ["~/bin/acme"] };
+      expect(issuePaths(agent)).toEqual(["contributes.agents.0.nativePaths"]);
+      expect(errorCodes(agent)).toEqual(["agent_discovery_bundled_command"]);
+    });
+
+    it("refuses packages, which are never probed for one", () => {
+      const agent = { command, packages: { npm: "acme" } };
+      expect(issuePaths(agent)).toEqual(["contributes.agents.0.packages"]);
+      expect(errorCodes(agent)).toEqual(["agent_discovery_bundled_command"]);
+    });
+
+    it("still accepts the command alone", () => {
+      expect(withAgent({ command }).success).toBe(true);
+    });
+  });
+
+  describe("packages beside a command that already names its launcher", () => {
+    it.each(["acme.cmd", "acme.EXE", "acme.bat", "acme.com", "acme.ps1"])(
+      "refuses them beside %s, since the package layers would add a second suffix",
+      (command) => {
+        const agent = { command, packages: { npm: "acme" } };
+        expect(issuePaths(agent)).toEqual(["contributes.agents.0.packages"]);
+        expect(errorCodes(agent)).toEqual(["agent_discovery_suffixed_command"]);
+      }
+    );
+
+    it("leaves a dotted name that isn't a launcher alone", () => {
+      expect(withAgent({ command: "acme.dev", packages: { npm: "acme" } }).success).toBe(true);
+    });
+  });
+});
+
+describe("executableNames (#16469)", () => {
+  const withNames = (executableNames: unknown) =>
+    AgentContributionSchema.safeParse({ ...VALID_AGENT, executableNames });
+
+  it("accepts bare lowercase names, and an empty list that claims none", () => {
+    expect(withNames(["mini", "mini-swe-agent"]).success).toBe(true);
+    expect(withNames([]).success).toBe(true);
+  });
+
+  it("refuses every name the command parser reads as a launcher", () => {
+    // The parser's shells, prefix runners and version-manager shims, and the
+    // package-manager exec subcommands.
+    const executors = ["sh", "bash", "zsh", "fish", "pwsh", "cmd", "env", "sudo", "doas"];
+    const prefixes = ["nohup", "nice", "time", "stdbuf", "setsid", "command"];
+    const shims = ["mise", "asdf", "rtx", "direnv", "pipx", "rye", "pdm", "hatch"];
+    for (const name of [...executors, ...prefixes, ...shims, "exec", "dlx", "x"]) {
+      expect(withNames([name]).success, name).toBe(false);
+    }
+  });
+
+  it("refuses every runtime and package manager the parser looks past", () => {
+    const launchers = Object.entries(PROCESS_TOOL_ICON_BY_COMMAND)
+      .filter(([, iconId]) => {
+        const tier = getProcessToolConfig(iconId)?.tier;
+        return tier === "runtime" || tier === "package-manager";
+      })
+      .map(([name]) => name)
+      .filter((name) => /^[a-z0-9][a-z0-9._-]*$/.test(name) && !name.includes("."));
+    expect(launchers).toEqual(expect.arrayContaining(["node", "npx", "uvx", "python3", "pnpm"]));
+    for (const name of launchers) {
+      expect(withNames([name]).success, name).toBe(false);
+    }
+  });
+
+  it("keeps the process-tool rules: case, extensions, reserved keys", () => {
+    expect(withNames(["Pi"]).success).toBe(false);
+    expect(withNames(["pi.exe"]).success).toBe(false);
+    expect(withNames(["constructor"]).success).toBe(false);
+    expect(withNames(["./bin/pi"]).success).toBe(false);
+  });
+
+  it("rejects a repeated name and an unbounded list", () => {
+    expect(withNames(["pi", "pi"]).success).toBe(false);
+    expect(withNames(Array.from({ length: 17 }, (_, i) => `pi${i}`)).success).toBe(false);
+  });
+
+  describe("manifest-level checks", () => {
+    const schema = getPluginManifestSchema("user");
+    const parseAgents = (agents: Record<string, unknown>[]) =>
+      schema.safeParse(manifestWith({ capabilities: ["agent:register"], contributes: { agents } }));
+    const errorCodes = (result: ReturnType<typeof parseAgents>) =>
+      result.success
+        ? []
+        : result.error.issues.map(
+            (issue) => (issue as { params?: { errorCode?: string } }).params?.errorCode
+          );
+
+    it("refuses a name a built-in agent or tool owns", () => {
+      const builtInAgentName = Object.keys(AGENT_CLI_NAMES)[0];
+      const builtInToolName = Object.keys(PROCESS_TOOL_ICON_BY_COMMAND).find(
+        (name) => withNames([name]).success
+      );
+      expect(builtInToolName).toBeDefined();
+      for (const name of [builtInAgentName, builtInToolName]) {
+        expect(
+          errorCodes(parseAgents([{ ...VALID_AGENT, executableNames: [name] }])),
+          name
+        ).toContain("agent_executable_name_reserved");
+      }
+    });
+
+    it("refuses two agents in one manifest claiming the same name", () => {
+      const result = parseAgents([
+        { ...VALID_AGENT, executableNames: ["pi"] },
+        { ...VALID_AGENT, id: "other-agent", executableNames: ["pi"] },
+      ]);
+      expect(errorCodes(result)).toContain("agent_executable_name_duplicate");
+    });
+
+    it("leaves a manifest without executableNames as it was", () => {
+      expect(parseAgents([{ ...VALID_AGENT, command: "pi" }]).success).toBe(true);
+    });
+  });
+
+  describe("resolveAgentExecutableNames", () => {
+    it("claims a bare lowercase command's own name when the list is omitted", () => {
+      expect(resolveAgentExecutableNames({ command: "pi" })).toEqual(["pi"]);
+      expect(resolveAgentExecutableNames({ command: "mini-swe-agent" })).toEqual([
+        "mini-swe-agent",
+      ]);
+    });
+
+    it("claims nothing implicitly for a mixed-case command", () => {
+      // `Hermes` and `hermes` are different programs on a case-sensitive disk.
+      expect(resolveAgentExecutableNames({ command: "Hermes" })).toEqual([]);
+    });
+
+    it("takes a declared list as written, so an empty one opts out", () => {
+      expect(
+        resolveAgentExecutableNames({
+          command: "mini",
+          executableNames: ["mini", "mini-swe-agent"],
+        })
+      ).toEqual(["mini", "mini-swe-agent"]);
+      expect(resolveAgentExecutableNames({ command: "pi", executableNames: [] })).toEqual([]);
+    });
+
+    it("claims nothing implicitly for a launcher, a built-in, or a plugin-relative command", () => {
+      const builtInAgentName = Object.keys(AGENT_CLI_NAMES)[0];
+      for (const command of ["node", "npx", "uvx", "bash", "./bin/agent.mjs", builtInAgentName]) {
+        expect(resolveAgentExecutableNames({ command }), command).toEqual([]);
+      }
+    });
   });
 });

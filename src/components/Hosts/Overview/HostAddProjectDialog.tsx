@@ -108,8 +108,16 @@ export function HostAddProjectDialog({
   /** The clone Cancel stopped: a success that arrives anyway opens nothing. */
   const stoppedOp = useRef<string | null>(null);
   const failureRef = useRef<HTMLDivElement>(null);
+  const urlInputRef = useRef<HTMLInputElement>(null);
 
   const trimmedUrl = url.trim();
+
+  // The dialog also offers "Open a folder…", but cloning is the primary route
+  // and typing or pasting a URL straight after opening must land in the field.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => urlInputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, []);
 
   // The host suggests where a clone of this URL goes, until the person picks a folder.
   useEffect(() => {
@@ -453,7 +461,7 @@ export function HostAddProjectDialog({
   );
 
   return (
-    <AppDialog isOpen onClose={closeDialog} size="md" initialFocus="surface">
+    <AppDialog isOpen onClose={closeDialog} size="md" initialFocus="none">
       <AppDialog.Header>
         <AppDialog.Title icon={<FolderPlus className="h-4 w-4 text-text-secondary" />}>
           Add a project on {hostName}
@@ -468,6 +476,7 @@ export function HostAddProjectDialog({
           {failureFor("top")}
           <FormRow label="Repository">
             <Input
+              ref={urlInputRef}
               density="compact"
               className="h-7 font-mono"
               aria-describedby={urlStatusId}

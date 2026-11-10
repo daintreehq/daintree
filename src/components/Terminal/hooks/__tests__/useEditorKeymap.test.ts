@@ -91,6 +91,7 @@ describe("useEditorKeymap", () => {
       popStashedEditorState: vi.fn<
         (terminalId: string, projectId?: string) => EditorState | undefined
       >(() => undefined),
+      onStashPopped: vi.fn<(text: string) => void>(),
       setActiveCompletionContext,
       setIsExpanded: vi.fn<Dispatch<SetStateAction<boolean>>>(),
       setSelectedIndex,

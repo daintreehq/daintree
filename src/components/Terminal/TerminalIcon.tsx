@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/icons";
 import {
@@ -10,9 +10,14 @@ import {
   type PluginIconId,
 } from "@/components/icons/pluginIconRegistry";
 import type { PanelKind } from "@/types";
+import { getAgentConfig } from "@/config/agents";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { resolveTerminalRunIcon } from "./terminalRunIconRegistry";
 import { isPluginCustomIconKey } from "@shared/config/pluginCustomIcon";
+import {
+  getPluginAgentRegistrySnapshot,
+  subscribeToPluginAgentRegistry,
+} from "@shared/config/pluginAgentRegistry";
 import type { ReactNode } from "react";
 
 /** Built-in panel kinds pin their glyph regardless of the chrome's `iconId`. */
@@ -49,6 +54,31 @@ function semanticId(iconId: string | null | undefined): PluginIconId | undefined
   return PLUGIN_ICON_IDS.find((id) => id === iconId);
 }
 
+/**
+ * Takes the snapshot as an argument so React Compiler, which caches a call on its
+ * arguments, re-reads when the registry changes. `getAgentConfig` rather than the
+ * snapshot's own entry, so a user agent sharing the id keeps its precedence.
+ */
+function readPluginAgent(agentId: string, pluginAgents: Record<string, unknown>) {
+  return Object.hasOwn(pluginAgents, agentId) ? getAgentConfig(agentId) : undefined;
+}
+
+/**
+ * Callers memoise chrome, and a pane restored at startup derives it before
+ * plugins load, so an agent's chrome can predate its registry entry and hold the
+ * bare agent id. Nothing re-derives it until an input changes, which for an agent
+ * with no `detection` block is never, so its icon and colour are read live here.
+ */
+function useLiveAgentChrome(chrome: TerminalChromeDescriptor): TerminalChromeDescriptor {
+  const pluginAgents = useSyncExternalStore(
+    subscribeToPluginAgentRegistry,
+    getPluginAgentRegistrySnapshot
+  );
+  const config = chrome.agentId ? readPluginAgent(chrome.agentId, pluginAgents) : undefined;
+  if (!config) return chrome;
+  return { ...chrome, iconId: config.iconId, color: chrome.presetColor ?? config.color };
+}
+
 export interface TerminalIconProps {
   kind?: PanelKind;
   chrome?: TerminalChromeDescriptor;
@@ -57,7 +87,8 @@ export interface TerminalIconProps {
 }
 
 export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIconProps) {
-  const resolvedChrome = chrome ?? deriveTerminalChrome({ kind });
+  const callerChrome = chrome ?? deriveTerminalChrome({ kind });
+  const resolvedChrome = useLiveAgentChrome(callerChrome);
   const iconId = resolvedChrome.iconId ?? "terminal";
   const finalProps = {
     className: cn("w-4 h-4", className),
@@ -82,7 +113,10 @@ export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIc
     );
   }, [kind, iconId, resolvedChrome.agentId, resolvedChrome.processId, resolvedChrome.label]);
 
-  const markerColor = brandColor ?? resolvedChrome.color;
+  // Most callers echo `chrome.color` back as `brandColor`. Only a different value
+  // is an override: the echo would pin a stale colour over the live one.
+  const markerColor =
+    (brandColor !== callerChrome.color ? brandColor : undefined) ?? resolvedChrome.color;
   const withIconMarker = (icon: ReactNode, markerIconId = iconId) => (
     <span
       className="contents"
@@ -110,9 +144,8 @@ export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIc
 
   const RunIcon = resolveTerminalRunIcon(resolvedChrome.iconId);
   if (RunIcon) {
-    const runBrandColor = brandColor ?? resolvedChrome.color;
     return withIconMarker(
-      <BrandMark brandColor={runBrandColor} className={finalProps.className}>
+      <BrandMark brandColor={markerColor} className={finalProps.className}>
         <RunIcon {...finalProps} />
       </BrandMark>
     );
@@ -123,9 +156,20 @@ export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIc
   // fall through to the terminal glyph the way the old id conditionals did.
   // A plugin's own SVG (#13143) — from a panel or a detected process tool —
   // renders neutrally too, keeping the terminal glyph until the asset arrives.
+  // An agent's mark is the exception: it wears the agent's colour, like a
+  // built-in agent's mark above.
   if (isPluginCustomIconKey(resolvedChrome.iconId)) {
     const CustomIcon = resolvePluginIcon(resolvedChrome.iconId, DEFAULT_PANEL_ICON);
-    return withIconMarker(<CustomIcon {...finalProps} />);
+    const customIcon = <CustomIcon {...finalProps} />;
+    return withIconMarker(
+      resolvedChrome.isAgent ? (
+        <BrandMark brandColor={markerColor} className={finalProps.className}>
+          {customIcon}
+        </BrandMark>
+      ) : (
+        customIcon
+      )
+    );
   }
 
   const RegisteredIcon = getPluginIconComponent(resolvedChrome.iconId);

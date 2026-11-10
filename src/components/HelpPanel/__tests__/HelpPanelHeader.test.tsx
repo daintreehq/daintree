@@ -57,6 +57,11 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuMeta: ({ children }: { children?: ReactNode }) => (
+    <span aria-hidden="true" data-testid="menu-meta">
+      {children}
+    </span>
+  ),
   DropdownMenuCheckboxItem: ({
     children,
     checked,
@@ -77,6 +82,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 }));
 
 import { HelpPanelHeader, summarizeLaneActivity } from "../HelpPanelHeader";
+import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 
 function renderHeader(overrides: Partial<ComponentProps<typeof HelpPanelHeader>> = {}) {
   return render(
@@ -308,13 +314,13 @@ describe("HelpPanelHeader", () => {
     // And never mirrored here: the strip's "+" is that action's single home.
     expect(queryByText("Open parallel session")).toBeNull();
 
-    fireEvent.click(getByText("Restart conversation"));
+    fireEvent.click(getByText("Clear conversation"));
     expect(onRestartConversation).toHaveBeenCalledTimes(1);
   });
 
   it("hides the restart item when there is no conversation to restart", () => {
     const { queryByText } = renderHeader({ canRestartConversation: false });
-    expect(queryByText("Restart conversation")).toBeNull();
+    expect(queryByText("Clear conversation")).toBeNull();
   });
 
   it("shows the Stop assistant item only when canEndSession is true", () => {
@@ -416,6 +422,54 @@ describe("HelpPanelHeader", () => {
         item.textContent?.startsWith("New session with")
       );
       expect(agentItems.map((item) => item.disabled)).toEqual([true, true]);
+    });
+
+    it("names the session ceiling on each parked item, and only when the ceiling parks it (#16659)", () => {
+      const agentItems = (container: HTMLElement) =>
+        menuItems(container).filter((item) => item.textContent?.startsWith("New session with"));
+      const reason =
+        /^New session with (Claude|Codex), \d+ sessions is the maximum for one project$/;
+
+      const atCeiling = renderHeader({
+        newSessionAgentIds: ["claude", "codex"],
+        canStartNewSession: false,
+        openSessionCount: MAX_ASSISTANT_SLOTS,
+        onNewSessionWithAgent: vi.fn(),
+      });
+      const parked = atCeiling.getAllByRole("button", { name: reason });
+      expect(parked).toHaveLength(2);
+      expect(parked.every((item) => item.hasAttribute("disabled"))).toBe(true);
+      // The count is seen, not heard: the sentence in the name already says it.
+      const counts = parked.map((item) => item.querySelector("[data-testid='menu-meta']"));
+      expect(counts.map((meta) => meta?.textContent)).toEqual([
+        `${MAX_ASSISTANT_SLOTS} of ${MAX_ASSISTANT_SLOTS} open`,
+        `${MAX_ASSISTANT_SLOTS} of ${MAX_ASSISTANT_SLOTS} open`,
+      ]);
+      expect(counts.every((meta) => meta?.getAttribute("aria-hidden") === "true")).toBe(true);
+      atCeiling.unmount();
+
+      // Parked for some other reason: dimmed, and silent about a ceiling it isn't at.
+      const otherCause = renderHeader({
+        newSessionAgentIds: ["claude", "codex"],
+        canStartNewSession: false,
+        openSessionCount: MAX_ASSISTANT_SLOTS - 1,
+        onNewSessionWithAgent: vi.fn(),
+      });
+      expect(agentItems(otherCause.container).map((item) => item.disabled)).toEqual([true, true]);
+      expect(otherCause.queryAllByRole("button", { name: reason })).toHaveLength(0);
+      expect(otherCause.queryAllByTestId("menu-meta")).toHaveLength(0);
+      otherCause.unmount();
+
+      // Six tabs with one still empty is room: the items start sessions and say nothing more.
+      const room = renderHeader({
+        newSessionAgentIds: ["claude", "codex"],
+        canStartNewSession: true,
+        openSessionCount: MAX_ASSISTANT_SLOTS,
+        onNewSessionWithAgent: vi.fn(),
+      });
+      expect(agentItems(room.container).map((item) => item.disabled)).toEqual([false, false]);
+      expect(room.getByRole("button", { name: "New session with Claude" })).not.toBeNull();
+      expect(room.queryAllByTestId("menu-meta")).toHaveLength(0);
     });
   });
 });

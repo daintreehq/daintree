@@ -132,7 +132,7 @@ describe("readPanelKindMenuCapabilities", () => {
         TOURED_PLUGIN_KIND,
         getRegisteredTourIdsSnapshot()
       ).tour
-    ).toEqual({ id: "acme.metrics-intro", label: "Metrics Welcome Tour" });
+    ).toEqual({ id: "acme.metrics-intro", label: "Metrics welcome tour" });
   });
 
   it("offers no declared tour until it is registered, since it would open nothing", () => {
@@ -146,7 +146,7 @@ describe("readPanelKindMenuCapabilities", () => {
 
     expect(read()).toBeNull();
     registerPlayableTour("acme.metrics-intro");
-    expect(read()).toEqual({ id: "acme.metrics-intro", label: "Metrics Welcome Tour" });
+    expect(read()).toEqual({ id: "acme.metrics-intro", label: "Metrics welcome tour" });
     for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
     expect(read()).toBeNull();
   });
@@ -371,19 +371,19 @@ describe("getGenericPanelMenuGroups", () => {
     }
   });
 
-  it("offers Reload panel beside Rename only for a kind that can reload (#12611)", () => {
+  it("offers Reload beside Rename only for a kind that can reload (#12611)", () => {
     expect(ids({ canReload: true })[1]).toEqual(["rename", "reload"]);
     expect(ids({ canReload: false }).flat()).not.toContain("reload");
     const reload = groups({ canReload: true })
       .flat()
       .find((command) => command.id === "reload")!;
-    expect(reload.label).toBe("Reload panel");
+    expect(reload.label).toBe("Reload");
     expect(reload.destructive).toBeUndefined();
     expect(GENERIC_PANEL_RELOAD_ACTION_ID).toBe("plugin.reloadPanel");
   });
 
   it("offers a declared tour in a group of its own, before the removal commands (#12774)", () => {
-    const withTour = ids({ tourLabel: "Metrics Welcome Tour" });
+    const withTour = ids({ tourLabel: "Metrics welcome tour" });
     const withoutTour = ids();
 
     expect(withoutTour.flat()).not.toContain("tour");
@@ -391,10 +391,10 @@ describe("getGenericPanelMenuGroups", () => {
     expect(withTour.filter((group) => !group.includes("tour"))).toEqual(withoutTour);
     expect(withTour.flat().indexOf("tour")).toBeLessThan(withTour.flat().indexOf("trash"));
 
-    const tour = groups({ tourLabel: "Metrics Welcome Tour" })
+    const tour = groups({ tourLabel: "Metrics welcome tour" })
       .flat()
       .find((command) => command.id === "tour")!;
-    expect(tour.label).toBe("Metrics Welcome Tour");
+    expect(tour.label).toBe("Metrics welcome tour");
     expect(tour.destructive).toBeUndefined();
     expect(tour.disabled).toBeUndefined();
   });
@@ -406,7 +406,7 @@ describe("getGenericPanelMenuGroups", () => {
     ]);
     expect(ids().flat()).not.toContain("plugin-settings");
 
-    const both = ids({ tourLabel: "Metrics Welcome Tour", hasPluginSettings: true });
+    const both = ids({ tourLabel: "Metrics welcome tour", hasPluginSettings: true });
     expect(both.find((group) => group.includes("tour"))).toEqual(["tour", "plugin-settings"]);
     expect(both.flat().indexOf("plugin-settings")).toBeLessThan(both.flat().indexOf("trash"));
 
@@ -424,7 +424,7 @@ describe("getGenericPanelMenuGroups", () => {
     ]);
 
     const all = ids({
-      tourLabel: "Metrics Welcome Tour",
+      tourLabel: "Metrics welcome tour",
       hasPluginSettings: true,
       hasPluginDatabases: true,
     });
@@ -449,7 +449,7 @@ describe("getGenericPanelMenuGroups", () => {
       { actionId: "acme.export", label: "Export as CSV" },
     ];
     const withEverything = groups({
-      tourLabel: "Metrics Welcome Tour",
+      tourLabel: "Metrics welcome tour",
       hasPluginSettings: true,
       pluginMenuItems: items,
     });
@@ -477,9 +477,31 @@ describe("getGenericPanelMenuGroups", () => {
   });
 
   it("still ends on its one destructive command with a tour offered", () => {
-    const all = groups({ tourLabel: "Metrics Welcome Tour" }).flat();
+    const all = groups({ tourLabel: "Metrics welcome tour" }).flat();
     expect(all.at(-1)?.destructive).toBe(true);
     expect(all.filter((command) => command.destructive)).toHaveLength(1);
+  });
+});
+
+describe("getGenericPanelMenuGroups for a backgrounded panel", () => {
+  const ids = (input: Partial<GenericPanelMenuInput> = {}) =>
+    groups({ location: "background", canMoveToWorktree: false, ...input }).map((group) =>
+      group.map((command) => command.id)
+    );
+
+  it("offers nothing that moves it or parks it again", () => {
+    const offered = ids().flat();
+    for (const id of ["move-to-dock", "move-to-grid", "toggle-maximize", "background"] as const) {
+      expect(offered).not.toContain(id);
+    }
+  });
+
+  it("still lets it be renamed, trashed or removed", () => {
+    expect(ids().flat()).toEqual(expect.arrayContaining(["rename", "trash", "kill"]));
+  });
+
+  it("leaves no empty group, which would draw a stray separator", () => {
+    for (const group of ids()) expect(group.length).toBeGreaterThan(0);
   });
 });
 

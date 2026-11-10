@@ -11,12 +11,14 @@ import type {
   ProjectPluginState,
   ProjectPluginTrustState,
 } from "@shared/types/plugin";
+import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
 
 const PROJECT = "proj-a";
 
 const setProjectPluginTrust = vi.fn<(decision: string) => Promise<void>>();
 const activateStagedProjectPlugin = vi.fn<(pluginId: string) => Promise<void>>();
 const reloadProjectPlugins = vi.fn<() => Promise<void>>();
+const getUnsavedPanels = vi.fn<(pluginId: string) => Promise<PluginUnsavedPanel[]>>();
 
 function plugin(
   id: string,
@@ -51,10 +53,16 @@ beforeEach(() => {
   setProjectPluginTrust.mockReset().mockResolvedValue(undefined);
   activateStagedProjectPlugin.mockReset().mockResolvedValue(undefined);
   reloadProjectPlugins.mockReset().mockResolvedValue(undefined);
+  getUnsavedPanels.mockReset().mockResolvedValue([]);
   Object.defineProperty(window, "electron", {
     configurable: true,
     value: {
-      plugin: { setProjectPluginTrust, activateStagedProjectPlugin, reloadProjectPlugins },
+      plugin: {
+        setProjectPluginTrust,
+        activateStagedProjectPlugin,
+        reloadProjectPlugins,
+        getUnsavedPanels,
+      },
     },
   });
 });
@@ -273,5 +281,80 @@ describe("ProjectPluginIndicator", () => {
     // The store-level `error` line is the only status colour this widget owns,
     // and nothing here set it.
     expect(document.querySelector('[class*="status-danger"]')).toBe(null);
+  });
+
+  describe("turning the project's plugins off (#16656)", () => {
+    const running = (id: string) =>
+      plugin(id, "active", { instanceId: `project__${PROJECT}__${id}` });
+
+    async function openAndTurnOff() {
+      render(<ProjectPluginIndicator />);
+      // A staged plugin keeps the indicator up while the folder is trusted.
+      snapshot([running("a.b"), running("e.f"), plugin("c.d", "staged")], {
+        decision: "enabled",
+        enabled: true,
+        persisted: true,
+      });
+      await act(async () => {
+        screen.getByRole("button", { name: /Project plugins/ }).click();
+      });
+      await act(async () => {
+        screen.getByRole("button", { name: "Turn off project plugins" }).click();
+      });
+    }
+
+    it("asks first, naming the dirty panels of every running plugin", async () => {
+      getUnsavedPanels.mockImplementation(async (id) =>
+        id === `project__${PROJECT}__e.f`
+          ? [{ panelId: "p1", title: "Draft notes", projectId: PROJECT, projectName: "Proj" }]
+          : []
+      );
+      await openAndTurnOff();
+
+      expect(getUnsavedPanels.mock.calls.map(([id]) => id).sort()).toEqual([
+        `project__${PROJECT}__a.b`,
+        `project__${PROJECT}__e.f`,
+      ]);
+      expect(setProjectPluginTrust).not.toHaveBeenCalled();
+      const dialog = screen.getByRole("alertdialog");
+      expect(dialog.textContent).toContain("Turn off this project's plugins?");
+      expect(dialog.textContent).toContain("Draft notes");
+
+      await act(async () => {
+        screen.getByRole("button", { name: "Discard changes" }).click();
+      });
+      expect(setProjectPluginTrust).toHaveBeenCalledWith("disabled");
+    });
+
+    it("leaves trust alone on Cancel and brings the popover back", async () => {
+      getUnsavedPanels.mockResolvedValue([
+        { panelId: "p1", title: "Draft notes", projectId: PROJECT, projectName: null },
+      ]);
+      await openAndTurnOff();
+
+      await act(async () => {
+        screen.getByRole("button", { name: "Cancel" }).click();
+      });
+
+      expect(setProjectPluginTrust).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Turn off project plugins" })).toBeTruthy();
+    });
+
+    it("turns them off with no prompt when nothing is unsaved", async () => {
+      await openAndTurnOff();
+
+      expect(screen.queryByRole("alertdialog")).toBe(null);
+      expect(setProjectPluginTrust).toHaveBeenCalledWith("disabled");
+    });
+
+    it("keeps the popover open with the error when the check fails", async () => {
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      getUnsavedPanels.mockRejectedValue(new Error("main unavailable"));
+      await openAndTurnOff();
+
+      expect(setProjectPluginTrust).not.toHaveBeenCalled();
+      expect(document.body.textContent).toContain("Couldn't check this project's plugins");
+      logged.mockRestore();
+    });
   });
 });

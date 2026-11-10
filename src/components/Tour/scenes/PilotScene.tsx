@@ -92,8 +92,9 @@ export function PilotScene() {
   const editorOpen = editing && !parked;
   const shortcuts = useTourShortcuts();
   const parkHint = shortcuts.hint("pilot.park");
-  // The same keys the footer hint shows ("⌥↵", "Alt+↵"), one cap each.
+  // The same keys the footer hint shows, one cap each.
   const parkKeycaps = shortcuts.keycaps("pilot.park");
+  const enterHint = shortcuts.hint("Enter");
 
   return (
     <MockApp
@@ -181,15 +182,15 @@ export function PilotScene() {
           ))}
         <div className="mt-1.5 flex items-center gap-3 border-t border-border-subtle px-1 pt-1.5 text-3xs text-text-secondary">
           <span>
-            <span className="text-text-primary">↵</span> Open
+            <span className="text-text-primary">{enterHint}</span> to open
           </span>
           <span data-tour-anchor="pilot-park">
-            <span className="text-text-primary">{parkHint}</span> Park
+            <span className="text-text-primary">{parkHint}</span> to park
           </span>
         </div>
       </div>
       <MockKeys keys={parkKeycaps} x={320} y={300} visible={parkCue && !parkKeys} />
-      <MockKeys keys={["↵"]} x={320} y={300} visible={enterKey && !parked} />
+      <MockKeys keys={shortcuts.keycaps("Enter")} x={320} y={300} visible={enterKey && !parked} />
       {/* "Whatever is waiting on you" — the top of each group, then the Park hint. */}
       <MockSpotlight
         targets={parkCue ? ["pilot-park"] : ["pilot-row-0-0", "pilot-row-1-0"]}

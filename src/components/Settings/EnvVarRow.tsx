@@ -56,6 +56,8 @@ interface EnvVarRowProps {
   /** 1-based, so two rows holding the same name still get distinct action names. */
   position: number;
   error?: string;
+  /** The field `error` is about, which is the one marked invalid. Defaults to the name. */
+  invalidField?: "key" | "value";
   /** Mask the value behind a reveal toggle. */
   sensitive: boolean;
   revealed: boolean;
@@ -72,12 +74,15 @@ interface EnvVarRowProps {
   keyRef?: Ref<HTMLInputElement>;
   /** Held while a save of the set it belongs to is in flight. */
   disabled?: boolean;
+  /** Replaces the list-row padding where the row sits in a form column instead of a settings group. */
+  className?: string;
 }
 
 export function EnvVarRow({
   row,
   position,
   error,
+  invalidField = "key",
   sensitive,
   revealed,
   onToggleReveal,
@@ -88,6 +93,7 @@ export function EnvVarRow({
   valuePlaceholder = "value",
   keyRef,
   disabled,
+  className,
 }: EnvVarRowProps) {
   const errorId = `${row.id}-error`;
   const name = row.key.trim();
@@ -95,7 +101,7 @@ export function EnvVarRow({
   const valueLabel = name ? `Value of ${name} (row ${position})` : `Value of variable ${position}`;
   return (
     // The id is what a close blocked on this row's error lands on.
-    <div id={row.id} className="px-4 py-2.5" data-env-row="">
+    <div id={row.id} className={cn("px-4 py-2.5", className)} data-env-row="">
       <div className={ENV_ROW_GRID}>
         <div className="relative min-w-0">
           <Input
@@ -107,7 +113,7 @@ export function EnvVarRow({
             spellCheck={false}
             autoCapitalize="none"
             autoComplete="off"
-            invalid={!!error}
+            invalid={!!error && invalidField === "key"}
             aria-describedby={error ? errorId : undefined}
             className={cn("font-mono", storageBadge && "pr-8")}
             placeholder="VARIABLE_NAME"
@@ -129,6 +135,7 @@ export function EnvVarRow({
             spellCheck={false}
             autoCapitalize="none"
             autoComplete={sensitive ? "new-password" : "off"}
+            invalid={!!error && invalidField === "value"}
             className={cn("font-mono", sensitive && "pr-9")}
             placeholder={valuePlaceholder}
             aria-label={valueLabel}

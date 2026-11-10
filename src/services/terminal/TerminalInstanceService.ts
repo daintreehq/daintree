@@ -10,7 +10,8 @@ import {
 } from "@/lib/viewCacheState";
 import { terminalClient } from "@/clients";
 import { getDriveLeaseSnapshot, subscribeDriveLeaseSnapshot } from "./inputGate";
-import { isCanopySizeHeld, subscribeCanopySizeHolds } from "./canopySizeHolds";
+import { isCanopySizeHeld, subscribeCanopySizeHolds, takeCanopySize } from "./canopySizeHolds";
+import { noteVisiblePanesChanged, registerVisiblePaneSource } from "./visiblePaneTerminals";
 import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
 import type { RendererTerminalBufferCounts } from "@shared/types/memoryAccounting";
@@ -44,7 +45,10 @@ import { TerminalWebGLManager } from "./TerminalWebGLManager";
 import { TerminalWebGLPolicy } from "./TerminalWebGLPolicy";
 import { TerminalRevealController } from "./TerminalRevealController";
 import { TerminalAgentStateController } from "./TerminalAgentStateController";
-import { TerminalRestoreController } from "./TerminalRestoreController";
+import {
+  TerminalRestoreController,
+  type FetchAndRestoreOptions,
+} from "./TerminalRestoreController";
 import {
   TerminalReflowController,
   attemptRendererUnpause,
@@ -130,6 +134,11 @@ function canAutoInitializeTerminalIngest(): boolean {
  * reason.
  */
 const SUPPRESSED_VIEW_WEBGL_RELEASE_DELAY_MS = 20_000;
+// A repaint after a hidden-view skip that fails (null snapshot, a timeout, a
+// competing restore taking the pane) is retried on a timer this many times;
+// past that it waits for the next reactivation or its own next skip notice.
+const HIDDEN_SKIP_REPAINT_TIMED_ATTEMPTS = 3;
+const HIDDEN_SKIP_REPAINT_RETRY_MS = 1000;
 
 // Cached (#12514) or in a hidden window (#12798): either way nobody can see
 // these terminals, so no foreground tier, burst or WebGL context is earned.
@@ -235,6 +244,7 @@ class TerminalInstanceService {
   private unsubExit: (() => void) | null = null;
   private unsubDriveLease: (() => void) | null = null;
   private unsubCanopySizeHolds: (() => void) | null = null;
+  private offVisiblePanes: (() => void) | null = null;
   /**
    * Terminals held at the PTY's grid because another frontend owns their size:
    * it drives this project (#13282), or a Canopy panel on another machine
@@ -247,6 +257,16 @@ class TerminalInstanceService {
   /** Held, but the PTY's grid is still unknown; retried on the next lease event. */
   private watchUnseeded = new Set<string>();
   private watchEpoch = 0;
+  /**
+   * Panes owed a repaint because the host skipped their output while no
+   * window showed this project, with how many attempts have failed.
+   */
+  private hiddenSkipRepaints = new Map<string, number>();
+  private hiddenSkipRepaintRunning = false;
+  // A pass requested while one runs, run when it ends: the running pass may
+  // already be past the pane the request was for.
+  private hiddenSkipRepaintRerun: { includeExhausted: boolean } | null = null;
+  private hiddenSkipRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private exitHandlers = new Map<string, (exitCode: number) => void>();
   private offViewLifecycle: () => void;
   private offViewObservability: () => void;
@@ -599,6 +619,7 @@ class TerminalInstanceService {
     for (const managed of this.instances.values()) {
       resumeXtermRender(managed.terminal);
     }
+    this.repaintHiddenSkips(true);
   }
 
   /**
@@ -726,12 +747,19 @@ class TerminalInstanceService {
    * file's path landing): it still counts as activity, but leaves the input
    * epoch alone so it cannot make other pending drops look overtaken.
    */
-  notifyUserInput(id: string, data = "", options: { automatic?: boolean } = {}): void {
+  notifyUserInput(
+    id: string,
+    data = "",
+    options: { automatic?: boolean; takesSize?: boolean } = {}
+  ): void {
     // A fleet follower is told about the origin's raw input, which can be a
     // reply or a mouse report rather than anything the user typed.
     if (!options.automatic && !isTerminalReply(data) && !isMouseReport(data)) {
       this.noteUserInput(id);
     }
+    // What skips xterm's onData: Return, a word jump, a paste, the pane's own
+    // composer. Input that reached this terminal without anyone at the pane says so.
+    if (options.takesSize !== false && !options.automatic) takeCanopySize(id);
     this.onUserInput(id, data);
   }
 
@@ -1030,6 +1058,7 @@ class TerminalInstanceService {
     const wasVisible = this.instances.get(id)?.isVisible;
     this.revealController.setVisible(id, isVisible, expectedGeneration);
     this.historyRelease.sync(id);
+    noteVisiblePanesChanged();
     const managed = this.instances.get(id);
     // A pane revealed mid-stream can stay at BURST, so the tier-upgrade
     // re-derive never fires; lift its pressure cap here instead.
@@ -1049,25 +1078,6 @@ class TerminalInstanceService {
 
   lockResize(id: string, locked: boolean, customTtlMs?: number): void {
     this.resizeController.lockResize(id, locked, customTtlMs);
-  }
-
-  /**
-   * Freeze this terminal's pane while another view draws it at its own size —
-   * Canopy's live pane holds the PTY at the panel's grid. Without it the two
-   * take turns resizing the agent, and each turn is a full redraw. The release
-   * re-measures the pane once nothing holds it; call it after the other view
-   * has handed the PTY back, so the pane's own size lands last.
-   */
-  holdGeometry(id: string): () => void {
-    this.resizeController.holdGeometry(id);
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      if (this.resizeController.releaseGeometry(id) && this.instances.has(id)) {
-        this.runResizePass([id]);
-      }
-    };
   }
 
   private layoutTransitionTimer: number | undefined;
@@ -1291,6 +1301,21 @@ class TerminalInstanceService {
   }
 
   /**
+   * The terminals this service shows in a pane: what main lets size their PTY
+   * ahead of Canopy. A pane the dock parked stays mounted and can keep its last
+   * visible reading, so the engine is asked whether it renders at all.
+   */
+  private *visiblePaneIds(): Iterable<string> {
+    for (const [id, managed] of this.instances) {
+      if (!managed.isVisible || managed.isDetached) continue;
+      const host = managed.hostElement;
+      if (!host.isConnected) continue;
+      if (typeof host.checkVisibility === "function" && !host.checkVisibility()) continue;
+      yield id;
+    }
+  }
+
+  /**
    * Another frontend drives this project. Its resizes are the only ones the
    * PTY takes, so this view draws each terminal at the PTY's grid instead of
    * fitting its own panes. No lease at all is ordinary local use.
@@ -1376,7 +1401,7 @@ class TerminalInstanceService {
         // The PTY was last sized by the other frontend, and the pane's box was
         // never applied while held: no cache may dedup the re-fit away, even
         // where the pane's grid is the one xterm already holds. A pane still
-        // locked or held by Canopy carries this to whichever pass frees it.
+        // locked carries this to whichever pass frees it.
         managed.lastWidth = 0;
         managed.lastHeight = 0;
         managed.reassertPtyGrid = true;
@@ -1483,6 +1508,89 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
     writeLocal(managed, `\x18\x1b]57301;${droppedBytes};backpressure\x07`);
+  }
+
+  /**
+   * The host stopped sending this pane live output while no window showed
+   * its project (#16497). Nothing is lost — the host mirror has it — so the
+   * pane repaints from the host snapshot once this view is back, instead of
+   * carrying a discontinuity marker. A view already back repaints now: the
+   * notice can trail the reactivation, and a skip after a repaint's snapshot
+   * request is reported again.
+   */
+  noteHiddenOutputSkipped(id: string): void {
+    if (!this.instances.has(id)) return;
+    this.hiddenSkipRepaints.set(id, 0);
+    if (!isProjectViewCached()) this.repaintHiddenSkips();
+  }
+
+  /**
+   * One repaint at a time: a reveal can find every busy pane of the project
+   * marked, and each restore writes a whole snapshot into its xterm. A pane
+   * whose repaint fails keeps its obligation.
+   */
+  private repaintHiddenSkips(includeExhausted = false): void {
+    if (this.hiddenSkipRepaintRunning) {
+      this.hiddenSkipRepaintRerun = {
+        includeExhausted: includeExhausted || !!this.hiddenSkipRepaintRerun?.includeExhausted,
+      };
+      return;
+    }
+    this.hiddenSkipRepaintRunning = true;
+    // Keyed by the instance the attempt ran against, so a failure never
+    // carries over to a pane recreated under the same id.
+    const failed = new Map<string, { managed: ManagedTerminal; failures: number }>();
+    void (async () => {
+      try {
+        // Map iteration also visits ids marked while an earlier one restores.
+        for (const [id, failures] of this.hiddenSkipRepaints) {
+          if (isProjectViewCached()) break;
+          // Only a reactivation retries a pane out of timed attempts; a timer or
+          // another pane's notice leaves it for that (or its own next notice).
+          if (!includeExhausted && failures >= HIDDEN_SKIP_REPAINT_TIMED_ATTEMPTS) continue;
+          this.hiddenSkipRepaints.delete(id);
+          // The latest attempt's outcome is the one that counts.
+          failed.delete(id);
+          const managed = this.instances.get(id);
+          if (!managed) continue;
+          // The worker mirror paints its own snapshots, which a host repaint
+          // would race; history release stays out of worker mode for the same
+          // reason.
+          if (this.workerIngestController.getIngest(id)?.shouldDivert()) continue;
+          let restored = false;
+          try {
+            restored = await this.restoreController.fetchAndRestore(id, { authoritative: true });
+          } catch (error) {
+            logWarn(`[TerminalInstanceService] ${id}: repaint after hidden-view skip threw`, {
+              error,
+            });
+          }
+          if (!restored) failed.set(id, { managed, failures: failures + 1 });
+        }
+      } finally {
+        this.hiddenSkipRepaintRunning = false;
+        let retry = false;
+        for (const [id, { managed, failures }] of failed) {
+          // A fresh notice meanwhile already re-marked it with a clean count.
+          if (this.hiddenSkipRepaints.has(id) || this.instances.get(id) !== managed) continue;
+          logWarn(`[TerminalInstanceService] ${id}: repaint after hidden-view skip failed`);
+          this.hiddenSkipRepaints.set(id, failures);
+          if (failures < HIDDEN_SKIP_REPAINT_TIMED_ATTEMPTS) retry = true;
+        }
+        const rerun = this.hiddenSkipRepaintRerun;
+        this.hiddenSkipRepaintRerun = null;
+        if (rerun && !isProjectViewCached()) this.repaintHiddenSkips(rerun.includeExhausted);
+        else if (retry) this.scheduleHiddenSkipRetry();
+      }
+    })();
+  }
+
+  private scheduleHiddenSkipRetry(): void {
+    if (this.hiddenSkipRetryTimer !== null) return;
+    this.hiddenSkipRetryTimer = setTimeout(() => {
+      this.hiddenSkipRetryTimer = null;
+      if (!isProjectViewCached()) this.repaintHiddenSkips();
+    }, HIDDEN_SKIP_REPAINT_RETRY_MS);
   }
 
   /**
@@ -1764,6 +1872,7 @@ class TerminalInstanceService {
     this.instances.set(id, managed);
     this.ensureResizeResultSubscription();
     this.ensureDriveLeaseSubscription();
+    this.offVisiblePanes ??= registerVisiblePaneSource(() => this.visiblePaneIds());
     if (this.followsPty(id)) this.watchTerminal(id, managed);
 
     const initialTier = getRefreshTier ? getRefreshTier() : TerminalRefreshTier.FOCUSED;
@@ -2534,6 +2643,7 @@ class TerminalInstanceService {
     managed.isVisible = false;
     managed.isDetached = true;
     this.historyRelease.sync(id);
+    noteVisiblePanesChanged();
   }
 
   detachForProjectSwitch(id: string): void {
@@ -2546,6 +2656,7 @@ class TerminalInstanceService {
 
     managed.isVisible = false;
     managed.isDetached = true;
+    noteVisiblePanesChanged();
 
     this.resizeController.clearResizeJob(managed);
     this.resizeController.clearSettledTimer(id);
@@ -2626,7 +2737,8 @@ class TerminalInstanceService {
    * fixed chrome doesn't scale. `applyBackgroundResize` moves xterm and the
    * PTY together, so agents wrap at the right width the whole time and the
    * parser never trails the grid the app is drawing for; alt-screen panes are
-   * excluded and both grids stay at their pre-background size. By reattach
+   * excluded, keep both grids at their pre-background size, and are left to
+   * the reveal repair with an obligation the watchdog also honours. By reattach
    * the wake path's `applyDeferredResize` therefore finds cache == current and
    * early-returns; only `reconcileGeometryFresh` on reveal corrects the
    * residual error between the scaled estimate and real layout.
@@ -2664,12 +2776,18 @@ class TerminalInstanceService {
     const heightRatio = height / session.basis.height;
     for (const [id, managed] of this.instances) {
       if (!managed.isOpened) continue;
-      // Never resize a live alt-screen TUI from here (#11443) — see the choke
-      // point in `applyBackgroundResize`. Skipping before the origin capture
-      // also keeps the anchor keyed to first eligibility, so a pane that leaves
-      // the alternate screen mid-session still scales from its pre-background
-      // size rather than a partially-applied one.
-      if (managed.isAltBuffer) continue;
+      // Never size a live alt-screen TUI to this estimate (#11443) — see the
+      // choke point in `applyBackgroundResize`. Its box did change, though, so
+      // hand it to the reveal repair, which measures real layout (#16359).
+      // Skipping before the origin capture also keeps the anchor keyed to first
+      // eligibility, so a pane that leaves the alternate screen mid-session
+      // still scales from its pre-background size rather than a
+      // partially-applied one.
+      if (managed.isAltBuffer) {
+        managed.revealPendingRepair = true;
+        managed.revealPendingGeneration = managed.attachGeneration;
+        continue;
+      }
       let origin = session.origin.get(id);
       if (!origin) {
         if (managed.lastWidth <= 0 || managed.lastHeight <= 0) continue;
@@ -2841,7 +2959,8 @@ class TerminalInstanceService {
     // fit()/sendPtyResize/maybeReflow on reveal: for an unchanged window they
     // are same-size host no-ops, and a real reflow of a live alt frame is the
     // out-of-band hazard #10632 / #10805 guard against. Genuine size changes
-    // are handled by the ResizeObserver-driven applyResize path.
+    // are handled by the ResizeObserver-driven applyResize path and the
+    // reveal-time `reconcileGeometryFresh`, which moves both grids together.
     if (managed.isAltBuffer) return;
 
     // Re-measure container dimensions after wake so latestCols/latestRows
@@ -3202,14 +3321,12 @@ class TerminalInstanceService {
     // stale until the next click or heartbeat. The redundant tick is cheap;
     // the lost repair is not.
 
-    // Re-arm the geometry circuit breaker only on DEMONSTRATED main-buffer
-    // convergence. reconcileGeometryFresh's boolean is measurability, not
-    // convergence: an alt-buffer pane returns true without touching geometry,
-    // and `resizeTerminal` parks the xterm resize during a serialized restore.
+    // Re-arm the geometry circuit breaker only on DEMONSTRATED convergence.
+    // reconcileGeometryFresh's boolean is measurability, not convergence:
+    // `resizeTerminal` parks the xterm resize during a serialized restore.
     // Comparing the live grid against the geometry just measured is the only
     // real signal, and it mirrors what the watchdog's converged branch does.
     if (
-      !managed.isAltBuffer &&
       managed.terminal.cols === managed.latestCols &&
       managed.terminal.rows === managed.latestRows
     ) {
@@ -3666,6 +3783,7 @@ class TerminalInstanceService {
     managed.scrollbackRestoreState = "none";
 
     this.instances.delete(id);
+    if (managed.isVisible) noteVisiblePanesChanged();
     if (this.watchHolds.delete(id)) {
       this.watchEchoSeq.delete(id);
       this.watchUnseeded.delete(id);
@@ -3775,6 +3893,7 @@ class TerminalInstanceService {
 
     this.offscreenManager.removeOffscreenSlot(id);
     this.suppressedExitUntil.delete(id);
+    this.hiddenSkipRepaints.delete(id);
     this.cwdProviders.delete(id);
     this.cachedSelections.delete(id);
     this.rendererPolicy.clearTierState(id);
@@ -3787,6 +3906,10 @@ class TerminalInstanceService {
     this.projectSwitchRedrawQueue.clear();
     this.offViewLifecycle();
     this.offViewObservability();
+    if (this.hiddenSkipRetryTimer !== null) {
+      clearTimeout(this.hiddenSkipRetryTimer);
+      this.hiddenSkipRetryTimer = null;
+    }
     this.offBufferSampleRequest?.();
     this.offBufferSampleRequest = null;
     TerminalInstanceService.liveServices.delete(this);
@@ -3810,6 +3933,8 @@ class TerminalInstanceService {
     this.reconciliationWatchdog.dispose();
     this.writeController.dispose();
     this.instances.forEach((_, id) => this.destroy(id));
+    this.offVisiblePanes?.();
+    this.offVisiblePanes = null;
     this.offscreenManager.dispose();
     this.webGLManager.dispose();
     this.rendererPolicy.dispose();
@@ -3825,8 +3950,8 @@ class TerminalInstanceService {
     return this.restoreController.restoreFetchedState(id, serializedState, captureGeometry);
   }
 
-  async fetchAndRestore(id: string): Promise<boolean> {
-    return this.restoreController.fetchAndRestore(id);
+  async fetchAndRestore(id: string, options?: FetchAndRestoreOptions): Promise<boolean> {
+    return this.restoreController.fetchAndRestore(id, options);
   }
 
   restoreFromSerialized(

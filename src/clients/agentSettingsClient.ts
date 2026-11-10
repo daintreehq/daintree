@@ -59,11 +59,6 @@ export const agentSettingsClient = {
     return window.electron.agentSettings.setGlobal(value).finally(invalidate);
   },
 
-  setGlobalInline: (value: boolean): Promise<AgentSettings> => {
-    invalidate();
-    return window.electron.agentSettings.setGlobalInline(value).finally(invalidate);
-  },
-
   setResumeOnRestart: (value: ResumeOnRestart): Promise<AgentSettings> => {
     invalidate();
     return window.electron.agentSettings.setResumeOnRestart(value).finally(invalidate);

@@ -31,21 +31,23 @@ const POINTS = [
   {
     icon: Hourglass,
     title: "The one that went quiet",
-    body: "A run stuck behind a spinner, or waiting on you for ten minutes, surfaces instead of hiding in a pane.",
+    body: "A run stuck behind a spinner, or waiting on you for ten minutes, surfaces instead of hiding in a panel.",
   },
 ] as const;
 
 interface CanopyPitchProps {
   isOpen: boolean;
-  onClose: () => void;
-  /** The user turned Canopy on: its model downloads and screens are read on this computer. */
+  /** The user turned Canopy on: screens are read on this computer, with the model that ships with Daintree. */
   onTurnOn: () => Promise<void>;
   /** The user doesn't want Canopy: its ways in go, all but Settings. */
   onHide: () => Promise<void>;
-  /** Where the keyboard goes when the offer closes: what had it when the panel opened. */
-  restoreFocusTo?: () => HTMLElement | null;
   /** The host picker, when there is another host to show: the offer is this host's alone. */
   hostPicker?: React.ReactNode;
+  /**
+   * The offer's close button: a dialog over a project window, whose own controls
+   * close the project. The Canopy window's are its own, so it passes none.
+   */
+  headerActions?: React.ReactNode;
 }
 
 const FAILED: Record<"on" | "hide", string> = {
@@ -57,20 +59,21 @@ const FAILED: Record<"on" | "hide", string> = {
  * What Canopy shows until the user turns it on: what it does, beside its inbox
  * playing a made-up fleet through the moments it is for, and what turning it on
  * does. Nothing here reads a terminal; nothing is read until they turn it on.
+ * Its header and body only: the offer in a project window draws it in a
+ * dialog, and the Canopy window in its own surface.
  */
 export function CanopyPitch({
   isOpen,
-  onClose,
   onTurnOn,
   onHide,
-  restoreFocusTo,
   hostPicker,
+  headerActions,
 }: CanopyPitchProps) {
   const [pending, setPending] = useState<"on" | "hide" | null>(null);
   const [failed, setFailed] = useState<"on" | "hide" | null>(null);
   // The keyboard lands on the offer's heading, not on Turn on: a reflexive
-  // Enter after the shortcut must not start a download. The dialog
-  // is told to place no focus of its own, so this is the only move.
+  // Enter after the shortcut must not turn reading on. The surface around it
+  // places no focus of its own, so this is the only move.
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     if (!isOpen) return;
@@ -92,18 +95,11 @@ export function CanopyPitch({
   };
 
   return (
-    <AppDialog
-      isOpen={isOpen}
-      onClose={onClose}
-      placement="window"
-      initialFocus="none"
-      {...(restoreFocusTo ? { restoreFocusTo, preferRestoreFocusTo: true } : {})}
-      data-testid="canopy-dialog"
-    >
+    <>
       <AppDialog.Header>
         <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
         <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
-        <AppDialog.CloseButton />
+        {headerActions}
       </AppDialog.Header>
       <div className="canopy-frame flex min-h-0 flex-1">
         <DemoInbox paused={!isOpen} />
@@ -123,7 +119,7 @@ export function CanopyPitch({
               </h2>
               <p className="text-sm leading-6 text-text-secondary">
                 Canopy reads each agent's screen and keeps one inbox for all of them, most urgent
-                first, so you stop hunting through panes to find out who needs you.
+                first, so you stop hunting through panels to find out who needs you.
               </p>
             </div>
             <ul className="flex flex-col gap-4">
@@ -146,7 +142,8 @@ export function CanopyPitch({
                 </p>
               </div>
               {/* Turning it on and not wanting it are the same size, side by
-                  side: the close button is the "not now". */}
+                  side: "not now" is closing it, by the offer's close button or
+                  the Canopy window's own controls. */}
               <div className="flex items-center gap-3">
                 <Button
                   variant="contrast"
@@ -170,7 +167,7 @@ export function CanopyPitch({
           </div>
         </section>
       </div>
-    </AppDialog>
+    </>
   );
 }
 

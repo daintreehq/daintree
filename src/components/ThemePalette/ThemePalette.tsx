@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { logError } from "@/utils/logger";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PaletteFooterHints, type PaletteFooterHint } from "@/components/ui/AppPaletteDialog";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
@@ -12,8 +11,7 @@ import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useAppThemeStore, injectSchemeToDOM, resolveCommittedScheme } from "@/store/appThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
-import { notify } from "@/lib/notify";
-import { appThemeClient } from "@/clients/appThemeClient";
+import { commitAppThemeSelection } from "@/lib/commitAppThemeSelection";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import type { AppColorScheme } from "@shared/types/appTheme";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
@@ -123,7 +121,6 @@ function committedScheme(): AppColorScheme {
 export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   const selectableSchemes = useAppThemeStore(selectSelectableSchemes);
-  const setSelectedSchemeId = useAppThemeStore((s) => s.setSelectedSchemeId);
   const themePaletteShortcut = useEffectiveCombo("app.theme.pick");
 
   const allSchemes = useMemo(
@@ -221,20 +218,10 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
   const commit = useCallback(
     (scheme: AppColorScheme) => {
       committedRef.current = true;
-      setSelectedSchemeId(scheme.id);
-      appThemeClient.setColorScheme(scheme.id).catch((error) => {
-        logError("Failed to persist theme selection", error);
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          priority: "high",
-          message: `Couldn't save theme preference — '${scheme.name}' is applied but the choice will be lost on restart.`,
-          duration: 3000,
-        });
-      });
+      void commitAppThemeSelection(scheme.id, null, { reveal: false });
       onClose();
     },
-    [setSelectedSchemeId, onClose]
+    [onClose]
   );
 
   const savedScheme = useMemo(
@@ -252,7 +239,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       if (!scheme) return null;
       const onSaved = scheme.id === savedScheme?.id;
       const primaryHint = {
-        keys: ["↵"],
+        keys: "Enter",
         label: onSaved ? `to keep ${scheme.name}` : `to switch to ${scheme.name}`,
       };
       // Secondary chips never shrink, so an imported theme's long name is
@@ -260,10 +247,10 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       const savedName = savedScheme ? clampName(savedScheme.name) : null;
       const hints: PaletteFooterHint[] = [];
       if (query !== "") {
-        hints.push({ keys: ["Esc"], label: "to clear search" });
-        if (!onSaved && savedName) hints.push({ keys: [], label: `Saved: ${savedName}` });
+        hints.push({ keys: "Escape", label: "to clear search" });
+        if (!onSaved && savedName) hints.push({ label: `Saved: ${savedName}` });
       } else if (!onSaved && savedName) {
-        hints.push({ keys: ["Esc"], label: `to go back to ${savedName}` });
+        hints.push({ keys: "Escape", label: `to go back to ${savedName}` });
       }
       return <PaletteFooterHints primaryHint={primaryHint} hints={hints} />;
     },
@@ -310,7 +297,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       label="Theme switcher"
       shortcut={themePaletteShortcut}
       ariaLabel="Theme palette"
-      searchPlaceholder="Search themes"
+      searchPlaceholder="Search themes…"
       searchAriaLabel="Search themes"
       listId="theme-palette-list"
       itemIdPrefix="theme-option"

@@ -54,7 +54,9 @@ export function CommandTile({
           "text-text-secondary",
           tone === "create"
             ? "border border-dashed border-border-strong bg-overlay-soft"
-            : "bg-overlay-medium"
+            : // The neutral project tile's hairline, so a scratch or host tile
+              // keeps its edge under the highlight and on light themes.
+              "border border-border-default bg-overlay-medium"
         )}
       >
         {children ?? (Icon && <Icon className="h-4 w-4" aria-hidden="true" />)}
@@ -106,7 +108,12 @@ export function ProjectTile({
             : undefined
         }
       >
-        <span className="leading-none select-none filter drop-shadow-sm">{emoji || "🌲"}</span>
+        {/* A contour rather than a drop: a pale emoji (☁️, ✨) on a light
+            theme's pale tile otherwise reads as an empty tile. Dark against a
+            dark tile, it disappears. */}
+        <span className="leading-none select-none filter drop-shadow-[0_0_1px_rgba(0,0,0,0.35)]">
+          {emoji || "🌲"}
+        </span>
       </div>
     </div>
   );

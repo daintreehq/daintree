@@ -28,6 +28,10 @@ vi.mock("../SettingsSection", () => ({
 
 const radio = (name: string) => screen.getByRole("radio", { name }) as HTMLInputElement;
 
+/** One entry per telemetry level; the Errors only entry nests its own field list. */
+const levelEntries = (disclosure: HTMLElement) =>
+  Array.from(disclosure.querySelectorAll("dd")).filter((dd) => !dd.parentElement?.closest("dd"));
+
 vi.mock("../SettingsSubtabBar", () => ({
   SettingsSubtabBar: () => null,
   subtabPanelProps: (group: string, activeId: string) => ({
@@ -210,7 +214,9 @@ describe("PrivacyDataTab", () => {
 
     // Scoped to the per-level summaries: field lists may legitimately carry
     // percentages (CPU, memory) that aren't sampling claims.
-    const summaries = Array.from(disclosure.querySelectorAll("dd > p"), (p) => p.textContent ?? "");
+    const summaries = levelEntries(disclosure).map(
+      (dd) => dd.querySelector(":scope > p")?.textContent ?? ""
+    );
     expect(summaries).toHaveLength(3);
     for (const summary of summaries) {
       expect(summary).not.toMatch(/sampl/i);
@@ -253,7 +259,7 @@ describe("PrivacyDataTab", () => {
     const disclosure = await waitFor(() =>
       screen.getByRole("group", { name: /What's collected at each level/i })
     );
-    const levels = Array.from(disclosure.querySelectorAll("dd"), (dd) => dd.textContent ?? "");
+    const levels = levelEntries(disclosure).map((dd) => dd.textContent ?? "");
     expect(levels).toHaveLength(3);
     const [off, errors, full] = levels;
     expect(off).not.toMatch(/location/i);

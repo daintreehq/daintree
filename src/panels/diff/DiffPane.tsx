@@ -1,8 +1,16 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import {
   ChevronLeft,
   ChevronRight,
-  Check,
   ExternalLink,
   FolderTree,
   PanelLeftClose,
@@ -17,6 +25,7 @@ import type { DiffPanelData } from "@shared/types/panel";
 import { isAbsolute, join, resolveWorktreePathScope } from "@shared/utils/path";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
@@ -611,39 +620,41 @@ export function DiffPane({
   const hasNextFile =
     isWorkspace && currentIndex !== -1 && currentIndex < (changeSet?.length ?? 0) - 1;
 
-  // `[` / `]` step files and `v` marks the current file viewed — the same keys
-  // the modal bound, scoped to this panel so a background one stays inert.
-  const rootRef = useRef<HTMLDivElement | null>(null);
   // The footer is a toolbar like the header above the diff: one tab stop,
   // arrow keys between its controls.
   const footerRef = useRef<HTMLDivElement | null>(null);
   const onFooterKeyDown = useToolbarRoving(footerRef);
-  useEffect(() => {
-    if (!isFocused) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target as HTMLElement | null;
-      if (
-        target &&
-        (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
-      ) {
-        return;
-      }
-      if (event.key === "[") {
-        event.preventDefault();
-        navigateFile(-1);
-      } else if (event.key === "]") {
-        event.preventDefault();
-        navigateFile(1);
-      } else if (event.key === "v" && currentEntry && worktreePath) {
-        event.preventDefault();
-        toggleViewed(worktreePath, currentEntry.viewedKey);
-      }
-    };
-    const root = rootRef.current;
-    root?.addEventListener("keydown", onKeyDown);
-    return () => root?.removeEventListener("keydown", onKeyDown);
-  }, [isFocused, navigateFile, currentEntry, worktreePath, toggleViewed]);
+
+  // `[` / `]` step files and `v` marks the current file viewed — the same keys
+  // the modal bound, scoped to this panel so a background one stays inert. Held
+  // by the panel root, so they work from the footer and toolbar that advertise
+  // them and from the root itself, where focus lands when the pane is focused.
+  // React bubbling hands the focused control first refusal: a key it already
+  // claimed (a sidebar row's own `v`) stays claimed.
+  const handleFileKeyDown = (event: ReactKeyboardEvent) => {
+    if (!isFocused || event.defaultPrevented) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    // React also bubbles keys from a menu or popover the pane opened, portalled
+    // outside its DOM; those keys belong to the overlay.
+    const target = event.target as Node;
+    if (!event.currentTarget.contains(target)) return;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
+    ) {
+      return;
+    }
+    if (event.key === "[") {
+      event.preventDefault();
+      navigateFile(-1);
+    } else if (event.key === "]") {
+      event.preventDefault();
+      navigateFile(1);
+    } else if (event.key === "v" && currentEntry && worktreePath) {
+      event.preventDefault();
+      toggleViewed(worktreePath, currentEntry.viewedKey);
+    }
+  };
 
   // Sentinels the viewer turns into empty states rather than a rendered diff.
   // `NO_CHANGES`/`ERROR` gate the pane's own branches below; the binary and
@@ -1307,11 +1318,9 @@ export function DiffPane({
       onTabClose={onTabClose}
       onTabRename={onTabRename}
       onAddTab={onAddTab}
+      onKeyDown={handleFileKeyDown}
     >
-      {/* Keydown host for the file-stepping shortcuts: the listener rides
-          bubbling from whatever inside actually holds focus, so the container
-          needs no tabIndex (and no outline suppression) of its own. */}
-      <div ref={rootRef} className="flex flex-1 min-h-0">
+      <div className="flex flex-1 min-h-0">
         {isWorkspace && diffShowFileList && changeSet && (
           <DiffFileSidebar
             files={changeSet}
@@ -1617,16 +1626,16 @@ export function DiffPane({
             )}
           </div>
           {currentEntry && worktreePath && (
-            // The word is the name, so no tooltip repeats it.
-            <button
-              type="button"
-              aria-pressed={isViewed}
-              onClick={() => toggleViewed(worktreePath, currentEntry.viewedKey)}
-              className={PANE_TOOLBAR_TEXT_BUTTON_CLASS}
-            >
-              <Check className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
+            // The same checkbox the file lists draw for a viewed file. The word
+            // is the name, so no tooltip repeats it.
+            <label className={`${PANE_TOOLBAR_TEXT_BUTTON_CLASS} cursor-pointer select-none`}>
+              <Checkbox
+                size="sm"
+                checked={isViewed}
+                onCheckedChange={() => toggleViewed(worktreePath, currentEntry.viewedKey)}
+              />
               Viewed
-            </button>
+            </label>
           )}
         </div>
       )}

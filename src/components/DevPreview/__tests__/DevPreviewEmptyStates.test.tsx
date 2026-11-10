@@ -29,7 +29,7 @@ function baseProps(overrides: Partial<React.ComponentProps<typeof DevPreviewEmpt
     phaseLabel: undefined,
     error: null,
     handleRetry: vi.fn(),
-    setDevPreviewConsoleOpen: vi.fn(),
+    showDevPreviewOutput: vi.fn(),
     id: "pane-1",
     currentUrl: "http://localhost:3000",
     handleOpenExternal: vi.fn(),
@@ -86,6 +86,27 @@ describe("DevPreviewEmptyStates", () => {
     const error: DevServerError = { type: "permission", message: "EACCES" };
     render(<DevPreviewEmptyStates {...baseProps({ status: "error", error })} />);
     expect(screen.getByRole("button", { name: /view terminal/i })).toBeTruthy();
+  });
+
+  it("routes the error state's 'View terminal' click to the Output tab", () => {
+    const showDevPreviewOutput = vi.fn();
+    const error: DevServerError = { type: "compile-error", message: "Build failed" };
+    render(
+      <DevPreviewEmptyStates {...baseProps({ status: "error", error, showDevPreviewOutput })} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /view terminal/i }));
+    expect(showDevPreviewOutput).toHaveBeenCalledWith("pane-1");
+  });
+
+  it("routes the waiting state's 'View terminal' click to the Output tab", () => {
+    const showDevPreviewOutput = vi.fn();
+    render(
+      <DevPreviewEmptyStates
+        {...baseProps({ status: "running", currentUrl: "", showDevPreviewOutput })}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /view terminal/i }));
+    expect(showDevPreviewOutput).toHaveBeenCalledWith("pane-1");
   });
 
   it("shows the auto-detected command prompt when unconfigured with a primary candidate", () => {

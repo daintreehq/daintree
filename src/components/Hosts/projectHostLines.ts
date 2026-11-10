@@ -8,12 +8,16 @@ import { describeObserved, ROW_BANDS, type HostProjectSummary } from "./projectH
  * What a host row shows right of its name: the counts, or the one phrase that
  * stands in for them. "away" is the link's own words while what the host says
  * isn't current; "note" is what the host said of this project instead of
- * counts; "checking" is a lookup or a read still out.
+ * counts, something to act on; "quiet" is the routine absence of anything to
+ * count (no worktrees, no agents, only settled ones), which the row says with
+ * a dimmed name rather than words, since the same phrase down every idle host
+ * outweighed the live ones; "checking" is a lookup or a read still out.
  */
 export type HostRowStatus =
   | { kind: "counts" }
   | { kind: "away"; text: string }
   | { kind: "note"; text: string }
+  | { kind: "quiet"; text: string }
   | { kind: "checking" };
 
 export function hostRowStatus(
@@ -35,14 +39,14 @@ export function hostRowStatus(
   if (!summary) return { kind: "checking" };
   // What the host listed, said as listed: a host also lists nothing for a
   // project it couldn't read, so an empty list is not "closed there".
-  if (summary.worktreeCount === 0) return { kind: "note", text: "No worktrees" };
-  if (summary.observed.size === 0) return { kind: "note", text: "No agents" };
+  if (summary.worktreeCount === 0) return { kind: "quiet", text: "No worktrees" };
+  if (summary.observed.size === 0) return { kind: "quiet", text: "No agents" };
   if (ROW_BANDS.every((band) => summary.counts[band] === 0)) {
     // Every agent in a band the row doesn't count (finished, parked, idle…):
     // how many there are, never a verdict on what they are doing.
     let agents = 0;
     for (const n of summary.observed.values()) agents += n;
-    return { kind: "note", text: pluralize(agents, "agent") };
+    return { kind: "quiet", text: pluralize(agents, "agent") };
   }
   return { kind: "counts" };
 }

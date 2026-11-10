@@ -16,6 +16,7 @@ import type {
   BranchInfo,
   CreateWorktreeOptions,
   GitDiffSide,
+  GitStatusUnanswered,
   RepoState,
   WorktreeChanges,
 } from "./git.js";
@@ -277,6 +278,16 @@ export interface WorktreeSnapshot {
   fetchNetworkFailed?: boolean;
 
   /**
+   * The last git status read for this worktree ended without an answer: it
+   * timed out, or a git already stopped there had not exited. Absent once a
+   * read answers. `worktreeChanges` still holds whatever was last observed.
+   */
+  gitStatusUnanswered?: GitStatusUnanswered;
+
+  /** Git status isn't being run here because `.git` still holds online-only files. */
+  gitStatusWaitingForDownload?: boolean;
+
+  /**
    * `false` when `git remote` lists nothing: a local-only repo, which has
    * nothing to fetch and nothing wrong with it. `true` when it lists any;
    * absent until a fetch attempt has read the list.
@@ -498,6 +509,14 @@ export interface WorkspaceFetchResult {
  * Each request is a discriminated union type for compile-time safety.
  * Request IDs enable tracking responses for async operations.
  */
+/**
+ * Whether a project's git status may run, from what Main has seen of its `.git`.
+ * `pending` is a project in a cloud folder whose first walk hasn't answered, and
+ * `held` is one with `.git` entries still online-only. Only such a project ever
+ * leaves `open`.
+ */
+export type StatusDownloadGate = "open" | "pending" | "held";
+
 export type WorkspaceHostRequest =
   // Project lifecycle
   | {
@@ -653,6 +672,8 @@ export type WorkspaceHostRequest =
   // GitHub rate-limit fetch-throttle multiplier relayed from main, where the
   // forge HTTP calls (and thus rate-limit observations) live post-#8870.
   | { type: "apply-fetch-throttle"; multiplier: number }
+  // Whether status passes may run, given what Main has seen of `.git` (#16364).
+  | { type: "set-status-download-gate"; gate: StatusDownloadGate }
   // Forge provider hostname-matcher table relayed from main's registry so
   // monitors can resolve remote URLs to a provider id without registry access.
   | { type: "forge-provider-matchers"; matchers: ForgeProviderMatcher[] }

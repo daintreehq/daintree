@@ -2,10 +2,12 @@ import { useMemo } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { PickerChevron } from "@/components/ui/PickerChevron";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useListboxCursor } from "@/hooks/useListboxCursor";
-import { Check, Copy, Play } from "lucide-react";
+import { Check, Copy } from "lucide-react";
+import { Workflow } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { FIELD_TRIGGER } from "./WorktreeFormLayout";
 import type { TerminalRecipe } from "@/types";
@@ -120,7 +122,7 @@ export function RecipePickerPopover({
               </>
             ) : selectedRecipe ? (
               <>
-                <Play className="shrink-0 text-text-secondary" />
+                <Workflow className="shrink-0 text-text-secondary" />
                 <span>{selectedRecipe.name}</span>
                 <span className="text-xs text-text-secondary">
                   ({pluralize(selectedRecipe.terminals.length, "terminal")})
@@ -128,7 +130,7 @@ export function RecipePickerPopover({
               </>
             ) : (
               <>
-                <Play className="shrink-0 text-text-secondary" />
+                <Workflow className="shrink-0 text-text-secondary" />
                 <span className="text-text-secondary">No recipe</span>
               </>
             )}
@@ -259,7 +261,8 @@ function RecipeRow({
             <span className="text-xs text-text-secondary shrink-0">Overridden by Team</span>
           )}
           {option.recipe.id === defaultRecipeId && (
-            <span className="text-xs text-text-secondary shrink-0">(default)</span>
+            // Marked as Settings → Recipes marks it.
+            <Badge size="xs">Default</Badge>
           )}
           {unavailable && (
             <span className="text-xs text-text-secondary shrink-0">{unavailable}</span>

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ComponentType } from
 import { ArrowRight, Check, Pause, Play, RotateCcw } from "lucide-react";
 import { ErrorBoundary } from "@/components/ErrorBoundary/ErrorBoundary";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { cn } from "@/lib/utils";
 import { useTourPlayer, useTourPlayerState, useTourTime } from "@daintreehq/tour/react";
 import { TourCanvas } from "@daintreehq/tour/kit";
@@ -157,7 +158,13 @@ function EndCard({
       className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-surface-canvas/90 backdrop-blur-md animate-in fade-in [--tw-animation-duration:var(--duration-200)]"
     >
       <span className="text-xs font-medium text-text-secondary">
-        {nextTitle ? `Up next · Chapter ${nextNumber}` : "That's the tour"}
+        {nextTitle ? (
+          <>
+            Up next <FactSeparator /> Chapter {nextNumber}
+          </>
+        ) : (
+          "That's the tour"
+        )}
       </span>
       <span className="mt-1.5 text-xl font-semibold tracking-tight text-text-primary">
         {nextTitle ?? "Try it for real"}

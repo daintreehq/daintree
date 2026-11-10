@@ -297,10 +297,12 @@ import { getBuildChannelLabel } from "../../shared/config/distribution.js";
 import { getPluginMenuItems } from "../services/pluginMenuRegistry.js";
 import { getPluginTours } from "../services/plugin/PluginTourRegistry.js";
 import { isPluginVisibleInProject } from "../services/plugin/projectPluginVisibility.js";
-import { webContents, app, Menu, dialog } from "electron";
+import { BrowserWindow, webContents, app, Menu, dialog } from "electron";
+import { markProjectlessView } from "../window/projectlessViews.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getWorkspaceClientRef } from "../window/windowServices.js";
 import { AppError } from "../utils/errorTypes.js";
+import { cachedViewBusy } from "../window/cachedViewBusy.js";
 import { registerRemoteService } from "../remote/runtime.js";
 
 beforeEach(() => {
@@ -623,6 +625,61 @@ describe("createApplicationMenu", () => {
   });
 });
 
+describe("a menu command with a window that holds no project focused", () => {
+  const canopyView = { id: 701, once: vi.fn() };
+  const canopyWindow = Object.assign(Object.create(BrowserWindow.prototype), {
+    id: 70,
+    isDestroyed: () => false,
+  }) as Electron.BrowserWindow;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedTemplate = [];
+    markProjectlessView(canopyView as never, canopyWindow);
+  });
+
+  afterEach(() => {
+    windowRefMock.getWindowRegistry.mockReturnValue(null);
+    canopyView.once.mock.calls.find(([event]) => event === "destroyed")?.[1]();
+  });
+
+  function closeProject(): void {
+    createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+    getAppWebContentsMock.mockClear();
+    const item = findMenuItem(capturedTemplate, "File", "Close Project");
+    item!.click!({} as Electron.MenuItem, canopyWindow, {} as Electron.KeyboardEvent);
+  }
+
+  it("goes to the project window last used, which comes forward", () => {
+    const projectWindow = { id: 2, isDestroyed: () => false, show: vi.fn() };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getPrimary: () => ({ browserWindow: projectWindow, services: {} }),
+      getByWindowId: () => undefined,
+      all: () => [],
+    });
+
+    closeProject();
+
+    expect(getAppWebContentsMock).toHaveBeenCalledWith(projectWindow);
+    expect(getAppWebContentsMock).not.toHaveBeenCalledWith(canopyWindow);
+    expect(projectWindow.show).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes nowhere once no project window is left", () => {
+    const destroyed = { id: 3, isDestroyed: () => true, show: vi.fn() };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getPrimary: () => ({ browserWindow: destroyed, services: {} }),
+      getByWindowId: () => undefined,
+      all: () => [],
+    });
+
+    closeProject();
+
+    expect(getAppWebContentsMock).not.toHaveBeenCalled();
+    expect(destroyed.show).not.toHaveBeenCalled();
+  });
+});
+
 describe("File menu layout (#12473)", () => {
   const originalPlatform = process.platform;
 
@@ -896,6 +953,52 @@ describe("File menu layout (#12473)", () => {
       );
       expect(openFolderInNewWindowMock).toHaveBeenCalledTimes(1);
       expect(projectStoreMock.addProject).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    it("retries a project another window holds for a moment as a new window still (#16724)", async () => {
+      openFolderInNewWindowMock.mockRejectedValueOnce(cachedViewBusy("Recent A", "flush"));
+      vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({
+        response: 0,
+        checkboxChecked: false,
+      });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await click(recentEntry("darwin"), { metaKey: true });
+
+      expect(dialog.showMessageBox).toHaveBeenCalledWith(
+        mockBrowserWindow,
+        expect.objectContaining({
+          message: "Couldn't open project",
+          detail: expect.stringContaining('"Recent A" is open in another window'),
+          buttons: ["Try again", "Cancel"],
+        })
+      );
+      expect(openFolderInNewWindowMock).toHaveBeenCalledTimes(2);
+      expect(openFolderInNewWindowMock).toHaveBeenLastCalledWith(RECENT.path, mockBrowserWindow.id);
+      expect(projectStoreMock.addProject).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    it("offers the window holding it for good, not another new window (#16724)", async () => {
+      openFolderInNewWindowMock.mockRejectedValueOnce(cachedViewBusy("Recent A", "assistant"));
+      vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({
+        response: 0,
+        checkboxChecked: false,
+      });
+      projectStoreMock.addProject.mockRejectedValueOnce(new Error("stop here"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await click(recentEntry("darwin"), { metaKey: true });
+
+      expect(dialog.showMessageBox).toHaveBeenNthCalledWith(
+        1,
+        mockBrowserWindow,
+        expect.objectContaining({ buttons: ["Show in other window", "Cancel"] })
+      );
+      // Showing it goes through the ordinary open, which finds that window.
+      expect(openFolderInNewWindowMock).toHaveBeenCalledTimes(1);
+      expect(projectStoreMock.addProject).toHaveBeenCalledWith(RECENT.path);
       errSpy.mockRestore();
     });
 
@@ -2281,6 +2384,111 @@ describe("handleDirectoryOpen failure dialogs", () => {
     expect(opts.cancelId).toBe(1);
   });
 
+  describe("a project another window keeps cached and can't let go of (#16724)", () => {
+    it("says where it is and what holds it there, never the folder copy", async () => {
+      projectStoreMock.addProject.mockRejectedValue(cachedViewBusy("alpha", "assistant"));
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      const opts = shownDialog();
+      expect(opts.title).toBe("Couldn't open project");
+      expect(opts.detail).toContain('"alpha" is open in another window');
+      expect(opts.detail).toContain("Assistant");
+      expect(opts.detail.toLowerCase()).not.toContain("drive");
+      expect(opts.buttons).toEqual(["Show in other window", "Cancel"]);
+      expect(opts.cancelId).toBe(1);
+    });
+
+    it("brings the window keeping it to the project only once the person chooses that", async () => {
+      const PROJECT = { id: "project-alpha", name: "alpha", path: FOLDER };
+      const ownerWindow = {
+        id: 4,
+        isDestroyed: () => false,
+        isMinimized: () => false,
+        show: vi.fn(),
+        focus: vi.fn(),
+      };
+      const ownerAppWebContents = {
+        isDestroyed: () => false,
+        isLoadingMainFrame: () => false,
+        send: vi.fn(),
+        once: vi.fn(),
+      };
+      const liveView = { webContents: { isDestroyed: () => false } };
+      const ownerManager = {
+        getActiveProjectId: () => "elsewhere",
+        getOutgoingBridgeProjectId: () => null,
+        getAllViews: () => [
+          { projectId: "elsewhere", view: liveView },
+          { projectId: PROJECT.id, view: liveView },
+        ],
+        releaseCachedView: vi.fn(() => false),
+        getCachedViewReleaseBlock: vi.fn(() => "assistant" as const),
+      };
+      windowRefMock.getWindowRegistry.mockReturnValue({
+        getByWindowId: () => undefined,
+        all: () => [
+          {
+            windowId: 4,
+            browserWindow: ownerWindow,
+            services: { projectViewManager: ownerManager },
+          },
+        ],
+      });
+      getAppWebContentsMock.mockImplementation((win) =>
+        win.id === 4 ? ownerAppWebContents : mockWebContents
+      );
+      projectStoreMock.addProject.mockResolvedValue(PROJECT);
+      vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({
+        response: 0,
+        checkboxChecked: false,
+      });
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      // The first open met the hold and said so, moving nothing.
+      expect(shownDialog().buttons).toEqual(["Show in other window", "Cancel"]);
+      expect(ownerManager.releaseCachedView).toHaveBeenCalledTimes(1);
+      // The choice had that window's own renderer switch, its cached view kept.
+      expect(ownerAppWebContents.send).toHaveBeenCalledExactlyOnceWith(CHANNELS.MENU_ACTION, {
+        actionId: "project.switch",
+        args: { projectId: PROJECT.id },
+      });
+      expect(ownerWindow.focus).toHaveBeenCalled();
+      expect(projectStoreMock.addProject).toHaveBeenCalledTimes(2);
+    });
+
+    it("offers a retry only for a hold that clears on its own, and retries the same folder", async () => {
+      projectStoreMock.addProject
+        .mockRejectedValueOnce(cachedViewBusy("alpha", "mcp"))
+        .mockRejectedValueOnce(new Error("stop here"));
+      vi.mocked(dialog.showMessageBox)
+        .mockResolvedValueOnce({ response: 0, checkboxChecked: false })
+        .mockResolvedValueOnce({ response: 1, checkboxChecked: false });
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      const calls: unknown[][] = vi.mocked(dialog.showMessageBox).mock.calls;
+      expect(Reflect.get(calls[0]?.[1] as object, "buttons")).toEqual(["Try again", "Cancel"]);
+      expect(projectStoreMock.addProject).toHaveBeenNthCalledWith(2, FOLDER);
+    });
+
+    it("offers nothing to press for a lasting hold it can't show from here", async () => {
+      projectStoreMock.addProject.mockRejectedValueOnce(
+        cachedViewBusy("alpha", "unsaved-work", { showable: false })
+      );
+      vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({
+        response: 0,
+        checkboxChecked: false,
+      });
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      expect(shownDialog().buttons).toEqual(["OK"]);
+      expect(projectStoreMock.addProject).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("keeps a raw error from reaching the dialog even when it isn't classified", async () => {
     // The pre-#11409 fallback assigned `error.message` straight to the dialog,
     // so an unclassified failure was the leak. It must now render safe copy.
@@ -2860,6 +3068,127 @@ describe("a window on a remote host", () => {
 
     expect(windowHosts.switchWindowToLocal).not.toHaveBeenCalled();
     expect(ownerWindow.focus).toHaveBeenCalled();
+  });
+
+  it("shows a project another window keeps for good in that window, when asked from a new-window open (#16724)", async () => {
+    projectStoreMock.getAllProjects.mockReturnValue([RECENT]);
+    projectStoreMock.addProject.mockResolvedValue({ id: RECENT.id, path: RECENT.path });
+    openFolderInNewWindowMock.mockRejectedValueOnce(cachedViewBusy(RECENT.name, "assistant"));
+    vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+    const ownerWindow = {
+      id: 4,
+      isDestroyed: () => false,
+      getTitle: () => "Daintree",
+      isMinimized: () => false,
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const ownerAppWebContents = {
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => false,
+      send: vi.fn(),
+      once: vi.fn(),
+    };
+    const liveView = { webContents: { isDestroyed: () => false } };
+    const ownerManager = {
+      getActiveProjectId: () => "elsewhere",
+      getOutgoingBridgeProjectId: () => null,
+      getAllViews: () => [
+        { projectId: "elsewhere", view: liveView },
+        { projectId: RECENT.id, view: liveView },
+      ],
+      releaseCachedView: vi.fn(() => false),
+    };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getPrimary: () => undefined,
+      getByWindowId: () => undefined,
+      all: () => [
+        { windowId: 4, browserWindow: ownerWindow, services: { projectViewManager: ownerManager } },
+      ],
+    });
+    getAppWebContentsMock.mockImplementation((win) =>
+      win === ownerWindow ? ownerAppWebContents : mockWebContents
+    );
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const recent = fileMenuItem("Open Recent").submenu as Electron.MenuItemConstructorOptions[];
+
+    await click(recent[0]!, { metaKey: true });
+
+    expect(dialog.showMessageBox).toHaveBeenCalledExactlyOnceWith(
+      mockBrowserWindow,
+      expect.objectContaining({ buttons: ["Show in other window", "Cancel"] })
+    );
+    // That window's own renderer runs the switch; this one stays on its host.
+    expect(ownerAppWebContents.send).toHaveBeenCalledExactlyOnceWith(CHANNELS.MENU_ACTION, {
+      actionId: "project.switch",
+      args: { projectId: RECENT.id },
+    });
+    expect(ownerWindow.focus).toHaveBeenCalled();
+    expect(ownerManager.releaseCachedView).not.toHaveBeenCalled();
+    expect(windowHosts.switchWindowToLocal).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("keeps the person's choice when the window lands on a host while the folder is added (#16724)", async () => {
+    let onHost = false;
+    const hostOf = (windowId: number) =>
+      windowId === mockBrowserWindow.id && onHost ? "studio-01" : "local";
+    windowHosts.windowHost.mockImplementation(hostOf);
+    projectStoreMock.addProject.mockImplementation(async () => {
+      onHost = true;
+      return { id: RECENT.id, path: RECENT.path };
+    });
+    const ownerWindow = {
+      id: 4,
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const ownerAppWebContents = {
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => false,
+      send: vi.fn(),
+      once: vi.fn(),
+    };
+    const liveView = { webContents: { isDestroyed: () => false } };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getPrimary: () => undefined,
+      getByWindowId: () => undefined,
+      all: () => [
+        {
+          windowId: 4,
+          browserWindow: ownerWindow,
+          services: {
+            projectViewManager: {
+              getActiveProjectId: () => "elsewhere",
+              getOutgoingBridgeProjectId: () => null,
+              getAllViews: () => [
+                { projectId: "elsewhere", view: liveView },
+                { projectId: RECENT.id, view: liveView },
+              ],
+            },
+          },
+        },
+      ],
+    });
+    getAppWebContentsMock.mockImplementation((win) =>
+      win.id === 4 ? ownerAppWebContents : mockWebContents
+    );
+    try {
+      await handleDirectoryOpen(RECENT.path, hostWindow, undefined, { showInOtherWindow: true });
+
+      expect(ownerAppWebContents.send).toHaveBeenCalledExactlyOnceWith(CHANNELS.MENU_ACTION, {
+        actionId: "project.switch",
+        args: { projectId: RECENT.id },
+      });
+      expect(windowHosts.switchWindowToLocal).not.toHaveBeenCalled();
+    } finally {
+      windowHosts.windowHost.mockImplementation((windowId: number) =>
+        windowId === mockBrowserWindow.id ? "studio-01" : "local"
+      );
+      projectStoreMock.addProject.mockReset();
+    }
   });
 
   it("opens a folder with no repository in a window on this machine, never the host window's git prompt", async () => {

@@ -83,7 +83,9 @@
   --dock-bg: var(--color-surface-sidebar);
   --dock-border: var(--border-divider);
   --dock-shadow: 0 -2px 12px rgb(from var(--theme-shadow-color) r g b / 0.35);
-  --dock-padding-x: 0.5rem;
+  /* The grid's own 4px inset, so the dock's first and last controls sit on
+     the pane frames' left and right edges above them. */
+  --dock-padding-x: 0.25rem;
   --dock-padding-y: 0.375rem;
   --dock-gap: 0.375rem;
   --dock-item-height: 2rem;
@@ -98,7 +100,8 @@
      accent: accent is the focus ring's. */
   --dock-item-bg-active: var(--theme-overlay-emphasis);
   --dock-item-border: var(--theme-border-subtle);
-  --dock-item-border-active: var(--theme-border-strong);
+  /* The edge of the popover the open chip owns, so the two read as one. */
+  --dock-item-border-active: var(--border-dock-popup);
   --dock-item-bg-waiting: color-mix(in oklab, var(--color-activity-waiting) 10%, transparent);
   --dock-item-border-waiting: rgb(from var(--color-activity-waiting) r g b / 0.3);
   --state-chip-bg-opacity: var(--theme-state-chip-bg-opacity, 0.15);

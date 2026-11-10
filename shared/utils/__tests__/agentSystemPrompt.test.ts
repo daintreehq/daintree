@@ -283,7 +283,7 @@ describe("standing instruction through the launch builders", () => {
     if (!resolved.ok) throw new Error(resolved.reason);
     const flags = buildAgentLaunchFlags({}, "codex", { systemPromptArgs: resolved.args });
     const reconciled = reconcileDecorationFlags(
-      reconcileInlineModeFlag(reconcileBypassFlags(flags, "codex", false), "codex", false),
+      reconcileInlineModeFlag(reconcileBypassFlags(flags, "codex", false), "codex"),
       "codex",
       true
     );

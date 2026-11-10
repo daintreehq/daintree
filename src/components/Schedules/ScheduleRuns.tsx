@@ -4,6 +4,7 @@ import { History, Play, SquareTerminal } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
@@ -28,6 +29,7 @@ import {
   runDuration,
   runReferenceAt,
   runStartedAt,
+  runWorktreeNote,
   workerWords,
   type RunAction,
 } from "./runWords";
@@ -54,7 +56,8 @@ interface ScheduleRunsProps {
   onRetryRuns: () => void;
   /** Terminal ids that still have a pane in this view. */
   liveTerminalIds: ReadonlySet<string>;
-  worktreeIds: ReadonlySet<string>;
+  /** The project's worktree ids; null until they're known, so nothing reads as gone (or resumes into one) meanwhile. */
+  worktreeIds: ReadonlySet<string> | null;
   /** A Run now failure the history didn't record, so the page is the only place it can be said. */
   runNowError: string | null;
   /** Run now is waiting on main, so neither its button nor its Retry starts a second run. */
@@ -145,6 +148,7 @@ function RunRow({
   now,
   dayLabel,
   action,
+  worktreeIds,
   onOpen,
   onResume,
 }: {
@@ -153,6 +157,7 @@ function RunRow({
   now: number;
   dayLabel: string;
   action: RunAction;
+  worktreeIds: ReadonlySet<string> | null;
   onOpen: () => void;
   onResume: () => void;
 }) {
@@ -168,6 +173,7 @@ function RunRow({
       ? SCHEDULE_ASSISTANT_NAME
       : agentNameOf(run.resume?.agentId ?? schedule.launch.agentId);
   const workers = run.workers ?? [];
+  const worktree = runWorktreeNote(run, worktreeIds);
   const runName = `${dayLabel} at ${formatRunTime(reference, timeZone)}, ${words.label}`;
 
   return (
@@ -194,6 +200,13 @@ function RunRow({
           {detail?.kind === "reason" && (
             <p className="mt-0.5 break-words text-xs text-text-secondary [text-wrap:pretty]">
               {detail.text}
+            </p>
+          )}
+          {worktree && (
+            <p className="mt-0.5 break-words text-xs text-text-secondary">
+              {worktree.removed ? "Worktree " : "In worktree "}
+              <span className="font-mono">{worktree.branch}</span>
+              {worktree.removed && " no longer exists"}
             </p>
           )}
           {workers.length > 0 && (
@@ -231,8 +244,8 @@ function RunRow({
           {TRIGGER_WORDS[run.origin.trigger]}
           {dueAt !== null && (
             <>
-              <span aria-hidden="true"> · </span>
-              due{" "}
+              {" "}
+              <FactSeparator /> due{" "}
               <RunTime at={dueAt} timeZone={timeZone}>
                 {formatDueTime(dueAt, reference, timeZone)}
               </RunTime>
@@ -488,7 +501,11 @@ export function ScheduleRuns({
               {scheduleAgentName(schedule.launch.agentId)}
               {presetMissing ? (
                 <>
-                  <span aria-hidden="true">&nbsp;·&nbsp;</span>
+                  <span aria-hidden="true">
+                    &nbsp;
+                    <FactSeparator />
+                    &nbsp;
+                  </span>
                   <MissingGlyph
                     className="mr-1 h-3 w-3 shrink-0 text-status-warning"
                     aria-hidden="true"
@@ -498,16 +515,28 @@ export function ScheduleRuns({
               ) : (
                 presetName && (
                   <>
-                    <span aria-hidden="true">&nbsp;·&nbsp;</span>
+                    <span aria-hidden="true">
+                      &nbsp;
+                      <FactSeparator />
+                      &nbsp;
+                    </span>
                     {presetName}
                   </>
                 )
               )}
-              <span aria-hidden="true">&nbsp;·&nbsp;</span>
+              <span aria-hidden="true">
+                &nbsp;
+                <FactSeparator />
+                &nbsp;
+              </span>
               {worktreeLabel ?? "Main checkout"}
               {foreignZone && (
                 <>
-                  <span aria-hidden="true">&nbsp;·&nbsp;</span>
+                  <span aria-hidden="true">
+                    &nbsp;
+                    <FactSeparator />
+                    &nbsp;
+                  </span>
                   times in {timeZone}
                 </>
               )}
@@ -656,6 +685,7 @@ export function ScheduleRuns({
                           run.terminalId !== null && liveTerminalIds.has(run.terminalId),
                         worktreeIds,
                       })}
+                      worktreeIds={worktreeIds}
                       onOpen={() => onOpenRun(run)}
                       onResume={() => onResumeRun(run)}
                     />

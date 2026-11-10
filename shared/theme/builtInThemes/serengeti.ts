@@ -151,6 +151,12 @@ export const theme: BuiltInThemeSource = {
     // spend accent on membership state and break the two-quote gold budget.
     "dock-item-bg-active": "#FFFFFF",
     "dock-item-border-active": "#D2CDB4",
+    // The sidebar's straw, not surfaces.grid: the same element is the empty
+    // workbench, where resting ChoiceCards draw only their border-default edge,
+    // and on #E2D7A0 that calmer border measured 1.10:1. Here it clears 1.31:1
+    // and panes keep a 1.14:1 step above the gutter. Flat, because
+    // `#panel-grid` paints this as background-color.
+    "panel-grid-bg": "#F0E9C9",
     // Panel title bars join the straw chrome; the focused pane's cap brightens.
     "panel-header-bg": "#E9E0B4",
     "panel-header-focus-bg": "#F7F5E9",

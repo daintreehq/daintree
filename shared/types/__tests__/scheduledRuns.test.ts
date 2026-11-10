@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createSchedule, occurrenceKeyFor } from "../../utils/scheduledRuns.js";
+import {
+  createSchedule,
+  occurrenceKeyFor,
+  SCHEDULE_ASSISTANT_AGENT_ID,
+} from "../../utils/scheduledRuns.js";
 import { ScheduleSchema, ScheduledRunSchema, type ScheduledRun } from "../scheduledRuns.js";
 
 const NOW = Date.parse("2026-06-02T02:00:00Z");
@@ -88,7 +92,67 @@ describe("ScheduleSchema", () => {
   });
 });
 
+describe("ScheduleSchema: a new worktree each run (#16369)", () => {
+  const newWorktree = { baseBranch: "origin/develop", fromRemote: true };
+  const launched = (launch: Partial<ReturnType<typeof schedule>["launch"]>) => ({
+    ...schedule(),
+    launch: { ...schedule().launch, ...launch },
+  });
+  const issuePaths = (value: unknown): string[] => {
+    const result = ScheduleSchema.safeParse(value);
+    return result.success ? [] : result.error.issues.map((issue) => issue.path.join("."));
+  };
+
+  it("accepts it", () => {
+    expect(ScheduleSchema.safeParse(launched({ newWorktree })).success).toBe(true);
+  });
+
+  it("requires the field on a launch, as every field is required", () => {
+    const { newWorktree: _newWorktree, ...launch } = schedule().launch;
+    expect(ScheduleSchema.safeParse({ ...schedule(), launch }).success).toBe(false);
+  });
+
+  it("refuses it beside a fixed worktree", () => {
+    expect(issuePaths(launched({ newWorktree, worktreeId: "/repo/wt" }))).toContain(
+      "launch.newWorktree"
+    );
+  });
+
+  it("refuses a blank base branch", () => {
+    expect(
+      issuePaths(launched({ newWorktree: { baseBranch: "  ", fromRemote: false } }))
+    ).toContain("launch.newWorktree.baseBranch");
+  });
+
+  it("keeps the Daintree Assistant out, as it is of every worktree target", () => {
+    expect(issuePaths(launched({ agentId: SCHEDULE_ASSISTANT_AGENT_ID, newWorktree }))).toContain(
+      "launch.newWorktree"
+    );
+  });
+});
+
 describe("ScheduledRunSchema", () => {
+  it("records the worktree made for a run, and still reads a run with none", () => {
+    expect(ScheduledRunSchema.safeParse(registered()).success).toBe(true);
+    const newWorktree = { branch: "schedule-x", baseBranch: "main", worktreeId: "/repo/wt" };
+    expect(ScheduledRunSchema.safeParse(registered({ newWorktree })).success).toBe(true);
+    expect(
+      ScheduledRunSchema.safeParse(
+        registered({ newWorktree: { ...newWorktree, worktreeId: null } })
+      ).success
+    ).toBe(true);
+    for (const bad of [
+      { ...newWorktree, branch: "" },
+      { ...newWorktree, baseBranch: "" },
+      { ...newWorktree, worktreeId: "" },
+      { ...newWorktree, extra: true },
+    ]) {
+      expect(ScheduledRunSchema.safeParse({ ...registered(), newWorktree: bad }).success).toBe(
+        false
+      );
+    }
+  });
+
   it("accepts a run registered before anything spawns", () => {
     expect(issues(registered())).toEqual([]);
   });

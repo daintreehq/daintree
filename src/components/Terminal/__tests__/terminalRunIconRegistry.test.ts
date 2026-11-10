@@ -43,6 +43,28 @@ describe("resolveTerminalRunIcon", () => {
     }
   });
 
+  it("leaves an agent's own SVG to TerminalIcon, whichever id names it", () => {
+    // Only an agent's chrome may wear the mark. Resolving the registry id here
+    // would hand it to a panel or process tool that happens to share that id.
+    const key = "plugin-icon:acme.agents:./icons/pi.svg";
+    setPluginAgentRegistry({
+      puzzle: {
+        id: "puzzle",
+        name: "Pi",
+        command: "pi",
+        color: "#3366ff",
+        iconId: key,
+        supportsContextInjection: false,
+      },
+    });
+    try {
+      expect(resolveTerminalRunIcon("puzzle")).toBeUndefined();
+      expect(resolveTerminalRunIcon(key)).toBeUndefined();
+    } finally {
+      setPluginAgentRegistry({});
+    }
+  });
+
   it("resolves a renderable component for every process tool in the registry", () => {
     // The brand glob is the only icon source now that PROCESS_RUN_ICON_MAP is
     // gone, so a registry key with no matching brand file would silently fall

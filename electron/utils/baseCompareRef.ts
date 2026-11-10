@@ -173,7 +173,7 @@ export interface ExistingBaseCompareTarget {
  * throw, not as an empty string. `^{commit}` peels an annotated tag rather than
  * reporting the tag object as a usable rebase target.
  */
-async function refExists(git: BaseCompareRefGit, fullRef: string): Promise<boolean> {
+export async function refExists(git: BaseCompareRefGit, fullRef: string): Promise<boolean> {
   try {
     const out = await git.raw(["rev-parse", "--verify", "--quiet", `${fullRef}^{commit}`]);
     return out.trim().length > 0;

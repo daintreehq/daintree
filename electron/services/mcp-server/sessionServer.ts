@@ -192,6 +192,7 @@ import {
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
   TERMINAL_WAIT_FOR_EXIT_TOOL,
   WORKTREE_RETIRE_OWNED_TOOL,
+  AGENT_RESUME_OWNED_TOOL,
 } from "./sessionToolIds.js";
 import type { CallFacts, CallOutcome, CallerAdmission } from "./sessionCallFacts.js";
 import {
@@ -280,6 +281,9 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   ASSISTANT_LIST_TOOL,
   ASSISTANT_START_TOOL,
   AGENT_READ_QUOTA_TOOL,
+  // Reopens a session from the journal main holds (#16341), with or without a
+  // view: recovering after a restart can't wait for a window to open.
+  AGENT_RESUME_OWNED_TOOL,
 ]);
 
 /**
@@ -346,6 +350,45 @@ const ASSISTANT_WATCH_TOOLS: ReadonlySet<string> = new Set([
   "terminal.getOutput",
   "terminal.info.get",
 ]);
+
+/**
+ * What a project's assistant may do with this machine's global Assistant
+ * (#16410): send it a prompt and read its status. Its screen is the person's
+ * own conversation, so nothing that quotes it is admitted: no output, no
+ * last-message read, and no `notify` or `waitForReply` on a send, which both
+ * quote the screen they settle on. Null when the call may go ahead.
+ */
+function globalTargetRefusal(
+  actionId: string,
+  args: unknown
+): { code: string; message: string } | null {
+  const record =
+    typeof args === "object" && args !== null && !Array.isArray(args)
+      ? (args as Record<string, unknown>)
+      : {};
+  if (ASSISTANT_SEND_TOOLS.has(actionId)) {
+    if (record.notify !== true && record.waitForReply !== true) return null;
+    return {
+      code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
+      message:
+        "A send to the global Assistant takes no `notify` or `waitForReply`: both quote its screen, the person's own conversation. Nothing was sent. Read its status with the send's `submissionToken` for its handback.",
+    };
+  }
+  if (actionId === TERMINAL_GET_STATUS_TOOL) {
+    const output = record.includeOutput;
+    if (output === undefined || output === null || output === false) return null;
+    return {
+      code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
+      message:
+        "The global Assistant's screen is the person's own conversation, so its status is read without `includeOutput`.",
+    };
+  }
+  return {
+    code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
+    message:
+      "The global Assistant is the person's own conversation, so a project's assistant may only send to it and read its status. Nothing was done.",
+  };
+}
 
 /** Every terminal id a call's arguments name, by `terminalId` or `terminalIds`. */
 function namedTerminalIds(args: unknown): string[] {
@@ -751,6 +794,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     handleSkillsLoad,
     handleProjectRunCheck,
     handleProjectRunCommand,
+    handleAgentResumeOwned,
     handleTerminalGetStatusViewless,
     appendAuditRecord: appendSessionAuditRecord,
     getCachedManifest,
@@ -962,7 +1006,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
         return control.readReply(target, read.options.maxBytes ?? LAST_MESSAGE_TEXT_MAX_BYTES);
       }
-      const refusal = assistantWriteRefusal(target.projectId);
+      // A send up to the global answers to the drive rule of the caller's own project.
+      const driveProjectId = target.scope === "global" ? caller.projectId : target.projectId;
+      const refusal = assistantWriteRefusal(driveProjectId);
       if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
       if (ASSISTANT_SEND_TOOLS.has(actionId)) {
         const command = typeof record.command === "string" ? record.command : "";
@@ -973,10 +1019,33 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           typeof record.generation === "number" && Number.isInteger(record.generation)
             ? record.generation
             : undefined;
+        // Only the owned send takes `whenBusy` (#16620), as it does for a worker.
+        const ttlSeconds =
+          actionId === "terminal.sendCommandOwned" ? readQueueTtlSeconds(record) : undefined;
         return control.submit(caller, target, {
           command,
           generation,
           handback: record.handback === true,
+          ...(ttlSeconds !== undefined && record.whenBusy === "queue"
+            ? {
+                whenBusy: {
+                  queue: { ttlSeconds },
+                  // The notice armed for this call follows the held send.
+                  takeNotice: () => {
+                    const notice = pendingNotify;
+                    pendingNotify = undefined;
+                    return notice;
+                  },
+                  onWritten: () => {
+                    const pane = tier === "external" ? null : ownPane();
+                    if (pane !== null) terminalNotify?.supersede(pane, target.terminalId);
+                  },
+                  // A held send answers to the session that queued it through
+                  // its principal, whose end drops it, not this MCP session.
+                  authorize: () => assistantWriteRefusal(driveProjectId),
+                },
+              }
+            : {}),
         });
       }
       if (ASSISTANT_KEYS_TOOLS.has(actionId)) {
@@ -1542,6 +1611,31 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             });
           }
         }
+        // This machine's global Assistant, for a project's assistant here
+        // (#16410): refused here unless the call is a send or a status read
+        // that quotes none of its screen, before anything is read or sent.
+        const globalAssistantId =
+          assistantCaller === null
+            ? undefined
+            : assistantIds.find(
+                (id) => assistantControl!.resolve(assistantCaller, id)?.scope === "global"
+              );
+        if (globalAssistantId !== undefined) {
+          const refusal = globalTargetRefusal(actionId, args);
+          if (refusal !== null) {
+            outcome = {
+              kind: "result",
+              value: {
+                ok: false,
+                error: {
+                  code: auditCodeForAssistantRefusal(refusal.code),
+                  message: refusal.message,
+                },
+              },
+            };
+            return buildToolError(refusal);
+          }
+        }
         const assistantTarget: AssistantTarget | undefined =
           assistantIds.length > 0 &&
           assistantCaller !== null &&
@@ -1563,7 +1657,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               await handleTerminalGetStatusViewless(
                 args,
                 assistantCaller.projectId,
-                new Set(assistantIds)
+                new Set(assistantIds),
+                globalAssistantId
               )
             );
             outcome = { kind: "result", value: { ok: true, result } };
@@ -2095,6 +2190,40 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               });
               continue;
             }
+            // An assistant this caller can't reach as one of its project's is
+            // refused before its wait exists, since a wait can end, and read
+            // the screen, before the item's own call is refused. The global
+            // Assistant takes one plain send at a time (#16410): a batch's
+            // waits and notices would quote its screen.
+            if (isAssistantId(item.target)) {
+              const reached =
+                assistantCaller === null
+                  ? null
+                  : (assistantControl?.resolve(assistantCaller, item.target) ?? null);
+              const refusal =
+                reached?.scope === "global"
+                  ? {
+                      code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
+                      message:
+                        "The global Assistant isn't sent to in a batch. Nothing was sent to it; use `terminal.sendCommand`.",
+                    }
+                  : reached === null
+                    ? assistantCaller === null
+                      ? {
+                          code: "NOT_FOUND",
+                          message: `No terminal '${item.target}' is available to this connection.`,
+                        }
+                      : {
+                          code: ASSISTANT_TARGET_REFUSALS.notFound,
+                          message: `No assistant in this project runs as terminal '${item.target}'. List them with 'assistant.list'.`,
+                        }
+                    : null;
+              if (refusal !== null) {
+                waits.push(undefined);
+                results.push({ target: item.target, ok: false, error: refusal });
+                continue;
+              }
+            }
             const wait =
               batchArgs.waitForReply === true && replyWaiter !== undefined
                 ? replyWaiter.wait({
@@ -2156,7 +2285,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           const replyBudget = Math.floor(BATCH_REPLY_TEXT_BUDGET / Math.max(1, replies.length));
           replies.forEach((reply, index) => {
             const entry = results[index];
-            if (entry !== undefined && reply !== undefined && reply.terminalId !== "") {
+            // A refused item's wait can have ended before the refusal; its read never goes out.
+            if (entry?.ok === true && reply !== undefined && reply.terminalId !== "") {
               const text = reply.reply?.text;
               entry.reply =
                 text !== undefined && text.length > replyBudget
@@ -2178,7 +2308,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // its notice, or a status read, says what became of it.
         if (
           waitForReply &&
-          globalSteerTerminalId !== undefined &&
+          (globalSteerTerminalId !== undefined || assistantTarget !== undefined) &&
           actionId === "terminal.sendCommandOwned" &&
           callArgs.whenBusy === "queue"
         ) {
@@ -2870,6 +3000,60 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, "project.runCheck failed"),
+            });
+          }
+        }
+
+        // Short-circuit: agent.resumeOwned runs in main (#16341). It spawns
+        // through a host channel, which no lease policy covers on this path, so
+        // the drive rule is asked here: now, and again right before the spawn,
+        // since the reads between can take a while. Never `danger: "confirm"`:
+        // the same callers can already launch an agent. The pane it started
+        // goes to the ledger from the answer, as a dispatch's creation does.
+        if (actionId === AGENT_RESUME_OWNED_TOOL) {
+          emitToolCallStarted(false, false);
+          const relay = deps.relay;
+          const refuseWrite = relay
+            ? (projectId: string | undefined) => relay.refuseWrite(projectId)
+            : (deps.refuseWrite ?? deps.refuseViewWrite);
+          const refusal = refuseWrite?.(undefined);
+          if (refusal) return refuseRelayed(refusal);
+          try {
+            const envelope = await handleAgentResumeOwned(
+              args,
+              extra.signal,
+              refuseWrite
+                ? (projectId) => {
+                    const late = refuseWrite(projectId);
+                    if (late) throw new RelayWriteRefused(late);
+                  }
+                : undefined
+            );
+            recordDispatchOwnership(envelope);
+            outcome = { kind: "result", value: envelope.result };
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
+              if (sessionStore.sessions.has(sessionId)) {
+                sessionStore.resetIdleTimer(sessionId);
+              } else if (sessionStore.httpSessions.has(sessionId)) {
+                sessionStore.resetHttpIdleTimer(sessionId);
+              }
+            }
+            return buildToolCallResult(envelope.result.result, {
+              structuredContent: envelope.result.result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            if (err instanceof RelayWriteRefused) return refuseRelayed(err.refusal);
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "agent.resumeOwned failed"),
             });
           }
         }

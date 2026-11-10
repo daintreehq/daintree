@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "../schema.js";
-import { OPEN_WINDOWS_KEY } from "../windowManifest.js";
+import { OPEN_WINDOWS_KEY, parseCanopyWindowOpen } from "../windowManifest.js";
 
 let sqlite: Database.Database;
 let db: ReturnType<typeof drizzle<typeof schema>>;
@@ -47,6 +47,26 @@ describe("readManifestWorkspaceIds (#15614)", () => {
 
     writeOpenWindowsManifest([{ projectId: null }]);
     expect(readManifestWorkspaceIds()).toEqual([]);
+  });
+
+  it("stores the Canopy window beside the windows, and names no workspace for it (#16336)", () => {
+    writeOpenWindowsManifest([{ projectId: "project-a" }], { canopyWindowOpen: true });
+    const stored = db.select({ value: schema.appState.value }).from(schema.appState).get()?.value;
+
+    expect(parseCanopyWindowOpen(stored)).toBe(true);
+    expect(readManifestWorkspaceIds()).toEqual(["project-a"]);
+  });
+
+  it("replaces the stored marker as the Canopy window closes and opens again", () => {
+    const stored = () =>
+      db.select({ value: schema.appState.value }).from(schema.appState).get()?.value;
+
+    writeOpenWindowsManifest([{ projectId: "project-a" }], { canopyWindowOpen: true });
+    writeOpenWindowsManifest([{ projectId: "project-a" }], { canopyWindowOpen: false });
+    expect(parseCanopyWindowOpen(stored())).toBe(false);
+
+    writeOpenWindowsManifest([{ projectId: "project-a" }], { canopyWindowOpen: true });
+    expect(parseCanopyWindowOpen(stored())).toBe(true);
   });
 
   it("throws on a stored manifest it cannot read rather than answer nothing", () => {

@@ -5,7 +5,12 @@ import {
   stripAssignedSessionIdArgs,
   type AgentSettings,
 } from "../../types/agentSettings.js";
+import type { PluginAgentContribution } from "../../types/plugin.js";
 import { buildAgentLaunchPlan, type AgentLaunchPlanInput } from "../agentLaunchPlan.js";
+import {
+  clearPluginAgentRegistryForTests,
+  registerPluginAgents,
+} from "../../config/pluginAgentRegistry.js";
 
 function input(overrides: Partial<AgentLaunchPlanInput> = {}): AgentLaunchPlanInput {
   return {
@@ -502,6 +507,146 @@ describe("buildAgentLaunchPlan", () => {
     expect(plan.command).toBeUndefined();
     expect(plan.assignedSessionId).toBeUndefined();
     expect(plan.title).toBe("Terminal");
+  });
+});
+
+describe("inline-only launches (#16356)", () => {
+  it("launches grok inline from settings an older build saved with alt screen chosen", async () => {
+    const settings = {
+      agents: {
+        grok: {
+          inlineMode: "off",
+          presetId: "old",
+          customPresets: [{ id: "old", name: "Old", inlineMode: false, env: { WHO: "old" } }],
+        },
+      },
+      globalUseAltScreen: true,
+    } as unknown as AgentSettings;
+    const plan = await buildAgentLaunchPlan(
+      input({ agentId: "grok", agentConfig: getEffectiveAgentConfig("grok"), settings })
+    );
+
+    expect(plan.command?.split(" ")).toContain("--no-alt-screen");
+    expect(plan.command).not.toContain("--fullscreen");
+    expect(plan.launchFlags).toContain("--no-alt-screen");
+    expect(plan.launchFlags).not.toContain("--fullscreen");
+    // The preset still applies everything else it sets.
+    expect(plan.env).toMatchObject({ WHO: "old" });
+  });
+});
+
+describe("a plugin agent's declared prompt form (#16404)", () => {
+  afterEach(() => clearPluginAgentRegistryForTests());
+
+  function plan(
+    options: AgentLaunchPlanInput["options"],
+    initialPromptForm?: PluginAgentContribution["initialPromptForm"]
+  ) {
+    registerPluginAgents("acme.agents", [
+      {
+        id: "hermes",
+        name: "Hermes",
+        command: "hermes",
+        color: "#3366ff",
+        iconId: "claude",
+        ...(initialPromptForm ? { initialPromptForm } : {}),
+      },
+    ]);
+    return buildAgentLaunchPlan(
+      input({
+        agentId: "hermes",
+        agentConfig: getEffectiveAgentConfig("hermes"),
+        options,
+        settings: { agents: {} } as unknown as AgentSettings,
+      })
+    );
+  }
+
+  const FORM = {
+    interactive: { args: ["--query", "{prompt}"] },
+    headless: { args: ["--print", "{prompt}"] },
+  };
+
+  it("launches with the prompt after the flag for the launch's mode, kept out of the replayed flags", async () => {
+    const interactive = await plan({ prompt: "Fix it" }, FORM);
+    expect(interactive.command).toBe("hermes --query 'Fix it'");
+    expect(interactive.launchFlags).toEqual([]);
+
+    const headless = await plan({ prompt: "Fix it", interactive: false }, FORM);
+    expect(headless.command).toBe("hermes --print 'Fix it'");
+    expect(headless.launchFlags).toEqual([]);
+  });
+
+  it("still hands the prompt over positionally when the agent declares no form", async () => {
+    expect((await plan({ prompt: "Fix it" })).command).toBe("hermes 'Fix it'");
+    expect((await plan({ prompt: "Fix it", interactive: false })).command).toBe("hermes 'Fix it'");
+  });
+
+  it("adds nothing of the form to a launch with no prompt", async () => {
+    expect((await plan({}, FORM)).command).toBe("hermes");
+  });
+
+  // Why the docs warn against ending a form on `--` for an agent launched with
+  // caller flags: they land after the form, as they do after a positional prompt.
+  it("appends a caller's flags after the form", async () => {
+    const result = await plan({ prompt: "Fix it", agentLaunchFlags: ["--model", "fast"] }, FORM);
+    expect(result.command).toBe("hermes --query 'Fix it' --model fast");
+    expect(result.launchFlags).toEqual(["--model", "fast"]);
+  });
+});
+
+describe("a plugin agent's declared permission-bypass args (#16374)", () => {
+  afterEach(() => clearPluginAgentRegistryForTests());
+
+  async function plan(entry: Record<string, unknown>, globalSkipPermissions: boolean) {
+    registerPluginAgents("acme.agents", [
+      {
+        id: "hermes",
+        name: "Hermes",
+        command: "hermes",
+        color: "#3366ff",
+        iconId: "claude",
+        permissionBypassArgs: ["--approval", "never"],
+      },
+    ]);
+    return buildAgentLaunchPlan(
+      input({
+        agentId: "hermes",
+        agentConfig: getEffectiveAgentConfig("hermes"),
+        settings: {
+          agents: { hermes: { customPresets: PRESETS, ...entry } },
+          globalSkipPermissions,
+        } as unknown as AgentSettings,
+      })
+    );
+  }
+
+  it("launches and records them when the global switch is on", async () => {
+    const result = await plan({}, true);
+    expect(result.command).toBe("hermes --approval 'never'");
+    expect(result.launchFlags).toEqual(["--approval", "never"]);
+  });
+
+  it("leaves them off when the global switch is off", async () => {
+    const result = await plan({}, false);
+    expect(result.command).toBe("hermes");
+    expect(result.launchFlags).toEqual([]);
+  });
+
+  it("honours an agent setting of 'off' over the global switch", async () => {
+    const result = await plan({ dangerousMode: "off" }, true);
+    expect(result.command).toBe("hermes");
+    expect(result.launchFlags).toEqual([]);
+  });
+
+  it("honours a preset of 'off' over the global switch", async () => {
+    const result = await plan(
+      { presetId: "veto", customPresets: [{ id: "veto", name: "Veto", dangerousMode: "off" }] },
+      true
+    );
+    expect(result.preset?.id).toBe("veto");
+    expect(result.command).toBe("hermes");
+    expect(result.launchFlags).toEqual([]);
   });
 });
 

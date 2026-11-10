@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as platform from "@/lib/platform";
 import { fleetExitChordLabel } from "@/components/Fleet/fleetKeys";
-import { pilotParkKeys } from "@/components/Pilot/pilotKeys";
+import { PILOT_PARK_COMBO } from "@/components/Pilot/pilotKeys";
 import { daintreeTourShortcuts } from "../daintreeTourShortcuts";
 import { tourCombo, tourKeycaps, tourShortcutHint } from "../tourKeys";
 
@@ -20,10 +20,20 @@ describe("daintreeTourShortcuts", () => {
       const shortcuts = daintreeTourShortcuts(keyboard);
       expect(shortcuts.keyboard).toBe(keyboard);
       expect(shortcuts.hint("fleet.exit")).toBe(fleetExitChordLabel(keyboard === "mac"));
-      expect(shortcuts.hint("pilot.park")).toBe(pilotParkKeys(keyboard === "mac"));
     }
-    expect(daintreeTourShortcuts("mac").keycaps("pilot.park")).toEqual(["⌥", "↵"]);
-    expect(daintreeTourShortcuts("pc").keycaps("pilot.park")).toEqual(["Alt", "↵"]);
+  });
+
+  // The footer draws Pilot's park chord with KbdChord, so the scene resolves
+  // the same combo through the same parser rather than a hand-built label.
+  it("draws Pilot's park chord the way the footer's KbdChord does", () => {
+    for (const keyboard of ["mac", "pc"] as const) {
+      const shortcuts = daintreeTourShortcuts(keyboard);
+      expect(shortcuts.hint("pilot.park")).toBe(tourShortcutHint(PILOT_PARK_COMBO, keyboard));
+      expect(shortcuts.keycaps("pilot.park")).toEqual(tourKeycaps(PILOT_PARK_COMBO, keyboard));
+    }
+    expect(daintreeTourShortcuts("mac").keycaps("pilot.park")).toEqual(["⌥", "⏎"]);
+    expect(daintreeTourShortcuts("pc").keycaps("pilot.park")).toEqual(["Alt", "Enter"]);
+    expect(daintreeTourShortcuts("pc").hint("pilot.park")).toBe("Alt+Enter");
   });
 
   it("draws every other shortcut from its default keybinding", () => {
@@ -34,6 +44,14 @@ describe("daintreeTourShortcuts", () => {
         tourKeycaps("action.palette.open", keyboard)
       );
     }
+  });
+
+  it("draws the caps the keyboard layout prints, while the narration keeps the US keys", () => {
+    const azerty = new Map([["/", "!"]]);
+    expect(daintreeTourShortcuts("mac", azerty).keycaps("help.shortcutsAlt")).toEqual(["⌘", "!"]);
+    expect(daintreeTourShortcuts("pc", azerty).hint("help.shortcutsAlt")).toBe("Ctrl+!");
+    expect(daintreeTourShortcuts("mac").keycaps("help.shortcutsAlt")).toEqual(["⌘", "/"]);
+    expect(tourCombo("help.shortcutsAlt")).toBe("Cmd+/");
   });
 
   // Linux replaces New terminal's Ctrl+Alt+T, which the desktop opens its own

@@ -176,7 +176,7 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
   if (terminalCount === 0) return null;
 
   const worktreeNoun = members.length === 1 ? "deleted worktree" : "deleted worktrees";
-  const terminalNoun = terminalCount === 1 ? "terminal" : "terminals";
+  const terminalNoun = terminalCount === 1 ? "panel" : "panels";
   // Same verb as a single card's dismiss — the group only changes the scope.
   const clearLabel = `Close ${terminalCount} ${terminalNoun}`;
 

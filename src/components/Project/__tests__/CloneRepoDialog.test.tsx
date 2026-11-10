@@ -37,6 +37,7 @@ const {
   cancelCloneMock,
   dispatchMock,
   showItemInFolderMock,
+  getHomeDirMock,
 } = vi.hoisted(() => ({
   cloneRepoMock: vi.fn(),
   onCloneProgressMock: vi.fn(),
@@ -44,6 +45,7 @@ const {
   cancelCloneMock: vi.fn(),
   dispatchMock: vi.fn(),
   showItemInFolderMock: vi.fn(),
+  getHomeDirMock: vi.fn(),
 }));
 
 vi.mock("@/clients", () => ({
@@ -55,6 +57,7 @@ vi.mock("@/clients", () => ({
   },
   systemClient: {
     showItemInFolderUnconfined: showItemInFolderMock,
+    getHomeDir: getHomeDirMock,
   },
 }));
 
@@ -223,6 +226,9 @@ describe("CloneRepoDialog", () => {
 
     cloneRepoMock.mockResolvedValue({ clonedPath: "/tmp/my-repo" });
     openDialogMock.mockResolvedValue("/tmp");
+    // The default Location never arrives unless a test says so, so every test
+    // that picks one through Browse still owns its destination.
+    getHomeDirMock.mockImplementation(() => new Promise(() => {}));
     useProjectGroupsStore.setState({ groups: [] });
   });
 
@@ -1154,7 +1160,7 @@ describe("CloneRepoDialog", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
     const urlInput = screen.getByLabelText(/^url$/i);
-    // No parent path picked yet — canClone is false.
+    // No location yet: nothing was picked and the home dir default hasn't arrived.
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     await act(async () => {
@@ -1554,6 +1560,264 @@ describe("CloneRepoDialog", () => {
       });
 
       expect(screen.queryByTestId("cleanup-banner")).toBeNull();
+    });
+  });
+
+  describe("default location (#16634)", () => {
+    const location = () => screen.getByLabelText(/^location$/i) as HTMLInputElement;
+    const cloneButton = () => screen.getByRole("button", { name: "Clone" });
+
+    function deferHomeDir() {
+      let resolve!: (dir: string) => void;
+      getHomeDirMock.mockImplementationOnce(
+        () =>
+          new Promise<string>((r) => {
+            resolve = r;
+          })
+      );
+      return (dir: string) => resolve(dir);
+    }
+
+    it("opens on the home dir, so a pasted URL clones on Enter without the picker", async () => {
+      cloneRepoMock.mockImplementation(() => new Promise(() => {}));
+      getHomeDirMock.mockResolvedValue("/Users/test");
+      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+      await waitFor(() => expect(location().value).toBe("/Users/test"));
+      // A destination alone isn't enough to clone.
+      expect(cloneButton().getAttribute("aria-disabled")).toBe("true");
+      const urlInput = screen.getByLabelText(/^url$/i);
+      fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
+
+      const hint = screen.getByTestId("footer-hint").textContent ?? "";
+      expect(hint).toContain("Clones into");
+      expect(hint).toContain("/Users/test/repo");
+      expect(cloneButton().getAttribute("aria-disabled")).toBeNull();
+
+      await act(async () => {
+        fireEvent.keyDown(urlInput, { key: "Enter" });
+      });
+      expect(openDialogMock).not.toHaveBeenCalled();
+      expect(cloneRepoMock).toHaveBeenCalledWith({
+        url: "https://github.com/user/repo.git",
+        parentPath: "/Users/test",
+        folderName: "repo",
+        shallowClone: false,
+      });
+    });
+
+    it("keeps a folder picked before the home dir arrives", async () => {
+      const resolveHome = deferHomeDir();
+      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      expect(location().value).toBe("/tmp");
+
+      await act(async () => {
+        resolveHome("/Users/test");
+      });
+      expect(location().value).toBe("/tmp");
+    });
+
+    it("leaves a running clone's destination alone when the home dir arrives late", async () => {
+      cloneRepoMock.mockImplementation(() => new Promise(() => {}));
+      const resolveHome = deferHomeDir();
+      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText(/^url$/i), {
+        target: { value: "https://github.com/user/repo.git" },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      await act(async () => {
+        fireEvent.click(cloneButton());
+      });
+      expect(cloneRepoMock).toHaveBeenCalledWith(expect.objectContaining({ parentPath: "/tmp" }));
+
+      await act(async () => {
+        resolveHome("/Users/test");
+      });
+      await waitForRunningMode();
+      const destination = screen.getByText("Destination").parentElement?.textContent ?? "";
+      expect(destination).toContain("/tmp/repo");
+      expect(destination).not.toContain("/Users/test");
+    });
+
+    it.each([
+      ["can't be read", () => getHomeDirMock.mockRejectedValue(new Error("bridge gone"))],
+      ["comes back empty", () => getHomeDirMock.mockResolvedValue("")],
+    ])("asks for a location when the home dir %s", async (_, arrange) => {
+      arrange();
+      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText(/^url$/i), {
+        target: { value: "https://github.com/user/repo.git" },
+      });
+      await waitFor(() => expect(getHomeDirMock).toHaveBeenCalledTimes(1));
+      await act(async () => {});
+
+      expect(location().value).toBe("");
+      expect(screen.getByTestId("footer-hint").textContent).toBe("Choose a location to continue");
+      expect(cloneButton().getAttribute("aria-disabled")).toBe("true");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      expect(cloneButton().getAttribute("aria-disabled")).toBeNull();
+    });
+
+    it("starts from the home dir again on every open, not from the last pick", async () => {
+      getHomeDirMock.mockResolvedValue("/Users/test");
+      const props = { onSuccess: vi.fn(), onCancel: vi.fn() };
+      const { rerender } = render(<CloneRepoDialog isOpen={true} {...props} />);
+      await waitFor(() => expect(location().value).toBe("/Users/test"));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      expect(location().value).toBe("/tmp");
+
+      rerender(<CloneRepoDialog isOpen={false} {...props} />);
+      rerender(<CloneRepoDialog isOpen={true} {...props} />);
+
+      await waitFor(() => expect(location().value).toBe("/Users/test"));
+      expect(getHomeDirMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("drops a home dir read for an earlier opening", async () => {
+      const resolveFirstOpening = deferHomeDir();
+      const props = { onSuccess: vi.fn(), onCancel: vi.fn() };
+      const { rerender } = render(<CloneRepoDialog isOpen={true} {...props} />);
+
+      rerender(<CloneRepoDialog isOpen={false} {...props} />);
+      getHomeDirMock.mockRejectedValueOnce(new Error("bridge gone"));
+      rerender(<CloneRepoDialog isOpen={true} {...props} />);
+      await waitFor(() => expect(getHomeDirMock).toHaveBeenCalledTimes(2));
+
+      await act(async () => {
+        resolveFirstOpening("/Users/earlier");
+      });
+      expect(location().value).toBe("");
+    });
+  });
+
+  describe("background clone (#16352)", () => {
+    async function fillAndClone() {
+      fireEvent.change(screen.getByLabelText(/^url$/i), {
+        target: { value: "https://github.com/user/test-repo.git" },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+      });
+    }
+
+    it("hands a local clone to the background instead of waiting on it", async () => {
+      const onStartBackground = vi.fn().mockResolvedValue(undefined);
+      render(
+        <CloneRepoDialog
+          isOpen={true}
+          onSuccess={vi.fn()}
+          onStartBackground={onStartBackground}
+          onCancel={vi.fn()}
+        />
+      );
+
+      await fillAndClone();
+
+      expect(cloneRepoMock).not.toHaveBeenCalled();
+      expect(onStartBackground).toHaveBeenCalledWith(
+        {
+          url: "https://github.com/user/test-repo.git",
+          parentPath: "/tmp",
+          folderName: "test-repo",
+          shallowClone: false,
+          identity: { name: "test-repo", emoji: suggestProjectEmoji("test-repo") },
+        },
+        { disposition: "current" }
+      );
+      // No running mode: the wait lives on the project now.
+      expect(screen.queryByText("Connecting…")).toBeNull();
+    });
+
+    it("keeps the form up with the reason when the clone can't start", async () => {
+      const onStartBackground = vi
+        .fn()
+        .mockRejectedValue(new Error('Folder "test-repo" already exists in this location'));
+      render(
+        <CloneRepoDialog
+          isOpen={true}
+          onSuccess={vi.fn()}
+          onStartBackground={onStartBackground}
+          onCancel={vi.fn()}
+        />
+      );
+
+      await fillAndClone();
+
+      await screen.findByText("Clone failed");
+      expect(screen.getByText(/already exists in this location/)).toBeTruthy();
+      expect((screen.getByLabelText(/^url$/i) as HTMLInputElement).disabled).toBe(false);
+
+      // The busy guard cleared with the failure: Retry hands the request over again.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      });
+      expect(onStartBackground).toHaveBeenCalledTimes(2);
+    });
+
+    it("holds the form and Cancel while the clone is being handed over", async () => {
+      let accept!: () => void;
+      const onStartBackground = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
+      const onCancel = vi.fn();
+      render(
+        <CloneRepoDialog
+          isOpen={true}
+          onSuccess={vi.fn()}
+          onStartBackground={onStartBackground}
+          onCancel={onCancel}
+        />
+      );
+
+      await fillAndClone();
+
+      const cancel = screen.getByRole("button", { name: "Cancel" });
+      expect(cancel.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(cancel);
+      expect(onCancel).not.toHaveBeenCalled();
+      // A second press can't hand over a second clone.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+      });
+      expect(onStartBackground).toHaveBeenCalledTimes(1);
+
+      await act(async () => accept());
+      expect(
+        screen.getByRole("button", { name: "Cancel" }).getAttribute("aria-disabled")
+      ).toBeNull();
+    });
+
+    it("keeps waiting on the clone itself in a remote-bound view", async () => {
+      cloneRepoMock.mockImplementation(() => new Promise(() => {}));
+      const onStartBackground = vi.fn();
+      window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+      try {
+        render(
+          <CloneRepoDialog
+            isOpen={true}
+            onSuccess={vi.fn()}
+            onStartBackground={onStartBackground}
+            onCancel={vi.fn()}
+          />
+        );
+        await fillAndClone();
+        expect(onStartBackground).not.toHaveBeenCalled();
+        expect(cloneRepoMock).toHaveBeenCalledTimes(1);
+      } finally {
+        delete window.__DAINTREE_HOST_ID__;
+      }
     });
   });
 });

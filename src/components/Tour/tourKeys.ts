@@ -1,5 +1,6 @@
 import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 import { describeChord, parseChord } from "@/lib/kbdShortcut";
+import type { KeyLabels } from "@/lib/keyboardLayout";
 import { isLinux, isMac } from "@/lib/platform";
 import type { TourChapter } from "@daintreehq/tour";
 import type { TourKeyboard } from "@daintreehq/tour/kit";
@@ -68,8 +69,12 @@ function shownCombo(token: string, keyboard: TourKeyboard): string {
   return tourCombo(token);
 }
 
-export function tourKeycaps(token: string, keyboard: TourKeyboard): string[] {
-  const steps = parseChord(shownCombo(token, keyboard), keyboard === "mac");
+export function tourKeycaps(
+  token: string,
+  keyboard: TourKeyboard,
+  keyLabels?: KeyLabels
+): string[] {
+  const steps = parseChord(shownCombo(token, keyboard), keyboard === "mac", keyLabels);
   // One row of caps can't show "then"; a chord belongs in a hint instead.
   if (steps.length !== 1)
     throw new Error(`Tour keycaps take a single-step shortcut, not "${token}"`);
@@ -77,8 +82,12 @@ export function tourKeycaps(token: string, keyboard: TourKeyboard): string[] {
 }
 
 /** A menu row's shortcut hint: "⌘⇧P" on a Mac, "Ctrl+Shift+P" elsewhere. */
-export function tourShortcutHint(token: string, keyboard: TourKeyboard): string {
-  return parseChord(shownCombo(token, keyboard), keyboard === "mac")
+export function tourShortcutHint(
+  token: string,
+  keyboard: TourKeyboard,
+  keyLabels?: KeyLabels
+): string {
+  return parseChord(shownCombo(token, keyboard), keyboard === "mac", keyLabels)
     .map((keys) => keys.join(keyboard === "mac" ? "" : "+"))
     .join(" ");
 }

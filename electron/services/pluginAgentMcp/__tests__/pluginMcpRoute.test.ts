@@ -36,7 +36,10 @@ vi.mock("../../../utils/logger.js", async (importOriginal) => {
 import type { PluginMcpCaller } from "../../../../shared/types/plugin.js";
 import { AgentMcpEndpointRegistry } from "../endpointRegistry.js";
 import { pluginMcpGrantRegistry } from "../grantRegistry.js";
-import { setProjectAgentMcpAccess } from "../projectEnablement.js";
+import {
+  setProjectAgentMcpAccess,
+  setProjectAssistantAgentMcpAccess,
+} from "../projectEnablement.js";
 import {
   MAX_PARKED_PLUGIN_MCP_REQUESTS_PER_CREDENTIAL,
   MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL,
@@ -149,6 +152,7 @@ function issue(
     serverName: string;
     projectId: string;
     terminalId: string;
+    consumer: "assistant";
   }> = {}
 ) {
   return pluginMcpGrantRegistry.issue({
@@ -433,6 +437,46 @@ describe("PluginMcpRoute", () => {
     expect(caller).toEqual(expected);
     expect(Object.isFrozen(caller)).toBe(true);
     expect(JSON.stringify(caller)).not.toContain(token);
+  });
+
+  it("marks the caller as the Assistant when the grant was issued to it", async () => {
+    setProjectAssistantAgentMcpAccess(PROJECT_A, INSTANCE, "read-write");
+    const { grant, token } = issue({ consumer: "assistant" });
+    const { client } = await connect(token);
+    await client.callTool({ name: "lookup", arguments: { id: "r-1" } });
+
+    const caller = invoke.mock.calls[0][2];
+    const expected: PluginMcpCaller = {
+      credentialId: grant.credentialId,
+      projectId: PROJECT_A,
+      terminalId: "term-1",
+      launchAgentIdHint: "claude",
+      consumer: "assistant",
+    };
+    expect(caller).toEqual(expected);
+    expect(Object.isFrozen(caller)).toBe(true);
+  });
+
+  it("leaves consumer off the caller of a grant issued to an agent pane", async () => {
+    // The answer on record must not decide it: only the grant does.
+    setProjectAssistantAgentMcpAccess(PROJECT_A, INSTANCE, "read-write");
+    const { token } = issue();
+    const { client } = await connect(token);
+    await client.callTool({ name: "lookup", arguments: { id: "r-1" } });
+
+    expect(invoke.mock.calls[0][2]).not.toHaveProperty("consumer");
+  });
+
+  it("never takes consumer from what the client sends", async () => {
+    const { token } = issue();
+    const { client } = await connect(token, { headers: { "X-Daintree-Consumer": "assistant" } });
+    await client.callTool({
+      name: "lookup",
+      arguments: { id: "r-1", consumer: "assistant" },
+      _meta: { consumer: "assistant" },
+    });
+
+    expect(invoke.mock.calls[0][2]).not.toHaveProperty("consumer");
   });
 
   it("tells the call observer which grant made each call, and how it ended", async () => {

@@ -4,6 +4,7 @@ import {
   KEYBINDING_CATEGORY_ORDER,
 } from "@shared/config/defaultKeybindings";
 import {
+  buildFixedShortcutEntries,
   buildShortcutEntries,
   collapseNumberedSeries,
   groupByCategory,
@@ -12,6 +13,7 @@ import {
   searchShortcuts,
   type ReferenceBinding,
 } from "../shortcutReferenceModel";
+import { FIXED_SHORTCUTS } from "../fixedShortcuts";
 import { parseChord } from "@/lib/kbdShortcut";
 
 function registry(isWindows: boolean, isLinux = false): ReferenceBinding[] {
@@ -228,6 +230,19 @@ describe("searchShortcuts", () => {
     for (const entry of results.slice(0, 3)) expect(entry.description).toMatch(/focused terminal/i);
   });
 
+  it("finds a key by what the keyboard layout prints on it as well as its US name", () => {
+    const azerty = new Map([["/", "!"]]);
+    const isSlash = (entry: (typeof entries)[number]) =>
+      entry.alternatives.some((alt) => alt.combo === "Cmd+/");
+    const drawn = searchShortcuts(entries, "⌘!", true, azerty)!;
+    expect(drawn.some(isSlash)).toBe(true);
+    expect(drawn.every((entry) => entry.alternatives.some((alt) => alt.combo.includes("/")))).toBe(
+      true
+    );
+    expect(searchShortcuts(entries, "⌘/", true, azerty)!.some(isSlash)).toBe(true);
+    expect(searchShortcuts(entries, "⌘!", true)!.some(isSlash)).toBe(false);
+  });
+
   it("filters by key prefix when the query reads as keys", () => {
     const results = searchShortcuts(entries, "⌘K", true)!;
     expect(results.length).toBeGreaterThan(0);
@@ -353,5 +368,29 @@ describe("searchShortcuts", () => {
     for (const mac of [true, false]) {
       expect(searchShortcuts(withPlus, "+", mac)!.map((e) => e.description)).toEqual(["Bare plus"]);
     }
+  });
+});
+
+describe("buildFixedShortcutEntries", () => {
+  const entries = buildFixedShortcutEntries(FIXED_SHORTCUTS);
+
+  it("makes one actionless, uncustomized row per fixed shortcut", () => {
+    expect(entries).toHaveLength(FIXED_SHORTCUTS.length);
+    expect(new Set(entries.map((e) => e.id)).size).toBe(entries.length);
+    for (const entry of entries) {
+      expect(entry.actionIds).toEqual([]);
+      expect(entry.isCustom).toBe(false);
+    }
+  });
+
+  it("searches by key, name and category", () => {
+    const names = (query: string) =>
+      searchShortcuts(entries, query, true)!.map((e) => e.description);
+    expect(names("j")).toContain("Move through the worktree list");
+    expect(names("⌥↓")).toEqual(["Reorder worktree"]);
+    expect(names("panels")).toEqual(["Reorder panel", "Reorder tab"]);
+    expect(names("space")).toEqual(["Open worktree", "Reorder panel", "Reorder tab"]);
+    expect(names("enter")).toEqual(["Open worktree"]);
+    expect(names("up")).toEqual(["Move through the worktree list"]);
   });
 });

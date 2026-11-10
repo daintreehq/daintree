@@ -3,6 +3,11 @@ import {
   PANEL_LIMIT_DECLINED_REASON,
 } from "@/services/actions/definitions/panelLimitError";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearPluginAgentRegistryForTests,
+  registerPluginAgents,
+} from "@shared/config/pluginAgentRegistry";
+import type { PluginAgentContribution } from "@shared/types/plugin";
 
 const {
   addRecipeMock,
@@ -160,8 +165,11 @@ import { usePanelLimitStore } from "../panelLimitStore";
 import { getPanelSlotReservations } from "../slices/panelRegistry/panelSlotReservations";
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
-import { RecipeImportDropsTerminalsError } from "@/utils/recipeImport";
-import { buildLaunchCommandFromFlags } from "@shared/types/agentSettings";
+import { RecipeImportDropsTerminalsError, RecipeImportInvalidError } from "@/utils/recipeImport";
+import {
+  buildLaunchCommandFromFlags,
+  stripAssignedSessionIdArgs,
+} from "@shared/types/agentSettings";
 import { mergeRecipes } from "@shared/utils/recipeListing";
 
 /** A host approval that genuinely covers `recipe`, as the bridge would issue it. */
@@ -217,10 +225,10 @@ describe("recipeStore", () => {
     }));
   });
 
-  it("rejects malformed recipe json", async () => {
-    await expect(useRecipeStore.getState().importRecipe("project-1", "{bad-json")).rejects.toThrow(
-      "Invalid JSON format"
-    );
+  it("rejects malformed recipe json as content to fix, not a failed save", async () => {
+    const attempt = useRecipeStore.getState().importRecipe("project-1", "{bad-json");
+    await expect(attempt).rejects.toBeInstanceOf(RecipeImportInvalidError);
+    await expect(attempt).rejects.toThrow("That isn't valid JSON");
   });
 
   it("sanitizes imported terminals and strips empty commands", async () => {
@@ -1245,6 +1253,100 @@ describe("recipeStore", () => {
       expect(addTerminalMock).toHaveBeenCalledWith(
         expect.objectContaining({ launchAgentId: "acme-agent" })
       );
+    });
+
+    it("gives each agent pane of a recipe its own session id (#16470)", async () => {
+      addTerminalMock.mockResolvedValue("terminal-1");
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-two-agents",
+            name: "Two Agents",
+            projectId: "project-1",
+            terminals: [
+              { type: "claude", title: "One", env: {} },
+              { type: "claude", title: "Two", env: {} },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-two-agents", "/tmp/worktree", "worktree-1");
+
+      const launched = addTerminalMock.mock.calls.map(
+        ([options]) => options as { agentSessionId?: string; command?: string }
+      );
+      expect(launched).toHaveLength(2);
+      const [first, second] = launched;
+      expect(first?.agentSessionId).toBeTruthy();
+      expect(first?.agentSessionId).not.toBe(second?.agentSessionId);
+      expect(first?.command).toContain(first?.agentSessionId);
+      expect(second?.command).toContain(second?.agentSessionId);
+    });
+
+    it("mints no id for a recipe whose own args pick the conversation (#16470)", async () => {
+      addTerminalMock.mockResolvedValue("terminal-1");
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-continue",
+            name: "Continue",
+            projectId: "project-1",
+            terminals: [{ type: "claude", title: "One", env: {}, args: "--continue" }],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-continue", "/tmp/worktree", "worktree-1");
+
+      const [options] = addTerminalMock.mock.calls[0] as [
+        { agentSessionId?: string; command?: string },
+      ];
+      expect(options.agentSessionId).toBeUndefined();
+      expect(options.command).toContain("--continue");
+      expect(options.command).not.toContain("--session-id");
+    });
+
+    it("reads the flags the launch carries, not the ones a recipe has captured (#16470)", async () => {
+      addTerminalMock.mockResolvedValue("terminal-1");
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-captured",
+            name: "Captured",
+            projectId: "project-1",
+            terminals: [
+              { type: "claude", title: "Picks", env: {}, args: "--continue", agentLaunchFlags: [] },
+              { type: "claude", title: "Fresh", env: {}, agentLaunchFlags: ["--continue"] },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-captured", "/tmp/worktree", "worktree-1");
+
+      const launched = addTerminalMock.mock.calls.map(
+        ([options]) => options as { agentSessionId?: string; command?: string }
+      );
+      expect(launched[0]?.agentSessionId).toBeUndefined();
+      expect(launched[0]?.command).not.toContain("--session-id");
+      expect(launched[1]?.agentSessionId).toBeTruthy();
+      expect(launched[1]?.command).toContain(launched[1]?.agentSessionId);
     });
 
     it("reports partial failures with correct indices", async () => {
@@ -2354,7 +2456,7 @@ describe("recipeStore", () => {
         "--add-dir",
         "/Users/me/My Project",
       ]);
-      expect(call.command).toBe(
+      expect(stripAssignedSessionIdArgs(call.command ?? "", "claude")).toBe(
         buildLaunchCommandFromFlags("claude", "claude", call.agentLaunchFlags!)
       );
     });
@@ -2453,7 +2555,7 @@ describe("recipeStore", () => {
 
         expect(call.command).toContain("--system-prompt 'two words'");
         expect(call.agentLaunchFlags).toEqual(["--system-prompt", "two words"]);
-        expect(call.command).toBe(
+        expect(stripAssignedSessionIdArgs(call.command ?? "", "claude")).toBe(
           buildLaunchCommandFromFlags("claude", "claude", call.agentLaunchFlags!)
         );
       });
@@ -4488,35 +4590,93 @@ describe("recipeStore", () => {
       expect("whenDone" in imported.terminals[1]!).toBe(false);
     });
 
-    it("importRecipeFromFile reports a cancelled pick", async () => {
+    it("readRecipeFile reports a cancelled pick", async () => {
       importRecipeFromFileMock.mockResolvedValueOnce(null);
-      const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
+      const result = await useRecipeStore.getState().readRecipeFile();
       expect(result).toEqual({ status: "cancelled" });
     });
 
-    it("importRecipeFromFile imports a clean file straight away", async () => {
-      importRecipeFromFileMock.mockResolvedValueOnce(
-        JSON.stringify({ name: "From file", terminals: [{ type: "terminal", command: "ls" }] })
-      );
-      const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
-      expect(result).toEqual({ status: "imported" });
-      expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+    // Where a file goes is the user's choice, so reading one saves nothing (#16658).
+    it("readRecipeFile shows a clean file as it would be saved, and saves nothing", async () => {
+      const before = useRecipeStore.getState().recipes;
+      importRecipeFromFileMock.mockResolvedValueOnce({
+        fileName: "from-file.json",
+        json: JSON.stringify({
+          name: "From file",
+          terminals: [
+            { type: "terminal", command: " ls " },
+            { type: "claude", title: "Lead" },
+          ],
+        }),
+      });
+
+      const result = await useRecipeStore.getState().readRecipeFile();
+
+      expect(result.status).toBe("ready");
+      if (result.status !== "ready") return;
+      expect(result.fileName).toBe("from-file.json");
+      expect(result.recipe.name).toBe("From file");
+      // The sanitized terminals the save would write, not the file's raw ones.
+      expect(result.recipe.terminals.map((t) => [t.type, t.command, t.title])).toEqual([
+        ["terminal", "ls", undefined],
+        ["claude", undefined, "Lead"],
+      ]);
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+      expect(globalAddRecipeMock).not.toHaveBeenCalled();
+      expect(useRecipeStore.getState().recipes).toBe(before);
     });
 
-    it("importRecipeFromFile hands back a file that would lose terminals, unsaved (#15044)", async () => {
+    it("readRecipeFile hands back a file that would lose terminals, unsaved (#15044)", async () => {
       const json = JSON.stringify({
         name: "From file",
         terminals: [{ type: "terminal", command: "ls" }, { type: "acme-agent" }],
       });
-      importRecipeFromFileMock.mockResolvedValueOnce(json);
+      importRecipeFromFileMock.mockResolvedValueOnce({ fileName: "from-file.json", json });
 
-      const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
+      const result = await useRecipeStore.getState().readRecipeFile();
 
       expect(result.status).toBe("refused");
       if (result.status !== "refused") return;
       expect(result.json).toBe(json);
       expect(result.error).toBeInstanceOf(RecipeImportDropsTerminalsError);
       expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+    });
+
+    it("readRecipeFile refuses an empty file instead of treating it as a cancelled pick", async () => {
+      importRecipeFromFileMock.mockResolvedValueOnce({ fileName: "empty.json", json: "  \n" });
+
+      const result = await useRecipeStore.getState().readRecipeFile();
+
+      expect(result.status).toBe("refused");
+      if (result.status !== "refused") return;
+      expect(result.fileName).toBe("empty.json");
+      expect(result.error).toBeInstanceOf(RecipeImportInvalidError);
+    });
+
+    it("readRecipeFile refuses JSON that isn't a recipe as content to fix", async () => {
+      importRecipeFromFileMock.mockResolvedValueOnce({
+        fileName: "settings.json",
+        json: JSON.stringify({ theme: "bondi" }),
+      });
+
+      const result = await useRecipeStore.getState().readRecipeFile();
+
+      expect(result.status).toBe("refused");
+      if (result.status !== "refused") return;
+      expect(result.error).toBeInstanceOf(RecipeImportInvalidError);
+      expect((result.error as RecipeImportInvalidError).title).toBe("This JSON isn't a recipe");
+    });
+
+    it("importRecipe resolves to the recipe it saved", async () => {
+      const saved = await useRecipeStore
+        .getState()
+        .importRecipe(
+          undefined,
+          JSON.stringify({ name: "Saved", terminals: [{ type: "terminal" }] })
+        );
+      expect(saved.name).toBe("Saved");
+      expect(saved.projectId).toBeUndefined();
+      expect(useRecipeStore.getState().globalRecipes.some((r) => r.id === saved.id)).toBe(true);
     });
   });
 
@@ -4942,6 +5102,44 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
     // The panel step is not an agent and never reaches the PTY spawn path.
     expect(addTerminalMock).toHaveBeenCalledTimes(1);
     expect(addTerminalMock.mock.calls[0]?.[0].command).toContain("Review Invoice 42 on feature/x");
+  });
+
+  describe("a plugin agent's first prompt (#16404)", () => {
+    afterEach(() => clearPluginAgentRegistryForTests());
+
+    const launchedCommand = async (
+      initialPromptForm?: PluginAgentContribution["initialPromptForm"]
+    ) => {
+      registerPluginAgents("acme.tools", [
+        {
+          id: "mini",
+          name: "Mini",
+          command: "mini",
+          color: "#3366ff",
+          iconId: "claude",
+          ...(initialPromptForm ? { initialPromptForm } : {}),
+        },
+      ]);
+      await run(
+        { terminals: [{ type: "mini", initialPrompt: "Review {{plugin.record}}" }] },
+        { record: "Invoice 42" }
+      );
+      expect(addTerminalMock).toHaveBeenCalledTimes(1);
+      return addTerminalMock.mock.calls[0]?.[0].command;
+    };
+
+    it("launches with the prompt after the flag the agent declares", async () => {
+      await expect(
+        launchedCommand({
+          interactive: { args: ["--task", "{prompt}"] },
+          headless: { args: ["--print", "{prompt}"] },
+        })
+      ).resolves.toBe("mini --task 'Review Invoice 42'");
+    });
+
+    it("launches with a positional prompt when the agent declares nothing", async () => {
+      await expect(launchedCommand()).resolves.toBe("mini 'Review Invoice 42'");
+    });
   });
 
   it("records the agent's first turn with its line breaks, and none for a step without one (#14592)", async () => {

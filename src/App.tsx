@@ -43,6 +43,7 @@ import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useScheduledRunLaunchBridge } from "./hooks/useScheduledRunLaunchBridge";
 import { useScheduledRunFinishBridge } from "./hooks/useScheduledRunFinishBridge";
 import { useTerminalWhenDoneBridge } from "./hooks/useTerminalWhenDoneBridge";
+import { useHeldComposerSendBridge } from "./hooks/useHeldComposerSendBridge";
 import { useScheduledRunInboxBridge } from "./hooks/useScheduledRunInboxBridge";
 import { usePluginPromptBridge } from "./hooks/usePluginPromptBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
@@ -50,6 +51,7 @@ import { notifyViewPainted } from "./utils/removeStartupSkeleton";
 import {
   usePanelStoreBootstrap,
   useCloudSyncWarning,
+  useOnlineOnlyFilesSync,
   useRosettaWarning,
   useAccessibilityAnnouncements,
   useUnloadCleanup,
@@ -169,6 +171,7 @@ function AppInner() {
   useScheduledRunLaunchBridge();
   useScheduledRunFinishBridge();
   useTerminalWhenDoneBridge();
+  useHeldComposerSendBridge();
   usePluginPromptBridge();
   const { homeDir } = useHomeDir();
 
@@ -184,7 +187,6 @@ function AppInner() {
   const {
     worktrees,
     isLoading,
-    newTerminalPalette,
     panelPalette,
     projectSwitcherPalette,
     actionPalette,
@@ -199,7 +201,6 @@ function AppInner() {
     isProjectSwitcherModalOpen,
     shouldMountQuickSwitcher,
     shouldMountSendToAgentPalette,
-    shouldMountNewTerminalPalette,
     shouldMountWorktreePalette,
     shouldMountQuickCreatePalette,
     shouldMountPanelPalette,
@@ -225,6 +226,7 @@ function AppInner() {
   const cloneRepoDialogOpen = useProjectStore((state) => state.cloneRepoDialogOpen);
   const closeCloneRepoDialog = useProjectStore((state) => state.closeCloneRepoDialog);
   const handleCloneSuccess = useProjectStore((state) => state.handleCloneSuccess);
+  const startBackgroundClone = useProjectStore((state) => state.startBackgroundClone);
 
   const shouldMountCreateFolderDialog = useKeepMounted(createFolderDialogOpen);
   const shouldMountCloneRepoDialog = useKeepMounted(cloneRepoDialogOpen);
@@ -377,7 +379,7 @@ function AppInner() {
     usePaletteStore.getState().closePalette("log-level");
   }, []);
 
-  useAppEventListeners({ onOpenNewTerminalPalette: newTerminalPalette.open });
+  useAppEventListeners();
 
   const { handleErrorRetry, handleCancelRetry } = useErrorRetry();
 
@@ -468,6 +470,7 @@ function AppInner() {
   // App lifecycle hooks
   usePanelStoreBootstrap();
   useCloudSyncWarning(homeDir);
+  useOnlineOnlyFilesSync();
   useRosettaWarning(bootResult);
   useAccessibilityAnnouncements();
   // A switch to another host shows its screen from the start, can be
@@ -614,8 +617,6 @@ function AppInner() {
                 shouldMountQuickSwitcher={shouldMountQuickSwitcher}
                 sendToAgentPalette={sendToAgentPalette}
                 shouldMountSendToAgentPalette={shouldMountSendToAgentPalette}
-                newTerminalPalette={newTerminalPalette}
-                shouldMountNewTerminalPalette={shouldMountNewTerminalPalette}
                 worktreePalette={worktreePalette}
                 shouldMountWorktreePalette={shouldMountWorktreePalette}
                 quickCreatePalette={quickCreatePalette}
@@ -696,6 +697,7 @@ function AppInner() {
                 cloneRepoDialogOpen={cloneRepoDialogOpen}
                 shouldMountCloneRepoDialog={shouldMountCloneRepoDialog}
                 handleCloneSuccess={handleCloneSuccess}
+                startBackgroundClone={startBackgroundClone}
                 closeCloneRepoDialog={closeCloneRepoDialog}
                 reEntrySummary={reEntrySummary}
                 gettingStarted={gettingStarted}

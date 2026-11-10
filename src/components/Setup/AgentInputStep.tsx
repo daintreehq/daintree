@@ -110,7 +110,7 @@ export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean)
         />
         <SettingsDependents
           disabled={!hybridInputEnabled}
-          reason="Turn on the hybrid input to choose where agent panes put the keyboard"
+          reason="Turn on the hybrid input to choose where agent panels put the keyboard"
         >
           <SettingsPresetGroup
             label="Focus first"

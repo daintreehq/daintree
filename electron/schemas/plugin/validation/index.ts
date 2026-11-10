@@ -4,8 +4,12 @@ import type { ParsedPluginManifest } from "../manifestShape.js";
 import { buildManifestValidationContext } from "./context.js";
 import { validateAccountConnections, validateServiceNames } from "./accounts.js";
 import {
+  validateAgentExecutableNames,
   validateAgentIds,
   validateAgentMcp,
+  validateAgentDiscovery,
+  validateAgentPermissionBypass,
+  validateAgentPromptFormTerminator,
   validateAgentRegistration,
   validateMcpServerSettingsTokens,
   validateProcessTools,
@@ -21,7 +25,12 @@ import {
 } from "./providers.js";
 import { validateContributedActionIds, validateEventRoutes } from "./actions.js";
 import { validateDatabases } from "./databases.js";
-import { validateDefaultLayout, validateSurfaceViews, validateViews } from "./views.js";
+import {
+  validateCanopyViews,
+  validateDefaultLayout,
+  validateSurfaceViews,
+  validateViews,
+} from "./views.js";
 import {
   validateLaunchEntries,
   validateLayouts,
@@ -67,6 +76,10 @@ export function validatePluginManifest(
   validateAgentMcp(manifest, ctx, context);
   validateAssistantKnowledge(manifest, ctx);
   validateAgentIds(manifest, ctx);
+  validateAgentPermissionBypass(manifest, ctx);
+  validateAgentPromptFormTerminator(manifest, ctx);
+  validateAgentDiscovery(manifest, ctx);
+  validateAgentExecutableNames(manifest, ctx);
   validateProcessTools(manifest, ctx);
   validateContributedActionIds(manifest, ctx, context);
   validatePanelActionSurfaces(manifest, ctx, context);
@@ -85,6 +98,7 @@ export function validatePluginManifest(
   validateDefaultLayout(manifest, ctx);
   validateApplication(manifest, ctx, context);
   validateToolbarButtons(manifest, ctx, context);
+  validateCanopyViews(manifest, ctx, context);
   validateLaunchEntries(manifest, ctx, context);
   validateSearchProviders(manifest, ctx, context);
   validateRecipes(manifest, ctx);

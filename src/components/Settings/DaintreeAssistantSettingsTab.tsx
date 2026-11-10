@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Callout } from "@/components/ui/Callout";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import type { ReactNode } from "react";
 import { AlertTriangle, ChevronRight, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -66,8 +67,13 @@ const TIER_SUMMARIES: Record<HelpAssistantTier, string> = {
 
 // Descriptive exclusive choice: each tool set's consequence stays readable in full, so
 // the larger one can't hide what it adds behind a truncated label.
-const TIER_CHOICES: { value: HelpAssistantTier; label: string; description: string }[] = [
-  { value: "core", label: "Core (default)", description: TIER_SUMMARIES.core },
+const TIER_CHOICES: {
+  value: HelpAssistantTier;
+  label: string;
+  description: string;
+  isDefault?: boolean;
+}[] = [
+  { value: "core", label: "Core", isDefault: true, description: TIER_SUMMARIES.core },
   { value: "full", label: "Full", description: TIER_SUMMARIES.full },
 ];
 
@@ -93,7 +99,7 @@ function groupToolsByNamespace(tools: readonly string[]): Array<[string, string[
 
 const HIBERNATE_OPTIONS = [
   { value: "0", label: "Off" },
-  { value: "5", label: "5 minutes (default)" },
+  { value: "5", label: "5 minutes", isDefault: true },
   { value: "15", label: "15 minutes" },
   { value: "30", label: "30 minutes" },
   { value: "60", label: "1 hour" },
@@ -254,10 +260,10 @@ export function DaintreeAssistantSettingsTab() {
   // description names the agent in use instead.
   const agentSelectValue = preferredAgentId ?? "";
   const agentDescription = preferredAgentId
-    ? "The CLI that runs the help assistant in the dock"
+    ? "The CLI that runs the assistant in the dock"
     : effectiveAgentId
       ? `Using ${getAgentConfig(effectiveAgentId)?.name ?? effectiveAgentId}, the only installed agent the assistant supports`
-      : "The help assistant can't start until you choose one";
+      : "The assistant can't start until you choose one";
 
   const globalSkipPermissions = useAgentSettingsStore(
     (state) => state.settings?.globalSkipPermissions === true
@@ -521,8 +527,8 @@ export function DaintreeAssistantSettingsTab() {
               description={
                 modelCatalogFailed ? (
                   <>
-                    Couldn&apos;t load this agent&apos;s models, so only the saved choice is listed
-                    ·{" "}
+                    Couldn&apos;t load this agent&apos;s models, so only the saved choice is listed{" "}
+                    <FactSeparator />{" "}
                     <Button variant="link" onClick={retryModelCatalog}>
                       Retry
                     </Button>
@@ -897,7 +903,7 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
             aria-hidden="true"
           />
           <span>
-            What this tool set allows · {totalCount} actions
+            What this tool set allows <FactSeparator /> {totalCount} actions
             {tier !== "core" && <span> ({newAtTier} more than core)</span>}
           </span>
         </span>

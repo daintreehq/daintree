@@ -188,14 +188,17 @@ export function describeObservedAgents(summary: HostMetricsSummary): string {
   return `${working} working · ${attention.waiting} waiting${blocked} · ${attention.idle} idle (observed)`;
 }
 
-/** "2 open · 5 worktrees", with whichever count failed to read shown as unknown, never 0. */
-export function describeProjects(summary: HostMetricsSummary): string {
+/**
+ * ["2 open", "5 worktrees"], with whichever count failed to read shown as
+ * unknown, never 0. Parts, so the card draws the separators between them.
+ */
+export function describeProjects(summary: HostMetricsSummary): string[] {
   const { projectCount, worktreeCount } = summary;
-  if (projectCount === null && worktreeCount === null) return "Unknown";
+  if (projectCount === null && worktreeCount === null) return ["Unknown"];
   const open = projectCount === null ? "? open" : `${projectCount} open`;
   const worktrees =
     worktreeCount === null ? "worktrees unknown" : pluralize(worktreeCount, "worktree");
-  return `${open} · ${worktrees}`;
+  return [open, worktrees];
 }
 
 interface DriverLaunch {

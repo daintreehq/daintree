@@ -4,6 +4,7 @@ import type { TourOnboardingState } from "@shared/types";
 import { DAINTREE_TOUR_ID, tourProgressFor } from "@shared/utils/tourIds";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { getOnboardingState } from "@/clients/onboardingClient";
 import { getPerformanceModeFloor, UI_EXIT_DURATION } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
@@ -235,8 +236,8 @@ export function TourInviteCard({
               <p className="mt-1 text-xs leading-relaxed text-text-secondary">
                 <span className="tabular-nums">
                   Chapter {offer.chapter + 1} of {summary.chapterTitles.length}
-                </span>
-                <span aria-hidden="true"> · </span>
+                </span>{" "}
+                <FactSeparator />{" "}
                 <span className="text-text-primary">{summary.chapterTitles[offer.chapter]!}</span>
               </p>
             ) : (

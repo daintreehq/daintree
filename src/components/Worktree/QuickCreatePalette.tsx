@@ -62,7 +62,7 @@ function RecipeListItem({
         aria-selected={isSelected}
         role="option"
       >
-        <Settings2 className="w-4 h-4 text-daintree-text/50" />
+        <Settings2 className="w-4 h-4 text-text-secondary" />
         <span className="text-sm text-text-secondary">Customize…</span>
       </button>
     );
@@ -220,9 +220,16 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
         // No `Esc cancel` chip. Escape closes the palette but the pending
         // `worktree.createWithRecipe` keeps running — there is no abort path —
         // so naming it "cancel" promised something the key doesn't do.
-        <PaletteFooterHints
-          primaryHint={{ keys: ["↵"], label: palette.isPending ? "creating…" : "to create" }}
-        />
+        // Nothing to name when the list is empty: Enter has no row to act on.
+        palette.results.length > 0 || palette.isPending ? (
+          <PaletteFooterHints
+            primaryHint={
+              // Enter does nothing while a create is in flight, so the chip
+              // states progress instead of naming the key.
+              palette.isPending ? { label: "Creating…" } : { keys: "Enter", label: "to create" }
+            }
+          />
+        ) : null
       }
     />
   );

@@ -98,6 +98,7 @@ import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
 import { getMaximizedGroupFocusTarget, enterFocusedPanel } from "./contentGridFocus";
 import { setGridLayoutSnapshot } from "./gridLayoutSnapshot";
 import { actionService } from "@/services/ActionService";
+import { recipeIssueContext } from "@/utils/recipeVariables";
 
 // Stable empty arrays — returned from `useShallow` selectors and memos when
 // the filtered list is empty so the previous reference is reused (avoids a
@@ -384,6 +385,9 @@ export function useContentGridContext({
         head: wt.head,
         path: wt.path,
         issueNumber: wt.issueNumber,
+        issueTitle: wt.issueTitle,
+        issueProviderId: wt.issueProviderId,
+        issueKey: wt.issueKey,
         prNumber: wt.linked?.pr?.ref.number,
       };
     })
@@ -399,7 +403,7 @@ export function useContentGridContext({
   // same worktree-scoped variable substitutions from the grid surface.
   const gridRecipeContext = activeWorktree
     ? {
-        issueNumber: activeWorktree.issueNumber,
+        ...recipeIssueContext(activeWorktree),
         prNumber: activeWorktree.prNumber,
         branchName: activeWorktree.branch,
         worktreePath: activeWorktree.path,

@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { FleetPickerContent, FleetPickerFooterHint } from "@/components/Fleet/FleetPickerContent";
 import { useFleetPicker } from "@/hooks/useFleetPicker";
@@ -217,7 +218,12 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
           data-testid="fleet-picker-cold-start-selection-summary"
         >
           {selectedCount} of {picker.eligibleCount} selected
-          {hiddenSelected > 0 ? ` · ${hiddenSelected} hidden by search` : ""}
+          {hiddenSelected > 0 && (
+            <>
+              {" "}
+              <FactSeparator /> {hiddenSelected} hidden by search
+            </>
+          )}
         </span>
       </div>
     </>

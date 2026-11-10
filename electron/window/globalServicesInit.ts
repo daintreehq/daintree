@@ -138,6 +138,7 @@ import {
   getGlobalServicesInitialized,
   decisionsWantedAtStartup,
   loadDecisionsModule,
+  peekDecisionsModule,
 } from "./serviceRefs.js";
 
 /**
@@ -751,6 +752,13 @@ export async function initGlobalServices(
             } else {
               getCrashRecoveryService().startBackupTimer();
               ptyClient?.suppressSessionPersistence(false);
+              // A Decisions store that stopped for disk space starts afresh (#16605).
+              // Only one already loaded: with Decisions never used, nothing loads.
+              peekDecisionsModule()
+                ?.then((decisions) => decisions.decisionsDiskSpaceRecovered())
+                .catch((err) => {
+                  logError("[DiskSpaceMonitor] Decisions recovery threw", err);
+                });
             }
           },
           showNativeNotification: (title, body) => {

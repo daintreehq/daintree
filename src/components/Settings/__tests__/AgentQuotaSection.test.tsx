@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { CodexQuotaProfile, CodexQuotaResult } from "@shared/types/ipc/agentQuota";
+import type {
+  ClaudeUsageAccount,
+  ClaudeUsageReading,
+  CodexQuotaProfile,
+  CodexQuotaResult,
+} from "@shared/types/ipc/agentQuota";
 
 // Most cases are about one profile's reading, so these answer with the default
 // profile alone; `readProfiles` takes over when a case needs several.
@@ -21,6 +26,8 @@ vi.mock("@/clients/codexClient", () => {
     },
   };
 });
+const readUsage = vi.hoisted(() => vi.fn<() => Promise<ClaudeUsageAccount[]>>());
+vi.mock("@/clients/claudeClient", () => ({ claudeClient: { readUsage: () => readUsage() } }));
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
   useGlobalMinuteClock: () => clock.now,
 }));
@@ -46,6 +53,8 @@ beforeEach(() => {
   readQuota.mockReset();
   refreshQuota.mockReset();
   readProfiles.mockReset();
+  readUsage.mockReset();
+  readUsage.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -55,9 +64,11 @@ afterEach(() => {
 });
 
 describe("AgentQuotaSection (#12797)", () => {
-  it("says Claude's live quota is unavailable without asking for it", async () => {
+  it("says no Claude usage has been seen yet, and never asks Codex", async () => {
     await renderFor("claude");
-    expect(screen.getByText("Live quota unavailable")).toBeTruthy();
+    expect(screen.getByText("No usage seen yet")).toBeTruthy();
+    expect(document.body.textContent).toContain("as a limit approaches");
+    expect(document.body.textContent).toContain("View usage");
     expect(readQuota).not.toHaveBeenCalled();
     expect(meters()).toHaveLength(0);
   });
@@ -403,5 +414,209 @@ describe("windowLabel", () => {
     expect(windowLabel(10080)).toBe("Weekly limit");
     expect(windowLabel(1440)).toBe("1-day limit");
     expect(windowLabel(90)).toBe("90-minute limit");
+  });
+});
+
+const claudeReading = (overrides: Partial<ClaudeUsageReading> = {}): ClaudeUsageReading => ({
+  window: "weekly limit",
+  statement: "used",
+  usedPercent: 87,
+  // A minute on: the same day in any zone NOW's minute allows, so it reads "Resets at".
+  resetsAt: NOW + 60_000,
+  observedAt: NOW - 5 * 60_000,
+  terminalId: "t1",
+  paneTitle: "Fix tests",
+  projectName: "daintree",
+  ...overrides,
+});
+
+const claudeAccount = (overrides: Partial<ClaudeUsageAccount> = {}): ClaudeUsageAccount => ({
+  key: "default",
+  kind: "default",
+  accountNames: [],
+  readings: [claudeReading()],
+  ...overrides,
+});
+
+describe("AgentQuotaSection for Claude Code (#16370)", () => {
+  it("shows what a pane said, where and how long ago, as seen rather than live", async () => {
+    readUsage.mockResolvedValue([claudeAccount()]);
+    await renderFor("claude");
+
+    expect(document.body.textContent).toContain("as your terminals showed them");
+    expect(document.body.textContent).toContain("Not a live account reading");
+    expect(meters().map((m) => m.getAttribute("aria-valuenow"))).toEqual(["87"]);
+    expect(meters()[0]?.getAttribute("aria-valuetext")).toBe("87% used, as a terminal showed it");
+    expect(screen.getByText("Weekly limit")).toBeTruthy();
+    expect(screen.getByText("87% used")).toBeTruthy();
+    const description = document.body.textContent ?? "";
+    expect(description).toContain("Resets at");
+    expect(description).toContain("Seen 5m ago in Fix tests (daintree)");
+    expect(screen.queryByText("Stale")).toBeNull();
+    // A lone default login with no accounts saved needs no group name.
+    expect(screen.queryByText("Default login")).toBeNull();
+  });
+
+  it("states a bound, an approach and a hit limit in their own terms, with no meter", async () => {
+    readUsage.mockResolvedValue([
+      claudeAccount({
+        readings: [
+          claudeReading({ window: "5-hour limit", statement: "reached", usedPercent: null }),
+          claudeReading({ window: "weekly limit", statement: "over", usedPercent: 90 }),
+          claudeReading({ window: "Opus limit", statement: "approaching", usedPercent: null }),
+        ],
+      }),
+    ]);
+    await renderFor("claude");
+
+    expect(screen.getByText("Limit reached")).toBeTruthy();
+    expect(screen.getByText("Over 90% used")).toBeTruthy();
+    expect(screen.getByText("Approaching limit")).toBeTruthy();
+    expect(meters()).toHaveLength(0);
+    expect(document.body.textContent).not.toContain("10% left");
+  });
+
+  it("marks a reading stale once its reset has passed, and keeps it", async () => {
+    readUsage.mockResolvedValue([
+      claudeAccount({ readings: [claudeReading({ resetsAt: NOW - 1 })] }),
+    ]);
+    await renderFor("claude");
+
+    expect(screen.getByText("Stale")).toBeTruthy();
+    expect(meters()[0]?.getAttribute("aria-valuetext")).toBe(
+      "87% used, as a terminal showed it, stale"
+    );
+    expect(document.body.textContent).toContain("Reset time has passed");
+    expect(document.body.textContent).not.toContain("Resets at");
+  });
+
+  it("leaves the reset out when the message showed none", async () => {
+    readUsage.mockResolvedValue([claudeAccount({ readings: [claudeReading({ resetsAt: null })] })]);
+    await renderFor("claude");
+
+    expect(document.body.textContent).toContain("Seen 5m ago in Fix tests (daintree)");
+    expect(document.body.textContent).not.toContain("Reset");
+    expect(screen.queryByText("Stale")).toBeNull();
+  });
+
+  it("names a pane its host can't describe without claiming it closed", async () => {
+    readUsage.mockResolvedValue([
+      claudeAccount({ readings: [claudeReading({ paneTitle: null, projectName: null })] }),
+    ]);
+    await renderFor("claude");
+
+    expect(document.body.textContent).toContain("Seen 5m ago in a terminal");
+    expect(document.body.textContent).not.toMatch(/closed|no longer open/);
+  });
+
+  it("numbers folders no account names, each with its own readings", async () => {
+    readUsage.mockResolvedValue([
+      claudeAccount({
+        key: "o1",
+        kind: "other",
+        readings: [claudeReading({ usedPercent: 11 })],
+      }),
+      claudeAccount({
+        key: "o2",
+        kind: "other",
+        readings: [claudeReading({ usedPercent: 22, terminalId: "t2" })],
+      }),
+    ]);
+    await renderFor("claude");
+
+    expect(
+      meters().map((m) => [m.getAttribute("aria-label"), m.getAttribute("aria-valuenow")])
+    ).toEqual([
+      ["Other config folder 1 weekly limit used", "11"],
+      ["Other config folder 2 weekly limit used", "22"],
+    ]);
+  });
+
+  it("keeps the readings and offers Retry when a later read fails", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      readUsage.mockResolvedValueOnce([claudeAccount()]).mockRejectedValueOnce(new Error("gone"));
+      await renderFor("claude");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(meters()).toHaveLength(1);
+      expect(screen.getByText("Couldn't check for newer readings")).toBeTruthy();
+      readUsage.mockResolvedValueOnce([claudeAccount()]);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      });
+      expect(screen.queryByText("Couldn't check for newer readings")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("puts each login's readings under its own name", async () => {
+    readUsage.mockResolvedValue([
+      claudeAccount({ readings: [claudeReading({ usedPercent: 87 })] }),
+      claudeAccount({
+        key: "work",
+        kind: "account",
+        accountNames: ["Work"],
+        readings: [claudeReading({ usedPercent: 30, terminalId: "t2" })],
+      }),
+      claudeAccount({
+        key: "unknown",
+        kind: "unknown",
+        readings: [claudeReading({ usedPercent: 12, terminalId: "t3" })],
+      }),
+    ]);
+    await renderFor("claude");
+
+    // The innermost groups: the section around them is one too.
+    const groups = Array.from(document.querySelectorAll('[role="group"]')).filter(
+      (group) => !group.querySelector('[role="group"]')
+    );
+    const byGroup = groups.map((group) => [
+      group.getAttribute("aria-labelledby")
+        ? document.getElementById(group.getAttribute("aria-labelledby")!)?.textContent
+        : null,
+      Array.from(group.querySelectorAll('[role="meter"]')).map((m) =>
+        m.getAttribute("aria-valuenow")
+      ),
+    ]);
+    expect(byGroup).toEqual([
+      ["Default login", ["87"]],
+      ["Work", ["30"]],
+      ["Unknown config folder", ["12"]],
+    ]);
+    expect(meters().map((m) => m.getAttribute("aria-label"))).toEqual([
+      "Default login weekly limit used",
+      "Work weekly limit used",
+      "Unknown config folder weekly limit used",
+    ]);
+  });
+
+  it("names a lone login's group once an account is saved", async () => {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: { claude: { accounts: [{ id: "a1", name: "Work", configDir: "/w" }] } },
+      } as AgentSettings,
+    });
+    readUsage.mockResolvedValue([claudeAccount()]);
+    await renderFor("claude");
+
+    expect(screen.getByText("Default login")).toBeTruthy();
+  });
+
+  it("offers Retry when the read fails before anything is shown, then shows the readings", async () => {
+    readUsage.mockRejectedValueOnce(new Error("ipc gone"));
+    await renderFor("claude");
+
+    expect(screen.getByText("Usage unavailable")).toBeTruthy();
+    readUsage.mockResolvedValue([claudeAccount()]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+
+    expect(screen.queryByText("Usage unavailable")).toBeNull();
+    expect(meters()).toHaveLength(1);
   });
 });

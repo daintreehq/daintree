@@ -176,6 +176,9 @@ describe("HostSwitcherPalette", () => {
     const rows = [...document.querySelectorAll<HTMLElement>("[data-host-id]")];
     expect(rows.map((el) => el.dataset.hostId)).toEqual(["local", "h1"]);
     expect(rows[0]!.getAttribute("aria-current")).toBe("true");
+    expect(rows[0]!.textContent).toContain("Current");
+    expect(rows[0]!.querySelector(".sr-only")?.textContent).toBe(", current");
+    expect(row("h1").textContent).not.toContain("Current");
     const text = row("h1").textContent ?? "";
     expect(text).toContain("studio-01");
     expect(text).toContain("3 projects");
@@ -392,6 +395,9 @@ describe("HostSwitcherPalette", () => {
       localSummary: null,
     };
     openPalette();
+    // The footer teaches the chord the keydown takes, in this platform's keys.
+    const chip = screen.getByText("to open in a new window").parentElement!;
+    expect(Array.from(chip.querySelectorAll("kbd"), (kbd) => kbd.textContent)).toEqual(["⌘", "⏎"]);
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", metaKey: true });
     await waitFor(() =>
       expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: true })

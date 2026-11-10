@@ -69,9 +69,6 @@ vi.mock("@/components/Terminal/HybridInputBar", () => ({
     ) : null,
 }));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
-const openInAssistantMock = vi.hoisted(() =>
-  vi.fn(async (): Promise<{ ok: true } | { ok: false; reason: "ended" }> => ({ ok: true }))
-);
 const assistantApiMock = vi.hoisted(() =>
   vi.fn((subject: AgentDirectorySubject, _stamp?: unknown) => ({
     assistantSubject: subject,
@@ -79,14 +76,14 @@ const assistantApiMock = vi.hoisted(() =>
   }))
 );
 vi.mock("@/services/assistantSubject", () => ({
-  openInAssistant: openInAssistantMock,
   assistantTerminalApi: assistantApiMock,
 }));
 
 import { CanopyView } from "../CanopyView";
+import type { CanopyFrame } from "../canopyFrame";
+import { canopyTestFrame } from "./canopyTestFrame";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
@@ -94,6 +91,8 @@ import { canopyReplyVoiceId, resolveCanopyReplyDictation } from "@/services/cano
 import { isMac } from "@/lib/platform";
 
 const NOW = Date.now();
+/** A host's refusal to open an assistant, in its words. */
+const ENDED = "This assistant's session has ended.";
 /** Past the panel's wait on the typing before it reads terminals for a search. */
 const SCREEN_SEARCH_SETTLE_MS = 250;
 
@@ -176,6 +175,7 @@ function globalRunning(overrides: Partial<GlobalAssistantView> = {}): GlobalAssi
 }
 
 let globalView: GlobalAssistantView;
+let frame: CanopyFrame;
 let help: ReturnType<typeof makeHelp>;
 let canopyBridge: ReturnType<typeof installElectron>;
 let attachments = 0;
@@ -206,6 +206,7 @@ function makeHelp() {
       return globalView;
     }),
     ensureGlobalAssistant: vi.fn(async () => globalView),
+    cancelGlobalAssistantLaunch: vi.fn(async () => globalView),
   };
 }
 
@@ -215,7 +216,6 @@ function installElectron() {
     setActive: vi.fn(async () => canopySnapshot),
     refresh: vi.fn(async () => {}),
     setShown: vi.fn(async (_ids: string[]) => {}),
-    setScope: vi.fn(async () => {}),
     markSeen: vi.fn(async (_runId: string, _looking?: boolean) => {}),
     setRead: vi.fn(async () => null),
     archive: vi.fn(async () => null),
@@ -275,6 +275,7 @@ function roleSegment(role: "all" | "workers" | "assistants") {
 }
 
 beforeEach(() => {
+  frame = canopyTestFrame();
   __resetCanopySeenForTests();
   __resetCanopyPlaceForTests();
   terminalApis.length = 0;
@@ -319,13 +320,13 @@ afterEach(() => {
     isOpen: false,
     snapshot: null,
     mode: "unset",
-    scope: "all",
-    orders: {},
+    order: null,
     unreadOnly: false,
     roleFilter: "all",
     workOf: null,
     globalDocked: false,
     dockWidth: null,
+    archivedExpanded: false,
   });
   window.localStorage.removeItem("daintree-canopy-order");
   window.localStorage.removeItem("daintree-canopy-global-docked");
@@ -338,7 +339,7 @@ afterEach(() => {
 describe("CanopyView role filter", () => {
   it("lists workers and each assistant lane together, workers in their own order", async () => {
     directory.entries = [assistant(0, { label: "Refactor" }), assistant(1)];
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const workersAlone = workerIds();
     expect(workersAlone).toEqual(["waiting", "working"]);
@@ -370,7 +371,7 @@ describe("CanopyView role filter", () => {
         runs: [...snapshot.runs, run("codex-run", { agentId: "codex", agentState: "working" })],
       },
     });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const band = document.querySelector("[data-testid=canopy-needs-you]")!.parentElement!;
     const worker = document.getElementById("canopy-card-waiting")!;
@@ -418,7 +419,7 @@ describe("CanopyView role filter", () => {
   it("names an assistant whose agent isn't known by its role alone, with the plain terminal glyph", async () => {
     directory.entries = [assistant(0, { agentId: null })];
     useCanopyStore.setState({ roleFilter: "assistants" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const [row] = assistantRows();
     expect(row!.getAttribute("aria-label")).toBe("Daintree Assistant, Session 1");
@@ -449,7 +450,7 @@ describe("CanopyView role filter", () => {
       assistant(5, { since: minutes(30.5), handback: { observedAt: minutes(10.5) } }),
     ];
     useCanopyStore.setState({ roleFilter: "assistants" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const lane = (index: number) =>
       assistantRows().find((row) => row.id.includes(encodeURIComponent(`"help-${index}"`)))!;
@@ -477,7 +478,7 @@ describe("CanopyView role filter", () => {
       }),
     ];
     useCanopyStore.setState({ roleFilter: "assistants" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const [row] = assistantRows();
     expect(row!.getAttribute("aria-label")).toBe("Daintree Assistant, Claude");
@@ -489,7 +490,7 @@ describe("CanopyView role filter", () => {
       assistant(0, { notices: { pending: 2, ready: 1, delivery: "held" }, attached: false }),
     ];
     useCanopyStore.setState({ roleFilter: "assistants" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const [row] = assistantRows();
     const notes = row!.querySelectorAll("[data-canopy-assistant-note]");
@@ -513,7 +514,7 @@ describe("CanopyView role filter", () => {
   });
 
   it("shows only workers, then only assistants, keeping the choice for the next opening", async () => {
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     await act(async () => fireEvent.click(roleSegment("workers")));
     expect(assistantRows()).toHaveLength(0);
@@ -531,7 +532,7 @@ describe("CanopyView role filter", () => {
 
   it("keeps assistants at their prompt quiet, and an observed ask on one lane in view", async () => {
     directory.entries = [assistant(0), assistant(1, { waitingReason: "approval" })];
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const rows = assistantRows();
     // The ask leads; the resting lane stays without one.
@@ -560,9 +561,9 @@ describe("CanopyView role filter", () => {
         ],
       },
     });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
-    const header = document.querySelector("[data-testid=canopy-dialog]")!.textContent ?? "";
+    const header = document.querySelector("[data-canopy-standalone]")!.textContent ?? "";
     expect(header).toContain("2 agents and 2 assistants need you");
     const band = document.querySelector("[data-testid=canopy-needs-you]")!.parentElement!;
     expect(
@@ -582,7 +583,7 @@ describe("CanopyView role filter", () => {
         runs: [run("working", { agentState: "working", since: NOW - 30_000 })],
       },
     });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const scroller = () => document.querySelector("[data-canopy-list]")!;
     const bandLabel = document.getElementById("canopy-needs-you-label")!;
@@ -596,7 +597,7 @@ describe("CanopyView role filter", () => {
 
   it("keeps an asking assistant in its own list under the Assistants filter", async () => {
     directory.entries = [assistant(0, { waitingReason: "question" })];
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     await act(async () => fireEvent.click(roleSegment("assistants")));
     expect(
@@ -605,66 +606,14 @@ describe("CanopyView role filter", () => {
     expect(document.querySelector("[data-testid=canopy-needs-you]")).toBeNull();
   });
 
-  it("opens on the worker the main view has focused over an asking assistant, unless workers are hidden", async () => {
-    directory.entries = [assistant(0, { waitingReason: "question" })];
-    const runs = [run("working", { agentState: "working", since: NOW - 30_000 })];
-    const assistantPane = () => document.querySelector("[data-testid=canopy-assistant-pane]");
-    const selectedWorker = () =>
-      document.querySelector('[data-canopy-card][aria-selected="true"]')?.id ?? null;
-    const focusWorking = (focused: boolean) =>
-      usePanelStore.setState({
-        panelsById: {
-          working: { id: "working", kind: "terminal", location: "grid", detectedAgentId: "claude" },
-        } as never,
-        focusedId: focused ? "working" : null,
-      });
-    // Mounted only while open, as the app hosts it, with the assistants listed
-    // before the workers arrive: only then does an assistant lead the landing.
-    const openCanopy = async () => {
-      const snapshot = useFleetSnapshotStore.getState().snapshot!;
-      useFleetSnapshotStore.setState({ snapshot: { ...snapshot, runs: [] } });
-      useCanopyStore.setState({ isOpen: false });
-      act(() => useCanopyStore.getState().open());
-      const view = render(<CanopyView />);
-      await settle();
-      act(() => useFleetSnapshotStore.setState({ snapshot: { ...snapshot, runs } }));
-      await settle();
-      return view;
-    };
-    try {
-      focusWorking(false);
-      const plain = await openCanopy();
-      expect(assistantPane()).not.toBeNull();
-      expect(selectedWorker()).toBeNull();
-      plain.unmount();
-
-      focusWorking(true);
-      const focused = await openCanopy();
-      expect(selectedWorker()).toBe("canopy-card-working");
-      expect(assistantPane()).toBeNull();
-      expect(assistantRows()[0]!.getAttribute("aria-selected")).not.toBe("true");
-      focused.unmount();
-
-      // Workers hidden by the filter: the focused one is nowhere to land.
-      useCanopyStore.setState({ roleFilter: "assistants" });
-      await openCanopy();
-      expect(useCanopyStore.getState().roleFilter).toBe("assistants");
-      expect(assistantPane()).not.toBeNull();
-    } finally {
-      usePanelStore.setState({ panelsById: {} as never, focusedId: null });
-    }
-  });
-
   it("never hands an assistant to the reader: not shown, searched or seen as a worker", async () => {
     const canopy = installElectron();
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     await act(async () => fireEvent.click(roleSegment("assistants")));
     await act(async () => {
       fireEvent.change(
-        document.querySelector<HTMLInputElement>(
-          "[data-testid=canopy-dialog] input[role=combobox]"
-        )!,
+        document.querySelector<HTMLInputElement>("[data-canopy-standalone] input[role=combobox]")!,
         { target: { value: "session" } }
       );
     });
@@ -685,10 +634,10 @@ describe("CanopyView role filter", () => {
   });
 
   it("walks from the last worker down into the assistants with the keyboard", async () => {
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const search = document.querySelector<HTMLInputElement>(
-      "[data-testid=canopy-dialog] input[role=combobox]"
+      "[data-canopy-standalone] input[role=combobox]"
     )!;
     const [first, last] = [
       document.getElementById("canopy-card-waiting")!,
@@ -711,11 +660,48 @@ describe("CanopyView role filter", () => {
     expect(document.querySelector("[data-testid=canopy-assistant-pane]")).toBeNull();
   });
 
+  it("steps between the last assistant and the Archived bar below it, shut or open", async () => {
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: [
+          run("waiting", { agentState: "waiting", waitingReason: "approval", since: NOW - 60_000 }),
+          run("done", { agentState: "completed", since: NOW - 90_000 }),
+        ],
+        changedAt: NOW,
+        degraded: false,
+        lastSuccessfulAt: NOW,
+      },
+    });
+    const archived: CanopySnapshot = {
+      ...canopySnapshot,
+      dispositions: [{ runId: "done", spawnedAt: NOW - 3_600_000, kind: "archived", at: NOW }],
+    };
+    // Opening the panel takes main's answer over the store's snapshot.
+    canopyBridge.setActive.mockImplementation(async () => archived);
+    useCanopyStore.setState({ snapshot: archived });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const bar = () =>
+      document.querySelector<HTMLButtonElement>("button[aria-controls=canopy-archived]")!;
+    const [, lastAssistant] = assistantRows();
+    act(() => lastAssistant!.focus());
+    fireEvent.keyDown(lastAssistant!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(bar());
+    fireEvent.keyDown(bar(), { key: "ArrowUp" });
+    expect(document.activeElement).toBe(lastAssistant);
+    // Open, the bar still goes up to the assistant above it, not the archived row below.
+    fireEvent.click(bar());
+    expect(document.getElementById("canopy-card-done")).not.toBeNull();
+    act(() => bar().focus());
+    fireEvent.keyDown(bar(), { key: "ArrowUp" });
+    expect(document.activeElement).toBe(lastAssistant);
+  });
+
   it("dictates into the selected worker's reply, and into nothing while an assistant is selected", async () => {
-    const view = render(<CanopyView />);
+    const view = render(<CanopyView frame={frame} />);
     await settle();
     const search = document.querySelector<HTMLInputElement>(
-      "[data-testid=canopy-dialog] input[role=combobox]"
+      "[data-canopy-standalone] input[role=combobox]"
     )!;
     fireEvent.keyDown(search, { key: "Tab" });
     const first = document.getElementById("canopy-card-waiting")!;
@@ -743,7 +729,7 @@ describe("CanopyView role filter", () => {
   });
 
   it("opens the exact lane on Enter, and offers no worker action on an assistant row", async () => {
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const row = assistantRows()[1]!;
     expect(row.querySelector("[data-canopy-row-archive]")).toBeNull();
@@ -751,9 +737,12 @@ describe("CanopyView role filter", () => {
       row.focus();
       fireEvent.keyDown(row, { key: "Enter" });
     });
-    expect(openInAssistantMock).toHaveBeenCalledWith(assistant(1).subject);
+    expect(frame.openAssistant).toHaveBeenCalledTimes(1);
+    expect(frame.openAssistant).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: assistant(1).subject }),
+      expect.any(Function)
+    );
     expect(dispatchMock).not.toHaveBeenCalled();
-    expect(useCanopyStore.getState().isOpen).toBe(false);
   });
 
   it("shows a lane's waiting confirmation and routes to it, with no way to answer it here (#14165)", async () => {
@@ -770,7 +759,7 @@ describe("CanopyView role filter", () => {
       }),
     ];
     useCanopyStore.setState({ roleFilter: "assistants" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
 
     const rows = assistantRows();
@@ -793,7 +782,10 @@ describe("CanopyView role filter", () => {
       (button) => button.textContent === "Open in Assistant"
     )!;
     await act(async () => fireEvent.click(open));
-    expect(openInAssistantMock).toHaveBeenCalledWith(assistant(1).subject);
+    expect(frame.openAssistant).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: assistant(1).subject }),
+      expect.any(Function)
+    );
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
@@ -803,20 +795,23 @@ describe("CanopyView role filter", () => {
     });
     directory.entries = [global];
     useCanopyStore.setState({ roleFilter: "assistants" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const open = [...document.querySelectorAll("button")].find(
       (button) => button.textContent === "Open in Assistant"
     )!;
     await act(async () => fireEvent.click(open));
-    expect(openInAssistantMock).toHaveBeenCalledWith(global.subject);
+    expect(frame.openAssistant).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: global.subject }),
+      expect.any(Function)
+    );
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("says nothing of supervision for an assistant that watches nothing", async () => {
     directory.entries = [assistant(0, { notices: null })];
     useCanopyStore.setState({ roleFilter: "assistants" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(document.querySelector("[data-canopy-assistant-supervision]")).toBeNull();
     expect(document.querySelector("[data-canopy-assistant-note]")).toBeNull();
@@ -824,15 +819,16 @@ describe("CanopyView role filter", () => {
   });
 
   it("says why a lane couldn't be opened, and starts nothing in its place", async () => {
-    openInAssistantMock.mockResolvedValueOnce({ ok: false, reason: "ended" });
+    vi.mocked(frame.openAssistant).mockResolvedValueOnce(ENDED);
     useCanopyStore.setState({ roleFilter: "assistants" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const open = [...document.querySelectorAll("button")].find(
       (button) => button.textContent === "Open in Assistant"
     )!;
     await act(async () => fireEvent.click(open));
     expect(document.body.textContent).toContain("Couldn't open this assistant");
+    expect(document.body.textContent).toContain(ENDED);
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(dispatchMock).not.toHaveBeenCalled();
   });
@@ -843,7 +839,7 @@ describe("CanopyView role filter", () => {
       assistant(1, { handback: { observedAt: NOW - 400 } }),
     ];
     useCanopyStore.setState({ roleFilter: "assistants" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     // Shown in the pane only because it leads the list: both still ask.
     expect(document.querySelector("[data-testid=canopy-assistant-pane]")).not.toBeNull();
@@ -859,7 +855,7 @@ describe("CanopyView role filter", () => {
   it("says when assistants couldn't all be listed, rather than that none run", async () => {
     directory = { coverage: "stale", observedAt: NOW, complete: false, omitted: 0, entries: [] };
     useCanopyStore.setState({ roleFilter: "assistants" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(emptyLines()).toEqual(["Daintree couldn't list every assistant just now"]);
     expect(document.body.textContent).not.toContain("No assistant is running");
@@ -869,14 +865,14 @@ describe("CanopyView role filter", () => {
   it("draws no 0 over an empty Assistants section, and names how to start one", async () => {
     const countOf = (id: string) =>
       document.getElementById(id)!.querySelector("[data-slot=count-badge]");
-    const first = render(<CanopyView />);
+    const first = render(<CanopyView frame={frame} />);
     await settle();
     expect(countOf("canopy-assistants-label")).not.toBeNull();
     first.unmount();
     useCanopyStore.setState({ isOpen: true });
 
     directory = { coverage: "ok", observedAt: NOW, complete: true, omitted: 0, entries: [] };
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(countOf("canopy-assistants-label")).toBeNull();
     expect(emptyLines()).toContain("Start an assistant from the Assistant panel");
@@ -884,18 +880,20 @@ describe("CanopyView role filter", () => {
     expect(countOf("canopy-inbox-label")).not.toBeNull();
   });
 
-  it("offers reading above the workers, never above the assistants alone", async () => {
+  it("asks for reading in the pitch alone with the reader off, whichever role the list shows", async () => {
     const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
     installElectron().setActive.mockResolvedValue(off);
     useCanopyStore.setState({ snapshot: off, roleFilter: "assistants" });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
-    expect(assistantRows().length).toBeGreaterThan(0);
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(assistantRows()).toHaveLength(0);
     expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
     act(() => useCanopyStore.getState().setRoleFilter("all"));
     await settle();
-    expect(workerIds().length).toBeGreaterThan(0);
-    expect(document.querySelector("[data-canopy-reading-offer]")).not.toBeNull();
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(document.querySelector("[role=listbox]")).toBeNull();
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
   });
 });
 
@@ -914,7 +912,7 @@ describe("CanopyView show its work", () => {
   }
 
   async function showWorkOfFirstAssistant() {
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     await act(async () => {
       fireEvent.click(assistantRows()[0]!);
@@ -1024,7 +1022,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
 
   it("shows the global assistant beside the selected worker, typing under the input it holds", async () => {
     useCanopyStore.setState({ globalDocked: true });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(document.getElementById("canopy-detail-waiting")).not.toBeNull();
     const pane = dock()!;
@@ -1046,7 +1044,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
   });
 
   it("docks from the header and is kept, the toggle's name never changing", async () => {
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(dock()).toBeNull();
     const toggle = document.querySelector<HTMLElement>("[data-testid=canopy-global-toggle]")!;
@@ -1066,37 +1064,18 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     expect(electronHelp().detachGlobalAssistant).toHaveBeenCalledWith("attachment-1");
   });
 
-  it("lists the global assistant in one project's scope, and stays docked whatever the filters hide", async () => {
-    window.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
-    try {
-      directory.entries = [
-        assistant(0),
-        assistant(1, {
-          subject: {
-            hostId: "local",
-            scope: { kind: "project", projectId: "p2" },
-            terminalId: "help-p2",
-            incarnation: 3,
-            lane: 0,
-          },
-        }),
-        assistant(0, { subject: GLOBAL_SUBJECT }),
-      ];
-      useCanopyStore.setState({ globalDocked: true, scope: "project" });
-      render(<CanopyView />);
-      await settle();
-      // This project's lane and the global assistant; never another project's.
-      expect(
-        assistantRows().map((row) => row.querySelector("[data-canopy-where]")!.textContent)
-      ).toEqual(["🌳app", "Global"]);
+  it("stays docked whatever the filters hide", async () => {
+    useCanopyStore.setState({ globalDocked: true });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    expect(
+      assistantRows().map((row) => row.querySelector("[data-canopy-where]")!.textContent)
+    ).toEqual(["🌳app", "Global"]);
 
-      act(() => useCanopyStore.getState().setRoleFilter("workers"));
-      await settle();
-      expect(assistantRows()).toHaveLength(0);
-      expect(dock()!.querySelector("[data-canopy-assistant-state]")).not.toBeNull();
-    } finally {
-      delete window.__DAINTREE_INITIAL_PROJECT__;
-    }
+    act(() => useCanopyStore.getState().setRoleFilter("workers"));
+    await settle();
+    expect(assistantRows()).toHaveLength(0);
+    expect(dock()!.querySelector("[data-canopy-assistant-state]")).not.toBeNull();
   });
 
   it("keeps its stream open when the directory lists it only after it showed", async () => {
@@ -1105,7 +1084,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
       () => new Promise<AgentDirectory>((resolve) => (answer = resolve))
     );
     useCanopyStore.setState({ globalDocked: true });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(dock()!.querySelector("[data-canopy-assistant-state]")).toBeNull();
     expect(globalStreams()).toHaveLength(1);
@@ -1117,7 +1096,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
 
   it("steps to the next agent from its composer with the keyboard left there", async () => {
     useCanopyStore.setState({ globalDocked: true });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const composer = dock()!.querySelector<HTMLElement>("[data-testid=global-composer]")!;
     act(() => composer.focus());
@@ -1129,7 +1108,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
 
   it("shows one pane for the global assistant's own row, without reopening its stream", async () => {
     useCanopyStore.setState({ globalDocked: true });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const opened = globalStreams().length;
     const row = assistantRows().find((each) => each.textContent?.includes("Global"))!;
@@ -1142,13 +1121,16 @@ describe("CanopyView's docked global assistant (#16214)", () => {
   });
 
   it("opens the Assistant from the dock with the worker still selected beside it", async () => {
-    openInAssistantMock.mockResolvedValueOnce({ ok: false, reason: "ended" });
+    vi.mocked(frame.openAssistant).mockResolvedValueOnce(ENDED);
     useCanopyStore.setState({ globalDocked: true });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     await act(async () => fireEvent.click(buttonIn(dock()!, "Open in Assistant")!));
     await settle();
-    expect(openInAssistantMock).toHaveBeenCalledWith(GLOBAL_SUBJECT);
+    expect(frame.openAssistant).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: GLOBAL_SUBJECT }),
+      expect.any(Function)
+    );
     expect(dock()!.textContent).toContain("Couldn't open this assistant");
     expect(document.getElementById("canopy-detail-waiting")).not.toBeNull();
   });
@@ -1157,12 +1139,39 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     globalView = globalRunning({ phase: "absent", subject: null, terminalId: null });
     directory.entries = [assistant(0)];
     useCanopyStore.setState({ globalDocked: true });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const start = dock()!.querySelector<HTMLElement>("[data-testid=canopy-global-start]")!;
     expect(electronHelp().ensureGlobalAssistant).not.toHaveBeenCalled();
     await act(async () => fireEvent.click(start));
     expect(electronHelp().ensureGlobalAssistant).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits on a launch as the Assistant panel does, and its Cancel stops that launch (#16603)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const absent = { phase: "absent" as const, subject: null, terminalId: null };
+      globalView = globalRunning({ ...absent, phase: "launching", generation: 3 });
+      directory.entries = [assistant(0)];
+      electronHelp().cancelGlobalAssistantLaunch.mockImplementation(async () => {
+        globalView = globalRunning({ ...absent, generation: 4 });
+        return globalView;
+      });
+      useCanopyStore.setState({ globalDocked: true });
+      render(<CanopyView frame={frame} />);
+      await settle();
+      expect(buttonIn(dock()!, "Cancel")).toBeUndefined();
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      await act(async () => fireEvent.click(buttonIn(dock()!, "Cancel")!));
+      expect(electronHelp().cancelGlobalAssistantLaunch).toHaveBeenCalledWith(3);
+      expect(electronHelp().ensureGlobalAssistant).not.toHaveBeenCalled();
+      expect(dock()!.querySelector("[data-testid=canopy-global-start]")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the dock up with no agent running, its start offer in reach", async () => {
@@ -1172,7 +1181,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
       snapshot: { runs: [], changedAt: NOW, degraded: false, lastSuccessfulAt: NOW },
     });
     useCanopyStore.setState({ globalDocked: true });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(dock()!.querySelector("[data-testid=canopy-global-start]")).not.toBeNull();
   });
@@ -1180,7 +1189,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
   it("asks before taking input another window holds", async () => {
     globalView = globalRunning({ inputOwner: "another-window", inputEpoch: 3 });
     useCanopyStore.setState({ globalDocked: true });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     expect(electronHelp().claimGlobalAssistantInput).not.toHaveBeenCalled();
     expect(globalApiStamps().at(-1)).toBeUndefined();
@@ -1196,7 +1205,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
 
   it("dictates into nothing while the keyboard is in the dock, and says why", async () => {
     useCanopyStore.setState({ globalDocked: true });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const stream = terminalApis.filter((entry) => entry.runId === "waiting").at(-1)!;
     await act(async () =>
@@ -1212,7 +1221,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
 
   it("keeps Escape in its terminal for the agent, with Canopy left open", async () => {
     useCanopyStore.setState({ globalDocked: true });
-    render(<CanopyView />);
+    render(<CanopyView frame={frame} />);
     await settle();
     const terminal = dock()!.querySelector<HTMLElement>("[data-canopy-terminal]")!;
     fireEvent.keyDown(terminal, { key: "Escape" });

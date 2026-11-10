@@ -77,6 +77,7 @@ describe("collectPluginManifestAssets", () => {
       contributes: {
         panels: [{ iconId: "./icons/p.svg", toolbar: [{ iconId: "./icons/t.svg" }] }],
         processTools: [{ iconId: "terminal" }],
+        agents: [{ iconId: "./icons/a.svg" }, { iconId: "codex" }],
         views: [
           { componentPath: "dist/a.js", location: "sidebar", iconId: "./icons/s.svg" },
           { componentPath: "dist/b.js", location: "panel", iconId: "./icons/ignored.svg" },
@@ -88,6 +89,9 @@ describe("collectPluginManifestAssets", () => {
     expect(assets.get("views[0].iconId")?.path).toBe("icons/s.svg");
     expect(assets.has("views[1].iconId")).toBe(false);
     expect(assets.has("processTools[0].iconId")).toBe(false);
+    expect(assets.get("agents[0].iconId")?.path).toBe("icons/a.svg");
+    expect(assets.get("agents[0].iconId")?.required).toBe(true);
+    expect(assets.has("agents[1].iconId")).toBe(false);
   });
 
   it("leaves executable commands out, since Windows resolves their extensions at spawn", () => {

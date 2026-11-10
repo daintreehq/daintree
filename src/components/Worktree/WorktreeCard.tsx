@@ -17,7 +17,7 @@ import { GripVertical } from "lucide-react";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
 import { isDevPreviewPanel, type PtyPanelData } from "@shared/types/panel";
-import { useRecipeStore } from "../../store/recipeStore";
+import { useWorktreeRecipes } from "../../hooks/useWorktreeRecipes";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import {
@@ -34,10 +34,6 @@ import { worktreeLabelColorStyle } from "./worktreeLabelColorStyle";
 import { errorsClient, worktreeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
-import { notify } from "@/lib/notify";
-import { humanizeAppError } from "@shared/utils/errorMessage";
-import { getGitRecoveryAction } from "@shared/utils/gitOperationErrors";
-import { isClientGitError } from "@/utils/clientGitError";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { exitProjectHome } from "@/store/storeAccessors";
 import { issueAttachPayload } from "@/utils/linkProviderIssue";
@@ -215,9 +211,8 @@ export function WorktreeCard({
   );
   const trackTerminalFocus = useWorktreeSelectionStore((state) => state.trackTerminalFocus);
 
-  const getRecipesForWorktree = useRecipeStore((state) => state.getRecipesForWorktree);
   const agentPins = useAgentToolbarPinsStore((state) => state.pins);
-  const recipes = getRecipesForWorktree(worktree.id);
+  const recipes = useWorktreeRecipes(worktree.id);
 
   const resourceEnvironments = useProjectSettingsStore(
     (state) => state.settings?.resourceEnvironments
@@ -352,16 +347,13 @@ export function WorktreeCard({
   // Input-time receipt — fires the moment a row terminal is pinged (well
   // before the polled `dominantAgentState` border-flash). Acknowledges the
   // input itself, not its outcome, so any agent-state staleness is irrelevant.
-  // `pingSeq` is the authoritative trigger so back-to-back taps of the same
-  // terminal both produce a receipt (Zustand `Object.is` would suppress the
-  // re-render if we keyed off `pingedId` alone).
-  const pingedId = usePanelStore((state) => state.pingedId);
-  const pingSeq = usePanelStore((state) => state.pingSeq);
+  // The hook watches the ping through a store subscription so only the card
+  // that owns the pinged terminal re-renders.
   const worktreeTerminalIds = useMemo(
     () => worktreeTerminals.map((t) => t.id),
     [worktreeTerminals]
   );
-  const receiptKey = useInputReceiptKey(pingedId, pingSeq, worktreeTerminalIds);
+  const receiptKey = useInputReceiptKey(worktreeTerminalIds);
   // Parking reads the fleet snapshot, not the panels: only a run the snapshot
   // carries can be parked, and a plain shell never appears there.
   const parking = useFleetSnapshotStore(
@@ -944,81 +936,15 @@ export function WorktreeCard({
     forcePushRecovery !== undefined && forcePushRecovery.branchName === worktree.branch;
 
   /**
-   * Unlike the card's other dispatches, these report failure. A push rejected
-   * for a diverged remote is the ENTIRE precondition for the Force push row,
-   * and a card that swallowed the rejection would hide the row behind a
-   * failure the user was never told about. The rejection also carries its own
-   * recovery, so the toast offers it rather than making them find the row.
+   * The actions report their own failure, the Force push recovery for a
+   * diverged remote included, so this row and the Cmd+K Cmd+P chord show the
+   * same toast for the same rejection (#16667). A second one here would say it
+   * twice.
    */
   const dispatchGitAction =
     (actionId: "git.pullRebase" | "git.push" | "git.forcePushWithLease") =>
-    async (source: MenuActionSourceValue) => {
-      const result = await actionService.dispatch(actionId, { cwd: worktree.path }, { source });
-      if (result.ok) return;
-
-      // A lease exists only when this very push was rejected for a diverged
-      // remote, which is exactly the failure force pushing resolves.
-      const captured = useGitForcePushStore.getState().getRecovery(worktree.path);
-      if (actionId === "git.push" && captured) {
-        notify({
-          type: "error",
-          context: { worktreeId: worktree.id, eventKind: "git" },
-          title: "Push failed",
-          message: `${captured.branchName} has commits on the remote you don't have locally. Force pushing discards them; pulling keeps them.`,
-          action: {
-            label: "Force push…",
-            onClick: () => void dispatchGitAction("git.forcePushWithLease")(source),
-          },
-        });
-        return;
-      }
-
-      // ActionService preserves the original throw on `details`, and the git
-      // actions decode it before rethrowing — so the discriminated reason is
-      // right there. Dropping it would collapse auth, network, hook and policy
-      // failures into one "Git operation failed" toast that names no cause and
-      // offers no route.
-      const cause = result.error.details;
-      const gitReason = isClientGitError(cause) ? cause.gitReason : undefined;
-      const humanized = humanizeAppError({
-        type: "git",
-        source: "WorktreeCard",
-        message: result.error.message,
-        gitReason,
-        recoveryHint: undefined,
-      });
-      const recovery = gitReason ? getGitRecoveryAction(gitReason) : undefined;
-      if (recovery) {
-        // The table's entries take different location spellings, and a wrong
-        // one fails silently rather than loudly: `worktree.openReviewHub`
-        // declares `z.object({ worktreeId })`, which STRIPS a stray `cwd` and
-        // then falls back to the focused/active worktree — opening the wrong
-        // card's Review Hub. The git actions want the path.
-        const recoveryArgs =
-          recovery.args ??
-          (recovery.actionId === "worktree.openReviewHub"
-            ? { worktreeId: worktree.id }
-            : { cwd: worktree.path });
-        notify({
-          type: "error",
-          context: { worktreeId: worktree.id, eventKind: "git" },
-          title: humanized.title,
-          message: humanized.body,
-          action: {
-            label: recovery.label,
-            onClick: () => void actionService.dispatch(recovery.actionId, recoveryArgs, { source }),
-          },
-        });
-        return;
-      }
-
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok. `RECOVERY_ACTIONS` in gitOperationErrors.ts is the repo's map of which git failures have a route; the ones that reach here are the ones it deliberately leaves unrouted, and inventing an action for them would send the user somewhere unrelated to what failed.
-      notify({
-        type: "error",
-        context: { worktreeId: worktree.id, eventKind: "git" },
-        title: humanized.title,
-        message: humanized.body,
-      });
+    (source: MenuActionSourceValue) => {
+      void actionService.dispatch(actionId, { cwd: worktree.path }, { source });
     };
 
   // One action set drives both menu surfaces — the card's right-click menu and
@@ -1129,16 +1055,23 @@ export function WorktreeCard({
   // Details is closed: two disclosures that each used a full row to say one
   // line. Opening Sessions keeps its trigger in that row and lays the list out
   // beneath, so the control does not move out from under the click.
-  // The pinned main card takes the compact footer in either density: it never
-  // scrolls away, so every row it spends is a row the list below loses. Not on
-  // a card showing setup recovery: that block sits under the summary row and
-  // needs the card's full width, not the width left beside the trigger.
-  const hasInlineFooter =
-    (isCompactCard || (variant === "sidebar" && isMainWorktree)) && lifecycleAlarm === null;
+  // Compact only, the main card included: one sessions form per density. The
+  // comfortable main card used to take this footer too, which put its age left
+  // of the column every other card's age ends on and drew its sessions as a
+  // bare trigger where its neighbours had a row. Not on a card showing setup
+  // recovery: that block sits under the summary row and needs the card's full
+  // width, not the width left beside the trigger.
+  const hasInlineFooter = isCompactCard && lifecycleAlarm === null;
   const isSessionsFooterInline = hasInlineFooter && !isExpanded && terminalCounts.total > 0;
   // A card with no sessions keeps the trigger's slot empty on that row, so the
-  // age column sits on the same x on every card with the shared footer.
-  const reservesSessionsSlot = hasInlineFooter && !isExpanded && terminalCounts.total === 0;
+  // age column sits on the same x on every card with the shared footer. Only
+  // from 20rem: narrower, the commit subject needs the room more than the age
+  // needs its column. Only
+  // the compact density gives every card that footer; in comfortable the pinned
+  // main card is the only one, and an empty slot there pushed its age off the
+  // column every other card's age ends on.
+  const reservesSessionsSlot =
+    isCompactCard && hasInlineFooter && !isExpanded && terminalCounts.total === 0;
 
   const ariaStatusParts: string[] = [spineState];
   if (gitStateIndicator) {
@@ -1597,7 +1530,7 @@ export function WorktreeCard({
                     : variant !== "sidebar"
                       ? "pt-2"
                       : isCompactCard
-                        ? "pt-3"
+                        ? "pt-2.5"
                         : "pt-3.5",
                   variant === "grid" && "pr-5"
                 )}
@@ -1684,7 +1617,7 @@ export function WorktreeCard({
                     variant !== "sidebar"
                       ? "pb-2.5 pt-2"
                       : isCompactCard
-                        ? "pb-3 pt-1"
+                        ? "pb-2.5 pt-1"
                         : "pb-3.5 pt-2",
                     // The pinned main card never scrolls with the list, so an
                     // opened Details or Sessions could take the whole sidebar
@@ -1703,12 +1636,15 @@ export function WorktreeCard({
                       wslGitEligible={worktree.wslGitEligible}
                     />
                   )}
-                  {/* Stacked below 20rem, where one row cannot hold a summary,
-                      a time and the sessions trigger without losing the words. */}
+                  {/* Stacked below 15rem, where one row cannot hold a summary,
+                      a time and the sessions trigger without losing the words.
+                      At 15-20rem the summary truncates instead: a stacked
+                      trigger spent a whole line on "1" at the widths Compact
+                      is most likely to be used at. */}
                   <div
                     className={cn(
                       (isSessionsFooterInline || reservesSessionsSlot) &&
-                        "flex flex-col @xs/card:flex-row @xs/card:flex-wrap @xs/card:items-center @xs/card:gap-x-1"
+                        "flex flex-col @[15rem]/card:flex-row @[15rem]/card:flex-wrap @[15rem]/card:items-center @[15rem]/card:gap-x-1"
                     )}
                   >
                     <div
@@ -1797,7 +1733,7 @@ export function WorktreeCard({
                     {reservesSessionsSlot && (
                       <div
                         aria-hidden="true"
-                        className="hidden w-[3.625rem] shrink-0 @xs/card:block"
+                        className="hidden w-[3.625rem] shrink-0 @[20rem]/card:block"
                       />
                     )}
                   </div>

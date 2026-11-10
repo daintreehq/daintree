@@ -1,4 +1,5 @@
 import type { ChangeData, HunkData } from "react-diff-view";
+import { join, normalize } from "@shared/utils/path";
 
 export type DiffNoteSide = "old" | "new";
 
@@ -9,15 +10,15 @@ export type DiffNoteSide = "old" | "new";
  * lets a moved diff mark the note stale instead of pinning it to whatever line
  * now sits at that number.
  */
-export type DiffNoteAnchor =
-  | { kind: "file" }
-  | {
-      kind: "lines";
-      side: DiffNoteSide;
-      startLine: number;
-      endLine: number;
-      contentHash: string;
-    };
+export type DiffNoteAnchor = { kind: "file" } | (DiffNoteLines & { contentHash: string });
+
+/** A run of lines on one side, before a note has been written against their text. */
+export interface DiffNoteLines {
+  kind: "lines";
+  side: DiffNoteSide;
+  startLine: number;
+  endLine: number;
+}
 
 export interface DiffNote {
   id: string;
@@ -114,6 +115,22 @@ export function hashLineRange(
   return hashText(joined);
 }
 
+/** The rows a range covers, skipping any line that isn't rendered. */
+export function changeKeysForLines(
+  index: DiffLineIndex,
+  side: DiffNoteSide,
+  startLine: number,
+  endLine: number
+): string[] {
+  const lines = side === "old" ? index.old : index.new;
+  const keys: string[] = [];
+  for (let line = startLine; line <= endLine; line++) {
+    const info = lines.get(line);
+    if (info) keys.push(info.key);
+  }
+  return keys;
+}
+
 export type DiffNotePlacement =
   | { status: "file" }
   | { status: "anchored"; widgetKey: string; selectedKeys: string[] }
@@ -134,18 +151,13 @@ export function placeDiffNote(note: DiffNote, index: DiffLineIndex): DiffNotePla
   const hash = hashLineRange(index, anchor.side, anchor.startLine, anchor.endLine);
   if (hash === null) return { status: "unplaced" };
   if (hash !== anchor.contentHash) return { status: "stale" };
-  const lines = anchor.side === "old" ? index.old : index.new;
-  const selectedKeys: string[] = [];
-  for (let line = anchor.startLine; line <= anchor.endLine; line++) {
-    const info = lines.get(line);
-    if (info) selectedKeys.push(info.key);
-  }
+  const selectedKeys = changeKeysForLines(index, anchor.side, anchor.startLine, anchor.endLine);
   const last = selectedKeys[selectedKeys.length - 1];
   if (last === undefined) return { status: "unplaced" };
   return { status: "anchored", widgetKey: last, selectedKeys };
 }
 
-export function formatDiffNoteLines(anchor: DiffNoteAnchor): string {
+export function formatDiffNoteLines(anchor: { kind: "file" } | DiffNoteLines): string {
   if (anchor.kind === "file") return "whole file";
   const range =
     anchor.startLine === anchor.endLine
@@ -183,6 +195,21 @@ export function formatDiffNotesPrompt(
     .join("\n\n");
 }
 
+/**
+ * Paths stay worktree-relative only for an agent sitting at that worktree's
+ * root. One in a subdirectory, or another checkout, would resolve them against
+ * the wrong base, so it gets them absolute.
+ */
+export function formatDiffNotesPromptForCwd(
+  notes: readonly DiffNote[],
+  cwd: string | undefined
+): string {
+  const base = cwd ? normalize(cwd) : "";
+  return formatDiffNotesPrompt(notes, (note) =>
+    base === normalize(note.worktreePath) ? note.filePath : join(note.worktreePath, note.filePath)
+  );
+}
+
 function anchorOrder(anchor: DiffNoteAnchor): number {
   return anchor.kind === "file" ? 0 : anchor.startLine;
 }
@@ -194,5 +221,45 @@ export function sortDiffNotes(notes: readonly DiffNote[]): DiffNote[] {
     const byLine = anchorOrder(a.anchor) - anchorOrder(b.anchor);
     if (byLine !== 0) return byLine;
     return a.createdAt - b.createdAt;
+  });
+}
+
+/** A worktree's pending notes as a send would treat them right now. */
+export interface PendingDiffNotes {
+  /** What a send takes, in the order it sends them. */
+  sendable: readonly DiffNote[];
+  /** Open in an editor: sending the old text and clearing it would throw the rewrite away. */
+  editing: readonly DiffNote[];
+}
+
+export function hasPendingDiffNotes(pending: PendingDiffNotes | null): boolean {
+  return pending !== null && pending.sendable.length + pending.editing.length > 0;
+}
+
+export function partitionPendingDiffNotes(
+  notes: readonly DiffNote[],
+  editingIds: Readonly<Record<string, number>>
+): PendingDiffNotes {
+  return {
+    sendable: sortDiffNotes(notes.filter((note) => !editingIds[note.id])),
+    editing: notes.filter((note) => editingIds[note.id]),
+  };
+}
+
+/**
+ * What each `@notes` token in a draft takes, in order. A note goes once however
+ * many tokens name it, so a later token only gets what is left.
+ */
+export function allocateDiffNotes(
+  tokens: readonly { filePath: string | null }[],
+  sendable: readonly DiffNote[]
+): DiffNote[][] {
+  const taken = new Set<string>();
+  return tokens.map(({ filePath }) => {
+    const notes = sendable.filter(
+      (note) => !taken.has(note.id) && (filePath === null || note.filePath === filePath)
+    );
+    for (const note of notes) taken.add(note.id);
+    return notes;
   });
 }

@@ -37,6 +37,14 @@ import type { TerminalWhenDone } from "./ipc/terminalWhenDone.js";
 export type ProjectStatus = "active" | "background" | "closed" | "missing";
 
 /**
+ * A project registered when its clone started, before there is a checkout
+ * (#16352). `cloning` while git runs, `failed` and `cancelled` once it ended
+ * without one. Kept apart from {@link ProjectStatus}, which is reconciled from
+ * the folder and the running processes and would fight it.
+ */
+export type ProjectCloneState = "cloning" | "failed" | "cancelled";
+
+/**
  * Last-known repository counts persisted on the project row so the toolbar can
  * render real numbers the instant a project is switched back to, instead of
  * em-dashes that widen into values once a poll lands (issue #11078).
@@ -185,6 +193,21 @@ export interface Project {
    * {@link isGitBackedProject} rather than testing the field directly.
    */
   gitBacked?: boolean;
+  /**
+   * Set while the project's repository is still being cloned, or after a clone
+   * that ended without a checkout (#16352). Absent on every ready project. Main
+   * owns the write; read it through {@link isAwaitingClone}.
+   */
+  cloneState?: ProjectCloneState;
+}
+
+/**
+ * Whether the project has no checkout yet because its clone is running or
+ * ended without one. Nothing that reads the repository, its worktrees or its
+ * folder applies until the clone succeeds.
+ */
+export function isAwaitingClone(project: Pick<Project, "cloneState"> | null | undefined): boolean {
+  return project?.cloneState !== undefined && project?.cloneState !== null;
 }
 
 /** Options for registering a folder as a workspace. */
@@ -568,7 +591,7 @@ export interface RecipeTerminal {
   command?: string;
   /** Environment variables to set (optional) */
   env?: Record<string, string>;
-  /** Initial prompt to send to agent terminals after boot (optional). Supports {{issue_number}}, {{pr_number}}, {{worktree_path}}, {{branch_name}} variables replaced at runtime, and a plugin recipe's {{plugin.<name>}} variables. */
+  /** Initial prompt to send to agent terminals after boot (optional). Supports {{issue_number}}, {{issue_title}}, {{pr_number}}, {{number}}, {{worktree_path}}, {{branch_name}} variables replaced at runtime, and a plugin recipe's {{plugin.<name>}} variables. */
   initialPrompt?: string;
   /**
    * Standing instruction appended to an agent's system prompt (#13797). Plugin

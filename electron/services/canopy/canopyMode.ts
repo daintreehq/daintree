@@ -6,8 +6,8 @@ export function isCanopyMode(value: unknown): value is CanopyMode {
   return typeof value === "string" && (CANOPY_MODES as readonly string[]).includes(value);
 }
 
-/** Where the user stands on Canopy, as stored; anything unreadable is `unset`. */
+/** Where the user stands on Canopy, as stored; anything unreadable is the default, `on`. */
 export function readCanopyMode(): CanopyMode {
   const mode: unknown = store.get("canopyMode");
-  return isCanopyMode(mode) ? mode : "unset";
+  return isCanopyMode(mode) ? mode : "on";
 }

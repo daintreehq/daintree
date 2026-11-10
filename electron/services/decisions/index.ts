@@ -4,7 +4,13 @@ import { hostname } from "node:os";
 import { basename, dirname } from "node:path";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
-import { broadcastToProjectRenderers } from "../../ipc/utils.js";
+import {
+  broadcastToProjectRenderers,
+  broadcastToRenderer,
+  hasBroadcastAudience,
+} from "../../ipc/utils.js";
+import type { MainProcessToastPayload } from "../../../shared/types/ipc/maps.js";
+import { isDiskSpaceFault } from "./storageRecovery.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import {
   getDecisionsHostsPort,
@@ -339,6 +345,88 @@ function sendStatus(status: DecisionsStatus): void {
   sendToLocalViews("decisions:status-changed", status);
 }
 
+/** The person was told Decisions stopped for storage; cleared once it connects or turns off (#16605). */
+let storageOutageNoticed = false;
+
+/** The warning for Decisions stopped for storage; null while it isn't. */
+function storageOutageToast(
+  running: DecisionsService,
+  status: DecisionsStatus
+): MainProcessToastPayload | null {
+  if (status.state !== "not-connected" || status.problem !== "storage") return null;
+  const forSpace = isDiskSpaceFault(running.getStore()?.faultReason() ?? null);
+  return {
+    type: "warning",
+    title: "Decisions connection lost",
+    message: forSpace
+      ? "The local Decisions database stopped accepting writes while disk space ran low, so agents can't ask you questions through Decisions. It tries again by itself once there's space; if it stays disconnected, turn Decisions off and on in Settings."
+      : "The local Decisions database isn't accepting writes, so agents can't ask you questions through Decisions. Turn Decisions off and on in Settings to try again.",
+    rateLimitKey: "decisions-storage",
+    rateLimitLabel: "Decisions",
+    replaceKey: "decisions-storage",
+  };
+}
+
+/**
+ * Agents lose `ask_human` while Decisions is stopped for storage, and nothing
+ * outside Settings showed it (#16605): the first time it stops for that, a
+ * warning says so, once, until it connects again or turns off. A window that
+ * wasn't ready to show it is told when it is (`noteDecisionsRendererReady`).
+ */
+function noticeStorageOutage(running: DecisionsService, status: DecisionsStatus): void {
+  if (status.state === "connected" || status.state === "off") {
+    storageOutageNoticed = false;
+    return;
+  }
+  if (shutDown || storageOutageNoticed) return;
+  const toast = storageOutageToast(running, status);
+  // With no window at all, the next stop tries again, as does the next window ready.
+  if (toast === null || !hasBroadcastAudience(CHANNELS.NOTIFICATION_SHOW_TOAST, toast)) return;
+  storageOutageNoticed = true;
+  try {
+    broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, toast);
+  } catch (error) {
+    console.warn("[Decisions] The storage warning couldn't be shown:", error);
+  }
+}
+
+/**
+ * A renderer reported first-interactive, so its toast listener is mounted:
+ * while Decisions is stopped for storage, that renderer is told, since a
+ * warning sent while it was loading (or before it existed) never reached it.
+ * Only that one: a window already told isn't told again.
+ */
+export function noteDecisionsRendererReady(webContentsId: number): void {
+  const running = service;
+  if (shutDown || running === null) return;
+  const toast = storageOutageToast(running, running.getStatus());
+  if (toast === null) return;
+  const view = getAllAppWebContents().find((wc) => wc.id === webContentsId && !wc.isDestroyed());
+  if (!view) return;
+  try {
+    view.send(CHANNELS.NOTIFICATION_SHOW_TOAST, toast);
+    storageOutageNoticed = true;
+  } catch {
+    // A view torn down mid-send.
+  }
+}
+
+/**
+ * The store is being replaced (#16605). A setup check mid-question holds the
+ * old store and connection, so it is called off as Cancel would: Settings
+ * shows it cancelled, and nothing is recorded.
+ */
+function cancelSetupCheckForStore(): void {
+  void setupCheck?.cancel().catch(() => {});
+}
+
+/** Reads free space now: whether there is room to write again, null when it couldn't be read. */
+async function checkDiskSpace(): Promise<boolean | null> {
+  const { checkDiskSpaceNow } = await import("../DiskSpaceMonitor.js");
+  const status = await checkDiskSpaceNow();
+  return status === null ? null : !status.writesSuppressed;
+}
+
 /**
  * The relay's devices changed (#16010): a device was revoked or the key
  * rotated, here or as the ledger reports it. Settings reads the list again;
@@ -532,12 +620,15 @@ export function getDecisionsService(): Promise<DecisionsService> {
         onDevicesChanged: publishDevicesChanged,
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
+        checkDiskSpace,
+        onStoreReplacing: cancelSetupCheckForStore,
       });
       next.onStatusChanged((event) => {
         // A Host enrolls no Hosts: only an owner's lifetime does.
         hostEnrollerFollows(next.getRole() === "host" ? "off" : event.status.state);
         publishStatus();
         publishHostRuntime();
+        noticeStorageOutage(next, event.status);
       });
       service = next;
       return next;
@@ -549,6 +640,15 @@ export function getDecisionsService(): Promise<DecisionsService> {
     });
   }
   return creating;
+}
+
+/**
+ * Disk space is no longer critical (#16605): a store that stopped for it is
+ * replaced and its connection made again. Never makes or starts the service.
+ */
+export async function decisionsDiskSpaceRecovered(): Promise<void> {
+  if (shutDown) return;
+  await (await settledService())?.diskSpaceRecovered();
 }
 
 async function settledService(): Promise<DecisionsService | null> {
@@ -2305,6 +2405,7 @@ export function _resetDecisionsForTesting(): void {
   transitions = Promise.resolve();
   statusRevision = 0;
   statusPushes = Promise.resolve();
+  storageOutageNoticed = false;
   policyRevision = 0;
   modelRevision = 0;
   hostEnroller.dispose();

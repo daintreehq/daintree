@@ -10,6 +10,7 @@
  */
 
 import type { FleetRunRow } from "./fleet.js";
+import type { TerminalInputLineState } from "../terminalStatus.js";
 
 /** The screen's current state, as the classifier read it. */
 export type CanopyCategory =
@@ -228,6 +229,12 @@ export interface CanopyTerminalView {
    * another machine then never asks to size.
    */
   holdsSize?: boolean;
+  /**
+   * The stream opens following the PTY's grid, taking no size until the user
+   * works in it: the Canopy window's, which stays open all day (#16339). Also
+   * while a main window shows the terminal in a pane, which has the size (#16737).
+   */
+  following?: boolean;
 }
 
 /**
@@ -256,8 +263,20 @@ export type CanopyTerminalData =
       /** End offset in the terminal's output stream, for fencing against the snapshot. */
       streamEnd?: number;
     }
-  /** The PTY took a new size from the pane that owns it. */
-  | { kind: "resize"; watchId: number; runId: string; cols: number; rows: number }
+  /**
+   * The PTY's grid, or the stream saying afresh what it is. `following` says the
+   * panel takes no size of its own until the user interacts with it (#16333),
+   * or while a main window's pane shows the terminal (#16737). A grid without
+   * it after one with it lets the panel take the size again.
+   */
+  | {
+      kind: "resize";
+      watchId: number;
+      runId: string;
+      cols: number;
+      rows: number;
+      following?: boolean;
+    }
   /** The terminal exited or its host went down; the stream takes no more input. */
   | { kind: "ended"; watchId: number; runId: string };
 
@@ -381,8 +400,8 @@ export function isCanopyUnread(mark: CanopyReadMark | null | undefined): boolean
 }
 
 /**
- * Where the user stands on Canopy. `unset`: never turned on, or turned off —
- * its ways in offer it, and nothing is read. `on`: screens are read. `hidden`:
+ * Where the user stands on Canopy. `on`, the default: screens are read.
+ * `unset`: turned off — its ways in offer it, and nothing is read. `hidden`:
  * the user doesn't want it — no way in but Settings, and nothing is read.
  */
 export type CanopyMode = "unset" | "on" | "hidden";
@@ -417,8 +436,9 @@ const CANOPY_MODEL_ID = new RegExp(
 );
 
 /**
- * One of the publisher's reader repos. Only `CANOPY_MODEL` is fetched; an
- * earlier Daintree could choose among them, and a host on one still names its pick.
+ * One of the publisher's reader repos. Only `CANOPY_MODEL` ships with
+ * Daintree; an earlier Daintree could choose among them, and a host on one
+ * still names its pick.
  */
 export function isCanopyModelId(value: unknown): value is string {
   return typeof value === "string" && value.length <= 120 && CANOPY_MODEL_ID.test(value);
@@ -438,18 +458,39 @@ export interface CanopyModelInfo {
   /** Its Hugging Face repo. */
   id: string;
   name: string;
-  /** What it takes on this machine once installed, else what a download fetches. */
+  /** What its files take on this machine. */
   bytes: number;
   /** On this machine and checked. */
   installed: boolean;
 }
 
-/** Where the model stands on this machine. */
+/**
+ * Where the model stands on this machine. A host that ships it (#16415) says
+ * only `ready` or `failed`; `missing` and `downloading` come from a host from
+ * before, which still fetches it. A newer revision on its way leaves it
+ * `ready`: the copy in use reads meanwhile, and only Settings shows the update.
+ */
 export type CanopyModelState =
   | { id: string; status: "missing" }
   | { id: string; status: "downloading"; received: number; total: number }
-  | { id: string; status: "ready" }
+  | {
+      id: string;
+      status: "ready";
+      /** The revision read with; absent from a host from before updates (#16416). */
+      revision?: string;
+      /** The copy that ships with Daintree, or a newer one fetched from Hugging Face since. */
+      source?: "bundled" | "update";
+      /** A newer revision being fetched, read with once it is all here and checked. */
+      update?: CanopyModelUpdate;
+    }
   | { id: string; status: "failed"; error: string };
+
+/** A newer revision of the model on its way. */
+export interface CanopyModelUpdate {
+  revision: string;
+  received: number;
+  total: number;
+}
 
 /** What a run's screen says at a glance, for a run the readers have not carded yet. */
 export interface CanopyRunGlance {
@@ -510,9 +551,9 @@ export interface CanopySnapshot {
   modeRevision?: number;
   /** The plan's host epoch: see `CanopyPlan.hostEpoch`. */
   hostEpoch?: string;
-  /** The user turned Canopy on; nothing is read until they do. */
+  /** Canopy is on, as it is by default; nothing is read while it isn't. */
   activated: boolean;
-  /** The model and whether it is here; absent while Canopy is off. */
+  /** The model and whether it is ready; absent while Canopy is off, or while it is checked. */
   model?: CanopyModelState;
   /** Runs the user archived or replied to and that have said nothing new since. */
   dispositions: CanopyDisposition[];
@@ -565,13 +606,53 @@ export interface CanopyTrashTarget extends CanopyTarget {
 }
 
 /**
+ * What one search may ask of a terminal: the words of one alternative, how
+ * long each may be, and how many alternatives a query offers. Main refuses an
+ * ask past them; the panel names what it leaves out.
+ */
+export const CANOPY_SEARCH_MAX_TERMS = 16;
+export const CANOPY_SEARCH_MAX_TERM_LENGTH = 200;
+export const CANOPY_SEARCH_MAX_ALTERNATIVES = 50;
+
+/**
  * A run the panel's search asks about, with the words of the query nothing
  * else on the run held: main looks for them on its terminal, which never
  * leaves the machine it runs on.
  */
 export interface CanopyScreenSearchTarget extends CanopyTarget {
   runId: string;
+  /** The words left of the search's first alternative, all to be found. */
   terms: string[];
+  /**
+   * The words left of each further alternative (#16412): the run matches when
+   * its terminal holds every word of any one of them or of `terms`. A host
+   * from before alternatives ignores these and answers for `terms` alone.
+   */
+  orTerms?: string[][];
+}
+
+/** A run a bulk action names, in the incarnation the panel listed. */
+export interface CanopyRunTarget extends CanopyTarget {
+  runId: string;
+}
+
+/**
+ * What a run's input box held when the panel asked, read off its screen on the
+ * machine it runs on: only the state leaves, never the text.
+ */
+export interface CanopyInputLineReading {
+  runId: string;
+  state: TerminalInputLineState;
+}
+
+/** One run of a bulk trash: the receipt Undo takes back, or why that run alone was not trashed. */
+export type CanopyTrashOutcome =
+  { runId: string; receipt: number } | { runId: string; error: string };
+
+/** One receipt of a bulk Undo: put back, or why that one was not. */
+export interface CanopyUntrashOutcome {
+  receipt: number;
+  error?: string;
 }
 
 /**

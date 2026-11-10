@@ -2,7 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, ChevronDown, ExternalLink, GitPullRequest } from "lucide-react";
 import { GitMerge } from "@/components/icons";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
-import type { CIStatus, NormalizedPRState, PRMergeIntent } from "@shared/types/forge";
+import type {
+  CIStatus,
+  ForgePullRequestTerm,
+  NormalizedPRState,
+  PRMergeIntent,
+} from "@shared/types/forge";
+import type { ForgeNewPRLink } from "@shared/types/ipc/forge";
 import {
   describeMergeIntent,
   HEAD_MOVED_WHILE_ARMED_TEXT,
@@ -13,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { PrChecksPopover } from "./PrChecksPopover";
@@ -37,6 +44,14 @@ const MERGE_ACK_DWELL_MS = 6_000;
  */
 const MERGE_OUTCOME_HOLD_MS = 30_000;
 
+const NO_PR_WORDS: Record<ForgePullRequestTerm, { badge: string; noun: string }> = {
+  "pull-request": { badge: "No PR", noun: "pull request" },
+  "merge-request": { badge: "No MR", noun: "merge request" },
+};
+
+const NEW_PR_FOCUS_RING =
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
+
 interface WorktreePR {
   prNumber: number;
   prUrl: string;
@@ -50,6 +65,8 @@ interface PrStatusChipProps {
   hasRemote: boolean | undefined;
   worktreePR: WorktreePR | null;
   worktreePath: string;
+  /** What the chip can offer with no pull request; `null` until that's known. */
+  newPRLink: ForgeNewPRLink | null;
   onOpenExternal: (url: string) => void;
 }
 
@@ -57,6 +74,7 @@ export function PrStatusChip({
   hasRemote,
   worktreePR,
   worktreePath,
+  newPRLink,
   onOpenExternal,
 }: PrStatusChipProps) {
   // Keyed to the PR it was for: a reply about one pull request never paints
@@ -158,16 +176,12 @@ export function PrStatusChip({
                 glyph. Every one stays in the trigger's description and the
                 checks popover. */}
             <span className="inline-flex items-center gap-1 @max-[640px]/header:hidden">
-              <span className="text-text-muted" aria-hidden="true">
-                ·
-              </span>
+              <FactSeparator />
               <span className="text-text-secondary">{prStateLabel}</span>
             </span>
             {ciVisual && (
               <>
-                <span className="text-text-muted" aria-hidden="true">
-                  ·
-                </span>
+                <FactSeparator />
                 <span className="inline-flex items-center gap-1">
                   <span
                     className="inline-flex items-center justify-center w-3 h-3 shrink-0"
@@ -192,9 +206,7 @@ export function PrStatusChip({
             )}
             {mergeIntent && (
               <>
-                <span className="text-text-muted" aria-hidden="true">
-                  ·
-                </span>
+                <FactSeparator />
                 <span className="inline-flex items-center gap-1" data-testid="pr-merge-intent">
                   {headMoved ? (
                     <AlertTriangle
@@ -212,9 +224,7 @@ export function PrStatusChip({
                 </span>
                 {mergeIntent.kind === "auto-merge" && mergeIntent.method && (
                   <span className="inline-flex items-center gap-1 @max-[1100px]/header:hidden">
-                    <span className="text-text-muted" aria-hidden="true">
-                      ·
-                    </span>
+                    <FactSeparator />
                     <span className="text-text-secondary" data-testid="pr-merge-intent-method">
                       {mergeMethodLabel(mergeIntent.method)}
                     </span>
@@ -252,16 +262,63 @@ export function PrStatusChip({
     );
   }
 
-  if (hasRemote && !worktreePR) {
-    return (
-      <Badge tone="outline" className="text-2xs text-text-secondary">
-        <GitPullRequest />
-        <span>No PR</span>
-      </Badge>
-    );
+  // Held back until the answer is in, so neither the forge's word nor whether
+  // the chip is a link changes under someone already reading it.
+  if (hasRemote && !worktreePR && newPRLink) {
+    return <NoPrChip link={newPRLink} onOpenExternal={onOpenExternal} />;
   }
 
   return null;
+}
+
+function NoPrChip({
+  link,
+  onOpenExternal,
+}: {
+  link: ForgeNewPRLink;
+  onOpenExternal: (url: string) => void;
+}) {
+  const { badge, noun } = NO_PR_WORDS[link.term];
+  if (link.state !== "ready") {
+    return (
+      <Badge tone="outline" className="text-2xs text-text-secondary">
+        <GitPullRequest />
+        <span>{badge}</span>
+        {link.state === "unpushed" && (
+          <>
+            <FactSeparator />
+            <span>not pushed</span>
+          </>
+        )}
+      </Badge>
+    );
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          data-testid="pr-new-link"
+          onClick={() => onOpenExternal(link.url)}
+          className={cn(
+            "group/new-pr inline-flex items-center rounded-sm cursor-pointer",
+            NEW_PR_FOCUS_RING
+          )}
+        >
+          <Badge
+            tone="outline"
+            className="text-2xs text-text-secondary transition-colors group-hover/new-pr:bg-overlay-soft"
+          >
+            <GitPullRequest />
+            <span>{badge}</span>
+            <span className="sr-only">open new {noun}</span>
+            <ExternalLink aria-hidden="true" />
+          </Badge>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">Open new {noun}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 /**

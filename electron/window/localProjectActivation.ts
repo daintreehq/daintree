@@ -6,7 +6,7 @@ import { projectSwitchStatusTiming } from "../services/ProjectSwitchStatusTiming
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import type { WorktreePortBroker } from "../services/WorktreePortBroker.js";
-import type { Project } from "../../shared/types/project.js";
+import { isAwaitingClone, type Project } from "../../shared/types/project.js";
 import { distributePortsToView } from "./portDistribution.js";
 import { getWindowRegistry } from "./windowRef.js";
 
@@ -59,7 +59,12 @@ export async function completeLocalProjectActivation(
     }),
   });
 
-  if (clients.workspace) {
+  // Read fresh: the clone may have landed since the caller read the row.
+  if (clients.workspace && isAwaitingClone(projectStore.getProjectById(project.id) ?? project)) {
+    // No checkout to load yet (#16352); the window lets go of the workspace
+    // it was attached to, and the clone's success loads this one.
+    clients.workspace.unregisterWindow(targetWindow.id);
+  } else if (clients.workspace) {
     try {
       projectSwitchStatusTiming.hostReady(
         switchId,

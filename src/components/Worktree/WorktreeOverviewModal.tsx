@@ -54,6 +54,8 @@ import {
   isWorktreeMergedForCleanup,
 } from "@/lib/worktreeAgentBuckets";
 import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
+import { useWorktreeDiskUsage } from "@/hooks/useWorktreeDiskUsage";
+import { orderWorktreesBySize } from "@/lib/worktreeSizeOrder";
 import { pluralize } from "@/lib/pluralize";
 import { LazyOtherHostsWorktrees } from "@/components/Hosts/Overview/LazyHostOverviewParts";
 
@@ -255,77 +257,85 @@ export function WorktreeOverviewModal({
 
   const hasNonMainWorktrees = useMemo(() => worktrees.some((w) => !w.isMainWorktree), [worktrees]);
 
-  const { filteredWorktrees, groupedSections, quickStateCounts, finishedUnseenCount } =
-    useMemo(() => {
-      const hasActiveQuery = liveQuery.trim().length > 0;
-      // Counted over what the search and facets leave, before the quick-state
-      // narrowing, so each segment says how many rows pressing it would show.
-      const counts: Record<QuickStateFilter, number> = {
-        all: 0,
-        working: 0,
-        waiting: 0,
-        finished: 0,
-      };
-      const unseen = { finished: 0 };
+  const { filteredWorktrees, typeSections, quickStateCounts, finishedUnseenCount } = useMemo(() => {
+    const hasActiveQuery = liveQuery.trim().length > 0;
+    // Counted over what the search and facets leave, before the quick-state
+    // narrowing, so each segment says how many rows pressing it would show.
+    const counts: Record<QuickStateFilter, number> = {
+      all: 0,
+      working: 0,
+      waiting: 0,
+      finished: 0,
+    };
+    const unseen = { finished: 0 };
 
-      const filtered = worktrees.filter((worktree) => {
-        const derived = derivedMetaMap.get(worktree.id) ?? EMPTY_META;
-        const isActive = worktree.id === activeWorktreeId;
-        const matchesScope = matchesFilters(
-          worktree,
-          facetFilters,
-          derived,
-          isActive,
-          devServerSessions
-        );
-        if (matchesScope) {
-          counts.all++;
-          if (matchesQuickStateFilter("working", derived)) counts.working++;
-          if (matchesQuickStateFilter("waiting", derived)) counts.waiting++;
-          if (matchesQuickStateFilter("finished", derived)) counts.finished++;
-          if (derived.buckets.finishedUnseen) unseen.finished++;
-        }
+    const filtered = worktrees.filter((worktree) => {
+      const derived = derivedMetaMap.get(worktree.id) ?? EMPTY_META;
+      const isActive = worktree.id === activeWorktreeId;
+      const matchesScope = matchesFilters(
+        worktree,
+        facetFilters,
+        derived,
+        isActive,
+        devServerSessions
+      );
+      if (matchesScope) {
+        counts.all++;
+        if (matchesQuickStateFilter("working", derived)) counts.working++;
+        if (matchesQuickStateFilter("waiting", derived)) counts.waiting++;
+        if (matchesQuickStateFilter("finished", derived)) counts.finished++;
+        if (derived.buckets.finishedUnseen) unseen.finished++;
+      }
 
-        const bypassesNarrowing =
-          !hasActiveQuery && quickStateFilter === "all" && !hasFacetFiltersActive;
-        if (alwaysShowActive && isActive && bypassesNarrowing) return true;
-        if (alwaysShowWaiting && derived.hasWaitingAgent && bypassesNarrowing) return true;
+      const bypassesNarrowing =
+        !hasActiveQuery && quickStateFilter === "all" && !hasFacetFiltersActive;
+      if (alwaysShowActive && isActive && bypassesNarrowing) return true;
+      if (alwaysShowWaiting && derived.hasWaitingAgent && bypassesNarrowing) return true;
 
-        if (quickStateFilter !== "all" && !matchesQuickStateFilter(quickStateFilter, derived)) {
-          return false;
-        }
+      if (quickStateFilter !== "all" && !matchesQuickStateFilter(quickStateFilter, derived)) {
+        return false;
+      }
 
-        return matchesScope;
-      });
+      return matchesScope;
+    });
 
-      const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
-      const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
-      const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
+    const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
+    const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
+    const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
 
-      return {
-        filteredWorktrees: sorted,
-        groupedSections: isGroupedByType
-          ? groupByType(sorted, orderBy, validPinnedWorktrees)
-          : null,
-        quickStateCounts: counts,
-        finishedUnseenCount: unseen.finished,
-      };
-    }, [
-      worktrees,
-      liveQuery,
-      facetFilters,
-      orderBy,
-      isGroupedByType,
-      devServerSessions,
-      alwaysShowActive,
-      alwaysShowWaiting,
-      pinnedWorktrees,
-      manualOrder,
-      derivedMetaMap,
-      activeWorktreeId,
-      quickStateFilter,
-      hasFacetFiltersActive,
-    ]);
+    return {
+      filteredWorktrees: sorted,
+      typeSections: isGroupedByType ? groupByType(sorted, orderBy, validPinnedWorktrees) : null,
+      quickStateCounts: counts,
+      finishedUnseenCount: unseen.finished,
+    };
+  }, [
+    worktrees,
+    liveQuery,
+    facetFilters,
+    orderBy,
+    isGroupedByType,
+    devServerSessions,
+    alwaysShowActive,
+    alwaysShowWaiting,
+    pinnedWorktrees,
+    manualOrder,
+    derivedMetaMap,
+    activeWorktreeId,
+    quickStateFilter,
+    hasFacetFiltersActive,
+  ]);
+
+  // Sizes are measured only while the overview is mounted, and ordering by
+  // them is this opening's choice, not the sidebar's persisted order: it gives
+  // way to the shared order and grouping again on the next opening.
+  const diskUsage = useWorktreeDiskUsage(isOpen, worktrees);
+  const [sortBySize, setSortBySize] = useState(false);
+  const orderedWorktrees = useMemo(
+    () => (sortBySize ? orderWorktreesBySize(filteredWorktrees, diskUsage) : filteredWorktrees),
+    [sortBySize, filteredWorktrees, diskUsage]
+  );
+  const groupedSections = sortBySize ? null : typeSections;
 
   // ── Multi-select state ────────────────────────────────────────────────
   // Selection lives on the modal so it resets naturally when the modal
@@ -339,13 +349,13 @@ export function WorktreeOverviewModal({
 
   // Must mirror DOM render order so keyboard navigation indexes into the right
   // row. When grouped, the DOM flattens groupedSections in section order; the
-  // flat sorted order in filteredWorktrees does not match.
+  // flat order in orderedWorktrees does not match.
   const visibleIds = useMemo(
     () =>
       groupedSections
         ? groupedSections.flatMap((s) => s.worktrees.map((w) => w.id))
-        : filteredWorktrees.map((w) => w.id),
-    [groupedSections, filteredWorktrees]
+        : orderedWorktrees.map((w) => w.id),
+    [groupedSections, orderedWorktrees]
   );
   const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
 
@@ -455,7 +465,7 @@ export function WorktreeOverviewModal({
     useAnnouncerStore
       .getState()
       .announce(
-        count === 1 ? "Closed sessions for 1 worktree" : `Closed sessions for ${count} worktrees`
+        count === 1 ? "Removed panels for 1 worktree" : `Removed panels for ${count} worktrees`
       );
   }, [clearSelection]);
 
@@ -466,7 +476,16 @@ export function WorktreeOverviewModal({
 
   /** ArrowDown out of the search field hands keyboard control to the list. */
   const handleArrowIntoResults = useCallback(() => {
-    gridRef.current?.focus({ preventScroll: true });
+    const grid = gridRef.current;
+    if (!grid) return;
+    grid.focus({ preventScroll: true });
+    // A cursor kept from before may have been carried offscreen while the field
+    // held focus — sizes arriving reorder the rows under it — so bring it back
+    // as the list takes the keys.
+    const cursorId = grid.getAttribute("aria-activedescendant");
+    if (cursorId) {
+      document.getElementById(cursorId)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
   }, []);
 
   /**
@@ -543,6 +562,18 @@ export function WorktreeOverviewModal({
     );
     cell?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [isOpen, activeDescendantId]);
+
+  // Sizes arriving while the list is ordered by them move rows under a cursor
+  // whose id doesn't change, so the effect above never runs. Keep it in view
+  // while the list holds focus; with focus in the field, the cursor isn't drawn.
+  useEffect(() => {
+    if (!sortBySize || !activeDescendantId) return;
+    const grid = gridRef.current;
+    if (!grid || document.activeElement !== grid) return;
+    grid
+      .querySelector<HTMLElement>(`[id="${CSS.escape(activeDescendantId)}"]`)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [sortBySize, visibleIds, activeDescendantId]);
 
   // Reset the range anchor when the window loses focus (lesson #4591), so a
   // stuck Shift after Cmd+Tab cannot produce a phantom range on the next click.
@@ -694,6 +725,7 @@ export function WorktreeOverviewModal({
       isCursor={activeDescendantId === getWorktreeOverviewCellId(worktree.id)}
       isSelecting={hasSelection}
       isLast={isLast}
+      diskUsage={diskUsage.get(worktree.id)}
       onActivate={activateWorktree}
       onToggleSelect={handleRowToggleSelect}
       onBeforeMenuAction={onClose}
@@ -741,7 +773,7 @@ export function WorktreeOverviewModal({
                 like the agent overview's, so the header's rule closes the
                 narrowing block. */}
             {hasNonMainWorktrees && (
-              <div className="-mx-3 -mb-2 mt-2 border-t border-border-default">
+              <div className="-mx-3 -mb-2 mt-2 border-t border-divider">
                 <QuickStateFilterBar
                   className="border-b-0"
                   value={quickStateFilter}
@@ -754,7 +786,12 @@ export function WorktreeOverviewModal({
             )}
           </AppPaletteDialog.Header>
 
-          {filteredWorktrees.length > 0 && <WorktreeOverviewColumnHeaders />}
+          {filteredWorktrees.length > 0 && (
+            <WorktreeOverviewColumnHeaders
+              sortBySize={sortBySize}
+              onSortBySizeChange={setSortBySize}
+            />
+          )}
 
           <ScrollShadow className="min-h-0 flex-1 max-h-[60vh]" scrollClassName="scroll-py-2">
             {isLoading && worktrees.length === 0 ? (
@@ -823,8 +860,8 @@ export function WorktreeOverviewModal({
                         renderRow(worktree, i === section.worktrees.length - 1)
                       ),
                     ])
-                  : filteredWorktrees.map((worktree, i) =>
-                      renderRow(worktree, i === filteredWorktrees.length - 1)
+                  : orderedWorktrees.map((worktree, i) =>
+                      renderRow(worktree, i === orderedWorktrees.length - 1)
                     )}
               </div>
             )}
@@ -853,10 +890,10 @@ export function WorktreeOverviewModal({
                     onClick={handleCloseSessionsClick}
                     data-testid="worktree-bulk-close-sessions"
                   >
-                    Close sessions
+                    Remove panels
                   </Button>
                   <Button
-                    variant="destructive"
+                    variant="ghost-danger"
                     size="sm"
                     onClick={bulkRemove.handleRemoveClick}
                     disabled={bulkRemove.isExecuting}
@@ -871,13 +908,11 @@ export function WorktreeOverviewModal({
           ) : filteredWorktrees.length > 0 ? (
             <AppPaletteDialog.Footer className="shrink-0">
               <PaletteFooterHints
-                primaryHint={{ keys: ["↵"], label: "to switch" }}
+                primaryHint={{ keys: "Enter", label: "to switch" }}
                 hints={[
-                  { keys: ["↑", "↓"], label: "navigate" },
-                  { keys: ["Space"], label: "select" },
-                  { keys: ["F2"], label: "sessions" },
-                  { keys: ["⇧", "F10"], label: "actions" },
-                  { keys: ["Esc"], label: "close" },
+                  { keys: "Space", label: "to select" },
+                  { keys: "F2", label: "to browse terminals" },
+                  { keys: "Shift+F10", label: "to open actions" },
                 ]}
               />
             </AppPaletteDialog.Footer>
@@ -891,11 +926,11 @@ export function WorktreeOverviewModal({
         onClose={handleCloseSessionsCancel}
         title={
           closeSessionsCount === 1
-            ? "Close sessions for 1 worktree?"
-            : `Close sessions for ${closeSessionsCount} worktrees?`
+            ? "Remove panels for 1 worktree?"
+            : `Remove panels for ${closeSessionsCount} worktrees?`
         }
-        description="Every grid and dock session for the selected worktrees will end. Scrollback is lost for each terminal."
-        confirmLabel="Close sessions"
+        description="Every panel for the selected worktrees is removed for good, wherever it is. Running terminals stop and their scrollback is lost."
+        confirmLabel="Remove panels"
         cancelLabel="Cancel"
         variant="default"
         zIndex="nested"

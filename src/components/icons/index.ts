@@ -16,6 +16,7 @@ export {
   ArchiveRestore, // bring an archived project back to where it was filed
   ArrowDown, // a branch behind what it tracks — the same ↓ the upstream badge writes beside the count, so the collapsed alarm and the expanded one name the drift alike; also moves a project group down the switcher
   ArrowDownAZ, // alphabetical sort order (A to Z)
+  ArrowDownWideNarrow, // largest-first sort order — the Worktrees overview ordered by size on disk
   ArrowLeftRight, // a settings search hit that lives in the other scope — following it switches scope
   ArrowUp, // move a project group up the switcher — paired with ArrowDown
   ArrowUpDown, // card organization — pinning, collapsing and reordering a worktree row
@@ -40,7 +41,7 @@ export {
   CircleSlash, // something refused or skipped (MCP calls, clones, conflicts) — an agent blocked on an error draws BlockedCircle on the family's ring
   CircleStop, // a scheduled run that ended without a verdict — interrupted, stopped, replaced, or exited with no code seen
   CircleX, // anything that failed: CI, an environment, a pane that could not load — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
-  Clock, // recency sort order (most recently opened first); a canopy row's time in its current state
+  Clock, // recency sort order (most recently opened first); a canopy row's time in its current state; a composer send held for its pane's next prompt
   CloudOff, // a remote or forge that could not be reached — the same glyph the PR and issue badges show when detection is paused
   Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
   FileStack, // artifacts an agent left in a terminal — the code, patches and files pulled from its output
@@ -91,7 +92,7 @@ export {
   SmilePlus, // an assistant or agent with no persona emoji yet — choosing one gives it a face beside its name
   Sprout, // origin / first step (main worktree, first agent launch)
   SquareDashedMousePointer, // the dev preview's Element Picker — pick an element on the page to hand to an agent, on its toolbar button and its plugin tile alike
-  SquareTerminal, // a scheduled run's terminal still in the grid — Open brings that pane forward
+  SquareTerminal, // a terminal pane — a scheduled run's terminal still in the grid (Open brings that pane forward), or a new one an install command is typed into
   Star, // the default recipe a new worktree launches — kept apart from Pin, which means pinned to the canvas
   Tag, // a worktree's colour label — the identity a user pins to a card, kept apart from Pin, which is its position
   Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it

@@ -27,6 +27,7 @@ Check `src/components/ui/` before you hand-roll anything. A surface built from t
 | `ROW_CONTROL_CLASS`, `RowControlTooltip` (`RowControl.tsx`) | An inline control inside a list, palette or menu row (pin, hide, launch in dock, set default). See [Row Controls](./interaction-state-recipes.md#row-controls). |
 | `CopyButton`, `copyWithToast` | Anything that puts text on the clipboard. See [Copy feedback](#copy-feedback) for which one. |
 | `TimeAgo`, `DiffStat`, `ProgressBar` | An age, a line-churn stat, a task progress bar. See [Formatting](#formatting). |
+| `FactSeparator`, `FactRun` | The dot between two facts in a run of metadata, and a list of facts with one between each pair. It dims the dot and hides it from assistive tech; the row's gap, or the spaces around it in running text, own the spacing. `src/config/__tests__/factSeparator.contract.test.ts` fails on a middle dot drawn anywhere else in JSX markup. |
 | `ResizeHandle` + `useSplitterKeys` | Any draggable edge between two regions. The primitive owns the 12px target, the grip, the focus outline, the ARIA and the "(double-click to reset)" label suffix; the hook owns the keyboard contract. You own the drag. `src/config/__tests__/resizeHandle.contract.test.ts` fails on any `role="separator"` rendered anywhere else. |
 | `dropIndicator.ts`, `dragActivation.ts`, `DRAG_GRIP_CLASS`, `DRAG_GHOST_OPACITY` | Anything that moves by drag and drop. `DROP_INDICATOR_LINE` marks an insertion point, `DROP_SLOT_FRAME` a slot held open, `DROP_TARGET_FRAME` a container that takes the drop whole; `MOUSE_SENSOR_OPTIONS` / `TOUCH_SENSOR_OPTIONS` are the one pickup threshold; `DRAG_GRIP_CLASS` (`src/components/ui/dragGripStyles.ts`) is the grip box; `DRAG_GHOST_OPACITY` dims the item in hand. Recipe: [Drag and drop feedback](interaction-state-recipes.md#drag-and-drop-feedback). `src/config/__tests__/dragDropFeedback.contract.test.ts` fails on a droppable without the frame, a hand-set activation distance, a grip outside the recipe, or a sortable that dims anything other than the ghost. |
 
@@ -123,7 +124,7 @@ An action that recurs across the app wears one glyph everywhere, so a user who h
 | Glyph | Means | Labels it goes with |
 | --- | --- | --- |
 | `RefreshCw` | Do it again, or fetch it again. The thing stays what it was. | Retry, Try again, Refresh, Check again, Re-check, Re-scan, Fetch, Redraw |
-| `RotateCw` | Reload a page, view or panel, or restart a process, session or server. | Reload, Reload preview, Reload from folder, Restart terminal, Restart dev server, Restart conversation, Auto-restart |
+| `RotateCw` | Reload a page, view or panel, or restart a process, session or server. | Reload, Reload preview, Reload from folder, Restart terminal, Restart dev server, Auto-restart |
 | `RotateCcw` | Go back to an earlier state. | Restore, Reset, Revert, Undo, Replay, Resume session |
 
 Never `RotateCcw` for a retry or a restart: the counter-clockwise arrow promises the user they are going back, and a retry does not undo anything. A control with a busy state spins the same glyph through `SpinningIcon`, which only turns clockwise; that is one more reason restart is `RotateCw`.
@@ -132,6 +133,7 @@ The other concepts that had split:
 
 | Concept | Glyph | Not |
 | --- | --- | --- |
+| Clear a conversation (the assistant's Clear conversation) | `Eraser` | `RotateCw`, which would read as restart: `terminal.restart` keeps the conversation, clearing ends it |
 | Copy (a URL, a path, a link address) | `Copy`, swapping to `Check` for the copied beat | `Link` / `Link2`, which mean linking something (attach an issue, linked work) |
 | Edit | `Pencil` | `Edit`, `Edit2`, `Edit3` (deprecated Lucide aliases) |
 | Project settings | `Settings` | `Settings2`, which stays the General settings tab and the manage-presets rows |
@@ -235,6 +237,8 @@ Copy follows `.claude/rules/user-signals.md`; these are the rules the consistenc
 - **Trash vs Remove vs Delete.** "Trash X" is the soft delete with a way back (a terminal to the trash); "Remove X" is permanent, taking an item out of a list or collection for good (a recipe row, a preset); "Delete X" is the permanent delete of a thing on disk. Worktrees are deleted, single or bulk: "Delete worktree", "Delete 3 worktrees", "Deleted 3 worktrees".
 - **"Open in external browser"** is the escape hatch from inside the in-app browser, dev preview and portal — toolbar button, pane context menu and tab menu alike — because "Open in browser" is ambiguous when you are already in one. An icon button's tooltip names the same thing as its `aria-label`.
 - **Empty and status fragments take no period**: "No output captured", "No themes match your search".
+- **Panel, terminal, session.** The grid and dock object is a **panel**, whatever its kind. A surface that acts on whichever panel is focused or named says "panel": keyboard shortcut descriptions, palette and MCP action titles, the shared panel header, Recently closed and the worktree bulk commands ("Close focused panel", "Remove panel", "Trash all panels"). **Terminal** is right only when the command needs the PTY (spawning a shell; restarting, killing or redrawing its process; typing into it or reading its output; fleet arming; terminal settings) or when the population is filtered to PTY-backed panels ("Restart all terminals", "3 terminals: 2 working"). **Session** means an agent's conversation, the thing that is resumed, bookmarked or cleared from history ("Resume a closed session"), and an Assistant session. A menu or banner that only appears on one kind of panel names that kind ("Rename terminal" on a terminal, "Rename review" on a review panel). Copy never says "pane". Action and keybinding ids keep their `terminal.*` and `worktree.sessions.*` names: those are API, not copy.
+- **Review Hub** is the diff review surface's one name, in its dialog title, close control, palette action and status copy. The worktree card's "Review & commit" and "Review & push" are verbs on the control that opens it, not a second name.
 
 `src/components/ui/__tests__/wording.contract.test.ts` scans `src`, `shared` and the main-process services for three-dot ellipses in copy (log calls excluded), local `plural*` helpers, the hand-rolled singular/plural conditional, Title Case menu group headings, and "Open in browser" inside the in-app browser surfaces.
 

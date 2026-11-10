@@ -2,7 +2,6 @@ import type { HelpAssistantDaintreeConfirmations } from "../types/ipc/api.js";
 import {
   isAgentBypassSupported,
   resolveDangerousMode,
-  resolveEffectiveBypass,
   type AgentSettings,
 } from "../types/agentSettings.js";
 
@@ -25,10 +24,12 @@ export interface AssistantAgentSkip {
 }
 
 /**
- * The skip-permissions value in effect for the agent running the assistant,
- * resolved as an agent launch resolves it (#14141): the agent's own setting
- * when it has one, else the global. With no agent chosen there is nothing to
- * follow but the global, which keeps the pre-#14141 behaviour.
+ * The skip-permissions value in effect for the agent running the assistant
+ * (#14141): the agent's own setting when it has one, else the global. With no
+ * agent chosen there is nothing to follow but the global, which keeps the
+ * pre-#14141 behaviour. The global reaches only agents whose assistant wiring
+ * declares `supports.permissionBypass`, which is narrower than the terminal
+ * launch's reach (#16414), so this doesn't defer to `resolveEffectiveBypass`.
  */
 export function resolveAssistantAgentSkip(
   agentId: string | null | undefined,
@@ -36,10 +37,10 @@ export function resolveAssistantAgentSkip(
 ): AssistantAgentSkip {
   const global = agentSettings?.globalSkipPermissions === true;
   if (!agentId) return { skips: global, source: "global" };
-  const entry = agentSettings?.agents?.[agentId] ?? {};
-  const skips = resolveEffectiveBypass(entry, agentId, global);
-  if (resolveDangerousMode(entry) !== "inherit") return { skips, source: "agent" };
-  return { skips, source: isAgentBypassSupported(agentId) ? "global" : "unsupported" };
+  const mode = resolveDangerousMode(agentSettings?.agents?.[agentId] ?? {});
+  if (mode !== "inherit") return { skips: mode === "on", source: "agent" };
+  if (!isAgentBypassSupported(agentId)) return { skips: false, source: "unsupported" };
+  return { skips: global, source: "global" };
 }
 
 /**

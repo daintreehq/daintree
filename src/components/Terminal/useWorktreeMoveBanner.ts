@@ -9,6 +9,7 @@ import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { actionService } from "@/services/ActionService";
 import { buildWorktreeMoveInstruction } from "@/services/terminal/worktreeMoveInstruction";
 import type { HybridInputBarHandle } from "./HybridInputBar";
+import type { ComposerSubmitOutcome } from "./hooks/useTokenResolution";
 
 /**
  * How this pane can put the instruction in front of its agent right now.
@@ -167,19 +168,22 @@ export function useWorktreeMoveBanner(
      * destination can move, or the notice be answered, between the click and
      * the moment there is actually something to send.
      */
-    const submit = async (command: string): Promise<boolean> => {
+    const submit = async (command: string): Promise<ComposerSubmitOutcome> => {
       // Any change, not just a block. Arming a fleet turns this pane's draft
       // into the fleet's, and committing the send would clear it out from
       // under every other armed pane.
       if (routeRef.current !== route) return false;
       if (readNotice(panelId) !== attempt) return false;
       if (readWorktreePath(attempt.destinationWorktreeId) !== path) return false;
-      const result = await actionService.dispatch(
+      const result = await actionService.dispatch<{ submissionToken?: string }>(
         "terminal.sendCommand",
         { terminalId: panelId, command },
         { source: "user" }
       );
-      return result.ok;
+      if (!result.ok) return false;
+      // The action mints the line's token; a draft's `@notes` clear by it.
+      const submissionToken = result.result?.submissionToken;
+      return submissionToken ? { submissionToken } : true;
     };
 
     inFlight.add(panelId);
@@ -194,7 +198,7 @@ export function useWorktreeMoveBanner(
         delivered =
           (await inputBarRef.current?.submitWithInstruction(instruction, submit)) ?? false;
       } else if (route === "direct") {
-        delivered = await submit(buildWorktreeMoveInstruction(path));
+        delivered = Boolean(await submit(buildWorktreeMoveInstruction(path)));
       }
     } finally {
       inFlight.delete(panelId);

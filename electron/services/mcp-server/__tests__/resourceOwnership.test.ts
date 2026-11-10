@@ -550,6 +550,23 @@ describe("extractOwnedResourcesFromDispatch", () => {
   });
 });
 
+describe("a resumed session's pane (#16341)", () => {
+  const answer = (status: string) => ({
+    ok: true as const,
+    result: { status, terminalId: "terminal-1" },
+  });
+
+  it("records the pane the call started", () => {
+    expect(extractOwnedResourcesFromDispatch("agent.resumeOwned", answer("launched"))).toEqual([
+      { kind: "terminal", id: "terminal-1" },
+    ]);
+  });
+
+  it.each(["existing", "refused"])("records nothing for an `%s` answer", (status) => {
+    expect(extractOwnedResourcesFromDispatch("agent.resumeOwned", answer(status))).toEqual([]);
+  });
+});
+
 describe("ownership recording coverage", () => {
   // A manually maintained contract, not a derived one: nothing in the registry
   // marks an action as "creates a resource", so this list is the record of that
@@ -558,6 +575,7 @@ describe("ownership recording coverage", () => {
   const EXPECTED_RECORDING_TOOLS = [
     "terminal.new",
     "agent.launch",
+    "agent.resumeOwned",
     "workflow.startWorkOnIssue",
     "recipe.run",
     "worktree.createWithRecipe",

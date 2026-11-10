@@ -8,6 +8,8 @@ Releases are built by **three per-OS workflows** — `.github/workflows/release-
 
 Use the `release` skill (`.claude/skills/release/`) to ship a release. After one question, the version, it runs unattended: the dry-run decision, the changelog, the gitflow merges, the tag, watching all three workflows to green, and recovering from failures.
 
+The release commit also carries the output of `npm run db:freeze`, which records the database migrations the release ships so a later edit to one fails CI ([persistence-and-migrations.md](architecture/persistence-and-migrations.md#drizzle-migrations)).
+
 ## Release Notes Format
 
 `CHANGELOG.md` is the chronological record; each release prepends a `## [X.Y.Z] - YYYY-MM-DD` section with an intro paragraph and `###` Breaking Changes / Features / Bug Fixes / Performance sections, grouped by `**Area**` when long. The GitHub Release body is that section without its heading line. The full rules for shape, voice, what is left out and how long a section should be live in [`.claude/skills/release/references/release-notes.md`](../.claude/skills/release/references/release-notes.md).
@@ -27,6 +29,7 @@ Each dry run executes every gate and build job for its OS — checks, unit tests
 
 - No R2 upload (binaries or metadata)
 - No Microsoft Store submission (`Submit to Microsoft Store` is gated by `inputs.dry_run != true`)
+- No Homebrew tap update (`publish-homebrew-tap` needs `publish-daintree`)
 - No website refresh webhook
 - `publish-daintree` doesn't run at all (its `if:` requires both a `v*` tag ref and `dry_run != true`)
 
@@ -115,6 +118,32 @@ Artifacts are uploaded to Cloudflare R2 via AWS CLI:
 | `R2_SECRET_ACCESS_KEY` | R2 secret key                    |
 | `R2_ENDPOINT`          | R2 endpoint URL                  |
 | `DAINTREE_R2_BUCKET`   | Bucket name (`daintree-updates`) |
+
+## Homebrew Tap
+
+Every stable macOS release updates the cask in [`daintreehq/homebrew-tap`](https://github.com/daintreehq/homebrew-tap), so `brew install --cask daintreehq/tap/daintree` installs the current version. The `publish-homebrew-tap` job in `release-macos.yml` runs after `publish-daintree`, so a failure there never holds back R2 or the website: the release has shipped and only the cask lags, and rerunning that one job (`gh run rerun <run-id> --failed`) catches it up.
+
+- **Stable tags only.** Dry runs, `rc`/`beta` tags, `skip_notarization` runs and nightlies (`nightly-publish.yml`) never touch the tap.
+- **Checksums come from the published DMGs.** `scripts/ci/homebrew-cask.mjs` downloads `Daintree-<version>-arm64.dmg` and `-x64.dmg` from `https://updates.daintree.org/releases/` and hashes them, not the run's own artifact, because a re-run of a tag that is already live rebuilds a DMG the publish never uploads. It leaves the tap alone when it already carries a newer version, so re-running an old tag can't roll it back.
+- **Validated before it is pushed.** The job runs `brew style`, `brew audit --cask --strict --online --arch=all` and `brew livecheck` on the generated cask, then commits `Casks/daintree.rb` as `daintree <version>`, or nothing when the tap already matches.
+- **The cask itself** is rendered by `renderCask` in `scripts/ci/homebrew-cask.mjs`; `scripts/ci/__fixtures__/homebrew/daintree.rb` is the readable copy its tests compare against. It declares `auto_updates true` because electron-updater updates the app in place, so `brew upgrade` never reinstalls over a copy that has already updated itself, and its `zap` stanza lists the app's data, cache, preference, log, LaunchAgent and Quick Action paths.
+
+| Secret | Description |
+| --- | --- |
+| `HOMEBREW_TAP_TOKEN` | Fine-grained personal access token limited to `daintreehq/homebrew-tap` with **Contents: Read and write**. Without it the job skips with a notice and the release still publishes |
+
+To check a cask change by hand, generate it for a published version and validate it in a throwaway tap:
+
+```bash
+node scripts/ci/homebrew-cask.mjs --version 0.49.0 --out .tmp/daintree.rb
+brew tap-new --no-git daintree-local/audit
+mkdir -p "$(brew --repository daintree-local/audit)/Casks"
+cp .tmp/daintree.rb "$(brew --repository daintree-local/audit)/Casks/daintree.rb"
+brew trust --cask daintree-local/audit/daintree  # Homebrew 7+ won't load an untrusted third-party cask
+brew style --cask daintree-local/audit/daintree
+brew audit --cask --strict --online --arch=all daintree-local/audit/daintree
+brew untap daintree-local/audit
+```
 
 ## Entitlements
 

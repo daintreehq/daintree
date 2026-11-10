@@ -106,6 +106,29 @@ function toPluginNotificationActions(
   }));
 }
 
+/**
+ * Several copies of an agent's CLI were found. Built here from the agent id alone
+ * because a remote view takes this toast from its host, which gets to name an
+ * agent and nothing else about what the button does. The action id keeps the
+ * button on the inbox row, where a toast raised during startup quiet ends up.
+ */
+function toAgentCliCopiesAction(agentId: string): NotificationAction {
+  const target = { tab: "agents", subtab: agentId, sectionId: "agents-cli-copies" };
+  return {
+    label: "View copies",
+    actionId: "app.settings.openTab",
+    actionArgs: target,
+    onClick: async () => {
+      const result = await actionService.dispatch("app.settings.openTab", target, {
+        source: "user",
+      });
+      if (!result.ok) {
+        console.warn("[MainProcessToast] Couldn't open agent settings:", result.error);
+      }
+    },
+  };
+}
+
 export function useMainProcessToastListener(): void {
   useEffect(() => {
     if (!window.electron?.notification?.onShowToast) return;
@@ -183,7 +206,9 @@ export function useMainProcessToastListener(): void {
         rateLimitKey: payload.rateLimitKey,
         rateLimitLabel: payload.rateLimitLabel,
         priority: payload.priority,
-        action,
+        action: payload.agentCliCopies
+          ? toAgentCliCopiesAction(payload.agentCliCopies.agentId)
+          : action,
         ...(payload.urgent !== undefined ? { urgent: payload.urgent } : {}),
         ...(pluginActions ? { actions: pluginActions, urgent: false } : {}),
         ...(payload.replaceKey !== undefined ? { replaceKey: payload.replaceKey } : {}),

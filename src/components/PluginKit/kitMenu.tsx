@@ -14,6 +14,7 @@ import {
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu-base";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { useKeyLabels } from "@/lib/keyboardLayout";
 import { isMac } from "@/lib/platform";
 import { renderIconSource } from "./PluginKitIcons";
 import { actionMenuRowVisible, useActionMenuRow } from "./PluginKitNativeAgents";
@@ -161,6 +162,7 @@ const TWO_LINE_TRIGGER_CLASS = "items-start [&>svg:last-child]:mt-px";
 /** An `action` entry: the action's own label, key and availability, read as the menu opens. */
 function ActionMenuRow({ parts, entry }: { parts: KitMenuParts; entry: PluginActionMenuItem }) {
   const row = useActionMenuRow(entry);
+  const keyLabels = useKeyLabels();
   if (!row) return null;
   const refused = row.disabled;
   // The host's unavailable row: dimmed and skipped like every disabled item,
@@ -175,7 +177,9 @@ function ActionMenuRow({ parts, entry }: { parts: KitMenuParts; entry: PluginAct
       destructive={row.destructive}
       textValue={row.label}
       aria-label={reason}
-      aria-keyshortcuts={row.shortcut ? comboToAriaKeyshortcuts(row.shortcut, isMac()) : undefined}
+      aria-keyshortcuts={
+        row.shortcut ? comboToAriaKeyshortcuts(row.shortcut, isMac(), keyLabels) : undefined
+      }
     >
       {menuRowIcon(row.icon, row.description !== undefined)}
       {row.description === undefined ? (

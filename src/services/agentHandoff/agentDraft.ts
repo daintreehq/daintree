@@ -80,7 +80,7 @@ export function listAgentPanes(): PluginAgentPane[] {
  */
 const REFUSAL_RECEIPT = {
   "unknown-terminal": "that agent is gone",
-  "not-agent": "that pane isn't an agent",
+  "not-agent": "that panel isn't an agent",
   exited: "that agent has exited",
   "input-bar-off": "the input bar is off",
   "backend-unavailable": "the terminal service is unavailable",

@@ -2,8 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { buildPilotGroups, type PilotWorkspaceMeta } from "@/components/Pilot/pilotRows";
 import { buildCanopyInbox } from "./canopyModel";
 import { ALL_HOSTS_LABEL } from "./CanopyHostPicker";
@@ -12,7 +10,6 @@ import {
   ownCanopyTerminalApi,
   remoteCanopyApi,
   remoteCanopyTerminalApi,
-  unlessHostDisconnected,
   useRemoteCanopies,
   useRemoteCanopy,
 } from "./canopyHostSource";
@@ -23,12 +20,7 @@ import {
   mergeHostReadings,
   type HostReading,
 } from "./canopyAllHosts";
-import {
-  ALL_HOSTS_ID,
-  canopyOwnHostId,
-  useCanopyStore,
-  type CanopyScope,
-} from "@/store/canopyStore";
+import { ALL_HOSTS_ID, canopyOwnHostId, useCanopyStore } from "@/store/canopyStore";
 import { retryHostProjects, useHostProjectLists } from "@/components/Hosts/hostProjects";
 import type { HostMenuRow } from "@/components/Hosts/hostModel";
 import type { HostId } from "@shared/types/remoteHosts";
@@ -42,7 +34,7 @@ const AGE_TICK_MS = 30_000;
 /**
  * The inbox's runs for the host the panel shows: the window's own, another
  * host read through its own Canopy, or every host merged. Owns the route that
- * reads them, the scope main is told, and the minute tick their ages run on.
+ * reads them, and the minute tick their ages run on.
  */
 export function useCanopyInboxData({
   isOpen,
@@ -151,10 +143,6 @@ export function useCanopyInboxData({
   const hostProjects = useHostProjectLists(
     everyHost ? remoteIds : hostId === null ? NO_HOSTS : [hostId]
   );
-  const storedScope = useCanopyStore((s) => s.scope);
-  const setScope = useCanopyStore((s) => s.setScope);
-  // "This project" is the window's own project: another host shows all of its own.
-  const scope: CanopyScope = otherHost ? "all" : storedScope;
   // The link came back: its project names may have changed while it was away.
   const hostEpochs = everyHost
     ? remoteIds.map((id) => `${id}:${remotes.states.get(id)?.epoch ?? 0}`).join(" ")
@@ -174,15 +162,6 @@ export function useCanopyInboxData({
       if (cut > 0 && Number(entry.slice(cut + 1)) > 0) retryHostProjects(entry.slice(0, cut));
     }
   }, [hostId, everyHost, recoveries, hostEpochs]);
-
-  // Main reads only the screens in scope, so the agents a project view hides
-  // cost nothing. Said again whenever another host's link comes back.
-  useEffect(() => {
-    if (!isOpen) return;
-    safeFireAndForget(
-      unlessHostDisconnected(api.setScope(scope === "project" ? getViewWorkspaceId() : null))
-    );
-  }, [isOpen, scope, api, recoveries]);
 
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -259,13 +238,10 @@ export function useCanopyInboxData({
 
   const baseItems = useMemo(() => {
     if (!fleet) return [];
-    // No project on another host is the one this window shows.
-    const here = otherHost ? null : getViewWorkspaceId();
-    const runs =
-      scope === "project" ? fleet.runs.filter((run) => run.workspaceId === here) : fleet.runs;
-    const groups = buildPilotGroups(runs, {
+    // The window holds no project: none of them is the one it shows.
+    const groups = buildPilotGroups(fleet.runs, {
       workspaces,
-      currentWorkspaceId: here,
+      currentWorkspaceId: null,
       nowMs,
     });
     const cards = new Map((canopy?.cards ?? []).map((card) => [card.runId, card]));
@@ -284,7 +260,7 @@ export function useCanopyInboxData({
       new Map((canopy?.glances ?? []).map((entry) => [entry.runId, entry])),
       new Map((canopy?.reads ?? []).map((entry) => [entry.runId, entry]))
     );
-  }, [fleet, workspaces, nowMs, canopy, scope, otherHost, readerOff, merged]);
+  }, [fleet, workspaces, nowMs, canopy, readerOff, merged]);
 
   return {
     otherHost,
@@ -301,9 +277,6 @@ export function useCanopyInboxData({
     canopy,
     fleet,
     projects,
-    storedScope,
-    setScope,
-    scope,
     recoveries,
     nowMs,
     baseItems,

@@ -1,4 +1,4 @@
-import { isBuiltInActionId } from "../../schemas/plugin.js";
+import { isBuiltInActionId, resolveAgentExecutableNames } from "../../schemas/plugin.js";
 import { PROJECT_SURFACE_SLOTS, fileEditorSlotKey } from "../../../shared/types/plugin.js";
 import type {
   PluginLaunchEntryTarget,
@@ -36,6 +36,7 @@ import { registerPluginDatabaseEndpoint } from "../pluginAgentMcp/databaseEndpoi
 import type { LoadedPlugin } from "./PluginServiceTypes.js";
 import type { ParsedPluginManifest } from "./pluginManifestLoad.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
+import { recordPluginAgentBypassArgs } from "./pluginAgentBypassHistory.js";
 import { makePluginTourId } from "../../../shared/utils/tourIds.js";
 import type { WorkspaceClient } from "../WorkspaceClient.js";
 import {
@@ -102,6 +103,7 @@ import {
   unregisterContextProviders,
 } from "../contextProviderRegistry.js";
 import {
+  getPluginAgentRegistry,
   getPluginIdForAgent,
   registerPluginAgents,
   unregisterPluginAgents,
@@ -562,7 +564,18 @@ export class PluginContributionRegistrar {
     const { resolveIconId } = pending;
 
     if (manifest.contributes.agents.length > 0) {
-      registerPluginAgents(pluginId, manifest.contributes.agents, pluginDir);
+      // Executable names resolve here, where the launcher and built-in rules
+      // live, so the shared registry only sees the names an agent claims.
+      registerPluginAgents(
+        pluginId,
+        manifest.contributes.agents.map((agent) => ({
+          ...agent,
+          iconId: resolveIconId(agent.iconId),
+          executableNames: resolveAgentExecutableNames(agent),
+        })),
+        pluginDir
+      );
+      recordPluginAgentBypassArgs(Object.values(getPluginAgentRegistry()));
       this.deps.broadcaster.scheduleAgentsBroadcast(false);
       // Mirror the updated registry into the pty-host so its activity monitor
       // resolves this agent's detection patterns at spawn time (#10587). The
@@ -1100,6 +1113,29 @@ export class PluginContributionRegistrar {
         },
       ];
     });
+    // Panel views the plugin offers in the Canopy window, which belongs to no
+    // project. Validation refuses them for a project plugin or an instanced
+    // package; an instance bound to a project is skipped here all the same,
+    // since its view would run there with that project's binding.
+    if (!isProject && (binding.projectId == null || binding.projectId.length === 0)) {
+      for (const { viewId } of manifest.contributes.canopyViews ?? []) {
+        const view = viewsByBareId.get(viewId);
+        const panel = manifest.contributes.panels.find((entry) => entry.id === viewId);
+        if (view?.location !== "panel" || panel === undefined || panel.hasPty === true) continue;
+        hostedViews.push({
+          id: pluginHostedViewKindId(pluginId, viewId),
+          pluginId,
+          viewId,
+          componentPath: buildPluginViewUrl(authority, view.componentPath, plugin.viewGeneration),
+          location: "canopy",
+          name: `${pluginName} ${panel.name}`,
+          title: panel.name,
+          pluginName,
+          iconId: resolveIconId(panel.iconId),
+          ...(panel.stateVersion !== undefined ? { stateVersion: panel.stateVersion } : {}),
+        });
+      }
+    }
     if (hostedViews.length > 0) {
       registerPluginHostedViews(pluginId, hostedViews);
       this.deps.broadcaster.scheduleHostedViewsBroadcast();
@@ -1290,7 +1326,12 @@ export class PluginContributionRegistrar {
       if (unregisterPluginHostedViews(pluginId))
         this.deps.broadcaster.scheduleHostedViewsBroadcast();
     });
-    runUnloadStep(pluginId, "unregisterPluginAgents", () => unregisterPluginAgents(pluginId));
+    runUnloadStep(pluginId, "unregisterPluginAgents", () => {
+      unregisterPluginAgents(pluginId);
+      // An unload can promote another plugin's same-id agent, whose declaration
+      // a launch can now carry.
+      recordPluginAgentBypassArgs(Object.values(getPluginAgentRegistry()));
+    });
     runUnloadStep(pluginId, "scheduleAgentsBroadcast", () =>
       this.deps.broadcaster.scheduleAgentsBroadcast(true)
     );

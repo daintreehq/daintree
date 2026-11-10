@@ -743,6 +743,20 @@ describe("usePanelPalette", () => {
     });
   });
 
+  it("names an agent row by its agent id, so the icon gets the agent treatment (#16467)", () => {
+    getEffectiveAgentIdsMock.mockReturnValue(["pi"]);
+    getEffectiveAgentConfigMock.mockReturnValue({
+      name: "Pi",
+      iconId: "plugin-icon:acme.agents:./icons/pi.svg",
+      color: "#3366ff",
+      tooltip: "Pi",
+    });
+
+    const { result } = renderHook(() => usePanelPalette());
+
+    expect(result.current.results.find((item) => item.id === "agent:pi")?.iconId).toBe("pi");
+  });
+
   describe("pin-independent visibility (issue #5117)", () => {
     it("shows installed agents regardless of pin state", () => {
       getEffectiveAgentIdsMock.mockReturnValue(["claude", "gemini"]);

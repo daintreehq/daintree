@@ -4,6 +4,28 @@ import { ScheduledRunSchema, type ScheduledRun } from "../../../shared/types/sch
 /** How many runs of one schedule its history keeps. */
 export const SCHEDULED_RUN_HISTORY_LIMIT = 100;
 
+/**
+ * The branch a schedule's next run owns, written before anything creates it
+ * (#16369) and consumed in the transaction that records the run. Each schedule
+ * holds at most one, and one still held means an earlier launch stopped between
+ * those two points, so the next launch takes this branch rather than a new one.
+ */
+export interface ScheduledRunWorktreeClaim {
+  readonly scheduleId: string;
+  readonly projectId: string;
+  readonly branch: string;
+  readonly baseBranch: string;
+  readonly fromRemote: boolean;
+}
+
+interface WorktreeClaimRow {
+  schedule_id: string;
+  project_id: string;
+  branch: string;
+  base_branch: string;
+  from_remote: number;
+}
+
 /** A second run registered for an occurrence its schedule already has a run for. */
 export class ScheduledRunConflictError extends Error {
   constructor(
@@ -75,7 +97,8 @@ export class ScheduledRunStore {
   /**
    * A run for an occurrence also moves its schedule's evaluation point up to
    * that occurrence, in the same transaction, so neither commits alone.
-   * `inboxPending` inserts it already waiting for the notification inbox.
+   * `inboxPending` inserts it already waiting for the notification inbox. A run
+   * given a new worktree consumes that branch's claim the same way.
    *
    * @throws {ScheduledRunConflictError} when the occurrence already has a run.
    */
@@ -111,6 +134,9 @@ export class ScheduledRunStore {
             )
             .run(record.scheduleId, record.projectId, evaluated);
         }
+        if (record.newWorktree) {
+          this.dropWorktreeClaim(record.scheduleId, record.newWorktree.branch);
+        }
       });
     } catch (error) {
       if (isUniqueViolation(error) && record.origin.occurrenceKey !== null) {
@@ -131,6 +157,52 @@ export class ScheduledRunStore {
       .pluck()
       .get(scheduleId) as number | undefined;
     return value ?? null;
+  }
+
+  worktreeClaim(scheduleId: string): ScheduledRunWorktreeClaim | null {
+    const row = this.sqlite
+      .prepare(
+        `SELECT schedule_id, project_id, branch, base_branch, from_remote
+         FROM scheduled_run_worktree_claims WHERE schedule_id = ?`
+      )
+      .get(scheduleId) as WorktreeClaimRow | undefined;
+    if (!row) return null;
+    return {
+      scheduleId: row.schedule_id,
+      projectId: row.project_id,
+      branch: row.branch,
+      baseBranch: row.base_branch,
+      fromRemote: row.from_remote === 1,
+    };
+  }
+
+  /** Replaces any claim the schedule held; committed when this returns. */
+  saveWorktreeClaim(claim: ScheduledRunWorktreeClaim): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO scheduled_run_worktree_claims
+           (schedule_id, project_id, branch, base_branch, from_remote)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (schedule_id) DO UPDATE SET
+           project_id = excluded.project_id,
+           branch = excluded.branch,
+           base_branch = excluded.base_branch,
+           from_remote = excluded.from_remote`
+      )
+      .run(
+        claim.scheduleId,
+        claim.projectId,
+        claim.branch,
+        claim.baseBranch,
+        claim.fromRemote ? 1 : 0
+      );
+  }
+
+  /** Only this branch's: a newer claim of the schedule's is another run's. */
+  dropWorktreeClaim(scheduleId: string, branch: string): void {
+    this.sqlite
+      .prepare("DELETE FROM scheduled_run_worktree_claims WHERE schedule_id = ? AND branch = ?")
+      .run(scheduleId, branch);
   }
 
   /**
@@ -259,6 +331,9 @@ export class ScheduledRunStore {
       this.sqlite
         .prepare("DELETE FROM schedule_evaluation_points WHERE schedule_id = ?")
         .run(scheduleId);
+      this.sqlite
+        .prepare("DELETE FROM scheduled_run_worktree_claims WHERE schedule_id = ?")
+        .run(scheduleId);
     });
     return projectIds;
   }
@@ -267,6 +342,9 @@ export class ScheduledRunStore {
     return this.transaction(() => {
       this.sqlite
         .prepare("DELETE FROM schedule_evaluation_points WHERE project_id = ?")
+        .run(projectId);
+      this.sqlite
+        .prepare("DELETE FROM scheduled_run_worktree_claims WHERE project_id = ?")
         .run(projectId);
       return this.sqlite.prepare("DELETE FROM scheduled_runs WHERE project_id = ?").run(projectId)
         .changes;

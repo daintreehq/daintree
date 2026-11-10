@@ -157,7 +157,7 @@ describe("WorktreeTerminalSection — a session row owns its menu", () => {
     fireEvent.contextMenu(row("two"));
     const menu = await screen.findByRole("menu");
 
-    expect(within(menu).getByRole("menuitem", { name: "Rename terminal" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "Rename" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: CARD_ITEM })).toBeNull();
     expect(screen.getAllByRole("menu")).toHaveLength(1);
   });
@@ -169,7 +169,7 @@ describe("WorktreeTerminalSection — a session row owns its menu", () => {
     fireEvent.contextMenu(row("two"));
     const menu = await screen.findByRole("menu");
     await act(async () => {
-      fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename terminal" }));
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename" }));
     });
 
     expect(dispatch).toHaveBeenCalledWith(
@@ -182,7 +182,7 @@ describe("WorktreeTerminalSection — a session row owns its menu", () => {
   it("leaves the card's menu to the card's own surface", async () => {
     renderInCard();
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: /sessions?/i, expanded: true }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /terminals?/i, expanded: true }));
 
     expect(await screen.findByRole("menuitem", { name: CARD_ITEM })).toBeTruthy();
   });

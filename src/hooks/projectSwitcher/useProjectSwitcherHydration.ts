@@ -3,7 +3,12 @@ import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { projectClient, projectPresenceClient } from "@/clients";
-import type { ProjectStatusMap } from "@shared/types/ipc/project";
+import { isSameProjectStatusEntry } from "@/lib/projectStatusEntry";
+import type {
+  BulkProjectStatsEntry,
+  ProjectStatusEntry,
+  ProjectStatusMap,
+} from "@shared/types/ipc/project";
 import type {
   ProjectPresenceSnapshot,
   ProjectPresenceState,
@@ -23,6 +28,42 @@ function isSamePresence(
       (snapshot?.otherWindows ?? []).map((e) => `${e.projectId}:${e.state}`).sort(),
     ]);
   return key(a) === key(b);
+}
+
+/** The pushed entry's fields of a bulk reading, without its memory and process detail. */
+function toStatusEntry(entry: BulkProjectStatsEntry): ProjectStatusEntry {
+  return {
+    activeAgentCount: entry.activeAgentCount,
+    waitingAgentCount: entry.waitingAgentCount,
+    blockedAgentCount: entry.blockedAgentCount,
+    ...(entry.oldestWaitingSince !== undefined
+      ? { oldestWaitingSince: entry.oldestWaitingSince }
+      : {}),
+    completedAgentCount: entry.completedAgentCount,
+    unacknowledgedCompletedAgentCount: entry.unacknowledgedCompletedAgentCount,
+    ...(entry.oldestUnacknowledgedCompletionAt !== undefined
+      ? { oldestUnacknowledgedCompletionAt: entry.oldestUnacknowledgedCompletionAt }
+      : {}),
+    ...(entry.latestUnacknowledgedCompletionAt !== undefined
+      ? { latestUnacknowledgedCompletionAt: entry.latestUnacknowledgedCompletionAt }
+      : {}),
+    ...(entry.latestCompletionAt !== undefined
+      ? { latestCompletionAt: entry.latestCompletionAt }
+      : {}),
+    ...(entry.latestWorkingSince !== undefined
+      ? { latestWorkingSince: entry.latestWorkingSince }
+      : {}),
+    snoozedAgentCount: entry.snoozedAgentCount,
+    ...(entry.nextSnoozeWakeAt !== undefined ? { nextSnoozeWakeAt: entry.nextSnoozeWakeAt } : {}),
+    ...(entry.assistantState !== undefined ? { assistantState: entry.assistantState } : {}),
+    ...(entry.assistantWaitingReason !== undefined
+      ? { assistantWaitingReason: entry.assistantWaitingReason }
+      : {}),
+    ...(entry.assistantStateSince !== undefined
+      ? { assistantStateSince: entry.assistantStateSince }
+      : {}),
+    processCount: entry.processCount,
+  };
 }
 
 export interface ProjectSwitcherPresenceById {
@@ -85,69 +126,40 @@ export function useProjectSwitcherHydration({
     // rejection short-circuit the pair would mean one store's IPC failure
     // silently costs the OTHER kind of row its status line. Whichever list did
     // load still gets hydrated from the ids it has.
+    let disposed = false;
     void Promise.allSettled([loadProjects(), loadScratches()])
       .then(() => {
+        if (disposed) return;
         const ids = [
           ...useProjectStore.getState().projects.map((p) => p.id),
           ...useScratchStore.getState().scratches.map((s) => s.id),
         ];
         if (ids.length === 0) return;
+        const pushesBefore = useProjectStatsStore.getState().pushCount;
         return projectClient.getBulkStats(ids).then((bulk) => {
-          // Seed only — never overwrite.
+          // Bulk and the push service compute agent state from the same
+          // helper, so a bulk reading is as accurate as a push, and it is the
+          // one reading that repairs a store that missed a push: main repeats
+          // nothing it has already broadcast, so a wrong entry otherwise stays
+          // wrong until that project's counts next move (#16418).
           //
-          // Bulk and the push service now compute agent state from the same
-          // helper, so a seed is as accurate as a push. It is still only ever a
-          // seed: the push service suppresses broadcasts whose payload is
-          // unchanged, which is what would make a late bulk response landing on
-          // top of a newer push stick until the underlying counts next moved.
-          //
-          // Bulk covers the one gap the push model leaves: a renderer that has
-          // never received a broadcast has nothing to show. Fill absent entries
-          // and leave every present one alone.
+          // Unless a push landed while the request was out. The reply and the
+          // push share no ordering, so the push may describe a later state
+          // than this answer, and main would never send it again. The push
+          // carries the whole map, so nothing of this answer is kept, not even
+          // ids the push left out. A closed palette's answer is dropped too: it
+          // may land after a later open's newer one.
+          if (disposed || useProjectStatsStore.getState().pushCount !== pushesBefore) return;
           const previous = useProjectStatsStore.getState().stats;
-          const seeded: ProjectStatusMap = { ...previous };
-          let changed = false;
+          let next: ProjectStatusMap | null = null;
           for (const [id, entry] of Object.entries(bulk)) {
-            if (previous[id] !== undefined) continue;
-            seeded[id] = {
-              activeAgentCount: entry.activeAgentCount,
-              waitingAgentCount: entry.waitingAgentCount,
-              blockedAgentCount: entry.blockedAgentCount,
-              ...(entry.oldestWaitingSince !== undefined
-                ? { oldestWaitingSince: entry.oldestWaitingSince }
-                : {}),
-              completedAgentCount: entry.completedAgentCount,
-              unacknowledgedCompletedAgentCount: entry.unacknowledgedCompletedAgentCount,
-              ...(entry.oldestUnacknowledgedCompletionAt !== undefined
-                ? { oldestUnacknowledgedCompletionAt: entry.oldestUnacknowledgedCompletionAt }
-                : {}),
-              ...(entry.latestUnacknowledgedCompletionAt !== undefined
-                ? { latestUnacknowledgedCompletionAt: entry.latestUnacknowledgedCompletionAt }
-                : {}),
-              ...(entry.latestCompletionAt !== undefined
-                ? { latestCompletionAt: entry.latestCompletionAt }
-                : {}),
-              ...(entry.latestWorkingSince !== undefined
-                ? { latestWorkingSince: entry.latestWorkingSince }
-                : {}),
-              snoozedAgentCount: entry.snoozedAgentCount,
-              ...(entry.nextSnoozeWakeAt !== undefined
-                ? { nextSnoozeWakeAt: entry.nextSnoozeWakeAt }
-                : {}),
-              ...(entry.assistantState !== undefined
-                ? { assistantState: entry.assistantState }
-                : {}),
-              ...(entry.assistantWaitingReason !== undefined
-                ? { assistantWaitingReason: entry.assistantWaitingReason }
-                : {}),
-              ...(entry.assistantStateSince !== undefined
-                ? { assistantStateSince: entry.assistantStateSince }
-                : {}),
-              processCount: entry.processCount,
-            };
-            changed = true;
+            const current = previous[id];
+            const reading = toStatusEntry(entry);
+            if (current !== undefined && isSameProjectStatusEntry(current, reading)) continue;
+            next ??= { ...previous };
+            next[id] = reading;
           }
-          if (changed) useProjectStatsStore.getState().setStats(seeded);
+          if (next) useProjectStatsStore.getState().setStats(next);
         });
       })
       .catch(() => {
@@ -155,6 +167,9 @@ export function useProjectSwitcherHydration({
         // status line. This background freshness pull must never surface an
         // error.
       });
+    return () => {
+      disposed = true;
+    };
   }, [isOpen, loadProjects, loadScratches]);
 
   // Where each project is open, relative to this window (#12597). Pulled on

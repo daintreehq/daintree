@@ -61,6 +61,7 @@ function intent(overrides: Partial<PluginArchiveInstallIntent> = {}): PluginArch
       capabilities: ["fs:project-read", "network:fetch"],
       recipes: { count: 0, names: [] },
       projectTemplates: [],
+      permissionBypassAgents: [],
     },
     ...overrides,
   };
@@ -154,6 +155,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: ["fs:project-read", "shell:exec", "network:fetch"],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -183,6 +185,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: ["network:fetch", "git:write"],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -205,6 +208,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: ["fs:project-read", "clipboard:read"],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -214,6 +218,35 @@ describe("PluginArchiveInstallConfirmDialog", () => {
       screen.queryByText("Requests sensitive permissions — review before installing")
     ).toBeNull();
     expect(screen.queryByText("Can run arbitrary commands on your machine")).toBeNull();
+  });
+
+  it("says which contributed agents can run without permission prompts (#16374)", () => {
+    render(<PluginArchiveInstallConfirmDialog />);
+    const base = intent().manifest;
+    enqueue(
+      intent({
+        manifest: {
+          ...base,
+          capabilities: ["network:fetch", "agent:register", "fs:project-read"],
+          permissionBypassAgents: ["Hermes", "Atlas"],
+        },
+      })
+    );
+
+    const disclosures = screen.getAllByText(
+      "Hermes and Atlas can run without permission prompts when you turn on Skip permission prompts"
+    );
+    expect(disclosures).toHaveLength(1);
+    expect(disclosures[0]!.closest("li")?.textContent).toContain("Register agent CLIs");
+  });
+
+  it("says nothing about permission prompts for agents that declare no bypass flag (#16374)", () => {
+    render(<PluginArchiveInstallConfirmDialog />);
+    const base = intent().manifest;
+    enqueue(intent({ manifest: { ...base, capabilities: ["agent:register"] } }));
+
+    expect(screen.getByText("Register agent CLIs")).toBeTruthy();
+    expect(screen.queryByText(/without permission prompts/)).toBeNull();
   });
 
   it("says so explicitly when no authors or capabilities are declared", () => {
@@ -228,6 +261,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: [],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -248,6 +282,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: [],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -268,6 +303,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: [],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -289,6 +325,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: [],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -311,6 +348,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: [],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         } as unknown as PluginArchiveInstallIntent["manifest"],
       })
     );
@@ -330,6 +368,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: [],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -733,6 +772,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
 
       expect(screen.getByText("Install 'Acme Tool'?")).toBeTruthy();
       expect(screen.getByText(/replacing any installed plugin with the same ID/)).toBeTruthy();
+      expect(screen.getByText(/can be available in every project/)).toBeTruthy();
       expect(installedRowText()).toBeNull();
       armConfirm();
       expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
@@ -749,6 +789,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
         /Installing replaces the installed v1\.0\.0 with this newer v1\.2\.3\./
       );
       expect(description.textContent).toContain("full Node.js privileges");
+      expect(description.textContent).toContain("can be available in every project");
       expect(screen.queryByText(/replacing any installed plugin/)).toBeNull();
       expect(installedRowText()).toBe("Replaces installed v1.0.0Update");
       expect(confirmBadgeTone()).toBe("outline");

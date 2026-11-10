@@ -3,6 +3,7 @@ import vm from "node:vm";
 import {
   asciiOnlyChunksPlugin,
   escapeChunkToAscii,
+  findEscapableTwoByteCharacters,
   hasTwoByteCharacters,
 } from "./ascii-only-chunks.mjs";
 
@@ -57,6 +58,55 @@ describe("escapeChunkToAscii", () => {
 
   it("reports a chunk it cannot parse instead of emitting it", () => {
     expect(() => escapeChunkToAscii("broken.js", "var a = `—")).toThrow(/broken\.js/);
+  });
+});
+
+describe("findEscapableTwoByteCharacters", () => {
+  const found = (code) =>
+    findEscapableTwoByteCharacters("chunk.js", code).map((offset) => code[offset]);
+
+  it("finds a wide character in a regex literal, with or without the u flag", () => {
+    expect(found("var a=/[,;:—–]/u,b=/[…]/;")).toEqual(["—", "–", "…"]);
+  });
+
+  it("finds one in a string or an untagged template", () => {
+    expect(found('var a="—",b=`…${1}“`;')).toEqual(["—", "…", "“"]);
+  });
+
+  it("passes one inside a tagged template, nested tags included", () => {
+    expect(found("var a=String.raw`→${1}é→`,b=t`│${t`┃`}║`;")).toEqual([]);
+  });
+
+  it("still finds one in a tagged template's expressions", () => {
+    expect(found("var a=String.raw`→${/[—]/u.source}→`;")).toEqual(["—"]);
+  });
+
+  it("reports each code unit of an astral character, and the offsets after it", () => {
+    const code = "var a=String.raw`😀`,b=/😀/u,c=/[—]/;";
+    const offsets = findEscapableTwoByteCharacters("chunk.js", code);
+    expect(offsets).toEqual([code.indexOf("/😀") + 1, code.indexOf("/😀") + 2, code.indexOf("—")]);
+  });
+
+  it("draws the line between U+00FF and U+0100", () => {
+    expect(found("var a=/[éÿĀ—]/u;")).toEqual(["Ā", "—"]);
+  });
+
+  it("finds one in a comment the minifier keeps", () => {
+    expect(found("/*! © — */var a=1;\n//# sourceURL=….js")).toEqual(["—", "…"]);
+  });
+
+  it("passes Latin-1 and escaped text without parsing it", () => {
+    expect(found('var a=/[\\u2014é]/u,b="café";')).toEqual([]);
+    expect(found("var a = `é")).toEqual([]);
+  });
+
+  it("finds nothing escapable once a chunk has been re-printed to ASCII", () => {
+    expect(found(SOURCE).length).toBeGreaterThan(0);
+    expect(found(escapeChunkToAscii("chunk.js", SOURCE))).toEqual([]);
+  });
+
+  it("reports a chunk it cannot parse instead of passing it", () => {
+    expect(() => findEscapableTwoByteCharacters("broken.js", "var a = `—")).toThrow(/broken\.js/);
   });
 });
 

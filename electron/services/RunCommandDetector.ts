@@ -1,6 +1,5 @@
 import path from "path";
 import fs from "fs/promises";
-import { existsSync } from "fs";
 import { load } from "js-yaml";
 import { parse as parseToml } from "smol-toml";
 import type { RunCommand } from "../types/index.js";
@@ -9,6 +8,7 @@ import { YAML_MERGE_SCHEMA } from "../utils/yamlMergeSchema.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import { parseJsonc } from "../utils/parseJsonc.js";
 import { agentCommandDialect, quoteLaunchArgOptional } from "../../shared/utils/shellEscape.js";
+import { isProjectIoError, projectIo } from "./projectIoGate.js";
 
 const RESERVED_SCRIPT_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const COMPOSER_LIFECYCLE_SCRIPTS = new Set([
@@ -112,16 +112,62 @@ const DETECTION_INPUTS: readonly string[] = [
   path.join(".devcontainer", "devcontainer.json"),
 ];
 
-async function readInputSignature(root: string): Promise<string> {
-  const parts = await Promise.all(
-    DETECTION_INPUTS.map((name) =>
-      fs.stat(path.join(root, name)).then(
-        (stat) => `${stat.mtimeMs}:${stat.size}`,
-        () => "-"
-      )
-    )
-  );
-  return parts.join("|");
+/**
+ * One detection pass over a project. Every file goes through the project I/O
+ * gate (#16361), so a project whose files never finish reading (online-only
+ * cloud placeholders, a dead mount) holds at most its own slot of Main's libuv
+ * pool; a refused request marks the pass incomplete instead of failing it.
+ */
+class DetectionRun {
+  incomplete = false;
+  private readonly present = new Set<string>();
+
+  constructor(readonly root: string) {}
+
+  /**
+   * Stats every detection input once: the signature the cache is checked
+   * against, and the existence answers the detectors use instead of probing
+   * the disk again.
+   */
+  async probe(): Promise<string> {
+    const parts = await Promise.all(
+      DETECTION_INPUTS.map(async (name) => {
+        try {
+          const stat = await projectIo.run(this.root, () => fs.stat(path.join(this.root, name)));
+          this.present.add(name);
+          return `${stat.mtimeMs}:${stat.size}`;
+        } catch (error) {
+          // Only a proven absence is an answer; EIO, EACCES or a refused
+          // request leave the file unknown, not missing.
+          const code = (error as NodeJS.ErrnoException | undefined)?.code;
+          if (isProjectIoError(error) || (code !== "ENOENT" && code !== "ENOTDIR")) {
+            this.incomplete = true;
+          }
+          return "-";
+        }
+      })
+    );
+    return parts.join("|");
+  }
+
+  has(name: string): boolean {
+    return this.present.has(name);
+  }
+
+  /**
+   * The file's text, or null when the gate refused the read. Any failed read
+   * leaves the pass incomplete: on macOS an online-only placeholder fails with
+   * EDEADLK, and that file's commands must not be cached as absent.
+   */
+  async read(name: string): Promise<string | null> {
+    try {
+      return await projectIo.run(this.root, () => fs.readFile(path.join(this.root, name), "utf-8"));
+    } catch (error) {
+      this.incomplete = true;
+      if (isProjectIoError(error)) return null;
+      throw error;
+    }
+  }
 }
 
 interface CachedDetection {
@@ -138,44 +184,53 @@ export class RunCommandDetector {
   async detect(projectPath: string): Promise<RunCommand[]> {
     // A project is often added before it is scaffolded, so a cached result is
     // only reused while none of the files it was derived from has changed.
-    const signature = await readInputSignature(projectPath);
+    const run = new DetectionRun(projectPath);
+    const signature = await run.probe();
     const cached = this.cache.get(projectPath);
-    if (cached && cached.signature === signature) return cached.commands;
+    // A pass that couldn't stat everything can't validate the cache, so the
+    // last full result is the better answer than a partial one.
+    if (cached && (run.incomplete || cached.signature === signature)) return cached.commands;
 
     const results = await Promise.all([
-      this.detectNpm(projectPath),
-      this.detectMakefile(projectPath),
-      this.detectJustfile(projectPath),
-      this.detectTaskfile(projectPath),
-      this.detectProcfile(projectPath),
-      this.detectMise(projectPath),
-      this.detectDjango(projectPath),
-      this.detectComposer(projectPath),
-      this.detectDevContainer(projectPath),
+      this.detectNpm(run),
+      this.detectMakefile(run),
+      this.detectJustfile(run),
+      this.detectTaskfile(run),
+      this.detectProcfile(run),
+      this.detectMise(run),
+      this.detectDjango(run),
+      this.detectComposer(run),
+      this.detectDevContainer(run),
     ]);
 
     const commands = results.flat();
+    if (run.incomplete) {
+      // A partial result must not outlive the stall that caused it, nor stand
+      // in for a full one read earlier.
+      return cached ? cached.commands : commands;
+    }
     this.cache.set(projectPath, { signature, commands });
     return commands;
   }
 
-  private async detectNpm(root: string): Promise<RunCommand[]> {
-    const pkgPath = path.join(root, "package.json");
-    if (!existsSync(pkgPath)) return [];
+  private async detectNpm(run: DetectionRun): Promise<RunCommand[]> {
+    const pkgPath = path.join(run.root, "package.json");
+    if (!run.has("package.json")) return [];
 
     try {
-      const content = await fs.readFile(pkgPath, "utf-8");
+      const content = await run.read("package.json");
+      if (content === null) return [];
       const pkg = JSON.parse(stripUtf8Bom(content));
       if (!pkg.scripts || typeof pkg.scripts !== "object") return [];
 
       let runner = "npm run";
-      if (existsSync(path.join(root, "bun.lock"))) {
+      if (run.has("bun.lock")) {
         runner = "bun run";
-      } else if (existsSync(path.join(root, "bun.lockb"))) {
+      } else if (run.has("bun.lockb")) {
         runner = "bun run";
-      } else if (existsSync(path.join(root, "pnpm-lock.yaml"))) {
+      } else if (run.has("pnpm-lock.yaml")) {
         runner = "pnpm run";
-      } else if (existsSync(path.join(root, "yarn.lock"))) {
+      } else if (run.has("yarn.lock")) {
         runner = "yarn run";
       }
 
@@ -221,12 +276,13 @@ export class RunCommandDetector {
     }
   }
 
-  private async detectMakefile(root: string): Promise<RunCommand[]> {
-    const makePath = path.join(root, "Makefile");
-    if (!existsSync(makePath)) return [];
+  private async detectMakefile(run: DetectionRun): Promise<RunCommand[]> {
+    const makePath = path.join(run.root, "Makefile");
+    if (!run.has("Makefile")) return [];
 
     try {
-      const content = await fs.readFile(makePath, "utf-8");
+      const content = await run.read("Makefile");
+      if (content === null) return [];
       const targetRegex = /^([A-Za-z0-9][\w.+/-]*(?:\s+[A-Za-z0-9][\w.+/-]*)*)\s*:(?![=])/gm;
       const commands: RunCommand[] = [];
       const seen = new Set<string>();
@@ -254,19 +310,14 @@ export class RunCommandDetector {
     }
   }
 
-  private async detectJustfile(root: string): Promise<RunCommand[]> {
-    let justfilePath: string | null = null;
-    for (const name of JUSTFILE_VARIANTS) {
-      const candidate = path.join(root, name);
-      if (existsSync(candidate)) {
-        justfilePath = candidate;
-        break;
-      }
-    }
-    if (!justfilePath) return [];
+  private async detectJustfile(run: DetectionRun): Promise<RunCommand[]> {
+    const justfileName = JUSTFILE_VARIANTS.find((name) => run.has(name));
+    if (!justfileName) return [];
+    const justfilePath = path.join(run.root, justfileName);
 
     try {
-      const content = await fs.readFile(justfilePath, "utf-8");
+      const content = await run.read(justfileName);
+      if (content === null) return [];
       const lines = content.split("\n");
       const commands: RunCommand[] = [];
       const seen = new Set<string>();
@@ -315,19 +366,14 @@ export class RunCommandDetector {
     }
   }
 
-  private async detectTaskfile(root: string): Promise<RunCommand[]> {
-    let taskfilePath: string | null = null;
-    for (const name of TASKFILE_VARIANTS) {
-      const candidate = path.join(root, name);
-      if (existsSync(candidate)) {
-        taskfilePath = candidate;
-        break;
-      }
-    }
-    if (!taskfilePath) return [];
+  private async detectTaskfile(run: DetectionRun): Promise<RunCommand[]> {
+    const taskfileName = TASKFILE_VARIANTS.find((name) => run.has(name));
+    if (!taskfileName) return [];
+    const taskfilePath = path.join(run.root, taskfileName);
 
     try {
-      const content = await fs.readFile(taskfilePath, "utf-8");
+      const content = await run.read(taskfileName);
+      if (content === null) return [];
       // Merge schema: Taskfiles share `desc`/`internal` across tasks via anchors,
       // and without it a task inheriting `desc` vanishes from the run list while
       // one inheriting `internal: true` leaks into it.
@@ -365,12 +411,13 @@ export class RunCommandDetector {
     }
   }
 
-  private async detectProcfile(root: string): Promise<RunCommand[]> {
-    const procfilePath = path.join(root, "Procfile");
-    if (!existsSync(procfilePath)) return [];
+  private async detectProcfile(run: DetectionRun): Promise<RunCommand[]> {
+    const procfilePath = path.join(run.root, "Procfile");
+    if (!run.has("Procfile")) return [];
 
     try {
-      const content = await fs.readFile(procfilePath, "utf-8");
+      const content = await run.read("Procfile");
+      if (content === null) return [];
       const lines = content.split("\n");
       const commands: RunCommand[] = [];
       const seen = new Set<string>();
@@ -403,12 +450,13 @@ export class RunCommandDetector {
     }
   }
 
-  private async detectMise(root: string): Promise<RunCommand[]> {
-    const misePath = path.join(root, "mise.toml");
-    if (!existsSync(misePath)) return [];
+  private async detectMise(run: DetectionRun): Promise<RunCommand[]> {
+    const misePath = path.join(run.root, "mise.toml");
+    if (!run.has("mise.toml")) return [];
 
     try {
-      const content = await fs.readFile(misePath, "utf-8");
+      const content = await run.read("mise.toml");
+      if (content === null) return [];
       const doc = parseToml(content) as Record<string, unknown> | null;
       if (!doc || typeof doc !== "object") return [];
 
@@ -464,8 +512,8 @@ export class RunCommandDetector {
     }
   }
 
-  private async detectDjango(root: string): Promise<RunCommand[]> {
-    if (!existsSync(path.join(root, "manage.py"))) return [];
+  private async detectDjango(run: DetectionRun): Promise<RunCommand[]> {
+    if (!run.has("manage.py")) return [];
 
     const commonCommands = ["runserver", "migrate", "makemigrations", "test", "shell"];
 
@@ -479,12 +527,13 @@ export class RunCommandDetector {
     }));
   }
 
-  private async detectComposer(root: string): Promise<RunCommand[]> {
-    const composerPath = path.join(root, "composer.json");
-    if (!existsSync(composerPath)) return [];
+  private async detectComposer(run: DetectionRun): Promise<RunCommand[]> {
+    const composerPath = path.join(run.root, "composer.json");
+    if (!run.has("composer.json")) return [];
 
     try {
-      const content = await fs.readFile(composerPath, "utf-8");
+      const content = await run.read("composer.json");
+      if (content === null) return [];
       const json = JSON.parse(stripUtf8Bom(content));
       if (!json.scripts || typeof json.scripts !== "object") return [];
 
@@ -510,12 +559,14 @@ export class RunCommandDetector {
       return [];
     }
   }
-  private async detectDevContainer(root: string): Promise<RunCommand[]> {
-    const devcontainerPath = path.join(root, ".devcontainer", "devcontainer.json");
-    if (!existsSync(devcontainerPath)) return [];
+  private async detectDevContainer(run: DetectionRun): Promise<RunCommand[]> {
+    const devcontainerName = path.join(".devcontainer", "devcontainer.json");
+    const devcontainerPath = path.join(run.root, devcontainerName);
+    if (!run.has(devcontainerName)) return [];
 
     try {
-      const content = await fs.readFile(devcontainerPath, "utf-8");
+      const content = await run.read(devcontainerName);
+      if (content === null) return [];
       const config = parseJsonc(content) as { postStartCommand?: unknown } | null;
       const postStart = config?.postStartCommand;
       if (postStart === undefined || postStart === null) return [];

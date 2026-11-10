@@ -8,10 +8,15 @@ import {
   liveAssistantTerminalControl,
 } from "../AssistantTerminalControl.js";
 import { MAX_ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
+import {
+  GLOBAL_ASSISTANT_ID,
+  GLOBAL_ASSISTANT_SLOT,
+} from "../../../../shared/config/globalAssistant.js";
 import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
 import type { RunningLane, RunningLaneSession } from "../../HelpSessionService.js";
 import { helpOwnershipPrincipal, principalOwnerKey } from "../../mcp-server/resourceOwnership.js";
+import { HoldRefusedError, type WorkerSteerQueue } from "../WorkerSteerQueue.js";
 
 const PROJECT = "proj-1";
 const LOCAL: AssistantCaller = {
@@ -112,6 +117,7 @@ describe("AssistantTerminalControl (#13496)", () => {
       getLiveGeneration: (terminalId) => byTerminal(terminalId)?.generation ?? null,
       serializedState: async () => ({ data: "screen" }),
       sleep: async () => {},
+      projectName: (projectId) => (projectId === PROJECT ? "Web App" : null),
       ...mocks,
     };
     control = new AssistantTerminalControl(deps);
@@ -283,6 +289,243 @@ describe("AssistantTerminalControl (#13496)", () => {
       await expect(
         control.submit(LOCAL, target, { command: "x", generation: 3, handback: true })
       ).rejects.toThrow(/state: working/);
+    });
+  });
+
+  describe("a send held for an assistant mid-turn (#16620)", () => {
+    type HoldRequest = Parameters<WorkerSteerQueue["hold"]>[0];
+    let hold: Mock<(request: HoldRequest) => ReturnType<WorkerSteerQueue["hold"]>>;
+    const authorize = vi.fn(() => null as { code: string; message: string } | null);
+    const whenBusy = { queue: { ttlSeconds: 600 }, authorize };
+    const busyRun = (extra: Partial<AssistantTerminalRecord> = {}) =>
+      atPrompt({
+        agentState: "working",
+        agentIncarnation: 2,
+        agentSessionId: "agent-session",
+        lastForeignPromptInputAt: 500,
+        ...extra,
+      });
+
+    beforeEach(() => {
+      hold = vi.fn(() => ({ queuedSendToken: "held-1", expiresAt: 9_000 }));
+      authorize.mockClear();
+      control = new AssistantTerminalControl({ ...deps, queue: () => ({ hold }) });
+      addLane(1, "t-one", { record: busyRun() });
+    });
+    const send = (caller: AssistantCaller = LOCAL, terminalId = "t-one") =>
+      control.submit(caller, control.require(caller, terminalId), {
+        command: "Rebase onto develop when you're done.",
+        generation: 3,
+        handback: true,
+        whenBusy,
+      });
+
+    it("holds it for the run it named, under the sender, stamped as an immediate send is", async () => {
+      const receipt = await send();
+      expect(mocks.submit).not.toHaveBeenCalled();
+      expect(receipt).toMatchObject({
+        sent: false,
+        queued: true,
+        terminalId: "t-one",
+        queuedSendToken: "held-1",
+        expiresAt: 9_000,
+      });
+      const request = hold.mock.calls[0]![0];
+      expect(request).toMatchObject({
+        principal: LOCAL_OWNER,
+        projectId: PROJECT,
+        terminalId: "t-one",
+        generation: 3,
+        ttlSeconds: 600,
+        promptAsWritten: "Rebase onto develop when you're done.",
+        run: {
+          agentIncarnation: 2,
+          agentSessionId: "agent-session",
+          lastForeignPromptInputAt: 500,
+        },
+      });
+      expect(request.text.split("\n")[0]).toMatch(/^From the Daintree Assistant on /);
+      expect(request.text.endsWith(buildHandbackInstruction(request.handbackCode!, "run"))).toBe(
+        true
+      );
+    });
+
+    it("still refuses one sent without `whenBusy`, holding nothing", async () => {
+      await expect(
+        control.submit(LOCAL, control.require(LOCAL, "t-one"), {
+          command: "x",
+          generation: 3,
+          handback: false,
+        })
+      ).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      expect(hold).not.toHaveBeenCalled();
+    });
+
+    it("refuses rather than holds over a draft typed mid-turn, or the sender's own keys", async () => {
+      byTerminal("t-one")!.record = busyRun({ lastTypedInputAt: 1_500 });
+      await expect(send()).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      const own = busyRun();
+      stampTypedInput(own, 1_500, LOCAL_OWNER);
+      byTerminal("t-one")!.record = own;
+      await expect(send()).rejects.toThrow(/keys you sent/);
+      byTerminal("t-one")!.record = busyRun({ hasPendingSubmission: true });
+      await expect(send()).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      expect(hold).not.toHaveBeenCalled();
+    });
+
+    it("holds nothing at a question or for a replaced run", async () => {
+      byTerminal("t-one")!.record = atPrompt({ waitingReason: "approval" });
+      await expect(send()).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      byTerminal("t-one")!.record = busyRun();
+      byTerminal("t-one")!.generation = 4;
+      await expect(send()).rejects.toMatchObject({ code: "ASSISTANT_RESTARTED" });
+      expect(hold).not.toHaveBeenCalled();
+    });
+
+    it("refuses as busy when the queue can't take it", async () => {
+      hold.mockImplementation(() => {
+        throw new HoldRefusedError("this host is shutting down");
+      });
+      const refused = await send().catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(AssistantTargetError);
+      expect(refused).toMatchObject({ code: "ASSISTANT_BUSY" });
+      expect((refused as Error).message).toMatch(/shutting down/);
+
+      control = new AssistantTerminalControl(deps);
+      await expect(send()).rejects.toThrow(/can't hold a message/);
+      expect(mocks.submit).not.toHaveBeenCalled();
+    });
+
+    it("holds nothing for a run never seen settling, or one replaced while it was read", async () => {
+      byTerminal("t-one")!.record = busyRun({ lastStateChange: undefined });
+      await expect(send()).rejects.toThrow(/hasn't been seen settling/);
+
+      byTerminal("t-one")!.record = busyRun();
+      const read = deps.getTerminal;
+      control = new AssistantTerminalControl({
+        ...deps,
+        queue: () => ({ hold }),
+        getTerminal: async (terminalId) => {
+          const record = await read(terminalId);
+          byTerminal(terminalId)!.generation = 4;
+          return record;
+        },
+      });
+      await expect(send()).rejects.toMatchObject({ code: "ASSISTANT_RESTARTED" });
+      expect(hold).not.toHaveBeenCalled();
+    });
+
+    it("is written only while the session it named still runs there and the drive rule allows", async () => {
+      await send();
+      const request = hold.mock.calls[0]![0];
+      expect(request.authorize()).toBeNull();
+      authorize.mockReturnValueOnce({ code: "DRIVEN_ELSEWHERE", message: "no" });
+      expect(request.authorize()).toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+      byTerminal("t-one")!.running.sessionId = "replacement";
+      expect(request.authorize()).toMatchObject({ code: "ASSISTANT_NOT_FOUND" });
+    });
+
+    it("waits while keys are planned and pressed, or an interrupt is read, however they end", async () => {
+      let isWriting: () => boolean = () => false;
+      let duringRead: boolean | undefined;
+      let releaseRead: (() => void) | undefined;
+      control = new AssistantTerminalControl({
+        ...deps,
+        queue: () => ({ hold }),
+        serializedState: async () => {
+          duringRead ??= isWriting();
+          if (releaseRead === undefined) return { data: "screen" };
+          await new Promise<void>((resolve) => {
+            const go = releaseRead!;
+            releaseRead = () => {
+              resolve();
+              go();
+            };
+          });
+          return { data: "screen" };
+        },
+      });
+      await send();
+      isWriting = hold.mock.calls[0]![0].isWriting;
+      expect(isWriting()).toBe(false);
+
+      byTerminal("t-one")!.record = atPrompt({ waitingReason: "approval" });
+      const keys = () =>
+        control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+          keys: ["enter"],
+          choose: undefined,
+          generation: 3,
+        });
+      let seen: boolean | undefined;
+      mocks.write.mockImplementation(() => {
+        seen = isWriting();
+      });
+      await keys();
+      // From the first read on, not only once the keys go in.
+      expect(duringRead).toBe(true);
+      expect(seen).toBe(true);
+      expect(isWriting()).toBe(false);
+
+      // Two at once count as two, and a throw still lets go.
+      releaseRead = () => {};
+      const first = keys();
+      await vi.waitFor(() => expect(isWriting()).toBe(true));
+      const parked = releaseRead;
+      releaseRead = undefined;
+      mocks.write.mockImplementation(() => {
+        throw new Error("pty gone");
+      });
+      await expect(keys()).rejects.toThrow("pty gone");
+      expect(isWriting()).toBe(true);
+      parked();
+      await expect(first).rejects.toThrow("pty gone");
+      expect(isWriting()).toBe(false);
+
+      byTerminal("t-one")!.record = busyRun();
+      let duringInterrupt: boolean | undefined;
+      mocks.doubleEscape.mockImplementation(() => {
+        duringInterrupt = isWriting();
+      });
+      await control.interrupt(LOCAL, control.require(LOCAL, "t-one"));
+      expect(duringInterrupt).toBe(true);
+      expect(isWriting()).toBe(false);
+    });
+
+    it("presses no keys while a submission is still going in", async () => {
+      byTerminal("t-one")!.record = atPrompt({
+        waitingReason: "approval",
+        hasPendingSubmission: true,
+      });
+      await expect(
+        control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+          keys: ["enter"],
+          choose: undefined,
+          generation: 3,
+        })
+      ).rejects.toThrow(/still being written/);
+      expect(mocks.write).not.toHaveBeenCalled();
+    });
+
+    it("holds one up to the global Assistant under its upward stamp", async () => {
+      addLane(GLOBAL_ASSISTANT_SLOT, "t-global", {
+        projectId: GLOBAL_ASSISTANT_ID,
+        sessionId: "global-session",
+        attached: false,
+        record: busyRun(),
+      });
+      await send(LOCAL, "t-global");
+      const request = hold.mock.calls[0]![0];
+      expect(request.projectId).toBe(GLOBAL_ASSISTANT_ID);
+      expect(request.text.split("\n")[0]).toMatch(
+        /^From the Daintree Assistant of the project "Web App" on /
+      );
+    });
+
+    it("files an immediate send as the sender's prompt input", async () => {
+      byTerminal("t-one")!.record = atPrompt();
+      await send();
+      expect(mocks.submit.mock.calls[0]![5]).toBe(LOCAL_OWNER);
+      expect(hold).not.toHaveBeenCalled();
     });
   });
 
@@ -906,10 +1149,121 @@ describe("AssistantTerminalControl (#13496)", () => {
       });
     });
   });
+
+  describe("the global Assistant (#16410)", () => {
+    const GLOBAL_CALLER: AssistantCaller = {
+      kind: "local",
+      helpSessionId: "global-session",
+      projectId: GLOBAL_ASSISTANT_ID,
+      machineName: "studio-01",
+    };
+    const addGlobal = (options: Parameters<typeof addLane>[2] = {}) =>
+      addLane(GLOBAL_ASSISTANT_SLOT, "t-global", {
+        projectId: GLOBAL_ASSISTANT_ID,
+        sessionId: "global-session",
+        attached: false,
+        ...options,
+      });
+
+    it("resolves this machine's global for a project's own assistant here, and nobody else", () => {
+      addGlobal();
+      expect(control.resolve(LOCAL, "t-global")).toMatchObject({
+        scope: "global",
+        projectId: GLOBAL_ASSISTANT_ID,
+        sessionId: "global-session",
+      });
+      // Another machine's assistant has its own machine's global.
+      expect(control.resolve(RELAY, "t-global")).toBeNull();
+      // The global never addresses itself.
+      expect(control.resolve(GLOBAL_CALLER, "t-global")).toBeNull();
+      addLane(1, "t-one");
+      expect(control.resolve(LOCAL, "t-one")?.scope).toBe("project");
+    });
+
+    it("lists it on its own, outside the project's assistants and slots", async () => {
+      addGlobal({ generation: 7, record: atPrompt({ agentState: "working" }) });
+      addLane(1, "t-one");
+
+      const listed = await control.list(LOCAL);
+      expect(listed.global).toEqual({
+        terminalId: "t-global",
+        generation: 7,
+        agentState: "working",
+      });
+      expect(listed.assistants.map((entry) => entry.terminalId)).toEqual(["t-one"]);
+      expect(listed.vacantSlots).toContain(GLOBAL_ASSISTANT_SLOT);
+      expect((await control.list(RELAY)).global).toBeNull();
+    });
+
+    it("lists none while no global runs, or before its run has a generation", async () => {
+      expect((await control.list(LOCAL)).global).toBeNull();
+      addGlobal();
+      lanes[0]!.generation = null as never;
+      expect((await control.list(LOCAL)).global).toBeNull();
+    });
+
+    it("stamps a send up with the project it came from, never as a brief", async () => {
+      addGlobal();
+      const target = control.require(LOCAL, "t-global");
+      await control.submit(LOCAL, target, {
+        command: "Can studio-02 take the GPU run?",
+        generation: 3,
+        handback: true,
+      });
+      const [terminalId, text, , code, promptAsWritten] = mocks.submit.mock.calls[0]!;
+      expect(terminalId).toBe("t-global");
+      expect(promptAsWritten).toBe("Can studio-02 take the GPU run?");
+      const first = String(text).split("\n")[0]!;
+      expect(first).toMatch(
+        /^From the Daintree Assistant of the project "Web App" on Greg's Mac mini\. /
+      );
+      expect(first).not.toMatch(/orchestrator's brief/);
+      expect(String(text).endsWith(buildHandbackInstruction(code!, "run"))).toBe(true);
+    });
+
+    it("names the project by its id when its name can't be read", async () => {
+      addGlobal();
+      const caller: AssistantCaller = { ...LOCAL, projectId: "proj-unnamed" };
+      await control.submit(caller, control.require(caller, "t-global"), {
+        command: "Hi",
+        generation: 3,
+        handback: false,
+      });
+      expect(String(mocks.submit.mock.calls[0]![1])).toMatch(/of the project "proj-unnamed" on /);
+    });
+
+    it("refuses a send while the global is busy, as any assistant would", async () => {
+      addGlobal({ record: atPrompt({ agentState: "working" }) });
+      await expect(
+        control.submit(LOCAL, control.require(LOCAL, "t-global"), {
+          command: "Hi",
+          generation: 3,
+          handback: false,
+        })
+      ).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      expect(mocks.submit).not.toHaveBeenCalled();
+    });
+
+    it("refuses keys, an interrupt, a close or a reply read, doing nothing", async () => {
+      addGlobal({ startedBy: { kind: "local", askingHelpSessionId: "hub-session" } });
+      const target = control.require(LOCAL, "t-global");
+      const refused = { code: "ASSISTANT_GLOBAL_SEND_ONLY" };
+      await expect(
+        control.sendKeys(LOCAL, target, { keys: ["Enter"], choose: undefined, generation: 3 })
+      ).rejects.toMatchObject(refused);
+      await expect(control.interrupt(LOCAL, target)).rejects.toMatchObject(refused);
+      await expect(control.close(LOCAL, target)).rejects.toMatchObject(refused);
+      await expect(control.readReply(target, 1_000)).rejects.toMatchObject(refused);
+      expect(mocks.write).not.toHaveBeenCalled();
+      expect(mocks.doubleEscape).not.toHaveBeenCalled();
+      expect(mocks.revoke).not.toHaveBeenCalled();
+      expect(mocks.extractReply).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("liveAssistantTerminalControl (#15521)", () => {
-  it("submits under the strict guard and offers the brief alone as the run's first prompt", async () => {
+  it("submits under the strict guard, offers the brief alone as the run's first prompt, and files it as the sender's", async () => {
     const pty = {
       getTerminalAsync: async () => atPrompt(),
       getLiveGeneration: () => 3,
@@ -927,6 +1281,7 @@ describe("liveAssistantTerminalControl (#15521)", () => {
       },
       pty: () => pty as never,
       extractReply: () => ({ reply: null, reachedHandback: false }),
+      projectName: () => null,
     });
 
     await control.submit(LOCAL, control.require(LOCAL, "t-one"), {
@@ -942,7 +1297,9 @@ describe("liveAssistantTerminalControl (#15521)", () => {
       undefined,
       "settled-prompt-strict",
       undefined,
-      "Hello"
+      "Hello",
+      undefined,
+      LOCAL_OWNER
     );
   });
 
@@ -966,6 +1323,7 @@ describe("liveAssistantTerminalControl (#15521)", () => {
       },
       pty: () => pty as never,
       extractReply: () => ({ reply: null, reachedHandback: false }),
+      projectName: () => null,
     });
     const target = control.require(LOCAL, "t-one");
 

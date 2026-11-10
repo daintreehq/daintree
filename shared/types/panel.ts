@@ -1,7 +1,6 @@
 import type { AgentState, AgentStateChangeTrigger, AgentId, WaitingReason } from "./agent.js";
 import type { TerminalCheckResult } from "./checkResult.js";
 import type { TerminalHandback } from "./handback.js";
-import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { ScheduledRunRef } from "./scheduledRunRef.js";
@@ -719,6 +718,12 @@ export interface PtyPanelData extends BasePanelData {
    */
   worktreeMoveNotice?: PanelWorktreeMoveNotice;
   /**
+   * Hold the "running full-screen" notice back for this pane's lifetime once
+   * the user closes it (#16357). Never serialized, so the next app start offers
+   * the notice again.
+   */
+  altScreenNoticeDismissed?: boolean;
+  /**
    * Held duration gauge for currently-paused terminals, sampled by the
    * `pause-duration-gauge` reliability metric (2s tick). Distinct from
    * `flowStatus` (a transition) and from `pauseDuration` on the
@@ -776,7 +781,7 @@ export interface PtyPanelData extends BasePanelData {
    * Not persisted; rehydrated from backend reconnect payload.
    * See `docs/architecture/terminal-identity.md`.
    */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   /**
    * How many times the pty-host has observed a new agent session take over this
    * terminal's PTY after a prior one exited (#12535).
@@ -1425,6 +1430,7 @@ export interface TerminalInstance {
   flowStatusTimestamp?: number;
   isInputLocked?: boolean;
   worktreeMoveNotice?: PanelWorktreeMoveNotice;
+  altScreenNoticeDismissed?: boolean;
   browserUrl?: string;
   browserHistory?: BrowserHistory;
   browserZoom?: number;
@@ -1463,7 +1469,7 @@ export interface TerminalInstance {
    * Live detected identity — the agent currently running in this terminal.
    * See `PtyPanelData.detectedAgentId` for full contract.
    */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */

@@ -9,6 +9,7 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import {
   SettingsDependents,
   SettingsGroup,
+  SettingsInlineError,
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
@@ -47,13 +48,7 @@ function openMcpSettings() {
 function FailureRow({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-      <p role="alert" className="flex items-start gap-1.5 text-xs text-text-secondary">
-        <TriangleAlert
-          className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
-          aria-hidden="true"
-        />
-        <span>{message}</span>
-      </p>
+      <SettingsInlineError role="alert">{message}</SettingsInlineError>
       <Button variant="outline" size="sm" onClick={onRetry}>
         Retry
       </Button>
@@ -108,7 +103,7 @@ function RelaunchNeededGroup({
                   .then(onRestarted)
               }
             >
-              Restart
+              Restart terminal
             </Button>
           }
         />

@@ -155,6 +155,39 @@ describe("agent MCP over the worker bridge", () => {
     expect(workerSignal.aborted).toBe(false);
   });
 
+  it("carries the Assistant's consumer across the port to the worker's execute", async () => {
+    const { host, proxy } = makeConnectedPair();
+    const execute = vi.fn(() => null);
+    await proxy.host.mcp.registerTools("data", {
+      list_rows: { description: "Lists rows.", inputSchema: { type: "object" }, execute },
+    });
+    await flush();
+
+    const assistantCaller: PluginMcpCaller = { ...CALLER, consumer: "assistant" };
+    await host.rosters[0].tools.list_rows.execute(
+      {},
+      assistantCaller,
+      new AbortController().signal
+    );
+
+    const caller = (execute.mock.calls[0] as unknown[])[1];
+    expect(caller).toEqual(assistantCaller);
+    expect(Object.isFrozen(caller)).toBe(true);
+  });
+
+  it("does not invent a consumer for a caller that has none", async () => {
+    const { host, proxy } = makeConnectedPair();
+    const execute = vi.fn(() => null);
+    await proxy.host.mcp.registerTools("data", {
+      list_rows: { description: "Lists rows.", inputSchema: { type: "object" }, execute },
+    });
+    await flush();
+
+    await host.rosters[0].tools.list_rows.execute({}, CALLER, new AbortController().signal);
+
+    expect((execute.mock.calls[0] as unknown[])[1]).not.toHaveProperty("consumer");
+  });
+
   it("carries declared annotations across the port, explicit false included", async () => {
     const { host, proxy } = makeConnectedPair();
     await proxy.host.mcp.registerTools("data", {

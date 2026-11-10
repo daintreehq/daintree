@@ -1,12 +1,13 @@
 /**
  * Canopy on its local model, end to end: the real app, real PTYs, fake Claude
- * agents drawing realistic screens, and the published reader downloaded from
- * Hugging Face and run in its own process. Turning Canopy on downloads the
- * model, in INT8 on every CPU, and every row is read on this machine;
- * Settings offers no choice of model; turning Canopy off lets the reader
- * process go, and the model can then be deleted.
+ * agents drawing realistic screens, and the reader that ships with Daintree
+ * (#16415) run in its own process. Canopy is on from the first launch and
+ * every row is read on this machine, with nothing downloaded first; Settings
+ * offers no choice of model and nothing to download or delete; turning Canopy
+ * off lets the reader process go.
  *
- * Opt-in only, since it downloads the model (about 21 MB):
+ * Opt-in only, since it runs the real reader model on every screen. The build
+ * puts the model where an unpackaged run reads it (`npm run fetch:canopy-model`):
  *
  *   DAINTREE_E2E_CANOPY_LOCAL=1 npx playwright test --project=full-panels canopy-local-reader
  */
@@ -140,8 +141,9 @@ function traceReads(): Array<{ stage: string; at: number; error?: string; output
     });
 }
 
-function modelDir(name: string): string {
-  return path.join(ctx.userDataDir, "canopy", "models", name);
+/** Where Daintree downloaded the model before it shipped with the app. */
+function downloadedModels(): string {
+  return path.join(ctx.userDataDir, "canopy", "models");
 }
 
 /** The reader's utility processes, by the service name it is forked under, with their memory. */
@@ -180,12 +182,12 @@ test.describe("Canopy on its local model", () => {
     cleanupFixture?.();
   });
 
-  test("turning Canopy on downloads Light and reads every agent on this machine", async () => {
+  test("Canopy reads every agent on this machine from the first launch, with nothing downloaded", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the model",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec runs the reader model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the model");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to run the reader model");
     test.setTimeout(300_000);
     const page = ctx.window;
 
@@ -202,18 +204,11 @@ test.describe("Canopy on its local model", () => {
         { timeout: 60_000 }
       );
     }
-    // Nothing is fetched or started before Canopy is turned on.
-    expect(existsSync(path.join(ctx.userDataDir, "canopy"))).toBe(false);
-    expect(await readerCount()).toBe(0);
-
+    // On by default: the panel opens on its inbox, with nothing asking to turn it on.
     await toggleCanopy(page);
-    const offer = dialog(page);
-    await expect(
-      offer.getByText("Nothing it reads leaves this computer.", { exact: false })
-    ).toBeVisible();
-    await expect(offer.getByText("Privacy policy")).toHaveCount(0);
-    await expect(offer.getByText("paid", { exact: false })).toHaveCount(0);
-    await offer.getByRole("button", { name: "Turn on Canopy" }).click();
+    await expect(dialog(page)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(dialog(page).getByRole("button", { name: "Turn on Canopy" })).toHaveCount(0);
+    await expect(dialog(page).getByText("Privacy policy")).toHaveCount(0);
 
     await expect(rows(page)).toHaveCount(3, { timeout: 60_000 });
     // Every row read and ranked, with words copied off its screen.
@@ -226,12 +221,8 @@ test.describe("Canopy on its local model", () => {
         { timeout: 120_000, intervals: [500] }
       )
       .toBe(true);
-    // Weight-only INT8 on every CPU, and config.json, which Hugging Face counts downloads by.
-    const light = modelDir("canopy-reader-17m");
-    expect(existsSync(path.join(light, "model.int8.onnx"))).toBe(true);
-    expect(existsSync(path.join(light, "model.fp32.onnx"))).toBe(false);
-    expect(existsSync(path.join(light, "config.json"))).toBe(true);
-    expect(existsSync(modelDir("canopy-reader-68m"))).toBe(false);
+    // Read with the model that ships with Daintree: nothing was downloaded for it.
+    expect(existsSync(downloadedModels())).toBe(false);
     const readers = await readerProcesses();
     expect(readers).toHaveLength(1);
     console.log(`Light reader process: ${readers[0]!.workingSetKb} KB working set`);
@@ -264,19 +255,20 @@ test.describe("Canopy on its local model", () => {
     await page.keyboard.press("Escape");
   });
 
-  test("Settings offers no choice of model, and names the one downloaded", async () => {
+  test("Settings offers no choice of model, and nothing to download or delete", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the model",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec runs the reader model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the model");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to run the reader model");
     test.setTimeout(60_000);
     const page = ctx.window;
     const panel = await openCanopySettings(page);
-    await expect(panel.getByRole("button", { name: "Delete model" })).toBeVisible({
+    await expect(panel.getByRole("switch", { name: "Read agent terminals" })).toBeChecked({
       timeout: T_MEDIUM,
     });
-    await expect(panel).toContainText("Light");
+    await expect(panel.getByRole("button", { name: "Delete model" })).toHaveCount(0);
+    await expect(panel.getByText("Download", { exact: false })).toHaveCount(0);
     await expect(panel.getByRole("radio")).toHaveCount(0);
     await expect(panel.getByText("Best", { exact: true })).toHaveCount(0);
     await expect(panel.getByText("Plan", { exact: true })).toHaveCount(0);
@@ -285,26 +277,22 @@ test.describe("Canopy on its local model", () => {
     await page.keyboard.press("Escape");
   });
 
-  test("turning Canopy off lets the reader go, and its model can then be deleted", async () => {
+  test("turning Canopy off lets the reader go, and turning it on again needs no download", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the model",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec runs the reader model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the model");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to run the reader model");
     test.setTimeout(120_000);
     const page = ctx.window;
     const panel = await openCanopySettings(page);
-    await panel.getByRole("switch", { name: "Read agent terminals" }).click();
+    const read = panel.getByRole("switch", { name: "Read agent terminals" });
+    await read.click();
+    await expect(read).not.toBeChecked({ timeout: T_SHORT });
     await expect.poll(readerCount, { timeout: 15_000 }).toBe(0);
-    await panel.getByRole("button", { name: "Delete model" }).click();
-    // A destructive confirm: an alert dialog, named for what it deletes.
-    await page
-      .getByRole("alertdialog", { name: "Delete 'Light'?" })
-      .getByRole("button", { name: "Delete model" })
-      .click();
-    await expect
-      .poll(() => existsSync(modelDir("canopy-reader-17m")), { timeout: 15_000 })
-      .toBe(false);
-    await expect(panel.getByRole("button", { name: "Delete model" })).toHaveCount(0);
+    await read.click();
+    await expect(read).toBeChecked({ timeout: T_SHORT });
+    await expect(panel.getByText("Model unavailable")).toHaveCount(0);
+    expect(existsSync(downloadedModels())).toBe(false);
   });
 });

@@ -14,6 +14,7 @@ import { actionService } from "@/services/ActionService";
 import { BUILTIN_GITLAB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import type { GitLabTokenValidation } from "../../shared/types.js";
 import { logError } from "@/utils/logger";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 const GITLAB_PLUGIN_ID = "daintree.gitlab";
 const INSTANCE_URL_SETTING = "instanceUrl";
@@ -425,6 +426,12 @@ export function GitLabSettingsTab() {
                 onValueChange={(value) => {
                   setToken(value);
                   clearStaleResult();
+                }}
+                onKeyDown={(e) => {
+                  if (!isEnterToSubmit(e)) return;
+                  e.preventDefault();
+                  if (credentialOpInFlight() || !settingsLoaded || !credentialKnown) return;
+                  void handleSaveToken();
                 }}
                 placeholder={hasToken ? "Enter new token to replace" : "glpat-…"}
                 aria-label="GitLab personal access token"

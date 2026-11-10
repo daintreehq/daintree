@@ -82,7 +82,6 @@ const ROW_LABELS: Partial<Record<RowSlot, string>> = {
   canopyReading: "Read agent terminals",
   "agentDefaults.defaultAgent": "Default agent",
   "agentSettings.resumeOnRestart": "Resume agents after restart",
-  "agentSettings.globalUseAltScreen": "Use alt-screen mode",
   globalEnvironmentVariables: "Environment",
   "sessionRestore.enabled": "Restore live projects",
   "terminalConfig.resourceMonitoringEnabled": "Resource monitoring",
@@ -517,15 +516,9 @@ export function HostWorkSettingsPage({
             {presetRow<ResumeOnRestart>({
               key: "agentSettings.resumeOnRestart",
               label: "Resume agents after restart",
-              description: "What agent panes do when Daintree restarts",
+              description: "What agent panels do when Daintree restarts",
               options: RESUME_OPTIONS,
               value: isResumeOnRestart(resume) ? resume : null,
-            })}
-            {switchRow({
-              key: "agentSettings.globalUseAltScreen",
-              label: "Use alt-screen mode",
-              description:
-                "Render supported agents on the full-screen alternate buffer instead of inline",
             })}
           </SettingsGroup>
         </SettingsSection>
@@ -771,8 +764,7 @@ const UNAVAILABLE_BUTTON = "aria-disabled:opacity-50 aria-disabled:pointer-event
 const ENV_DESCRIPTION =
   "Injected into every new terminal in every project. A project variable with the same name overrides one of these.";
 const LEAK_DESCRIPTION = `Restart a terminal automatically once its memory (RSS) passes this. ${LEAK_RESTART_THRESHOLD_MB.min.toLocaleString()}–${LEAK_RESTART_THRESHOLD_MB.max.toLocaleString()} MB.`;
-const CANOPY_READ_DESCRIPTION =
-  "Downloads the model the first time. When off, Canopy lets the model go and deletes its readings";
+const CANOPY_READ_DESCRIPTION = "When off, Canopy lets its model go and deletes its readings";
 
 /**
  * The host's global variables, edited as a whole and saved explicitly against

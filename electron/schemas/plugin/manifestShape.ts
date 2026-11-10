@@ -59,7 +59,11 @@ import {
   WorktreeSetupStepContributionSchema,
 } from "./terminals.js";
 import { SettingDefinitionSchema, SetupStepContributionSchema } from "./settings.js";
-import { SurfaceContributionsSchema, ViewContributionSchema } from "./views.js";
+import {
+  CanopyViewContributionSchema,
+  SurfaceContributionsSchema,
+  ViewContributionSchema,
+} from "./views.js";
 import { TourContributionSchema } from "./tours.js";
 
 /** Values of a manifest's `platforms`: Node's `process.platform` names. */
@@ -89,6 +93,8 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   contextMenus: 200,
   commands: 200,
   views: 50,
+  // Rows in Canopy's one list, beside every other plugin's.
+  canopyViews: 5,
   mcpServers: 20,
   skills: 50,
   themes: 20,
@@ -310,6 +316,10 @@ export function buildPluginManifestObjectSchema() {
             .array(ToolbarButtonContributionSchema)
             .max(MANIFEST_CONTRIBUTION_CAPS.toolbarButtons)
             .default([]),
+          canopyViews: z
+            .array(CanopyViewContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.canopyViews)
+            .default([]),
           launchEntries: z
             .array(LaunchEntryContributionSchema)
             .max(MANIFEST_CONTRIBUTION_CAPS.launchEntries)
@@ -441,6 +451,7 @@ export function buildPluginManifestObjectSchema() {
         .default(() => ({
           panels: [],
           toolbarButtons: [],
+          canopyViews: [],
           launchEntries: [],
           layouts: [],
           searchProviders: [],

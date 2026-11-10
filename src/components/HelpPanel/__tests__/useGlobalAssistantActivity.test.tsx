@@ -52,6 +52,7 @@ function installHelp() {
     releaseGlobalAssistantInput: vi.fn(),
     restartGlobalAssistant: vi.fn(),
     discardGlobalAssistant: vi.fn(),
+    cancelGlobalAssistantLaunch: vi.fn(),
   };
   Object.assign(window, { electron: { help } });
 }
@@ -120,6 +121,7 @@ describe("useGlobalAssistantActivity", () => {
       "releaseGlobalAssistantInput",
       "restartGlobalAssistant",
       "discardGlobalAssistant",
+      "cancelGlobalAssistantLaunch",
     ]) {
       expect(help[name]).not.toHaveBeenCalled();
     }

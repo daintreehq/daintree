@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { PluginPresetGrantEntry } from "@shared/types/pluginCapabilityConsent";
 import { presetSourceLabel } from "./PluginCapabilityConfirmDialog";
@@ -66,7 +67,7 @@ export function PluginPresetGrants({ pluginId }: { pluginId: string }) {
           <span className="text-2xs text-text-secondary">
             Couldn&rsquo;t read these permissions.
           </span>
-          <Button variant="ghost" size="xs" onClick={() => setReadNonce((n) => n + 1)}>
+          <Button variant="outline" size="xs" onClick={() => setReadNonce((n) => n + 1)}>
             Retry
           </Button>
         </div>
@@ -83,7 +84,7 @@ export function PluginPresetGrants({ pluginId }: { pluginId: string }) {
               <li key={key} className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-xs text-text-primary break-words">
-                    {agentName} · {grant.presetName}
+                    {agentName} <FactSeparator /> {grant.presetName}
                   </div>
                   <div className="text-2xs text-text-secondary">
                     {presetSourceLabel(grant.source)}

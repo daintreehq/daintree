@@ -131,7 +131,7 @@ export function WorktreeCardPlaceholder({
             )}
             <Button
               type="button"
-              variant="subtle"
+              variant="outline"
               size="xs"
               onClick={() => onRetry(pendingCreation)}
             >

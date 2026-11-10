@@ -4,7 +4,7 @@ import {
   getProcessToolPriority,
   PROCESS_TOOL_ICON_BY_COMMAND,
 } from "../../../shared/config/processToolRegistry.js";
-import { AGENT_CLI_NAMES, getProcessIconMap } from "./registries.js";
+import { getAgentCliNames, getProcessIconMap } from "./registries.js";
 
 const WINDOWS_LAUNCHER_EXTENSION_PATTERN = /\.(?:exe|cmd|bat|com|ps1)$/i;
 const SCRIPT_EXTENSION_PATTERN = /\.(?:m?jsx?|cjs|tsx?|py|rb|php|pl)$/i;
@@ -226,6 +226,16 @@ function isExecutorCommand(name: string | undefined): boolean {
 }
 
 /**
+ * Does the parser read this name as running another program — a shell, a
+ * prefix runner, a version-manager shim, a runtime, a package manager, or a
+ * package manager's exec subcommand? Such a name never says which program is
+ * running, so it can never be an agent's executable name (#16469).
+ */
+export function isLauncherCommandName(name: string): boolean {
+  return isExecutorCommand(name) || BINARY_EXEC_SUBCOMMANDS.has(name.toLowerCase());
+}
+
+/**
  * Highest candidate index that can still name the tool being run.
  *
  * argv[0] always can. Anything further right counts only when argv[0] is a
@@ -305,6 +315,7 @@ export function detectCommandIdentity(command: string | undefined): CommandIdent
   // Captured once so every lookup in this resolution sees one consistent map,
   // even if a plugin loads mid-pass.
   const processIconMap = getProcessIconMap();
+  const agentCliNames = getAgentCliNames();
 
   for (const [index, candidate] of candidates.entries()) {
     // Same executable-position rule as the process-tree path, and it binds
@@ -314,7 +325,7 @@ export function detectCommandIdentity(command: string | undefined): CommandIdent
     if (index > positionLimit) break;
 
     const lowerCandidate = candidate.toLowerCase();
-    const candidateAgent = AGENT_CLI_NAMES[lowerCandidate];
+    const candidateAgent = agentCliNames[lowerCandidate];
     if (candidateAgent) {
       return {
         agentType: candidateAgent,

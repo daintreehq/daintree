@@ -15,7 +15,7 @@ import { ProjectWorktreeCreateDialog } from "./ProjectWorktreeCreateDialog";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
-import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { DecisionsAttentionHost } from "@/components/Decisions/DecisionsAttentionHost";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useRecipeDialogState } from "./useRecipeDialogState";
@@ -39,11 +39,6 @@ const LazyRecipeManager = lazy(() =>
 const LazyScheduleEditorHost = lazy(() =>
   import("@/components/Schedules/ScheduleEditorHost").then((m) => ({
     default: m.ScheduleEditorHost,
-  }))
-);
-const LazyDecisionsAttentionDialog = lazy(() =>
-  import("@/components/Decisions/DecisionsAttentionDialog").then((m) => ({
-    default: m.DecisionsAttentionDialog,
   }))
 );
 
@@ -160,9 +155,6 @@ function ProjectDialogHost() {
   const hasScheduleEditor = useSchedulesViewStore((state) => state.editor !== null);
   // The opening outlives the host in its store; the next workspace starts without one.
   useEffect(() => () => useSchedulesViewStore.getState().clearEditor(), []);
-  const isDecisionsAttentionOpen = useDecisionsAttentionStore((state) => state.isOpen);
-  const closeDecisionsAttention = useDecisionsAttentionStore((state) => state.close);
-  const shouldMountDecisionsAttention = useKeepMounted(isDecisionsAttentionOpen);
 
   return (
     <>
@@ -277,20 +269,7 @@ function ProjectDialogHost() {
         )}
       </ErrorBoundary>
 
-      <ErrorBoundary
-        variant="component"
-        componentName="DecisionsAttentionDialog"
-        resetKeys={[Number(isDecisionsAttentionOpen)]}
-      >
-        {shouldMountDecisionsAttention && (
-          <Suspense fallback={null}>
-            <LazyDecisionsAttentionDialog
-              isOpen={isDecisionsAttentionOpen}
-              onClose={closeDecisionsAttention}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
+      <DecisionsAttentionHost />
 
       <ErrorBoundary
         variant="component"

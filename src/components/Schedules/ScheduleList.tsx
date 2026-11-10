@@ -4,12 +4,13 @@ import { BrandMark, DaintreeIcon, History, Play } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsEmptyRow, SettingsGroup } from "@/components/Settings/SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { resolveAgentIcon } from "@/config/agentIcons";
 import { getBrandColorHex } from "@/lib/colorUtils";
@@ -21,7 +22,14 @@ import type { LastRunsState } from "./useLastRuns";
 import { lastRunWords } from "./lastRunWords";
 import { RunGlyph } from "./RunGlyph";
 import { scheduleAgentName } from "./scheduleAgent";
-import { cadenceWords, formatNextRunRelative, formatRunInstant, nextRunAt } from "./scheduleWords";
+import { SCHEDULE_STARTERS, type ScheduleStarter } from "./scheduleStarters";
+import {
+  cadenceWords,
+  formatNextRunRelative,
+  formatRunInstant,
+  nextRunAt,
+  scheduleWorktreeLabel,
+} from "./scheduleWords";
 
 /** The controls a row offers, each findable by schedule for handing focus back to it. */
 export type ScheduleRowAction = "run" | "history" | "edit" | "delete";
@@ -54,6 +62,8 @@ interface ScheduleListProps {
   addButtonRef: Ref<HTMLButtonElement>;
   onRetryLastRuns: () => void;
   onCreate: () => void;
+  /** Opens the editor for a new schedule filled in from a starter; nothing is saved until Save. */
+  onCreateFromStarter: (starter: ScheduleStarter) => void;
   onSetEnabled: (schedule: Schedule, enabled: boolean) => void;
   onRunNow: (schedule: Schedule) => void;
   /** `viaKeyboard`: opened from the keyboard, so focus lands visibly on the history. */
@@ -134,7 +144,9 @@ function LastRun({
       />
       {words.detail && (
         <TruncatedTooltip content={words.detail} focusable={false}>
-          <span className="min-w-0 truncate">· {words.detail}</span>
+          <span className="min-w-0 truncate">
+            <FactSeparator /> {words.detail}
+          </span>
         </TruncatedTooltip>
       )}
     </span>
@@ -225,8 +237,7 @@ function ScheduleRow({
             {worktreeLabel && <Badge size="xs">{worktreeLabel}</Badge>}
           </div>
           <p className="mt-1 truncate text-xs text-text-secondary">
-            {words ?? <span className="font-mono">{schedule.cadence.cron}</span>}
-            <span aria-hidden="true"> · </span>
+            {words ?? <span className="font-mono">{schedule.cadence.cron}</span>} <FactSeparator />{" "}
             {agentName}
           </p>
           <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 text-xs text-text-secondary">
@@ -303,6 +314,7 @@ export function ScheduleList({
   addButtonRef,
   onRetryLastRuns,
   onCreate,
+  onCreateFromStarter,
   onSetEnabled,
   onRunNow,
   onOpenHistory,
@@ -403,24 +415,46 @@ export function ScheduleList({
             </Skeleton>
           </SettingsGroup>
         ) : state.snapshot === null ? null : schedules.length === 0 ? (
-          <SettingsGroup>
-            <SettingsEmptyRow
-              action={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={onCreate}
-                  ref={addButtonRef}
-                  data-schedules-new=""
-                >
-                  <Plus />
-                  Add schedule
-                </Button>
-              }
-            >
-              Add a schedule to run an agent with your prompt, such as every night at 2:00&nbsp;AM
-            </SettingsEmptyRow>
-          </SettingsGroup>
+          <>
+            <SettingsGroup>
+              <SettingsEmptyRow
+                action={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onCreate}
+                    ref={addButtonRef}
+                    data-schedules-new=""
+                  >
+                    <Plus />
+                    Add schedule
+                  </Button>
+                }
+              >
+                Add a schedule to run an agent with your prompt, such as every night at 2:00&nbsp;AM
+              </SettingsEmptyRow>
+            </SettingsGroup>
+            <SettingsGroup label="Starters">
+              {SCHEDULE_STARTERS.map((starter) => (
+                <SettingsRow
+                  key={starter.id}
+                  label={starter.name}
+                  description={starter.description}
+                  control={
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onCreateFromStarter(starter)}
+                      aria-label={`Use starter: ${starter.name}`}
+                      data-schedule-starter={starter.id}
+                    >
+                      Use starter
+                    </Button>
+                  }
+                />
+              ))}
+            </SettingsGroup>
+          </>
         ) : (
           <SettingsGroup>
             {schedules.map((schedule) => (
@@ -429,11 +463,7 @@ export function ScheduleList({
                 schedule={schedule}
                 now={now}
                 schedulesOn={schedulesOn}
-                worktreeLabel={
-                  schedule.launch.worktreeId === null
-                    ? null
-                    : (worktreeLabels.get(schedule.launch.worktreeId) ?? "Missing worktree")
-                }
+                worktreeLabel={scheduleWorktreeLabel(schedule.launch, worktreeLabels)}
                 enabledPending={pendingEnabled.has(schedule.id)}
                 runNowPending={pendingRunNow.has(schedule.id)}
                 lastRun={lastRuns.byScheduleId.get(schedule.id)}

@@ -110,7 +110,7 @@ export type CliAvailability = Record<AgentId, AgentAvailabilityState>;
  * Which probe layer located the CLI binary. Populated alongside
  * {@link AgentCliDetail.resolvedPath} for the Settings diagnostics surface.
  */
-export type AgentCliProbeSource = "which" | "native" | "npm-global" | "wsl";
+export type AgentCliProbeSource = "which" | "native" | "npm-global" | "wsl" | "chosen";
 
 /**
  * Reason a binary exists but cannot be executed. Only set when
@@ -139,11 +139,18 @@ export interface AgentCliDetail {
   /** WSL distribution used when `via === "wsl"`. */
   wslDistro?: string;
   /**
+   * The copy the user chose to launch, when they chose one. Launches start this
+   * path and nothing else: while it is `missing` or `blocked` they fail rather than
+   * start whichever copy PATH reaches first.
+   */
+  chosenPath?: string;
+  /**
    * All distinct paths the PATH probe found (an in-process walk on POSIX, an
    * in-process PATH search on Windows), in PATH order. Populated only when the
-   * probe succeeded via the PATH layer (`via: "which"`). The first
-   * entry equals {@link AgentCliDetail.resolvedPath}; additional entries are
-   * the duplicate installs that drove the duplicate-detection notification.
+   * probe succeeded via the PATH layer (`via: "which"`), so never with a
+   * {@link AgentCliDetail.chosenPath}. The first entry equals
+   * {@link AgentCliDetail.resolvedPath}; additional entries are the duplicate
+   * installs that drove the duplicate-detection notification.
    */
   allResolvedPaths?: string[];
   /**
@@ -163,6 +170,19 @@ export interface AgentCliDetail {
 
 /** Map of agent ID → detailed detection result. */
 export type AgentCliDetails = Partial<Record<AgentId, AgentCliDetail>>;
+
+/** One copy of an agent's CLI found on the machine the agent runs on. */
+export interface AgentCliCopy {
+  /** Where the copy was found, as found: a symlink is not followed for display. */
+  path: string;
+  /**
+   * What this copy said when asked for its version: the version number, or the
+   * first line it printed when that held none. `null` when it reported nothing.
+   */
+  version: string | null;
+  /** True for the copy agent launches start. */
+  launches: boolean;
+}
 
 /** Version information for an agent */
 export interface AgentVersionInfo {
@@ -188,21 +208,6 @@ export interface AgentUpdateSettings {
   checkFrequencyHours: number;
   /** Last automatic check timestamp */
   lastAutoCheck: number | null;
-}
-
-/** Payload for starting an agent update */
-export interface StartAgentUpdatePayload {
-  agentId: AgentId;
-  /** Preferred update method (e.g., "npm", "brew") */
-  method?: string;
-}
-
-/** Result of starting an agent update */
-export interface StartAgentUpdateResult {
-  /** Terminal ID where update is running */
-  terminalId: string;
-  /** Update command being executed */
-  command: string;
 }
 
 /** Severity level for a prerequisite check */

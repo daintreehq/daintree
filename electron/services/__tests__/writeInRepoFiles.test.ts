@@ -23,6 +23,16 @@ const DAINTREE_PROJECT_JSON = ".daintree/project.json";
 const DAINTREE_SETTINGS_JSON = ".daintree/settings.json";
 const DAINTREE_RECIPES_DIR = ".daintree/recipes";
 
+// How a read of an online-only placeholder fails on macOS once Main's libuv
+// workers stop materializing them (#16361): libuv has no name for EDEADLK.
+function placeholderReadError(): NodeJS.ErrnoException {
+  return Object.assign(new Error("Unknown system error -11: open"), {
+    errno: -11,
+    code: "Unknown system error -11",
+    syscall: "open",
+  });
+}
+
 function makeSettings(overrides: Partial<ProjectSettings> = {}): ProjectSettings {
   return { runCommands: [], ...overrides };
 }
@@ -38,6 +48,23 @@ describe("writeInRepoProjectIdentity", () => {
 
   afterEach(async () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("refuses to rebuild a project.json it couldn't read, keeping its id and theme", async () => {
+    const filePath = path.join(tmpDir, DAINTREE_PROJECT_JSON);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const original = JSON.stringify({ version: 1, id: "abc123", name: "Old", theme: "daintree" });
+    await fs.writeFile(filePath, original);
+
+    const readSpy = vi.spyOn(fs, "readFile").mockRejectedValueOnce(placeholderReadError());
+    try {
+      await expect(
+        identityFiles.writeInRepoProjectIdentity(tmpDir, { name: "Renamed" })
+      ).rejects.toThrow(/can't be read/);
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(await fs.readFile(filePath, "utf-8")).toBe(original);
   });
 
   it("creates .daintree/ directory and project.json when absent", async () => {
@@ -456,6 +483,52 @@ describe("in-repo dictation vocabulary", () => {
     const content = await readFile();
     expect(content.devServerCommand).toBe("npm run dev");
     expect(content.voiceDictionary).toEqual([{ term: "PtyClient", heardAs: [] }]);
+  });
+
+  it("refuses a settings save over a file it couldn't read, leaving the vocabulary", async () => {
+    await fs.mkdir(path.join(tmpDir, ".daintree"));
+    const original = JSON.stringify({ version: 1, voiceDictionary: [{ term: "PtyClient" }] });
+    await fs.writeFile(settingsPath(), original);
+
+    const readSpy = vi.spyOn(fs, "readFile").mockRejectedValueOnce(placeholderReadError());
+    try {
+      await expect(
+        identityFiles.writeInRepoSettings(tmpDir, makeSettings({ devServerCommand: "npm run dev" }))
+      ).rejects.toMatchObject({ errno: -11 });
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(await fs.readFile(settingsPath(), "utf-8")).toBe(original);
+  });
+
+  it("refuses a settings save when the read failed without an errno", async () => {
+    await fs.mkdir(path.join(tmpDir, ".daintree"));
+    const original = JSON.stringify({ version: 1, voiceDictionary: [{ term: "PtyClient" }] });
+    await fs.writeFile(settingsPath(), original);
+
+    // Node raises this one itself, with no syscall behind it.
+    const tooLarge = Object.assign(new RangeError("File size is greater than 2 GiB"), {
+      code: "ERR_FS_FILE_TOO_LARGE",
+    });
+    const readSpy = vi.spyOn(fs, "readFile").mockRejectedValueOnce(tooLarge);
+    try {
+      await expect(
+        identityFiles.writeInRepoSettings(tmpDir, makeSettings({ devServerCommand: "go" }))
+      ).rejects.toBe(tooLarge);
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(await fs.readFile(settingsPath(), "utf-8")).toBe(original);
+  });
+
+  it.each([
+    ["isn't JSON", "{ not json"],
+    ["isn't a settings object", "[1, 2]"],
+  ])("still replaces a settings file that reads but %s", async (_label, content) => {
+    await fs.mkdir(path.join(tmpDir, ".daintree"));
+    await fs.writeFile(settingsPath(), content);
+    await identityFiles.writeInRepoSettings(tmpDir, makeSettings({ devServerCommand: "go" }));
+    expect((await readFile()).devServerCommand).toBe("go");
   });
 
   it("keeps an emptied committed vocabulary through a settings save", async () => {
@@ -1323,6 +1396,39 @@ describe("readInRepoPresets", () => {
   it("returns empty object when presets directory is absent", async () => {
     const result = await identityFiles.readInRepoPresets(tmpDir);
     expect(result).toEqual({});
+  });
+
+  it("lists presets and recipes without readdir's withFileTypes", async () => {
+    // withFileTypes lstats every entry the filesystem leaves untyped at once,
+    // outside the project I/O gate's count (#16361).
+    const agentDir = path.join(tmpDir, PRESETS_DIR, "claude");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agentDir, "team.json"),
+      JSON.stringify({ id: "team", name: "Team" })
+    );
+    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ name: "Listed" }));
+
+    const realReaddir = fs.readdir;
+    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(((
+      dir: string,
+      options?: unknown
+    ) => {
+      if (options && typeof options === "object" && "withFileTypes" in options) {
+        return Promise.reject(new Error("withFileTypes fans out ungated lstats"));
+      }
+      return realReaddir(dir);
+    }) as typeof fs.readdir);
+    try {
+      expect((await identityFiles.readInRepoPresets(tmpDir)).claude?.map((p) => p.id)).toEqual([
+        "team",
+      ]);
+      const { recipes, scanComplete } = await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+      expect(recipes.map((recipe) => recipe.name)).toEqual(["Listed"]);
+      expect(scanComplete).toBe(true);
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   it("loads presets from per-agent subdirectories", async () => {

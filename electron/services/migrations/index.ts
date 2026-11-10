@@ -39,6 +39,7 @@ import { migration039 } from "./039-device-agent-toolbar-pins.js";
 import { migration040 } from "./040-voice-cleanup-on-terra.js";
 import { migration041 } from "./041-learned-everyday-heard-as.js";
 import { migration042 } from "./042-interpreter-bypass-flag.js";
+import { migration043 } from "./043-canopy-on-by-default.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -82,4 +83,5 @@ export const migrations: Migration[] = [
   migration040,
   migration041,
   migration042,
+  migration043,
 ];

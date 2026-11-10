@@ -55,6 +55,11 @@ export interface RollupContextNode {
   status?: string | null;
   conclusion?: string | null;
   detailsUrl?: string | null;
+  // Only selected by the per-check read; see `PR_CI_STATUS_QUERY`.
+  checkSuite?: {
+    app?: { name?: string | null } | null;
+    workflowRun?: { workflow?: { name?: string | null } | null } | null;
+  } | null;
   // StatusContext fields
   context?: string | null;
   state?: string | null;
@@ -286,6 +291,11 @@ export function mapRollupContextToCheckRun(node: RollupContextNode): CheckRun | 
   const conclusion = rawConclusion ? CHECK_CONCLUSION_MAP[rawConclusion] : undefined;
   const rawStatus = node.status?.toUpperCase();
 
+  // Reporter identity exists only on check runs: a legacy status has no suite,
+  // so it returned above with neither field, exactly as before these existed.
+  const workflow = node.checkSuite?.workflowRun?.workflow?.name?.trim() || undefined;
+  const app = node.checkSuite?.app?.name?.trim() || undefined;
+
   let status: CheckRunStatus;
   if (rawConclusion) {
     // A reported outcome settles the lifecycle, whatever `status` says. Trusting
@@ -311,6 +321,8 @@ export function mapRollupContextToCheckRun(node: RollupContextNode): CheckRun | 
     ...(conclusion ? { conclusion } : {}),
     ...(required !== undefined ? { required } : {}),
     ...(detailsUrl ? { detailsUrl } : {}),
+    ...(workflow ? { workflow } : {}),
+    ...(app ? { app } : {}),
     rawData: node,
   };
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { choiceCardVariants } from "@/components/ui/card";
@@ -7,6 +7,7 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { AgentCliStep } from "./AgentCliStep";
 import { AgentInputStep } from "./AgentInputStep";
 import { SystemRequirementsSection } from "./SystemRequirementsSection";
+import { InstallCommandHandoffContext } from "@/hooks/terminal/installCommandHandoffContext";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { AgentCard } from "@/components/agents/AgentCard";
@@ -27,6 +28,7 @@ import { getAgentHealth } from "@/components/Settings/agentHealth";
 import {
   Sparkles,
   ChevronLeft,
+  ChevronRight,
   ArrowRight,
   Check,
   Sun,
@@ -41,6 +43,7 @@ import { AnimatePresence, m, type Variants } from "framer-motion";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Plug } from "@/components/icons";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
+import { CrashReportContents } from "@/components/Settings/telemetryDisclosure";
 import {
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
@@ -333,7 +336,7 @@ export const STEP_META: Record<WizardStep["type"], { title: string; subtitle: st
   },
   privacy: {
     title: "Privacy",
-    subtitle: "Help improve Daintree by sharing anonymous crash reports",
+    subtitle: "Choose whether to share crash reports to help improve Daintree",
   },
   cli: {
     title: "Install agents",
@@ -510,7 +513,8 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
 interface AgentSetupWizardProps {
   isOpen: boolean;
-  onClose: () => void;
+  /** `"handoff"` when it closed to show a terminal an install command was opened in. */
+  onClose: (reason?: "handoff") => void;
   initialAvailability?: CliAvailability;
   isFirstRun?: boolean;
   /**
@@ -905,6 +909,21 @@ export function AgentSetupWizard({
     return true;
   }, [isFirstRun, state.step.type, commitTelemetry, notifyTelemetryDefault]);
 
+  // A terminal opened behind the dialog can't be typed into, so the wizard
+  // closes first, the way its close button does.
+  const handleInstallHandoff = useCallback(
+    (open: () => void) => {
+      void (async () => {
+        if (isFirstRun && !(await handleBeforeClose())) return;
+        onClose("handoff");
+        open();
+      })();
+    },
+    [isFirstRun, handleBeforeClose, onClose]
+  );
+  // Closing mid-install would stop a batch before its remaining agents.
+  const installHandoff = isSaving || isInstalling ? null : handleInstallHandoff;
+
   const agentsContinueBlocked =
     selectedAgentIds.length === 0 || isSaving || hasFatalHealthFailure || isHealthChecking;
 
@@ -938,8 +957,11 @@ export function AgentSetupWizard({
       <AppDialog.Body>
         {/* A floor under the sparsest steps so the panel stops halving in height
             between consent gates and the agent list; AppDialog's max-h still
-            caps the tall end and owns the scrolling. */}
-        <div className="relative overflow-hidden min-h-[22rem]">
+            caps the tall end and owns the scrolling. The clip is for the step
+            slide; the padding it gives back is room for focus rings on the
+            content's edges (the heading's sits 6px out), which it would
+            otherwise cut off. */}
+        <div className="relative overflow-hidden -m-1.5 p-1.5 min-h-[calc(22rem+0.75rem)]">
           <AnimatePresence mode="wait" custom={directionRef.current}>
             <m.div
               key={state.step.type}
@@ -973,17 +995,19 @@ export function AgentSetupWizard({
                 />
               )}
               {state.step.type === "agents" && (
-                <AgentsStep
-                  availability={state.availability}
-                  selections={state.selections}
-                  isLoading={showLoadingSelections}
-                  isSaving={isSaving}
-                  onToggle={(id, checked) =>
-                    dispatch({ type: "TOGGLE_SELECTION", agentId: id, checked })
-                  }
-                  onFatalFailureChange={setHasFatalHealthFailure}
-                  onCheckingChange={setIsHealthChecking}
-                />
+                <InstallCommandHandoffContext.Provider value={installHandoff}>
+                  <AgentsStep
+                    availability={state.availability}
+                    selections={state.selections}
+                    isLoading={showLoadingSelections}
+                    isSaving={isSaving}
+                    onToggle={(id, checked) =>
+                      dispatch({ type: "TOGGLE_SELECTION", agentId: id, checked })
+                    }
+                    onFatalFailureChange={setHasFatalHealthFailure}
+                    onCheckingChange={setIsHealthChecking}
+                  />
+                </InstallCommandHandoffContext.Provider>
               )}
               {state.step.type === "privacy" && (
                 <PrivacyStep
@@ -992,19 +1016,21 @@ export function AgentSetupWizard({
                 />
               )}
               {state.step.type === "cli" && (
-                <AgentCliStep
-                  availability={state.availability}
-                  selections={state.selections}
-                  isFirstRun={isFirstRun}
-                  onBusyChange={setIsInstalling}
-                  onInstallComplete={() => {
-                    void cliAvailabilityClient.refresh().then((result) => {
-                      if (isOpenRef.current) {
-                        dispatch({ type: "SET_AVAILABILITY", payload: result });
-                      }
-                    });
-                  }}
-                />
+                <InstallCommandHandoffContext.Provider value={installHandoff}>
+                  <AgentCliStep
+                    availability={state.availability}
+                    selections={state.selections}
+                    isFirstRun={isFirstRun}
+                    onBusyChange={setIsInstalling}
+                    onInstallComplete={() => {
+                      void cliAvailabilityClient.refresh().then((result) => {
+                        if (isOpenRef.current) {
+                          dispatch({ type: "SET_AVAILABILITY", payload: result });
+                        }
+                      });
+                    }}
+                  />
+                </InstallCommandHandoffContext.Provider>
               )}
               {state.step.type === "permissions" && (
                 <PermissionsStep
@@ -1369,29 +1395,51 @@ function PrivacyStep({
   telemetryEnabled?: boolean;
   onTelemetryChange: (enabled: boolean) => void;
 }) {
+  // Answered here rather than by the live telemetry preview: that opens the
+  // Diagnostics dock under this dialog's scrim, and with crash reporting off it
+  // can't hold a crash report anyway, since Sentry only loads once it's on.
+  const [showContents, setShowContents] = useState(false);
+  const contentsId = useId();
+
   return (
-    <section className="space-y-2">
+    <section className="space-y-3">
       <SettingsSwitchCard
         title="Enable crash reporting"
-        subtitle="Sentry records an approximate location from your IP address. No file contents or credentials are ever sent."
+        // Non-breaking, so the route never strands "data." on a line of its own.
+        subtitle={
+          "Reports go to Sentry with an approximate location from your IP address, and never include file contents, prompts or credentials. You can change this anytime in Settings\u00a0→\u00a0Privacy\u00a0&\u00a0data."
+        }
         isEnabled={telemetryEnabled ?? false}
         onChange={() => onTelemetryChange(!(telemetryEnabled ?? false))}
       />
-      {/* Underlined at rest: previously this read as a third line of body
-          copy and only became identifiable as a control on hover. */}
-      <Button
-        variant="link"
-        className="text-xs"
-        onClick={() =>
-          void actionService.dispatch(
-            "telemetry.togglePreview",
-            { active: true },
-            { source: "user" }
-          )
-        }
-      >
-        Preview what would be sent
-      </Button>
+      <div>
+        {/* Underlined at rest: previously this read as a third line of body
+            copy and only became identifiable as a control on hover. */}
+        <Button
+          variant="link"
+          className="text-xs"
+          aria-expanded={showContents}
+          aria-controls={contentsId}
+          onClick={() => setShowContents((shown) => !shown)}
+        >
+          <ChevronRight
+            aria-hidden="true"
+            data-animated-chevron
+            className={cn(
+              "transition-transform duration-150 ease-out",
+              showContents && "rotate-90"
+            )}
+          />
+          What a crash report contains
+        </Button>
+        <div id={contentsId} hidden={!showContents} className="mt-3 space-y-3">
+          <CrashReportContents showNotSent />
+          <p className="text-xs text-text-secondary select-text">
+            After setup, Settings → Privacy & data → Open preview shows each payload as Daintree
+            records it.
+          </p>
+        </div>
+      </div>
     </section>
   );
 }

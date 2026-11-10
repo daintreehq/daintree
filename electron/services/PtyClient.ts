@@ -151,6 +151,7 @@ import { terminalAnswerOf, type TerminalAnswer } from "../../shared/utils/termin
 import type { TerminalHandback } from "../../shared/types/handback.js";
 import { withoutHandbackInstruction } from "../../shared/utils/handback.js";
 import { buildFirstPrompt, sanitizeFirstPrompt } from "../../shared/utils/firstPrompt.js";
+import { isCheckoutPendingProject } from "./projectClone/checkoutGate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -229,7 +230,7 @@ interface TerminalInfoResponse {
   /** Lifecycle-ledger generation of the record that answered. */
   launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
   /** Capability mode — sealed-at-spawn agent capability surface. Set when the terminal was cold-launched as a built-in agent. */
@@ -294,9 +295,9 @@ export interface PtyClientConfig {
   /** Whether to show dialog on crash */
   showCrashDialog?: boolean;
   /**
-   * Memory limit in MB for PTY Host process (default: 512). Applies to the
-   * legacy singleton path; with the PTY fabric enabled every shard instead
-   * gets a RAM-scaled budget from {@link shardHeapBudgetMb}.
+   * Override the V8 heap ceiling in MB of every PTY host shard. Without it each
+   * shard, including the single host when the fabric is off, gets the
+   * RAM-scaled budget from {@link shardHeapBudgetMb}. Primarily a test hook.
    */
   memoryLimitMb?: number;
   /**
@@ -317,7 +318,9 @@ export interface PtyClientConfig {
   maxProjectShards?: number;
 }
 
-type ResolvedPtyClientConfig = Required<Omit<PtyClientConfig, "fabric" | "maxProjectShards">>;
+type ResolvedPtyClientConfig = Required<
+  Omit<PtyClientConfig, "fabric" | "maxProjectShards" | "memoryLimitMb">
+>;
 
 const DEFAULT_CONFIG: ResolvedPtyClientConfig = {
   // 5s heartbeat. Watchdog checks the missed-pong count before incrementing,
@@ -326,7 +329,6 @@ const DEFAULT_CONFIG: ResolvedPtyClientConfig = {
   // at frozen terminals long enough to assume the app had hung.
   healthCheckIntervalMs: 5000,
   showCrashDialog: true,
-  memoryLimitMb: 512,
   deferStart: false,
 };
 
@@ -411,7 +413,7 @@ export class PtyClient extends EventEmitter {
   private readonly fabricEnabled: boolean;
   /** Max concurrent project shards; overflow projects co-locate on the default shard. */
   private readonly projectShardCap: number;
-  /** Per-shard V8 heap budget (RAM-scaled under the fabric, config value otherwise). */
+  /** Per-shard V8 heap budget: RAM-scaled unless the config overrides it. */
   private readonly shardMemoryLimitMb: number;
   private readonly electronDir: string;
   /** Live shards by key: "main" plus one per project under the fabric. */
@@ -580,13 +582,14 @@ export class PtyClient extends EventEmitter {
 
   constructor(config: PtyClientConfig = {}) {
     super();
-    const { fabric, maxProjectShards: shardCapOverride, ...baseConfig } = config;
+    const { fabric, maxProjectShards: shardCapOverride, memoryLimitMb, ...baseConfig } = config;
     this.config = { ...DEFAULT_CONFIG, ...baseConfig };
     this.fabricEnabled = fabric ?? isPtyFabricEnabled();
     this.projectShardCap = shardCapOverride ?? maxProjectShards(os.cpus().length);
-    this.shardMemoryLimitMb = this.fabricEnabled
-      ? shardHeapBudgetMb(os.totalmem())
-      : this.config.memoryLimitMb;
+    // The single host carries every project's terminals when the fabric is off,
+    // so a fixed 512 MB cap stalled high-RAM machines on the governor's global
+    // PTY pause (#10948).
+    this.shardMemoryLimitMb = memoryLimitMb ?? shardHeapBudgetMb(os.totalmem());
     installWindowsTreeKillNotice();
 
     // SharedArrayBuffer cannot be sent to Electron UtilityProcess via postMessage
@@ -1534,6 +1537,22 @@ export class PtyClient extends EventEmitter {
         : undefined;
 
     const resolvedProjectId = normalizedProjectId ?? activeProjectId;
+    // Every launch path ends here: a project still awaiting its clone has no
+    // folder, and the pty-host would quietly fall back to another cwd (#16352).
+    // Only a named project is checked: a spawn naming none isn't asking for
+    // that project's folder, and every launch into a project names it.
+    if (isCheckoutPendingProject(normalizedProjectId)) {
+      const result: SpawnResult = {
+        success: false,
+        id,
+        error: {
+          code: "PROJECT_NOT_READY",
+          message: "This project is still being cloned. Wait for the clone to finish.",
+        },
+      };
+      this.emit("spawn-result", id, result);
+      return;
+    }
     const projectResolvedOptions: PtyHostSpawnOptions =
       resolvedProjectId !== undefined ? { ...options, projectId: resolvedProjectId } : options;
     // Mint the launch generation here — every spawn (fresh, restart, resume)

@@ -342,7 +342,7 @@ import {
   registerPluginAgents,
   clearPluginAgentRegistryForTests,
 } from "../../../../../shared/config/pluginAgentRegistry.js";
-import { setUserRegistry } from "../../../../../shared/config/agentRegistry.js";
+import { AGENT_REGISTRY, setUserRegistry } from "../../../../../shared/config/agentRegistry.js";
 import { CHANNELS } from "../../../channels.js";
 import { TRASH_TTL_MS } from "../../../../../shared/config/trash.js";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
@@ -1149,6 +1149,66 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
     expect(ptyClient.write).not.toHaveBeenCalled();
   });
 
+  // On Windows an agent launch always runs through PowerShell's wrapper.
+  describe.skipIf(process.platform === "win32")(
+    "a built multi-line prompt typed into a wrapper-less shell (#16378)",
+    () => {
+      const COMMAND = `claude "$(printf '%b' 'one\\n\\ntwo\\0047s')"`;
+
+      async function typedInto(shell: string): Promise<string | undefined> {
+        registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+        const handler = getSpawnHandler();
+        const os = await import("os");
+        await handler(
+          {} as Electron.IpcMainInvokeEvent,
+          {
+            cwd: os.homedir(),
+            cols: 80,
+            rows: 24,
+            shell,
+            command: COMMAND,
+            launchAgentId: "claude",
+          } as unknown as Parameters<typeof handler>[1]
+        );
+        const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+        // The saved command keeps the prompt's lines for a later launch elsewhere.
+        expect(spawnArgs.command).toBe(COMMAND);
+        return spawnArgs.postSpawnInput;
+      }
+
+      it("types a form fish reads, keeping the line breaks", async () => {
+        expect(await typedInto("/usr/bin/fish")).toBe(
+          `claude (printf '%b' 'one\\n\\ntwo\\0047s' | string collect)\r`
+        );
+      });
+
+      it("types a double-quoted string into nushell, keeping the line breaks", async () => {
+        expect(await typedInto("/usr/bin/nu")).toBe(`claude "one\\n\\ntwo's"\r`);
+      });
+
+      it("types the prompt on one line into a shell with no form to rely on", async () => {
+        expect(await typedInto("/bin/tcsh")).toBe(`claude 'one  two'\\''s'\r`);
+      });
+
+      it("leaves a command that isn't an agent launch as the user wrote it", async () => {
+        registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+        const handler = getSpawnHandler();
+        const os = await import("os");
+        await handler(
+          {} as Electron.IpcMainInvokeEvent,
+          {
+            cwd: os.homedir(),
+            cols: 80,
+            rows: 24,
+            shell: "/bin/tcsh",
+            command: COMMAND,
+          } as unknown as Parameters<typeof handler>[1]
+        );
+        expect(ptyClient.spawn.mock.calls[0][1].postSpawnInput).toBe(`${COMMAND}\r`);
+      });
+    }
+  );
+
   it.skipIf(process.platform === "win32")(
     "omits postSpawnInput for a wrapper-capable shell — the command rides args (#11339)",
     async () => {
@@ -1953,6 +2013,28 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.command).not.toContain("--dangerously-skip-permissions");
     expect(spawnArgs.command).toContain("--resume abc");
+  });
+
+  it("keeps a prompt's own spacing when stripping the bypass flag from a help launch (#16378)", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+    mockGetBypassPermissions.mockImplementation(() => false);
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+
+    const prompt = `"$(printf '%b' 'if x:\\n    indented  twice')"`;
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: `claude --dangerously-skip-permissions --model x ${prompt}`,
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn.mock.calls[0][1].command).toContain(`claude --model x ${prompt}`);
   });
 
   it("strips lookalike =false and appends canonical --dangerously-skip-permissions when bypass is on", async () => {
@@ -3970,5 +4052,185 @@ describe("terminal spawn handler - a recipe step's When done (#16172)", () => {
   it("refuses a value other than background or close", async () => {
     await expect(recipeSpawn({ whenDone: "keep" })).rejects.toThrow(/validation/i);
     expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe("terminal spawn handler - main-screen launch env (#16355)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+  let tmpDir: string;
+
+  const claudeInlineEnv = () => AGENT_REGISTRY.claude.capabilities?.inlineModeEnv ?? {};
+  const undeclaredAgentId = () => {
+    const agentId = (Object.keys(AGENT_REGISTRY) as Array<keyof typeof AGENT_REGISTRY>).find(
+      (id) =>
+        AGENT_REGISTRY[id].capabilities !== undefined &&
+        AGENT_REGISTRY[id].capabilities.inlineModeEnv === undefined
+    );
+    expect(agentId).toBeDefined();
+    return agentId!;
+  };
+
+  async function spawnWith(options: Record<string, unknown>): Promise<Record<string, string>> {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const handler = getSpawnHandler();
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      cwd: tmpDir,
+      ...options,
+    });
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    return (ptyClient.spawn.mock.calls[0][1].env ?? {}) as Record<string, string>;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const os = await import("os");
+    tmpDir = os.tmpdir();
+    ptyClient = { spawn: vi.fn(), hasTerminal: vi.fn(() => false), write: vi.fn() };
+    mockGetCurrentProject.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+    mockValidateToken.mockReturnValue(false);
+    mockIsRunning.mockReturnValue(false);
+    mockCurrentPort.mockReturnValue(null);
+    mockGetClaudeLaunchArgs.mockReturnValue([]);
+    mockGetBypassPermissions.mockReturnValue(false);
+    mockMarkTerminalForToken.mockReturnValue(true);
+    mockIsHelpTerminal.mockReturnValue(false);
+    mockGetAssistantScratchEnv.mockReturnValue(null);
+  });
+
+  it("keeps a Claude launch on the main screen whatever the user's Claude config picks", async () => {
+    expect(Object.keys(claudeInlineEnv()).length).toBeGreaterThan(0);
+
+    const env = await spawnWith({ command: "claude", launchAgentId: "claude" });
+
+    expect(env).toMatchObject(claudeInlineEnv());
+  });
+
+  it.each([
+    ["a restart's", false],
+    ["a restore's", true],
+  ])("carries it on %s resume of the pane", async (_label, restore) => {
+    const sessionId = "0b6a1c2e-6f4b-4f43-9d55-1b7b2f1f8a10";
+    const env = await spawnWith({
+      command: `claude --resume ${sessionId}`,
+      launchAgentId: "claude",
+      agentSessionId: sessionId,
+      restore,
+    });
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs).toMatchObject({ restore, agentSessionId: sessionId });
+    expect(spawnArgs.command).toContain(sessionId);
+    expect(env).toMatchObject(claudeInlineEnv());
+  });
+
+  it("carries it on a Claude pane spawned before its command is known", async () => {
+    const env = await spawnWith({ launchAgentId: "claude" });
+
+    expect(env).toMatchObject(claudeInlineEnv());
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "carries it into a shell that types the command in, which the PTY pool can serve",
+    async () => {
+      getDefaultShellMock.mockReturnValue("/usr/local/bin/fish");
+      try {
+        const env = await spawnWith({ command: "claude", launchAgentId: "claude" });
+
+        const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+        expect(spawnArgs.shell).toBeUndefined();
+        expect(spawnArgs.args).toBeUndefined();
+        expect(spawnArgs.postSpawnInput).toBe("claude\r");
+        expect(env).toMatchObject(claudeInlineEnv());
+      } finally {
+        getDefaultShellMock.mockReturnValue("/bin/zsh");
+      }
+    }
+  );
+
+  it("replaces a differently-cased copy of the variable on Windows", async () => {
+    const realPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const lowered = Object.fromEntries(
+        Object.keys(claudeInlineEnv()).map((key) => [key.toLowerCase(), "0"])
+      );
+
+      const env = await spawnWith({ command: "claude", launchAgentId: "claude", env: lowered });
+
+      for (const [key, value] of Object.entries(claudeInlineEnv())) {
+        const copies = Object.entries(env).filter(([k]) => k.toUpperCase() === key.toUpperCase());
+        expect(copies).toEqual([[key, value]]);
+      }
+    } finally {
+      Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+    }
+  });
+
+  it("wins over a value the user's preset or project env sets", async () => {
+    const overridden = Object.fromEntries(Object.keys(claudeInlineEnv()).map((key) => [key, "0"]));
+
+    const env = await spawnWith({
+      command: "claude",
+      launchAgentId: "claude",
+      env: { ...overridden, ANTHROPIC_BASE_URL: "https://example.test" },
+    });
+
+    expect(env).toMatchObject({ ...claudeInlineEnv(), ANTHROPIC_BASE_URL: "https://example.test" });
+  });
+
+  it("applies to the Assistant's Claude session too", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+
+    const env = await spawnWith({
+      command: "claude",
+      launchAgentId: "claude",
+      env: { DAINTREE_MCP_TOKEN: "help-token" },
+    });
+
+    expect(ptyClient.spawn.mock.calls[0][1].isAssistantTerminal).toBe(true);
+    expect(env).toMatchObject({ ...claudeInlineEnv(), DAINTREE_MCP_TOKEN: "help-token" });
+  });
+
+  it("adds nothing to a plain shell", async () => {
+    const env = await spawnWith({});
+
+    for (const key of Object.keys(claudeInlineEnv())) expect(env[key]).toBeUndefined();
+  });
+
+  it("adds nothing for an agent that declares no main-screen env", async () => {
+    const agentId = undeclaredAgentId();
+
+    const env = await spawnWith({
+      command: AGENT_REGISTRY[agentId].command,
+      launchAgentId: agentId,
+    });
+
+    for (const key of Object.keys(claudeInlineEnv())) expect(env[key]).toBeUndefined();
+  });
+
+  it("follows each agent's own declaration rather than Claude's", async () => {
+    const agentId = undeclaredAgentId();
+    const capabilities = AGENT_REGISTRY[agentId].capabilities!;
+    capabilities.inlineModeEnv = { EXAMPLE_MAIN_SCREEN: "1" };
+    try {
+      const env = await spawnWith({
+        command: AGENT_REGISTRY[agentId].command,
+        launchAgentId: agentId,
+        env: { EXAMPLE_MAIN_SCREEN: "0", EXAMPLE_KEPT: "yes" },
+      });
+
+      expect(env).toMatchObject({ EXAMPLE_MAIN_SCREEN: "1", EXAMPLE_KEPT: "yes" });
+      for (const key of Object.keys(claudeInlineEnv())) expect(env[key]).toBeUndefined();
+    } finally {
+      delete capabilities.inlineModeEnv;
+    }
   });
 });

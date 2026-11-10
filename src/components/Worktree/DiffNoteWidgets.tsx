@@ -17,6 +17,7 @@ import {
   sortDiffNotes,
   type DiffNote,
   type DiffNoteAnchor,
+  type DiffNoteLines,
 } from "./diffNotes";
 
 const SAVE_SHORTCUT = "Cmd+Enter";
@@ -141,7 +142,7 @@ function DiffNoteEditor({
   );
 }
 
-function describeAnchor(anchor: DiffNoteAnchor): string {
+export function describeAnchor(anchor: { kind: "file" } | DiffNoteLines): string {
   if (anchor.kind === "file") return "File note";
   // The agent's copy keeps a plain hyphen; on screen a range reads as one.
   const lines = formatDiffNoteLines(anchor).replace("-", "–");
@@ -153,7 +154,7 @@ function capitalize(text: string): string {
 }
 
 /** "file note" or "note on line 12", for accessible names built around it. */
-function nameAnchor(anchor: DiffNoteAnchor): string {
+export function nameAnchor(anchor: { kind: "file" } | DiffNoteLines): string {
   const described = describeAnchor(anchor);
   return anchor.kind === "file" ? "file note" : `note on ${described.toLowerCase()}`;
 }
@@ -189,7 +190,14 @@ export const DiffNoteComposer = memo(function DiffNoteComposer({
   const addNote = useDiffNotesStore((s) => s.addNote);
   return (
     <div className="diff-note" data-testid="diff-note-composer">
-      <div className={NOTE_HEADER_CLASS}>{describeAnchor(anchor)}</div>
+      <div className={NOTE_HEADER_CLASS}>
+        <span>{describeAnchor(anchor)}</span>
+        {/* Said here because this is the only time the gesture does anything:
+            shift-click extends an open draft, and there is none before this. */}
+        {anchor.kind === "lines" && (
+          <span className="ml-auto text-right">Shift-click another line number to extend</span>
+        )}
+      </div>
       <DiffNoteEditor
         initialBody={composerDrafts.get(ownerId) ?? ""}
         label={`New ${nameAnchor(anchor)}`}
@@ -370,7 +378,7 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
               <TooltipTrigger asChild>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="ghost-danger"
                   size="icon-xs"
                   aria-label="Delete note"
                   onClick={handleDelete}

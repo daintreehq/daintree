@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import { executeViewlessAction } from "../ViewlessActionExecutor.js";
+import { createScheduledRunWorktree } from "../viewlessWorktreeCreation.js";
 import { makeDeps, makeHosts, makeWorktree, PROJECT, request } from "./viewlessTestDeps.js";
 
 function creationDeps(answers: Record<string, unknown | ((args: unknown) => unknown)> = {}) {
@@ -282,5 +283,43 @@ describe("worktree.createWithRecipe with no frontend (#13501)", () => {
       ok: false,
       error: { message: expect.stringContaining("source.baseBranch") },
     });
+  });
+});
+
+describe("a scheduled run's new worktree (#16369)", () => {
+  const made = { worktreeId: "/repo-wt/schedule-x", branch: "schedule-x", setupState: "pending" };
+  const asked = { branch: "schedule-x", baseBranch: "origin/develop", fromRemote: true };
+
+  it("creates on exactly the claimed branch, refusing a taken name rather than suffixing", async () => {
+    const { deps, invoke } = creationDeps({ [CHANNELS.WORKTREE_CREATE]: made });
+
+    await expect(createScheduledRunWorktree(PROJECT, asked, deps)).resolves.toBe(made.worktreeId);
+
+    expect(channelsCalled(invoke)).not.toContain(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH);
+    const create = invoke.mock.calls.find(([, channel]) => channel === CHANNELS.WORKTREE_CREATE);
+    expect(create?.[2]).toEqual([
+      expect.objectContaining({
+        rootPath: PROJECT.path,
+        options: expect.objectContaining({
+          newBranch: "schedule-x",
+          baseBranch: "origin/develop",
+          fromRemote: true,
+          useExistingBranch: false,
+          collisionPolicy: "error",
+        }),
+      }),
+    ]);
+  });
+
+  it("rejects with the host's reason", async () => {
+    const { deps } = creationDeps({
+      [CHANNELS.WORKTREE_CREATE]: () => {
+        throw new Error("Branch 'schedule-x' already exists");
+      },
+    });
+
+    await expect(createScheduledRunWorktree(PROJECT, asked, deps)).rejects.toThrow(
+      "already exists"
+    );
   });
 });

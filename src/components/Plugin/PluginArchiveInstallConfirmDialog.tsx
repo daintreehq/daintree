@@ -38,7 +38,12 @@ const TITLE_LABEL_MAX = 60;
 const PRIVILEGE_WARNING =
   "Plugins run with full Node.js privileges — there's no sandbox and no signature check.";
 
-const INSTALL_DESCRIPTION = `Installing writes this archive into Daintree's plugins folder, replacing any installed plugin with the same ID. ${PRIVILEGE_WARNING}`;
+// An archive installs into the user folder, so it is app-wide, not scoped to one
+// project; a single grant answers for every project.
+const SCOPE_WARNING =
+  "It's installed for the whole app, not a single project, so it can be available in every project and a permission grant can apply to all of them.";
+
+const INSTALL_DESCRIPTION = `Installing writes this archive into Daintree's plugins folder, replacing any installed plugin with the same ID. ${PRIVILEGE_WARNING} ${SCOPE_WARNING}`;
 
 function replacementSentence(
   kind: ArchiveReplacementKind,
@@ -284,7 +289,7 @@ export function PluginArchiveInstallConfirmDialog() {
   const effect =
     replacement === null
       ? INSTALL_DESCRIPTION
-      : `${replacementSentence(replacement.kind, replacement.installedVersion, current.manifest.version)} ${PRIVILEGE_WARNING}`;
+      : `${replacementSentence(replacement.kind, replacement.installedVersion, current.manifest.version)} ${PRIVILEGE_WARNING} ${SCOPE_WARNING}`;
   const description = remoteTrust ? `${effect} ${remoteTrust}` : effect;
 
   return (
@@ -320,7 +325,10 @@ export function PluginArchiveInstallConfirmDialog() {
           description, and the denser blocks below need the larger step. */}
       <div className="pt-3 space-y-4">
         <ArchiveIdentityCard intent={current} replacement={replacement} />
-        <ArchivePermissions capabilities={current.manifest.capabilities} />
+        <ArchivePermissions
+          capabilities={current.manifest.capabilities}
+          permissionBypassAgents={current.manifest.permissionBypassAgents}
+        />
         <ArchiveRecipes recipes={current.manifest.recipes} />
         <ArchiveProjectTemplates templates={current.manifest.projectTemplates} />
         {error !== null && (
@@ -400,11 +408,11 @@ function ArchiveIdentityCard({
           </div>
         )}
         <div className="flex items-start gap-1.5 text-2xs text-text-secondary">
-          <FileArchive className="w-3 h-3 shrink-0 mt-[1.5px] text-daintree-text/35" aria-hidden />
+          <FileArchive className="w-3 h-3 shrink-0 mt-[1.5px] text-text-secondary" aria-hidden />
           <span className="font-mono break-all min-w-0">{archiveFileName}</span>
         </div>
         <div className="flex items-start gap-1.5 text-2xs text-text-secondary">
-          <Users className="w-3 h-3 shrink-0 mt-[1.5px] text-daintree-text/35" aria-hidden />
+          <Users className="w-3 h-3 shrink-0 mt-[1.5px] text-text-secondary" aria-hidden />
           {manifest.authors.length > 0 ? (
             <span className="break-words min-w-0">{formatAuthors(manifest.authors)}</span>
           ) : (
@@ -529,7 +537,13 @@ function ArchiveProjectTemplates({
  * thing read. Filtered through the built-in list (not the raw manifest array)
  * so duplicates collapse and ordering never depends on declaration order.
  */
-function ArchivePermissions({ capabilities }: { capabilities: readonly string[] }) {
+function ArchivePermissions({
+  capabilities,
+  permissionBypassAgents,
+}: {
+  capabilities: readonly string[];
+  permissionBypassAgents: readonly string[];
+}) {
   const declared = new Set(capabilities);
   const granted = BUILT_IN_PLUGIN_CAPABILITIES.filter((c) => declared.has(c)).sort(
     (a, b) =>
@@ -560,7 +574,11 @@ function ArchivePermissions({ capabilities }: { capabilities: readonly string[] 
           )}
           <ul className="space-y-2 pt-0.5">
             {granted.map((capability: BuiltInPluginCapability) => (
-              <CapabilityRow key={capability} capability={capability} />
+              <CapabilityRow
+                key={capability}
+                capability={capability}
+                permissionBypassAgents={permissionBypassAgents}
+              />
             ))}
           </ul>
         </>

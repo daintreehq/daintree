@@ -8,6 +8,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import {
   SegmentedRadioGroup,
   type SegmentedRadioOption,
@@ -110,7 +111,9 @@ export function ViewportControls({
                 </button>
               </DropdownMenuTrigger>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Choose device · {active.label}</TooltipContent>
+            <TooltipContent side="bottom">
+              Choose device <FactSeparator /> {active.label}
+            </TooltipContent>
           </Tooltip>
           <DropdownMenuContent align="start" className="min-w-[200px]">
             <DropdownMenuRadioGroup
@@ -189,14 +192,14 @@ export function ViewportControls({
                 type="button"
                 onClick={onFitToggle}
                 className={cn(PANE_TOOLBAR_TEXT_BUTTON_CLASS, "ml-auto")}
-                aria-label="Fit to pane"
+                aria-label="Fit to panel"
                 aria-pressed={fit}
               >
                 Fit
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              Shrink the preview to fit the pane; the page still sees{" "}
+              Shrink the preview to fit the panel; the page still sees{" "}
               {formatSize(size.width, size.height)}
             </TooltipContent>
           </Tooltip>

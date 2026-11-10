@@ -162,9 +162,13 @@ export function usePanelPalette(): UsePanelPaletteReturn {
         return {
           id: `agent:${agentId}`,
           name: agentConfig.name,
-          iconId: agentConfig.iconId,
+          // The agent id rather than its icon id: `PanelKindIcon` only gives a
+          // mark the agent treatment when it can tell the row is an agent.
+          iconId: agentId,
           color: agentConfig.color,
-          description: displayCombo || agentConfig.tooltip,
+          // The chord rides `shortcut` and trails the row; the description is
+          // the agent's own line, as on every other row.
+          description: agentConfig.tooltip,
           shortcut:
             displayCombo && actionId ? keybindingService.getEffectiveCombo(actionId) : undefined,
           category: "agent" as const,

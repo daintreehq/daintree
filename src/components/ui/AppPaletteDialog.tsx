@@ -10,8 +10,6 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
-import { describeKeyCap } from "@/lib/kbdShortcut";
-import { isMac } from "@/lib/platform";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -496,7 +494,7 @@ AppPaletteDialog.Header = function AppPaletteHeader({
         // are the two surfaces the family is modelled on. Promoted to the
         // default so every palette breathes the same.
         // `shrink-0`: in the card's capped column only the body gives way.
-        "relative shrink-0 overflow-hidden px-3 pt-2 pb-2 border-b border-border-strong",
+        "relative shrink-0 overflow-hidden px-3 pt-2 pb-2 border-b border-divider",
         className
       )}
     >
@@ -586,7 +584,7 @@ AppPaletteDialog.Divider = function AppPaletteDivider({
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div aria-hidden="true" className={cn("h-px bg-border-strong", className)} {...props} />;
+  return <div aria-hidden="true" className={cn("h-px bg-border-divider", className)} {...props} />;
 };
 
 interface AppPaletteBodyProps {
@@ -774,7 +772,7 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
   return (
     <div
       className={cn(
-        "shrink-0 px-3 py-2 border-t border-border-strong bg-surface-panel text-xs text-text-secondary flex items-center gap-4",
+        "shrink-0 px-3 py-2 border-t border-divider bg-surface-panel text-xs text-text-secondary flex items-center gap-4",
         className
       )}
     >
@@ -784,7 +782,17 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
 };
 
 export interface PaletteFooterHint {
-  keys: string[];
+  /**
+   * The canonical combo the hint teaches ("Enter", "Cmd+Enter", "Shift+F10"),
+   * drawn by `KbdChord` in the platform's own key names. Never a glyph: a
+   * literal "↵" or "⌘" names a Mac key on every platform. Omitted for a chip
+   * that states a fact rather than teaching a key ("Saved: Nord").
+   */
+  keys?: string;
+  /**
+   * What the key does, read after it: "to switch", "to go back". Every hint in
+   * a footer, primary or secondary, takes the same lowercase "to …" phrase.
+   */
   label: string;
 }
 
@@ -821,29 +829,33 @@ function HintChip({
     <span
       className={cn("inline-flex items-baseline", truncate ? "min-w-0" : "shrink-0", className)}
     >
-      {/* The caps are glyphs ("↵", "↑"), which a screen reader names as symbols
-          or skips; the keys are spoken by name instead. */}
-      <span className="sr-only">
-        {hint.keys.map((key) => describeKeyCap(key, isMac())).join(" ")}
+      {hint.keys && <KbdChord shortcut={hint.keys} className="shrink-0" />}
+      <span className={cn(hint.keys && "ml-1.5", truncate && "min-w-0 truncate")}>
+        {hint.label}
       </span>
-      {hint.keys.map((key, i) => (
-        <kbd key={key} aria-hidden="true" className={cn(KBD_CLASS, "shrink-0", i > 0 && "ml-1")}>
-          {key}
-        </kbd>
-      ))}
-      <span className={cn("ml-1.5", truncate && "min-w-0 truncate")}>{hint.label}</span>
     </span>
   );
 }
 
-// Width-priority drop classes for secondary chips, matched by index from the
-// trailing edge. Index 0 is the rightmost chip (drops first), index 1 is the
-// next-to-rightmost, etc. Tailwind needs each variant present in source for the
-// JIT compiler — keep as a static array.
-const SECONDARY_DROP_CLASSES = [
-  "@max-[380px]/palette-footer:hidden",
-  "@max-[280px]/palette-footer:hidden",
-  "@max-[200px]/palette-footer:hidden",
+// Width-priority drop classes for secondary chips: one row per number of
+// secondaries the footer carries, then matched by index from the trailing edge.
+// Index 0 is the rightmost chip (drops first), index 1 the next-to-rightmost,
+// etc. Tailwind needs each variant present in source for the JIT compiler —
+// keep as static strings.
+//
+// Sized for the widest chips: Windows and Linux spell keys out ("Shift + F10",
+// "Backspace"), and the worktree overview's three "to …" chips need about 530px,
+// while one chip beside the primary fits in about 320px. Every surface that
+// carries secondaries opens at least 580px wide, so these only bite in a
+// narrower Linux window, where a tiling manager may size it.
+const SECONDARY_DROP_CLASSES: readonly (readonly string[])[] = [
+  ["@max-[380px]/palette-footer:hidden"],
+  ["@max-[460px]/palette-footer:hidden", "@max-[260px]/palette-footer:hidden"],
+  [
+    "@max-[560px]/palette-footer:hidden",
+    "@max-[380px]/palette-footer:hidden",
+    "@max-[260px]/palette-footer:hidden",
+  ],
 ];
 
 /**
@@ -869,10 +881,10 @@ export function PaletteFooterHints({ primaryHint, hints = [] }: PaletteFooterHin
           {hints.map((hint, i) => {
             // Map render index → drop priority: rightmost chip (last in array) gets
             // index 0 from the trailing edge, hiding first. Clamp to the table.
+            const row =
+              SECONDARY_DROP_CLASSES[Math.min(hints.length, SECONDARY_DROP_CLASSES.length) - 1]!;
             const fromEnd = hints.length - 1 - i;
-            const dropClass =
-              SECONDARY_DROP_CLASSES[fromEnd] ??
-              SECONDARY_DROP_CLASSES[SECONDARY_DROP_CLASSES.length - 1]!;
+            const dropClass = row[fromEnd] ?? row[row.length - 1]!;
             return <HintChip key={`${i}-${hint.label}`} hint={hint} className={dropClass} />;
           })}
         </div>

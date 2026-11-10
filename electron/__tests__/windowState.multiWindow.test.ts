@@ -14,7 +14,7 @@ const fakes = vi.hoisted(() => {
   };
 
   const workArea = { x: 0, y: 0, width: 1920, height: 1200 };
-  const display = { workArea, bounds: workArea };
+  const display = { id: 1, workArea, bounds: workArea };
 
   class FakeWindow {
     static created: FakeWindow[] = [];
@@ -87,6 +87,7 @@ vi.mock("electron", () => ({
   screen: {
     getDisplayMatching: () => fakes.display,
     getPrimaryDisplay: () => fakes.display,
+    getAllDisplays: () => [fakes.display],
   },
 }));
 

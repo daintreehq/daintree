@@ -21,8 +21,8 @@ import {
   SEND_KEYS_SETTLE_MS,
   SendKeysArgsSchema,
 } from "@shared/utils/terminalKeys";
-import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { isForegroundDispatch } from "./dispatchSource";
+import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import {
   INPUT_LOCKED_INJECTION_REFUSAL,
   isTerminalInputLocked,
@@ -111,7 +111,7 @@ export function registerTerminalInputActions(
     id: "terminal.inject",
     title: "Inject context",
     description:
-      "Write the active worktree's prepared context into a terminal, to hand an agent a large codebase context. Name the target: focus can drift, and a mistarget types a large dump into the wrong pane. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal, to hand an agent a large codebase context. Name the target: focus can drift, and a mistarget types a large dump into the wrong terminal. Target an idle terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -245,7 +245,10 @@ export function registerTerminalInputActions(
             bracketedPasteMode: managed.terminal.modes.bracketedPasteMode,
           })
         );
-        peekTerminalService()?.notifyUserInput(targetId);
+        // An agent can dispatch this too, and only a person moves a Canopy hold.
+        peekTerminalService()?.notifyUserInput(targetId, "", {
+          takesSize: isForegroundDispatch(ctx?.dispatchSource),
+        });
       } catch {
         // Clipboard API may be denied
       }

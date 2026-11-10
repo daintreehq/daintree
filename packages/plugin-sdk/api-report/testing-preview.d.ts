@@ -193,13 +193,14 @@ interface PluginSettingsViewFocus {
  * as narrow as the sidebar's minimum width. `"fileEditor"` is a view-backed
  * file editor inside the file panel. `"popover"` is the anchored popover
  * a toolbar button opens (`contributes.toolbarButtons[].popover`), again one of
- * the plugin's panel views.
+ * the plugin's panel views. `"canopy"` is the Canopy window
+ * (`contributes.canopyViews`), a panel view shown with no project around it.
  *
  * Open-ended: hosts added later arrive as new members, so a view that switches
  * on this must give unknown kinds a sensible default rather than treat the list
  * as exhaustive.
  */
-type PluginViewHostKind = "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover";
+type PluginViewHostKind = "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover" | "canopy";
 interface PluginViewHostContext {
     readonly kind: PluginViewHostKind;
     /**

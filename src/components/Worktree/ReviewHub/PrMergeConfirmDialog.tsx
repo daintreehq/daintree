@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { GitPullRequest } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import type { PR, PRMergeIntent, PRMergeMethod } from "@shared/types/forge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
@@ -25,20 +27,33 @@ import { pluralize } from "@/lib/pluralize";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   MERGE_STATUS_UNREPORTED_REASON,
+  canMergeWithoutWaiting,
   confirmBlockReason,
   describeMergeRejection,
+  describeUnmetRequirements,
   effectiveMergeMode,
   mergeActionLabel,
   type PrMergeMode,
   type PrMergeOutcome,
   type PrMergeRequest,
 } from "./prMergeModel";
+import { preparePrChecks, type PrCheckRow } from "./prChecks";
 
 type PreviewState =
   | { kind: "loading" }
-  | { kind: "loaded"; pr: PR }
+  /**
+   * `checks`: read beside the PR only for a merge without waiting, to name
+   * what it skips. `null` when that read failed.
+   */
+  | { kind: "loaded"; pr: PR; checks?: PrCheckRow[] | null }
   | { kind: "missing" }
   | { kind: "error"; message: string };
+
+/** A refused write, with the mode it was refused in: a re-read can change the mode. */
+interface Rejection {
+  message: string;
+  mode: PrMergeMode;
+}
 
 interface PrMergeConfirmDialogProps {
   worktreePath: string;
@@ -102,7 +117,7 @@ function readOutcome(
   const field = (key: string): unknown => (key in record ? Reflect.get(record, key) : undefined);
   // Only what the reply says: a merge GitHub didn't report as done, or an arm
   // it didn't describe, is acknowledged as requested and changes no chip.
-  if (mode === "merge") {
+  if (mode === "merge" || mode === "bypass") {
     return field("merged") === true
       ? { kind: "merged", baseRef: context.baseRef }
       : { kind: "merge-requested", baseRef: context.baseRef };
@@ -132,6 +147,10 @@ function readOutcome(
  * notice saying so, and the user has to confirm that instead. A rejected arm
  * that comes back `already-mergeable` does the same. Nothing here ever falls
  * through to an immediate merge on its own.
+ *
+ * A merge without waiting is only ever the mode the user asked for. It names
+ * what GitHub reports is still unmet, and a read that no longer allows it
+ * blocks the write rather than arming auto-merge in its place.
  */
 export function PrMergeConfirmDialog({
   worktreePath,
@@ -143,7 +162,7 @@ export function PrMergeConfirmDialog({
 }: PrMergeConfirmDialogProps) {
   const [preview, setPreview] = useState<PreviewState>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
-  const [rejection, setRejection] = useState<string | null>(null);
+  const [rejection, setRejection] = useState<Rejection | null>(null);
   // Bumped whenever the control holding focus is about to disappear — a
   // Retry that turns into a skeleton, a primary locked by a re-read — so
   // focus goes back to the safe control instead of falling to the body.
@@ -153,23 +172,36 @@ export function PrMergeConfirmDialog({
   const generationRef = useRef(0);
 
   const isOpen = request !== null;
+  const withChecks = request?.mode === "bypass";
 
   // Always past the provider's cache: a minute-old read could preview a base
   // the PR has since been retargeted off, and the head pin wouldn't catch it.
   const load = useCallback(() => {
     const generation = (generationRef.current += 1);
     setPreview({ kind: "loading" });
-    forgeClient.getPR(worktreePath, prNumber, { fresh: true }).then(
-      (pr) => {
+    // A failed checks read only leaves the requirements less itemised; it
+    // never stands in for the PR read the write depends on.
+    const checks: Promise<PrCheckRow[] | null | undefined> = withChecks
+      ? forgeClient.getChecks(worktreePath, prNumber).then(
+          (result) => (result ? preparePrChecks(result.checks) : null),
+          () => null
+        )
+      : Promise.resolve(undefined);
+    Promise.all([forgeClient.getPR(worktreePath, prNumber, { fresh: true }), checks]).then(
+      ([pr, checkRows]) => {
         if (generationRef.current !== generation) return;
-        setPreview(pr ? { kind: "loaded", pr } : { kind: "missing" });
+        setPreview(
+          pr
+            ? { kind: "loaded", pr, ...(checkRows !== undefined ? { checks: checkRows } : {}) }
+            : { kind: "missing" }
+        );
       },
       (err: unknown) => {
         if (generationRef.current !== generation) return;
         setPreview({ kind: "error", message: formatErrorMessage(err, "") });
       }
     );
-  }, [worktreePath, prNumber]);
+  }, [worktreePath, prNumber, withChecks]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -238,6 +270,12 @@ export function PrMergeConfirmDialog({
   const commits = loadedPr?.commits;
   const baseRef = loadedPr?.baseRef ?? request.baseRef;
   const prTitle = loadedPr?.title ?? request.title;
+  // The PR badges' mark once the PR is read; until then the plain PR glyph,
+  // since the request carries no state to draw.
+  const PrGlyph = loadedPr ? getPrStateGlyph(loadedPr.state, loadedPr.isDraft) : GitPullRequest;
+  const prGlyphColor = loadedPr
+    ? getPrStateColor(loadedPr.state, loadedPr.isDraft)
+    : "text-text-secondary";
   const intent = loadedPr ? (loadedPr.mergeIntent ?? null) : request.intent;
   const queuedIntent = intent?.kind === "queued";
   const nothingPending = mode === "cancel" && loadedPr !== null && !loadedPr.mergeIntent;
@@ -262,8 +300,11 @@ export function PrMergeConfirmDialog({
             { ...target, ...pin },
             { source: "user" }
           )
-        : mode === "merge"
-          ? await actionService.dispatch("forge.mergePR", { ...target, ...pin }, { source: "user" })
+        : mode === "merge" || mode === "bypass"
+          ? // GitHub's merge needs no flag to skip requirements: it does so for
+            // whoever it lets. What makes this one deliberate is the choice
+            // that got here and the confirm the user has just read.
+            await actionService.dispatch("forge.mergePR", { ...target, ...pin }, { source: "user" })
           : await actionService.dispatch("forge.disableAutoMerge", target, { source: "user" });
     if (generationRef.current !== generation) return;
     setBusy(false);
@@ -271,7 +312,7 @@ export function PrMergeConfirmDialog({
       // Whatever GitHub said, the preview is now older than the attempt. Read
       // it again so the next press is decided against where the PR stands,
       // and lock the primary until that read lands.
-      setRejection(result.error.message || "");
+      setRejection({ message: result.error.message || "", mode });
       setAttempt((value) => value + 1);
       setFocusKey((key) => key + 1);
       load();
@@ -299,13 +340,15 @@ export function PrMergeConfirmDialog({
           : `Cancel auto-merge for #${prNumber}?`
       : mode === "merge"
         ? `Merge #${prNumber} into ${baseRef}?`
-        : queue
-          ? `Merge #${prNumber} when ready?`
-          : `Enable auto-merge for #${prNumber}?`;
+        : mode === "bypass"
+          ? `Merge #${prNumber} into ${baseRef} without waiting?`
+          : queue
+            ? `Merge #${prNumber} when ready?`
+            : `Enable auto-merge for #${prNumber}?`;
 
   const count = commits?.totalCount;
   const consequence: ReactNode =
-    mode === "merge"
+    mode === "merge" || mode === "bypass"
       ? count === undefined || !method
         ? `Writes this pull request into ${baseRef} for everyone working from it.`
         : method === "squash"
@@ -335,7 +378,18 @@ export function PrMergeConfirmDialog({
   );
 
   const rejected =
-    rejection !== null ? describeMergeRejection(rejection, mode, { baseRef, queue }) : null;
+    rejection !== null
+      ? describeMergeRejection(rejection.message, rejection.mode, { baseRef, queue })
+      : null;
+  // Only over a read that allows it: a blocked bypass has nothing to skip,
+  // and a status GitHub hasn't settled says nothing about what's unmet.
+  const unmet =
+    loadedPr && mode === "bypass" && canMergeWithoutWaiting(loadedPr)
+      ? describeUnmetRequirements(
+          loadedPr,
+          preview.kind === "loaded" ? (preview.checks ?? null) : null
+        )
+      : null;
 
   const hint =
     preview.kind === "loading" ? (
@@ -370,8 +424,8 @@ export function PrMergeConfirmDialog({
       // as an instruction from the dialog.
       description={
         <span className="flex items-start gap-2">
-          <GitPullRequest
-            className="w-3.5 h-3.5 mt-[3px] shrink-0 text-text-secondary"
+          <PrGlyph
+            className={cn("w-3.5 h-3.5 mt-[3px] shrink-0", prGlyphColor)}
             aria-hidden="true"
           />
           <span
@@ -409,7 +463,7 @@ export function PrMergeConfirmDialog({
           {rejected && (
             <PreviewNotice tone="error" title={rejected.title} testId="pr-merge-error">
               {rejected.summary}
-              <TechnicalDetails text={rejection ?? ""} />
+              <TechnicalDetails text={rejection?.message ?? ""} />
             </PreviewNotice>
           )}
           {preview.kind === "error" && !showSkeleton && (
@@ -457,9 +511,33 @@ export function PrMergeConfirmDialog({
               testId="pr-merge-mode-changed"
             >
               {mode === "merge" ? (
-                "GitHub won't enable auto-merge for a pull request that's ready. Confirming merges it now."
+                request.mode === "bypass" ? (
+                  "GitHub reports nothing left blocking it, so there's nothing to skip. Confirming merges it now."
+                ) : (
+                  "GitHub won't enable auto-merge for a pull request that's ready. Confirming merges it now."
+                )
               ) : (
                 <>It changed since the checks were read. {pushCaveat}</>
+              )}
+            </PreviewNotice>
+          )}
+          {pr && unmet && (
+            <PreviewNotice
+              tone="warning"
+              title="Skips what GitHub still requires"
+              testId="pr-merge-bypass-requirements"
+            >
+              <ul className="list-disc pl-4" aria-label="Requirements not met">
+                {unmet.items.map((item, index) => (
+                  <li key={index} data-testid="pr-merge-bypass-requirement">
+                    {item}
+                  </li>
+                ))}
+              </ul>
+              {unmet.checksUnread && (
+                <p className="mt-1" data-testid="pr-merge-bypass-checks-unread">
+                  Couldn&apos;t read the checks, so required ones may be missing here.
+                </p>
               )}
             </PreviewNotice>
           )}

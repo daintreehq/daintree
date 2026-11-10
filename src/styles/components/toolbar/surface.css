@@ -106,7 +106,13 @@
 /* The project pill stands in front of the light rather than taking it: its
  * fill is translucent, and lit from behind its branch name lost contrast. An
  * unlit patch of strip sits exactly under it, so it renders as it does in a
- * local window. */
+ * local window.
+ *
+ * The patch is a pseudo-element of the drag strip, so it would inherit `drag`,
+ * and Chromium applies drag regions in document order: an `::after` comes after
+ * the pill's no-drag cut-out and puts the drag back, turning every click on the
+ * pill into a title-bar press on macOS. It claims no-drag instead, which is
+ * what the pill above it claims anyway. */
 .surface-toolbar[data-remote-window] .toolbar-project-pill {
   anchor-name: --remote-project-pill;
 }
@@ -121,6 +127,8 @@
   left: anchor(--remote-project-pill left);
   border-radius: var(--toolbar-pill-radius, var(--radius-md));
   pointer-events: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
   background-color: var(--remote-occluder);
 }
 

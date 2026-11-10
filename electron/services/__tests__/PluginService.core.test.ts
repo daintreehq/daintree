@@ -621,6 +621,67 @@ describe("PluginService", () => {
     });
   });
 
+  it("serves a panel view named in canopyViews as a Canopy hosted view, and activates it there", async () => {
+    await writePlugin("canopy-plugin", {
+      name: "acme.canopy-plugin",
+      displayName: "Acme Beads",
+      version: "1.0.0",
+      contributes: {
+        panels: [
+          { id: "triage", name: "Triage", iconId: "list", color: "#111", stateVersion: 3 },
+          { id: "board", name: "Board", iconId: "eye", color: "#111" },
+        ],
+        views: [
+          { id: "triage", componentPath: "dist/triage.js", location: "panel" },
+          { id: "board", componentPath: "dist/board.js", location: "panel" },
+        ],
+        canopyViews: [{ viewId: "triage" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // Still the panel it was: spawnable in a project window as before.
+    const triage = vi
+      .mocked(registerPanelKind)
+      .mock.calls.find((call) => call[0]?.id === "acme.canopy-plugin.triage")?.[0];
+    expect(triage?.componentPath).toContain("dist/triage.js");
+    const hosted = getPluginHostedViews().filter((v) => v.pluginId === "acme.canopy-plugin");
+    expect(hosted).toEqual([
+      {
+        id: "plugin-view:acme.canopy-plugin/triage",
+        pluginId: "acme.canopy-plugin",
+        viewId: "triage",
+        location: "canopy",
+        name: "Acme Beads Triage",
+        title: "Triage",
+        pluginName: "Acme Beads",
+        iconId: "list",
+        stateVersion: 3,
+        componentPath: triage?.componentPath,
+      },
+    ]);
+
+    const activate = vi.spyOn(service, "activatePlugin");
+    await expect(
+      service.activatePluginForView("plugin-view:acme.canopy-plugin/triage", true)
+    ).resolves.toMatchObject({
+      ok: true,
+      recoveryComponentPath: expect.stringMatching(/dist\/triage\.js$/),
+    });
+    expect(activate).toHaveBeenCalledWith("acme.canopy-plugin");
+    // A panel view the plugin didn't offer to Canopy stays reachable only as a panel.
+    activate.mockClear();
+    await expect(
+      service.activatePluginForView("plugin-view:acme.canopy-plugin/board", true)
+    ).resolves.toEqual({ ok: true });
+    expect(activate).not.toHaveBeenCalled();
+
+    service.unloadPlugin("acme.canopy-plugin");
+    expect(getPluginHostedViews().some((v) => v.pluginId === "acme.canopy-plugin")).toBe(false);
+  });
+
   it("skips directories without plugin.json", async () => {
     await fs.mkdir(path.join(tmpDir, "empty-dir"));
 

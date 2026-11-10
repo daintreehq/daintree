@@ -26,6 +26,7 @@ import type {
 import type { ForgeCheckRun } from "@shared/types/ipc/forge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { LIST_ROW_HOVER_CLASS } from "@/components/ui/paletteRowStyles";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -423,9 +424,7 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
               aria-label={`Review: ${extra.review.label}`}
               className={cn("inline-flex shrink-0 items-center gap-1", extra.review.tone)}
             >
-              <span aria-hidden="true" className="text-text-secondary">
-                &middot;
-              </span>
+              <FactSeparator />
               <extra.review.Glyph aria-hidden="true" className="h-3 w-3" />
               <span>{extra.review.label}</span>
             </span>

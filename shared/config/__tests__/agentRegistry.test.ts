@@ -1022,12 +1022,13 @@ describe("screen-mode flag capabilities (#11423)", () => {
     }
   });
 
-  it("still ships at least one agent able to force alt screen", () => {
-    // Non-vacuity guard: every assertion in this block passes trivially if no
-    // agent declares `altScreenFlag`, which would mean #11423's fix went dead.
-    expect(
-      screenModeAgents.filter((a) => a.capabilities?.altScreenFlag !== undefined).length
-    ).toBeGreaterThan(0);
+  it("declares an alt-screen token only beside the inline flag it is rewritten to", () => {
+    // A saved `altScreenFlag` is only ever rewritten to the agent's
+    // `inlineModeFlag` (#16356); alone, it would be read by nothing.
+    for (const { id, capabilities } of screenModeAgents) {
+      if (capabilities?.altScreenFlag === undefined) continue;
+      expect(capabilities.inlineModeFlag, `${id} declares altScreenFlag alone`).toBeDefined();
+    }
   });
 
   it("keeps the two polarities distinct for any agent declaring both", () => {
@@ -1039,16 +1040,35 @@ describe("screen-mode flag capabilities (#11423)", () => {
       ).not.toBe(capabilities.inlineModeFlag);
     }
   });
+});
 
-  it("never pairs a force-alt-screen flag with blockAltScreen", () => {
-    // Forcing the CLI into its full-screen TUI while the terminal strips the
-    // alt-screen escape sequences leaves the agent unusable.
-    for (const { id, capabilities } of screenModeAgents) {
-      if (!capabilities?.altScreenFlag) continue;
+describe("main-screen launch env (#16355)", () => {
+  const declaring = getAgentIds()
+    .map((id) => ({ id, capabilities: getAgentConfig(id)?.capabilities }))
+    .filter((a) => a.capabilities?.inlineModeEnv !== undefined);
+
+  it("is declared by at least one agent", () => {
+    expect(declaring.length).toBeGreaterThan(0);
+  });
+
+  it("declares plain variables a spawn env can carry", () => {
+    for (const { id, capabilities } of declaring) {
+      const entries = Object.entries(capabilities?.inlineModeEnv ?? {});
+      expect(entries.length, `${id} declares an empty inlineModeEnv`).toBeGreaterThan(0);
+      for (const [key, value] of entries) {
+        expect(key, `${id} declares an invalid env name`).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
+        expect(typeof value).toBe("string");
+        expect(value.length, `${id} declares an empty ${key}`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("is never paired with a flag that forces the alternate screen", () => {
+    for (const { id, capabilities } of declaring) {
       expect(
-        capabilities.blockAltScreen ?? false,
-        `${id} forces alt screen but also blocks it`
-      ).toBe(false);
+        capabilities?.altScreenFlag,
+        `${id} both forces and forbids alt screen`
+      ).toBeUndefined();
     }
   });
 });

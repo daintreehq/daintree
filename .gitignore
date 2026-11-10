@@ -142,3 +142,6 @@ planning/
 # Perf results history: ~5k lines rewritten per canonical run, and the filename
 # carries a machine label. Local to whoever ran it.
 scripts/perf/history/*.json
+
+# Canopy's reader model, fetched at build time (scripts/fetch-canopy-model.mjs)
+/electron/resources/canopy-reader/

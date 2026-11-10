@@ -228,6 +228,10 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         ...chipStyle,
       },
       ".cm-diff-chip svg": CHIP_SVG_SIZE,
+      ".cm-notes-chip": {
+        ...chipStyle,
+      },
+      ".cm-notes-chip svg": CHIP_SVG_SIZE,
       ".cm-terminal-chip": {
         ...chipStyle,
       },
@@ -449,6 +453,7 @@ const CHIP_CLASSES = [
   ".cm-image-chip",
   ".cm-file-drop-chip",
   ".cm-diff-chip",
+  ".cm-notes-chip",
   ".cm-terminal-chip",
   ".cm-selection-chip",
   ".cm-context-chip",

@@ -245,12 +245,7 @@ export function PanelPalette({
               indices={findMatchIndices(matchesById.get(kind.id), "name")}
             />
           </div>
-          {kind.shortcut ? (
-            // The launch chord as keycaps, the way the header and footers
-            // draw every other shortcut, not as a line of glyph text.
-            <KbdChord shortcut={kind.shortcut} density="compact" className="mt-0.5" />
-          ) : (
-            secondaryText &&
+          {secondaryText &&
             (resumeLocation ? (
               // A resume row's location is what tells two sessions with the
               // same title apart, and worktrees differ at the end of their
@@ -279,9 +274,14 @@ export function PanelPalette({
                     found by its worktree or model, which live on this line. */}
                 <HighlightedText text={secondaryText} indices={descriptionIndices} />
               </div>
-            ))
-          )}
+            ))}
         </div>
+        {/* The launch chord as compact keycaps trailing the row, where the
+            action palette puts a bound row's shortcut, so the description
+            keeps its line on every row. */}
+        {kind.shortcut && (
+          <KbdChord shortcut={kind.shortcut} density="compact" className="shrink-0" />
+        )}
         {badgeLabel && (
           <span className="shrink-0 text-3xs font-medium text-text-secondary">{badgeLabel}</span>
         )}
@@ -371,7 +371,7 @@ export function PanelPalette({
       </AppPaletteDialog.Body>
 
       <AppPaletteDialog.Footer>
-        {enterLabel && <PaletteFooterHints primaryHint={{ keys: ["↵"], label: enterLabel }} />}
+        {enterLabel && <PaletteFooterHints primaryHint={{ keys: "Enter", label: enterLabel }} />}
       </AppPaletteDialog.Footer>
     </AppPaletteDialog>
   );

@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { SECTION_TEXT_COLUMN } from "./sectionChrome";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 import { LiveTimeAgo } from "../LiveTimeAgo";
@@ -60,8 +61,8 @@ export function FocusedSubLine({
           segments.map((seg, i) => (
             <span key={seg} className={cn("flex items-center", seg === "label" && "min-w-0")}>
               {i > 0 && (
-                <span aria-hidden="true" className="mr-1.5 text-text-muted">
-                  ·
+                <span aria-hidden="true" className="mr-1.5">
+                  <FactSeparator />
                 </span>
               )}
               {seg === "changes" && (

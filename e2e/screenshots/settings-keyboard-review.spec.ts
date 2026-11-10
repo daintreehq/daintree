@@ -263,7 +263,7 @@ async function captureKeyboard(page: Page, theme: string): Promise<void> {
 
   await step("keyboard-edit", async () => {
     await ensureAt(page, "keyboard");
-    const row = rows.filter({ hasText: "Close focused terminal" }).first();
+    const row = rows.filter({ hasText: "Close focused panel" }).first();
     await row.evaluate((el) => el.scrollIntoView({ block: "center" }));
     await row.hover();
     await row

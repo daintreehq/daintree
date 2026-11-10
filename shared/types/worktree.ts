@@ -1,4 +1,4 @@
-import type { FileChangeDetail, RepoState, WorktreeChanges } from "./git.js";
+import type { FileChangeDetail, GitStatusUnanswered, RepoState, WorktreeChanges } from "./git.js";
 import type { CIStatusState } from "./forge.js";
 import type { PluginWorktreeLinked } from "./plugin.js";
 
@@ -102,6 +102,25 @@ export interface WorktreeSetupStatus {
    * whose plugins declare none.
    */
   pluginSteps?: WorktreeSetupPluginStep[];
+  /**
+   * One record per directory the project's `cloneIgnored` names, in the order
+   * declared (#16392). Written once the `copy-config` stage has tried them all
+   * and kept by every later status, so a skipped clone stays visible after the
+   * setup script has run. Absent when the project names none.
+   */
+  clones?: WorktreeSetupClone[];
+}
+
+/**
+ * What became of one `cloneIgnored` directory. A skip never fails setup: the
+ * setup script still runs and installs what the clone would have carried.
+ */
+export interface WorktreeSetupClone {
+  /** The directory as the config names it, relative to the worktree. */
+  path: string;
+  outcome: "cloned" | "skipped";
+  /** Why it was skipped, one line. Absent when cloned. */
+  reason?: string;
 }
 
 /**
@@ -493,6 +512,19 @@ export interface Worktree {
    * count from one that's intentionally suppressed.
    */
   fetchNetworkFailed?: boolean;
+
+  /**
+   * The last git status read for this worktree ended without an answer: it
+   * timed out, or a git already stopped there had not exited. Absent once a
+   * read answers. `worktreeChanges` still holds whatever was last observed.
+   */
+  gitStatusUnanswered?: GitStatusUnanswered;
+
+  /**
+   * Git status isn't being run here because `.git` still holds online-only
+   * files. `worktreeChanges` still holds whatever was last observed.
+   */
+  gitStatusWaitingForDownload?: boolean;
 
   /**
    * `false` when `git remote` lists nothing: a local-only repo, which has

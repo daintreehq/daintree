@@ -150,12 +150,12 @@ export function AgentInputSettings() {
         />
         <SettingsDependents
           disabled={!hybridInputEnabled}
-          reason="Turn on the hybrid input to choose where agent panes put the keyboard"
+          reason="Turn on the hybrid input to choose where agent panels put the keyboard"
         >
           <SettingsPresetGroup
             id="agents-hybrid-focus"
             label="Focus first"
-            description="Where switching to an agent pane puts the keyboard, with the terminal taking it when the hybrid input can't. Files dropped on another pane's terminal go there too. Clicking either one only changes that pane."
+            description="Where switching to an agent panel puts the keyboard, with the terminal taking it when the hybrid input can't. Files dropped on another panel's terminal go there too. Clicking either one only changes that panel."
             options={FOCUS_OPTIONS}
             value={hybridInputAutoFocus ? "hybrid" : "terminal"}
             onChange={(value) => void setHybridInputAutoFocus(value === "hybrid")}

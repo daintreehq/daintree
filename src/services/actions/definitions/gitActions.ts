@@ -18,6 +18,7 @@ import {
 import { z } from "zod";
 import { fileMutationArgsSchema } from "./gitActionArgs";
 import type { GitActionRunId } from "./gitActions.impl";
+import { notify } from "@/lib/notify";
 
 /**
  * A base branch as an action argument.
@@ -39,6 +40,19 @@ const RepoOperationStateSchema = z
   .describe("Which operation is in progress, used only to label the confirm while it loads.");
 
 /**
+ * The actions that advertise `selfNotifiesOnExecutionError`, keyed to the title
+ * their toast takes if the run bodies never load. The flag stands the palette's
+ * and the HUD's generic toast down, so a failed chunk load would otherwise be
+ * reported nowhere for exactly these.
+ */
+const SELF_REPORTED_LOAD_FAILURE_TITLES: Partial<Record<GitActionRunId, string>> = {
+  "git.push": "Push failed",
+  "git.pullRebase": "Pull and rebase failed",
+  "git.fetch": "Fetch failed",
+  "git.forcePushWithLease": "Force push failed",
+};
+
+/**
  * Run bodies load on first dispatch (#14239). Every view registers the git
  * actions at boot for menus, keybindings and the MCP manifest, but an empty
  * view runs none of them. A failed chunk load rejects inside `run`, which
@@ -49,8 +63,24 @@ async function runGitAction(
   args: unknown,
   ctx: ActionContext
 ): Promise<unknown> {
-  const { gitActionRuns } = await import("./gitActions.impl");
-  return gitActionRuns[id](args, ctx);
+  let runs: (typeof import("./gitActions.impl"))["gitActionRuns"];
+  try {
+    ({ gitActionRuns: runs } = await import("./gitActions.impl"));
+  } catch (error) {
+    const title = SELF_REPORTED_LOAD_FAILURE_TITLES[id];
+    if (title && ctx.dispatchSource !== "agent" && !ctx.callerReportsFailure) {
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok. Nothing here can recover a renderer whose own chunks don't load; retrying the same dispatch would fail the same way.
+      notify({
+        type: "error",
+        title,
+        // Fixed copy: a failed import's own message is a bundle path.
+        message: "Part of Daintree didn't load, so nothing ran. Reload the window to try again.",
+        context: { eventKind: "git" },
+      });
+    }
+    throw error;
+  }
+  return runs[id](args, ctx);
 }
 
 export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
@@ -362,6 +392,11 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       { setUpstream: z.boolean().optional() },
       { legacy: ["cwd"] }
     ).optional(),
+    // Reports its own failure, as do `git.pullRebase` and
+    // `git.forcePushWithLease`: the default Cmd+K Cmd+P chord and a menu row
+    // drop the dispatch result, so a rejected push the action kept quiet about
+    // was reported nowhere but the card that happened to toast it (#16667).
+    selfNotifiesOnExecutionError: true,
     run: (args: unknown, ctx: ActionContext) => runGitAction("git.push", args, ctx),
   }));
 
@@ -376,6 +411,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     dangerRationale:
       "Rebases local commits onto remote changes. Local history is rewritten and unrecoverable until pushed.",
     argsSchema: withWorktreeLocation({}, { legacy: ["cwd"] }).optional(),
+    selfNotifiesOnExecutionError: true,
     run: (args: unknown, ctx: ActionContext) => runGitAction("git.pullRebase", args, ctx),
   }));
 
@@ -509,6 +545,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     palette: { mode: "hidden" },
     mcpVisibility: "hidden",
     argsSchema: withWorktreeLocation({}, { legacy: ["cwd"] }).optional(),
+    selfNotifiesOnExecutionError: true,
     run: (args: unknown, ctx: ActionContext) => runGitAction("git.forcePushWithLease", args, ctx),
   }));
 

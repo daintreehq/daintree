@@ -18,11 +18,9 @@ import {
   Icon,
   IconButton,
   SearchField,
-  SegmentedControl,
   SkeletonHint,
   Spinner,
   SpinningIcon,
-  type SegmentedOption,
 } from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
@@ -36,8 +34,10 @@ import { useIssueSelectionStore } from "@/store/issueSelectionStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import {
+  prScopeQualifier,
   useGitHubFilterStore,
   type IssueStateFilter,
+  type PRScopeFilter,
   type PRStateFilter,
 } from "../stores/githubFilterStore";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
@@ -47,8 +47,11 @@ import type { Worktree } from "@shared/types/worktree";
 import type { GitHubSortOrder } from "../../shared/types.js";
 import { looksLikeNumberList, MULTI_FETCH_CAP } from "@/lib/parseNumberQuery";
 import {
+  describeResourceFilter,
+  effectiveResourceScope,
   GitHubResourceRowsSkeleton,
   MAX_SKELETON_ITEMS,
+  RESOURCE_FILTER_SUMMARY,
   RESOURCE_ITEM_HEIGHT_PX,
   RESOURCE_LIST_GUTTER,
   RESOURCE_PANEL_FOOTER,
@@ -68,6 +71,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 // The host overlays, because the rows are a Virtuoso list the grid drives
@@ -85,6 +89,12 @@ import {
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
+
+const SCOPE_OPTIONS: { value: PRScopeFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "mine", label: "Mine" },
+  { value: "needs-review", label: "Needs my review" },
+];
 
 /** Stable empty snapshot for the views that have no worktree store to read. */
 const EMPTY_WORKTREES: ReadonlyMap<string, Worktree> = new Map();
@@ -270,12 +280,19 @@ export function GitHubResourceList({
   const setFilterState = useGitHubFilterStore((s) =>
     type === "issue" ? s.setIssueFilter : s.setPrFilter
   ) as (f: StateFilter) => void;
+  const prScope = useGitHubFilterStore((s) => s.prScope);
+  const setPrScope = useGitHubFilterStore((s) => s.setPrScope);
+  const scope: PRScopeFilter = type === "pr" ? prScope : "all";
+  const scopeActive = scope !== "all";
+  const clearFilters = useGitHubFilterStore((s) => s.clearFilters);
   const sortOrder = useGitHubFilterStore((s) =>
     type === "issue" ? s.issueSortOrder : s.prSortOrder
   );
   const setSortOrder = useGitHubFilterStore((s) =>
     type === "issue" ? s.setIssueSortOrder : s.setPrSortOrder
   ) as (o: GitHubSortOrder) => void;
+  const filtersActive = filterState !== "open" || scopeActive;
+  const viewCustomized = filtersActive || sortOrder !== "created";
   const githubConfigInitialized = useGitHubConfigStore((s) => s.isInitialized);
   const githubConfig = useGitHubConfigStore((s) => s.config);
   const showNoTokenEmptyState =
@@ -312,14 +329,22 @@ export function GitHubResourceList({
     projectPath,
     searchQuery,
     filterState,
+    scope,
     sortOrder,
     githubConfig,
     onFreshFetch,
     onCountUpdate,
   });
 
+  // Exact number lookups cannot honor involvement (the notice below says so),
+  // so the filter line describes only what is actually narrowing the results.
+  const appliedScope = effectiveResourceScope(type, scope, numberQuery);
+  const filterLineShown = filterState !== "open" || appliedScope !== "all";
+  const filterSummary = describeResourceFilter(type, filterState, appliedScope);
+  const filterSummaryId = `github-${type}-filter-summary`;
+
   const [activeIndex, setActiveIndex] = useState(-1);
-  const [sortPopoverOpen, setSortPopoverOpen] = useState(false);
+  const [viewOptionsOpen, setViewOptionsOpen] = useState(false);
   const [selectionMenuOpen, setSelectionMenuOpen] = useState(false);
   /**
    * Which row's actions menu is open, if any.
@@ -422,7 +447,7 @@ export function GitHubResourceList({
     useIssueSelectionStore.getState().clear(`${type}:${prevProjectPath}`);
   }, [projectPath, type]);
 
-  const stateTabs = useMemo((): SegmentedOption[] => {
+  const stateTabs = useMemo((): { value: StateFilter; label: string }[] => {
     if (type === "pr") {
       return [
         { value: "open", label: "Open" },
@@ -441,7 +466,12 @@ export function GitHubResourceList({
   }, [onClose]);
 
   const handleOpenInGitHub = useCallback(() => {
-    const query = searchQuery.trim() || undefined;
+    // An exact number lookup ignores the scope in the list, so the browser
+    // page must too, or it would filter out the very PR the panel is showing.
+    const scopeApplies = numberQuery === null || numberQuery.kind === "open-ended";
+    const query =
+      [scopeApplies ? prScopeQualifier(scope) : "", searchQuery.trim()].filter(Boolean).join(" ") ||
+      undefined;
     const state = filterState as string;
     // dispatch() never throws — failures come back as { ok: false }, so they
     // must be surfaced here or the click silently does nothing.
@@ -486,7 +516,7 @@ export function GitHubResourceList({
     };
     open();
     handleClose();
-  }, [searchQuery, filterState, type, projectPath, handleClose]);
+  }, [searchQuery, filterState, scope, numberQuery, type, projectPath, handleClose]);
 
   /**
    * Open the forge's compose page. This used to call `handleOpenInGitHub()`,
@@ -648,7 +678,7 @@ export function GitHubResourceList({
   useEffect(() => {
     if (isDropdownOpen) return;
     // Closing — nothing of ours may stay portaled on `document.body`.
-    setSortPopoverOpen(false);
+    setViewOptionsOpen(false);
     setSelectionMenuOpen(false);
     setOpenRowMenuNumber(null);
   }, [isDropdownOpen]);
@@ -728,6 +758,7 @@ export function GitHubResourceList({
     exactNumberNotFound === null &&
     numberQuery === null &&
     debouncedSearch.trim().length === 0 &&
+    !scopeActive &&
     filterState === "open";
 
   // A background revalidation can rename an issue or move a PR's head ref
@@ -769,6 +800,7 @@ export function GitHubResourceList({
     !error &&
     !loading &&
     !debouncedSearch &&
+    !scopeActive &&
     lastUpdatedAt != null &&
     nowMs - lastUpdatedAt >= FRESHNESS_VISIBLE_AFTER_MS;
 
@@ -1046,14 +1078,20 @@ export function GitHubResourceList({
     // 1. A query that matched nothing — the way out is clearing the query, and
     //    the state tab too when that is also narrowing the view. The label says
     //    which, so the button never undoes more than it claims to.
-    if (exactNumberNotFound !== null || numberQuery !== null || trimmedSearch.length > 0) {
-      const stateAlsoNarrows = filterState !== "open";
+    const hasQuery =
+      exactNumberNotFound !== null || numberQuery !== null || trimmedSearch.length > 0;
+    if (hasQuery || scopeActive) {
+      const filtersNarrow = filterState !== "open" || scopeActive;
       const title =
         exactNumberNotFound !== null
           ? `No ${singular} #${exactNumberNotFound} in this view`
           : trimmedSearch.length > 0
             ? `No ${resourceLabel} match “${trimmedSearch}”`
-            : `No ${resourceLabel} in this view`;
+            : scope === "mine"
+              ? `No ${resourceLabel} opened by you in this view`
+              : scope === "needs-review"
+                ? `No ${resourceLabel} waiting on your review in this view`
+                : `No ${resourceLabel} in this view`;
       return (
         <EmptyState
           variant="filtered-empty"
@@ -1064,11 +1102,16 @@ export function GitHubResourceList({
               variant="ghost"
               size="sm"
               onClick={() => {
-                if (stateAlsoNarrows) setFilterState("open" as StateFilter);
-                handleClearSearch();
+                if (filterState !== "open") setFilterState("open" as StateFilter);
+                if (scopeActive) setPrScope("all");
+                if (hasQuery) handleClearSearch();
               }}
             >
-              {stateAlsoNarrows ? "Clear search and filters" : "Clear search"}
+              {!hasQuery
+                ? "Clear filters"
+                : filtersNarrow
+                  ? "Clear search and filters"
+                  : "Clear search"}
             </Button>
           }
           className="flex-1 justify-center"
@@ -1162,6 +1205,8 @@ export function GitHubResourceList({
             aria-haspopup="grid"
             aria-controls={listId}
             aria-activedescendant={activeItemId}
+            // Focus lives in the field, so the narrowed view is read out from here.
+            aria-describedby={filterLineShown ? filterSummaryId : undefined}
             aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
             aria-keyshortcuts="ArrowDown ArrowUp Enter Meta+Enter Control+Enter Shift+Space Shift+F10"
             /* Claims Shift+F10 / ContextMenu for the row under the cursor.
@@ -1201,47 +1246,83 @@ export function GitHubResourceList({
             }
             className="shrink-0 aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary [&_svg]:size-3.5"
           />
-          <DropdownMenu open={sortPopoverOpen} onOpenChange={setSortPopoverOpen}>
+          {/* State, involvement and sort in one menu, as the file browser's
+              view options do. The state and involvement filters used to hold
+              two permanent rows above the list — a quarter of the panel spent
+              on controls that are rarely touched. What a narrowed view is
+              doing is said in words under the search row instead. */}
+          <DropdownMenu open={viewOptionsOpen} onOpenChange={setViewOptionsOpen}>
             <DropdownMenuTrigger asChild>
               <IconButton
                 variant="ghost"
                 size="default"
-                icon="sort"
-                aria-label={
-                  sortOrder === "created"
-                    ? `Sort ${type === "issue" ? "issues" : "pull requests"}`
-                    : `Sort ${type === "issue" ? "issues" : "pull requests"}, sorted by recently updated`
-                }
+                icon="sliders"
+                aria-label="View options"
                 tooltipSide="bottom"
-                tooltip={sortOrder === "created" ? "Sort" : "Sort: recently updated"}
+                tooltip="View options"
                 className={cn(
                   "shrink-0 [&_svg]:size-3.5",
-                  // A non-default sort is a neutral lifted state, not a badge.
-                  // The old blue dot read as unread activity and said nothing
-                  // about which order was in force.
-                  sortOrder !== "created" && "bg-overlay-soft text-text-primary"
+                  // A non-default view is a neutral lifted state, not a badge.
+                  // The old blue dot read as unread activity.
+                  viewCustomized && "bg-overlay-soft text-text-primary"
                 )}
               />
             </DropdownMenuTrigger>
-            {/* The app's menu, not a hand-built radio popover: the same rows,
-                marks, keys and motion as every other choice-of-one in the app. */}
             <DropdownMenuContent
               align="end"
-              className="w-48"
+              className="w-56"
               // Portaled out of the panel, so without these FixedDropdown reads
               // a click inside as an outside click and closes the panel.
               onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
               onTouchStart={(e: React.TouchEvent) => e.stopPropagation()}
               // Focus goes back to the search field, not the trigger: the grid's
               // keys live on the field, so a trigger holding focus leaves the
-              // arrows and Enter dead after every sort change.
+              // arrows and Enter dead after every change.
               onCloseAutoFocus={(event: Event) => {
                 event.preventDefault();
                 focusSearchInput();
               }}
             >
+              {/* Each group carries its own aria-label: Radix renders them as
+                  role="group" and the visible label is a sibling, not an
+                  association. */}
+              <DropdownMenuLabel>State</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                aria-label="State"
+                value={filterState}
+                onValueChange={(value: string) => setFilterState(value as StateFilter)}
+              >
+                {stateTabs.map((tab) => (
+                  <DropdownMenuRadioItem key={tab.value} value={tab.value}>
+                    {tab.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              {type === "pr" && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>Involvement</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    aria-label="Involvement"
+                    value={prScope}
+                    onValueChange={(value: string) => {
+                      if (value === "all" || value === "mine" || value === "needs-review") {
+                        setPrScope(value);
+                      }
+                    }}
+                  >
+                    {SCOPE_OPTIONS.map((option) => (
+                      <DropdownMenuRadioItem key={option.value} value={option.value}>
+                        {option.label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </>
+              )}
+              <DropdownMenuSeparator />
               <DropdownMenuLabel>Sort by</DropdownMenuLabel>
               <DropdownMenuRadioGroup
+                aria-label="Sort by"
                 value={sortOrder}
                 onValueChange={(value: string) => {
                   if (value === "created" || value === "updated") setSortOrder(value);
@@ -1365,13 +1446,27 @@ export function GitHubResourceList({
           </DropdownMenu>
         </div>
 
-        <SegmentedControl
-          aria-label="Filter by state"
-          fullWidth
-          options={stateTabs}
-          value={filterState}
-          onValueChange={(value) => setFilterState(value as StateFilter)}
-        />
+        {/* Only while the view is narrowed: the controls live in a menu now,
+            so this line is what keeps a filtered list from passing for the
+            whole repo. Sort alone does not earn it; it hides nothing. */}
+        {filterLineShown && (
+          <div className={RESOURCE_FILTER_SUMMARY}>
+            <span id={filterSummaryId} className="min-w-0 flex-1 truncate">
+              Showing <span className="text-text-primary">{filterSummary}</span>
+            </span>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="shrink-0"
+              onClick={() => {
+                clearFilters(type);
+                focusSearchInput();
+              }}
+            >
+              Clear filters
+            </Button>
+          </div>
+        )}
 
         {numberQuery !== null &&
           !loading &&
@@ -1401,6 +1496,11 @@ export function GitHubResourceList({
                 : `Showing range #${numberQuery.from}..#${numberQuery.to}`;
             } else {
               label = `Showing #${numberQuery.from} and above`;
+            }
+            // Exact lookups go by number, and a PR's requested reviewers are not
+            // in the lookup, so only the open-ended search can honor the scope.
+            if (scopeActive && numberQuery.kind !== "open-ended") {
+              label += ` · ${scope === "mine" ? "Mine" : "Needs my review"} not applied`;
             }
             return (
               <p className="bg-overlay-soft border border-[var(--border-divider)] rounded-[var(--radius-sm)] px-2 py-1 text-xs text-text-secondary">
@@ -1620,7 +1720,7 @@ export function GitHubResourceList({
                   : sanitizeIpcError(error)
               }
               action={
-                <Button variant="ghost" size="sm" onClick={handleRetry} icon="refresh">
+                <Button variant="outline" size="sm" onClick={handleRetry} icon="refresh">
                   Retry
                 </Button>
               }

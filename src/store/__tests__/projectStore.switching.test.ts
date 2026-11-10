@@ -1362,3 +1362,124 @@ describe("a switch the paint gate cancelled (#13035)", () => {
     }
   );
 });
+
+describe("an open failure that carries main's own copy (#16724)", () => {
+  const USER_MESSAGE = "A window for its project didn't open.";
+
+  function failedWithCopy(): Error {
+    return new Error(
+      `[AppError|PROJECT_OPEN_FAILED|${encodeURIComponent(USER_MESSAGE)}] No window opened for the run's workspace`
+    );
+  }
+
+  it.each([
+    ["switchProject", "switch"],
+    ["reopenProject", "reopen"],
+  ] as const)("%s toasts that copy, not the folder fallback", async (action, clientMethod) => {
+    const { notify } = await import("@/lib/notify");
+    projectClientMock[clientMethod].mockRejectedValueOnce(failedWithCopy());
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState()[action](projectB.id);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notify).mock.calls[0]?.[0]).toMatchObject({ message: USER_MESSAGE });
+    expect(useProjectStore.getState().error).toBe(USER_MESSAGE);
+  });
+});
+
+describe("a project another window keeps cached and can't let go of (#16724)", () => {
+  /** The preload's encoding: code, urlencoded userMessage, then `#`-marked urlencoded details. */
+  function heldRejection(reason: string, showable = true): Error {
+    const userMessage = `"Project B" is open in another window (${reason}).`;
+    const details = { code: "PROJECT_HELD_ELSEWHERE", reason, showable };
+    return new Error(
+      `[AppError|PROJECT_HELD_ELSEWHERE|${encodeURIComponent(userMessage)}|#${encodeURIComponent(JSON.stringify(details))}] Another window's cached view of Project B can't be released`
+    );
+  }
+
+  async function flushCatch(): Promise<void> {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  }
+
+  const TRANSITIONS = [
+    ["switchProject", "switch"],
+    ["reopenProject", "reopen"],
+  ] as const;
+
+  describe.each(TRANSITIONS)("%s", (action, clientMethod) => {
+    async function runRefused(rejection: Error) {
+      const { notify } = await import("@/lib/notify");
+      projectClientMock[clientMethod].mockRejectedValueOnce(rejection);
+      const { useProjectStore } = await import("../projectStore");
+      useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+      await useProjectStore.getState()[action](projectB.id);
+      await flushCatch();
+      return { useProjectStore, toast: vi.mocked(notify).mock.calls.at(-1)![0] };
+    }
+
+    it("says where the project is, in main's words, and offers that window instead of a retry", async () => {
+      const { useProjectStore, toast } = await runRefused(heldRejection("assistant"));
+
+      expect(toast.type).toBe("error");
+      expect(toast.message).toBe('"Project B" is open in another window (assistant).');
+      expect(toast.actions?.map((a) => a.label)).toEqual(["Show in other window"]);
+      expect(useProjectStore.getState().isSwitching).toBe(false);
+      // Nothing asked main to move the other window until the person chose it.
+      expect(projectClientMock[clientMethod]).toHaveBeenCalledTimes(1);
+      const firstOptions = projectClientMock[clientMethod].mock.calls[0]![2];
+      expect(firstOptions).toMatchObject({ trace: expect.any(Object) });
+      expect(firstOptions.showInOtherWindow).not.toBe(true);
+    });
+
+    it("asks main for that window only on the action, and says nothing more once it goes there", async () => {
+      const { notify } = await import("@/lib/notify");
+      const { useProjectStore, toast } = await runRefused(heldRejection("unsaved-work"));
+      projectClientMock[clientMethod].mockResolvedValueOnce({
+        outcome: "activated-elsewhere",
+        project: projectB,
+        targetWindowId: 2,
+      });
+
+      void toast.actions![0]!.onClick();
+
+      await vi.waitFor(() => expect(projectClientMock[clientMethod]).toHaveBeenCalledTimes(2));
+      expect(projectClientMock[clientMethod].mock.calls[1]![0]).toBe(projectB.id);
+      expect(projectClientMock[clientMethod].mock.calls[1]![2]).toMatchObject({
+        showInOtherWindow: true,
+      });
+      // The other window took it, so this one is left as it was, not busy.
+      await vi.waitFor(() => expect(useProjectStore.getState().isSwitching).toBe(false));
+      expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+      expect(useProjectStore.getState().isLoading).toBe(false);
+      expect(useProjectStore.getState().currentProject).toEqual(projectA);
+      expect(notify).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["mcp", "flush", "dictation", "unavailable"])(
+      "keeps the %s hold a retry, since it clears on its own",
+      async (reason) => {
+        const { toast } = await runRefused(heldRejection(reason));
+
+        expect(toast.actions?.map((a) => a.label)).toEqual(["Try again"]);
+        projectClientMock[clientMethod].mockResolvedValueOnce(undefined);
+        void toast.actions![0]!.onClick();
+        await vi.waitFor(() => expect(projectClientMock[clientMethod]).toHaveBeenCalledTimes(2));
+        const [target, , retryOptions] = projectClientMock[clientMethod].mock.calls[1]!;
+        expect(target).toBe(projectB.id);
+        expect(retryOptions).toMatchObject({ trace: expect.any(Object) });
+        expect(retryOptions.showInOtherWindow).not.toBe(true);
+      }
+    );
+
+    it("offers nothing it can't do for a lasting hold that can't be shown from here", async () => {
+      const { toast } = await runRefused(heldRejection("assistant", false));
+
+      expect(toast.message).toBe('"Project B" is open in another window (assistant).');
+      expect(toast.actions).toEqual([]);
+    });
+  });
+});

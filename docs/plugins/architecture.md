@@ -40,13 +40,14 @@ A built-in plugin is Daintree code that happens to use the plugin contract. It d
 - **Its renderer lives in the host bundle.** There is no `plugin://` module for it, which changes how its panel views resolve — see [Built-in plugin views](#built-in-plugin-views).
 - **Activation failures are swallowed.** Main reports a built-in's activation as successful even when `activate()` throws, so a built-in's panel can still render against handlers that never registered. Handle missing handlers in the view rather than assuming activation succeeded.
 
-Five built-ins ship today, one directory each under `plugins/builtin/`:
+Six built-ins ship today, one directory each under `plugins/builtin/`:
 
 | Plugin                     | Contributes                                 | Default |
 | -------------------------- | ------------------------------------------- | ------- |
 | `daintree.beads`           | `forgeProviders`, `settings`                | Off     |
 | `daintree.github`          | `forgeProviders`, `fileDecorationProviders` | On      |
 | `daintree.gitlab`          | `forgeProviders`, `settings`                | On      |
+| `daintree.jira`            | `forgeProviders`, `settings`                | Off     |
 | `daintree.linear`          | `forgeProviders`, `settings`                | Off     |
 | `daintree.markdown-editor` | `fileEditors`, `commands`                   | Off     |
 
@@ -271,7 +272,7 @@ The schema accepts three slots, `emptyCanvas`, `projectHome` and `worktreeCreate
 
 ### Views outside panels
 
-Every `contributes.views` entry whose location is not `"panel"` (the one `location: "settings"` view, any `location: "fileEditor"` views and any `location: "sidebar"` views) is a hosted view: it mounts outside the panel grid and is never registered as a panel kind, so the launcher, palette and dock cannot spawn it. `PluginService.loadPlugin` registers it in `PluginHostedViewRegistry` after the map commit, under this load's authority and generation, and unload withdraws it. Renderers learn it through `plugin:hosted-views-changed` and the `plugin:hosted-views-get` pull, both narrowed by the same project visibility rule as every other contribution: a project plugin's views reach only its own project, an installed plugin's every project that shows it. Each carries a synthetic kind id, `plugin-view:{instanceKey}/{viewId}` (`pluginHostedViewKindId` in `shared/types/plugin.ts`), which `activatePluginForView` resolves to the declared view.
+Every `contributes.views` entry whose location is not `"panel"` (the one `location: "settings"` view, any `location: "fileEditor"` views and any `location: "sidebar"` views) is a hosted view: it mounts outside the panel grid and is never registered as a panel kind, so the launcher, palette and dock cannot spawn it. So is each panel view an app-wide plugin names in `contributes.canopyViews`, served a second time as a `location: "canopy"` descriptor carrying its panel's name, icon and `stateVersion` while its panel kind stays registered as before; `activatePluginForView` resolves its hosted id only for such a named, non-PTY panel view of an instance with no project binding. `PluginService.loadPlugin` registers it in `PluginHostedViewRegistry` after the map commit, under this load's authority and generation, and unload withdraws it. Renderers learn it through `plugin:hosted-views-changed` and the `plugin:hosted-views-get` pull, both narrowed by the same project visibility rule as every other contribution: a project plugin's views reach only its own project, an installed plugin's every project that shows it, and the Canopy window, which has no project, gets the installed plugins' alone. Each carries a synthetic kind id, `plugin-view:{instanceKey}/{viewId}` (`pluginHostedViewKindId` in `shared/types/plugin.ts`), which `activatePluginForView` resolves to the declared view.
 
 `PluginHostedView` is the one renderer path for any view drawn outside the grid. A hosted view mounts from its descriptor; a project surface mounts its claimed panel kind, which stays spawnable as a panel on purpose. Either way the host caches one runtime per source — the content factory for its module URL and an `AbortController` standing in for a panel record's removal signal — and retires it when the source is withdrawn or moves to a new module (a reload), whether or not anything is showing it. The content is the shared `PluginViewContent` loader, so every mount gets the panel contract (activation, lazy import, error boundary with Try again, `disposeSignal`, style root) plus `hostContext` naming the host, inside a box that isolates and contains the plugin's layout. Host DOM and CSS outside that box are unsupported.
 

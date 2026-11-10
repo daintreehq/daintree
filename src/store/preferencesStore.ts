@@ -129,6 +129,9 @@ interface PreferencesState {
   setDockDensity: (density: DockDensity) => void;
   assignWorktreeToSelf: boolean;
   setAssignWorktreeToSelf: (value: boolean) => void;
+  /** Quote the issue a worktree is created for ahead of its first agent's prompt. */
+  includeIssueInFirstPrompt: boolean;
+  setIncludeIssueInFirstPrompt: (value: boolean) => void;
   reduceAnimations: boolean;
   setReduceAnimations: (value: boolean) => void;
   /** Tapping Shift twice opens Canopy, from anywhere including a terminal. */
@@ -320,6 +323,11 @@ function sanitizePersistedPreferences(
   if (typeof sanitized.doubleShiftOpensCanopy !== "boolean") {
     sanitized.doubleShiftOpensCanopy = true;
   }
+  // Off unless it was turned on: a hand-edited string must not start quoting
+  // issues into prompts the user never opted into.
+  if (typeof sanitized.includeIssueInFirstPrompt !== "boolean") {
+    sanitized.includeIssueInFirstPrompt = false;
+  }
   if (!isDeletedWorktreeCleanupSeconds(sanitized.deletedWorktreeCleanupSeconds)) {
     sanitized.deletedWorktreeCleanupSeconds = DELETED_WORKTREE_CLEANUP_DEFAULT;
   }
@@ -371,6 +379,7 @@ type PreferencesPersistedState = Pick<
   | "showDockAgentHighlights"
   | "dockDensity"
   | "assignWorktreeToSelf"
+  | "includeIssueInFirstPrompt"
   | "reduceAnimations"
   | "doubleShiftOpensCanopy"
   | "diffViewType"
@@ -402,6 +411,7 @@ const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
   showDockAgentHighlights: false,
   dockDensity: "normal",
   assignWorktreeToSelf: false,
+  includeIssueInFirstPrompt: false,
   reduceAnimations: false,
   doubleShiftOpensCanopy: true,
   diffViewType: "split",
@@ -476,6 +486,10 @@ function toPreferencesPersisted(
     showDockAgentHighlights: coerceBool(raw.showDockAgentHighlights, d.showDockAgentHighlights),
     dockDensity: isDockDensity(raw.dockDensity) ? raw.dockDensity : d.dockDensity,
     assignWorktreeToSelf: coerceBool(raw.assignWorktreeToSelf, d.assignWorktreeToSelf),
+    includeIssueInFirstPrompt: coerceBool(
+      raw.includeIssueInFirstPrompt,
+      d.includeIssueInFirstPrompt
+    ),
     reduceAnimations: coerceBool(raw.reduceAnimations, d.reduceAnimations),
     doubleShiftOpensCanopy: coerceBool(raw.doubleShiftOpensCanopy, d.doubleShiftOpensCanopy),
     diffViewType: isDiffViewType(raw.diffViewType) ? raw.diffViewType : d.diffViewType,
@@ -576,6 +590,11 @@ function mergePreferencesPersistedWrite({
         base.assignWorktreeToSelf,
         inc.assignWorktreeToSelf,
         disk.assignWorktreeToSelf
+      ),
+      includeIssueInFirstPrompt: pickFieldByWriterDelta(
+        base.includeIssueInFirstPrompt,
+        inc.includeIssueInFirstPrompt,
+        disk.includeIssueInFirstPrompt
       ),
       reduceAnimations: pickFieldByWriterDelta(
         base.reduceAnimations,
@@ -697,6 +716,8 @@ export const usePreferencesStore = create<PreferencesState>()(
       setDockDensity: (density) => set({ dockDensity: density }),
       assignWorktreeToSelf: false,
       setAssignWorktreeToSelf: (value) => set({ assignWorktreeToSelf: value }),
+      includeIssueInFirstPrompt: false,
+      setIncludeIssueInFirstPrompt: (value) => set({ includeIssueInFirstPrompt: value }),
       reduceAnimations: false,
       setReduceAnimations: (value) => set({ reduceAnimations: value }),
       doubleShiftOpensCanopy: true,
@@ -812,6 +833,7 @@ export const usePreferencesStore = create<PreferencesState>()(
         showDockAgentHighlights: state.showDockAgentHighlights,
         dockDensity: state.dockDensity,
         assignWorktreeToSelf: state.assignWorktreeToSelf,
+        includeIssueInFirstPrompt: state.includeIssueInFirstPrompt,
         reduceAnimations: state.reduceAnimations,
         doubleShiftOpensCanopy: state.doubleShiftOpensCanopy,
         diffViewType: state.diffViewType,
@@ -1012,7 +1034,7 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; doubleShiftOpensCanopy: boolean; diffViewType: DiffViewType; diffWrapLines: boolean | null; diffMarkdownRendered: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; lastSelectedWorktreeAgentIdByProject: Record<string, string | null | undefined>; lastSelectedIssueWorktreeRecipeIdByProject: Record<string, string | null | undefined>; lastSelectedIssueWorktreeAgentIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; includeIssueInFirstPrompt: boolean; reduceAnimations: boolean; doubleShiftOpensCanopy: boolean; diffViewType: DiffViewType; diffWrapLines: boolean | null; diffMarkdownRendered: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; lastSelectedWorktreeAgentIdByProject: Record<string, string | null | undefined>; lastSelectedIssueWorktreeRecipeIdByProject: Record<string, string | null | undefined>; lastSelectedIssueWorktreeAgentIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean }",
 });
 
 // Turning double-Shift off in one project view must reach every other view at

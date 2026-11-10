@@ -26,10 +26,11 @@ async function withReadSlot<T>(read: () => Promise<T>): Promise<T> {
 }
 
 /**
- * The runs whose terminal holds every one of their terms, matched here on the
- * machine the terminal runs on: only ids leave, never the screen. Terms are
- * found as written, ignoring case, anywhere in what `read` returns; a run whose
- * screen can't be read matches nothing. A run named twice is read once.
+ * The runs whose terminal holds every word of any one of their alternatives
+ * (`terms`, then each of `orTerms`), matched here on the machine the terminal
+ * runs on: only ids leave, never the screen. Words are found as written,
+ * ignoring case, anywhere in what `read` returns; a run whose screen can't be
+ * read matches nothing. A run named twice is read once, for its first target.
  */
 export async function searchScreens(
   targets: readonly CanopyScreenSearchTarget[],
@@ -42,12 +43,24 @@ export async function searchScreens(
   }
   const found = await Promise.all(
     [...unique.values()].map(async (target) => {
-      const terms = target.terms.map((term) => term.toLowerCase()).filter((term) => term !== "");
-      if (terms.length === 0) return false;
+      const alternatives = [target.terms, ...(target.orTerms ?? [])]
+        .map((terms) => terms.map((term) => term.toLowerCase()).filter((term) => term !== ""))
+        .filter((terms) => terms.length > 0);
+      if (alternatives.length === 0) return false;
       const text = await withReadSlot(() => read(target)).catch(() => null);
       if (text === null) return false;
       const haystack = text.toLowerCase();
-      return terms.every((term) => haystack.includes(term));
+      // A word shared by several alternatives is looked for once.
+      const found = new Map<string, boolean>();
+      const holds = (term: string) => {
+        let hit = found.get(term);
+        if (hit === undefined) {
+          hit = haystack.includes(term);
+          found.set(term, hit);
+        }
+        return hit;
+      };
+      return alternatives.some((terms) => terms.every(holds));
     })
   );
   return [...unique.values()].filter((_, index) => found[index]).map((target) => target.runId);

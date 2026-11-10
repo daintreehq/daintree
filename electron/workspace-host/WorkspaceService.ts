@@ -1,5 +1,5 @@
 import os from "os";
-import type { InotifyLimit } from "../../shared/types/workspace-host.js";
+import type { InotifyLimit, StatusDownloadGate } from "../../shared/types/workspace-host.js";
 import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync } from "fs";
@@ -27,6 +27,7 @@ import { runWithCappedStdout } from "../utils/cappedGitOutput.js";
 import { readRemotesWithStatus } from "../utils/baseCompareRef.js";
 import { createRemoteInventoryReader } from "./remoteInventory.js";
 import { copyWorktreeIncludeFiles } from "./worktreeInclude.js";
+import { cloneIgnoredDirectories } from "./worktreeClone.js";
 import { FileDiffCache } from "./fileDiffCache.js";
 import {
   classifyGitError,
@@ -41,10 +42,10 @@ import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type {
   LifecycleCommandReview,
   Worktree,
+  WorktreeSetupClone,
   WorktreeSetupStatus,
   WorktreeSetupState,
   WorktreeTeardownPreview,
-  WslGitEligibility,
 } from "../../shared/types/worktree.js";
 
 /**
@@ -96,7 +97,6 @@ import { WorktreeEmitGate } from "./WorktreeEmitGate.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import { sweepWorktreeAdminEntries } from "./worktreeAdminSweep.js";
-import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
 import {
   getGitDir,
   getGitCommonDir,
@@ -168,11 +168,8 @@ import {
   ensureNoteFile,
   assertWorktreePathContained,
 } from "./worktreeUtils.js";
-import {
-  matchProviderForRemoteUrl,
-  type ForgeProviderMatcher,
-} from "../../shared/utils/forgeHostnames.js";
-import { resolveForgeRemote } from "../../shared/utils/forgeRemoteSelection.js";
+import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
+import { ForgeRemoteDetector } from "./ForgeRemoteDetector.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
 import { AttachmentService, type AttachmentActionResult } from "./AttachmentService.js";
@@ -181,33 +178,7 @@ import {
   resolveProjectAttachmentsDir,
 } from "./projectAttachmentStore.js";
 import { TopologyWatcher, type TopologyWatcherHost } from "./TopologyWatcher.js";
-
-function normalizePathKeyForPrefix(value: string): string {
-  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
-  return normalized === "" && value.startsWith("/") ? "/" : normalized;
-}
-
-function pathParentForPrefix(value: string): string {
-  const normalized = normalizePathKeyForPrefix(value);
-  if (normalized === "/") return "/";
-  const slashIndex = normalized.lastIndexOf("/");
-  if (slashIndex <= 0) return slashIndex === 0 ? "/" : normalized;
-  return normalized.slice(0, slashIndex);
-}
-
-function isPathKeyAtOrUnder(candidate: string, parent: string): boolean {
-  const normalizedCandidate = normalizePathKeyForPrefix(candidate);
-  const normalizedParent = normalizePathKeyForPrefix(parent);
-  const comparableCandidate =
-    process.platform === "win32" ? normalizedCandidate.toLowerCase() : normalizedCandidate;
-  const comparableParent =
-    process.platform === "win32" ? normalizedParent.toLowerCase() : normalizedParent;
-
-  return (
-    comparableCandidate === comparableParent ||
-    comparableCandidate.startsWith(comparableParent === "/" ? "/" : `${comparableParent}/`)
-  );
-}
+import { WslGitEligibilityTracker } from "./WslGitEligibilityTracker.js";
 
 // Re-export so existing test imports (`probeGitLfsAvailable` from
 // `../WorkspaceService.js`) continue to work without modification.
@@ -285,25 +256,6 @@ const SUBMODULE_AT_RISK_COMMIT_SAMPLE = 50;
 // subject, so a line without one means the walk answered something other than
 // what was asked.
 const SUBMODULE_COMMIT_FIELD_SEPARATOR = "\u001f";
-
-// Coalescing window for `.git/config` writes (#11155). Every worktree sharing
-// the common dir reports the same write, and git itself writes config as
-// lock-then-rename (two events), so a short trailing debounce collapses the
-// burst into one `getRemotes()` spawn.
-const FORGE_REMOTE_REPROBE_DEBOUNCE_MS = 250;
-// Re-arm budget for a settings/matcher-driven reselect whose probe was
-// superseded or failed. Bounded because a deleted repo fails enumeration
-// forever and nothing else retries this path (`.git/config` never changed).
-const FORGE_RESELECT_MAX_RETRIES = 3;
-
-// Backstop cadence for the config fingerprint check when the git watcher is
-// disabled or has silently degraded. A stat, not a subprocess.
-const FORGE_CONFIG_POLL_INTERVAL_MS = 5 * 60 * 1000;
-
-// How long a resume waits for the remotes to settle before restarting PR
-// polling anyway. A stat on a dead mount never returns, and polling stranded
-// behind it would be worse than one check against a possibly stale provider.
-const FORGE_RESUME_SETTLE_TIMEOUT_MS = 5_000;
 
 // The fresh-base fetch a create can ask for (#15733), including any wait behind
 // a background fetch of the same repo. Under the 30s a workspace request and an
@@ -538,6 +490,7 @@ async function readWorktreeFileForDiff(
 
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
+  private statusDownloadGate: StatusDownloadGate = "open";
   private readonly statusTiming = new StatusTimingRecorder();
   private readonly emitGate = new WorktreeEmitGate();
   /** Tail of the sweep chain — load, refresh and delete never sweep at once. */
@@ -593,27 +546,7 @@ export class WorkspaceService {
   // stream count unbounded. Agents past it keep a `git-only` watcher plus the
   // 60 s elevated poll.
   private agentRecursiveWatcherCap: number = DEFAULT_AGENT_RECURSIVE_WATCHER_CAP;
-  // Provider hostname-matcher table relayed from main's forge registry.
-  // Empty until the first relay lands (after plugin load), so monitors start
-  // unmatched and re-resolve when the table arrives or changes.
-  private forgeProviderMatchers: ForgeProviderMatcher[] = [];
-  // Repo-level forge-remote state (#11155). Remotes live in the shared
-  // `.git/config`, so every worktree's watcher reports the same write — the
-  // service coalesces them into ONE probe and fans the result out to all
-  // monitors. `forgeRemoteSignature` is the last-seen remote table (names +
-  // fetch URLs, host-local and never transmitted — remote URLs can embed
-  // credentials). Events fire only when it genuinely changes, so the unrelated
-  // config writes that already wake the watcher (`git push -u`,
-  // `branch --set-upstream-to`) cost nothing and cannot churn the provider.
-  private forgeRemoteSignature: string | null = null;
-  // The project's selected forge remote *name* (#11408). Kept on the service
-  // (not just handed to `pullRequestService`) because `readForgeRemotes` needs
-  // it to pick the same remote the toolbar routes through — otherwise the
-  // worktree cards probe `origin` while the toolbar talks to `upstream`.
-  private forgeRemoteName: string | null = null;
-  private forgeReselectSeq = 0;
-  private forgeReselectTimer: NodeJS.Timeout | null = null;
-  private forgeReselectRetries = 0;
+  private readonly forgeRemoteDetector: ForgeRemoteDetector;
   // Re-asks main for the issues provider's branch keys while the answer isn't
   // knowable yet (cold-start plugin scan) — see `refreshIssueBranchClaim`.
   private issueClaimRetryTimer: NodeJS.Timeout | null = null;
@@ -621,29 +554,10 @@ export class WorkspaceService {
   private issueClaimSeq = 0;
   private issueClaimInFlight = false;
   private issueClaimRefreshQueued = false;
-  private forgeRemoteProbeSeq = 0;
-  private forgeRemoteReprobeTimer: NodeJS.Timeout | null = null;
-  // Bumped whenever a `.git/config` write is OBSERVED. A baseline read that
-  // spans a bump may already contain the change it was meant to precede, so it
-  // is discarded rather than seeded.
-  private forgeConfigEpoch = 0;
-  // Watcher-independent backstop: `GitFileWatcher` swallows `fs.watch` failures
-  // (silent fallback to polling) and Linux inotify exhaustion is a live failure
-  // mode, so a repo can miss the config event entirely. Costs one stat per
-  // interval; the git subprocess runs only when the fingerprint actually moved.
-  private forgeConfigPollTimer: NodeJS.Timeout | null = null;
-  private forgeConfigFingerprint: string | null = null;
-  // Detection runs for the loaded project; the backstop timer only while the
-  // host is foregrounded. Tracked apart so a pause can drop the timer without
-  // letting a later load mistake the missing timer for "never started".
-  private forgeRemoteDetectionActive = false;
   // Set by `pause()`, cleared by `resume()`.
   private backgrounded = false;
   // The resume reprobe the PR poller waits on; see `resume()`.
   private pendingResumeSettle: Promise<void> | null = null;
-  private latestForgeReprobe: Promise<void> | null = null;
-  // Stopped by `pause()` rather than by an unload, so `resume()` restarts it.
-  private wslDistroPollerSuspended = false;
   // Credential changes that reached this host while backgrounded, the latest
   // per provider, replayed once PR work resumes — they would otherwise fetch
   // every worktree and poll PRs in a host nothing is looking at. Per provider
@@ -697,26 +611,8 @@ export class WorkspaceService {
    *  re-notify. */
   private readonly authFailureConfirmedNotified = new Set<string>();
 
-  /** Per-worktree WSL git opt-in state forwarded from main on load and toggle. */
-  private wslGitByWorktree: Record<string, { enabled: boolean; dismissed: boolean }> = {};
-  /** Cached default WSL distro (populated lazily on first WSL-path detection). */
-  private wslDefaultDistroPromise: Promise<string | null> | null = null;
-  /**
-   * Last default distro the poller observed. `undefined` until the first probe
-   * seeds it (so the first poll tick can't spuriously diff against it). `null`
-   * means the probe ran but found no default (WSL absent / probe failed).
-   */
-  private wslLastKnownDefaultDistro: string | null | undefined = undefined;
-  /** Background poll handle that watches for WSL default-distro changes. */
-  private wslDistroPoller: ReturnType<typeof setInterval> | null = null;
-  /**
-   * Monotonic guard so a slow probe (poll or reprobe) that resolves after a
-   * newer probe — or after a project switch — discards its stale result instead
-   * of overwriting fresher state or refreshing the next project's monitors.
-   */
-  private wslProbeSeq = 0;
-  /** How often to re-check the WSL default distro (Windows only). */
-  private static readonly WSL_DISTRO_POLL_INTERVAL_MS = 60_000;
+  // Windows WSL git routing: opt-ins, default-distro probe and its poll.
+  private readonly wslGit: WslGitEligibilityTracker;
 
   // Watches `.git/worktrees/` for external worktree create/delete and drives
   // serialized reconciliation, the dark/recovered signal, and the
@@ -1177,6 +1073,38 @@ export class WorkspaceService {
       sendEvent: (event) => this.sendEvent(event),
     };
     this.topologyWatcher = new TopologyWatcher(topologyHost);
+
+    this.wslGit = new WslGitEligibilityTracker({
+      get backgrounded() {
+        return self.backgrounded;
+      },
+      monitors: this.monitors,
+      sendEvent: (event) => this.sendEvent(event),
+    });
+
+    this.forgeRemoteDetector = new ForgeRemoteDetector({
+      getProjectRootPath: () => this.projectRootPath,
+      getMonitor: (id) => this.monitors.get(id),
+      getMonitors: () => this.monitors.values(),
+      getGitBacked: () => this.gitBacked,
+      isBackgrounded: () => this.backgrounded,
+      isShutDown: () => this._shutdownController.signal.aborted,
+      onRemotesChanged: () => {
+        // In-process: releases PullRequestService's sticky "no-match" pause so the
+        // per-worktree PR badges resolve against the new remote.
+        events.emit("sys:forge:remote-changed", { timestamp: Date.now() });
+        // Cross-process: main relays this to the renderer, which drops its cached
+        // provider resolution and re-runs the full precedence chain (per-project
+        // override → global default → hostname match).
+        this.sendEvent({ type: "forge-remote-changed" });
+      },
+    });
+  }
+
+  /** Every worktree shares the one `.git`, so they all wait or resume together. */
+  setStatusDownloadGate(gate: StatusDownloadGate): void {
+    this.statusDownloadGate = gate;
+    for (const monitor of this.monitors.values()) monitor.setStatusDownloadGate(gate);
   }
 
   async loadProject(
@@ -1215,13 +1143,10 @@ export class WorkspaceService {
       this.projectRootPath = projectRootPath;
       this.projectId = projectId;
       if (wslGitByWorktree && typeof wslGitByWorktree === "object") {
-        // Merge instead of replacing: a `set-wsl-opt-in` message arriving
-        // during this load-project's async work would otherwise be silently
-        // overwritten. The most recent in-memory value wins on conflict.
-        this.wslGitByWorktree = { ...wslGitByWorktree, ...this.wslGitByWorktree };
+        this.wslGit.mergePersistedOptIns(wslGitByWorktree);
       }
       if (forgeSettings) {
-        this.forgeRemoteName = forgeSettings.forgeRemote;
+        this.forgeRemoteDetector.setRemoteName(forgeSettings.forgeRemote);
         pullRequestService.setForgeSettings(forgeSettings);
       }
       // Merge: global (lowest priority) < project-level < DAINTREE_* (set in buildEnv)
@@ -1258,7 +1183,7 @@ export class WorkspaceService {
       this.gitBacked = true;
 
       // Backstop for a disabled or silently-degraded git watcher (#11155).
-      this.startForgeRemoteDetection();
+      this.forgeRemoteDetector.start();
       this.refreshIssueBranchClaim();
       this.listService.setGit(this.git, projectRootPath);
 
@@ -1278,6 +1203,9 @@ export class WorkspaceService {
       const rawWorktrees = await this.listService.list();
       const worktrees = await this.listService.mapToWorktrees(rawWorktrees);
       this.statusTiming.markEnumerated();
+      this.forgeRemoteDetector.setMainWorktreePath(
+        worktrees.find((wt) => wt.isMainWorktree)?.path ?? null
+      );
 
       // Before the sync, so the holders it reconciles against are this
       // project's and every monitor it creates starts with its attachments.
@@ -1305,7 +1233,7 @@ export class WorkspaceService {
       // foreign keys stay in the in-memory mirror for the duration of this
       // load and are sent through to main untouched. The next load of the
       // owning project picks them up.
-      this.pruneStaleWslGitEntries(worktrees);
+      this.wslGit.pruneStale(worktrees, this.projectRootPath);
 
       this.statusTiming.markLoaded();
       this.sendEvent({ type: "load-project-result", requestId, success: true });
@@ -1518,174 +1446,19 @@ export class WorkspaceService {
   }
 
   /**
-   * Create, configure, and register a monitor for a single worktree.
-   *
-   * Used by syncMonitors' new-monitor branch AND by createWorktree to install
-   * a monitor for a freshly created worktree. Unlike syncMonitors, this does
-   * NOT touch any other monitor — which matters for createWorktree, where
-   * syncMonitors' remove-stale loop would drop every other non-main monitor
-   * because the one-element array is interpreted as the authoritative set.
-   *
-   * If a monitor already exists for `wt.id`, this is a no-op (race safety for
-   * overlapping create/delete on the same path).
-   */
-  /**
-   * Detect whether a worktree is mounted via WSL and, if so, attach the
-   * detection metadata + persisted opt-in state. No-op on non-Windows. Bind
-   * time only — the result is folded into the `Worktree` passed to
-   * `WorktreeMonitor`.
-   */
-  private async enrichWorktreeWithWsl(wt: Worktree): Promise<Worktree> {
-    if (process.platform !== "win32") return wt;
-    const detected = detectWslPath(wt.path);
-    if (!detected) return wt;
-
-    if (!this.wslDefaultDistroPromise) {
-      this.wslDefaultDistroPromise = getDefaultWslDistro().catch(() => null);
-    }
-    const defaultDistro = await this.wslDefaultDistroPromise;
-    // Seed the poller's baseline from the first resolved probe so its first
-    // tick compares against a real value (no spurious refresh on a stable box).
-    this.wslLastKnownDefaultDistro = defaultDistro;
-    // Now that we know a WSL worktree exists, arm the background distro watcher
-    // (idempotent — only the first WSL worktree actually starts the interval).
-    this.startWslDistroPoller();
-    const eligibility = this.computeWslEligibility(detected.distro, defaultDistro);
-    const persisted = this.wslGitByWorktree[wt.id];
-
-    return {
-      ...wt,
-      isWslPath: true,
-      wslDistro: detected.distro,
-      wslPosixPath: detected.posixPath,
-      wslGitEligible: eligibility,
-      wslGitOptIn: Boolean(persisted?.enabled),
-      wslGitDismissed: Boolean(persisted?.dismissed),
-    };
-  }
-
-  /**
-   * Compute three-state WSL git eligibility for a worktree distro against the
-   * current default distro. `null` default (probe failed / WSL absent) maps to
-   * `'unprobed'` rather than `'ineligible'` so the renderer can offer a
-   * re-check instead of a wrong "git runs via Windows" note. UNC paths are
-   * case-insensitive on Windows and `wsl --list --verbose` returns canonical
-   * case (e.g. "Ubuntu"), so compare case-insensitively.
-   */
-  private computeWslEligibility(
-    distro: string | undefined,
-    defaultDistro: string | null
-  ): WslGitEligibility {
-    if (!distro || defaultDistro === null) return "unprobed";
-    return defaultDistro.toLowerCase() === distro.toLowerCase() ? "eligible" : "ineligible";
-  }
-
-  /**
-   * Arm the Windows-only background watcher that re-checks the WSL default
-   * distro. The default distro can change mid-session (`wsl --set-default`,
-   * install/uninstall) and the renderer has no OS event to subscribe to, so we
-   * poll. Idempotent — a second call while already running is a no-op.
-   */
-  private startWslDistroPoller(): void {
-    if (process.platform !== "win32") return;
-    if (this.wslDistroPoller) return;
-    // A first WSL enrichment can finish after the host was backgrounded; arm
-    // on the way back to the foreground instead.
-    if (this.backgrounded) {
-      this.wslDistroPollerSuspended = true;
-      return;
-    }
-    this.wslDistroPoller = setInterval(() => {
-      void this.pollWslDefaultDistro();
-    }, WorkspaceService.WSL_DISTRO_POLL_INTERVAL_MS);
-    // Don't keep the host process alive solely for this poll.
-    this.wslDistroPoller.unref?.();
-  }
-
-  /** Stop the WSL distro watcher (project switch / dispose). */
-  private stopWslDistroPoller(): void {
-    // Bump the sequence so any in-flight probe (poll or reprobe) sees itself
-    // superseded and bails before mutating state — otherwise a probe awaiting
-    // across a project switch could refresh the next project's monitors with
-    // this project's distro.
-    this.wslProbeSeq++;
-    this.wslDistroPollerSuspended = false;
-    if (this.wslDistroPoller) {
-      clearInterval(this.wslDistroPoller);
-      this.wslDistroPoller = null;
-    }
-  }
-
-  /**
-   * Probe the default distro under a sequence guard. Returns whether this probe
-   * is still the most recent one — a later probe (concurrent reprobe, or a
-   * project switch via `stopWslDistroPoller`) supersedes an earlier one so the
-   * stale result is discarded rather than overwriting fresher state.
-   */
-  private async probeDefaultDistro(): Promise<{ distro: string | null; current: boolean }> {
-    const seq = ++this.wslProbeSeq;
-    const distro = await getDefaultWslDistro().catch(() => null);
-    return { distro, current: seq === this.wslProbeSeq };
-  }
-
-  /** Commit a fresh probe result to the cache and fan it out to all monitors. */
-  private applyDefaultDistro(distro: string | null): void {
-    this.wslLastKnownDefaultDistro = distro;
-    this.wslDefaultDistroPromise = Promise.resolve(distro);
-    this.refreshWslEligibilityForAllMonitors(distro);
-  }
-
-  /**
-   * One poll tick: re-probe the default distro and, when it changed, invalidate
-   * the cache and refresh every WSL monitor's eligibility so existing worktrees
-   * stop using a stale decision.
-   */
-  private async pollWslDefaultDistro(): Promise<void> {
-    const { distro, current } = await this.probeDefaultDistro();
-    if (!current) return;
-    if (distro === this.wslLastKnownDefaultDistro) return;
-    this.applyDefaultDistro(distro);
-  }
-
-  /**
-   * Recompute and push WSL git eligibility to every active WSL monitor against
-   * the given default distro. Non-WSL monitors are skipped.
-   */
-  private refreshWslEligibilityForAllMonitors(defaultDistro: string | null): void {
-    for (const monitor of this.monitors.values()) {
-      if (!monitor.isWslPath) continue;
-      monitor.setWslEligible(this.computeWslEligibility(monitor.wslDistro, defaultDistro));
-    }
-  }
-
-  /**
    * Re-probe the WSL default distro on demand (renderer "Re-check" button) and
-   * refresh all WSL monitors. Sets the target monitor to `'unprobed'` first so
-   * the banner shows a pending state while the probe runs. The probe is shared
-   * across all worktrees, so we refresh every WSL monitor, not just the target.
+   * refresh all WSL monitors.
    */
-  async reprobeWslForWorktree(worktreeId: string): Promise<void> {
-    if (process.platform !== "win32") return;
-    const monitor = this.monitors.get(worktreeId);
-    if (!monitor || !monitor.isWslPath) return;
-    monitor.setWslEligible("unprobed");
-    const { distro, current } = await this.probeDefaultDistro();
-    if (!current) return;
-    this.applyDefaultDistro(distro);
+  reprobeWslForWorktree(worktreeId: string): Promise<void> {
+    return this.wslGit.reprobe(worktreeId);
   }
 
   /**
-   * Update WSL git routing state for a single worktree. Persists the new
-   * preference into the in-memory map and forwards to the matching monitor
-   * (which re-emits its snapshot). Called by the workspace-host message
-   * handler in response to renderer-driven IPC.
+   * Update WSL git routing state for a single worktree. Called by the
+   * workspace-host message handler in response to renderer-driven IPC.
    */
   setWslOptIn(worktreeId: string, enabled: boolean, dismissed: boolean): void {
-    this.wslGitByWorktree[worktreeId] = { enabled, dismissed };
-    const monitor = this.monitors.get(worktreeId);
-    if (monitor) {
-      monitor.setWslOptIn(enabled, dismissed);
-    }
+    this.wslGit.setOptIn(worktreeId, enabled, dismissed);
   }
 
   /**
@@ -1717,6 +1490,7 @@ export class WorkspaceService {
     this.resourceActionExecutor.cleanupResourceActionState(id);
     this.attachmentService.handleWorktreeRemoved(id);
     this.setupCoordinator.cancelPluginSetup(monitor);
+    void this.setupCoordinator.cancelCloneRun(monitor);
     monitor.stop();
     this.monitors.delete(id);
     this.emitGate.forget(monitor);
@@ -1737,18 +1511,10 @@ export class WorkspaceService {
     const canonicalRoot = monitor.getWorktreeChanges()?.rootPath;
     if (canonicalRoot && canonicalRoot !== monitor.path) releaseWorktreeDiffStats(canonicalRoot);
 
-    // Drop the in-memory wsl-git opt-in entry (keyed by monitor.id, matching
-    // the lookup shape used by `enrichWorktreeWithWsl`) and tell main to
-    // drop the persistent one. Idempotent on the main side: `clearWslGitEntry`
-    // is a no-op if the key is missing, and does a case-insensitive lookup
-    // on win32 to handle legacy mixed-case persisted keys.
-    if (Object.prototype.hasOwnProperty.call(this.wslGitByWorktree, monitor.id)) {
-      delete this.wslGitByWorktree[monitor.id];
-      this.sendEvent({
-        type: "clear-wsl-git-opt-in",
-        worktreeId: monitor.id,
-      });
-    }
+    // Keyed by monitor.id, matching the lookup shape `enrichWorktree` uses.
+    // Sent before `worktree-removed` so main's persistent-store prune lands
+    // ahead of any renderer refresh that consults the worktree list.
+    this.wslGit.forgetWorktree(monitor.id);
 
     this.sendEvent({
       type: "worktree-removed",
@@ -1758,40 +1524,6 @@ export class WorkspaceService {
       generation: monitor.generation,
     });
     events.emit("sys:worktree:remove", { worktreeId: monitor.id, timestamp: Date.now() });
-  }
-
-  /**
-   * Bulk self-heal of `wslGitByWorktree` after `loadProject` lands the live
-   * worktree set (#9926, review #1). Walks the in-memory mirror and emits
-   * one `clear-wsl-git-opt-in` per key that (a) is not in the live set AND
-   * (b) is rooted under this project's parent directory. Foreign-project
-   * keys are left in the in-memory mirror for the duration of this load
-   * and never reach main — otherwise loading project A would silently
-   * erase project B's valid opt-ins from the global persisted map on every
-   * load/prewarm/host-restart. The next load of the owning project picks
-   * the foreign keys up and prunes them on that cycle.
-   */
-  private pruneStaleWslGitEntries(worktrees: Worktree[]): void {
-    const projectParent = this.projectRootPath ? pathParentForPrefix(this.projectRootPath) : null;
-    const projectRoot = this.projectRootPath
-      ? normalizePathKeyForPrefix(this.projectRootPath)
-      : null;
-    const liveIds = new Set(worktrees.map((wt) => wt.id));
-    for (const key of Object.keys(this.wslGitByWorktree)) {
-      if (liveIds.has(key)) continue;
-      if (
-        projectParent &&
-        normalizePathKeyForPrefix(key) !== projectRoot &&
-        !isPathKeyAtOrUnder(key, projectParent)
-      ) {
-        continue;
-      }
-      delete this.wslGitByWorktree[key];
-      this.sendEvent({
-        type: "clear-wsl-git-opt-in",
-        worktreeId: key,
-      });
-    }
   }
 
   // --- Background git-watcher budget (LRU) ---
@@ -1960,6 +1692,18 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * Create, configure, and register a monitor for a single worktree.
+   *
+   * Used by syncMonitors' new-monitor branch AND by createWorktree to install
+   * a monitor for a freshly created worktree. Unlike syncMonitors, this does
+   * NOT touch any other monitor — which matters for createWorktree, where
+   * syncMonitors' remove-stale loop would drop every other non-main monitor
+   * because the one-element array is interpreted as the authoritative set.
+   *
+   * If a monitor already exists for `wt.id`, this is a no-op (race safety for
+   * overlapping create/delete on the same path).
+   */
   private async addNewWorktreeMonitor(
     wt: Worktree,
     isActive: boolean,
@@ -1998,8 +1742,7 @@ export class WorkspaceService {
     skipInitialGitStatus: boolean,
     deferWatcherBudget: boolean
   ): Promise<void> {
-    const enrichedWt = await this.enrichWorktreeWithWsl(wt);
-    wt = enrichedWt;
+    wt = await this.wslGit.enrichWorktree(wt);
 
     await ensureNoteFile(wt.path);
     const claimedIssue = wt.branch ? claimIssueFromBranch(wt.branch, wt.name) : null;
@@ -2057,7 +1800,8 @@ export class WorkspaceService {
         onInotifyLimitReached: (_worktreeId, limit) => this.handleInotifyLimitReached(limit),
         onEmfileLimitReached: () => this.handleEmfileLimitReached(),
         onWatcherRecovered: () => this.handleWatcherRecovered(),
-        onGitConfigChanged: () => this.scheduleForgeRemoteReprobe({ observedConfigWrite: true }),
+        onGitConfigChanged: () =>
+          this.forgeRemoteDetector.scheduleReprobe({ observedConfigWrite: true }),
         onScheduleFetch: (worktreeId, _isCurrent, force, prune, maxAgeMs) =>
           this.executeFetchForWorktree(worktreeId, force, prune, maxAgeMs),
       },
@@ -2118,6 +1862,7 @@ export class WorkspaceService {
     // its neighbours, so start() never arms a watcher or poll loop the rest of
     // the host has let go of — and inherits the current attenuation.
     monitor.applyPollingPermissions(this.appliedPermissions);
+    if (this.statusDownloadGate !== "open") monitor.setStatusDownloadGate(this.statusDownloadGate);
 
     if (skipInitialGitStatus) {
       monitor.startWithoutGitStatus();
@@ -2147,7 +1892,7 @@ export class WorkspaceService {
     // Resolve origin → registered forge provider at monitor start. Setter
     // re-emits the snapshot only if the value differs from the initial `null`,
     // so this is a no-op for repos no registered provider matches.
-    void this.probeForgeRemoteAsync(monitor);
+    void this.forgeRemoteDetector.probeMonitor(monitor);
   }
 
   private async initResourceConfigAsync(
@@ -2654,310 +2399,15 @@ export class WorkspaceService {
     }
   }
 
-  /**
-   * Read the repo's remote table once. Returns the selected remote's fetch URL
-   * plus a stable signature of every name→fetch-URL pair, used to tell
-   * a real remote change from an unrelated `.git/config` write. The signature
-   * stays in this process — remote URLs can carry embedded credentials.
-   */
-  private async readForgeRemotes(
-    cwd: string
-  ): Promise<{ fetchUrl: string | undefined; signature: string } | null> {
-    try {
-      const git = await createHardenedGit(cwd);
-      const remotes = await git.getRemotes(true);
-      const signature = remotes
-        .map((remote) => `${remote.name}\x00${remote.refs?.fetch ?? ""}`)
-        .sort()
-        .join("\x01");
-      // Selection honours the project's `forgeRemote` setting (#11408). The
-      // signature above deliberately still covers ALL remotes: it answers "did
-      // the remote table change", independent of which entry we route through.
-      // A configured-but-missing remote selects nothing, leaving the
-      // affordance hidden rather than silently probing a different repo.
-      const { remote: selected } = resolveForgeRemote({
-        remotes: remotes.map((r) => ({ name: r.name, fetchUrl: r.refs?.fetch ?? "" })),
-        forgeRemote: this.forgeRemoteName,
-        // The host has no provider registry — it matches against the matcher
-        // table main relays via `setForgeProviderMatchers`.
-        isSupportedRemote: (url) =>
-          matchProviderForRemoteUrl(url, this.forgeProviderMatchers) !== null,
-      });
-      return { fetchUrl: selected?.fetchUrl, signature };
-    } catch {
-      // Remote probe is best-effort; keep the affordance hidden on failure.
-      return null;
-    }
-  }
-
-  /**
-   * Probe origin's fetch URL once at monitor start, remember it on the
-   * monitor, and resolve it against the relayed provider-matcher table. Runs
-   * off the critical path — failures are silent (the affordance simply stays
-   * hidden, which matches the unmatched-remote behavior). The remembered URL
-   * lets `setForgeProviderMatchers` re-match without re-probing git.
-   */
-  private async probeForgeRemoteAsync(monitor: WorktreeMonitor): Promise<void> {
-    const probed = await this.readForgeRemotes(monitor.path);
-    if (!probed) return;
-    monitor.setRemoteFetchUrl(probed.fetchUrl);
-    monitor.setMatchedForgeProviderId(
-      probed.fetchUrl
-        ? matchProviderForRemoteUrl(probed.fetchUrl, this.forgeProviderMatchers)
-        : null
-    );
-    // Deliberately does NOT seed `forgeRemoteSignature`. A monitor start probe
-    // races the user: it can complete AFTER a `git remote add` and would then
-    // record the post-change remotes as the "before" baseline, leaving the
-    // reprobe with an equal signature and nothing to emit — the toolbar would
-    // stay stale for exactly the case this feature exists to catch. The
-    // baseline is seeded once at load instead (`startForgeRemoteDetection`).
-  }
-
-  /**
-   * A worktree's `.git/config` was written. Remotes are repo-level, so every
-   * sibling worktree reports the same write (and git writes config as
-   * lock-then-rename) — a trailing debounce collapses the burst into one probe.
-   */
-  private scheduleForgeRemoteReprobe(opts: { observedConfigWrite: boolean }): void {
-    if (this._shutdownController.signal.aborted) return;
-    // Bump on a real observed write even when a reprobe is already pending: it
-    // marks an in-flight baseline seed as spanning the write, so it can't record
-    // a snapshot that already absorbed the change. The backstop tick observes
-    // nothing, so it must not invalidate the seed.
-    if (opts.observedConfigWrite) this.forgeConfigEpoch++;
-    if (this.forgeRemoteReprobeTimer) return;
-    this.forgeRemoteReprobeTimer = setTimeout(() => {
-      this.forgeRemoteReprobeTimer = null;
-      void this.reprobeForgeRemoteAsync();
-    }, FORGE_REMOTE_REPROBE_DEBOUNCE_MS);
-  }
-
-  /**
-   * Re-read the repo's remotes after a `.git/config` write and, when the remote
-   * table actually changed, re-resolve every monitor's forge affordance and
-   * signal both the in-process PR poller and the renderer (#11155). An
-   * unchanged signature emits nothing — that restraint is what keeps
-   * `PullRequestService`'s no-match pause (#9997) meaningful, since the same
-   * config file is written by `git push -u` on every first push.
-   */
-  private reprobeForgeRemoteAsync(): Promise<void> {
-    const probe = this.runForgeRemoteReprobe();
-    this.latestForgeReprobe = probe;
-    return probe;
-  }
-
-  /**
-   * Resolve once the newest remote probe has finished. A probe superseded
-   * mid-read returns at its sequence check before its replacement has read
-   * anything, so waiting on the first one alone would release early.
-   */
-  private async settleForgeRemotes(): Promise<void> {
-    let probe = this.reprobeForgeRemoteAsync();
-    for (;;) {
-      await probe.catch(() => {});
-      const latest = this.latestForgeReprobe;
-      if (latest === null || latest === probe) return;
-      probe = latest;
-    }
-  }
-
-  private async runForgeRemoteReprobe(): Promise<void> {
-    const cwd = this.forgeProbeCwd();
-    if (!cwd) return;
-    const seq = ++this.forgeRemoteProbeSeq;
-
-    // Cheap gate in front of the subprocess. Two callers land here — the git
-    // watcher and the 5-minute backstop — and neither proves the remotes moved:
-    // `fs.watch` may report a change with NO filename (so we conservatively
-    // assume config), and the backstop fires on a timer. Without this gate a
-    // repo emitting unnamed `.git/` events would spawn `git remote` every
-    // debounce window.
-    //
-    // Safe to gate on, because git writes `.git/config` lock-then-rename — a
-    // real `git remote add/set-url/remove` ALWAYS lands a new inode, so it can
-    // never be mistaken for "unchanged". Stat failure fails open (probe anyway).
-    const fingerprint = await this.readForgeConfigFingerprint();
-    if (seq !== this.forgeRemoteProbeSeq) return;
-    if (fingerprint !== null && fingerprint === this.forgeConfigFingerprint) return;
-
-    const probed = await this.readForgeRemotes(cwd);
-    // A dispose (or a newer probe) landed while git ran: the monitors this one
-    // would touch may already be stopped, and its read is no longer the truth.
-    if (!probed || seq !== this.forgeRemoteProbeSeq) return;
-    if (this._shutdownController.signal.aborted) return;
-
-    // Consume the fingerprint only now that this probe has actually READ the
-    // remotes that go with it. Recording it up front (before the git read) loses
-    // changes two ways: a superseding probe would see the fingerprint already
-    // consumed and bail while the superseded probe dies on the seq check, and a
-    // transient git failure would leave the change permanently marked as seen.
-    this.forgeConfigFingerprint = fingerprint;
-
-    const matchedProviderId = probed.fetchUrl
-      ? matchProviderForRemoteUrl(probed.fetchUrl, this.forgeProviderMatchers)
-      : null;
-    for (const monitor of this.monitors.values()) {
-      if (!monitor.isRunning) continue;
-      monitor.setRemoteFetchUrl(probed.fetchUrl);
-      monitor.setMatchedForgeProviderId(matchedProviderId);
-    }
-
-    if (probed.signature === this.forgeRemoteSignature) return;
-    this.forgeRemoteSignature = probed.signature;
-
-    // In-process: releases PullRequestService's sticky "no-match" pause so the
-    // per-worktree PR badges resolve against the new remote.
-    events.emit("sys:forge:remote-changed", { timestamp: Date.now() });
-    // Cross-process: main relays this to the renderer, which drops its cached
-    // provider resolution and re-runs the full precedence chain (per-project
-    // override → global default → hostname match).
-    this.sendEvent({ type: "forge-remote-changed" });
-  }
-
-  /**
-   * Any running monitor resolves the same remotes — they share one common dir.
-   * Prefer the main worktree (longest-lived), then any running monitor, then
-   * the project root for the window between load and the first monitor start.
-   */
-  private forgeProbeCwd(): string | null {
-    for (const monitor of this.monitors.values()) {
-      if (monitor.isRunning && monitor.isMainWorktree) return monitor.path;
-    }
-    for (const monitor of this.monitors.values()) {
-      if (monitor.isRunning) return monitor.path;
-    }
-    return this.projectRootPath;
-  }
-
-  /**
-   * Identity fingerprint of `<commonDir>/config`, or null when it can't be read.
-   * Includes the inode: git writes config lock-then-rename, so every real
-   * `git remote` mutation lands a NEW inode. That makes the fingerprint a
-   * trustworthy "did this file actually change" gate even on filesystems whose
-   * timestamp granularity is too coarse to catch a same-size rewrite.
-   */
-  private async readForgeConfigFingerprint(): Promise<string | null> {
-    const rootPath = this.projectRootPath;
-    if (!rootPath) return null;
-    try {
-      const commonDir = await getGitCommonDir(rootPath, { logErrors: false });
-      if (!commonDir) return null;
-      const stats = await stat(pathResolve(commonDir, "config"));
-      return `${stats.ino}:${stats.mtimeMs}:${stats.ctimeMs}:${stats.size}`;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Seed the change baseline and arm the watcher-independent backstop. Called
-   * at project load, before any monitor (and therefore any git watcher) starts.
-   *
-   * The load-time read is the ONLY one allowed to establish the "before"
-   * snapshot: it provably precedes the watcher, whereas a per-monitor start
-   * probe races the user and can absorb the very `git remote add` we need to
-   * detect. `??=` keeps a reprobe that already landed from being overwritten by
-   * this slower read.
-   */
-  private startForgeRemoteDetection(): void {
-    if (this.forgeRemoteDetectionActive) return;
-    const rootPath = this.projectRootPath;
-    if (!rootPath) return;
-    this.forgeRemoteDetectionActive = true;
-
-    const seq = this.forgeRemoteProbeSeq;
-    const epoch = this.forgeConfigEpoch;
-    void (async () => {
-      // stat → read → stat. The remote table and the fingerprint must describe
-      // the SAME config, or the pair is incoherent: pre-change remotes stamped
-      // with a post-change fingerprint would make the backstop consider the
-      // change already seen and never emit it. Reading them concurrently cannot
-      // guarantee that; bracketing the git read with two stats can.
-      const before = await this.readForgeConfigFingerprint();
-      const probed = await this.readForgeRemotes(rootPath);
-      const after = await this.readForgeConfigFingerprint();
-
-      // Discard when: the project unloaded mid-read, a config write was observed
-      // mid-read, or the config moved between the stats (so this read may
-      // already contain the change it is supposed to precede). Leaving the
-      // baseline null is the safe failure — the next reprobe then sees
-      // `signature !== null` and emits.
-      if (seq !== this.forgeRemoteProbeSeq || epoch !== this.forgeConfigEpoch) return;
-      if (before !== after) return;
-      if (probed) this.forgeRemoteSignature ??= probed.signature;
-      this.forgeConfigFingerprint ??= after;
-    })();
-
-    if (!this.backgrounded) this.armForgeConfigBackstop();
-  }
-
-  private armForgeConfigBackstop(): void {
-    if (this.forgeConfigPollTimer) return;
-    // The backstop only has to WAKE the reprobe — the reprobe itself stats the
-    // config and skips the git spawn when nothing moved, so an idle tick costs
-    // one stat.
-    this.forgeConfigPollTimer = setInterval(() => {
-      this.scheduleForgeRemoteReprobe({ observedConfigWrite: false });
-    }, FORGE_CONFIG_POLL_INTERVAL_MS);
-    this.forgeConfigPollTimer.unref?.();
-  }
-
-  private disarmForgeConfigBackstop(): void {
-    if (this.forgeConfigPollTimer) {
-      clearInterval(this.forgeConfigPollTimer);
-      this.forgeConfigPollTimer = null;
-    }
+  /** The provider-matcher table main relays from its forge registry. */
+  setForgeProviderMatchers(matchers: ForgeProviderMatcher[]): void {
+    this.forgeRemoteDetector.setProviderMatchers(matchers);
   }
 
   private stopForgeRemoteDetection(): void {
-    this.forgeRemoteDetectionActive = false;
+    // The resume settle belongs to this project's remotes.
     this.pendingResumeSettle = null;
-    this.disarmForgeConfigBackstop();
-    if (this.forgeReselectTimer) {
-      clearTimeout(this.forgeReselectTimer);
-      this.forgeReselectTimer = null;
-    }
-    if (this.forgeRemoteReprobeTimer) {
-      clearTimeout(this.forgeRemoteReprobeTimer);
-      this.forgeRemoteReprobeTimer = null;
-    }
-    // Invalidate every in-flight read (baseline seed and reprobe alike) so a
-    // late completion can't touch stopped monitors, seed the incoming project's
-    // baseline, or signal on behalf of a project that is no longer loaded.
-    this.forgeRemoteProbeSeq++;
-    this.forgeRemoteSignature = null;
-    this.forgeConfigFingerprint = null;
-  }
-
-  /**
-   * Store the relayed provider-matcher table and re-resolve every running
-   * monitor's matched provider id. The table arrives async after plugin load
-   * (and again on registry changes), so monitors that started unmatched gain
-   * their provider id here once the owning plugin registers.
-   */
-  setForgeProviderMatchers(matchers: ForgeProviderMatcher[]): void {
-    this.forgeProviderMatchers = Array.isArray(matchers) ? matchers : [];
-    for (const monitor of this.monitors.values()) {
-      if (!monitor.isRunning) continue;
-      const fetchUrl = monitor.remoteFetchUrl;
-      monitor.setMatchedForgeProviderId(
-        fetchUrl ? matchProviderForRemoteUrl(fetchUrl, this.forgeProviderMatchers) : null
-      );
-    }
-    // Re-matching the REMEMBERED url is not enough (#11408): which remote is
-    // selected depends on the matcher table too. At cold start the table is
-    // empty, so auto-detect ranks by name alone and can settle on a remote no
-    // provider ends up supporting — re-matching that URL would leave the
-    // affordance hidden forever while a sibling remote was usable all along.
-    // Same story when enabling or disabling a provider plugin at runtime.
-    //
-    // Coalesced: the relay pushes on EVERY registry change, so plugin init
-    // arrives as a burst of calls that would otherwise be one `git remote -v`
-    // each. Mirrors the reprobe debounce, minus its config-fingerprint gate —
-    // nothing wrote `.git/config` here, only the matcher table moved.
-    this.forgeReselectRetries = 0;
-    this.scheduleForgeReselect();
+    this.forgeRemoteDetector.stop();
   }
 
   private handleInotifyLimitReached(limit: InotifyLimit): void {
@@ -3416,6 +2866,18 @@ export class WorkspaceService {
    * than trusting this field.
    */
   private async inventorySubmoduleRisk(worktreePath: string): Promise<SubmoduleDeleteRisk> {
+    const incomplete: SubmoduleDeleteRisk = {
+      entries: [],
+      dirtyFiles: [],
+      untrackedFiles: [],
+      atRiskCommits: [],
+      requiresMechanicalForce: false,
+      incomplete: true,
+    };
+    // The inventory runs its own `git status`, in the parent and in every module.
+    // Only once `.git` is known to need it: refusing during the first walk would
+    // turn away a delete of a repository with nothing outstanding.
+    if (this.statusDownloadGate === "held") return incomplete;
     try {
       return await withTimeout(
         buildSubmoduleDeleteRisk(worktreePath, { signal: this._shutdownController.signal }),
@@ -3426,14 +2888,7 @@ export class WorkspaceService {
       logWarn(
         `[WorkspaceHost] submodule delete risk inventory failed for ${worktreePath}: ${formatErrorMessage(error, "unknown failure")}`
       );
-      return {
-        entries: [],
-        dirtyFiles: [],
-        untrackedFiles: [],
-        atRiskCommits: [],
-        requiresMechanicalForce: false,
-        incomplete: true,
-      };
+      return incomplete;
     }
   }
 
@@ -3590,6 +3045,9 @@ export class WorkspaceService {
     }
 
     const worktrees = await this.listService.mapToWorktrees(rawWorktrees);
+    this.forgeRemoteDetector.setMainWorktreePath(
+      worktrees.find((wt) => wt.isMainWorktree)?.path ?? null
+    );
 
     await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
   }
@@ -4116,6 +3574,14 @@ export class WorkspaceService {
       // reconcile 5s later).
       this.topologyWatcher.clearPending(pendingCreateKey);
 
+      // The checkout left the index racily clean, and our status never writes
+      // it back (#16679). Only a timer is armed here; git runs seconds later,
+      // and only while this monitor still stands for the worktree.
+      const createdMonitor = this.monitors.get(canonicalWorktreeId);
+      createdMonitor?.scheduleIndexRefresh(
+        () => this.monitors.get(canonicalWorktreeId) === createdMonitor
+      );
+
       if (options.worktreeMode && options.worktreeMode !== "local") {
         const m = this.monitors.get(canonicalWorktreeId);
         if (m) {
@@ -4209,6 +3675,23 @@ export class WorkspaceService {
         // Same stage: `WorktreeSetupStage` is part of the MCP output schema.
         // Never throws — a bad `.worktreeinclude` must not fail the setup.
         await copyWorktreeIncludeFiles(rootPath, canonicalPath);
+        // Before the setup script, so it finds `node_modules` (or whatever the
+        // project names) already there and can refresh instead of install.
+        // Never throws, and a skip does not fail setup: the script still runs.
+        const clones = await this.cloneIgnoredIntoWorktree(
+          rootPath,
+          canonicalPath,
+          canonicalWorktreeId,
+          setupGeneration
+        );
+        if (clones) {
+          setSetupStatus({
+            state: "running",
+            stage: "copy-config",
+            startedAt: setupStartedAt,
+            clones,
+          });
+        }
 
         // Awaited, and awaited HERE: the setup script below must not start
         // against an unpopulated submodule tree — the original "worktree is
@@ -4490,14 +3973,52 @@ export class WorkspaceService {
     return this.setupCoordinator.approveLifecycleCommands(worktreeId, fingerprint);
   }
 
+  /**
+   * Clone the directories the lifecycle config's `cloneIgnored` names into a
+   * new worktree, from the same config file its setup commands come from.
+   * Resolves `undefined` when the project names none (the status then carries
+   * no `clones` at all), or when the incarnation it was started for is gone.
+   */
+  private async cloneIgnoredIntoWorktree(
+    rootPath: string,
+    worktreePath: string,
+    worktreeId: string,
+    generation: number | undefined
+  ): Promise<WorktreeSetupClone[] | undefined> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor || monitor.generation !== generation) return undefined;
+
+    // The config read runs under the same signal as the clone, so a delete
+    // that starts while it is pending still stops the clone from starting.
+    return this.setupCoordinator.runCloneRun(monitor, async (signal) => {
+      let entries: string[] | undefined;
+      try {
+        entries = (await this.lifecycleService.loadConfig(worktreePath, rootPath))?.cloneIgnored;
+      } catch (err) {
+        logWarn("[WorkspaceHost] could not read cloneIgnored; nothing cloned", {
+          worktreePath,
+          error: formatErrorMessage(err, "config read failed"),
+        });
+        return undefined;
+      }
+      // A project switch drops monitors without cancelling, so the read can
+      // outlive the incarnation it was started for.
+      if (!entries || entries.length === 0 || signal.aborted) return undefined;
+      if (this.monitors.get(worktreeId) !== monitor) return undefined;
+      return cloneIgnoredDirectories(rootPath, worktreePath, entries, { signal });
+    });
+  }
+
   private async runLifecycleTeardown(
     worktreeId: string,
     monitor: WorktreeMonitor,
     force: boolean
   ): Promise<void> {
     // A plugin step still setting the worktree up is setting up one that is
-    // about to be gone.
+    // about to be gone. A clone would still be writing into it, so its child
+    // must have exited and its staging gone before git removes the tree.
     this.setupCoordinator.cancelPluginSetup(monitor);
+    await this.setupCoordinator.cancelCloneRun(monitor);
     // First, while the worktree's own stack is still up for its detach to talk to.
     await this.attachmentService.detachForDelete(worktreeId);
     const ctx = this.getLifecycleContext();
@@ -5915,15 +5436,8 @@ export class WorkspaceService {
     this.pendingResumeSettle = null;
     this.reconcilePolling();
     this.prService.pause();
-    // The pool keeps a backgrounded host for as long as its project's view is
-    // cached (#12519), so the config backstop would otherwise tick for hours in
-    // a host nothing is looking at. Nothing else watches `.git/config` while
-    // paused either — `resume()` reprobes once to catch what it missed.
-    this.disarmForgeConfigBackstop();
-    if (this.wslDistroPoller) {
-      this.stopWslDistroPoller();
-      this.wslDistroPollerSuspended = true;
-    }
+    this.forgeRemoteDetector.pause();
+    this.wslGit.pause();
     try {
       os.setPriority(process.pid, os.constants.priority.PRIORITY_LOW);
     } catch {
@@ -5944,24 +5458,10 @@ export class WorkspaceService {
     // screen is locked or every window is hidden must not start polling that
     // the app-wide policy has withdrawn.
     this.reconcilePolling();
-    if (this.wslDistroPollerSuspended) {
-      this.wslDistroPollerSuspended = false;
-      this.startWslDistroPoller();
-    }
-    if (wasBackgrounded && this.forgeRemoteDetectionActive) {
-      this.armForgeConfigBackstop();
-      // Settle the remotes before the PR poller restarts on the provider it
-      // resolved before the pause: nothing watched `.git/config` meanwhile.
-      // Stat-gated, so an unchanged config costs one stat and no git; a changed
-      // one emits `sys:forge:remote-changed`, which drops that resolution first.
-      const settle = new Promise<void>((resolve) => {
-        const deadline = setTimeout(resolve, FORGE_RESUME_SETTLE_TIMEOUT_MS);
-        deadline.unref?.();
-        void this.settleForgeRemotes().finally(() => {
-          clearTimeout(deadline);
-          resolve();
-        });
-      });
+    this.wslGit.resume();
+    // The PR poller restarts only once the remotes have settled.
+    const settle = wasBackgrounded ? this.forgeRemoteDetector.resume() : null;
+    if (settle) {
       this.pendingResumeSettle = settle;
       void settle.then(() => {
         // Superseded by a pause or an unload, each of which clears it.
@@ -6004,94 +5504,13 @@ export class WorkspaceService {
     forgeDefaultProviderId: string | null;
     forgeRemote: string | null;
   }): void {
-    const remoteSelectionChanged = args.forgeRemote !== this.forgeRemoteName;
-    this.forgeRemoteName = args.forgeRemote;
     pullRequestService.setForgeSettings(args);
     // The issues binding may be what changed; its branch keys go with it.
     this.refreshIssueBranchClaim();
     // A backgrounded host re-resolves when it is foregrounded; refreshing now
     // would query the forge for a project nothing is showing (#12519).
     if (!this.backgrounded) void pullRequestService.refresh();
-    // The remote table on disk is unchanged, so the signature-gated reprobe
-    // would never fire — but the remote we *select* from it just moved, which
-    // changes the matched provider for every monitor (#11408).
-    if (remoteSelectionChanged) {
-      this.forgeReselectRetries = 0;
-      void this.reselectForgeRemote();
-    }
-  }
-
-  /**
-   * Re-run remote selection after the `forgeRemote` setting changed. Unlike
-   * `reprobeForgeRemotes` this deliberately skips the `.git/config`
-   * fingerprint and signature gates: neither moved, only the choice did.
-   */
-  private scheduleForgeReselect(): void {
-    // A folder with no repository has no remotes to reselect from, and
-    // `forgeProbeCwd` falls back to the project root — so without this the
-    // matcher relay would spawn `git remote -v` there and, on its bounded
-    // re-arm, up to three more times per registry change (#11405 × #11408).
-    // Left at `=== false` where the monitor-minting guards moved to `!== true`:
-    // a matcher push reaching a host whose probe failed can still spawn one
-    // bounded, read-only `git remote -v` against that path. It fails fast and
-    // harmlessly, and tightening it here would block the legitimate cold-start
-    // reselect that lands before a load completes.
-    if (this.gitBacked === false) return;
-    if (this._shutdownController.signal.aborted) return;
-    if (this.forgeReselectTimer) return;
-    this.forgeReselectTimer = setTimeout(() => {
-      this.forgeReselectTimer = null;
-      void this.reselectForgeRemote();
-    }, FORGE_REMOTE_REPROBE_DEBOUNCE_MS);
-  }
-
-  private async reselectForgeRemote(): Promise<void> {
-    // Guarded here as well as in `scheduleForgeReselect`: `updateForgeSettings`
-    // calls this one directly, so the debounced path is not the only way in.
-    if (this.gitBacked === false) return;
-    const cwd = this.forgeProbeCwd();
-    if (!cwd) return;
-    // Its OWN sequence — it only makes two rapid setting changes land in order.
-    const seq = ++this.forgeReselectSeq;
-    // Snapshot WITHOUT bumping: bumping `forgeRemoteProbeSeq` would cancel an
-    // in-flight `reprobeForgeRemotes` before it consumed its fingerprint,
-    // silently dropping a real `.git/config` change until the next watcher
-    // event. Yielding to it instead is safe — a reprobe re-reads the table
-    // with the current `forgeRemoteName`, so its result already reflects this
-    // settings change. The same check covers teardown and project switch,
-    // which bump the probe seq in `stopForgeRemoteDetection`.
-    const probeSeq = this.forgeRemoteProbeSeq;
-    const probed = await this.readForgeRemotes(cwd);
-    // A newer reselect is already authoritative — drop this one outright.
-    if (seq !== this.forgeReselectSeq) return;
-    // The other two bail-outs are NOT terminal, so they re-arm the debounce
-    // instead of returning. A config probe that superseded us may itself have
-    // exited at its fingerprint gate without ever reading the remotes, and a
-    // failed enumeration leaves monitors pointing at the previously selected
-    // remote. Either way the new selection would otherwise never be applied,
-    // and nothing else would retry: `.git/config` did not change, so the
-    // fingerprint-gated backstop skips this repo entirely.
-    if (!probed || probeSeq !== this.forgeRemoteProbeSeq) {
-      // Bounded: a repo that was deleted under us fails enumeration forever,
-      // and an unbounded re-arm would spawn a git process every debounce tick
-      // for the life of the host.
-      if (this.forgeReselectRetries < FORGE_RESELECT_MAX_RETRIES) {
-        this.forgeReselectRetries++;
-        this.scheduleForgeReselect();
-      }
-      return;
-    }
-    this.forgeReselectRetries = 0;
-    if (this._shutdownController.signal.aborted) return;
-
-    const matchedProviderId = probed.fetchUrl
-      ? matchProviderForRemoteUrl(probed.fetchUrl, this.forgeProviderMatchers)
-      : null;
-    for (const monitor of this.monitors.values()) {
-      if (!monitor.isRunning) continue;
-      monitor.setRemoteFetchUrl(probed.fetchUrl);
-      monitor.setMatchedForgeProviderId(matchedProviderId);
-    }
+    this.forgeRemoteDetector.updateRemoteName(args.forgeRemote);
   }
 
   /**
@@ -6191,7 +5610,7 @@ export class WorkspaceService {
     this.topologyWatcher.stop();
     // Stop the WSL distro poller before clearing monitors so a poll tick can't
     // fire setWslEligible against a half-torn-down or next-project monitor map.
-    this.stopWslDistroPoller();
+    this.wslGit.resetForProjectSwitch();
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
@@ -6226,8 +5645,6 @@ export class WorkspaceService {
     this.projectRootPath = null;
     this.projectId = null;
     this.projectEnvVars = {};
-    this.wslDefaultDistroPromise = null;
-    this.wslLastKnownDefaultDistro = undefined;
 
     clearGitDirCache();
     clearGitCommonDirCache();
@@ -6361,7 +5778,7 @@ export class WorkspaceService {
     this.fetchCoordinator.destroy();
     // stop() clears the pending sets and their safety timers.
     this.topologyWatcher.stop();
-    this.stopWslDistroPoller();
+    this.wslGit.stop();
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();

@@ -228,6 +228,31 @@ describe("PtyHostLifecycle", () => {
     expect(lifecycle.child).toBe(mockChild);
   });
 
+  it.each([
+    [1536, 1536],
+    [1024.6, 1024],
+    [64, 256],
+    [20_000, 8192],
+    [Number.NaN, 512],
+  ])(
+    "forks memoryLimitMb=%s with the V8 cap and governor budget both at %i MB",
+    (memoryLimitMb, expectedMb) => {
+      const lifecycle = new PtyHostLifecycle(
+        { memoryLimitMb, electronDir: "/tmp/electron" },
+        createCallbacks().callbacks
+      );
+      lifecycle.start();
+      lifecycle.child = null;
+      lifecycle.manualRestart();
+
+      expect(shared.forkMock).toHaveBeenCalledTimes(2);
+      for (const [, , opts] of shared.forkMock.mock.calls) {
+        expect(opts.execArgv).toContain(`--max-old-space-size=${expectedMb}`);
+        expect(opts.env.DAINTREE_PTY_HEAP_BUDGET_MB).toBe(String(expectedMb));
+      }
+    }
+  );
+
   it("injects DAINTREE_PTY_DEFER_POOL_WARM into the fork env per the config getter (#10393)", () => {
     let defer = true;
     const callbacks = createCallbacks();

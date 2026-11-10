@@ -8,12 +8,12 @@ const onEvent = vi.hoisted(() => vi.fn((_handler: (event: unknown) => void) => (
 const ownCalls = vi.hoisted(() => ({
   archive: vi.fn(() => Promise.resolve()),
   setShown: vi.fn(() => Promise.resolve()),
-  setScope: vi.fn(() => Promise.resolve()),
   searchScreens: vi.fn((_targets: unknown[]) => Promise.resolve(["t1"])),
   watchTerminal: vi.fn(() => Promise.resolve({ watchId: 1, snapshot: null })),
   unwatchTerminal: vi.fn(() => Promise.resolve()),
   terminalInput: vi.fn(() => Promise.resolve()),
   terminalResize: vi.fn((_watchId: number, _cols: number, _rows: number) => Promise.resolve()),
+  terminalClaimSize: vi.fn((_watchId: number) => Promise.resolve()),
   setMode: vi.fn(() => Promise.resolve()),
   refresh: vi.fn(() => Promise.resolve()),
   setRead: vi.fn((): Promise<unknown> => Promise.resolve(null)),
@@ -23,6 +23,15 @@ const ownCalls = vi.hoisted(() => ({
   ),
   removeTrashed: vi.fn((_runId: string, _target: unknown) => Promise.resolve()),
   emptyTrash: vi.fn((targets: unknown[]) => Promise.resolve(targets.length)),
+  trashBatch: vi.fn((targets: Array<{ runId: string }>): Promise<unknown[]> =>
+    Promise.resolve(targets.map((target) => ({ runId: target.runId, receipt: 11 })))
+  ),
+  untrashBatch: vi.fn((receipts: number[]): Promise<unknown[]> =>
+    Promise.resolve(receipts.map((receipt) => ({ receipt })))
+  ),
+  readInputLines: vi.fn((targets: Array<{ runId: string }>): Promise<unknown[]> =>
+    Promise.resolve(targets.map((target) => ({ runId: target.runId, state: "typed" })))
+  ),
 }));
 
 vi.mock("@/clients/canopyHostClient", () => ({
@@ -357,6 +366,85 @@ describe("createAllHostsRoute", () => {
     ).rejects.toThrow();
   });
 
+  it("trashes a mixed-host set on each run's own host, and Undo goes back to each", async () => {
+    invoke.mockImplementation(async (_hostId: string, channel: string, arg: unknown) => {
+      if (channel === "canopy:trash-batch") {
+        return (arg as Array<{ runId: string }>).map((target) =>
+          target.runId === "r2"
+            ? { runId: "r2", error: "That agent isn't there any more." }
+            : { runId: target.runId, receipt: 11 }
+        );
+      }
+      if (channel === "canopy:untrash-batch") {
+        return (arg as number[]).map((receipt) => ({ receipt }));
+      }
+      return undefined;
+    });
+    const { api } = createAllHostsRoute("own", ["own", "remote"]);
+    const outcomes = await api.trashBatch([
+      { runId: allHostsKey("own", "o1"), spawnedAt: 1 },
+      { runId: allHostsKey("remote", "r1"), spawnedAt: 2 },
+      { runId: allHostsKey("remote", "r2"), spawnedAt: 3 },
+    ]);
+    expect(ownCalls.trashBatch).toHaveBeenCalledWith([{ runId: "o1", spawnedAt: 1 }]);
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:trash-batch", [
+      { runId: "r1", spawnedAt: 2 },
+      { runId: "r2", spawnedAt: 3 },
+    ]);
+    const byKey = new Map(outcomes.map((outcome) => [outcome.runId, outcome]));
+    expect(byKey.get(allHostsKey("remote", "r2"))).toEqual({
+      runId: allHostsKey("remote", "r2"),
+      error: "That agent isn't there any more.",
+    });
+    // Each trashed run gets a receipt of the route's own: two hosts number theirs alike.
+    const own = byKey.get(allHostsKey("own", "o1"));
+    const remote = byKey.get(allHostsKey("remote", "r1"));
+    if (!own || !remote || !("receipt" in own) || !("receipt" in remote)) {
+      throw new Error("expected both trashed");
+    }
+    expect(own.receipt).not.toBe(remote.receipt);
+
+    const undone = await api.untrashBatch([own.receipt!, remote.receipt!]);
+    // Each host gets back the receipt it gave, though both gave 11.
+    expect(ownCalls.untrashBatch).toHaveBeenCalledWith([11]);
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:untrash-batch", [11]);
+    expect(undone.map((outcome) => outcome.receipt).sort()).toEqual(
+      [own.receipt, remote.receipt].sort()
+    );
+    expect(undone.every((outcome) => outcome.error === undefined)).toBe(true);
+    // Spent: a second Undo finds nothing to put back.
+    const again = await api.untrashBatch([own.receipt!]);
+    expect(again[0]?.error).toBeTruthy();
+  });
+
+  it("says a host's refusal of a bulk trash for each of its runs, the other host's still going", async () => {
+    invoke.mockRejectedValue(new Error("offline"));
+    const { api } = createAllHostsRoute("own", ["own", "remote"]);
+    const outcomes = await api.trashBatch([
+      { runId: allHostsKey("own", "o1"), spawnedAt: 1 },
+      { runId: allHostsKey("remote", "r1"), spawnedAt: 2 },
+      { runId: allHostsKey("gone", "g1"), spawnedAt: 3 },
+    ]);
+    const byKey = new Map(outcomes.map((outcome) => [outcome.runId, outcome]));
+    expect(byKey.get(allHostsKey("own", "o1"))).toMatchObject({ receipt: expect.any(Number) });
+    expect(byKey.get(allHostsKey("remote", "r1"))).toEqual({
+      runId: allHostsKey("remote", "r1"),
+      error: "offline",
+    });
+    expect(byKey.get(allHostsKey("gone", "g1"))).toMatchObject({ error: expect.any(String) });
+  });
+
+  it("reads input lines on each run's host, leaving a host that can't answer unread", async () => {
+    invoke.mockRejectedValue(new Error("offline"));
+    const { api } = createAllHostsRoute("own", ["own", "remote"]);
+    const readings = await api.readInputLines([
+      { runId: allHostsKey("own", "o1"), spawnedAt: 1 },
+      { runId: allHostsKey("remote", "r1"), spawnedAt: 2 },
+    ]);
+    expect(ownCalls.readInputLines).toHaveBeenCalledWith([{ runId: "o1", spawnedAt: 1 }]);
+    expect(readings).toEqual([{ runId: allHostsKey("own", "o1"), state: "typed" }]);
+  });
+
   it("refuses a run that isn't on a host shown", async () => {
     const { api } = createAllHostsRoute("own", ["own"]);
     await expect(api.archive(allHostsKey("gone", "t1"), { spawnedAt: 1 })).rejects.toThrow();
@@ -428,10 +516,14 @@ describe("createAllHostsRoute", () => {
     const { api } = createAllHostsRoute("own", ["own", "remote"]);
     const hits = await api.searchScreens([
       { runId: allHostsKey("own", "t1"), spawnedAt: 1, terms: ["x"] },
-      { runId: allHostsKey("remote", "t1"), spawnedAt: 2, terms: ["x"] },
+      { runId: allHostsKey("remote", "t1"), spawnedAt: 2, terms: ["x"], orTerms: [["y", "z"]] },
     ]);
     expect(ownCalls.searchScreens).toHaveBeenCalledWith([
       { runId: "t1", spawnedAt: 1, terms: ["x"] },
+    ]);
+    // A run's further alternatives reach its host with it.
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:search-screens", [
+      { runId: "t1", spawnedAt: 2, terms: ["x"], orTerms: [["y", "z"]] },
     ]);
     expect(hits.sort()).toEqual([allHostsKey("own", "t1"), allHostsKey("remote", "t1")].sort());
   });
@@ -495,6 +587,24 @@ describe("createAllHostsRoute", () => {
     expect(ownCalls.terminalResize).not.toHaveBeenCalled();
     // By the host's own stream number, not the one the route gave the pane.
     expect(invoke).toHaveBeenCalledWith("remote", "canopy:terminal-resize", 1, 99, 30);
+  });
+
+  it("takes the size back only on this machine: another host's hold answers to the drive lease", async () => {
+    invoke.mockResolvedValue({ watchId: 1, snapshot: null });
+    ownCalls.watchTerminal.mockResolvedValueOnce({ watchId: 41, snapshot: null });
+    const { terminalApi } = createAllHostsRoute("own", ["own", "remote"]);
+    const own = await terminalApi.watchTerminal(allHostsKey("own", "t1"), { spawnedAt: 1 });
+    expect(own.watchId).not.toBe(41);
+    await terminalApi.terminalClaimSize(own.watchId!);
+    // By the host's own stream number, not the one the route gave the pane.
+    expect(ownCalls.terminalClaimSize.mock.calls).toEqual([[41]]);
+
+    const remote = await terminalApi.watchTerminal(allHostsKey("remote", "t1"), { spawnedAt: 1 });
+    ownCalls.terminalClaimSize.mockClear();
+    invoke.mockClear();
+    await terminalApi.terminalClaimSize(remote.watchId!);
+    expect(ownCalls.terminalClaimSize).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("keeps the host's word on sizing through the renumbered stream (#14497)", async () => {

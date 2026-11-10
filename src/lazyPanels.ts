@@ -47,11 +47,11 @@ export const LazyPilotView = lazyWithPreload(
 );
 export const preloadPilotView = LazyPilotView.preload;
 
-export const LazyCanopyView = lazyWithPreload(
-  () => import("./components/Canopy/CanopyView"),
-  (m) => m.CanopyView
+export const LazyCanopyOffer = lazyWithPreload(
+  () => import("./components/Canopy/CanopyOffer"),
+  (m) => m.CanopyOffer
 );
-export const preloadCanopyView = LazyCanopyView.preload;
+export const preloadCanopyOffer = LazyCanopyOffer.preload;
 
 export const LazyQuickCreatePalette = lazyWithPreload(
   () => import("./components/Worktree/QuickCreatePalette"),
@@ -64,12 +64,6 @@ export const LazyCrossWorktreeDiff = lazyWithPreload(
   (m) => m.CrossWorktreeDiff
 );
 export const preloadCrossWorktreeDiff = LazyCrossWorktreeDiff.preload;
-
-export const LazyNewTerminalPalette = lazyWithPreload(
-  () => import("./components/TerminalPalette/NewTerminalPalette"),
-  (m) => m.NewTerminalPalette
-);
-export const preloadNewTerminalPalette = LazyNewTerminalPalette.preload;
 
 export const LazySendToAgentPalette = lazyWithPreload(
   () => import("./components/Terminal/SendToAgentPalette"),
@@ -120,6 +114,12 @@ export const LazyCloneRepoDialog = lazyWithPreload(
   (m) => m.CloneRepoDialog
 );
 export const preloadCloneRepoDialog = LazyCloneRepoDialog.preload;
+
+// Only a project still awaiting its clone draws it (#16352).
+export const LazyProjectCloneView = lazyWithPreload(
+  () => import("./components/Project/ProjectCloneView"),
+  (m) => m.ProjectCloneView
+);
 
 export const LazyCreateProjectFolderDialog = lazyWithPreload(
   () => import("./components/Project/CreateProjectFolderDialog"),

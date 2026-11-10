@@ -9,6 +9,8 @@
  * synchronous step, no MutationObserver.
  */
 import { beforeAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createContext, useContext } from "react";
+import { Check } from "lucide-react";
 import { act, fireEvent, render } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
@@ -302,7 +304,43 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       {children}
     </button>
   ),
+  // Radix's radio rows: the group's value checks one row, which takes the
+  // role, aria-checked and the leading check the real indicator draws.
+  DropdownMenuRadioGroup: ({ children, value }: { children: React.ReactNode; value?: string }) => (
+    <MockRadioGroupValue.Provider value={value}>
+      <div role="group">{children}</div>
+    </MockRadioGroupValue.Provider>
+  ),
+  DropdownMenuRadioItem: ({
+    children,
+    className,
+    value,
+    onSelect,
+    ...rest
+  }: {
+    children: React.ReactNode;
+    className?: string;
+    value: string;
+    onSelect?: () => void;
+  } & Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "onSelect">) => {
+    const checked = useContext(MockRadioGroupValue) === value;
+    return (
+      <button
+        role="menuitemradio"
+        aria-checked={checked}
+        data-state={checked ? "checked" : "unchecked"}
+        className={className}
+        onClick={onSelect}
+        {...rest}
+      >
+        {checked && <Check className="h-3.5 w-3.5" aria-hidden="true" />}
+        {children}
+      </button>
+    );
+  },
 }));
+
+const MockRadioGroupValue = createContext<string | undefined>(undefined);
 
 vi.mock("@dnd-kit/core", () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -1149,7 +1187,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       // shadowed by aria-label per the accessible-name algorithm, so the count
       // lives in the label itself.
       expect(overflowButton!.getAttribute("aria-label")).toBe("Show 1 hidden tabs");
-      expect(overflowButton!.querySelector("span.bg-daintree-text\\/70")).toBeNull();
+      expect(overflowButton!.querySelector("span.bg-text-primary\\/70")).toBeNull();
     });
 
     it("renders the neutral dot and discloses 'including active' when the active tab is hidden", () => {
@@ -1170,7 +1208,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
         "Show 2 hidden tabs, including active"
       );
 
-      const dot = overflowButton!.querySelector("span.bg-daintree-text\\/70");
+      const dot = overflowButton!.querySelector("span.status-mark.bg-text-secondary");
       expect(dot).not.toBeNull();
       // Accent restraint: the neutral cue must NOT use any accent token.
       expect(dot!.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\w-])/);
@@ -1192,11 +1230,12 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
         <DockedTabGroup group={makeGroup(["t-1", "t-2", "t-3"], "t-2")} panels={panels} />
       );
 
-      const rows = Array.from(container.querySelectorAll<HTMLButtonElement>("[aria-current]"));
+      const rows = Array.from(
+        container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"][aria-checked="true"]')
+      );
       expect(rows.length).toBe(1);
       const activeRow = rows[0]!;
-      expect(activeRow.getAttribute("aria-current")).toBe("true");
-      expect(activeRow.className).toContain("font-medium");
+      expect(activeRow.textContent).toContain("Active hidden");
       expect(activeRow.querySelector("svg.lucide-check")).not.toBeNull();
       // A rail would read as the highlighted row, not the tab on screen.
       expect(activeRow.className).not.toContain("before:");
@@ -1207,8 +1246,9 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       );
       expect(allRows.length).toBeGreaterThan(0);
       for (const row of allRows) {
+        expect(row.getAttribute("role")).toBe("menuitemradio");
+        expect(row.getAttribute("aria-checked")).toBe("false");
         expect(row.querySelector("svg.lucide-check")).toBeNull();
-        expect(row.className).not.toContain("font-medium");
       }
     });
   });

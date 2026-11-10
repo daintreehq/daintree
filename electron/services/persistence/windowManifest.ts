@@ -15,8 +15,9 @@
  * signal persisted: WindowRegistry keeps focus *history*, not timestamps, so a
  * `lastFocusedAt` field would have nothing truthful to write into it.
  *
- * `projectId: null` is a real record, not a hole — a window sitting on the
- * project picker restores as a picker window.
+ * `projectId: null` is a window on the project picker. It holds nothing to
+ * restore, so neither side keeps one ({@link dropPickerWindows}, #16740) unless
+ * it is the only window left to carry background projects.
  *
  * Deliberately dependency-free: the reader that consumes it runs before
  * `app.whenReady()`, and keeping the shape and its validation clear of the DB
@@ -79,6 +80,20 @@ export interface OpenWindowRecord {
 export interface OpenWindowsManifest {
   version: number;
   windows: OpenWindowRecord[];
+  /**
+   * The Canopy window was open (#16336). It sits beside the window list rather
+   * than in it: it holds no workspace, so it is never counted against
+   * {@link MAX_RESTORED_WINDOWS} or restored as a project or picker window, and
+   * a build that predates it ignores the field instead of reading an entry
+   * with no project as a picker. Omitted when closed, so a manifest without a
+   * Canopy window serializes exactly as it did before.
+   */
+  canopyWindow?: true;
+}
+
+/** What the manifest holds beside its window list. */
+export interface OpenWindowsManifestExtras {
+  canopyWindowOpen?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -161,6 +176,27 @@ export function parseOpenWindowsManifest(raw: string | null | undefined): OpenWi
 }
 
 /**
+ * Whether a stored manifest says the Canopy window was open. Read apart from
+ * the window list, under the same envelope rules: anything this version can't
+ * read says no, and a malformed marker costs only itself, never the windows.
+ */
+export function parseCanopyWindowOpen(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  return (
+    isRecord(parsed) &&
+    parsed.version === OPEN_WINDOWS_MANIFEST_VERSION &&
+    Array.isArray(parsed.windows) &&
+    parsed.canopyWindow === true
+  );
+}
+
+/**
  * Attach a validated background list to a record whose foreground already
  * parsed.
  *
@@ -233,15 +269,52 @@ export function capBackgroundProjectIds(
  * as it did before #12320 — which is what keeps the pre-existing shape tests
  * meaningful instead of merely updated.
  */
-export function serializeOpenWindowsManifest(records: OpenWindowRecord[]): string {
+export function serializeOpenWindowsManifest(
+  records: OpenWindowRecord[],
+  { canopyWindowOpen = false }: OpenWindowsManifestExtras = {}
+): string {
   const manifest: OpenWindowsManifest = {
     version: OPEN_WINDOWS_MANIFEST_VERSION,
     windows: records.slice(0, MAX_RESTORED_WINDOWS).map(({ projectId, backgroundProjectIds }) => {
       const ids = parseBackgroundProjectIds(backgroundProjectIds, projectId);
       return ids.length > 0 ? { projectId, backgroundProjectIds: ids } : { projectId };
     }),
+    ...(canopyWindowOpen ? { canopyWindow: true as const } : {}),
   };
   return JSON.stringify(manifest);
+}
+
+/**
+ * The windows worth bringing back: every window on the project picker dropped
+ * (#16740). A picker has no workspace, terminals or layout, so restoring one
+ * only reopens an empty window, and it then came back on every launch.
+ *
+ * A picker can still hold background projects: warm views, or live workspaces
+ * the orphan sweep gave the most-recently-focused window. Those go to the first
+ * window that stays, after its own, the way a dropped duplicate's go to the
+ * window that kept its project. With no window left to take them, one picker
+ * record carries them all: the launch still opens one window, and they come
+ * back behind it.
+ */
+export function dropPickerWindows(records: readonly OpenWindowRecord[]): OpenWindowRecord[] {
+  const kept = records.filter((record) => record.projectId !== null);
+  const foregrounds = new Set(kept.map((record) => record.projectId));
+  const carried = records.flatMap((record) =>
+    record.projectId === null
+      ? (record.backgroundProjectIds ?? []).filter((id) => !foregrounds.has(id))
+      : []
+  );
+  if (carried.length === 0) return kept;
+
+  // Another window's foreground is filtered from the window's own list too,
+  // before the cap: left in, it would take a slot the restore later frees, and
+  // the carried project it pushed out would be lost.
+  const [first, ...rest] = kept;
+  const backgroundProjectIds = capBackgroundProjectIds(
+    [...(first?.backgroundProjectIds ?? []), ...carried].filter((id) => !foregrounds.has(id)),
+    first?.projectId ?? null
+  );
+  return [{ projectId: first?.projectId ?? null, backgroundProjectIds }, ...rest];
 }
 
 /** Longest project id a host-scoped key may carry (the switch refuses longer ones). */

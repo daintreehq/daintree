@@ -54,7 +54,7 @@ export function useDevPreviewCrashRecovery({
         notify({
           type: "error",
           title: "Preview process crashed repeatedly",
-          message: `The dev preview crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload or Hard restart to recover.`,
+          message: `The dev preview crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload or Restart dev server to recover.`,
           priority: "high",
           duration: 0,
           context: { eventKind: "recovery", ...panelNotificationAddress(id) },

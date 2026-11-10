@@ -19,6 +19,7 @@ import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAu
 import { getForgeProviderBaseImpl } from "../../services/forgeProviderRegistry.js";
 import { getCommitCount } from "../../utils/git.js";
 import { logWarn } from "../../utils/logger.js";
+import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import type {
@@ -1068,7 +1069,9 @@ function requireValidChecks(value: unknown, prNumber: number): ForgeCheckRun[] {
       // things under a schema that advertises neither as possible.
       (c.conclusion !== undefined && c.status !== "completed") ||
       (c.required !== undefined && typeof c.required !== "boolean") ||
-      (c.detailsUrl !== undefined && typeof c.detailsUrl !== "string")
+      (c.detailsUrl !== undefined && typeof c.detailsUrl !== "string") ||
+      (c.workflow !== undefined && typeof c.workflow !== "string") ||
+      (c.app !== undefined && typeof c.app !== "string")
     ) {
       throw new Error(`Forge provider returned a malformed check for PR #${prNumber}`);
     }
@@ -1078,6 +1081,8 @@ function requireValidChecks(value: unknown, prNumber: number): ForgeCheckRun[] {
       ...(c.conclusion !== undefined ? { conclusion: c.conclusion } : {}),
       ...(c.required !== undefined ? { required: c.required } : {}),
       ...(c.detailsUrl ? { detailsUrl: c.detailsUrl } : {}),
+      ...(c.workflow?.trim() ? { workflow: c.workflow } : {}),
+      ...(c.app?.trim() ? { app: c.app } : {}),
     };
   });
 }
@@ -1254,7 +1259,12 @@ async function handleForgeListIssueComments(payload: {
   const { impl, repoRef, namespaceId } = await resolveForCwd(cwd, "issues");
   const capability = impl.issueComments;
   if (!capability) {
-    throw new Error("The active forge provider does not support reading issue comments");
+    // Coded so a caller can tell "this provider has no comments" from a read
+    // that failed, without matching the message.
+    throw new AppError({
+      code: "UNSUPPORTED",
+      message: "The active forge provider does not support reading issue comments",
+    });
   }
   return auditForgeCall(
     {

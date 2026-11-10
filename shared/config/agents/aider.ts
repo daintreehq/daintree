@@ -7,6 +7,12 @@ export const config: AgentConfig = {
   // --no-auto-commits is critical: Aider's default --auto-commits would
   // muddy the user's intentional commit history inside a Daintree worktree.
   args: ["--no-auto-commits"],
+  // Positionals are filenames, and -m sends one message then exits: no
+  // interactive-with-prompt mode exists.
+  initialPromptForm: {
+    interactive: { args: ["-m", "{prompt}"], caveat: "exits-after-reply" },
+    headless: { args: ["-m", "{prompt}"] },
+  },
   color: "#14B014",
   iconId: "aider",
   supportsContextInjection: true,

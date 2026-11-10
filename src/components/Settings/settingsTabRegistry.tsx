@@ -3,7 +3,6 @@ import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import {
   Blocks,
   FileCode,
-  GitBranch,
   GitBranchPlus,
   History,
   LayoutGrid,
@@ -28,6 +27,7 @@ import {
   DaintreeIcon,
   DecisionsIcon,
   FolderGit2,
+  GitPullRequest,
   Plug,
   McpServerIcon,
   Telescope,
@@ -428,7 +428,7 @@ export const SETTINGS_REGISTRY = [
         section: "Startup",
         title: "Resume agents after restart",
         description:
-          "Resume every agent pane after a restart, only when each is first focused, or never on its own.",
+          "Resume every agent panel after a restart, only when each is first focused, or never on its own.",
         keywords: [
           "resume",
           "restart",
@@ -807,6 +807,7 @@ export const SETTINGS_REGISTRY = [
     importer: LazyPrivacyDataTab.preload,
     LazyComponent: LazyPrivacyDataTab,
     needsSubtabs: true,
+    needsOnClose: true,
     searchNavDescription: "Telemetry level, log retention, data folder, cache, and factory reset",
     searchNavKeywords: ["privacy", "data", "telemetry", "reset", "cache", "logs"],
     sections: [
@@ -915,7 +916,7 @@ export const SETTINGS_REGISTRY = [
     sectionSettings: {
       "Performance mode": SECTION_SETTINGS.performanceMode,
       "Panel limits": SECTION_SETTINGS.panelLimits,
-      "Two-pane split layout": SECTION_SETTINGS.twoPaneSplit,
+      "Two-panel split layout": SECTION_SETTINGS.twoPaneSplit,
       "Scrollback history": SECTION_SETTINGS.scrollback,
       "Grid layout": SECTION_SETTINGS.gridLayout,
       "Screen reader mode": SECTION_SETTINGS.assistiveTechnology,
@@ -926,7 +927,7 @@ export const SETTINGS_REGISTRY = [
     importer: LazyTerminalSettingsTab.preload,
     LazyComponent: LazyTerminalSettingsTab,
     needsSubtabs: true,
-    searchNavDescription: "Panel grid layout, scrollback, split pane, and performance settings",
+    searchNavDescription: "Panel grid layout, scrollback, panel split, and performance settings",
     searchNavKeywords: ["terminal", "panel", "grid", "layout", "panes"],
     sections: [
       {
@@ -973,10 +974,10 @@ export const SETTINGS_REGISTRY = [
         id: "terminal-two-pane-split",
         subtab: "layout",
         subtabLabel: "Layout",
-        section: "Two-pane split layout",
-        title: "Two-pane split layout",
+        section: "Two-panel split layout",
+        title: "Two-panel split layout",
         description: "When exactly two panels are open, display them with a resizable divider",
-        keywords: ["split", "two pane", "layout", "divider", "resize", "ratio"],
+        keywords: ["split", "two panel", "two pane", "layout", "divider", "resize", "ratio"],
       },
       {
         id: "terminal-scrollback",
@@ -1021,7 +1022,7 @@ export const SETTINGS_REGISTRY = [
         id: "terminal-preview-layout",
         subtab: "layout",
         subtabLabel: "Layout",
-        section: "Two-pane split layout",
+        section: "Two-panel split layout",
         title: "Preview-focused layout",
         description:
           "Give more space to browser or dev-preview panels (65/35 split) vs balanced layout (50/50)",
@@ -1031,16 +1032,16 @@ export const SETTINGS_REGISTRY = [
         id: "terminal-default-ratio",
         subtab: "layout",
         subtabLabel: "Layout",
-        section: "Two-pane split layout",
+        section: "Two-panel split layout",
         title: "Default split ratio",
-        description: "Set the default left/right split ratio for two-pane layout",
+        description: "Set the default left/right split ratio for the two-panel layout",
         keywords: ["ratio", "split", "default", "percentage", "slider", "two pane"],
       },
       {
         id: "terminal-reset-ratios",
         subtab: "layout",
         subtabLabel: "Layout",
-        section: "Two-pane split layout",
+        section: "Two-panel split layout",
         title: "Reset all worktree split ratios",
         description: "Clear all per-worktree split ratio overrides and return to the default ratio",
         keywords: ["reset", "worktree", "ratio", "split", "default", "clear"],
@@ -1258,7 +1259,7 @@ export const SETTINGS_REGISTRY = [
     importKind: "lazy",
     importer: LazyDaintreeAssistantSettingsTab.preload,
     LazyComponent: LazyDaintreeAssistantSettingsTab,
-    searchNavDescription: "Tools, security, and audit logging for the help assistant",
+    searchNavDescription: "Tools, security, and audit logging for the Daintree Assistant",
     searchNavKeywords: [
       "assistant",
       "daintree",
@@ -1367,6 +1368,7 @@ export const SETTINGS_REGISTRY = [
     settings: ["agentSettings", "userAgentRegistry", "agentUpdateSettings"],
     sectionSettings: {
       Input: SECTION_SETTINGS.agentInput,
+      "Prompt templates": SECTION_SETTINGS.promptTemplates,
     },
     label: "CLI agents",
     icon: <Plug className="w-4 h-4" />,
@@ -1375,6 +1377,8 @@ export const SETTINGS_REGISTRY = [
     LazyComponent: LazyAgentSettings,
     needsSubtabs: true,
     needsOnSettingsChange: true,
+    // A hidden, prefetched tab must not run every copy of an agent's CLI.
+    needsIsActive: true,
     // A sign-in terminal opened from an agent's Accounts closes Settings first.
     needsOnClose: true,
     searchNavDescription: "Configure CLI agent settings",
@@ -1402,7 +1406,7 @@ export const SETTINGS_REGISTRY = [
         section: "All agents",
         title: "Default agent",
         description:
-          'Agent used for the help dock button and automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Portal "Default new tab agent".',
+          'Agent used for the Daintree Assistant and automated workflows ("What\'s next?", onboarding, project explanations). Distinct from the Portal "Default new tab agent".',
         keywords: [
           "default",
           "agent",
@@ -1416,6 +1420,15 @@ export const SETTINGS_REGISTRY = [
           "keyboard shortcut",
           ...BUILT_IN_AGENT_IDS,
         ],
+      },
+      {
+        id: "agents-prompt-templates",
+        subtab: "general",
+        subtabLabel: "General",
+        section: "Prompt templates",
+        title: "Prompt templates",
+        description: "Your own reusable prompts, kept as Markdown files, in every agent's composer",
+        keywords: ["prompt", "template", "markdown", "folder", "slash", "composer", "frontmatter"],
       },
       {
         id: "agents-hybrid-input",
@@ -1433,7 +1446,7 @@ export const SETTINGS_REGISTRY = [
         section: "Input",
         title: "Focus first",
         description:
-          "Switching to an agent pane focuses its hybrid input or its terminal, and a file dropped on another pane's terminal goes there too",
+          "Switching to an agent panel focuses its hybrid input or its terminal, and a file dropped on another panel's terminal goes there too",
         keywords: [
           "focus",
           "autofocus",
@@ -1474,15 +1487,6 @@ export const SETTINGS_REGISTRY = [
         ],
       },
       {
-        id: "agents-inline-mode",
-        subtab: "claude",
-        subtabLabel: "Claude",
-        section: "Launch preset",
-        title: "Alt-screen mode",
-        description: "Choose inline rendering or the CLI's full-screen TUI per agent",
-        keywords: ["inline", "mode", "tui", "fullscreen", "alt screen", "resize", "tty"],
-      },
-      {
         id: "agents-clipboard",
         subtab: "gemini",
         subtabLabel: "Gemini",
@@ -1510,6 +1514,15 @@ export const SETTINGS_REGISTRY = [
           "Install commands, detected path and troubleshooting for an agent that isn't ready",
         keywords: ["install", "setup", "wizard", "cli", "download", "npm", "brew"],
       },
+      {
+        id: "agents-cli-copies",
+        subtab: "claude",
+        subtabLabel: "Claude",
+        section: "Detected CLI",
+        title: "Detected CLI",
+        description: "Which copy of an agent's CLI launches, and the version each copy reports",
+        keywords: ["path", "version", "copy", "copies", "duplicate", "binary", "which", "update"],
+      },
     ],
   } satisfies LazySettingsTabEntry,
 
@@ -1520,7 +1533,7 @@ export const SETTINGS_REGISTRY = [
     settings: ["forgeCredentials", "forgeDefaultProviderId"],
     label: "Code forge",
     headerTitle: "Code forge",
-    icon: <GitBranch className="w-4 h-4" />,
+    icon: <GitPullRequest className="w-4 h-4" />,
     importKind: "lazy",
     importer: LazyCodeForgeSettingsTab.preload,
     LazyComponent: LazyCodeForgeSettingsTab,
@@ -1557,6 +1570,8 @@ export const SETTINGS_REGISTRY = [
           "gitlab",
           "gitea",
           "linear",
+          "jira",
+          "atlassian",
           "API",
         ],
       },
@@ -2029,10 +2044,9 @@ export const SETTINGS_REGISTRY = [
     importKind: "lazy",
     importer: LazyCanopySettingsTab.preload,
     LazyComponent: LazyCanopySettingsTab,
-    searchNavDescription:
-      "Show or hide Canopy, turn its reading on or off, and the model it reads with",
-    // The model's own rows only render while there is a download or a model on disk, so
-    // model searches land on rows that are always there and describe it.
+    searchNavDescription: "Show or hide Canopy, and turn its reading on or off",
+    // The model's own rows render only while Canopy reads (its revision, an update on its
+    // way, a failed check), so model searches land on rows that are always there.
     searchNavKeywords: [
       "canopy",
       "inbox",
@@ -2042,9 +2056,6 @@ export const SETTINGS_REGISTRY = [
       "privacy",
       "local",
       "model",
-      "download",
-      "delete",
-      "disk",
     ],
     sections: [
       {
@@ -2069,7 +2080,6 @@ export const SETTINGS_REGISTRY = [
           "local",
           "offline",
           "model",
-          "download",
         ],
       },
     ],
@@ -2202,7 +2212,7 @@ export const SETTINGS_REGISTRY = [
         section: "Questions",
         title: "Show agent status and recent terminal lines on my phone",
         description:
-          "For the pane that asked, only while its question is open, redacted on a best-effort basis",
+          "For the agent that asked, only while its question is open, redacted on a best-effort basis",
         keywords: [
           "terminal",
           "snapshot",
@@ -2477,8 +2487,7 @@ export const SETTINGS_REGISTRY = [
     group: "Project",
     settings: ["worktreeConfig"],
     label: "Worktree setup",
-    // Not GitBranch: project Code Forge already uses it, and two sections in the same
-    // nav list sharing one glyph makes the icon useless for telling them apart.
+    // Not GitBranch: that glyph names a checked-out branch, while this tab creates them.
     icon: <GitBranchPlus className="w-4 h-4" />,
     importKind: "lazy",
     importer: LazyProjectAutomationTab.preload,
@@ -2534,7 +2543,7 @@ export const SETTINGS_REGISTRY = [
     group: "Project",
     settings: ["forgeEnableDismissedPaths"],
     label: "Code forge",
-    icon: <GitBranch className="w-4 h-4" />,
+    icon: <GitPullRequest className="w-4 h-4" />,
     importKind: "lazy",
     importer: LazyProjectCodeForgeTab.preload,
     LazyComponent: LazyProjectCodeForgeTab,
@@ -2887,7 +2896,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   worktree: <FolderGit2 className="w-5 h-5 text-text-secondary" />,
   agents: <Plug className="w-5 h-5 text-text-secondary" />,
   assistant: <DaintreeIcon className="w-5 h-5 text-text-secondary" size={20} />,
-  "code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
+  "code-forge": <GitPullRequest className="w-5 h-5 text-text-secondary" />,
   portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
   toolbar: <PanelTop className="w-5 h-5 text-text-secondary" />,
   notifications: <Bell className="w-5 h-5 text-text-secondary" />,
@@ -2920,7 +2929,7 @@ export const projectTabIcons: Record<ProjectSettingsTab, ReactNode> = {
   "project:recipes": <Workflow className="w-5 h-5 text-text-secondary" />,
   "project:schedules": <CalendarClock className="w-5 h-5 text-text-secondary" />,
   "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
-  "project:code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
+  "project:code-forge": <GitPullRequest className="w-5 h-5 text-text-secondary" />,
   "project:plugins": <Package className="w-5 h-5 text-text-secondary" />,
 };
 

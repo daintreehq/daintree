@@ -1,4 +1,7 @@
+import { useMemo } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { pluralize } from "@/lib/pluralize";
+import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useProjectStore } from "@/store/projectStore";
 
 interface StopProjectConfirmDialogProps {
@@ -7,6 +10,18 @@ interface StopProjectConfirmDialogProps {
   isStopping: boolean;
   onClose: () => void;
   onConfirm: () => void | Promise<void>;
+}
+
+// Outside the component: the compiler rejects a store hook referenced as a value inside one.
+function readStopCounts(projectId: string | null | undefined) {
+  if (projectId == null) return null;
+  const entry = useProjectStatsStore.getState().stats[projectId];
+  if (!entry) return null;
+  return {
+    terminals: entry.processCount,
+    active: entry.activeAgentCount,
+    waiting: entry.waitingAgentCount,
+  };
 }
 
 /**
@@ -27,6 +42,11 @@ export function StopProjectConfirmDialog({
     (state) => projectId != null && state.currentProject?.id === projectId
   );
 
+  // Read once when the dialog opens, so the figures don't shift under the cursor.
+  const counts = useMemo(() => readStopCounts(projectId), [projectId]);
+  const hasCounts =
+    counts != null && (counts.terminals > 0 || counts.active > 0 || counts.waiting > 0);
+
   return (
     <ConfirmDialog
       isOpen={projectId != null}
@@ -41,6 +61,14 @@ export function StopProjectConfirmDialog({
       onConfirm={onConfirm}
       isConfirmLoading={isStopping}
       variant="destructive"
-    />
+    >
+      {hasCounts && (
+        <div data-stop-counts="" className="mt-3 text-sm">
+          {counts.terminals > 0 && <div>• {pluralize(counts.terminals, "terminal")}</div>}
+          {counts.active > 0 && <div>• {pluralize(counts.active, "active agent")}</div>}
+          {counts.waiting > 0 && <div>• {pluralize(counts.waiting, "waiting agent")}</div>}
+        </div>
+      )}
+    </ConfirmDialog>
   );
 }

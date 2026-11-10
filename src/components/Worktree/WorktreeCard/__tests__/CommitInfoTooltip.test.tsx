@@ -12,6 +12,10 @@ import {
 
 const human = { name: "Jane Doe", email: "jane@example.com" };
 
+function activityLine(): HTMLElement {
+  return screen.getByText(/^Last active /);
+}
+
 describe("CommitInfoTooltip", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -112,7 +116,11 @@ describe("CommitInfoTooltip", () => {
       <CommitInfoTooltip lastActivityTimestamp={Date.now() - 120_000} />
     );
 
-    expect(screen.getByText(/^Last active 2 minutes ago ·/)).toBeDefined();
+    const line = activityLine();
+    expect(line.textContent).toMatch(/^Last active 2 minutes ago · /);
+    expect(line.querySelector("time")?.getAttribute("datetime")).toBe(
+      new Date(Date.now() - 120_000).toISOString()
+    );
     expect(screen.queryByText("Last commit")).toBeNull();
     expect(container.querySelector("img")).toBeNull();
   });
@@ -130,7 +138,7 @@ describe("CommitInfoTooltip", () => {
     expect(screen.getByText("Jane Doe")).toBeDefined();
     expect(screen.getByText("Committed 1 hour ago")).toBeDefined();
     expect(screen.getByText("fix: preserve commit context")).toBeDefined();
-    expect(screen.getByText(/^Last active 2 minutes ago ·/)).toBeDefined();
+    expect(activityLine().textContent).toMatch(/^Last active 2 minutes ago · /);
   });
 
   it("does not repeat activity detail when the commit is the activity source", () => {
@@ -301,14 +309,14 @@ describe("CommitInfoTooltip while open", () => {
         lastActivityTimestamp={Date.now() - 20_000}
       />
     );
-    expect(screen.getByText(/^Last active just now ·/)).toBeDefined();
+    expect(activityLine().textContent).toMatch(/^Last active just now · /);
     // One act() per minute, so each flip re-arms the next as it does live.
     for (let minute = 0; minute < 3; minute++) {
       act(() => {
         vi.advanceTimersByTime(60_000);
       });
     }
-    expect(screen.getByText(/^Last active 3 minutes ago ·/)).toBeDefined();
+    expect(activityLine().textContent).toMatch(/^Last active 3 minutes ago · /);
   });
 
   it("wakes exactly when a phrase or the day changes", () => {

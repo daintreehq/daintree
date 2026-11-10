@@ -1,15 +1,31 @@
 /**
- * The local model Canopy reads screens with, and getting it here. It is the
- * public `daintreehq/canopy-reader-17m` repo on Hugging Face: pinned at the
- * revision known at build time, and updated to a newer one when Hugging Face
- * publishes a revision this build can read.
+ * The local model Canopy reads screens with, `daintreehq/canopy-reader-17m`.
+ * It ships inside the app (#16415), at the revision and hashes pinned in
+ * `canopy-reader-manifest.json`: the build fetches those files and packaging
+ * checks them, and each launch checks them once more before the reader may
+ * load them.
  *
- * Nothing here ever sends a screen anywhere: the only requests are for the
- * repo's revision and the model files themselves.
+ * A newer revision Hugging Face publishes reaches users between releases
+ * (#16416): with Canopy on, the Hub is asked once a launch for its newest
+ * revision, and one this build reads is fetched beside the copy in use,
+ * checked against the hashes the Hub publishes, and read with from then on.
+ * The shipped copy is the floor: nothing older than it is ever read. The only
+ * requests are for the repo's revision metadata and its model files; no screen
+ * ever leaves the machine.
  */
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -23,23 +39,11 @@ import {
 } from "../../../shared/types/ipc/canopy.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { isReaderMeta } from "./canopyReader.js";
+import manifest from "./canopy-reader-manifest.json" with { type: "json" };
 
-const HF = "https://huggingface.co";
-const USER_AGENT = "Daintree-Canopy/1.0";
-export { CANOPY_MODEL, canopyModelName, isCanopyModelId };
-/**
- * Everything the reader needs besides its weights. `config.json` is what
- * Hugging Face counts a download by, so it is fetched with every download and
- * never to look for an update; `reader.json` holds the same and is not needed.
- */
-const COMMON_FILES = ["config.json", "tokenizer.json", "tokenizer_config.json"];
-/** Weight-only INT8: every multiply runs in float, so it reads the same on every CPU. */
-const WEIGHTS = "model.int8.onnx";
-const REVISION_TIMEOUT_MS = 10_000;
-/** Progress is told at most this often. */
-const PROGRESS_INTERVAL_MS = 250;
+export { CANOPY_MODEL, canopyModelName };
 
-interface FileSpec {
+export interface CanopyModelFileSpec {
   name: string;
   size: number;
   /** SHA-256 of an LFS file, the model weights. */
@@ -48,40 +52,118 @@ interface FileSpec {
   blobId?: string;
 }
 
-interface Variant {
+/** One revision of the model: its commit, when it was published, and its files' pins. */
+export interface CanopyModelRevision {
   revision: string;
-  /** Every file fetched, the weights last. */
-  files: FileSpec[];
+  /** When Hugging Face published it (epoch ms): the only order revisions have offline. */
+  published: number;
+  files: readonly CanopyModelFileSpec[];
 }
 
-/** The revision published at build time. */
-const BUNDLED: Variant = {
-  revision: "eb00edfd11d640d412e6b9fffcf812c795d308d4",
-  files: [
-    { name: "config.json", size: 1703, blobId: "ff12926090370f57579a3d9b641adf1311d8f381" },
-    { name: "tokenizer.json", size: 3583228, blobId: "2f4d8583e507b7466d2490e2d6c045647a822698" },
-    {
-      name: "tokenizer_config.json",
-      size: 368,
-      blobId: "e3ce044f1db95b6884796f4fdf7d3f78fb6b9df4",
-    },
-    {
-      name: WEIGHTS,
-      size: 17410374,
-      sha256: "da4e9eb4a873d1349fd38d2e86c5b120cc82d802844833ef3a901f48282c0fd1",
-    },
-  ],
+/** The weights file the reader loads: weight-only INT8, which reads the same on every CPU. */
+export const CANOPY_READER_WEIGHTS: string = manifest.weights;
+
+/** The revision this build ships. */
+const SHIPPED: CanopyModelRevision = {
+  revision: manifest.revision,
+  published: Date.parse(manifest.published),
+  files: manifest.files,
 };
 
-/** Git's blob id: SHA-1 over `blob <size>\0` and the content. */
-function gitBlobId(content: Buffer): string {
-  return createHash("sha1").update(`blob ${content.length}\0`).update(content).digest("hex");
+/** Every file the reader opens. An update must carry each, with a hash the Hub publishes. */
+const READER_FILES = ["config.json", "tokenizer.json", "tokenizer_config.json"] as const;
+
+const HF = "https://huggingface.co";
+const USER_AGENT = "Daintree-Canopy/1.0";
+const CHECK_TIMEOUT_MS = 10_000;
+/** One file's request, body included: one cut off is picked up where it stopped on the next try. */
+const FILE_TIMEOUT_MS = 300_000;
+/** Settings hears an update's progress at most this often. */
+const PROGRESS_INTERVAL_MS = 500;
+const REVISION = /^[0-9a-f]{40}$/;
+const STAGING = ".download";
+/** An update's record of itself. In a finished update's folder it is the last thing written. */
+const INSTALL = "install.json";
+/** The same record in a download's folder, written first, so a download stopped part way says what it was. */
+const PENDING = "download.json";
+/**
+ * A revision whose run failed on this build: the same record, with the build
+ * and how many runs failed, beside the folders.
+ */
+const REJECTED = ".rejected";
+/** Runs of one revision that may fail on one build before that build stops fetching it. */
+const MAX_FAILED_RUNS = 3;
+/** Far past the reader's ~21 MB: a Hub answer naming more is not this model. */
+const MAX_MODEL_BYTES = 512 * 1024 * 1024;
+
+const DAMAGED =
+  "The model that comes with Daintree is missing or damaged. Reinstalling Daintree puts it back.";
+
+/** Whether `file` is the one pinned: its size, then its hash, read as a stream. */
+async function matches(file: string, spec: CanopyModelFileSpec): Promise<boolean> {
+  const size = await stat(file).then(
+    (s) => s.size,
+    () => -1
+  );
+  if (size !== spec.size) return false;
+  if (spec.sha256) {
+    const hash = createHash("sha256");
+    await pipeline(createReadStream(file), hash);
+    return hash.digest("hex") === spec.sha256;
+  }
+  if (spec.blobId) {
+    const hash = createHash("sha1").update(`blob ${size}\0`);
+    await pipeline(createReadStream(file), hash);
+    return hash.digest("hex") === spec.blobId;
+  }
+  return false;
 }
 
-async function sha256File(file: string): Promise<string> {
-  const hash = createHash("sha256");
-  await pipeline(createReadStream(file), hash);
-  return hash.digest("hex");
+/** The files of `files` in `dir` that are missing or don't match their pins. */
+async function mismatched(dir: string, files: readonly CanopyModelFileSpec[]): Promise<string[]> {
+  const bad: string[] = [];
+  for (const spec of files) {
+    const ok = await matches(path.join(dir, spec.name), spec).catch(() => false);
+    if (!ok) bad.push(spec.name);
+  }
+  return bad;
+}
+
+/** Windows holds a file open until its reader process has exited: retried for a few seconds. */
+function removeDir(dir: string): Promise<void> {
+  return rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+}
+
+function isFileSpec(value: unknown): value is CanopyModelFileSpec {
+  if (typeof value !== "object" || value === null) return false;
+  const spec = value as Partial<CanopyModelFileSpec>;
+  return (
+    typeof spec.name === "string" &&
+    // A plain name: an update's files never reach outside its folder.
+    path.basename(spec.name) === spec.name &&
+    !spec.name.startsWith(".") &&
+    typeof spec.size === "number" &&
+    Number.isSafeInteger(spec.size) &&
+    spec.size >= 0 &&
+    spec.size <= MAX_MODEL_BYTES &&
+    (typeof spec.sha256 === "string" || typeof spec.blobId === "string")
+  );
+}
+
+/** Every file the reader opens is pinned. */
+function complete(files: readonly CanopyModelFileSpec[]): boolean {
+  return [...READER_FILES, CANOPY_READER_WEIGHTS].every((name) =>
+    files.some((file) => file.name === name)
+  );
+}
+
+/** Newer than `than`: a different revision, published after it. */
+function newer(revision: CanopyModelRevision, than: CanopyModelRevision): boolean {
+  return revision.revision !== than.revision && revision.published > than.published;
+}
+
+function totalBytes(revision: CanopyModelRevision): number {
+  return revision.files.reduce((sum, file) => sum + file.size, 0);
 }
 
 async function fetchJson(url: string, signal: AbortSignal): Promise<unknown> {
@@ -91,302 +173,410 @@ async function fetchJson(url: string, signal: AbortSignal): Promise<unknown> {
 }
 
 /**
- * The repo's newest revision, from the Hub API, when this build can read it;
- * null when it can't. Its `reader.json` is what is checked: `config.json`
- * holds the same, but asking for it would count as a download.
+ * The repo's newest revision, from the Hub API: its commit, when it was
+ * published, and the hashes the Hub publishes for the reader's files. Null
+ * when the Hub's answer doesn't say all of that.
  */
-async function fetchLatest(signal: AbortSignal): Promise<Variant | null> {
+async function fetchNewest(signal: AbortSignal): Promise<CanopyModelRevision | null> {
   const detail = (await fetchJson(`${HF}/api/models/${CANOPY_MODEL}?blobs=true`, signal)) as {
-    sha?: string;
-    private?: boolean;
-    siblings?: { rfilename?: string; size?: number; blobId?: string; lfs?: { sha256?: string } }[];
+    sha?: unknown;
+    lastModified?: unknown;
+    private?: unknown;
+    siblings?: unknown;
   };
-  if (detail.private || typeof detail.sha !== "string" || !Array.isArray(detail.siblings)) {
+  if (detail.private === true || typeof detail.sha !== "string" || !REVISION.test(detail.sha)) {
     return null;
   }
-  if (detail.sha === BUNDLED.revision) return BUNDLED;
-  const spec = (name: string, lfs: boolean): FileSpec | null => {
-    const sibling = detail.siblings!.find((s) => s.rfilename === name);
+  const published = typeof detail.lastModified === "string" ? Date.parse(detail.lastModified) : NaN;
+  if (!Number.isFinite(published) || !Array.isArray(detail.siblings)) return null;
+  const siblings = detail.siblings as {
+    rfilename?: unknown;
+    size?: unknown;
+    blobId?: unknown;
+    lfs?: { sha256?: unknown };
+  }[];
+  const files: CanopyModelFileSpec[] = [];
+  for (const name of [...READER_FILES, CANOPY_READER_WEIGHTS]) {
+    const sibling = siblings.find((s) => s?.rfilename === name);
     if (!sibling || typeof sibling.size !== "number") return null;
+    // The weights are in LFS, pinned by their SHA-256; the rest by git's blob id.
+    const lfs = name === CANOPY_READER_WEIGHTS;
     const sha256 = sibling.lfs?.sha256;
-    if (lfs) return typeof sha256 === "string" ? { name, size: sibling.size, sha256 } : null;
-    return typeof sibling.blobId === "string"
-      ? { name, size: sibling.size, blobId: sibling.blobId }
-      : null;
-  };
-  const files: FileSpec[] = [];
-  for (const name of COMMON_FILES) {
-    const file = spec(name, false);
-    if (!file) return null;
-    files.push(file);
+    if (lfs && typeof sha256 !== "string") return null;
+    if (!lfs && typeof sibling.blobId !== "string") return null;
+    const spec = lfs
+      ? { name, size: sibling.size, sha256: sha256 as string }
+      : { name, size: sibling.size, blobId: sibling.blobId as string };
+    if (!isFileSpec(spec)) return null;
+    files.push(spec);
   }
-  const weights = spec(WEIGHTS, true);
-  if (!weights) return null;
-  files.push(weights);
-  const meta = await fetchJson(`${HF}/${CANOPY_MODEL}/resolve/${detail.sha}/reader.json`, signal);
-  return isReaderMeta(meta) ? { revision: detail.sha, files } : null;
+  if (files.reduce((sum, file) => sum + file.size, 0) > MAX_MODEL_BYTES) return null;
+  return { revision: detail.sha, published, files };
 }
 
-/** Windows holds a file open until its reader process has exited: retried for a few seconds. */
-function removeDir(dir: string): Promise<void> {
-  return rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+/**
+ * Whether this build reads `revision`, from its `reader.json`: the same as its
+ * `config.json`, which is never asked for here, since asking for it is what
+ * Hugging Face counts as a download.
+ */
+async function readable(revision: string, signal: AbortSignal): Promise<boolean> {
+  return isReaderMeta(
+    await fetchJson(`${HF}/${CANOPY_MODEL}/resolve/${revision}/reader.json`, signal)
+  );
 }
 
-function totalBytes(v: Variant): number {
-  return v.files.reduce((sum, f) => sum + f.size, 0);
+/** What `folder` records of `revision` in `file`, or null when that isn't a record of it. */
+async function readRecord(
+  folder: string,
+  revision: string,
+  file: string
+): Promise<CanopyModelRevision | null> {
+  try {
+    const raw = JSON.parse(await readFile(path.join(folder, file), "utf8")) as {
+      id?: unknown;
+      revision?: unknown;
+      published?: unknown;
+      files?: unknown;
+    };
+    if (raw.id !== CANOPY_MODEL || raw.revision !== revision) return null;
+    if (typeof raw.published !== "number" || !Number.isFinite(raw.published)) return null;
+    if (!Array.isArray(raw.files) || !raw.files.every(isFileSpec)) return null;
+    const files = raw.files as CanopyModelFileSpec[];
+    const names = new Set(files.map((spec) => spec.name));
+    if (names.size !== files.length || !complete(files)) return null;
+    return { revision, published: raw.published, files };
+  } catch {
+    return null;
+  }
 }
 
-interface Installed {
+/** One thing this code keeps in the updates folder for a revision. */
+interface Entry {
+  name: string;
   revision: string;
-  bytes: number;
+  kind: "update" | "download" | "rejected";
+}
+
+/** A name in the updates folder this code wrote; null for anything else, which is left alone. */
+function entryOf(name: string): Entry | null {
+  const kind = name.endsWith(STAGING)
+    ? "download"
+    : name.endsWith(REJECTED)
+      ? "rejected"
+      : "update";
+  const suffix = kind === "download" ? STAGING : kind === "rejected" ? REJECTED : "";
+  const revision = name.slice(0, name.length - suffix.length);
+  return REVISION.test(revision) ? { name, revision, kind } : null;
+}
+
+/** What an entry records of its revision: the record in its folder, or the marker itself. */
+function recordOf(root: string, entry: Entry): Promise<CanopyModelRevision | null> {
+  if (entry.kind === "rejected") return readRecord(root, entry.revision, entry.name);
+  const file = entry.kind === "download" ? PENDING : INSTALL;
+  return readRecord(path.join(root, entry.name), entry.revision, file);
+}
+
+/** Whether `root` or the folder holding it is missing or reached through a link: not ours to empty either way. */
+async function notOwnFolder(root: string): Promise<boolean> {
+  for (const folder of [path.dirname(root), root]) {
+    const link = await lstat(folder).then(
+      (s) => s.isSymbolicLink(),
+      () => null
+    );
+    if (link !== false) return true;
+  }
+  return false;
+}
+
+/** One update folder gone; one that can't go yet (Windows) goes on a later launch. */
+async function removeUpdate(root: string, name: string): Promise<void> {
+  await removeDir(path.join(root, name)).catch((error: unknown) =>
+    console.warn(`[Canopy] Couldn't delete the model update ${name}:`, error)
+  );
+}
+
+/** Every file of `revision` in `dir` matches its pin, and its config is one this build reads. */
+async function usable(dir: string, revision: CanopyModelRevision): Promise<boolean> {
+  if ((await mismatched(dir, revision.files)).length > 0) return false;
+  try {
+    return isReaderMeta(JSON.parse(await readFile(path.join(dir, "config.json"), "utf8")));
+  } catch {
+    return false;
+  }
+}
+
+/** Where a 206's body starts in the file, from its `Content-Range`; null when it doesn't say. */
+function rangeFrom(response: Response): number | null {
+  const match = /^bytes (\d+)-\d+\/(?:\d+|\*)$/.exec(response.headers.get("content-range") ?? "");
+  return match ? Number(match[1]) : null;
+}
+
+/** The copy Canopy reads with. */
+interface InUse {
+  revision: CanopyModelRevision;
+  dir: string;
+  source: "bundled" | "update";
 }
 
 interface Download {
+  revision: string;
   received: number;
   total: number;
-  abort: AbortController;
 }
 
-/** One `ensure`, registered before its first await so it can be cancelled from the start. */
+/** One look for an update, registered before its first await so it can be cancelled from the start. */
 interface Operation {
   abort: AbortController;
   done: Promise<void>;
 }
 
-export class CanopyModels {
+/**
+ * A fetched revision didn't run here, whatever its hashes say. Each counts
+ * against it on this build (`lasting` uses every try at once); what was
+ * fetched stays for the next launch's try until the tries run out.
+ */
+class FailedRun extends Error {
+  constructor(
+    message: string,
+    readonly lasting: boolean,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+  }
+}
+
+export interface CanopyModelsOptions {
   /**
-   * The newest revision Hugging Face publishes, when this build reads it; null
-   * before it has said, or when it can't be read here.
+   * Where updates fetched from Hugging Face live, one folder per revision;
+   * null never looks for one. Not `<userData>/canopy/models`, which
+   * `removeDownloadedModels` empties on every launch.
    */
-  private latest: Variant | null = null;
-  /** Hugging Face is asked for the newest revision once a launch, and again only after a failure. */
-  private checked = false;
+  updates?: string | null;
+  /** The revision the app ships in its folder, and its files' pins. */
+  shipped?: CanopyModelRevision;
+  /**
+   * Runs a fetched revision before it is read with, from its folder, and
+   * stops once `signal` aborts. A revision it throws for is never put in
+   * place; after `MAX_FAILED_RUNS` on this build, it isn't fetched again.
+   */
+  trial?: (dir: string, signal: AbortSignal) => Promise<void>;
+  /** Names this build: a revision that failed to run here may run on another. */
+  build?: string;
+}
+
+export class CanopyModels {
+  private local: Promise<void> | null = null;
+  /** The copy read with: undefined until checked, null when none checks out. */
+  private inUse: InUse | null | undefined;
+  /**
+   * The newest revision the Hub named this launch when this build reads it,
+   * else null; undefined until the Hub has answered.
+   */
+  private newest: CanopyModelRevision | null | undefined;
   private download: Download | null = null;
   private operation: Operation | null = null;
-  private failure: string | null = null;
   private lastProgressAt = 0;
-  private installed: Installed | null = null;
-  /** An update is being moved into place: the folder is not there to read from meanwhile. */
-  private replacing = false;
-  private scanned: Promise<void> | null = null;
-  /** A deletion under way: nothing is downloaded until it is done. */
-  private removing: Promise<void> | null = null;
+  private disposed = false;
+  private readonly updates: string | null;
+  private readonly shipped: CanopyModelRevision;
+  private readonly trial: ((dir: string, signal: AbortSignal) => Promise<void>) | null;
+  private readonly build: string | null;
 
   constructor(
-    private readonly root: string,
+    /** The folder the app ships the model in. */
+    private readonly dir: string,
+    /** Told once the check is done, as an update makes progress, and when one is in place. */
     private readonly onChange: () => void,
-    /** Lets go of the installed files before an update replaces them. */
-    private readonly beforeReplace: () => void = () => {},
-    /** An update is in place: what the last revision read is no longer this model's. */
-    private readonly afterReplace: () => void = () => {}
-  ) {}
-
-  private dirOf(id: string): string {
-    return path.join(this.root, id.slice(id.indexOf("/") + 1));
-  }
-
-  /** The folder the ready model is in, or null when it isn't on this machine. */
-  async installedDir(): Promise<string | null> {
-    await this.scan();
-    return this.installed && !this.replacing ? this.dirOf(CANOPY_MODEL) : null;
-  }
-
-  private scan(): Promise<void> {
-    this.scanned ??= this.readInstall();
-    return this.scanned;
-  }
-
-  private async readInstall(): Promise<void> {
-    const dir = this.dirOf(CANOPY_MODEL);
-    // An update stopped between moving the last revision aside and the new
-    // one into place: the last one goes back.
-    const backup = `${dir}.old`;
-    const there = (folder: string) =>
-      stat(path.join(folder, "install.json")).then(
-        () => true,
-        () => false
-      );
-    if (!(await there(dir)) && (await there(backup))) {
-      await removeDir(dir).catch(() => {});
-      await rename(backup, dir).catch(() => {});
-    }
-    try {
-      const raw = JSON.parse(await readFile(path.join(dir, "install.json"), "utf8")) as {
-        id?: unknown;
-        revision?: unknown;
-      };
-      if (raw.id !== CANOPY_MODEL || typeof raw.revision !== "string") return;
-      const names = await readdir(dir);
-      let bytes = 0;
-      for (const name of names) bytes += (await stat(path.join(dir, name))).size;
-      this.installed = { revision: raw.revision, bytes };
-    } catch {
-      // Not installed, or a half-written install that is not one.
-    }
-  }
-
-  /** The model as Settings shows it: what a download fetches, or what is here. */
-  async info(): Promise<CanopyModelInfo> {
-    await this.scan();
-    return {
-      id: CANOPY_MODEL,
-      name: canopyModelName(CANOPY_MODEL),
-      bytes: this.installed?.bytes ?? totalBytes(this.latest ?? BUNDLED),
-      installed: this.installed !== null,
-    };
-  }
-
-  /** Where the model stands. An update on its way leaves it ready: the installed one reads meanwhile. */
-  state(): CanopyModelState {
-    const id = CANOPY_MODEL;
-    if (this.installed) return { id, status: "ready" };
-    const download = this.download;
-    if (download) {
-      return { id, status: "downloading", received: download.received, total: download.total };
-    }
-    if (this.failure !== null) return { id, status: "failed", error: this.failure };
-    return { id, status: "missing" };
+    options: CanopyModelsOptions = {}
+  ) {
+    this.updates = options.updates ?? null;
+    this.shipped = options.shipped ?? SHIPPED;
+    this.trial = options.trial ?? null;
+    this.build = options.build ?? null;
   }
 
   /**
-   * Gets the model here, or the newest revision of it this build reads, unless
-   * it is or is on its way. Resolves once it is ready, failed or cancelled.
+   * Checks the copy to read with, once a launch, then, when updates are on,
+   * looks for a newer revision and fetches it while that copy reads. Resolves
+   * once both are done; an update that fails is logged and tried again on the
+   * next call, never reported.
    */
   ensure(): Promise<void> {
+    const local = this.checkLocal();
+    if (this.updates === null || this.disposed) return local;
     const current = this.operation;
     if (current && !current.abort.signal.aborted) return current.done;
     const abort = new AbortController();
-    const operation: Operation = { abort, done: this.run(abort.signal, current?.done ?? null) };
+    // One stopped a moment ago may still be writing: this one starts once it has let go.
+    const operation: Operation = {
+      abort,
+      done: this.update(local, abort.signal, current?.done ?? null),
+    };
     this.operation = operation;
-    void operation.done.finally(() => {
+    const settle = () => {
       if (this.operation === operation) this.operation = null;
-    });
+    };
+    operation.done.then(settle, settle);
     return operation.done;
   }
 
-  /** Asks Hugging Face, once, for the newest revision; offline keeps the one known. */
-  private async check(signal: AbortSignal): Promise<void> {
-    if (this.checked) return;
-    try {
-      this.latest = await fetchLatest(
-        AbortSignal.any([signal, AbortSignal.timeout(REVISION_TIMEOUT_MS)])
-      );
-      this.checked = true;
-    } catch {
-      // Offline: asked again on the next `ensure`.
-    }
+  /** Every later call joins or reads the launch's one check: nothing hashes a model twice. */
+  private checkLocal(): Promise<void> {
+    this.local ??= this.pickLocal();
+    return this.local;
   }
 
-  private async run(signal: AbortSignal, before: Promise<void> | null): Promise<void> {
-    await before?.catch(() => {});
-    await this.removing?.catch(() => {});
-    await this.scan();
-    if (signal.aborted) return;
-    await this.check(signal);
-    if (signal.aborted) return;
-    const installed = this.installed;
-    // An install is only ever replaced by the newest revision Hugging Face
-    // named and this build reads: offline, or with a newest one it can't
-    // read, whatever is here stands, never downgraded to the bundled one.
-    if (installed && (this.latest === null || this.latest.revision === installed.revision)) {
-      return;
+  /** The newest update here that checks out, else the shipped copy when it does. */
+  private async pickLocal(): Promise<void> {
+    let picked = this.updates === null ? null : await this.pickUpdate(this.updates);
+    if (picked === null) {
+      const bad = await mismatched(this.dir, this.shipped.files);
+      if (bad.length > 0) {
+        console.error(`[Canopy] Model at ${this.dir} fails its check: ${bad.join(", ")}`);
+      } else {
+        picked = { revision: this.shipped, dir: this.dir, source: "bundled" };
+      }
     }
-    const variant = installed ? this.latest! : (this.latest ?? BUNDLED);
+    this.inUse = picked;
+    this.tell();
+  }
+
+  /**
+   * The newest update in `root` that is newer than the shipped copy, matches
+   * its hashes, and that this build reads. Every other one goes: one the
+   * shipped copy has caught up with after an app update, one a newer update
+   * replaced, one that no longer matches. A download stopped part way stays
+   * for the next try when it says what it was fetching.
+   */
+  private async pickUpdate(root: string): Promise<InUse | null> {
+    await removeStaleUpdates(root, undefined, this.shipped);
+    const names = await readdir(root).catch(() => [] as string[]);
+    const found: CanopyModelRevision[] = [];
+    for (const name of names) {
+      const entry = entryOf(name);
+      if (entry === null || entry.kind === "rejected") continue;
+      const record = await recordOf(root, entry);
+      if (entry.kind === "download") {
+        // Nothing writes it before this check is done: no record means it never got started.
+        if (record === null) await this.discard(name);
+      } else if (record !== null && newer(record, this.shipped)) {
+        // Older than the shipped copy is never read, whether or not the sweep could delete it.
+        found.push(record);
+      } else {
+        await this.discard(name);
+      }
+    }
+    found.sort((a, b) => b.published - a.published);
+    let picked: InUse | null = null;
+    for (const revision of found) {
+      const dir = path.join(root, revision.revision);
+      if (picked === null && (await usable(dir, revision))) {
+        picked = { revision, dir, source: "update" };
+        continue;
+      }
+      if (picked === null)
+        console.warn(`[Canopy] Model update ${revision.revision} fails its check`);
+      await this.discard(revision.revision);
+    }
+    return picked;
+  }
+
+  private async update(
+    local: Promise<void>,
+    signal: AbortSignal,
+    before: Promise<void> | null
+  ): Promise<void> {
+    await before?.catch(() => {});
+    await local;
+    if (signal.aborted) return;
+    if (this.newest === undefined) {
+      try {
+        const timed = AbortSignal.any([signal, AbortSignal.timeout(CHECK_TIMEOUT_MS)]);
+        const newest = await fetchNewest(timed);
+        this.newest =
+          newest &&
+          newer(newest, this.floor()) &&
+          !(await this.wasRejected(newest.revision)) &&
+          (await readable(newest.revision, timed))
+            ? newest
+            : null;
+      } catch (error) {
+        // Offline, or the Hub didn't answer: asked again on the next `ensure`.
+        if (!signal.aborted) {
+          console.warn("[Canopy] Couldn't look for a model update:", formatErrorMessage(error, ""));
+        }
+        return;
+      }
+      await this.discardStaging(this.newest?.revision ?? null);
+    }
+    const target = this.newest;
+    if (target === null || signal.aborted || !newer(target, this.floor())) return;
     const download: Download = {
+      revision: target.revision,
       received: 0,
-      total: totalBytes(variant),
-      abort: new AbortController(),
+      total: totalBytes(target),
     };
-    signal.addEventListener("abort", () => download.abort.abort(), { once: true });
     this.download = download;
-    this.failure = null;
-    this.onChange();
+    this.tell();
     try {
-      await this.fetchInto(variant, download);
-      this.installed = { revision: variant.revision, bytes: totalBytes(variant) };
-      if (installed) this.afterReplace();
+      const dir = await this.fetchInto(target, download, signal);
+      // Stopped or let go while it was moved into place: the next launch finds it there.
+      if (signal.aborted || this.disposed) return;
+      const previous = this.inUse;
+      this.inUse = { revision: target, dir, source: "update" };
+      this.download = null;
+      this.tell();
+      if (previous?.source === "update") await this.discard(previous.revision.revision);
     } catch (error) {
-      if (!download.abort.signal.aborted) {
-        const message = formatErrorMessage(error, "The download failed.");
-        // An update that failed leaves the installed model reading; it is tried on the next launch.
-        if (this.installed) console.warn("[Canopy] Model update failed:", message);
-        else this.failure = message;
+      if (error instanceof FailedRun) {
+        console.warn(`[Canopy] Model update ${target.revision} didn't run here:`, error.message);
+        await this.failedRun(target, error.lasting);
+      } else if (!signal.aborted) {
+        // The copy in use reads on; what was fetched is kept for the next try.
+        console.warn("[Canopy] Model update failed:", formatErrorMessage(error, ""));
       }
     } finally {
-      if (this.download === download) this.download = null;
-      this.onChange();
+      if (this.download === download) {
+        this.download = null;
+        this.tell();
+      }
     }
   }
 
-  /** Stops a download under way; what it fetched so far is kept for the next try. */
-  cancel(): void {
-    this.operation?.abort.abort();
+  /** The revision an update has to be newer than: the copy in use, never older than the shipped one. */
+  private floor(): CanopyModelRevision {
+    const inUse = this.inUse?.revision;
+    return inUse && inUse.published > this.shipped.published ? inUse : this.shipped;
   }
 
   /**
-   * Deletes every model folder on this machine, half-finished downloads
-   * included, but the one in use when `keepCurrent`: the models an earlier
-   * Daintree could choose from go with it.
+   * Every file into `<revision>.download`, each checked against the hash the
+   * Hub publishes, then the folder renamed to `<revision>`: an update is either
+   * all there and checked, or not an update. A file fetched part way is picked
+   * up where it stopped on the next try.
    */
-  async remove(keepCurrent: boolean): Promise<void> {
-    const before = this.removing;
-    // The download under way now, not one started later: that one waits for
-    // this removal, and waiting on it here would wait forever.
-    const running = this.operation;
-    const removal = (async () => {
-      await before?.catch(() => {});
-      await this.removeNow(keepCurrent, running);
-    })();
-    this.removing = removal;
-    try {
-      await removal;
-    } finally {
-      if (this.removing === removal) this.removing = null;
-    }
-  }
-
-  private async removeNow(keepCurrent: boolean, running: Operation | null): Promise<void> {
-    if (running && !keepCurrent) {
-      running.abort.abort();
-      await running.done.catch(() => {});
-    }
-    await this.scan();
-    const kept = path.basename(this.dirOf(CANOPY_MODEL));
-    if (!keepCurrent) this.installed = null;
-    const names = await readdir(this.root).catch(() => [] as string[]);
-    for (const name of names) {
-      const base = name.replace(/\.(download|old)$/, "");
-      if (!isCanopyModelId(`${CANOPY_MODEL_AUTHOR}/${base}`)) continue;
-      if (keepCurrent && base === kept) continue;
-      await removeDir(path.join(this.root, name));
-    }
-    this.onChange();
-  }
-
-  private progress(download: Download, bytes: number): void {
-    download.received += bytes;
-    const now = Date.now();
-    if (now - this.lastProgressAt < PROGRESS_INTERVAL_MS) return;
-    this.lastProgressAt = now;
-    this.onChange();
-  }
-
-  /**
-   * Every file into a staging folder beside the install, each checked against
-   * the hash Hugging Face publishes, then the folder renamed into place: a
-   * model is either all there and checked, or not there.
-   */
-  private async fetchInto(variant: Variant, download: Download): Promise<void> {
-    const dir = this.dirOf(CANOPY_MODEL);
-    const staging = `${dir}.download`;
+  private async fetchInto(
+    target: CanopyModelRevision,
+    download: Download,
+    signal: AbortSignal
+  ): Promise<string> {
+    const root = this.updates!;
+    const dir = path.join(root, target.revision);
+    const staging = `${dir}${STAGING}`;
     await mkdir(staging, { recursive: true });
-    const signal = download.abort.signal;
-    for (const file of variant.files) {
-      const target = path.join(staging, file.name);
-      const part = `${target}.${variant.revision.slice(0, 12)}.part`;
+    const record = JSON.stringify({
+      id: CANOPY_MODEL,
+      revision: target.revision,
+      published: target.published,
+      files: target.files,
+    });
+    await writeFile(path.join(staging, PENDING), record, "utf8");
+    for (const file of target.files) {
+      const into = path.join(staging, file.name);
+      const part = `${into}.part`;
       // `config.json` is asked for on every download, never taken from an
       // earlier one: it is what Hugging Face counts a download by.
-      if (file.name !== "config.json" && (await this.verified(target, file))) {
+      if (file.name !== "config.json" && (await matches(into, file).catch(() => false))) {
         this.progress(download, file.size);
         continue;
       }
@@ -398,20 +588,38 @@ export class CanopyModels {
         await rm(part, { force: true });
         have = 0;
       }
-      const url = `${HF}/${CANOPY_MODEL}/resolve/${variant.revision}/${file.name}`;
-      const response = await fetch(url, {
-        headers: { "User-Agent": USER_AGENT, ...(have > 0 ? { Range: `bytes=${have}-` } : {}) },
-        signal,
-      });
+      const timed = AbortSignal.any([signal, AbortSignal.timeout(FILE_TIMEOUT_MS)]);
+      const response = await fetch(
+        `${HF}/${CANOPY_MODEL}/resolve/${target.revision}/${file.name}`,
+        {
+          headers: { "User-Agent": USER_AGENT, ...(have > 0 ? { Range: `bytes=${have}-` } : {}) },
+          signal: timed,
+        }
+      );
       let append = false;
-      if (response.status === 206 && have > 0) append = true;
+      if (response.status === 206 && have > 0 && rangeFrom(response) === have) append = true;
       else if (response.status === 416 && have === file.size) append = true;
-      else if (!response.ok) throw new Error(`Download failed (HTTP ${response.status})`);
+      else if (response.status === 206 || response.status === 416) {
+        // Not the rest of what is here: the next try starts the file again.
+        await response.body?.cancel();
+        await rm(part, { force: true });
+        throw new Error(`Download failed (HTTP ${response.status})`);
+      } else if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`Download failed (HTTP ${response.status})`);
+      }
       if (append) this.progress(download, have);
       if (response.status !== 416) {
         if (!response.body) throw new Error("Download failed (no data)");
+        let size = append ? have : 0;
         const count = new Transform({
           transform: (chunk: Buffer, _encoding, done) => {
+            size += chunk.length;
+            // Never a byte past what the Hub published: the file is wrong already.
+            if (size > file.size) {
+              done(new Error(`${file.name} is larger than Hugging Face published`));
+              return;
+            }
             this.progress(download, chunk.length);
             done(null, chunk);
           },
@@ -420,63 +628,228 @@ export class CanopyModels {
           Readable.fromWeb(response.body as import("node:stream/web").ReadableStream),
           count,
           createWriteStream(part, { flags: append ? "a" : "w" }),
-          { signal }
+          { signal: timed }
         );
+      } else {
+        await response.body?.cancel();
       }
-      if (!(await this.verified(part, file))) {
+      if (!(await matches(part, file).catch(() => false))) {
         await rm(part, { force: true });
-        throw new Error("The download didn't match what Hugging Face published. Try again.");
+        throw new Error(`${file.name} doesn't match what Hugging Face published`);
       }
-      if (signal.aborted) throw new Error("cancelled");
-      await rename(part, target);
+      await rename(part, into);
     }
-    // Stopped while the last file was checked: nothing is installed.
+    // The reader.json the Hub served said this build reads it; the config.json
+    // the reader opens has to say so too.
+    const meta: unknown = JSON.parse(await readFile(path.join(staging, "config.json"), "utf8"));
+    if (!isReaderMeta(meta))
+      throw new FailedRun("its config.json is not one this build reads", true);
     if (signal.aborted) throw new Error("cancelled");
-    await writeFile(
-      path.join(staging, "install.json"),
-      JSON.stringify({ id: CANOPY_MODEL, revision: variant.revision, weights: "int8" }),
-      "utf8"
-    );
-    // An update: the reader lets go of the old files first, and nothing new
-    // opens them until the new ones are in their place. The last revision is
-    // moved aside, not deleted, until the new one is: a move that fails puts
-    // it back, and a launch after one cut short finds it again.
-    const backup = `${dir}.old`;
-    this.replacing = true;
-    try {
-      if (this.installed) this.beforeReplace();
-      await removeDir(backup);
-      const hadOld = await rename(dir, backup).then(
-        () => true,
-        (error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return false;
-          throw error;
-        }
-      );
+    // Run where it was fetched, before anything reads with it: one stopped
+    // here is tried again, never put in place untried.
+    if (this.trial) {
       try {
-        await rename(staging, dir);
+        await this.trial(staging, signal);
       } catch (error) {
-        if (hadOld) {
-          await rename(backup, dir).catch(() => {
-            this.installed = null;
-          });
-        }
-        throw error;
+        if (signal.aborted) throw new Error("cancelled", { cause: error });
+        throw new FailedRun(formatErrorMessage(error, "it didn't run"), false, { cause: error });
       }
-      await removeDir(backup).catch(() => {});
-    } finally {
-      this.replacing = false;
+    }
+    if (signal.aborted) throw new Error("cancelled");
+    // The record goes last: until it is there, the folder is not an update.
+    await rename(path.join(staging, PENDING), path.join(staging, INSTALL));
+    // A folder of that name with no record in it is a move cut short: never the copy in use.
+    await removeDir(dir);
+    await rename(staging, dir);
+    return dir;
+  }
+
+  private progress(download: Download, bytes: number): void {
+    download.received += bytes;
+    const now = Date.now();
+    if (now - this.lastProgressAt < PROGRESS_INTERVAL_MS) return;
+    this.lastProgressAt = now;
+    this.tell();
+  }
+
+  /** Runs of `revision` that failed on this build; another build starts again from none. */
+  private async failedRuns(revision: string): Promise<number> {
+    try {
+      const raw = JSON.parse(
+        await readFile(path.join(this.updates!, `${revision}${REJECTED}`), "utf8")
+      ) as { build?: unknown; failures?: unknown };
+      if ((raw.build ?? null) !== this.build) return 0;
+      return typeof raw.failures === "number" && Number.isFinite(raw.failures) ? raw.failures : 0;
+    } catch {
+      return 0;
     }
   }
 
-  private async verified(file: string, spec: FileSpec): Promise<boolean> {
-    const size = await stat(file).then(
-      (s) => s.size,
-      () => -1
+  /** This build has run out of tries for `revision`: it isn't fetched again. */
+  private async wasRejected(revision: string): Promise<boolean> {
+    return (await this.failedRuns(revision)) >= MAX_FAILED_RUNS;
+  }
+
+  /**
+   * Counts a failed run of `target` against this build, and tries it again on
+   * the next launch from what was fetched, until the tries run out: then its
+   * files go. The record stays, so the sweep deletes it once the shipped copy
+   * has caught up.
+   */
+  private async failedRun(target: CanopyModelRevision, lasting: boolean): Promise<void> {
+    // Not again this launch, whatever else asks.
+    this.newest = null;
+    const root = this.updates!;
+    const failures = lasting ? MAX_FAILED_RUNS : (await this.failedRuns(target.revision)) + 1;
+    const record = JSON.stringify({
+      id: CANOPY_MODEL,
+      revision: target.revision,
+      published: target.published,
+      files: target.files,
+      build: this.build,
+      failures,
+    });
+    await writeFile(path.join(root, `${target.revision}${REJECTED}`), record, "utf8").catch(
+      (error: unknown) => console.warn("[Canopy] Couldn't note a model update that failed:", error)
     );
-    if (size !== spec.size) return false;
-    if (spec.sha256) return (await sha256File(file)) === spec.sha256;
-    if (spec.blobId) return gitBlobId(await readFile(file)) === spec.blobId;
-    return false;
+    if (failures >= MAX_FAILED_RUNS) await this.discard(`${target.revision}${STAGING}`);
+  }
+
+  /** Partly fetched revisions other than `keep`: the Hub has moved on from them. */
+  private async discardStaging(keep: string | null): Promise<void> {
+    const names = await readdir(this.updates!).catch(() => [] as string[]);
+    for (const name of names) {
+      if (!name.endsWith(STAGING)) continue;
+      const base = name.slice(0, -STAGING.length);
+      if (REVISION.test(base) && base !== keep) await this.discard(name);
+    }
+  }
+
+  private async discard(name: string): Promise<void> {
+    await removeUpdate(this.updates!, name);
+  }
+
+  private tell(): void {
+    if (!this.disposed) this.onChange();
+  }
+
+  /** The folder to read the model from once it checks out; null while checking, or when nothing did. */
+  async installedDir(): Promise<string | null> {
+    await this.checkLocal();
+    return this.inUse?.dir ?? null;
+  }
+
+  /** The folder read with now, without waiting: null until checked, or when nothing checks out. */
+  currentDir(): string | null {
+    return this.inUse?.dir ?? null;
+  }
+
+  /** The model as Settings shows it. */
+  async info(): Promise<CanopyModelInfo> {
+    await this.checkLocal();
+    return {
+      id: CANOPY_MODEL,
+      name: canopyModelName(CANOPY_MODEL),
+      bytes: totalBytes(this.inUse?.revision ?? this.shipped),
+      installed: this.inUse != null,
+    };
+  }
+
+  /** Where the model stands: nothing to say until the check is done. An update on its way leaves it ready. */
+  state(): CanopyModelState | undefined {
+    const inUse = this.inUse;
+    if (inUse === undefined) return undefined;
+    if (inUse === null) return { id: CANOPY_MODEL, status: "failed", error: DAMAGED };
+    const download = this.download;
+    return {
+      id: CANOPY_MODEL,
+      status: "ready",
+      revision: inUse.revision.revision,
+      source: inUse.source,
+      ...(download
+        ? {
+            update: {
+              revision: download.revision,
+              received: Math.min(download.received, download.total),
+              total: download.total,
+            },
+          }
+        : {}),
+    };
+  }
+
+  /** Stops an update under way; what it fetched so far is kept for the next try. */
+  cancel(): void {
+    this.operation?.abort.abort();
+  }
+
+  /** A check or update finishing after this tells no one. */
+  dispose(): void {
+    this.disposed = true;
+    this.cancel();
+  }
+}
+
+/**
+ * Deletes what earlier versions of Daintree downloaded into `root`
+ * (`<userData>/canopy/models`): every reader model folder, with its
+ * half-finished `.download` and set-aside `.old` copies, then `root` itself
+ * once nothing else is in it. Updates fetched since the model shipped with
+ * Daintree (#16416) live elsewhere, in `<userData>/canopy/reader-updates`.
+ *
+ * A `root` reached through a link is left alone: it may be a folder another
+ * profile or build shares. One folder that can't go yet (Windows holds files
+ * open until the process reading them exits) doesn't stop the rest; it goes
+ * on a later launch. Stops between folders once `signal` aborts.
+ */
+export async function removeDownloadedModels(root: string, signal?: AbortSignal): Promise<void> {
+  if (await notOwnFolder(root)) return;
+  const names = await readdir(root).catch(() => null);
+  if (names === null) return;
+  for (const name of names) {
+    if (signal?.aborted) return;
+    const base = name.replace(/\.(download|old)$/, "");
+    if (!isCanopyModelId(`${CANOPY_MODEL_AUTHOR}/${base}`)) continue;
+    await rm(path.join(root, name), {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 300,
+    }).catch((error: unknown) =>
+      console.warn(`[Canopy] Couldn't delete the downloaded model ${name}:`, error)
+    );
+  }
+  await rmdir(root).catch(() => {});
+}
+
+/**
+ * Deletes every update in `root` (`<userData>/canopy/reader-updates`) the
+ * shipped copy has caught up with, as after an app update that ships a newer
+ * revision: finished, part way, or noted as one this build couldn't run,
+ * along with any finished one whose record can't be read. Only records are read, nothing is hashed or fetched, so it
+ * runs whatever Canopy's mode. A download with no record yet is left alone:
+ * it may be being written.
+ *
+ * A `root` reached through a link is left alone, as `removeDownloadedModels`
+ * leaves one. Stops between folders once `signal` aborts.
+ */
+export async function removeStaleUpdates(
+  root: string,
+  signal?: AbortSignal,
+  shipped: CanopyModelRevision = SHIPPED
+): Promise<void> {
+  if (await notOwnFolder(root)) return;
+  const names = await readdir(root).catch(() => null);
+  if (names === null) return;
+  for (const name of names) {
+    if (signal?.aborted) return;
+    const entry = entryOf(name);
+    if (entry === null) continue;
+    const record = await recordOf(root, entry);
+    const stale =
+      record !== null
+        ? !newer(record, shipped)
+        : entry.kind !== "download" || entry.revision === shipped.revision;
+    if (stale) await removeUpdate(root, name);
   }
 }

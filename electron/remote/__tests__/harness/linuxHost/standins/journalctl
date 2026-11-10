@@ -1,0 +1,3 @@
+#!/bin/sh
+# What the stand-in systemctl's service printed, for setup's error reporting.
+tail -n 200 "/run/user/$(id -u)/standin-systemd/journal.log" 2>/dev/null

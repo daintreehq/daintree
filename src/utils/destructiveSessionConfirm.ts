@@ -64,7 +64,7 @@ export function buildDestructivePreview(
   resolveWorktreeTitle: (
     worktreeId: string | undefined
   ) => string | undefined = resolveWorktreeDisplayName,
-  fallbackWorktreeTitle = "Other terminals"
+  fallbackWorktreeTitle = "Other panels"
 ): DestructivePreviewGroup[] {
   const groups = new Map<string, DestructivePreviewGroup>();
   for (const terminal of terminals) {

@@ -1080,6 +1080,46 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
     );
   });
 
+  it("workflow.startWorkOnIssue: a provider's issue reaches the recipe by its key and title (#16381)", async () => {
+    forgeClientMock.getIssue.mockResolvedValue({
+      number: 42,
+      title: "Fix the login race",
+      url: "https://linear.app/acme/issue/ENG-42",
+      providerId: "linear",
+      id: "issue-uuid",
+      key: "ENG-42",
+    });
+    const startAttachIssue = vi.fn();
+    const state = currentViewStoreMock.getCurrentViewStore().getState();
+    currentViewStoreMock.getCurrentViewStore.mockReturnValue({
+      getState: () => ({ ...state, startAttachIssue }),
+    });
+    const runRecipeWithResults = setRecipe("recipe-1");
+    const service = registerThroughActionService(makeCallbacks());
+
+    const result = await service.dispatch(
+      "workflow.startWorkOnIssue" as ActionId,
+      { issueNumber: 42, agentId: "claude", recipeId: "recipe-1" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(startAttachIssue).toHaveBeenCalledWith(
+      expect.objectContaining({ issueProviderId: "linear", issueKey: "ENG-42" })
+    );
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
+      "recipe-1",
+      expect.any(String),
+      "wt-new",
+      expect.objectContaining({
+        issueNumber: 42,
+        issueKey: "ENG-42",
+        issueTitle: "Fix the login race",
+      }),
+      expect.any(Object)
+    );
+  });
+
   it("workflow.startWorkOnIssue: a bare approval carries no recipe scope, a host one does (#12263)", async () => {
     // End-to-end through the real ActionService, which is where the stamp
     // lives. `confirmed: true` alone is a standing grant — no dialog, nobody

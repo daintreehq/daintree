@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildLaunchMcpInjection,
+  LAUNCH_MCP_ENV_ONLY_FORMATS,
+  LAUNCH_MCP_FORMATS,
+} from "../../../../shared/config/launchMcp.js";
+import {
   LAUNCH_MCP_FILE_PLACEHOLDER,
   renderLaunchMcp,
   type LaunchMcpServer,
@@ -20,6 +25,11 @@ const LEDGER: LaunchMcpServer = {
 };
 
 describe("renderLaunchMcp", () => {
+  it.each(LAUNCH_MCP_FORMATS)("classifies %s by whether it adds flags to the command", (format) => {
+    const rendered = renderLaunchMcp(buildLaunchMcpInjection(format), [DAINTREE, LEDGER]);
+    expect(rendered.args.length === 0).toBe(LAUNCH_MCP_ENV_ONLY_FORMATS.has(format));
+  });
+
   it("writes Claude a --mcp-config file, SSE for the orchestration server and HTTP for plugins", () => {
     const rendered = renderLaunchMcp({ format: "claude-mcp-config" }, [DAINTREE, LEDGER]);
 

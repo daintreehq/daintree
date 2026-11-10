@@ -957,6 +957,12 @@ describe("McpServerService", () => {
         description: "Read worktree state",
         kind: "query",
       }),
+      // On the full tool set alone (#16335), for the same reason as the next.
+      createManifestEntry({
+        id: "canopy.openWindow" as ActionId,
+        title: "Open Canopy window",
+        description: "Open Canopy's own window",
+      }),
       // On the full tool set, and externally (#12340). The fixture has to
       // carry it or the subset assertions below read its absence from this
       // manifest as an absence from the allowlist.
@@ -1409,6 +1415,11 @@ describe("McpServerService", () => {
       // set now, which the off-MCP loop below pins. The coverage loops iterate
       // the live allowlists, so an id tiered without an entry here fails as a
       // missing tool rather than as the fixture gap it actually is.
+      createManifestEntry({
+        id: "agent.resumeOwned" as ActionId,
+        title: "Resume agent session as an owned pane",
+        description: "Reopen a closed session as a new pane the caller owns",
+      }),
       createManifestEntry({
         id: "agentSessionHistory.resume" as ActionId,
         title: "Resume Agent Session",

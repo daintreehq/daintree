@@ -511,6 +511,8 @@ function setup() {
     on: vi.fn((event: string, listener: Listener) => listeners.set(event, listener)),
     removeListener: vi.fn(),
     setWindowOpenHandler: vi.fn(),
+    setIgnoreMenuShortcuts: vi.fn(),
+    send: vi.fn(),
   };
   const host = {
     win: { isDestroyed: () => true },
@@ -527,7 +529,7 @@ function setup() {
     listeners.get("will-attach-webview")!({ preventDefault }, webPreferences, params);
     return { refused: preventDefault.mock.calls.length > 0, webPreferences };
   };
-  return { fire, attach };
+  return { fire, attach, listeners, wc, entry };
 }
 
 describe("ProjectViewHandlers webview attach (#15793)", () => {
@@ -643,5 +645,27 @@ describe("ProjectViewHandlers render-process-gone recording (#12884)", () => {
 
     expect(loggerMock.logError).not.toHaveBeenCalled();
     expect(loggerMock.logWarn).not.toHaveBeenCalled();
+  });
+});
+
+describe("ProjectViewHandlers key gate (#16618)", () => {
+  const realPlatform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+  });
+
+  it("hands Cmd+W to the view's renderer, and drops the gate with the view", () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const { listeners, wc, entry } = setup();
+    const gate = listeners.get("before-input-event")!;
+    const key = { type: "keyDown", key: "w", code: "KeyW", alt: false, meta: false, shift: false };
+
+    gate({ preventDefault: vi.fn() }, { ...key, control: true });
+    expect(wc.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(true);
+    gate({ preventDefault: vi.fn() }, { ...key, type: "keyUp", control: true });
+    expect(wc.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(false);
+
+    entry.cleanupHandlers();
+    expect(wc.removeListener).toHaveBeenCalledWith("before-input-event", gate);
   });
 });

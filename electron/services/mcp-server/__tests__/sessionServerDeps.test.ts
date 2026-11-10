@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { webContentsById } = vi.hoisted(() => ({
   webContentsById: new Map<number, { isDestroyed: () => boolean }>(),
@@ -13,6 +13,7 @@ import {
   type SessionServerDepsHost,
   type SessionServerDepsSource,
 } from "../sessionServerDeps.js";
+import { setMcpDriveTargetResolver, type McpDriveTarget } from "../driveTarget.js";
 import { SessionBindingError } from "../rendererBridge.js";
 import { helpNotifyKey } from "../terminalNotify.js";
 import type { AssistantControlBinding, McpSessionOrigin } from "../shared.js";
@@ -76,6 +77,92 @@ function registryShowing(webContentsId: number, workspaceId: string): WindowRegi
         : undefined,
   } as unknown as WindowRegistry;
 }
+
+describe("a session in a view reopening a saved session (#16341)", () => {
+  let restore: (() => void) | undefined;
+
+  afterEach(() => {
+    restore?.();
+    restore = undefined;
+  });
+
+  function inView() {
+    const deps = fakeSource();
+    deps.handleAgentResumeOwned = vi.fn();
+    deps.sessionStore.sessionWebContentsMap.set("s", 7);
+    webContentsById.set(7, { isDestroyed: () => false });
+    const { state, host } = mutableHost();
+    state.registry = registryShowing(7, WS_A);
+    return { deps, sessionDeps: createSessionServerDeps(deps, host, { sessionId: "s" }) };
+  }
+
+  /** The lease's answer for the view's project; every other project is vacant. */
+  const driven = (target: McpDriveTarget, projectId = WS_A) => {
+    restore = setMcpDriveTargetResolver((asked) =>
+      asked === projectId ? target : { state: "vacant" }
+    );
+  };
+
+  it("runs while routing is off, a view here drives, or nobody does", () => {
+    const { sessionDeps } = inView();
+    expect(sessionDeps.refuseViewWrite?.(undefined)).toBeNull();
+
+    driven({ state: "vacant" });
+    expect(sessionDeps.refuseViewWrite?.(undefined)).toBeNull();
+
+    driven({ state: "live", endpoint: { kind: "local-view", isClosed: () => false } as never });
+    expect(sessionDeps.refuseViewWrite?.(undefined)).toBeNull();
+  });
+
+  it("refuses behind another machine's drive, naming it", () => {
+    const { sessionDeps } = inView();
+    driven({
+      state: "live",
+      endpoint: { kind: "remote-view", linkSessionId: "link-1", isClosed: () => false } as never,
+      holderName: "studio-02",
+    });
+
+    const refusal = sessionDeps.refuseViewWrite?.(undefined);
+
+    expect(refusal?.code).toBe("DRIVEN_ELSEWHERE");
+    expect(refusal?.message).toContain("studio-02");
+  });
+
+  it("asks about the project it is named, once the view that showed it has gone", () => {
+    const { deps, sessionDeps } = inView();
+    driven({
+      state: "live",
+      endpoint: { kind: "remote-view", linkSessionId: "link-1", isClosed: () => false } as never,
+      holderName: "studio-02",
+    });
+    deps.sessionStore.sessionWebContentsMap.delete("s");
+
+    expect(sessionDeps.refuseViewWrite?.(undefined)).toBeNull();
+    expect(sessionDeps.refuseViewWrite?.(WS_A)?.code).toBe("DRIVEN_ELSEWHERE");
+  });
+
+  it("refuses while the holder can't be reached", () => {
+    const { sessionDeps } = inView();
+    driven({ state: "unavailable", reason: "reserved" });
+
+    expect(sessionDeps.refuseViewWrite?.(undefined)?.code).toBe("DRIVEN_ELSEWHERE");
+  });
+
+  it("reopens in the project the view shows, asking the caller's own check", async () => {
+    const { deps, sessionDeps } = inView();
+    const { signal } = new AbortController();
+    const authorize = vi.fn();
+
+    await sessionDeps.handleAgentResumeOwned({ sessionId: "x" }, signal, authorize);
+
+    expect(deps.handleAgentResumeOwned).toHaveBeenCalledWith(
+      { sessionId: "x" },
+      WS_A,
+      signal,
+      authorize
+    );
+  });
+});
 
 describe("createSessionServerDeps", () => {
   it("asks the host for a help session's registry, binding and terminal when a call needs them", async () => {
@@ -334,6 +421,27 @@ describe("createSessionServerDeps", () => {
     });
     expect(sessionDeps.globalSteer).toBeUndefined();
     expect(sessionDeps.relay?.global).toBeUndefined();
+  });
+
+  // #16620: any assistant reaching another through `host.call` reads and withdraws what it holds.
+  it.each([
+    ["a project assistant's relay session", { relay: RELAY }, true],
+    [
+      "this machine's project assistant reaching another project",
+      { relay: { ...RELAY, local: true as const } },
+      true,
+    ],
+    ["the global Assistant's relay session", { relay: { ...RELAY, global: true as const } }, true],
+    ["a direct session", {}, false],
+  ])("hands %s the held-send reads as it should", (_label, capture, expected) => {
+    const workerSteerQueue = { status: vi.fn(), cancel: vi.fn() };
+    const deps = fakeSource();
+    (deps as { workerSteerQueue?: unknown }).workerSteerQueue = workerSteerQueue;
+    const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+      sessionId: "s",
+      ...capture,
+    });
+    expect(sessionDeps.workerSteerQueue).toBe(expected ? workerSteerQueue : undefined);
   });
 
   it("names the external client the host reports at dispatch time, not at build", async () => {

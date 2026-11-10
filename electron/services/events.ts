@@ -787,9 +787,13 @@ export type DaintreeEventMap = {
    * A Claude Code pane showed a usage message (#15727): the limit it names,
    * what it says about use and its reset, as parsed fields. The line itself
    * never leaves the pty host. Main records it for `agent.readQuota` and
-   * doesn't re-emit it.
+   * Settings, under the pane's config folder (#16370), and doesn't re-emit it.
    */
-  "agent:claude-usage-observed": ClaudeUsageObservation & { timestamp: number };
+  "agent:claude-usage-observed": ClaudeUsageObservation & {
+    configDir: string | null;
+    shell: string | null;
+    timestamp: number;
+  };
 
   /**
    * A pane printed, complete, the handback marker one of its submissions asked
@@ -1117,7 +1121,8 @@ export type DaintreeEventMap = {
     /**
      * Where the capture came from. Explicit rather than read off a `null`
      * generation, which also means "frozen but unknown"; only `exit` may
-     * write the id back to the saved pane.
+     * write the id back to the saved pane, and a `demotion` only corrects the
+     * id its own run started on (#15994, #16377).
      */
     boundary: import("../../shared/types/pty-host.js").AgentSessionCaptureBoundary;
     record: Omit<

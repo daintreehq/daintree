@@ -74,3 +74,25 @@
 .diff-note[data-stale] {
   border-color: color-mix(in oklab, var(--color-status-warning) 55%, var(--color-border-default));
 }
+
+/* The gutter's keys, shown while a line number has keyboard focus. Hung off the
+   sticky header rather than in its flow, so appearing doesn't move the rows the
+   reader is walking through. */
+.diff-viewer .diff-note-keys {
+  position: absolute;
+  top: 100%;
+  right: 0.75rem;
+  margin-top: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-panel-elevated);
+  color: var(--color-text-secondary);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: var(--text-xs);
+  pointer-events: none;
+}
+
+.diff-viewer .diff-note-keys:not([data-active]) {
+  display: none;
+}

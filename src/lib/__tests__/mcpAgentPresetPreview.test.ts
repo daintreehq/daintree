@@ -51,7 +51,6 @@ describe("formatAgentPresetPreviewLines", () => {
           customFlags: "--search",
           dangerousMode: "on",
           dangerousEnabled: true,
-          inlineMode: "off",
           displayTitle: "Work tab",
           color: "#3b82f6",
           fallbacks: ["user-fast"],
@@ -70,7 +69,6 @@ describe("formatAgentPresetPreviewLines", () => {
       'Arguments: "-c" "model_reasoning_effort=high"',
       'Custom arguments: "--search"',
       "Skip permissions: On",
-      "Alt-screen mode: Alt screen",
       'Display title: "Work tab"',
       'Colour: "#3b82f6"',
       'Fallback presets: "Fast" (user-fast)',
@@ -81,22 +79,24 @@ describe("formatAgentPresetPreviewLines", () => {
   });
 
   it("shows an update as old → new for each changed field and env entry only", () => {
-    const before: AgentPreset = {
+    // A screen mode an older build stored is no setting any more (#16356), so
+    // neither side of the change shows one.
+    const before = {
       id: "user-work",
       name: "Work",
       env: { CODEX_HOME: "/a", KEEP: "same", GONE: "bye", API_TOKEN: "short", NOTE: "plain" },
       customFlags: "--search",
       color: "#3b82f6",
       inlineMode: "on",
-    };
-    const after: AgentPreset = {
+    } as AgentPreset;
+    const after = {
       id: "user-work",
       name: "Work 2",
       env: { CODEX_HOME: "/b", KEEP: "same", ADDED: "new", API_TOKEN: "longer", NOTE: TOKEN },
       color: "#3b82f6",
       inlineMode: "off",
       dangerousMode: "on",
-    };
+    } as AgentPreset;
     const text = formatAgentPresetPreviewLines(update(before, after)).join("\n");
     expect(text).toContain('Preset: "Work"');
     expect(text).toContain('Name: "Work" → "Work 2"');
@@ -109,7 +109,7 @@ describe("formatAgentPresetPreviewLines", () => {
     expect(text).toContain(`NOTE: •••••••• → ${MASKED_TOKEN}`);
     expect(text).not.toContain(TOKEN);
     expect(text).toContain(`Custom arguments: "--search" → the agent's own`);
-    expect(text).toContain("Alt-screen mode: Inline → Alt screen");
+    expect(text).not.toMatch(/alt.screen|inline/i);
     expect(text).toContain("Skip permissions: the agent's setting → On");
     expect(text).not.toContain("KEEP");
     expect(text).not.toContain("Colour");

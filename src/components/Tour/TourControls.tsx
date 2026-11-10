@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Pause, Play, RotateCcw, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { TourPlayer } from "@daintreehq/tour";
@@ -261,8 +262,8 @@ export function TourControls({
           )}
         </IconButton>
         <TimeReadout player={player} />
-        <span aria-hidden="true" className="text-xs text-text-secondary">
-          ·
+        <span aria-hidden="true" className="text-xs">
+          <FactSeparator />
         </span>
         <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
           {chapter.title}

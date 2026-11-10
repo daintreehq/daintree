@@ -428,6 +428,12 @@ const MAX_QUEUED_CHUNKS = 150;
 // suspended, so this only guards a worklet that can no longer reply.
 const WORKLET_FLUSH_TIMEOUT_MS = 250;
 
+// How long an open microphone waits for the audio graph. Generous, since a cold
+// worklet load is a file read in Main and a busy machine can slow it by seconds,
+// but a graph this late isn't coming: neither promise can be cancelled, and
+// resume() stays pending for as long as the audio service doesn't answer.
+const AUDIO_GRAPH_READY_TIMEOUT_MS = 10_000;
+
 // How long the capture context stays warm after the last dictation ends, so a
 // dictation soon after reuses it instead of rebuilding the graph (#14618).
 const WARM_AUDIO_IDLE_MS = 5 * 60_000;
@@ -2708,17 +2714,27 @@ class VoiceRecordingService {
     // Build the rest of the graph while the microphone is still opening, so it
     // is ready to attach the moment the stream arrives. Observed immediately so
     // a bail before it is awaited can't surface as an unhandled rejection.
+    // The queued step is a resume never issued, stuck behind an earlier transition.
+    const pendingGraphSteps = new Set(["audio_context_resume_queued", "worklet_load"]);
     const graphReady = (async () => {
       this.startKeepAlive(audio);
       // A reused context is suspended, or still has a release's suspend
       // queued, so the resume is queued behind it whatever `state` says.
-      const resumed = this.queueWarmAudioTransition(audio, () => audioContext.resume()).then(() =>
-        logStep("audio_context_resume", { state: audioContext.state })
-      );
+      const resumed = this.queueWarmAudioTransition(audio, () => {
+        pendingGraphSteps.delete("audio_context_resume_queued");
+        pendingGraphSteps.add("audio_context_resume");
+        return audioContext.resume();
+      }).then(() => {
+        pendingGraphSteps.delete("audio_context_resume");
+        logStep("audio_context_resume", { state: audioContext.state });
+      });
       const cached = audio.workletReady !== null;
       await Promise.all([
         resumed,
-        this.loadWorklet(audio).then(() => logStep("worklet_load", { cached })),
+        this.loadWorklet(audio).then(() => {
+          pendingGraphSteps.delete("worklet_load");
+          logStep("worklet_load", { cached });
+        }),
       ]);
     })().then(
       () => ({ ok: true as const }),
@@ -2848,7 +2864,26 @@ class VoiceRecordingService {
       (typeof stream.getAudioTracks === "function" &&
         stream.getAudioTracks().some((track) => track.readyState === "ended"));
 
-    const graphResult = await graphReady;
+    // Counted from here, not from when the graph began: the microphone can sit
+    // on a permission prompt for as long as the person takes to answer it.
+    let graphDeadline: ReturnType<typeof setTimeout> | undefined;
+    const graphResult = await Promise.race([
+      graphReady,
+      new Promise<{ ok: false; error: unknown }>((resolve) => {
+        graphDeadline = setTimeout(() => {
+          logStep("graph_timeout", {
+            timeoutMs: AUDIO_GRAPH_READY_TIMEOUT_MS,
+            pending: [...pendingGraphSteps],
+          });
+          // What never settled stays cached on this context and would hang the
+          // next start too, so it goes even when this start was already
+          // cancelled. Anything still capturing on it keeps it until released.
+          this.retireWarmAudio(audio);
+          resolve({ ok: false, error: { name: "TimeoutError" } });
+        }, AUDIO_GRAPH_READY_TIMEOUT_MS);
+      }),
+    ]);
+    clearTimeout(graphDeadline);
     if (this.isStartRequestStale(startRequestId)) {
       abandonCapture(stream);
       return;

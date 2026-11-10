@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { KbdChord } from "../Kbd";
 import { describeChord, formatChordText } from "@/lib/kbdShortcut";
+import { resetKeyboardLayoutForTests } from "@/lib/keyboardLayout";
 
 vi.mock("@/lib/platform", () => ({
   isMac: vi.fn(() => false),
@@ -114,5 +115,38 @@ describe("KbdChord inverse", () => {
         /text-text-secondary|bg-overlay-subtle|border-border-subtle/
       );
     }
+  });
+});
+
+describe("KbdChord keyboard layout", () => {
+  afterEach(() => {
+    resetKeyboardLayoutForTests();
+    Reflect.deleteProperty(navigator, "keyboard");
+  });
+
+  function keys(container: HTMLElement): string[] {
+    return [...container.querySelectorAll("kbd")].map((kbd) => kbd.textContent ?? "");
+  }
+
+  it("redraws a physically matched key when the layout changes", async () => {
+    const latin = "abcdefghijklmnopqrstuvwxyz";
+    const letters = [...latin].map((char, i) => [`Key${String.fromCharCode(65 + i)}`, char]);
+    let layout = new Map([...letters, ["Slash", "!"]] as [string, string][]);
+    Object.defineProperty(navigator, "keyboard", {
+      value: { getLayoutMap: async () => layout },
+      configurable: true,
+    });
+
+    const { container } = render(<KbdChord shortcut="Cmd+/" isMac={false} />);
+    await act(async () => {});
+    expect(keys(container)).toEqual(["Ctrl", "!"]);
+    expect(container.querySelector(".sr-only")?.textContent).toBe("Ctrl Exclamation Mark");
+
+    layout = new Map([...letters, ["Slash", "/"]] as [string, string][]);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(keys(container)).toEqual(["Ctrl", "/"]);
+    expect(container.querySelector(".sr-only")?.textContent).toBe("Ctrl Slash");
   });
 });

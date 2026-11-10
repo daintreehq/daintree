@@ -1139,6 +1139,29 @@ describe("terminalClient.submitWithImages (#12792)", () => {
     );
   });
 
+  it("carries a submission token with or without an attachable path", async () => {
+    await terminalClient.submitWithImages("t1", "see /a/shot.png", ["/a/shot.png"], "tok");
+    expect(mockElectronTerminal.submit).toHaveBeenLastCalledWith(
+      "t1",
+      "see /a/shot.png",
+      "tok",
+      undefined,
+      ["/a/shot.png"]
+    );
+
+    await terminalClient.submitWithImages(
+      "t1",
+      "see \\\\srv\\s\\a.png",
+      ["\\\\srv\\s\\a.png"],
+      "tok"
+    );
+    expect(mockElectronTerminal.submit).toHaveBeenLastCalledWith(
+      "t1",
+      "see \\\\srv\\s\\a.png",
+      "tok"
+    );
+  });
+
   it("drops paths main would refuse, keeping the draft as a plain submit", async () => {
     await terminalClient.submitWithImages("t1", "see \\\\srv\\s\\a.png", ["\\\\srv\\s\\a.png"]);
 

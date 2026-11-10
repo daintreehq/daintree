@@ -110,7 +110,7 @@ describe("restartPanesOnPreset", () => {
 
     expect(announceMock).toHaveBeenCalledWith("Restarting 2 panes");
     const toast = notifyMock.mock.calls[0]![0];
-    expect(toast.title).toBe("Couldn't restart 2 panes on Work");
+    expect(toast.title).toBe("Couldn't restart 2 terminals on Work");
     expect(toast.message).toBe("'Two' is waiting to be restored. 'Three' is already restarting.");
     expect(toast.action.actionArgs).toEqual({ panelId: "b" });
   });

@@ -101,6 +101,7 @@ const RELEASE_ONLY = [
   { re: /^\.github\/workflows\/release-windows\.yml$/, oses: ["windows"], nightly: [] },
   { re: /^\.github\/actions\/resolve-update-metadata-prefix\//, oses: OSES, nightly: [] },
   { re: /^\.github\/actions\/(publish-daintree|website-notify)\//, oses: OSES, nightly: [], publishOnly: true },
+  { re: /^scripts\/ci\/homebrew-cask\.mjs$/, oses: ["macos"], nightly: [], publishOnly: true },
 ];
 const ruleFor = (file) => RELEASE_ONLY.find((r) => r.re.test(file));
 // Shipped code: what the build users get is made from. Kept in step with

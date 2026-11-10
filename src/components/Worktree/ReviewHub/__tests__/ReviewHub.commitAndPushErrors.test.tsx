@@ -275,6 +275,7 @@ import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore"
 import { useUIStore } from "@/store/uiStore";
 import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
@@ -516,6 +517,253 @@ describe("ReviewHub", () => {
 
       await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
       expect(pushMock).not.toHaveBeenCalled();
+    });
+
+    // Escape in the message box lands on the file list, so the chord the status
+    // line advertises has to work from there too (#16644).
+    describe("Cmd+Enter from the file list", () => {
+      const openDiffCount = () => usePanelDialogStore.getState().dialogStack.length;
+
+      beforeEach(() => {
+        usePanelDialogStore.setState({ dialogStack: [] });
+      });
+
+      async function renderOnFileList(message = "feat: from the list") {
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByLabelText("Commit message"));
+        if (message) {
+          fireEvent.change(screen.getByLabelText("Commit message"), { target: { value: message } });
+        }
+        const listbox = screen.getByRole("listbox", { name: "Changed files" });
+        // The cursor sits on the first row, the one plain Enter would open.
+        fireEvent.keyDown(listbox, { key: "ArrowDown" });
+        return listbox;
+      }
+
+      it.each([
+        { chord: "Cmd+Enter", init: { metaKey: true } },
+        { chord: "Ctrl+Enter", init: { ctrlKey: true } },
+      ])("$chord commits and never opens the cursor row's diff", async ({ init }) => {
+        const listbox = await renderOnFileList();
+        const reachedTarget = vi.fn();
+        listbox.addEventListener("keydown", reachedTarget);
+
+        const notConsumed = fireEvent.keyDown(listbox, { key: "Enter", ...init });
+
+        // Handled, so neither the browser nor a later listener sees it again.
+        expect(notConsumed).toBe(false);
+        expect(reachedTarget).not.toHaveBeenCalled();
+        await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+        expect(commitMock.mock.calls[0]?.[1]).toBe("feat: from the list");
+        expect(openDiffCount()).toBe(0);
+      });
+
+      it("opens nothing for Alt+Enter, which is not the plain key the list opens a diff on", async () => {
+        const listbox = await renderOnFileList();
+
+        fireEvent.keyDown(listbox, { key: "Enter", altKey: true });
+
+        expect(openDiffCount()).toBe(0);
+        expect(commitMock).not.toHaveBeenCalled();
+      });
+
+      it("takes a held chord as one press: the repeats are swallowed, not run again", async () => {
+        const listbox = await renderOnFileList();
+
+        const repeatConsumed = fireEvent.keyDown(listbox, {
+          key: "Enter",
+          metaKey: true,
+          repeat: true,
+        });
+        expect(repeatConsumed).toBe(false);
+        expect(commitMock).not.toHaveBeenCalled();
+        expect(openDiffCount()).toBe(0);
+
+        fireEvent.keyDown(listbox, { key: "Enter", metaKey: true });
+        await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+      });
+
+      it("leaves plain Enter opening the diff", async () => {
+        const listbox = await renderOnFileList();
+
+        fireEvent.keyDown(listbox, { key: "Enter" });
+
+        await waitFor(() => expect(openDiffCount()).toBe(1));
+        expect(commitMock).not.toHaveBeenCalled();
+      });
+
+      it("does not toggle staging when Space carries a modifier", async () => {
+        const listbox = await renderOnFileList();
+
+        fireEvent.keyDown(listbox, { key: " ", metaKey: true });
+        fireEvent.keyDown(listbox, { key: " ", ctrlKey: true });
+        fireEvent.keyDown(listbox, { key: " ", altKey: true });
+        expect(stageFileMock).not.toHaveBeenCalled();
+        expect(unstageFileMock).not.toHaveBeenCalled();
+
+        fireEvent.keyDown(listbox, { key: " " });
+        await waitFor(() => expect(unstageFileMock).toHaveBeenCalledTimes(1));
+      });
+
+      it("opens the push confirm with a remote, rather than pushing", async () => {
+        getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+        const listbox = await renderOnFileList();
+
+        fireEvent.keyDown(listbox, { key: "Enter", metaKey: true });
+
+        expect(await screen.findByRole("alertdialog", { name: "Push commits?" })).toBeDefined();
+        expect(commitMock).not.toHaveBeenCalled();
+        expect(pushMock).not.toHaveBeenCalled();
+        expect(openDiffCount()).toBe(0);
+      });
+
+      it("Cmd+Shift+Enter commits without pushing when a remote exists", async () => {
+        getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+        const listbox = await renderOnFileList();
+
+        fireEvent.keyDown(listbox, { key: "Enter", metaKey: true, shiftKey: true });
+
+        await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+        expect(pushMock).not.toHaveBeenCalled();
+        expect(screen.queryByRole("alertdialog")).toBeNull();
+        expect(openDiffCount()).toBe(0);
+      });
+
+      it("moves focus to the blocker instead of opening the diff", async () => {
+        const listbox = await renderOnFileList("");
+
+        fireEvent.keyDown(listbox, { key: "Enter", metaKey: true });
+
+        expect(document.activeElement).toBe(screen.getByLabelText("Commit message"));
+        expect(commitMock).not.toHaveBeenCalled();
+        expect(openDiffCount()).toBe(0);
+      });
+
+      it("answers when focus is on the pane around the hub, as keyboard pane navigation leaves it", async () => {
+        const pane = document.createElement("div");
+        pane.tabIndex = -1;
+        document.body.appendChild(pane);
+        try {
+          render(
+            <ReviewHubContent
+              isOpen={true}
+              worktreePath={WORKTREE_PATH}
+              onClose={vi.fn()}
+              keyboardScope={pane}
+            />,
+            { container: pane }
+          );
+          await waitFor(() => screen.getByLabelText("Commit message"));
+          fireEvent.change(screen.getByLabelText("Commit message"), {
+            target: { value: "feat: from the pane" },
+          });
+
+          fireEvent.keyDown(pane, { key: "Enter", metaKey: true });
+
+          await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+          expect(commitMock.mock.calls[0]?.[1]).toBe("feat: from the pane");
+        } finally {
+          pane.remove();
+        }
+      });
+
+      it("answers from a hub button as well", async () => {
+        await renderOnFileList();
+
+        fireEvent.keyDown(screen.getByRole("button", { name: /refresh/i }), {
+          key: "Enter",
+          metaKey: true,
+        });
+
+        await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+      });
+
+      it("stays quiet while a diff overlay is open over the hub", async () => {
+        const listbox = await renderOnFileList();
+        fireEvent.keyDown(listbox, { key: "Enter" });
+        await waitFor(() => expect(openDiffCount()).toBe(1));
+
+        const notConsumed = fireEvent.keyDown(listbox, { key: "Enter", metaKey: true });
+
+        expect(notConsumed).toBe(true);
+        expect(commitMock).not.toHaveBeenCalled();
+        expect(openDiffCount()).toBe(1);
+      });
+
+      it("stays quiet while a menu holds focus", async () => {
+        const listbox = await renderOnFileList();
+        const menu = document.createElement("div");
+        menu.setAttribute("role", "menu");
+        const item = document.createElement("button");
+        menu.appendChild(item);
+        screen.getByTestId("review-hub-content").appendChild(menu);
+        item.focus();
+
+        const notConsumed = fireEvent.keyDown(item, { key: "Enter", metaKey: true });
+
+        expect(notConsumed).toBe(true);
+        expect(commitMock).not.toHaveBeenCalled();
+        expect(listbox.isConnected).toBe(true);
+      });
+
+      it("follows the steps from the message box: Escape to the list, then the chord", async () => {
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByLabelText("Commit message"));
+        const textarea = screen.getByLabelText("Commit message");
+        fireEvent.change(textarea, { target: { value: "feat: after escape" } });
+        textarea.focus();
+
+        fireEvent.keyDown(textarea, { key: "Escape" });
+        const listbox = screen.getByRole("listbox", { name: "Changed files" });
+        expect(document.activeElement).toBe(listbox);
+
+        fireEvent.keyDown(listbox, { key: "ArrowDown" });
+        fireEvent.keyDown(document.activeElement ?? listbox, { key: "Enter", metaKey: true });
+
+        await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+        expect(commitMock.mock.calls[0]?.[1]).toBe("feat: after escape");
+        expect(openDiffCount()).toBe(0);
+      });
+
+      it("stays quiet while the checks disclosure is open from the hub", async () => {
+        const listbox = await renderOnFileList();
+        const marker = document.createElement("button");
+        marker.setAttribute("data-pr-checks-open", "true");
+        screen.getByTestId("review-hub-content").appendChild(marker);
+
+        const notConsumed = fireEvent.keyDown(listbox, { key: "Enter", metaKey: true });
+
+        expect(notConsumed).toBe(true);
+        expect(commitMock).not.toHaveBeenCalled();
+      });
+
+      it("ignores the chord from a surface outside the hub, such as a dialog over it", async () => {
+        await renderOnFileList();
+        const outside = document.createElement("button");
+        document.body.appendChild(outside);
+
+        const notConsumed = fireEvent.keyDown(outside, { key: "Enter", metaKey: true });
+        outside.remove();
+
+        expect(notConsumed).toBe(true);
+        expect(commitMock).not.toHaveBeenCalled();
+      });
+
+      it("does not swallow the key when there is nothing to commit with", async () => {
+        await renderOnFileList();
+        // Base-branch mode has no commit panel to answer the chord. The working-
+        // tree list is gone by then, so the key goes to the hub's own element.
+        fireEvent.click(screen.getByRole("radio", { name: /vs main/i }));
+        await waitFor(() => expect(screen.queryByLabelText("Commit message")).toBeNull());
+
+        const notConsumed = fireEvent.keyDown(screen.getByTestId("review-hub-content"), {
+          key: "Enter",
+          metaKey: true,
+        });
+
+        expect(notConsumed).toBe(true);
+        expect(commitMock).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -815,7 +1063,8 @@ describe("ReviewHub", () => {
         expect(actionDispatchMock).toHaveBeenCalledWith(
           "git.forcePushWithLease",
           { cwd: WORKTREE_PATH },
-          { source: "user" }
+          // The pane's banner is the report, so the action's toast stands down.
+          { source: "user", callerReportsFailure: true }
         )
       );
       expect(forcePushWithLeaseMock).not.toHaveBeenCalled();
@@ -848,7 +1097,8 @@ describe("ReviewHub", () => {
         expect(actionDispatchMock).toHaveBeenCalledWith(
           "git.forcePushWithLease",
           { cwd: WORKTREE_PATH },
-          { source: "user" }
+          // The pane's banner is the report, so the action's toast stands down.
+          { source: "user", callerReportsFailure: true }
         )
       );
       // The old banner described the rejected push; a failed recovery has to

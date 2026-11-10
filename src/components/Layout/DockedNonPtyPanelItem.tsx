@@ -167,13 +167,20 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
                 ref={chipRef}
                 {...dragPointerListeners}
                 data-dock-item=""
+                data-dock-attention={activity?.shown === "waiting" ? "" : undefined}
                 className={cn(
                   DOCK_CHIP_CLASS,
                   isOpen && DOCK_CHIP_OPEN_CLASS,
                   !isOpen &&
                     showDockAgentHighlights &&
                     activity?.shown === "waiting" &&
-                    DOCK_CHIP_WAITING_CLASS
+                    DOCK_CHIP_WAITING_CLASS,
+                  // The rail's one border rule: a closed chip with nothing live
+                  // behind it rests borderless, as an idle shell or agent does.
+                  !isOpen &&
+                    activity?.shown !== "working" &&
+                    activity?.shown !== "waiting" &&
+                    "border-transparent"
                 )}
                 onFocus={(e) => {
                   if (showTitleTip && e.currentTarget.matches(":focus-visible")) {
@@ -223,7 +230,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
 
         <PopoverContent
           aria-label={`Preview: ${displayTitle}`}
-          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-surface-canvas/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
           style={{ height: popoverHeight }}
           side="top"
           align="start"

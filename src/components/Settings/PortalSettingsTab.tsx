@@ -523,7 +523,7 @@ export function PortalSettingsTab() {
         : defaultNewTabUrl;
 
   const defaultAgentOptions = [
-    { value: "none", label: "Launchpad (default)" },
+    { value: "none", label: "Launchpad", isDefault: true },
     ...enabledLinks.map((link) => ({ value: link.url, label: link.title })),
     { value: "custom", label: "Custom URL…" },
   ];

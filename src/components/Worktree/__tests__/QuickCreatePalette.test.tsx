@@ -82,6 +82,21 @@ describe("QuickCreatePalette", () => {
     }
   });
 
+  it("names Enter only while it can start a create", () => {
+    const palette = makePalette({});
+    const { rerender } = render(<QuickCreatePalette palette={palette} />);
+    const chip = screen.getByText("to create").parentElement!;
+    expect(Array.from(chip.querySelectorAll("kbd"), (kbd) => kbd.textContent)).toEqual(["Enter"]);
+
+    // A second Enter is refused while the first create is in flight, so the
+    // footer reports progress rather than teaching the key.
+    rerender(<QuickCreatePalette palette={{ ...palette, isPending: true }} />);
+    expect(screen.getByText("Creating…")).toBeTruthy();
+    expect(screen.queryByText("to create")).toBeNull();
+    const caps = Array.from(document.querySelectorAll("kbd"), (kbd) => kbd.textContent);
+    expect(caps).not.toContain("Enter");
+  });
+
   it("forgets the pinned recipe once the palette closes", () => {
     const palette = makePalette({});
     const { rerender } = render(<QuickCreatePalette palette={palette} />);

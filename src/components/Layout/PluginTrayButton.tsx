@@ -15,15 +15,18 @@ import { PopoverAnchor, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
   DropdownMenuActionItem,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
+  type DropdownMenuItemProps,
 } from "@/components/ui/dropdown-menu";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { saveProjectToolbar } from "./saveProjectToolbar";
@@ -48,7 +51,7 @@ import {
   projectIdFromPluginInstanceKey,
   type PluginPanelBadge,
 } from "@shared/types/plugin";
-import { useAriaKeyshortcuts, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import type { PluginToolbarButtonId } from "@shared/types/toolbar";
 import { cn } from "@/lib/utils";
@@ -446,13 +449,13 @@ export function PluginOverflowItem({
         <DropdownMenuSubContent className="min-w-[12rem]">
           {config.actionId !== undefined && (
             <>
-              <DropdownMenuItem
+              <PluginMenuActionItem
+                pressed={presentation.pressed}
                 onSelect={onSelect}
                 keybinding={config.actionId}
-                {...menuToggleProps(presentation.pressed)}
               >
                 <span className="min-w-0 flex-1 truncate">{config.label}</span>
-              </DropdownMenuItem>
+              </PluginMenuActionItem>
               <DropdownMenuSeparator />
             </>
           )}
@@ -461,8 +464,10 @@ export function PluginOverflowItem({
       </DropdownMenuSub>
     );
   }
+  const isToggle = presentation.pressed !== undefined;
   return (
-    <DropdownMenuItem
+    <PluginMenuActionItem
+      pressed={presentation.pressed}
       onClick={(event) => {
         if (presentation.blocked) {
           event.preventDefault();
@@ -471,11 +476,10 @@ export function PluginOverflowItem({
         onSelect();
       }}
       keybinding={keybinding}
-      {...menuToggleProps(presentation.pressed)}
       aria-disabled={presentation.blocked || undefined}
       className={cn(presentation.blocked && ARIA_DISABLED_CLASSES)}
     >
-      <PluginMenuRowIcon presentation={presentation} />
+      {!isToggle && <PluginMenuRowIcon presentation={presentation} />}
       <TruncatedTooltip
         content={presentation.tooltip}
         isTruncated={presentation.tooltip !== config.label}
@@ -483,7 +487,7 @@ export function PluginOverflowItem({
       >
         <span className="flex-1">{config.label}</span>
       </TruncatedTooltip>
-      <PluginMenuRowState presentation={presentation} />
+      <PluginMenuRowState presentation={presentation} checkInGutter={isToggle} />
       {badge && (
         <>
           <span className="ml-2 inline-flex shrink-0 items-center">
@@ -492,7 +496,7 @@ export function PluginOverflowItem({
           <span className="sr-only">, {describeToolbarBadge(badge)}</span>
         </>
       )}
-    </DropdownMenuItem>
+    </PluginMenuActionItem>
   );
 }
 
@@ -514,25 +518,66 @@ function PluginMenuRowIcon({
 }
 
 /**
- * A toggle's menu row is a `menuitemcheckbox`, the menu's form of
- * `aria-pressed`. The plugin's state stays authoritative: selecting the row
- * dispatches, and the check only moves when the plugin republishes.
+ * A row that runs the button's action. A toggle's row is the checkbox item, the
+ * menu's form of `aria-pressed`, with its check in the leading gutter like every
+ * other menu toggle, so the check takes the icon's column. The plugin's state
+ * stays authoritative: selecting the row dispatches, and the check only moves
+ * when the plugin republishes. The checkbox item has no `keybinding`, so the
+ * binding is drawn here the way `DropdownMenuItem` draws it.
  */
-function menuToggleProps(pressed: boolean | undefined) {
-  if (pressed === undefined) return {};
-  return { role: "menuitemcheckbox" as const, "aria-checked": pressed };
+function PluginMenuActionItem({
+  pressed,
+  keybinding,
+  children,
+  ...props
+}: Omit<DropdownMenuItemProps, "keybinding"> & {
+  pressed: boolean | undefined;
+  keybinding?: string;
+}) {
+  const combo = useEffectiveCombo(keybinding ?? "");
+  const ariaKeyshortcuts = useAriaKeyshortcuts(keybinding ?? "");
+  if (pressed === undefined) {
+    return (
+      <DropdownMenuItem keybinding={keybinding} {...props}>
+        {children}
+      </DropdownMenuItem>
+    );
+  }
+  return (
+    <DropdownMenuCheckboxItem
+      checked={pressed}
+      aria-keyshortcuts={keybinding ? ariaKeyshortcuts : undefined}
+      {...props}
+    >
+      {children}
+      {keybinding && <DropdownMenuShortcut shortcut={combo} />}
+    </DropdownMenuCheckboxItem>
+  );
 }
 
-/** A menu row's live state: a check for a toggle that is on, and why a blocked row won't run. */
+/**
+ * A menu row's live state, and why a blocked row won't run. A submenu trigger
+ * can't be a checkbox item, so it keeps a trailing check for a toggle that is
+ * on; a row whose check sits in the gutter shows a busy toggle's spinner here,
+ * where its dropped icon would have.
+ */
 function PluginMenuRowState({
   presentation,
+  checkInGutter = false,
 }: {
   presentation: ReturnType<typeof presentPluginToolbarButton>;
+  checkInGutter?: boolean;
 }) {
+  const isToggle = presentation.pressed !== undefined;
   return (
     <>
-      {presentation.pressed === true && (
+      {!checkInGutter && presentation.pressed === true && (
         <Check className="ml-2 h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+      )}
+      {checkInGutter && isToggle && presentation.busy && (
+        <span className="ml-2 inline-flex h-3.5 w-3.5 shrink-0" aria-hidden="true">
+          <Spinner size="sm" />
+        </span>
       )}
       {presentation.busy && <span className="sr-only">, busy</span>}
       {presentation.disabled && !presentation.busy && (
@@ -562,6 +607,8 @@ function PluginTrayRow({
   // A menu turns the row into a submenu: a button with an action lists that
   // action first, since the row itself opens the submenu rather than running it.
   const asSubmenu = !config.popover && menuEntries.length > 0 && !presentation.blocked;
+  // A toggle row's check takes the icon's column; a submenu trigger keeps its icon.
+  const checkInGutter = !asSubmenu && presentation.pressed !== undefined;
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "p" || e.key === "P") {
@@ -573,7 +620,7 @@ function PluginTrayRow({
 
   const content = (
     <>
-      <PluginMenuRowIcon presentation={presentation} />
+      {!checkInGutter && <PluginMenuRowIcon presentation={presentation} />}
 
       {/* The plugin's tooltip or disabled reason shows on hover whether or not
           the label is cut off; with neither, only a truncated label does. */}
@@ -585,7 +632,7 @@ function PluginTrayRow({
         <span className="min-w-0 flex-1 truncate">{config.label}</span>
       </TruncatedTooltip>
 
-      <PluginMenuRowState presentation={presentation} />
+      <PluginMenuRowState presentation={presentation} checkInGutter={checkInGutter} />
 
       {badge && (
         <>
@@ -652,14 +699,14 @@ function PluginTrayRow({
         <DropdownMenuSubContent className="min-w-[12rem]">
           {config.actionId !== undefined && (
             <>
-              <DropdownMenuItem
+              <PluginMenuActionItem
+                pressed={presentation.pressed}
                 onSelect={() => onSelect(config)}
                 keybinding={config.actionId}
-                {...menuToggleProps(presentation.pressed)}
                 data-testid={`plugin-tray-primary-${config.id}`}
               >
                 <span className="min-w-0 flex-1 truncate">{config.label}</span>
-              </DropdownMenuItem>
+              </PluginMenuActionItem>
               <DropdownMenuSeparator />
             </>
           )}
@@ -670,7 +717,8 @@ function PluginTrayRow({
   }
 
   return (
-    <DropdownMenuItem
+    <PluginMenuActionItem
+      pressed={presentation.pressed}
       // Not Radix's `disabled`: that would skip the row in keyboard navigation
       // and take its pin control with it. The row stays reachable, says why,
       // and only selecting it is vetoed — the menu stays open.
@@ -682,14 +730,13 @@ function PluginTrayRow({
         onSelect(config);
       }}
       onKeyDown={handleKeyDown}
-      {...menuToggleProps(presentation.pressed)}
       aria-disabled={presentation.blocked || undefined}
       className={cn("group", presentation.blocked && ARIA_DISABLED_CLASSES)}
       data-testid={`plugin-tray-row-${config.id}`}
       keybinding={config.actionId}
     >
       {content}
-    </DropdownMenuItem>
+    </PluginMenuActionItem>
   );
 }
 

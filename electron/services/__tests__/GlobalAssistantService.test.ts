@@ -287,6 +287,232 @@ describe("GlobalAssistantService", () => {
     expect(service.getState().phase).toBe("absent");
   });
 
+  describe("cancelling a launch (#16603)", () => {
+    const claim = { agentId: "claude", agentSessionId: "conv", claimId: "c1" };
+
+    function resumable(deps: MockedDeps, calls: string[]) {
+      deps.takeResume.mockImplementation(async () => {
+        calls.push("take");
+        return claim;
+      });
+      deps.releaseResume.mockImplementation(async (claimId: string) => {
+        calls.push(`release-${claimId}`);
+      });
+    }
+
+    it("stops a launch mid-spawn, shown stopped at once, and keeps the conversation it claimed", async () => {
+      const spawn = deferred<boolean>();
+      const { deps, calls } = makeDeps();
+      resumable(deps, calls);
+      deps.spawn.mockReturnValueOnce(spawn.promise);
+      const service = new GlobalAssistantService(deps);
+      const launch = service.ensureSession();
+      await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalled());
+      const terminalId = deps.spawn.mock.calls[0]![0].terminalId;
+      const phases: string[] = [];
+      service.onChange((state) => phases.push(state.phase));
+
+      const cancelled = service.cancelLaunch();
+      expect(service.getState().phase).toBe("absent");
+      expect(phases).toEqual(["absent"]);
+      await cancelled;
+      spawn.resolve(true);
+      await expect(launch).rejects.toMatchObject({ code: "CANCELLED" });
+
+      expect(deps.discardResume).not.toHaveBeenCalled();
+      expect(deps.releaseResume).toHaveBeenCalledWith("c1");
+      expect(calls.indexOf("revoke-s1")).toBeLessThan(calls.indexOf(`kill-${terminalId}`));
+      expect(service.getState().phase).toBe("absent");
+    });
+
+    it.each([
+      ["refuses", () => Promise.resolve(false)],
+      ["throws", () => Promise.reject(new Error("pty host gone"))],
+    ])("says a launch cancelled mid-spawn was cancelled when its spawn then %s", async (_, end) => {
+      const spawn = deferred<boolean>();
+      const { deps } = makeDeps();
+      deps.spawn.mockReturnValueOnce(spawn.promise);
+      const service = new GlobalAssistantService(deps);
+      const launch = service.ensureSession();
+      await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalled());
+      await service.cancelLaunch();
+      end().then(spawn.resolve, spawn.reject);
+      await expect(launch).rejects.toMatchObject({ code: "CANCELLED" });
+    });
+
+    it("stops a launch claiming its conversation, handing it back and provisioning nothing", async () => {
+      const taken = deferred<typeof claim>();
+      const { deps } = makeDeps();
+      deps.takeResume.mockReturnValueOnce(taken.promise);
+      const service = new GlobalAssistantService(deps);
+      const launch = service.ensureSession();
+      await vi.waitFor(() => expect(deps.takeResume).toHaveBeenCalled());
+      await service.cancelLaunch();
+      taken.resolve(claim);
+      await expect(launch).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(deps.releaseResume).toHaveBeenCalledWith("c1");
+      expect(deps.provision).not.toHaveBeenCalled();
+      expect(deps.discardResume).not.toHaveBeenCalled();
+    });
+
+    it("leaves a launch that has already become the run alone", async () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      const state = await service.ensureSession();
+      await service.cancelLaunch();
+      expect(service.getState()).toMatchObject({ phase: "running", generation: state.generation });
+      expect(deps.revoke).not.toHaveBeenCalled();
+      expect(deps.kill).not.toHaveBeenCalled();
+    });
+
+    it("shows a Start right after a Cancel at once, and resumes once the stopped launch has handed the conversation back", async () => {
+      const spawn = deferred<boolean>();
+      const respawn = deferred<boolean>();
+      const released = deferred<void>();
+      const { deps, calls } = makeDeps();
+      resumable(deps, calls);
+      deps.releaseResume.mockImplementationOnce(async (claimId: string) => {
+        await released.promise;
+        calls.push(`release-${claimId}`);
+      });
+      deps.spawn.mockReturnValueOnce(spawn.promise).mockReturnValueOnce(respawn.promise);
+      const service = new GlobalAssistantService(deps);
+      const first = service.ensureSession();
+      await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalled());
+      await service.cancelLaunch();
+
+      const again = service.ensureSession();
+      expect(service.getState().phase).toBe("launching");
+      expect(service.ensureSession()).toBe(again);
+
+      // The stopped launch is still handing its conversation back: nothing new is taken yet.
+      spawn.resolve(true);
+      await vi.waitFor(() => expect(deps.releaseResume).toHaveBeenCalledWith("c1"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(calls.filter((call) => call === "take")).toHaveLength(1);
+      expect(deps.provision).toHaveBeenCalledTimes(1);
+
+      released.resolve();
+      await expect(first).rejects.toMatchObject({ code: "CANCELLED" });
+      await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalledTimes(2));
+      // The stopped launch settling leaves its successor the one in flight.
+      expect(service.getState().phase).toBe("launching");
+      expect(service.ensureSession()).toBe(again);
+      expect(calls.indexOf("release-c1")).toBeGreaterThan(-1);
+      expect(calls.indexOf("release-c1")).toBeLessThan(calls.lastIndexOf("take"));
+      expect(deps.spawn.mock.calls[1]![0].resumeAgentSessionId).toBe("conv");
+
+      respawn.resolve(true);
+      expect((await again).phase).toBe("running");
+      expect(deps.discardResume).not.toHaveBeenCalled();
+    });
+
+    it("says a launch was cancelled when a step it was waiting on then fails", async () => {
+      const provision = deferred<never>();
+      const { deps } = makeDeps();
+      deps.provision.mockReturnValueOnce(provision.promise);
+      const service = new GlobalAssistantService(deps);
+      const launch = service.ensureSession();
+      await vi.waitFor(() => expect(deps.provision).toHaveBeenCalled());
+      await service.cancelLaunch();
+      provision.reject(new Error("disk full"));
+      await expect(launch).rejects.toMatchObject({ code: "CANCELLED" });
+    });
+
+    it("says a launch was cancelled when quitting closed admission while it provisioned", async () => {
+      const provision = deferred<never>();
+      const { deps } = makeDeps();
+      deps.provision.mockReturnValueOnce(provision.promise);
+      const service = new GlobalAssistantService(deps);
+      const launch = service.ensureSession();
+      await vi.waitFor(() => expect(deps.provision).toHaveBeenCalled());
+      service.closeAdmission();
+      provision.reject(new Error("disk full"));
+      await expect(launch).rejects.toMatchObject({ code: "CANCELLED" });
+    });
+
+    it("keeps nothing of a launch cancelled while it chose its agent", async () => {
+      const agent = deferred<string | null>();
+      const { deps } = makeDeps();
+      deps.agentId.mockReturnValueOnce(agent.promise);
+      const service = new GlobalAssistantService(deps);
+      const launch = service.ensureSession();
+      await vi.waitFor(() => expect(deps.agentId).toHaveBeenCalled());
+      await service.cancelLaunch();
+      agent.resolve("claude");
+      await expect(launch).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(deps.takeResume).not.toHaveBeenCalled();
+
+      // No agent of its left behind for a later agent change to stop anything over.
+      const { generation } = service.getState();
+      await service.onAgentChanged("codex");
+      expect(service.getState().generation).toBe(generation);
+    });
+
+    it("moves on from a launch that failed by itself, so a Cancel meant for it can't stop the next", async () => {
+      const { deps } = makeDeps();
+      deps.spawn.mockResolvedValueOnce(false);
+      const service = new GlobalAssistantService(deps);
+      const { generation } = service.getState();
+      await expect(service.ensureSession()).rejects.toMatchObject({ code: "INTERNAL" });
+      expect(service.getState()).toMatchObject({ phase: "absent" });
+      expect(service.getState().generation).not.toBe(generation);
+    });
+
+    it("ends a restart whose new launch is cancelled while the old run is still going", async () => {
+      const revoke = deferred<void>();
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      await service.ensureSession();
+      deps.revoke.mockReturnValueOnce(revoke.promise);
+      const restarted = service.restart();
+      // Started from another window while the old run is still being revoked, then cancelled.
+      const started = service.ensureSession();
+      const cancelled = service.cancelLaunch();
+      revoke.resolve();
+      await cancelled;
+      await expect(started).rejects.toMatchObject({ code: "CANCELLED" });
+      await expect(restarted).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(deps.provision).toHaveBeenCalledTimes(1);
+      expect(service.getState().phase).toBe("absent");
+    });
+
+    it("stops a Start queued behind a launch still winding down, before it provisions", async () => {
+      const spawn = deferred<boolean>();
+      const { deps } = makeDeps();
+      deps.spawn.mockReturnValueOnce(spawn.promise);
+      const service = new GlobalAssistantService(deps);
+      const first = service.ensureSession();
+      await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalled());
+      await service.cancelLaunch();
+      const queued = service.ensureSession();
+      await service.cancelLaunch();
+      expect(service.getState().phase).toBe("absent");
+
+      spawn.resolve(true);
+      await expect(first).rejects.toMatchObject({ code: "CANCELLED" });
+      await expect(queued).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(deps.provision).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets a Start queued behind a stopped launch choose its own agent, unstopped by an agent change", async () => {
+      const spawn = deferred<boolean>();
+      const { deps } = makeDeps();
+      deps.spawn.mockReturnValueOnce(spawn.promise);
+      const service = new GlobalAssistantService(deps);
+      const first = service.ensureSession();
+      await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalled());
+      await service.cancelLaunch();
+      const queued = service.ensureSession();
+
+      deps.agentId.mockResolvedValue("codex");
+      await service.onAgentChanged("codex");
+      spawn.resolve(true);
+      await expect(first).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(await queued).toMatchObject({ phase: "running", agentId: "codex" });
+    });
+  });
+
   describe("attachments and input", () => {
     it("gives the first attachment input and moves it only on an explicit claim", async () => {
       const service = new GlobalAssistantService(makeDeps().deps);
@@ -501,6 +727,22 @@ describe("GlobalAssistantService", () => {
       deps.spawn.mockResolvedValueOnce(false);
       await expect(service.ensureSession()).rejects.toMatchObject({ code: "INTERNAL" });
       expect(service.getState().inputOwner).toBeNull();
+    });
+
+    it("passes over a view that can't put a question, and asks nowhere if that's all there is", async () => {
+      const service = new GlobalAssistantService(makeDeps().deps);
+      await service.ensureSession();
+      service.attach(10, 1);
+      const canopy = service.attach(20, 2);
+      service.claimInput(canopy, 20);
+      const notCanopy = (id: number) => id !== 20;
+
+      expect(service.presenterWebContentsId(notCanopy)).toBe(10);
+
+      service.detachWebContents(10);
+      expect(service.presenterWebContentsId(notCanopy)).toBeNull();
+      expect(service.presenterWebContentsId()).toBe(20);
+      await service.discard();
     });
 
     it("asks questions in the view holding input, else the latest reader, and nowhere once none is left (#14161)", async () => {

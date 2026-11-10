@@ -42,4 +42,17 @@ describe("useCanopyDoubleShift", () => {
     fire();
     expect(dispatch.mock.calls).toEqual([["canopy.toggle", undefined, { source: "keybinding" }]]);
   });
+
+  it("hands the gesture to a window's own answer, under the same gates", () => {
+    const answer = vi.fn();
+    useCanopyStore.setState({ mode: "on" });
+    renderHook(() => useCanopyDoubleShift(answer));
+
+    const [fire, enabled] = useDoubleShift.mock.calls.at(-1) as [() => void, boolean];
+    expect(enabled).toBe(true);
+    fire();
+
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 });

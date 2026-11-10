@@ -100,6 +100,34 @@ describe("GitHubSettingsTab handleSaveToken", () => {
     });
   });
 
+  it("saves on Enter in the token field, and ignores Enter on an empty field", async () => {
+    setCredentialMock.mockResolvedValue({ valid: true, scopes: [] });
+    mockedDispatch.mockImplementation(async () => {
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    const input = screen.getByLabelText(/github personal access token/i);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(setCredentialMock).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: "ghp_valid_token" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(setCredentialMock).toHaveBeenCalledWith("daintree.github.github", {
+        token: "ghp_valid_token",
+      });
+    });
+    expect(setCredentialMock).toHaveBeenCalledTimes(1);
+  });
+
   it("dispatches worktree.refresh after a successful token save so the sidebar re-fetches", async () => {
     setCredentialMock.mockResolvedValue({ valid: true, scopes: [] });
     mockedDispatch.mockImplementation(async () => {

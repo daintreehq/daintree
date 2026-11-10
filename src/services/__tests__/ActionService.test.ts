@@ -1134,6 +1134,34 @@ describe("ActionService", () => {
         }
       });
 
+      // It silences an action's own failure toast (#16667), so only the caller
+      // that renders the failure itself may claim it — never a context.
+      it("stamps ctx.callerReportsFailure from the dispatch options, and never from a contextOverride", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+        const options = { source: "agent", confirmed: true } as const;
+
+        await service.dispatch("actions.list", undefined, {
+          ...options,
+          callerReportsFailure: true,
+        });
+        await service.dispatch("actions.list", undefined, {
+          ...options,
+          contextOverride: { callerReportsFailure: true },
+        });
+        await service.dispatch("actions.list", undefined, {
+          ...options,
+          callerReportsFailure: true,
+          contextOverride: { callerReportsFailure: false },
+        });
+
+        expect(mockRun.mock.calls.map(([, ctx]) => ctx.callerReportsFailure)).toEqual([
+          true,
+          undefined,
+          true,
+        ]);
+      });
+
       // The scheduled run (#15977) is what marks a launch `spawnedBy:
       // "schedule"`, so only the host's own dispatch options may carry it.
       it("stamps ctx.scheduledRun from the dispatch options, and never from a contextOverride", async () => {

@@ -1327,9 +1327,10 @@ export default tseslint.config(
             "DropdownMenuLabel",
             "DropdownMenuRadioGroup",
             "DropdownMenuRadioItem",
+            "DropdownMenuSeparator",
           ],
         },
-        gap: "the rows are a Virtuoso list driven through its scroller ref and handle, which the kit VirtualList does not expose; the sort and selection menus size their panels, and the kit DropdownMenu takes no width",
+        gap: "the rows are a Virtuoso list driven through its scroller ref and handle, which the kit VirtualList does not expose; the view options and selection menus size their panels, and the kit DropdownMenu takes no width",
       },
       {
         file: "plugins/builtin/markdown-editor/renderer/MarkdownEditorView.tsx",

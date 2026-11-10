@@ -120,55 +120,74 @@ describe("applySnapshot", () => {
   });
 });
 
-describe("orders", () => {
-  afterEach(() => window.localStorage.removeItem("daintree-canopy-order"));
+describe("the order", () => {
+  const stored = (): unknown =>
+    JSON.parse(window.localStorage.getItem("daintree-canopy-order") ?? "{}");
+  afterEach(() => {
+    window.localStorage.removeItem("daintree-canopy-order");
+    window.localStorage.removeItem("daintree-canopy-scope");
+  });
 
   it("opens a view loaded later on the order last shown, to be placed afresh", async () => {
     useCanopyStore
       .getState()
-      .setOrder("all", { ids: ["b", "a"], rankedFor: 7, urgent: ["b"], band: ["b"] });
+      .setOrder({ ids: ["b", "a"], rankedFor: 7, urgent: ["b"], band: ["b"] });
     vi.resetModules();
     const { useCanopyStore: reloaded } = await import("../canopyStore");
-    expect(reloaded.getState().orders.all).toEqual({
+    expect(reloaded.getState().order).toEqual({
       ids: ["b", "a"],
       rankedFor: null,
       urgent: [],
       band: [],
     });
-    expect(reloaded.getState().orders.project).toBeUndefined();
   });
 
-  it("keeps each project's own order apart", async () => {
-    const viewOf = async (projectId: string) => {
-      window.history.replaceState(null, "", `/?projectId=${projectId}`);
-      vi.resetModules();
-      return (await import("../canopyStore")).useCanopyStore;
-    };
+  it("opens on every project's order whatever an earlier build kept for This project (#16581)", async () => {
+    window.localStorage.setItem("daintree-canopy-scope", "project");
+    window.localStorage.setItem(
+      "daintree-canopy-order",
+      JSON.stringify({ "local|all": ["a", "b"], "local|project:p1": ["b"] })
+    );
+    window.history.replaceState(null, "", "/?projectId=p1");
     try {
-      (await viewOf("p1"))
-        .getState()
-        .setOrder("project", { ids: ["x"], rankedFor: 1, urgent: [], band: [] });
-      (await viewOf("p2"))
-        .getState()
-        .setOrder("project", { ids: ["y"], rankedFor: 1, urgent: [], band: [] });
-      expect((await viewOf("p1")).getState().orders.project?.ids).toEqual(["x"]);
-      expect((await viewOf("p2")).getState().orders.project?.ids).toEqual(["y"]);
+      vi.resetModules();
+      const { useCanopyStore: reloaded } = await import("../canopyStore");
+      expect(reloaded.getState().order?.ids).toEqual(["a", "b"]);
     } finally {
       window.history.replaceState(null, "", "/");
     }
   });
 
-  it("never drops the scope another view saved", async () => {
-    vi.resetModules();
-    const { useCanopyStore: other } = await import("../canopyStore");
-    useCanopyStore
-      .getState()
-      .setOrder("all", { ids: ["a", "b"], rankedFor: 1, urgent: [], band: [] });
-    other.getState().setOrder("project", { ids: ["c"], rankedFor: 1, urgent: [], band: [] });
+  it("takes no project's order alone for every project's", async () => {
+    window.localStorage.setItem(
+      "daintree-canopy-order",
+      JSON.stringify({ "local|project:p1": ["b"], "project:p2": ["c"] })
+    );
     vi.resetModules();
     const { useCanopyStore: reloaded } = await import("../canopyStore");
-    expect(reloaded.getState().orders.all?.ids).toEqual(["a", "b"]);
-    expect(reloaded.getState().orders.project?.ids).toEqual(["c"]);
+    expect(reloaded.getState().order).toBeNull();
+  });
+
+  it("drops the orders kept for one project alone as it saves, keeping every host's", async () => {
+    window.localStorage.setItem(
+      "daintree-canopy-order",
+      JSON.stringify({ "studio|all": ["s"], "local|project:p1": ["b"], "project:p2": ["c"] })
+    );
+    vi.resetModules();
+    const { useCanopyStore: reloaded } = await import("../canopyStore");
+    reloaded.getState().setOrder({ ids: ["a"], rankedFor: 1, urgent: [], band: [] });
+    expect(stored()).toEqual({ "studio|all": ["s"], "local|all": ["a"] });
+  });
+
+  it("never drops the order another view saved for another host", async () => {
+    vi.resetModules();
+    const { useCanopyStore: other } = await import("../canopyStore");
+    useCanopyStore.getState().setOrder({ ids: ["a", "b"], rankedFor: 1, urgent: [], band: [] });
+    other.getState().setHostOrder("studio", { ids: ["c"], rankedFor: 1, urgent: [], band: [] });
+    vi.resetModules();
+    const { useCanopyStore: reloaded } = await import("../canopyStore");
+    expect(reloaded.getState().order?.ids).toEqual(["a", "b"]);
+    expect(reloaded.getState().hostOrders.studio?.ids).toEqual(["c"]);
   });
 });
 
@@ -185,23 +204,21 @@ describe("orders per host", () => {
   });
 
   it("keys each host's order by the host, and never mixes them", async () => {
-    useCanopyStore
-      .getState()
-      .setOrder("all", { ids: ["mine"], rankedFor: 1, urgent: [], band: [] });
+    useCanopyStore.getState().setOrder({ ids: ["mine"], rankedFor: 1, urgent: [], band: [] });
     useCanopyStore
       .getState()
       .setHostOrder("studio", { ids: ["theirs"], rankedFor: 1, urgent: [], band: [] });
     expect(stored()).toEqual({ "local|all": ["mine"], "studio|all": ["theirs"] });
     const reloaded = await reload();
-    expect(reloaded.getState().orders.all?.ids).toEqual(["mine"]);
+    expect(reloaded.getState().order?.ids).toEqual(["mine"]);
     expect(reloaded.getState().hostOrders.studio?.ids).toEqual(["theirs"]);
   });
 
   it("opens this machine on the order kept before orders were per host, and moves it", async () => {
     window.localStorage.setItem("daintree-canopy-order", JSON.stringify({ all: ["old"] }));
     const reloaded = await reload();
-    expect(reloaded.getState().orders.all?.ids).toEqual(["old"]);
-    reloaded.getState().setOrder("all", { ids: ["new"], rankedFor: 1, urgent: [], band: [] });
+    expect(reloaded.getState().order?.ids).toEqual(["old"]);
+    reloaded.getState().setOrder({ ids: ["new"], rankedFor: 1, urgent: [], band: [] });
     expect(stored()).toEqual({ "local|all": ["new"] });
   });
 
@@ -210,7 +227,7 @@ describe("orders per host", () => {
     window.__DAINTREE_HOST_ID__ = { id: "studio" };
     const reloaded = await reload();
     // A window on the studio host: its own list is the studio's, which has no order yet.
-    expect(reloaded.getState().orders.all).toBeUndefined();
+    expect(reloaded.getState().order).toBeNull();
     // This machine, shown from there, still opens on its own.
     expect(reloaded.getState().hostOrders.local?.ids).toEqual(["old"]);
   });
@@ -276,7 +293,6 @@ describe("going back to a dictated reply (#14778)", () => {
       hostId: null,
       mode: "unset",
       replyReveal: null,
-      resume: null,
       workOf: null,
     })
   );
@@ -302,15 +318,13 @@ describe("going back to a dictated reply (#14778)", () => {
     });
   });
 
-  it("wins over a remembered place and drops another assistant's narrowing when it opens", () => {
+  it("wins over the host shown and drops another assistant's narrowing when it opens", () => {
     useCanopyStore.setState({
       hostId: "studio",
-      resume: { at: Date.now(), hostId: "studio", query: "lint", runId: "run-9", order: [] },
       workOf: { assistantId: "a-1", name: "Planner" },
     });
     useCanopyStore.getState().revealReply({ runId: "run-1", hostScope: null });
     const state = useCanopyStore.getState();
-    expect(state.resume).toBeNull();
     expect(state.workOf).toBeNull();
     expect(state.hostId).toBeNull();
   });
@@ -328,9 +342,7 @@ describe("going back to a dictated reply (#14778)", () => {
     useCanopyStore.getState().toggle();
     expect(useCanopyStore.getState().replyReveal).toBeNull();
     ask();
-    useCanopyStore
-      .getState()
-      .closeForTerminal({ at: Date.now(), hostId: null, query: "", runId: "run-1", order: [] });
+    useCanopyStore.getState().close();
     expect(useCanopyStore.getState().replyReveal).toBeNull();
   });
 

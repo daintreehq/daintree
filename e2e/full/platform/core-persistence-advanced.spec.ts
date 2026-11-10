@@ -21,7 +21,7 @@ const DEFAULT_OPEN_SETTINGS = `${MOD}+Comma`;
 // KeyM/KeyJ keep the physical key: Option+letter produces a symbol on macOS.
 const DEFAULT_TOGGLE_DOCK = `${MOD}+Alt+KeyM`;
 const REBOUND_TOGGLE_DOCK = `${MOD}+Alt+Shift+KeyJ`;
-const TOGGLE_DOCK_LABEL = "Toggle focused terminal dock state";
+const TOGGLE_DOCK_LABEL = "Toggle focused panel dock state";
 const NO_OP_DWELL_MS = 750;
 
 async function openSettingsTab(window: Page, tab: string): Promise<void> {

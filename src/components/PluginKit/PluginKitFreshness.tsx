@@ -6,6 +6,7 @@ import type {
 } from "@shared/types/plugin-sdk-react";
 import { Button } from "@/components/ui/button";
 import { ProgressBar } from "@/components/ui/ProgressBar";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Spinner } from "@/components/ui/Spinner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -171,9 +172,7 @@ export function KitStaleIndicator({
         <>
           <WifiOff aria-hidden="true" className="h-3 w-3 shrink-0 text-status-warning" />
           <span className="shrink-0 text-text-primary">Disconnected</span>
-          <span aria-hidden="true" className="text-text-muted">
-            ·
-          </span>
+          <FactSeparator />
         </>
       ) : state === "stale" ? (
         <>

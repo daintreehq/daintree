@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useEventStore, type EventRecord, type EventFilterOptions } from "@/store/eventStore";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, ListFilter } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilterChip } from "@/components/ui/FilterChip";
@@ -9,11 +9,16 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { sanitizeErrorText } from "@/utils/errorText";
+import { CONTEXT_FILTER_FACETS, formatContextValue, type ContextFilterKey } from "./contextFilters";
 
 interface EventDetailProps {
   event: EventRecord | null;
   /** False when there is nothing to select yet, so the pane doesn't ask for a selection. */
   hasEvents?: boolean;
+  /** False when filters hide every captured event, so there is nothing to select either. */
+  hasMatches?: boolean;
+  /** The selected event is no longer in the filtered list beside it. */
+  filteredOut?: boolean;
   className?: string;
 }
 
@@ -22,9 +27,9 @@ interface ContextPillProps {
   /** Lowercase name for the hint: "Filter by {noun}", "Clear {noun} filter". */
   noun: string;
   value: string | number;
-  filterKey: keyof EventFilterOptions;
+  filterKey: ContextFilterKey;
   currentFilters: EventFilterOptions;
-  onToggle: (key: keyof EventFilterOptions, value: string | number) => void;
+  onToggle: (key: ContextFilterKey, value: string | number) => void;
 }
 
 function ContextPill({
@@ -35,7 +40,7 @@ function ContextPill({
   currentFilters,
   onToggle,
 }: ContextPillProps) {
-  const strValue = String(value);
+  const strValue = formatContextValue(filterKey, value);
   const isActive = currentFilters[filterKey] === value;
   const { ref: labelRef, isTruncated } = useTruncationDetection();
 
@@ -49,6 +54,8 @@ function ContextPill({
           <FilterChip
             selected={isActive}
             labelRef={labelRef}
+            // The row label is a separate span; the chip names its facet itself.
+            aria-label={`${label}: ${strValue}`}
             onClick={(e) => {
               e.stopPropagation();
               onToggle(filterKey, value);
@@ -69,12 +76,18 @@ function ContextPill({
   );
 }
 
-export function EventDetail({ event, hasEvents = true, className }: EventDetailProps) {
+export function EventDetail({
+  event,
+  hasEvents = true,
+  hasMatches = true,
+  filteredOut = false,
+  className,
+}: EventDetailProps) {
   const filters = useEventStore((state) => state.filters);
   const setFilters = useEventStore((state) => state.setFilters);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["payload"]));
 
-  const handleContextToggle = (key: keyof EventFilterOptions, value: string | number) => {
+  const handleContextToggle = (key: ContextFilterKey, value: string | number) => {
     const newValue = filters[key] === value ? undefined : value;
     setFilters({ [key]: newValue });
   };
@@ -92,10 +105,23 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
           className
         )}
       >
-        <p>{hasEvents ? "Select an event to see its payload" : "Nothing to inspect yet"}</p>
+        <p>
+          {!hasEvents
+            ? "Nothing to inspect yet"
+            : hasMatches
+              ? "Select an event to see its payload"
+              : "No matching event to inspect"}
+        </p>
       </div>
     );
   }
+
+  const contextFacets = CONTEXT_FILTER_FACETS.flatMap((facet) => {
+    const value = event.payload?.[facet.key];
+    return (typeof value === "string" && value !== "") || typeof value === "number"
+      ? [{ ...facet, value }]
+      : [];
+  });
 
   const toggleSection = (section: string) => {
     setExpandedSections((prev) => {
@@ -167,6 +193,14 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
           </Tooltip>
           <TimeAgo timestamp={event.timestamp} className="whitespace-nowrap" />
           <span className="capitalize whitespace-nowrap">{event.source}</span>
+          {/* The selection outlives a filter change; say so rather than show a
+              payload with no row beside it. */}
+          {filteredOut ? (
+            <span className="inline-flex items-center gap-1 whitespace-nowrap">
+              <ListFilter aria-hidden="true" className="h-3 w-3" />
+              Hidden by filters
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -196,92 +230,37 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
           )}
         </div>
 
-        {event.payload &&
-          (event.payload.worktreeId ||
-            event.payload.agentId ||
-            event.payload.runId ||
-            event.payload.terminalId ||
-            event.payload.issueNumber ||
-            event.payload.prNumber) && (
-            <div className="flex-shrink-0">
-              <button
-                onClick={() => toggleSection("context")}
-                aria-expanded={expandedSections.has("context")}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
-              >
-                {expandedSections.has("context") ? (
-                  <ChevronDown className="w-3.5 h-3.5" />
-                ) : (
-                  <ChevronRight className="w-3.5 h-3.5" />
-                )}
-                <span className="text-xs font-medium">Context</span>
-              </button>
-              {expandedSections.has("context") && (
-                <div className="px-3 pb-2.5 space-y-1.5 text-xs">
-                  {event.payload.worktreeId !== undefined && (
-                    <ContextPill
-                      label="Worktree"
-                      noun="worktree"
-                      value={event.payload.worktreeId}
-                      filterKey="worktreeId"
-                      currentFilters={filters}
-                      onToggle={handleContextToggle}
-                    />
-                  )}
-                  {event.payload.agentId !== undefined && (
-                    <ContextPill
-                      label="Agent"
-                      noun="agent"
-                      value={event.payload.agentId}
-                      filterKey="agentId"
-                      currentFilters={filters}
-                      onToggle={handleContextToggle}
-                    />
-                  )}
-                  {event.payload.runId !== undefined && (
-                    <ContextPill
-                      label="Run"
-                      noun="run"
-                      value={event.payload.runId}
-                      filterKey="runId"
-                      currentFilters={filters}
-                      onToggle={handleContextToggle}
-                    />
-                  )}
-                  {event.payload.terminalId !== undefined && (
-                    <ContextPill
-                      label="Terminal"
-                      noun="terminal"
-                      value={event.payload.terminalId}
-                      filterKey="terminalId"
-                      currentFilters={filters}
-                      onToggle={handleContextToggle}
-                    />
-                  )}
-                  {event.payload.issueNumber !== undefined && (
-                    <ContextPill
-                      label="Issue #"
-                      noun="issue"
-                      value={event.payload.issueNumber}
-                      filterKey="issueNumber"
-                      currentFilters={filters}
-                      onToggle={handleContextToggle}
-                    />
-                  )}
-                  {event.payload.prNumber !== undefined && (
-                    <ContextPill
-                      label="PR #"
-                      noun="PR"
-                      value={event.payload.prNumber}
-                      filterKey="prNumber"
-                      currentFilters={filters}
-                      onToggle={handleContextToggle}
-                    />
-                  )}
-                </div>
+        {contextFacets.length > 0 && (
+          <div className="flex-shrink-0">
+            <button
+              onClick={() => toggleSection("context")}
+              aria-expanded={expandedSections.has("context")}
+              className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
+            >
+              {expandedSections.has("context") ? (
+                <ChevronDown className="w-3.5 h-3.5" />
+              ) : (
+                <ChevronRight className="w-3.5 h-3.5" />
               )}
-            </div>
-          )}
+              <span className="text-xs font-medium">Context</span>
+            </button>
+            {expandedSections.has("context") && (
+              <div className="px-3 pb-2.5 space-y-1.5 text-xs">
+                {contextFacets.map(({ key, label, noun, value }) => (
+                  <ContextPill
+                    key={key}
+                    label={label}
+                    noun={noun}
+                    value={value}
+                    filterKey={key}
+                    currentFilters={filters}
+                    onToggle={handleContextToggle}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <div className="border-b border-divider">
           <button
             onClick={() => toggleSection("metadata")}

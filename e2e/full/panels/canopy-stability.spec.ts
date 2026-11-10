@@ -12,7 +12,8 @@
  * Nor may any row turn unread without an agent doing something: a row going
  * read is the user reading it, but going unread takes a stop, a start or an ask.
  *
- * Opt-in only, since it downloads the reader model (about 90 MB):
+ * Opt-in only, since it runs the real reader model on every screen. The build
+ * puts the model where an unpackaged run reads it (`npm run fetch:canopy-model`):
  *
  *   DAINTREE_E2E_CANOPY_LOCAL=1 npx playwright test --project=full-panels canopy-stability
  */
@@ -523,9 +524,9 @@ test.describe("Canopy stability on the local model", () => {
   test("holds still while the user types into an agent, and moves only for a new approval", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the reader model",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec runs the reader model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the reader model");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to run the reader model");
     // Four agents launch and settle before anything is measured.
     test.setTimeout(480_000);
     const page = ctx.window;
@@ -551,19 +552,17 @@ test.describe("Canopy stability on the local model", () => {
       );
     }
 
-    // Turn Canopy on from its offer, the way a user does.
+    // Canopy is on by default (#16415): open it, the way a user does.
     await toggleCanopy(page);
-    await dialog(page).getByRole("button", { name: "Turn on Canopy" }).click();
     // From the first open on: rows show at once, and no row changes height
-    // as the model downloads and its readings land.
+    // as its readings land.
     await sampleInbox(page);
     const turnedOn = Date.now();
     await expect(dialog(page).locator("[data-canopy-list] [data-canopy-card]")).toHaveCount(4, {
       timeout: 60_000,
     });
-    // Every row read and worded before measuring starts: the model downloads
-    // on the first open and the readings land after it, which is not what
-    // this test measures.
+    // Every row read and worded before measuring starts: the readings land
+    // after the first open, which is not what this test measures.
     await expect
       .poll(
         async () =>
@@ -654,9 +653,9 @@ test.describe("Canopy stability on the local model", () => {
   test("holds still through a quiet spell and a close and reopen, and moves only the agents that start work", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the reader model",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec runs the reader model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the reader model");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to run the reader model");
     test.setTimeout(300_000);
     const page = ctx.window;
     await sampleInbox(page);
@@ -705,9 +704,9 @@ test.describe("Canopy stability on the local model", () => {
   test("moves only the approval the user answers, and then that agent's own work", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the reader model",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec runs the reader model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the reader model");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to run the reader model");
     test.setTimeout(240_000);
     const page = ctx.window;
     await sampleInbox(page);
@@ -764,9 +763,9 @@ test.describe("Canopy stability on the local model", () => {
   test("holds still while the user moves between agents and resizes the window, which redraws every one", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the reader model",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec runs the reader model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the reader model");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to run the reader model");
     test.setTimeout(300_000);
     const page = ctx.window;
     const { finished, approval, working, question } = agents;

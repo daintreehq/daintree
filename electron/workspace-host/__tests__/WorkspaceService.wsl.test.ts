@@ -3,9 +3,11 @@ import os from "os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
+import type { Worktree } from "../../../shared/types/worktree.js";
 
 const mockSimpleGit = {
   raw: vi.fn(),
+  checkIsRepo: vi.fn().mockResolvedValue(true),
   branch: vi.fn().mockResolvedValue({ current: "main" }),
 };
 
@@ -67,9 +69,12 @@ vi.mock("../../services/events.js", () => ({
   events: new EventEmitter(),
 }));
 
-const getDefaultWslDistroMock = vi.hoisted(() => vi.fn());
+const { detectWslPathMock, getDefaultWslDistroMock } = vi.hoisted(() => ({
+  detectWslPathMock: vi.fn(),
+  getDefaultWslDistroMock: vi.fn(),
+}));
 vi.mock("../../utils/wsl.js", () => ({
-  detectWslPath: vi.fn().mockReturnValue(null),
+  detectWslPath: detectWslPathMock,
   getDefaultWslDistro: getDefaultWslDistroMock,
 }));
 
@@ -91,208 +96,204 @@ interface StubMonitor {
   isWslPath: boolean;
   wslDistro: string | undefined;
   setWslEligible: ReturnType<typeof vi.fn>;
+  setWslOptIn: ReturnType<typeof vi.fn>;
   // dispose() iterates monitors and calls stop(); provide a no-op so teardown
   // doesn't blow up on these lightweight stubs.
   stop: ReturnType<typeof vi.fn>;
 }
 
 function stubMonitor(isWslPath: boolean, wslDistro: string | undefined): StubMonitor {
-  return { isWslPath, wslDistro, setWslEligible: vi.fn(), stop: vi.fn() };
+  return { isWslPath, wslDistro, setWslEligible: vi.fn(), setWslOptIn: vi.fn(), stop: vi.fn() };
 }
 
-describe("WorkspaceService WSL eligibility refresh (#9924)", () => {
+const WSL_WORKTREE: Worktree = {
+  id: "\\\\wsl$\\Ubuntu\\repo",
+  path: "\\\\wsl$\\Ubuntu\\repo",
+  name: "repo",
+  isCurrent: false,
+};
+
+// The eligibility matrix lives in WslGitEligibilityTracker.test.ts; these
+// cover only how WorkspaceService wires the tracker to its monitors and its
+// background, unload and project-switch lifecycle.
+describe("WorkspaceService WSL eligibility wiring (#9924)", () => {
   let service: WorkspaceService;
+  let clearedOptIns: string[];
   const originalPlatform = process.platform;
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    detectWslPathMock.mockReset().mockReturnValue({ distro: "Ubuntu", posixPath: "/repo" });
+    getDefaultWslDistroMock.mockReset().mockResolvedValue("Ubuntu");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    vi.spyOn(os, "setPriority").mockImplementation(() => {});
+    clearedOptIns = [];
     const workspaceModule = await import("../WorkspaceService.js");
-    service = new workspaceModule.WorkspaceService((_event: WorkspaceHostEvent) => {});
+    service = new workspaceModule.WorkspaceService((event: WorkspaceHostEvent) => {
+      if (event.type === "clear-wsl-git-opt-in") clearedOptIns.push(event.worktreeId);
+    });
   });
 
   afterEach(() => {
-    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
     service.dispose();
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  function seedMonitors(): { ubuntu: StubMonitor; debian: StubMonitor; nonWsl: StubMonitor } {
+  function seedMonitors(): { ubuntu: StubMonitor; debian: StubMonitor } {
     const ubuntu = stubMonitor(true, "Ubuntu");
     const debian = stubMonitor(true, "Debian");
-    const nonWsl = stubMonitor(false, undefined);
     const monitors = service["monitors"] as unknown as Map<string, StubMonitor>;
     monitors.set("ubuntu-wt", ubuntu);
     monitors.set("debian-wt", debian);
-    monitors.set("local-wt", nonWsl);
-    return { ubuntu, debian, nonWsl };
+    monitors.set("local-wt", stubMonitor(false, undefined));
+    return { ubuntu, debian };
   }
 
-  it("reprobe refreshes every WSL monitor against the fresh default distro", async () => {
-    const { ubuntu, debian, nonWsl } = seedMonitors();
-    // Default distro changed to Debian mid-session.
+  /** Arms the distro poll the way a first WSL monitor install does. */
+  function enrichWslWorktree(wt: Worktree = WSL_WORKTREE): Promise<Worktree> {
+    return service["wslGit"].enrichWorktree(wt);
+  }
+
+  it("reprobe refreshes the service's own WSL monitors", async () => {
+    const { ubuntu, debian } = seedMonitors();
     getDefaultWslDistroMock.mockResolvedValue("Debian");
 
     await service.reprobeWslForWorktree("ubuntu-wt");
 
-    // Target monitor first shows the pending state, then its final verdict.
     expect(ubuntu.setWslEligible).toHaveBeenCalledWith("unprobed");
     expect(ubuntu.setWslEligible).toHaveBeenLastCalledWith("ineligible");
-    // The shared probe also refreshes the now-default Debian worktree.
     expect(debian.setWslEligible).toHaveBeenLastCalledWith("eligible");
-    // Non-WSL monitors are never touched.
-    expect(nonWsl.setWslEligible).not.toHaveBeenCalled();
   });
 
-  it("reprobe maps a failed probe (null default) to 'unprobed', not 'ineligible'", async () => {
-    const { ubuntu, debian } = seedMonitors();
-    getDefaultWslDistroMock.mockResolvedValue(null);
+  it("setWslOptIn reaches the matching monitor and later enrichments", async () => {
+    const monitor = stubMonitor(true, "Ubuntu");
+    (service["monitors"] as unknown as Map<string, StubMonitor>).set(WSL_WORKTREE.id, monitor);
 
-    await service.reprobeWslForWorktree("ubuntu-wt");
+    service.setWslOptIn(WSL_WORKTREE.id, true, false);
+    expect(monitor.setWslOptIn).toHaveBeenLastCalledWith(true, false);
+    service.setWslOptIn(WSL_WORKTREE.id, false, true);
+    expect(monitor.setWslOptIn).toHaveBeenLastCalledWith(false, true);
 
-    expect(ubuntu.setWslEligible).toHaveBeenLastCalledWith("unprobed");
-    expect(debian.setWslEligible).toHaveBeenLastCalledWith("unprobed");
+    const enriched = await enrichWslWorktree();
+    expect(enriched.wslGitOptIn).toBe(false);
+    expect(enriched.wslGitDismissed).toBe(true);
   });
 
-  it("reprobe is a no-op for an unknown or non-WSL worktree", async () => {
-    const { nonWsl } = seedMonitors();
-    getDefaultWslDistroMock.mockResolvedValue("Ubuntu");
+  it("load merges main's opt-ins under in-memory toggles, then prunes stale in-project keys", async () => {
+    const root = "/projects/repo";
+    const live: Worktree = {
+      id: `${root}/.worktrees/live`,
+      path: `${root}/.worktrees/live`,
+      name: "live",
+      isCurrent: false,
+    };
+    const listService = service["listService"] as unknown as {
+      list: unknown;
+      mapToWorktrees: unknown;
+    };
+    listService.list = vi.fn().mockResolvedValue([]);
+    listService.mapToWorktrees = vi.fn().mockResolvedValue([live]);
+    vi.spyOn(service, "syncMonitors").mockResolvedValue(undefined);
+    vi.spyOn(
+      service["topologyWatcher"] as unknown as { startWatcher: () => Promise<void> },
+      "startWatcher"
+    ).mockResolvedValue(undefined);
+    const internals = service as unknown as {
+      sweepPrunableWorktreeEntries: () => Promise<void>;
+      initializePRService: () => Promise<void>;
+      refreshAll: (force?: boolean) => Promise<void>;
+    };
+    vi.spyOn(internals, "sweepPrunableWorktreeEntries").mockResolvedValue(undefined);
+    // The post-load PR and status work is fire-and-forget and outside this wiring.
+    vi.spyOn(internals, "initializePRService").mockResolvedValue(undefined);
+    vi.spyOn(internals, "refreshAll").mockResolvedValue(undefined);
 
-    await service.reprobeWslForWorktree("local-wt");
-    await service.reprobeWslForWorktree("does-not-exist");
+    // A toggle that landed before main's persisted map must survive the merge.
+    service.setWslOptIn(live.id, false, true);
+    await service.loadProject("req-load", root, "project-id", undefined, {
+      [live.id]: { enabled: true, dismissed: false },
+      [`${root}/.worktrees/stale`]: { enabled: true, dismissed: false },
+      "/elsewhere/repo/wt": { enabled: true, dismissed: false },
+    });
 
-    expect(nonWsl.setWslEligible).not.toHaveBeenCalled();
+    expect(clearedOptIns).toEqual([`${root}/.worktrees/stale`]);
+    const enriched = await enrichWslWorktree(live);
+    expect(enriched.wslGitOptIn).toBe(false);
+    expect(enriched.wslGitDismissed).toBe(true);
+  });
+
+  it("stops the distro poll while backgrounded and restarts it on resume (#12519)", async () => {
+    vi.useFakeTimers();
+    await enrichWslWorktree();
+
+    service.pause();
+    getDefaultWslDistroMock.mockClear();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(getDefaultWslDistroMock).not.toHaveBeenCalled();
+
+    service.resume();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getDefaultWslDistroMock).toHaveBeenCalled();
+  });
+
+  it("a first WSL enrichment landing while backgrounded arms the poll on resume", async () => {
+    vi.useFakeTimers();
+    service.pause();
+
+    await enrichWslWorktree();
+    getDefaultWslDistroMock.mockClear();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(getDefaultWslDistroMock).not.toHaveBeenCalled();
+
+    service.resume();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getDefaultWslDistroMock).toHaveBeenCalled();
+  });
+
+  it("a project switch while backgrounded does not revive the poll on resume", async () => {
+    vi.useFakeTimers();
+    await enrichWslWorktree();
+    service.pause();
+    await service.onProjectSwitch("switch-1");
+
+    service.resume();
+    getDefaultWslDistroMock.mockClear();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(getDefaultWslDistroMock).not.toHaveBeenCalled();
   });
 
-  it("discards an in-flight reprobe when the poller is stopped (project switch) (#9924)", async () => {
+  it("a project switch discards an in-flight reprobe and drops the cached distro", async () => {
+    await enrichWslWorktree();
     const { ubuntu, debian } = seedMonitors();
     let resolveProbe!: (v: string | null) => void;
-    getDefaultWslDistroMock.mockReturnValue(
+    getDefaultWslDistroMock.mockReturnValueOnce(
       new Promise<string | null>((r) => {
         resolveProbe = r;
       })
     );
-
     const pending = service.reprobeWslForWorktree("ubuntu-wt");
-    // Target shows the pending state synchronously, before the probe resolves.
-    expect(ubuntu.setWslEligible).toHaveBeenCalledWith("unprobed");
     ubuntu.setWslEligible.mockClear();
-    debian.setWslEligible.mockClear();
 
-    // A project switch (or dispose) bumps the probe sequence, invalidating the
-    // in-flight probe so its late resolution can't touch the monitor map.
-    (service as unknown as { stopWslDistroPoller(): void }).stopWslDistroPoller();
-
+    await service.onProjectSwitch("switch-1");
     resolveProbe("Debian");
     await pending;
 
     expect(ubuntu.setWslEligible).not.toHaveBeenCalled();
     expect(debian.setWslEligible).not.toHaveBeenCalled();
+    getDefaultWslDistroMock.mockClear();
+    await enrichWslWorktree();
+    expect(getDefaultWslDistroMock).toHaveBeenCalledTimes(1);
   });
 
-  it("a superseded probe never overwrites a newer probe's result (#9924)", async () => {
-    const { ubuntu } = seedMonitors();
-    service["wslLastKnownDefaultDistro"] = "Debian";
-
-    // First probe (a slow poll tick) is held open and will return a stale value.
-    let resolveSlow!: (v: string | null) => void;
-    getDefaultWslDistroMock.mockReturnValueOnce(
-      new Promise<string | null>((r) => {
-        resolveSlow = r;
-      })
-    );
-    const slowPoll = (
-      service as unknown as { pollWslDefaultDistro(): Promise<void> }
-    ).pollWslDefaultDistro();
-
-    // A reprobe initiated afterwards resolves first with the fresh value.
-    getDefaultWslDistroMock.mockResolvedValueOnce("Debian");
-    await service.reprobeWslForWorktree("ubuntu-wt");
-    expect(ubuntu.setWslEligible).toHaveBeenLastCalledWith("ineligible");
-
-    ubuntu.setWslEligible.mockClear();
-    // The older poll finally resolves with a stale distro — it must be ignored.
-    resolveSlow("Ubuntu");
-    await slowPoll;
-    expect(ubuntu.setWslEligible).not.toHaveBeenCalled();
-    expect(service["wslLastKnownDefaultDistro"]).toBe("Debian");
-  });
-
-  it("stops the distro poll while backgrounded and restarts it on resume (#12519)", async () => {
+  it("dispose stops the distro poll", async () => {
     vi.useFakeTimers();
-    try {
-      vi.spyOn(os, "setPriority").mockImplementation(() => {});
-      getDefaultWslDistroMock.mockResolvedValue("Ubuntu");
-      service["startWslDistroPoller"]();
+    await enrichWslWorktree();
 
-      service.pause();
-      getDefaultWslDistroMock.mockClear();
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(getDefaultWslDistroMock).not.toHaveBeenCalled();
-
-      service.resume();
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(getDefaultWslDistroMock).toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("a first WSL enrichment landing while backgrounded arms the poll on resume", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.spyOn(os, "setPriority").mockImplementation(() => {});
-      getDefaultWslDistroMock.mockResolvedValue("Ubuntu");
-      service.pause();
-
-      // The enrichment's probe resolved after the pause.
-      service["startWslDistroPoller"]();
-      getDefaultWslDistroMock.mockClear();
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(getDefaultWslDistroMock).not.toHaveBeenCalled();
-
-      service.resume();
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(getDefaultWslDistroMock).toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("an unload while backgrounded does not revive the distro poll on resume", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.spyOn(os, "setPriority").mockImplementation(() => {});
-      getDefaultWslDistroMock.mockResolvedValue("Ubuntu");
-      service["startWslDistroPoller"]();
-      service.pause();
-      service["stopWslDistroPoller"]();
-
-      service.resume();
-      getDefaultWslDistroMock.mockClear();
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(getDefaultWslDistroMock).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("the background poll refreshes monitors only when the default distro changes", async () => {
-    const { ubuntu, debian } = seedMonitors();
-    service["wslLastKnownDefaultDistro"] = "Ubuntu";
-
-    // Same distro → no refresh.
-    getDefaultWslDistroMock.mockResolvedValueOnce("Ubuntu");
-    await (service as unknown as { pollWslDefaultDistro(): Promise<void> }).pollWslDefaultDistro();
-    expect(ubuntu.setWslEligible).not.toHaveBeenCalled();
-    expect(debian.setWslEligible).not.toHaveBeenCalled();
-
-    // Distro flips to Debian → both WSL monitors recompute.
-    getDefaultWslDistroMock.mockResolvedValueOnce("Debian");
-    await (service as unknown as { pollWslDefaultDistro(): Promise<void> }).pollWslDefaultDistro();
-    expect(ubuntu.setWslEligible).toHaveBeenLastCalledWith("ineligible");
-    expect(debian.setWslEligible).toHaveBeenLastCalledWith("eligible");
-    expect(service["wslLastKnownDefaultDistro"]).toBe("Debian");
+    service.dispose();
+    getDefaultWslDistroMock.mockClear();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(getDefaultWslDistroMock).not.toHaveBeenCalled();
   });
 });

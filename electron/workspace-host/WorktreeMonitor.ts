@@ -1,8 +1,12 @@
 import { access } from "fs/promises";
-import type { InotifyLimit } from "../../shared/types/workspace-host.js";
+import type { InotifyLimit, StatusDownloadGate } from "../../shared/types/workspace-host.js";
 import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import type PQueue from "p-queue";
-import type { WorktreeChanges } from "../../shared/types/git.js";
+import type {
+  GitStatusUnanswered,
+  GitStatusUnansweredReason,
+  WorktreeChanges,
+} from "../../shared/types/git.js";
 import type {
   Worktree,
   WorktreeMood,
@@ -32,6 +36,9 @@ import {
 import type { StatusAdmissionController } from "./StatusAdmissionController.js";
 import { TimeoutError, withTimeout } from "../utils/withTimeout.js";
 import type { ClaimedIssue, IssueClaimProvenance } from "../services/issueBranchClaim.js";
+import { logDebug } from "../utils/logger.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { INDEX_REFRESH_DELAY_MS, refreshWorktreeIndex } from "./indexRefresh.js";
 
 // Hard ceiling for individual filesystem syscalls on the poll path. On a
 // healthy disk these return in well under a millisecond; on a stalled mount
@@ -46,6 +53,12 @@ const FS_OP_TIMEOUT_MS = 5_000;
 // await nothing else bounded, so no pass can hold the single-flight slot, or
 // leave the card looking current, indefinitely.
 const STATUS_PASS_WATCHDOG_MS = 40_000;
+// After a status read goes unanswered, no automatic pass starts until this
+// backoff elapses: 30s, doubling per consecutive unanswered read, up to 5 min.
+// A git blocked on files that are still downloading only competes with the
+// download, and every retry is another process waiting on the same files.
+const STATUS_RETRY_BACKOFF_BASE_MS = 30_000;
+const STATUS_RETRY_BACKOFF_MAX_MS = 300_000;
 const RESOURCE_POLL_DEFAULT_ACTIVE_MS = 30_000;
 const RESOURCE_POLL_DEFAULT_BACKGROUND_MS = 300_000;
 const HEARTBEAT_GAP_MULTIPLIER = 3;
@@ -90,6 +103,12 @@ export interface WorktreePollingPermissions {
   backgroundWork: boolean;
   /** Coalesce harder and meter automatic status passes. */
   attenuated: boolean;
+}
+
+interface IndexRefreshRequest {
+  readonly notBefore: number;
+  /** Whether the service still holds this monitor for the worktree. */
+  readonly isOwned: () => boolean;
 }
 
 export interface WorktreeMonitorConfig {
@@ -222,6 +241,15 @@ export class WorktreeMonitor {
   // by the time the queued request runs.
   private resumeCatchUpNeedsForce: boolean = false;
   private _hasInitialStatus: boolean = false;
+  // The current streak of status reads that ended without an answer, and the
+  // earliest an automatic pass may start again. Both clear on an answer.
+  private _gitStatusUnanswered: GitStatusUnanswered | null = null;
+  private statusDownloadGate: StatusDownloadGate = "open";
+  // One per running status read, so closing the gate can stop the git of
+  // whichever one holds the pass, and of any fresh read beside it.
+  private readonly passAbandons = new Set<AbortController>();
+  private statusUnansweredStreak = 0;
+  private statusRetryNotBefore = 0;
 
   // File watcher state — owned by `watcherController`. The remaining fields
   // here are inputs to the controller's host interface (read by the watcher
@@ -270,6 +298,14 @@ export class WorktreeMonitor {
   // Cleared by `clearTimers()` so `stop()` cancels the deferred poll.
   private initialStatusTimer: NodeJS.Timeout | null = null;
   private firstStatusTimer: NodeJS.Timeout | null = null;
+  // The one index refresh a worktree this process created is owed (#16679),
+  // held from `scheduleIndexRefresh` until its git may start. One that comes
+  // due during a pause or a closed download gate stays owed, and
+  // `scheduleNextPoll` re-arms it when status work runs again.
+  private indexRefresh: IndexRefreshRequest | null = null;
+  private indexRefreshScheduled = false;
+  private indexRefreshTimer: NodeJS.Timeout | null = null;
+  private indexRefreshQueued = false;
 
   // Extra state
   private _createdAt: number | undefined;
@@ -744,6 +780,12 @@ export class WorktreeMonitor {
       get fetchNetworkFailed() {
         return monitor._fetchNetworkFailed;
       },
+      get gitStatusUnanswered() {
+        return monitor._gitStatusUnanswered;
+      },
+      get gitStatusWaitingForDownload() {
+        return monitor.statusDownloadGate === "held";
+      },
       get hasRemote() {
         return monitor._hasRemote;
       },
@@ -950,6 +992,9 @@ export class WorktreeMonitor {
       set worktreeChanges(value: WorktreeChanges | null) {
         monitor.worktreeChanges = value;
       },
+      onStatusUnanswered: (reason: GitStatusUnansweredReason) =>
+        monitor.recordStatusUnanswered(reason),
+      onStatusAnswered: () => monitor.clearStatusUnanswered(),
       clearPRInfo: () => monitor.clearPRInfo(),
       clearLinked: () => monitor.clearLinked(),
       onBranchChanged: (branch: string) => monitor.callbacks.onBranchChanged?.(monitor.id, branch),
@@ -1109,14 +1154,14 @@ export class WorktreeMonitor {
   }
 
   /**
-   * Resolved when `WorkspaceService` matches the origin URL against the
+   * Resolved when `ForgeRemoteDetector` matches the origin URL against the
    * relayed provider-matcher table — at monitor start and again on every
    * table change. Gates forge affordances ("Sign in to refresh", PR badge) —
    * unmatched remotes silently hide them even when an auth failure is
    * recorded.
    *
-   * Guarded against post-stop emits: `probeForgeRemoteAsync` is a fire-and-
-   * forget async call that may resolve after the monitor is torn down (e.g.
+   * Guarded against post-stop emits: `ForgeRemoteDetector.probeMonitor` is a
+   * fire-and-forget async call that may resolve after the monitor is torn down (e.g.
    * worktree removal, project switch). Without this check the late resolution
    * would emit a `worktree-update` after `worktree-removed`, re-adding a
    * ghost card to the renderer.
@@ -1426,8 +1471,21 @@ export class WorktreeMonitor {
       this._setupStatus = undefined;
       return;
     }
+    // Clone results are written once, during `copy-config`, and every later
+    // writer (submodules, the setup script, plugin steps, a retry) builds a
+    // fresh status without them. Carried here so no writer has to know.
+    const clones = status.clones ?? this._setupStatus?.clones;
     this._setupStatus = {
       ...status,
+      ...(clones
+        ? {
+            clones: clones.map((clone) =>
+              clone.reason !== undefined
+                ? { ...clone, reason: clone.reason.slice(0, WORKTREE_SETUP_ERROR_MAX_LENGTH) }
+                : { ...clone }
+            ),
+          }
+        : {}),
       ...(status.error !== undefined
         ? { error: status.error.slice(0, WORKTREE_SETUP_ERROR_MAX_LENGTH) }
         : {}),
@@ -1812,9 +1870,95 @@ export class WorktreeMonitor {
     this.armFirstStatusRecovery(delayMs);
   }
 
+  /**
+   * Owe this worktree one index refresh (#16679). The create path calls it;
+   * every later call is a no-op. Nothing runs here, so the create result never
+   * waits on git.
+   */
+  scheduleIndexRefresh(isOwned: () => boolean, delayMs: number = INDEX_REFRESH_DELAY_MS): void {
+    if (this.indexRefreshScheduled || !this._isRunning) return;
+    this.indexRefreshScheduled = true;
+    this.indexRefresh = { notBefore: Date.now() + delayMs, isOwned };
+    this.armIndexRefresh();
+  }
+
+  /**
+   * The refresh only pays for itself in status passes, so it runs when they
+   * do: a backgrounded worktree with no agent waits for the resume, one with an
+   * agent keeps polling and keeps its refresh. A closed gate means git would
+   * block on placeholders.
+   */
+  private get indexRefreshAllowed(): boolean {
+    return this._isRunning && this.statusWorkAllowed && this.statusDownloadGate === "open";
+  }
+
+  private armIndexRefresh(): void {
+    const request = this.indexRefresh;
+    if (!request || this.indexRefreshTimer || this.indexRefreshQueued) return;
+    if (!this.indexRefreshAllowed) return;
+    this.indexRefreshTimer = setTimeout(
+      () => {
+        this.indexRefreshTimer = null;
+        void this.runIndexRefresh(request);
+      },
+      Math.max(0, request.notBefore - Date.now())
+    );
+    this.indexRefreshTimer.unref?.();
+  }
+
+  private async runIndexRefresh(request: IndexRefreshRequest): Promise<void> {
+    const run = async (): Promise<void> => {
+      // Paused or gated since it was armed: still owed.
+      if (this.indexRefresh !== request || !this.indexRefreshAllowed) return;
+      // A worktree deleted or recreated at this path since has its own monitor.
+      if (!request.isOwned()) {
+        this.indexRefresh = null;
+        return;
+      }
+      // Spent once git may start, whatever becomes of it: a held lock means an
+      // agent's git is writing the index, which heals it anyway. Nothing stops
+      // this git once started; see `refreshWorktreeIndex`.
+      this.indexRefresh = null;
+      try {
+        await refreshWorktreeIndex(
+          this.path,
+          this.wslInvocation,
+          () => this.indexRefreshAllowed && request.isOwned()
+        );
+      } catch (error) {
+        logDebug("[WorktreeMonitor] Index refresh skipped", {
+          worktreeId: this.id,
+          error: formatErrorMessage(error, "git update-index failed"),
+        });
+      }
+    };
+    this.indexRefreshQueued = true;
+    try {
+      if (this.pollQueue) {
+        // Ranked with this worktree's own status passes: the queue has no aging,
+        // so anything lower could wait behind a busy fleet indefinitely.
+        await this.pollQueue.add(run, {
+          signal: this._pollAbortController.signal,
+          priority: this.isElevated ? 1 : 0,
+        });
+      } else {
+        await run();
+      }
+    } catch {
+      // Withdrawn from the queue by stop().
+    } finally {
+      this.indexRefreshQueued = false;
+    }
+  }
+
   stop(): void {
     this._isRunning = false;
     this._pollAbortController.abort();
+    this.indexRefresh = null;
+    if (this.indexRefreshTimer) {
+      clearTimeout(this.indexRefreshTimer);
+      this.indexRefreshTimer = null;
+    }
     // An in-flight pass belongs to the lifecycle that just ended. Free its slot
     // so a restart can run its own instead of waiting for the old one to settle.
     this.gitStatusPass.abandon();
@@ -1915,7 +2059,11 @@ export class WorktreeMonitor {
         this.watcherController.update();
       }
     }
-    await this.updateGitStatus(true);
+    // A user refresh skips the unanswered-read backoff, never the check that
+    // the git stopped last time has exited.
+    await (options?.automatic
+      ? this.updateGitStatus(true)
+      : this.updateGitStatus(true, { userInitiated: true }));
   }
 
   /**
@@ -2143,11 +2291,17 @@ export class WorktreeMonitor {
    * closed.
    */
   getFreshChanges(): Promise<WorktreeChanges> {
+    if (this.statusDownloadGate === "held") {
+      return Promise.reject(new Error(`Git status is waiting for downloads: ${this.path}`));
+    }
+    const abandon = new AbortController();
+    this.passAbandons.add(abandon);
     return getWorktreeChangesWithStats(this.path, {
       forceRefresh: true,
       wsl: this.wslInvocation,
       signal: this._pollAbortController.signal,
-    });
+      abandonSignal: abandon.signal,
+    }).finally(() => this.passAbandons.delete(abandon));
   }
 
   triggerRefreshIfUpdating(): void {
@@ -2281,7 +2435,8 @@ export class WorktreeMonitor {
 
     const cooldown = Math.max(
       this.config.pollIntervalMax,
-      this.pollingStrategy.calculateNextInterval()
+      this.pollingStrategy.calculateNextInterval(),
+      this.statusRetryNotBefore - Date.now()
     );
     const jitter = Math.random() * 2000;
 
@@ -2297,6 +2452,9 @@ export class WorktreeMonitor {
     if (!this._isRunning || !this.statusWorkAllowed) {
       return;
     }
+    // Every path that lets status work run again comes through here: a resume,
+    // an agent starting, the download gate opening. An owed refresh goes with it.
+    this.armIndexRefresh();
 
     if (this.pollingStrategy.isCircuitBreakerTripped()) {
       this.scheduleCircuitBreakerRetry();
@@ -2312,7 +2470,7 @@ export class WorktreeMonitor {
     );
     const jitterRange = Math.min(2000, Math.floor(baseInterval * 0.2));
     const jitter = jitterRange > 0 ? Math.floor(Math.random() * jitterRange) : 0;
-    const delayMs = baseInterval + jitter;
+    const delayMs = Math.max(baseInterval + jitter, this.statusRetryNotBefore - Date.now());
 
     this.pollingTimer = setTimeout(() => {
       this.pollingTimer = null;
@@ -2496,10 +2654,22 @@ export class WorktreeMonitor {
   /**
    * One status pass under the watchdog. On expiry it gives up on exactly the
    * pass it started, never a newer one, and rejects.
+   *
+   * While an unanswered read's backoff runs, only a pass the user asked for
+   * starts. Everything else is `skipped`; the poll the backoff reschedules
+   * runs the forced pass a degraded card gets, which covers what they wanted.
+   * A closed download gate skips all of them, the user's too: git would only
+   * block on the placeholders, and opening the gate queues the pass that's owed.
    */
-  async updateGitStatus(forceRefresh: boolean = false): Promise<GitStatusPassOutcome> {
+  async updateGitStatus(
+    forceRefresh: boolean = false,
+    options?: { userInitiated?: boolean }
+  ): Promise<GitStatusPassOutcome> {
+    if (this.statusDownloadGate !== "open") return "skipped";
+    if (!options?.userInitiated && Date.now() < this.statusRetryNotBefore) return "skipped";
     const lifecycle = this._pollAbortController.signal;
     const abandon = new AbortController();
+    this.passAbandons.add(abandon);
     const pass = this.gitStatusPass.run(forceRefresh, abandon.signal);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<"expired">((resolve) => {
@@ -2510,8 +2680,12 @@ export class WorktreeMonitor {
       result = await Promise.race([pass, expired]);
     } finally {
       clearTimeout(timer);
+      this.passAbandons.delete(abandon);
     }
     if (result === "expired") {
+      // Stopped on purpose when the gate closed, so nothing went unanswered, and
+      // a newer pass may have answered since. Nothing here is this pass's to mark.
+      if (abandon.signal.aborted) return "skipped";
       abandon.abort();
       // A stop already dropped the pass, and a restart's card isn't its to mark.
       if (!lifecycle.aborted) this.handleStatusPassExpired();
@@ -2521,20 +2695,73 @@ export class WorktreeMonitor {
   }
 
   /**
-   * The abandoned pass never finished, so the last snapshot is no longer a
-   * current observation. Shown as stale until a full read replaces it; an
-   * error mood already on the card stays.
+   * Hold status passes back, or let them run, per what Main saw of `.git`. The
+   * poll loop keeps ticking through a closed gate, since a skipped pass spawns
+   * nothing, so opening it only has to queue the one pass that's owed. A paused
+   * monitor gets that from resume's catch-up instead, and `markDegraded` makes
+   * sure it's a real read.
+   */
+  setStatusDownloadGate(gate: StatusDownloadGate): void {
+    const previous = this.statusDownloadGate;
+    if (gate === previous) return;
+    this.statusDownloadGate = gate;
+
+    if (gate === "held") {
+      for (const abandon of this.passAbandons) abandon.abort();
+      // A streak built against placeholders says nothing about the next read.
+      this.clearStatusUnanswered();
+      this.gitStatusPass.markDegraded();
+      if (this._hasInitialStatus && this.mood !== "error") this.mood = "stale";
+      if (this._isRunning) this.emitUpdate();
+      return;
+    }
+
+    if (!this._isRunning) return;
+    if (previous === "held") this.emitUpdate();
+    if (gate !== "open") return;
+    // Failures against placeholders say nothing about the next read either.
+    if (this.pollingStrategy.isCircuitBreakerTripped()) this.pollingStrategy.reset();
+    void this.queueStatusPassThenPoll(() => true);
+  }
+
+  /**
+   * The abandoned pass never finished. Its git is being stopped by the
+   * abandon; refreshes parked behind it wait out the backoff like everything
+   * else, and the forced pass after it covers them.
    */
   private handleStatusPassExpired(): void {
+    this.recordStatusUnanswered("timed-out");
+  }
+
+  /**
+   * A status read ended without an answer. The last snapshot is no longer a
+   * current observation: it is shown as stale (an error mood already on the
+   * card stays) with what was seen, and automatic passes hold off until the
+   * backoff for this streak elapses.
+   */
+  private recordStatusUnanswered(reason: GitStatusUnansweredReason): void {
     if (!this._isRunning) return;
+    const now = Date.now();
+    this._gitStatusUnanswered = { reason, since: this._gitStatusUnanswered?.since ?? now };
+    this.statusUnansweredStreak++;
+    this.statusRetryNotBefore =
+      now +
+      Math.min(
+        STATUS_RETRY_BACKOFF_BASE_MS * 2 ** (this.statusUnansweredStreak - 1),
+        STATUS_RETRY_BACKOFF_MAX_MS
+      );
     this.gitStatusPass.markDegraded();
-    if (this._hasInitialStatus && this.mood !== "error") {
-      this.mood = "stale";
-      this.emitUpdate();
-    }
-    // Refreshes parked behind the hung pass (watcher events, resume catch-up)
-    // get their fresh pass now instead of waiting for the next one to finish.
-    this.watcherController.flushPendingIfReady(true);
+    if (this._hasInitialStatus && this.mood !== "error") this.mood = "stale";
+    // Emitted before a first status too: a card with nothing yet should say
+    // the read went unanswered rather than read as still checking.
+    this.emitUpdate();
+  }
+
+  /** A status read answered; the pass that observed it emits. */
+  private clearStatusUnanswered(): void {
+    this._gitStatusUnanswered = null;
+    this.statusUnansweredStreak = 0;
+    this.statusRetryNotBefore = 0;
   }
 
   /**

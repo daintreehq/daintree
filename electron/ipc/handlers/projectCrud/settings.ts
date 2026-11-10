@@ -87,8 +87,16 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
     }
     await projectStore.saveProjectSettings(projectId, settings as ProjectSettings);
     const project = projectStore.getProjectById(projectId);
+    // The local save has landed, so what follows from it still runs when the
+    // committed file can't be written (an unreadable one is never replaced);
+    // the caller still hears why afterwards.
+    let inRepoFailure: { error: unknown } | null = null;
     if (project?.inRepoSettings) {
-      await projectStore.writeInRepoSettings(project.path, settings as ProjectSettings);
+      try {
+        await projectStore.writeInRepoSettings(project.path, settings as ProjectSettings);
+      } catch (error) {
+        inRepoFailure = { error };
+      }
     }
     const previousRemote = previousSettings.forgeRemote ?? previousSettings.githubRemote;
     const nextRemote = settings.forgeRemote ?? settings.githubRemote;
@@ -124,6 +132,7 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
         payload: { projectId },
       });
     }
+    if (inRepoFailure) throw inRepoFailure.error;
   };
   handlers.push(
     typedHandleValidated(

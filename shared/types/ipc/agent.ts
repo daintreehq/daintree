@@ -184,7 +184,8 @@ export interface AgentExitedPayload {
   /**
    * Identifies the kind of exit. `"subcommand"` means the detected agent
    * process stopped while the shell PTY is still alive (user quit to shell,
-   * process-tree demotion). `"terminal"` means the PTY itself exited but the
+   * process-tree demotion), or the agent's identity was withdrawn because its
+   * plugin unloaded (#16469). `"terminal"` means the PTY itself exited but the
    * preserved panel still needs renderer-side live identity cleared.
    *
    * The `agent:exited` channel is dual-purpose: it ALSO fires to clear

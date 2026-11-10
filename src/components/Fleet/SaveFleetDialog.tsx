@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactElement } from "react";
-import { TriangleAlert } from "lucide-react";
+import { InlineError } from "@/components/ui/field";
 import { AppDialog, type RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { FIELD_CONTROL_SIZE, FIELD_INPUT, FormGrid, FormRow } from "@/components/Worktree/views";
@@ -190,10 +190,10 @@ export function SaveFleetDialog({
               <div id={kindHintId} className="space-y-1 text-xs text-text-secondary">
                 <p>
                   {kind !== "snapshot"
-                    ? `Whichever panes match when you recall it. ${pluralize(ruleMatchCount, "pane matches", "panes match")} now.`
+                    ? `Whichever terminals match when you recall it. ${pluralize(ruleMatchCount, "terminal matches", "terminals match")} now.`
                     : armedCount > 0
-                      ? `The ${pluralize(armedCount, "pane")} armed now. Panes you close drop out of it.`
-                      : "Only panes armed here go in a snapshot. Panes you close drop out of it."}
+                      ? `The ${pluralize(armedCount, "terminal")} armed now. Terminals you close drop out of it.`
+                      : "Only terminals armed here go in a snapshot. Terminals you close drop out of it."}
                 </p>
                 {kind === "snapshot" && crossHostTargets.length > 0 && (
                   <p>{describeLeftOut(crossHostTargets)}</p>
@@ -216,7 +216,7 @@ export function SaveFleetDialog({
 
           {kind === "predicate" && (
             <>
-              <FormRow label="Panes" htmlFor={stateId}>
+              <FormRow label="Terminals" htmlFor={stateId}>
                 <Select
                   value={ruleState}
                   onValueChange={(v) => {
@@ -236,7 +236,7 @@ export function SaveFleetDialog({
                     <SelectItem value="waiting">Waiting</SelectItem>
                     <SelectItem value="working">Working</SelectItem>
                     <SelectItem value="finished">Finished</SelectItem>
-                    <SelectItem value="all">All panes</SelectItem>
+                    <SelectItem value="all">All terminals</SelectItem>
                   </SelectContent>
                 </Select>
               </FormRow>
@@ -265,20 +265,16 @@ export function SaveFleetDialog({
         </FormGrid>
 
         {failed && (
-          <p role="alert" className="mt-3 flex items-start gap-1.5 text-xs text-text-secondary">
-            <TriangleAlert
-              className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
-              aria-hidden="true"
-            />
-            <span>Couldn&apos;t save the fleet. Try again.</span>
-          </p>
+          <InlineError role="alert" className="mt-3">
+            Couldn&apos;t save the fleet. Try again.
+          </InlineError>
         )}
       </AppDialog.Body>
 
       <AppDialog.Footer
         hint={
           kind === "snapshot" && armedCount === 0
-            ? "Arm panes here to save a snapshot"
+            ? "Arm terminals here to save a snapshot"
             : trimmed.length === 0
               ? "Name the fleet to save it"
               : undefined

@@ -1,0 +1,126 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const pty = vi.hoisted(() => ({
+  generation: 4 as number | null,
+  read: undefined as undefined | (() => Promise<unknown>),
+  client: {
+    getTerminalProjectId: () => "project-1",
+    getLiveGeneration: () => pty.generation,
+    getTerminalAsync: () => pty.read!(),
+  },
+}));
+vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => pty.client }));
+
+const queue = vi.hoisted(() => ({ hold: vi.fn() }));
+vi.mock("../../../services/composerHold/composerSendHoldLive.js", () => ({
+  getComposerSendHold: async () => queue,
+  peekComposerSendHold: () => queue,
+}));
+vi.mock("../../../services/DriveLeaseService.js", () => ({ peekDriveLeaseService: () => null }));
+vi.mock("../../../../shared/config/agentRegistry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../shared/config/agentRegistry.js")>();
+  return {
+    ...actual,
+    getEffectiveAgentConfig: (id: string) =>
+      id === "queuer"
+        ? { capabilities: { queuesInputWhileWorking: true } }
+        : id === "plain"
+          ? { capabilities: {} }
+          : actual.getEffectiveAgentConfig(id),
+  };
+});
+
+import { handleHold, holdsComposerSend } from "../composerHold.js";
+import type { IpcContext } from "../../types.js";
+import type { NotifyTerminalInfo } from "../../../services/mcp-server/terminalNotify.js";
+
+function info(overrides: Partial<NotifyTerminalInfo> = {}): NotifyTerminalInfo {
+  return { agentState: "working", detectedAgentId: "gemini", hasPty: true, ...overrides };
+}
+
+describe("holdsComposerSend", () => {
+  it("holds for a working agent not declared to queue input", () => {
+    expect(holdsComposerSend(info())).toBe(true);
+  });
+
+  it("keeps the immediate send for any CLI declared to queue input mid-turn", () => {
+    expect(holdsComposerSend(info({ detectedAgentId: "queuer" }))).toBe(false);
+    expect(holdsComposerSend(info({ detectedAgentId: "plain" }))).toBe(true);
+    expect(holdsComposerSend(info({ detectedAgentId: "claude" }))).toBe(false);
+    expect(holdsComposerSend(info({ detectedAgentId: "codex" }))).toBe(false);
+  });
+
+  it("keeps the immediate send at any prompt, idle, and in a shell", () => {
+    expect(holdsComposerSend(info({ agentState: "waiting", waitingReason: "prompt" }))).toBe(false);
+    expect(holdsComposerSend(info({ agentState: "waiting", waitingReason: "question" }))).toBe(
+      false
+    );
+    expect(holdsComposerSend(info({ agentState: "idle" }))).toBe(false);
+    expect(holdsComposerSend(info({ detectedAgentId: undefined }))).toBe(false);
+  });
+
+  it("never holds for a pane that is gone or going", () => {
+    expect(holdsComposerSend(null)).toBe(false);
+    expect(holdsComposerSend(info({ hasPty: false }))).toBe(false);
+    expect(holdsComposerSend(info({ isExited: true }))).toBe(false);
+    expect(holdsComposerSend(info({ isTrashed: true }))).toBe(false);
+    expect(holdsComposerSend(info({ isClosing: true }))).toBe(false);
+  });
+});
+
+describe("handleHold", () => {
+  const ctx = { projectId: "project-1", endpoint: undefined } as unknown as IpcContext;
+
+  beforeEach(() => {
+    pty.generation = 4;
+    queue.hold.mockReset().mockReturnValue({ ok: true, send: { token: "t" } });
+  });
+
+  it("holds for this view's busy agent", async () => {
+    pty.read = async () => info({ projectId: "project-1" });
+    await expect(handleHold(ctx, "term-1", "ship it")).resolves.toMatchObject({ held: true });
+    expect(queue.hold).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalId: "term-1", projectId: "project-1", generation: 4 })
+    );
+  });
+
+  it("answers unavailable, never send-now, for a run restarted during the read", async () => {
+    pty.read = async () => {
+      pty.generation = 5;
+      return info({ agentState: "waiting", waitingReason: "prompt" });
+    };
+    await expect(handleHold(ctx, "term-1", "ship it")).resolves.toEqual({
+      held: false,
+      reason: "unavailable",
+    });
+    expect(queue.hold).not.toHaveBeenCalled();
+  });
+
+  it("answers unavailable for a terminal it couldn't read", async () => {
+    pty.read = async () => {
+      throw new Error("timed out");
+    };
+    await expect(handleHold(ctx, "term-1", "ship it")).resolves.toEqual({
+      held: false,
+      reason: "unavailable",
+    });
+  });
+
+  it("lets a settled agent's send go as before", async () => {
+    pty.read = async () => info({ agentState: "waiting", waitingReason: "prompt" });
+    await expect(handleHold(ctx, "term-1", "ship it")).resolves.toEqual({
+      held: false,
+      reason: "not-busy",
+    });
+  });
+
+  it("passes on the queue's refusal", async () => {
+    pty.read = async () => info();
+    queue.hold.mockReturnValue({ ok: false, reason: "already-held" });
+    await expect(handleHold(ctx, "term-1", "ship it")).resolves.toEqual({
+      held: false,
+      reason: "already-held",
+    });
+  });
+});

@@ -132,6 +132,14 @@ export interface PanelSummary {
   isSuspect: boolean;
   /** Present only when `isSuspect` is true; drives per-panel reason copy. */
   suspectReason?: PanelSuspectReason;
+  /**
+   * The agent restore relaunches this panel under, resolved from the snapshot
+   * by the rule respawn uses, so the dialog can draw that agent's mark. Absent
+   * for plain terminals and non-PTY panels.
+   */
+  launchAgentId?: string;
+  /** Hex preset colour the panel's agent was launched with, for its mark. */
+  agentPresetColor?: string;
   agentState?: string;
   lastStateChange?: number;
 }

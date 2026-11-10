@@ -15,6 +15,7 @@ const projectStoreMock = vi.hoisted(() => ({
   deleteRecipe: vi.fn(),
   readInRepoRecipes: vi.fn(() => []),
   writeInRepoRecipe: vi.fn(),
+  saveInRepoRecipe: vi.fn(),
   assertInRepoRecipesForwardCompatible: vi.fn(),
   deleteInRepoRecipe: vi.fn(),
   reconcileProjectRecipes: vi.fn(() => []),
@@ -287,6 +288,25 @@ describe("projectRecipes IPC adversarial", () => {
       })
     ).rejects.toThrow(/secret.*github-pat|GITHUB_TOKEN/i);
     expect(projectStoreMock.writeInRepoRecipe).not.toHaveBeenCalled();
+    expect(projectStoreMock.saveInRepoRecipe).not.toHaveBeenCalled();
+  });
+
+  it("updateInRepoRecipe hands the whole save, file and local values, to one store call", async () => {
+    projectStoreMock.getProjectById.mockReturnValueOnce({ path: "/repo" } as never);
+    const recipe = { ...validRecipe(), terminals: [{ type: "terminal", env: { PORT: "4000" } }] };
+
+    await getHandler(CHANNELS.PROJECT_UPDATE_INREPO_RECIPE)(fakeEvent(), {
+      projectId: "p1",
+      recipe,
+      previousName: "Old",
+      force: true,
+    });
+
+    expect(projectStoreMock.saveInRepoRecipe).toHaveBeenCalledWith("/repo", "p1", recipe, {
+      force: true,
+      previousName: "Old",
+    });
+    expect(projectStoreMock.deleteInRepoRecipe).not.toHaveBeenCalled();
   });
 
   it("addRecipe rejects a context-dependent secret (AWS key named via env key)", async () => {

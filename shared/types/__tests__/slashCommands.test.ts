@@ -297,6 +297,73 @@ describe("catalog / agent-registry consistency", () => {
   });
 });
 
+// Picking one of these ends the conversation on screen, and the menu text is
+// all a person has to go on, so it has to say so on every agent.
+describe("/clear and /new", () => {
+  const commandFor = (agentId: BuiltInAgentId, id: string) =>
+    getBuiltinSlashCommands(agentId).find((command) => command.id === id);
+  const agentsWithClear = BUILT_IN_AGENT_IDS.filter((agentId) => commandFor(agentId, "clear"));
+
+  it("covers every agent the CLIs were checked for", () => {
+    expect([...agentsWithClear].sort()).toEqual(["antigravity", "claude", "codex", "gemini"]);
+  });
+
+  it.each(agentsWithClear)("says %s's /clear starts over", (agentId) => {
+    expect(commandFor(agentId, "clear")?.description).toMatch(/\bnew (session|chat|one)\b/i);
+  });
+
+  it("gives no /clear another agent's wording", () => {
+    const descriptions = agentsWithClear.map(
+      (agentId) => commandFor(agentId, "clear")?.description
+    );
+    expect(new Set(descriptions).size).toBe(agentsWithClear.length);
+  });
+
+  it("says Claude's /clear empties the context and leaves the old session resumable", () => {
+    const description = commandFor("claude", "clear")?.description;
+    expect(description).toMatch(/\bempty context\b/i);
+    expect(description).toMatch(/\bresum/i);
+  });
+
+  it("says Gemini's /clear clears the screen too", () => {
+    expect(commandFor("gemini", "clear")?.description).toMatch(/\bclear the screen\b/i);
+  });
+
+  it("lists /new only for Codex, the one CLI where it is a command of its own", () => {
+    expect(BUILT_IN_AGENT_IDS.filter((agentId) => commandFor(agentId, "new"))).toEqual(["codex"]);
+  });
+
+  it("says Codex's /new starts a new chat", () => {
+    expect(commandFor("codex", "new")?.description).toMatch(/\bnew chat\b/i);
+  });
+
+  it.each(["claude", "gemini", "antigravity"] as const)(
+    "keeps /new reachable through %s's /clear, which answers to it",
+    (agentId) => {
+      expect(commandFor(agentId, "clear")?.aliases).toContain("new");
+    }
+  );
+
+  it("keeps /reset to Claude, the only CLI whose /clear answers to it", () => {
+    const withReset = agentsWithClear.filter((agentId) =>
+      commandFor(agentId, "clear")?.aliases?.includes("reset")
+    );
+    expect(withReset).toEqual(["claude"]);
+  });
+
+  it("never lets an alias shadow one of the agent's own commands", () => {
+    for (const agentId of BUILT_IN_AGENT_IDS) {
+      const commands = getBuiltinSlashCommands(agentId);
+      const ids = new Set(commands.map((command) => command.id));
+      for (const command of commands) {
+        for (const alias of command.aliases ?? []) {
+          expect(ids.has(alias), `${agentId} /${command.id} alias ${alias}`).toBe(false);
+        }
+      }
+    }
+  });
+});
+
 describe("Codex upstream conformance", () => {
   it("matches the command set Codex 0.147.0 lists in its own popup", () => {
     const actual = getBuiltinSlashCommands("codex").map((c) => c.id);
@@ -341,6 +408,9 @@ describe("Antigravity upstream conformance", () => {
     for (const agentId of BUILT_IN_AGENT_IDS) {
       if (agentId === "antigravity") continue;
       for (const command of getBuiltinSlashCommands(agentId)) {
+        // Claude's and Gemini's /clear declare aliases of their own, checked
+        // under "/clear and /new"; Codex has its own /new and must get none.
+        if (command.id === "clear" && agentId !== "codex") continue;
         expect(command.aliases, `${agentId} /${command.id}`).toBeUndefined();
       }
     }

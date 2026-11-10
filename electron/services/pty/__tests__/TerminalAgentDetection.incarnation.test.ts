@@ -32,7 +32,6 @@ function terminalInfo(): TerminalInfo {
     launchAgentId: "claude",
     agentState: "idle",
     ptyProcess: {} as never,
-    outputBuffer: "",
     semanticBuffer: [],
   } as unknown as TerminalInfo;
 }

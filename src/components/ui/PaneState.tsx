@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { useLiveRegionReady } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 import type { RootAttributes } from "@/components/ui/rootAttributes";
 
@@ -18,6 +19,7 @@ export function PaneState({
   description,
   children,
   live = "status",
+  announceAfterMount = false,
   inFlow = false,
   className,
   rootAttributes,
@@ -33,6 +35,13 @@ export function PaneState({
    */
   live?: "status" | "alert" | "off";
   /**
+   * For a polite state that appears under the user mid-session, such as a load
+   * they stopped: a region that mounts with its message already inside is often
+   * never spoken (ARIA22), so it registers empty and the words land a commit
+   * later. Off by default, so panes restored at launch don't all speak at once.
+   */
+  announceAfterMount?: boolean;
+  /**
    * Take up room in the layout instead of covering the pane — for a host that
    * sizes to its content, such as a dialog, where an overlay has no height.
    */
@@ -41,6 +50,18 @@ export function PaneState({
   /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
   rootAttributes?: RootAttributes;
 }) {
+  const deferred = announceAfterMount && live === "status";
+  const emptyState = (
+    <EmptyState
+      variant="zero-data"
+      scale="canvas"
+      icon={icon}
+      title={title}
+      description={description}
+      className="p-0"
+    />
+  );
+
   return (
     <div
       {...rootAttributes}
@@ -56,18 +77,44 @@ export function PaneState({
           aria-live={live === "status" ? "polite" : live === "off" ? "off" : undefined}
           className="w-full"
         >
-          <EmptyState
-            variant="zero-data"
-            scale="canvas"
-            icon={icon}
-            title={title}
-            description={description}
-            className="p-0"
-          />
+          {deferred ? (
+            <>
+              <DeferredAnnouncement
+                text={typeof description === "string" ? `${title}. ${description}` : title}
+              />
+              <div aria-hidden="true">{emptyState}</div>
+            </>
+          ) : (
+            emptyState
+          )}
         </div>
         {children}
       </div>
     </div>
+  );
+}
+
+/** The words of a deferred `PaneState`, inserted once its region is registered. */
+function DeferredAnnouncement({ text }: { text: string }) {
+  const ready = useLiveRegionReady();
+  return <span className="sr-only">{ready ? text : ""}</span>;
+}
+
+/**
+ * A pane-state description whose `backticked` spans are commands, drawn as code
+ * rather than as literal backticks.
+ */
+export function withInlineCode(text: string): ReactNode {
+  const parts = text.split(/`([^`]+)`/);
+  if (parts.length === 1) return text;
+  return parts.map((part, i) =>
+    i % 2 === 1 ? (
+      <code key={i} className="font-mono">
+        {part}
+      </code>
+    ) : (
+      part
+    )
   );
 }
 

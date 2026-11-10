@@ -130,37 +130,41 @@ export function OnboardingFlow({
     [onComplete]
   );
 
-  const handleManualWizardClose = useCallback(async () => {
-    void onRefreshSettings();
-    const shouldReturn = returnToPaletteRef.current;
-    returnToPaletteRef.current = false;
-    // Reset the wizard sub-step ref so the next open doesn't carry a stale
-    // value into an abandonment payload before the new wizard reports its
-    // initial step.
-    lastWizardStepRef.current = null;
-    setManualWizardOpen(false);
-    setManualWizardIsFirstRun(false);
-    // Any finished setup completes onboarding if it was still open — whether
-    // the wizard came from the first-run banner or, after "Not now", from the
-    // welcome footer. Otherwise a user who declined the banner and set up
-    // later would stay "not onboarded" for good. Dismiss the banner via the
-    // shared hook so WelcomeScreen's AgentSetupBannerCard hides immediately
-    // (raw IPC would update electron-store but not the store it reads).
-    if (state && !state.completed) {
-      try {
-        await advanceStep("agentSetup");
-      } catch {
-        // If persistence fails, still dismiss the banner in the current
-        // session so the user isn't stuck staring at an already-opened flow.
+  const handleManualWizardClose = useCallback(
+    async (reason?: "handoff") => {
+      void onRefreshSettings();
+      const shouldReturn = returnToPaletteRef.current;
+      returnToPaletteRef.current = false;
+      // Reset the wizard sub-step ref so the next open doesn't carry a stale
+      // value into an abandonment payload before the new wizard reports its
+      // initial step.
+      lastWizardStepRef.current = null;
+      setManualWizardOpen(false);
+      setManualWizardIsFirstRun(false);
+      // Any finished setup completes onboarding if it was still open — whether
+      // the wizard came from the first-run banner or, after "Not now", from the
+      // welcome footer. Otherwise a user who declined the banner and set up
+      // later would stay "not onboarded" for good. Dismiss the banner via the
+      // shared hook so WelcomeScreen's AgentSetupBannerCard hides immediately
+      // (raw IPC would update electron-store but not the store it reads).
+      if (state && !state.completed) {
+        try {
+          await advanceStep("agentSetup");
+        } catch {
+          // If persistence fails, still dismiss the banner in the current
+          // session so the user isn't stuck staring at an already-opened flow.
+        }
+        await dismissSetupBannerFromHook();
+      } else {
+        setCurrentStep(null);
       }
-      await dismissSetupBannerFromHook();
-    } else {
-      setCurrentStep(null);
-    }
-    if (shouldReturn) {
-      void actionService.dispatch("panel.palette", undefined, { source: "user" });
-    }
-  }, [advanceStep, onRefreshSettings, state]);
+      // A handoff closed the wizard to show a terminal; the palette would cover it.
+      if (shouldReturn && reason !== "handoff") {
+        void actionService.dispatch("panel.palette", undefined, { source: "user" });
+      }
+    },
+    [advanceStep, onRefreshSettings, state]
+  );
 
   // Render nothing until hydration completes or if E2E skip is enabled
   if (SKIP_FIRST_RUN_DIALOGS) {

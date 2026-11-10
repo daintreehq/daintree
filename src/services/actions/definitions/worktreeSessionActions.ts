@@ -4,6 +4,7 @@ import type { ActionContext } from "@shared/types/actions";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { nextFrame } from "@/services/terminal/revealUntilStable";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isPtyPanel } from "@shared/types/panel";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import {
@@ -34,13 +35,13 @@ export function registerWorktreeSessionActions(
 ): void {
   actions.set("worktree.sessions.minimizeAll", () => ({
     id: "worktree.sessions.minimizeAll",
-    title: "Dock all sessions",
-    description: "Move all grid sessions for a worktree to the dock",
+    title: "Dock all panels",
+    description: "Move all grid panels for a worktree to the dock",
     category: "worktree",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["collapse", "hide", "zen", "dock"],
+    keywords: ["collapse", "hide", "zen", "dock", "dock all sessions"],
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { worktreeId } = args as { worktreeId?: string };
@@ -56,12 +57,13 @@ export function registerWorktreeSessionActions(
     // back into the grid. Renamed everywhere it surfaces so the palette, the
     // worktree menu and the audit trail name the same operation. The action ID
     // is load-bearing and stays.
-    title: "Move all sessions to grid",
-    description: "Move all dock sessions for a worktree into the grid",
+    title: "Move all panels to grid",
+    description: "Move all dock panels for a worktree into the grid",
     category: "worktree",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["move all sessions to grid"],
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { worktreeId } = args as { worktreeId?: string };
@@ -73,14 +75,15 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.restartAll", () => ({
     id: "worktree.sessions.restartAll",
-    title: "Restart all sessions",
-    description: "Restart all sessions for a worktree",
+    title: "Restart all terminals in worktree",
+    description: "Restart all terminals for a worktree",
     category: "worktree",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["restart all sessions"],
     dangerRationale:
-      "Restarts all sessions for a worktree. Scrollback is lost for every restarted terminal.",
+      "Restarts all terminals for a worktree. Scrollback is lost for every restarted terminal.",
     argsSchema: z
       .object({
         worktreeId: z.string().optional(),
@@ -98,10 +101,13 @@ export function registerWorktreeSessionActions(
         .filter(
           (t): t is NonNullable<typeof t> =>
             t != null &&
+            // Only PTY panels restart, so a browser or review panel in the
+            // worktree must not inflate the confirmation's terminal count.
+            isPtyPanel(t) &&
             t.worktreeId === targetWorktreeId &&
             t.location !== "trash" &&
             t.location !== "overlay" &&
-            // Dialog panels are ephemeral modal content, not worktree sessions —
+            // Dialog panels are ephemeral modal content, not worktree panels —
             // including one inflates the confirmation count while the bulk
             // action that follows correctly skips it.
             t.location !== "dialog"
@@ -130,12 +136,13 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.resetRenderers", () => ({
     id: "worktree.sessions.resetRenderers",
-    title: "Reset session renderers",
+    title: "Redraw all terminals",
     description: "Reset all xterm renderers for a worktree",
     category: "worktree",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["reset session renderers"],
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { worktreeId } = args as { worktreeId?: string };
@@ -174,12 +181,13 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.closeCompleted", () => ({
     id: "worktree.sessions.closeCompleted",
-    title: "Close completed sessions",
-    description: "Close completed sessions for a worktree",
+    title: "Close completed terminals",
+    description: "Close completed terminals for a worktree",
     category: "worktree",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["close completed sessions"],
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { worktreeId } = args as { worktreeId?: string };
@@ -193,14 +201,15 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.trashAll", () => ({
     id: "worktree.sessions.trashAll",
-    title: "Trash all sessions",
-    description: "Move all sessions for a worktree to trash",
+    title: "Trash all panels",
+    description: "Move all panels for a worktree to trash",
     category: "worktree",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["trash all sessions"],
     dangerRationale:
-      "Moves all sessions for a worktree to trash. Scrollback is lost for each trashed terminal.",
+      "Moves all panels for a worktree to trash. Scrollback is lost for each trashed terminal.",
     argsSchema: z
       .object({
         worktreeId: z.string().optional(),
@@ -252,8 +261,8 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.endAll", () => ({
     id: "worktree.sessions.endAll",
-    title: "End all sessions",
-    description: "Permanently end all sessions for a worktree",
+    title: "Remove all panels",
+    description: "Permanently remove all panels for a worktree",
     category: "worktree",
     kind: "command",
     danger: "confirm",
@@ -265,7 +274,7 @@ export function registerWorktreeSessionActions(
     // not the safety mechanism.
     palette: { mode: "hidden" },
     scope: "renderer",
-    dangerRationale: "Permanently ends all sessions for a worktree. All scrollback is lost.",
+    dangerRationale: "Permanently removes all panels for a worktree. All scrollback is lost.",
     argsSchema: z
       .object({
         worktreeId: z.string().optional(),

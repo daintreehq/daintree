@@ -8,6 +8,7 @@ import type {
 } from "@shared/types/plugin-sdk-react";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
@@ -104,7 +105,12 @@ export function KitBulkActionBar({
     >
       <span className="min-w-0 shrink truncate text-xs text-text-secondary tabular-nums">
         <span className="font-medium text-text-primary">{selected}</span> {word} selected
-        {hidden > 0 ? ` · ${hidden} not shown` : ""}
+        {hidden > 0 && (
+          <>
+            {" "}
+            <FactSeparator /> {hidden} not shown
+          </>
+        )}
       </span>
       {items.length > 0 ? (
         <Toolbar
@@ -206,7 +212,7 @@ export function KitLoadMoreFooter({
           <span className="min-w-0 truncate">{message}</span>
         </TruncatedTooltip>
         <Button
-          variant="ghost"
+          variant="outline"
           size="xs"
           disabled={!load}
           onClick={() => load?.()}

@@ -76,6 +76,12 @@ interface GroupedTrashGroup {
 
 type TrashDisplayItem = GroupedTrashItem | GroupedTrashGroup;
 
+const TRASH_POPOVER_ID = "trash-container-popover";
+
+// The opener unmounted with the popover, so a cancelled dialog would drop
+// focus on the app shell, outside the reopened popover and dismissing it.
+const restorePopoverFocus = () => document.getElementById(TRASH_POPOVER_ID);
+
 export function TrashContainer({
   trashedTerminals,
   compact = false,
@@ -460,7 +466,7 @@ export function TrashContainer({
   const hereCount = trashedTerminals.filter(
     ({ terminal }) => (terminal.worktreeId ?? null) === (activeWorktreeId ?? null)
   ).length;
-  const contentId = "trash-container-popover";
+  const contentId = TRASH_POPOVER_ID;
 
   // Ghost pill: visible during drags so users can see a drop target even when trash is empty.
   // Mount-only fade via animate-in; isOver styling cues an armed drop receptacle.
@@ -481,7 +487,7 @@ export function TrashContainer({
           )}
         >
           <Trash2 className="w-3.5 h-3.5 text-text-secondary" aria-hidden="true" />
-          {!compact && <span className="font-medium">Trash (drop to delete)</span>}
+          {!compact && <span className="font-medium">Trash (drop to close)</span>}
         </Button>
       </div>
     );
@@ -523,7 +529,7 @@ export function TrashContainer({
                 aria-expanded={isOpen}
                 aria-controls={contentId}
                 onClick={focusHandoff.onTriggerClick}
-                aria-label={`Trash: ${pluralize(count, "terminal")} ${dockStatusScopeDescription(count, hereCount)}, removed for good ${TRASH_TTL_SECONDS} seconds after closing`}
+                aria-label={`Trash: ${pluralize(count, "panel")} ${dockStatusScopeDescription(count, hereCount)}, removed for good ${TRASH_TTL_SECONDS} seconds after closing`}
               >
                 <DockStatusPillLabel
                   icon={
@@ -552,7 +558,7 @@ export function TrashContainer({
         <PopoverContent
           id={contentId}
           role="dialog"
-          aria-label="Recently closed terminals"
+          aria-label="Recently closed panels"
           className="w-96 p-0"
           side="top"
           align="end"
@@ -668,6 +674,7 @@ export function TrashContainer({
               : `${pendingRemoval?.ids.length ?? 0} panels will be permanently removed.`
           }
           variant="destructive"
+          restoreFocusTo={restorePopoverFocus}
           hasPreview={(pendingRemoval?.panelTitles.length ?? 0) > 0}
           confirmLabel={(pendingRemoval?.ids.length ?? 0) === 1 ? "Remove panel" : "Remove panels"}
           onConfirm={() => {
@@ -696,10 +703,14 @@ export function TrashContainer({
           onClose={() => {
             setEmptyTrashConfirmOpen(false);
             isExecutingRef.current = false;
+            // Same as a cancelled removal: the popover only stepped aside for
+            // the dialog, so hand the user back to it.
+            setIsOpen(true);
           }}
           title="Empty trash?"
           description={`${pluralize(trashedTerminals.length, "panel")} will be permanently removed.`}
           variant="destructive"
+          restoreFocusTo={restorePopoverFocus}
           // Scrollable list of the panels being destroyed — a dialog, not an
           // alertdialog, which APG reserves for a brief message read whole.
           hasPreview={trashedTerminals.length > 0}

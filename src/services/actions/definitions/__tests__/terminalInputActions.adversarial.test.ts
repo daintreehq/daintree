@@ -199,7 +199,9 @@ describe("terminalInputActions adversarial", () => {
       `${BRACKETED_PASTE_START}hello\nworld${BRACKETED_PASTE_END}`
     );
     expect(terminalClientMock.write).toHaveBeenCalledTimes(1);
-    expect(terminalInstanceMock.notifyUserInput).toHaveBeenCalledWith("t1");
+    expect(terminalInstanceMock.notifyUserInput).toHaveBeenCalledWith("t1", "", {
+      takesSize: false,
+    });
   });
 
   it("paste in bracketed-paste mode neutralises the body before wrapping it", async () => {
@@ -282,6 +284,32 @@ describe("terminalInputActions adversarial", () => {
 
     expect(terminalClientMock.write).toHaveBeenCalledWith("t1", "one\rtwo");
   });
+
+  it.each([
+    ["a person's keybinding", "keybinding", true],
+    ["a person's context menu", "context-menu", true],
+    ["an agent", "agent", false],
+  ] as const)(
+    "moves a Canopy hold for paste only when a person asked: %s",
+    async (_who, source, takes) => {
+      clipboardText = "ls";
+      setPanelState({
+        focusedId: "t1",
+        panelsById: { t1: { isInputLocked: false, kind: "terminal" } },
+      });
+      terminalInstanceMock.get.mockReturnValue({
+        terminal: { getSelection: () => "", modes: { bracketedPasteMode: false } },
+        isInputLocked: false,
+      });
+
+      const { run } = setupActions();
+      await run("terminal.paste", { terminalId: "t1" }, { dispatchSource: source });
+
+      expect(terminalInstanceMock.notifyUserInput).toHaveBeenCalledWith("t1", "", {
+        takesSize: takes,
+      });
+    }
+  );
 
   it("paste with empty clipboard does not call write or notifyUserInput", async () => {
     clipboardText = "";

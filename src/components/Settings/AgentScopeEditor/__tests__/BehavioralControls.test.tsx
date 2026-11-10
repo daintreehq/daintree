@@ -13,18 +13,13 @@ function makeProps(overrides: Partial<Props> = {}): Props {
     dangerousMode: "inherit",
     effectiveSkipPerms: false,
     inheritResolvesToOn: true,
-    inheritOriginLabel: "global setting",
-    inlineMode: "inherit",
-    inlineInheritResolvesToInline: true,
-    inlineInheritOriginLabel: "global setting",
+    inheritHint: "Inherited from global setting",
     customArgsValue: "",
     customArgsPlaceholder: "--flag",
     customArgsDescription: "Extra CLI flags",
     customFlagsOverride: undefined,
-    supportsInlineMode: true,
     defaultDangerousArg: "--dangerously-skip-permissions",
     onDangerousModeChange: vi.fn(),
-    onInlineModeChange: vi.fn(),
     onCustomFlagsChange: vi.fn(),
     onCustomFlagsOverrideReset: vi.fn(),
     ...overrides,
@@ -90,36 +85,38 @@ describe("BehavioralControls — skip permissions control", () => {
     rerender(<BehavioralControls {...makeProps({ dangerousMode: "on" })} />);
     expect(region(container).queryByText("Inherited from global setting")).toBeNull();
   });
+
+  it("renders whichever inherit hint the scope supplies, and none once a choice is explicit", () => {
+    const region = (container: HTMLElement) => {
+      const el = container.querySelector("#agents-skip-permissions");
+      if (!(el instanceof HTMLElement)) throw new Error("skip-permissions region not found");
+      return within(el);
+    };
+    for (const inheritHint of [
+      "The global setting doesn't apply to this agent",
+      "Inherited from agent default",
+    ]) {
+      const { container, rerender, unmount } = render(
+        <BehavioralControls {...makeProps({ inheritHint })} />
+      );
+      expect(region(container).getByText(inheritHint)).toBeTruthy();
+      expect(region(container).queryByText("Inherited from global setting")).toBeNull();
+      for (const dangerousMode of ["on", "off"] as const) {
+        rerender(<BehavioralControls {...makeProps({ inheritHint, dangerousMode })} />);
+        expect(region(container).queryByText(inheritHint), dangerousMode).toBeNull();
+      }
+      unmount();
+    }
+  });
 });
 
-describe("BehavioralControls — alt-screen mode control (#10876)", () => {
-  it("renders the alt-screen control as three radios only when the agent supports inline mode", () => {
-    const { container, rerender } = render(<BehavioralControls {...makeProps()} />);
-    const region = container.querySelector("#agents-inline-mode");
-    if (!(region instanceof HTMLElement)) throw new Error("inline-mode region not found");
-    expect(within(region).getAllByRole("radio")).toHaveLength(3);
-
-    rerender(<BehavioralControls {...makeProps({ supportsInlineMode: false })} />);
-    expect(container.querySelector("#agents-inline-mode")).toBeNull();
-  });
-
-  it("labels the options by effect (Inline / Alt screen), decoupled from stored value polarity", () => {
+describe("BehavioralControls — no screen-mode choice (#16356)", () => {
+  it("offers no alt-screen control, leaving only the radios for skip permissions", () => {
     const { container } = render(<BehavioralControls {...makeProps()} />);
-    const region = container.querySelector("#agents-inline-mode") as HTMLElement;
-    const scoped = within(region);
-    // Exact names so "Inline" doesn't also match the "Default (Inline)" option.
-    expect(scoped.getByRole("radio", { name: "Inline" })).toBeTruthy();
-    expect(scoped.getByRole("radio", { name: "Alt screen" })).toBeTruthy();
-  });
-
-  it("surfaces what the inline Default resolves to and flips with the parent state", () => {
-    const { container, rerender } = render(
-      <BehavioralControls {...makeProps({ inlineInheritResolvesToInline: true })} />
-    );
-    const region = () => container.querySelector("#agents-inline-mode") as HTMLElement;
-    expect(within(region()).getByRole("radio", { name: /Default \(Inline\)/ })).toBeTruthy();
-
-    rerender(<BehavioralControls {...makeProps({ inlineInheritResolvesToInline: false })} />);
-    expect(within(region()).getByRole("radio", { name: /Default \(Alt screen\)/ })).toBeTruthy();
+    expect(screen.queryByText(/alt.screen/i)).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Inline" })).toBeNull();
+    const skip = container.querySelector("#agents-skip-permissions");
+    if (!(skip instanceof HTMLElement)) throw new Error("skip-permissions region not found");
+    expect(screen.getAllByRole("radio")).toEqual(within(skip).getAllByRole("radio"));
   });
 });

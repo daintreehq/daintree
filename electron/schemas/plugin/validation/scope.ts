@@ -188,6 +188,17 @@ export function validateProjectRuntimeContributions(
         params: { errorCode: "projectTemplates_project_scope_forbidden" },
       });
     }
+    // Not deferred either: Canopy spans every project and stands in none, so
+    // there is no project for a project's plugin to run its view in there.
+    if (manifest.contributes.canopyViews.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contributes", "canopyViews"],
+        message:
+          'contributes.canopyViews is not available to a "scope": "project" plugin or an "instanceMode": "project" package — the Canopy window spans every project and belongs to none, so only an app-wide plugin\'s view can show there.',
+        params: { errorCode: "canopyViews_project_scope_forbidden" },
+      });
+    }
   }
 }
 

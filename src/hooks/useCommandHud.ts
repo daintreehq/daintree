@@ -11,6 +11,7 @@ import {
   usePendingChord,
 } from "./useGlobalKeybindings";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
+import { resolveInteractiveActionId } from "@/services/actions/resolveInteractiveActionId";
 
 /** A single entry in the curated Cmd+K power-command layer. */
 export interface CommandHudItem {
@@ -59,14 +60,21 @@ function buildLayerItems(): CommandHudItem[] {
   // a command that can't run says why on its row instead of closing the HUD on
   // a silent no-op. An id with no registered action is left enabled: dispatch
   // is still the authority, and the row must not claim a reason it doesn't have.
+  // A row whose action redirects runs the target, so the target's state is the
+  // row's. `list()` drops actions hidden by `isVisible`, which dispatch and the
+  // direct-completion check still reach through `get()`, so a miss falls back
+  // to it and the row agrees with what a pick does.
   const manifest = new Map(
     actionService.list(undefined, { includeSchemas: false }).map((entry) => [entry.id, entry])
   );
+  const entryFor = (id: Parameters<typeof actionService.get>[0]) =>
+    manifest.get(id) ?? actionService.get(id, undefined, { includeSchemas: false });
   return keybindingService
     .getChordCompletions(COMMAND_HUD_PREFIX)
     .filter((entry) => entry.actionId !== "")
     .map((entry) => {
-      const action = manifest.get(entry.actionId as Parameters<typeof actionService.get>[0]);
+      const bound = entryFor(entry.actionId as Parameters<typeof actionService.get>[0]);
+      const action = bound?.paletteRedirectTo ? entryFor(bound.paletteRedirectTo) : bound;
       const enabled = action?.enabled ?? true;
       return {
         actionId: entry.actionId,
@@ -198,11 +206,13 @@ export function useCommandHud(): UseCommandHudReturn {
     // Respect a palette redirect: a headless action can point at an interactive
     // sibling (e.g. git.commit → Review Hub, which must never auto-derive a
     // message). Dispatch the redirect target, not the raw id — mirrors the
-    // command palette.
-    const entry = actionService.get(item.actionId as Parameters<typeof actionService.get>[0]);
-    const dispatchId = (entry?.paletteRedirectTo ?? item.actionId) as Parameters<
-      typeof actionService.dispatch
-    >[0];
+    // command palette and the shortcut itself.
+    const dispatchId = resolveInteractiveActionId(
+      item.actionId as Parameters<typeof actionService.dispatch>[0]
+    );
+    // Read off the id that runs, as the palette does: a redirect's failure
+    // comes from the sibling, so that is the definition whose toast it is.
+    const selfNotifies = actionService.selfNotifiesOnExecutionError(dispatchId);
 
     void actionService
       .dispatch(
@@ -220,6 +230,9 @@ export function useCommandHud(): UseCommandHudReturn {
         // rather than a silent no-op (#12120), but the dialog it just opened is
         // what the user should be answering — not an error toast over it.
         if (isStagedConfirmation(result.error)) return;
+        // An action that owns its failure toast has already raised the
+        // specific one; a "Couldn't run" beside it names no cause.
+        if (result.error.code === "EXECUTION_ERROR" && selfNotifies) return;
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",

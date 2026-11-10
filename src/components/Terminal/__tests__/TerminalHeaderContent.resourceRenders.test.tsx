@@ -14,6 +14,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 vi.mock("../TerminalNotifyChip", () => ({ TerminalNotifyChip: () => null }));
 vi.mock("../SubagentChip", () => ({ SubagentChip: () => null }));
+vi.mock("../AgentContextUsageChip", () => ({ AgentContextUsageChip: () => null }));
 vi.mock("@/store", () => ({
   usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({ panelsById: {}, panelIds: [] }),

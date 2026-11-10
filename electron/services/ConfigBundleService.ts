@@ -850,8 +850,8 @@ export class ConfigBundleService {
     // Field level, both ways (#13346): only the fields `portableSettings.ts`
     // names leave, and an incoming entry is merged into the target's field by
     // field, its env maps per name and its presets per id. Bypass travels in
-    // its own opt-in section; the root-level `globalUseAltScreen` doesn't
-    // travel at all, since this payload is the per-agent record.
+    // its own opt-in section; root-level switches don't travel at all, since
+    // this payload is the per-agent record.
     const readAgents = (): Record<string, unknown> => {
       const settings = store.get("agentSettings");
       return isRecord(settings) && isRecord(settings.agents) ? settings.agents : {};

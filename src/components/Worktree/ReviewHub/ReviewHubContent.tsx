@@ -43,12 +43,15 @@ import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import { type FileStageRowSection } from "./FileStageRow";
 import { FileSection } from "./FileSection";
 import { BaseBranchFileList } from "./BaseBranchFileList";
+import { ReviewThreadsHandoff } from "./ReviewThreadsHandoff";
+import { collectReviewThreadFiles } from "./prReviewThreads";
 import {
   useReviewHubStagingActions,
   type ReviewHubActionFailure,
 } from "./useReviewHubStagingActions";
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
+import { useNewPRLink } from "./useNewPRLink";
 import { ReviewHubContext } from "./ReviewHubContext";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
@@ -70,6 +73,7 @@ import { useReviewHubCommitAndPush } from "./useReviewHubCommitAndPush";
 import { useReviewHubRowSelection } from "./useReviewHubRowSelection";
 import { useReviewHubFileCursor } from "./useReviewHubFileCursor";
 import { useReviewHubKeyboard } from "./useReviewHubKeyboard";
+import type { CommitShortcutHandler } from "./commitShortcut";
 import { PluginReadinessChecks, useWorktreeReviewPluginChecks } from "./PluginReadinessChecks";
 import {
   deriveReviewReadiness,
@@ -445,6 +449,7 @@ export function ReviewHubContent({
     selectionAnchorRef,
   } = selection;
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const commitShortcutRef = useRef<CommitShortcutHandler | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   // The same element as `scrollContainerRef`, held in STATE as well: Virtuoso
   // needs it as a prop, and a ref mutation does not re-render, so windowing
@@ -838,6 +843,10 @@ export function ReviewHubContent({
     [sortedBaseBranchFiles]
   );
   const reviewDecorations = useFileDecorations(decorationScope, decorationPaths);
+  const reviewThreadFiles = useMemo(
+    () => collectReviewThreadFiles(decorationPaths, reviewDecorations),
+    [decorationPaths, reviewDecorations]
+  );
 
   const behindCount = useWorktreeStore((state) => {
     for (const wt of state.worktrees.values()) {
@@ -855,6 +864,42 @@ export function ReviewHubContent({
       }
     }
     return undefined;
+  });
+
+  const newPRLinkInputs = useWorktreeStore(
+    useShallow((state) => {
+      for (const wt of state.worktrees.values()) {
+        if (wt.path === worktreePath) {
+          return {
+            baseRef: wt.baseCompareRef ?? null,
+            isMainWorktree: wt.isMainWorktree === true,
+            upstreamRef: wt.upstreamRef,
+            upstreamHeadSha: wt.upstreamHeadSha,
+            lastFetchedAt: wt.lastFetchedAt,
+          };
+        }
+      }
+      return null;
+    })
+  );
+  const newPRLink = useNewPRLink({
+    enabled: isOpen && status?.hasRemote === true && worktreePR === null,
+    cwd: worktreePath,
+    head: status?.currentBranch ?? null,
+    baseRef: newPRLinkInputs?.baseRef ?? null,
+    isMainWorktree: newPRLinkInputs?.isMainWorktree ?? false,
+    // A push from here shows in `isPushing`. One from a terminal shows in the
+    // upstream fields, but the main worktree has no base divergence to carry
+    // those, so `aheadCount` covers it: an unpushed branch has none until it
+    // gains an upstream. A fetch catches a push that set no upstream at all.
+    revision: JSON.stringify([
+      isPushing,
+      aheadCount,
+      newPRLinkInputs?.upstreamRef,
+      newPRLinkInputs?.upstreamHeadSha,
+      newPRLinkInputs?.lastFetchedAt,
+      status?.pushDestination,
+    ]),
   });
 
   const forgeHealthProviderId = useWorktreeStore((state) => {
@@ -1444,6 +1489,8 @@ export function ReviewHubContent({
     handleToggleUnstaged,
     handleViewedChange,
     viewedFiles,
+    rootRef,
+    commitShortcutRef,
   });
 
   // Shape-matched skeletons replace the old full-area spinners. Doherty-gate
@@ -1530,13 +1577,13 @@ export function ReviewHubContent({
                 screen readers only and the chips step down before it has to. */}
             <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2">
               {/* The dialog host already draws the title in AppDialog.Header —
-                  drawing it again would stack two "Review & Commit" headings. */}
+                  drawing it again would stack two "Review Hub" headings. */}
               {!isDialog && (
                 <h2
                   id="review-hub-title"
                   className="shrink-0 text-xs font-medium text-text-primary @max-[520px]/header:sr-only"
                 >
-                  Review & commit
+                  Review Hub
                 </h2>
               )}
               {status?.currentBranch && (
@@ -1553,6 +1600,7 @@ export function ReviewHubContent({
                 hasRemote={status?.hasRemote}
                 worktreePR={worktreePR}
                 worktreePath={worktreePath}
+                newPRLink={newPRLink}
                 onOpenExternal={(url) => void systemClient.openExternal(url)}
               />
             </div>
@@ -1676,12 +1724,12 @@ export function ReviewHubContent({
                 <TooltipTrigger asChild>
                   <SurfaceHeaderCloseButton
                     onClick={onClose}
-                    aria-label="Close review & commit"
+                    aria-label="Close Review Hub"
                     data-testid="review-hub-close"
                     className="col-start-3 row-start-1 @max-[960px]/header:col-start-2"
                   />
                 </TooltipTrigger>
-                <TooltipContent side="bottom">Close review & commit</TooltipContent>
+                <TooltipContent side="bottom">Close Review Hub</TooltipContent>
               </Tooltip>
             )}
           </SurfaceHeader>
@@ -1870,8 +1918,18 @@ export function ReviewHubContent({
               ) : sortedBaseBranchFiles !== null ? (
                 <div>
                   <div className={REVIEW_HUB_STICKY_BAND}>
-                    <div className={cn(REVIEW_HUB_SECTION_BAND, "border-b border-divider")}>
-                      <span className={SECTION_LABEL_CLASS}>
+                    {/* One row, always: the heading truncates rather than
+                        pushing the review-threads hand-off onto a row of its
+                        own, which would outgrow the scroller's `scroll-pt-10`
+                        clearance. Only the hand-off's no-target hint wraps.
+                        The heading's zero basis is what holds the row: a
+                        wrapping flex row breaks lines on each item's size
+                        before anything shrinks, so `min-w-0` alone would still
+                        let a long heading push the button down. */}
+                    <div
+                      className={cn(REVIEW_HUB_SECTION_BAND, "flex-wrap border-b border-divider")}
+                    >
+                      <span className={cn(SECTION_LABEL_CLASS, "min-w-0 flex-1 truncate")}>
                         Changed vs{" "}
                         <span className="font-mono font-medium normal-case tracking-normal">
                           {mainBranch}
@@ -1888,6 +1946,15 @@ export function ReviewHubContent({
                           className="ml-2 font-normal normal-case tracking-normal"
                         />
                       </span>
+                      {worktreePR && reviewThreadFiles.length > 0 && (
+                        <ReviewThreadsHandoff
+                          key={`${worktreePath}#${worktreePR.prNumber}`}
+                          worktreePath={worktreePath}
+                          prNumber={worktreePR.prNumber}
+                          prUrl={worktreePR.prUrl}
+                          files={reviewThreadFiles}
+                        />
+                      )}
                     </div>
                   </div>
                   <BaseBranchFileList
@@ -2292,6 +2359,7 @@ export function ReviewHubContent({
               skipPushConfirm={skipPushConfirm}
               onSetSkipPushConfirm={(value) => setSkipPushConfirmForWorktree(worktreePath, value)}
               isVerifying={!statusIsFresh}
+              shortcutRef={commitShortcutRef}
             />
           )}
       </div>

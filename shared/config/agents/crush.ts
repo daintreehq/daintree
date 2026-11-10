@@ -4,6 +4,12 @@ export const config: AgentConfig = {
   id: "crush",
   name: "Crush",
   command: "crush",
+  // The run subcommand is the only prompt path. The root TUI has no pre-seed
+  // flag, so the interactive positional form is best-effort.
+  initialPromptForm: {
+    interactive: { args: ["{prompt}"], caveat: "may-be-ignored" },
+    headless: { args: ["run", "{prompt}"] },
+  },
   // `go install github.com/charmbracelet/crush@latest` lands the binary at
   // ~/go/bin/crush, which is not on PATH for sandboxed Electron processes.
   // Homebrew (charmbracelet/tap/crush) installs to a brew-managed prefix

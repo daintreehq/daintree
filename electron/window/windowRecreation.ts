@@ -24,10 +24,8 @@ import { windowRestoreArgs, type CreateWindowResult } from "../lifecycle/windowR
 import type { OpenWindowRecord } from "../services/persistence/windowManifest.js";
 import {
   captureWindowRecord,
-  clearPendingWindowRecreation,
-  markWindowRecreationSetupFailed,
+  createWindowHoldingRecord,
   scheduleOpenWindowsSave,
-  setPendingWindowRecreation,
 } from "./openWindowsTracker.js";
 
 const OOM_LOOP_WINDOW_MS = 60_000;
@@ -103,23 +101,10 @@ export function createWindowRecreation(deps: WindowRecreationDeps): WindowRecrea
 
       return async () => {
         const { projectId, options } = windowRestoreArgs(record);
-        let replacementId: number | undefined;
         try {
-          await deps.createWindow(projectId, {
-            ...options,
-            revealMode,
-            oomHistory,
-            onRegistered: (id) => {
-              replacementId = id;
-              setPendingWindowRecreation(id, record);
-            },
-          });
-          // Setup has bound the workspace (or found it gone) and queued the
-          // background restores, which the manifest now reads for itself.
-          if (replacementId !== undefined) clearPendingWindowRecreation(replacementId);
-        } catch (error) {
-          if (replacementId !== undefined) markWindowRecreationSetupFailed(replacementId);
-          throw error;
+          await createWindowHoldingRecord(record, (onRegistered) =>
+            deps.createWindow(projectId, { ...options, revealMode, oomHistory, onRegistered })
+          );
         } finally {
           // Nothing else saves until the next focus change or switch.
           scheduleOpenWindowsSave();

@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TRASH_TTL_MS } from "../../../../shared/config/trash.js";
 
@@ -30,6 +32,8 @@ const state = vi.hoisted(() => ({
   submits: [] as string[],
   releaseMirror: (() => {}) as () => void,
   mode: "on" as string,
+  /** The window each fake sender sits in. */
+  windows: new Map<unknown, unknown>(),
   packaged: false,
   generation: 1 as number | null,
   /** The project the pty-host's record names; null once the terminal has exited. */
@@ -62,6 +66,8 @@ const ptyClient = vi.hoisted(() => ({
 /** Who drives every project: this screen, another one, or nobody (no lease service at all). */
 const lease = vi.hoisted(() => ({
   holder: null as "self" | "other" | null,
+  /** Projects this screen drives even while another screen holds the rest. */
+  driven: new Set<string>(),
   /** The handle of the endpoint holding the lease, when one is attached. */
   holderHandle: undefined as number | undefined,
   listeners: new Set<() => void>(),
@@ -72,7 +78,8 @@ vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
     lease.holder === null
       ? null
       : {
-          isDriving: () => lease.holder === "self",
+          isDriving: (projectId?: string) =>
+            lease.holder === "self" || (projectId !== undefined && lease.driven.has(projectId)),
           getHolderEndpoint: () =>
             lease.holderHandle === undefined ? null : { handle: lease.holderHandle },
           onChange: (listener: () => void) => {
@@ -84,11 +91,16 @@ vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
-  BrowserWindow: { fromWebContents: () => null, getAllWindows: () => [] },
+  BrowserWindow: {
+    fromWebContents: (sender: unknown) => state.windows.get(sender) ?? null,
+    getAllWindows: () => [],
+  },
   webContents: { fromId: () => undefined },
   safeStorage: {},
   app: {
     getPath: () => "/tmp",
+    getAppPath: () => "/repo",
+    getVersion: () => "1.4.0",
     get isPackaged() {
       return state.packaged;
     },
@@ -228,10 +240,13 @@ vi.mock("../../../services/canopy/canopyLocalReader.js", () => ({
   CanopyLocalReader: vi.fn(function CanopyLocalReader() {
     return localReader;
   }),
+  tryReaderModel: vi.fn(async () => {}),
 }));
 const models = vi.hoisted(() => ({
   ensure: vi.fn(async () => {}),
+  dispose: vi.fn(),
   cancel: vi.fn(),
+  currentDir: vi.fn((): string | null => "/repo/electron/resources/canopy-reader"),
   state: vi.fn(() => ({ id: "daintreehq/canopy-reader-17m", status: "ready" as const })),
   info: vi.fn(async () => ({
     id: "daintreehq/canopy-reader-17m",
@@ -239,14 +254,21 @@ const models = vi.hoisted(() => ({
     bytes: 21_000_000,
     installed: true,
   })),
-  installedDir: vi.fn(async () => "/tmp/canopy/models/canopy-reader-17m"),
-  remove: vi.fn(async () => {}),
+  installedDir: vi.fn(async () => "/repo/electron/resources/canopy-reader"),
 }));
+const removeDownloadedModels = vi.hoisted(() =>
+  vi.fn(async (_root: string, _signal?: AbortSignal) => {})
+);
+const removeStaleUpdates = vi.hoisted(() =>
+  vi.fn(async (_root: string, _signal?: AbortSignal) => {})
+);
 vi.mock("../../../services/canopy/canopyModels.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/canopy/canopyModels.js")>()),
   CanopyModels: vi.fn(function CanopyModels() {
     return models;
   }),
+  removeDownloadedModels,
+  removeStaleUpdates,
 }));
 const broadcasts = vi.hoisted(() => vi.fn());
 const pushes = vi.hoisted(() => vi.fn());
@@ -264,14 +286,23 @@ import { _resetRateLimitQueuesForTest, getProjectPushTargets } from "../../utils
 import { events } from "../../../services/events.js";
 import { getDefaultPanelTitle } from "../../../../shared/config/panelKindRegistry.js";
 import { canopyPanelsListing, registerCanopyHandlers } from "../canopy.js";
+import type { CanopySnapshot, CanopyTerminalView } from "../../../../shared/types/ipc/canopy.js";
+import { CanopyModels } from "../../../services/canopy/canopyModels.js";
+import { tryReaderModel } from "../../../services/canopy/canopyLocalReader.js";
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
-import { activeTerminalWatches } from "../canopyTerminalWatch.js";
+import { activeTerminalWatches, sizeHolds } from "../canopyTerminalWatch.js";
+import { markProjectlessView } from "../../../window/projectlessViews.js";
 import { getIpcDispatcher } from "../../dispatcher.js";
 import { resetCanopyTrashRemovalsForTests } from "../../../services/pty/canopyTrashRemovals.js";
 import type { ClientEndpoint } from "../../endpoint.js";
 import { CHANNELS } from "../../channels.js";
 import { readPluginTerminalScreen } from "../../../services/plugin/pluginTerminalScreenRead.js";
 import { redrawFor } from "../../../services/__tests__/answerRedraw.js";
+import {
+  CANOPY_SEARCH_MAX_ALTERNATIVES,
+  CANOPY_SEARCH_MAX_TERM_LENGTH,
+  CANOPY_SEARCH_MAX_TERMS,
+} from "../../../../shared/types/ipc/canopy.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
 
@@ -322,6 +353,7 @@ describe("canopy IPC", () => {
     ipcHandlers.clear();
     vi.clearAllMocks();
     state.runs = [{ runId: "run-1", spawnedAt: 100, workspaceId: "project-1" }];
+    state.windows.clear();
     state.views = [];
     state.record = { spawnedAt: 100 };
     state.screen = MENU;
@@ -332,6 +364,7 @@ describe("canopy IPC", () => {
     state.packaged = false;
     state.generation = 1;
     lease.holder = null;
+    lease.driven.clear();
     state.terminalProject = "project-1";
     saved.state = null;
     // setMode is rate-limited across the file; each case starts with the window clear.
@@ -403,6 +436,58 @@ describe("canopy IPC", () => {
       expect(result.ok).toBe(false);
     }
     expect(vi.mocked(readPluginTerminalScreen)).not.toHaveBeenCalled();
+  });
+
+  it("searches a run for any of its alternatives, and refuses alternatives past their bounds", async () => {
+    state.runs = [{ runId: "run-1", spawnedAt: 100 }];
+    state.screen = "fallback-review: dfat-vjv0";
+    vi.mocked(readPluginTerminalScreen).mockClear();
+    const sender = fakeSender(5);
+    expect(
+      await invoke(CANOPY_METHOD_CHANNELS.searchScreens, sender, [
+        {
+          runId: "run-1",
+          spawnedAt: 100,
+          terms: ["dfat-xth8"],
+          orTerms: [["cocto"], ["fallback-review:", "dfat-vjv0"]],
+        },
+      ])
+    ).toEqual(["run-1"]);
+    expect(vi.mocked(readPluginTerminalScreen)).toHaveBeenCalledTimes(1);
+
+    vi.mocked(readPluginTerminalScreen).mockClear();
+    const tooMany = Array.from({ length: CANOPY_SEARCH_MAX_ALTERNATIVES }, (_, i) => [`x${i}`]);
+    const run = { runId: "run-1", spawnedAt: 100 };
+    for (const target of [
+      { ...run, terms: ["x"], orTerms: "x" },
+      { ...run, terms: ["x"], orTerms: [[]] },
+      { ...run, terms: ["x"], orTerms: [["x".repeat(CANOPY_SEARCH_MAX_TERM_LENGTH + 1)]] },
+      {
+        ...run,
+        terms: ["x"],
+        orTerms: [Array.from({ length: CANOPY_SEARCH_MAX_TERMS + 1 }, () => "x")],
+      },
+      { ...run, terms: ["x"], orTerms: tooMany },
+      // Alternatives never stand in for the first: a host from before them needs it.
+      { ...run, orTerms: [["x"]] },
+      { ...run, terms: [], orTerms: [["x"]] },
+    ]) {
+      const result = await outcome(invoke(CANOPY_METHOD_CHANNELS.searchScreens, sender, [target]));
+      expect(result).toEqual({ ok: false, message: expect.stringContaining("Invalid search") });
+    }
+    expect(vi.mocked(readPluginTerminalScreen)).not.toHaveBeenCalled();
+    // As many alternatives as a query may offer go through, each as large as it may be.
+    const widest = Array.from({ length: CANOPY_SEARCH_MAX_TERMS }, (_, i) =>
+      `${i}`.padEnd(CANOPY_SEARCH_MAX_TERM_LENGTH, "y")
+    );
+    for (const target of [
+      { ...run, terms: ["x"], orTerms: tooMany.slice(1) },
+      { ...run, terms: widest, orTerms: [widest] },
+      { ...run, terms: ["x"], orTerms: [] },
+    ]) {
+      const result = await outcome(invoke(CANOPY_METHOD_CHANNELS.searchScreens, sender, [target]));
+      expect(result.ok).toBe(true);
+    }
   });
 
   it("reads no branch for an id that isn't one", async () => {
@@ -802,20 +887,94 @@ describe("canopy IPC", () => {
     }
   );
 
-  it("gets the model once Canopy is turned on, and lets the reader go when it is turned off", async () => {
+  it("checks the model the app ships once Canopy is turned on, and lets the reader go when it is turned off", async () => {
     state.mode = "unset";
     const sender = fakeSender(9);
     await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
-    // Off, nothing is downloaded or started.
+    // Off, nothing is checked or started.
     expect(models.ensure).not.toHaveBeenCalled();
     await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "on");
     expect(models.ensure).toHaveBeenCalled();
-    // Once it is ready, any model an earlier Daintree chose goes, the one in use stays.
-    await vi.waitFor(() => expect(models.remove).toHaveBeenCalledWith(true));
+    // Unpackaged, the shipped model is where the build fetched it.
+    expect(vi.mocked(CanopyModels).mock.calls[0]?.[0]).toBe(
+      path.join("/repo", "electron", "resources", "canopy-reader")
+    );
+    // Updates go beside the user's data, never where earlier versions downloaded to.
+    const options = vi.mocked(CanopyModels).mock.calls[0]?.[2];
+    expect(options).toEqual({
+      updates: path.join("/tmp", "canopy", "reader-updates"),
+      trial: expect.any(Function),
+      build: "1.4.0",
+    });
+
+    expect(models.cancel).not.toHaveBeenCalled();
     await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset");
-    // A download under way stops; no read was made, so no reader was ever started.
+    // An update under way stops.
     expect(models.cancel).toHaveBeenCalled();
+    // No read was made, so no reader was ever started.
     expect(localReader.read).not.toHaveBeenCalled();
+
+    // An update runs in a reader of its own first, stopping when the update does.
+    const stop = new AbortController();
+    vi.mocked(tryReaderModel).mockRejectedValueOnce(new Error("Model took too long to load"));
+    await expect(
+      options!.trial!("/tmp/canopy/reader-updates/x.download", stop.signal)
+    ).rejects.toThrow("Model took too long to load");
+    expect(tryReaderModel).toHaveBeenCalledWith(
+      "/tmp/canopy/reader-updates/x.download",
+      stop.signal
+    );
+  });
+
+  it.each(["unset", "hidden"] as const)(
+    "stops an update a retry began before any service was made, once Canopy is %s",
+    async (mode) => {
+      state.mode = "on";
+      await invoke(CANOPY_METHOD_CHANNELS.retryModel, fakeSender(9));
+      expect(models.ensure).toHaveBeenCalled();
+      await invoke(CANOPY_METHOD_CHANNELS.setMode, fakeSender(9), mode);
+      expect(models.cancel).toHaveBeenCalled();
+    }
+  );
+
+  it("lets the last copy's reader go and reads every screen again once an update is in place, and not as one downloads", async () => {
+    let told: (() => void) | undefined;
+    vi.mocked(CanopyModels).mockImplementationOnce(function (_dir: string, onChange: () => void) {
+      told = onChange;
+      return models as unknown as CanopyModels;
+    } as never);
+    state.mode = "on";
+    await invoke(CANOPY_METHOD_CHANNELS.setActive, fakeSender(9), true);
+    // A screen read starts the reader.
+    await vi.waitFor(() => expect(localReader.read).toHaveBeenCalled());
+    // The shipped copy checks out: every screen is read with it.
+    localReader.read.mockClear();
+    told?.();
+    await vi.waitFor(() => expect(localReader.read).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // An update's progress: the copy in use reads on, and what it read stands.
+    localReader.read.mockClear();
+    told?.();
+    told?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(localReader.release).not.toHaveBeenCalled();
+    expect(localReader.read).not.toHaveBeenCalled();
+
+    const update = path.join("/tmp", "canopy", "reader-updates", "b".repeat(40));
+    models.currentDir.mockReturnValue(update);
+    models.installedDir.mockResolvedValue(update);
+    try {
+      told?.();
+      expect(localReader.release).toHaveBeenCalledTimes(1);
+      // The screen is read again, by the update.
+      await vi.waitFor(() => expect(localReader.read).toHaveBeenCalled());
+      // Told again with the same copy in use: nothing more to let go.
+      told?.();
+      expect(localReader.release).toHaveBeenCalledTimes(1);
+    } finally {
+      models.currentDir.mockReturnValue("/repo/electron/resources/canopy-reader");
+      models.installedDir.mockResolvedValue("/repo/electron/resources/canopy-reader");
+    }
   });
 
   it("says what the model is and whether it is on this machine, as the models say", async () => {
@@ -833,20 +992,119 @@ describe("canopy IPC", () => {
     expect(result.data ?? result).toEqual(info);
   });
 
-  it("deletes the downloaded models at any time, turning Canopy off first when it is on", async () => {
-    state.mode = "on";
-    const sender = fakeSender(9);
-    await invoke(CANOPY_METHOD_CHANNELS.removeModels, sender);
-    // Off, through the guarded change: so every view is told, and a restart
-    // finds nothing to download again.
-    expect(state.mode).toBe("unset");
-    expect(models.remove).toHaveBeenCalledWith(false);
-    models.remove.mockClear();
-    // Already off: just the delete.
-    await invoke(CANOPY_METHOD_CHANNELS.removeModels, sender);
-    expect(state.mode).toBe("unset");
-    expect(models.remove).toHaveBeenCalledWith(false);
+  it("answers at once while the shipped model is checked, and tells every view when the check lands", async () => {
+    let checked: (() => void) | undefined;
+    vi.mocked(CanopyModels).mockImplementationOnce(function (_dir: string, onChange: () => void) {
+      checked = onChange;
+      return models as unknown as CanopyModels;
+    } as never);
+    const ready = models.state.getMockImplementation();
+    // A check that hasn't finished: nothing waits on it.
+    models.ensure.mockReturnValueOnce(new Promise(() => {}));
+    models.state.mockReturnValue(undefined as never);
+    // The background watch's interval too, so no real poll broadcasts meanwhile.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      state.mode = "on";
+      const result = (await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, fakeSender(9))) as {
+        data?: CanopySnapshot;
+      };
+      const first = (result.data ?? result) as CanopySnapshot;
+      expect(first.activated).toBe(true);
+      expect(first.model).toBeUndefined();
+      expect(models.ensure).toHaveBeenCalled();
+      // Whatever the service's own start broadcasts has gone out.
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      broadcasts.mockClear();
+      const failed = { id: "daintreehq/canopy-reader-17m", status: "failed", error: "damaged" };
+      models.state.mockReturnValue(failed as never);
+      // Nothing tells the views until the check says it is done.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(broadcasts).not.toHaveBeenCalled();
+      checked?.();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(broadcasts).toHaveBeenCalledWith(
+        "canopy:snapshot-updated",
+        expect.objectContaining({ model: failed })
+      );
+    } finally {
+      vi.useRealTimers();
+      models.state.mockImplementation(ready!);
+    }
   });
+
+  it("reads the shipped model from the app's resources once packaged", async () => {
+    const resources = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    Object.defineProperty(process, "resourcesPath", {
+      value: "/Applications/Daintree.app/Contents/Resources",
+      configurable: true,
+    });
+    try {
+      state.packaged = true;
+      state.mode = "on";
+      await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, fakeSender(9));
+      expect(vi.mocked(CanopyModels).mock.calls[0]?.[0]).toBe(
+        path.join("/Applications/Daintree.app/Contents/Resources", "canopy-reader")
+      );
+    } finally {
+      if (resources) Object.defineProperty(process, "resourcesPath", resources);
+      else delete (process as { resourcesPath?: string }).resourcesPath;
+    }
+  });
+
+  it("refuses an older Shell's delete of the model, which ships with Daintree, leaving Canopy on", async () => {
+    state.mode = "on";
+    const error = await invoke(CANOPY_METHOD_CHANNELS.removeModels, fakeSender(9)).then(
+      () => null,
+      (thrown: unknown) => thrown
+    );
+    expect(error).toMatchObject({
+      code: "UNSUPPORTED",
+      userMessage: expect.stringMatching(/comes with Daintree/),
+    });
+    expect(state.mode).toBe("on");
+    expect(removeDownloadedModels).not.toHaveBeenCalled();
+  });
+
+  it.each(["on", "unset", "hidden"] as const)(
+    "deletes the models earlier versions downloaded, after launch, with Canopy %s",
+    async (mode) => {
+      cleanup();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        state.mode = mode;
+        cleanup = registerCanopyHandlers();
+        // Not on the launch's own path.
+        await vi.advanceTimersByTimeAsync(29_999);
+        expect(removeDownloadedModels).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(removeDownloadedModels).toHaveBeenCalledWith(
+          path.join("/tmp", "canopy", "models"),
+          expect.any(AbortSignal)
+        );
+        // An update an app update made stale goes too, whatever the mode.
+        expect(removeStaleUpdates).toHaveBeenCalledWith(
+          path.join("/tmp", "canopy", "reader-updates"),
+          removeDownloadedModels.mock.calls[0]![1]
+        );
+        // Torn down while it runs: it is told to stop.
+        const signal = removeDownloadedModels.mock.calls[0]![1] as AbortSignal;
+        expect(signal.aborted).toBe(false);
+        cleanup();
+        cleanup = () => {};
+        expect(signal.aborted).toBe(true);
+
+        // Torn down before it is due: nothing is deleted.
+        removeDownloadedModels.mockClear();
+        registerCanopyHandlers()();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(removeDownloadedModels).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 
   it("watches a view's lifecycle once however often the panel reopens", async () => {
     const sender = fakeSender(7);
@@ -864,6 +1122,26 @@ describe("canopy IPC", () => {
     sender.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
     const snapshot = await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, sender);
     expect(active(snapshot)).toBe(false);
+  });
+
+  it("leaves nothing behind when a view closes with a terminal showing", async () => {
+    const release = vi.fn();
+    state.releaseMirror = release;
+    const sender = fakeSender(3);
+    await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
+    const opened = (await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", {
+      spawnedAt: 100,
+    })) as { data?: { watchId: number }; watchId?: number };
+    const { watchId } = opened.data ?? opened;
+    await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+    expect(release).not.toHaveBeenCalled();
+    expect(sizeHolds()).toEqual(["run-1"]);
+
+    sender.emit("destroyed");
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(sizeHolds()).toEqual([]);
+    expect(active(await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, fakeSender(4)))).toBe(false);
   });
 
   it("stays active while any view has the panel open", async () => {
@@ -1106,6 +1384,150 @@ describe("canopy IPC", () => {
     // A second Undo has nothing left to take back.
     const again = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
     expect(again.ok).toBe(false);
+  });
+
+  describe("bulk trash", () => {
+    /** What a handler answered, out of its envelope. */
+    function answer<T>(result: unknown): T {
+      const envelope = result as { ok?: boolean; data?: unknown };
+      return (envelope && "ok" in envelope ? envelope.data : result) as T;
+    }
+
+    /** Runs the fleet holds, each its own terminal in the incarnation listed. */
+    function fleetOf(count: number): Array<{ runId: string; spawnedAt: number }> {
+      state.runs = Array.from({ length: count }, (_, index) => ({
+        runId: `run-${index}`,
+        spawnedAt: 100,
+        workspaceId: "project-1",
+      }));
+      return state.runs.map(({ runId, spawnedAt }) => ({ runId, spawnedAt }));
+    }
+
+    it("trashes a confirmed set past one-by-one trash's limit in one call, and takes it all back", async () => {
+      const targets = fleetOf(25);
+      const outcomes = answer<Array<{ runId: string; receipt?: number | null }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets)
+      );
+      expect(outcomes).toHaveLength(25);
+      expect(outcomes.every((outcome) => typeof outcome.receipt === "number")).toBe(true);
+      expect(ptyClient.trash).toHaveBeenCalledTimes(25);
+
+      state.runs = [];
+      const receipts = outcomes.map((outcome) => outcome.receipt!);
+      const undone = answer<Array<{ receipt: number; error?: string }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.untrashBatch, fakeSender(1), receipts)
+      );
+      expect(undone.filter((outcome) => outcome.error === undefined)).toHaveLength(25);
+      expect(ptyClient.restore).toHaveBeenCalledTimes(25);
+      // Spent: the same Undo again puts nothing back.
+      const again = answer<Array<{ receipt: number; error?: string }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.untrashBatch, fakeSender(1), receipts.slice(0, 1))
+      );
+      expect(again[0]!.error).toBeTruthy();
+      expect(ptyClient.restore).toHaveBeenCalledTimes(25);
+    });
+
+    /** Each run's own terminal record, by id, for the length of `body`. */
+    async function withRecords<T>(
+      records: Record<string, { spawnedAt: number; projectId?: string; isExited?: boolean }>,
+      body: () => Promise<T>,
+      onLookup: (id: string) => void = () => {}
+    ): Promise<T> {
+      ptyClient.getTerminalAsync.mockImplementation(async (id?: string) => {
+        onLookup(id ?? "");
+        return (records[id ?? ""] ?? null) as typeof state.record;
+      });
+      ptyClient.getTerminalProjectId.mockImplementation(() => null);
+      try {
+        return await body();
+      } finally {
+        ptyClient.getTerminalAsync.mockImplementation(async () => state.record);
+        ptyClient.getTerminalProjectId.mockImplementation(() => state.terminalProject);
+        lease.driven.clear();
+      }
+    }
+
+    type Outcome = { runId: string; receipt?: number; error?: string };
+
+    it("refuses alone a run respawned since, or whose project another screen drives, exited or not", async () => {
+      const targets = fleetOf(4);
+      lease.holder = "other";
+      lease.driven.add("project-1");
+      const outcomes = await withRecords(
+        {
+          "run-0": { spawnedAt: 100, projectId: "project-1" },
+          "run-1": { spawnedAt: 200, projectId: "project-1" },
+          "run-2": { spawnedAt: 100, projectId: "project-2" },
+          // Exited: its spawn is no longer tracked, so only its record names the project.
+          "run-3": { spawnedAt: 100, projectId: "project-2", isExited: true },
+        },
+        async () =>
+          answer<Outcome[]>(await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets))
+      );
+      const byRun = new Map(outcomes.map((outcome) => [outcome.runId, outcome]));
+      expect(typeof byRun.get("run-0")!.receipt).toBe("number");
+      expect(byRun.get("run-1")!.error).toBeTruthy();
+      expect(byRun.get("run-2")!.error).toBe("This project is being driven from another screen.");
+      expect(byRun.get("run-3")!.error).toBe("This project is being driven from another screen.");
+      expect(ptyClient.trash).toHaveBeenCalledTimes(1);
+      expect(ptyClient.trash).toHaveBeenCalledWith("run-0");
+    });
+
+    it("refuses a run whose project another screen took while its record was read", async () => {
+      const targets = fleetOf(1);
+      lease.holder = "self";
+      const outcomes = await withRecords(
+        { "run-0": { spawnedAt: 100, projectId: "project-1" } },
+        async () =>
+          answer<Outcome[]>(
+            await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets)
+          ),
+        () => {
+          lease.holder = "other";
+        }
+      );
+      expect(outcomes[0]!.error).toBe("This project is being driven from another screen.");
+      expect(ptyClient.trash).not.toHaveBeenCalled();
+    });
+
+    it("keeps the receipt and the views' move for a run that leaves the fleet while it is trashed", async () => {
+      const targets = fleetOf(1);
+      const view = { send: vi.fn() };
+      state.views = [view];
+      const outcomes = await withRecords(
+        { "run-0": { spawnedAt: 100, projectId: "project-1" } },
+        async () =>
+          answer<Outcome[]>(
+            await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets)
+          ),
+        () => {
+          state.runs = [];
+        }
+      );
+      expect(typeof outcomes[0]!.receipt).toBe("number");
+      expect(view.send).toHaveBeenCalledWith("canopy:trash-requested", { runId: "run-0" });
+    });
+
+    it("refuses a set larger than the Trash lists, before trashing any of it", async () => {
+      const targets = fleetOf(51);
+      const refused = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets)
+      );
+      expect(refused.ok).toBe(false);
+      expect(ptyClient.trash).not.toHaveBeenCalled();
+    });
+
+    it("reads input lines only for runs the fleet holds in the incarnation named", async () => {
+      fleetOf(1);
+      const readings = answer<Array<{ runId: string; state: string }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.readInputLines, fakeSender(1), [
+          { runId: "run-0", spawnedAt: 100 },
+          { runId: "run-0", spawnedAt: 99 },
+          { runId: "elsewhere", spawnedAt: 100 },
+        ])
+      );
+      expect(readings.map((reading) => reading.runId)).toEqual(["run-0"]);
+    });
   });
 
   describe("Canopy's Trash", () => {
@@ -2181,6 +2603,109 @@ describe("canopy IPC", () => {
       expect(state.writes).toEqual(["a"]);
     });
 
+    describe("shown in the Canopy window (#16339)", () => {
+      const marked: Array<ReturnType<typeof fakeSender>> = [];
+      function canopyWindowSender(id: number) {
+        const sender = fakeSender(id);
+        markProjectlessView(
+          sender as unknown as Electron.WebContents,
+          new EventEmitter() as unknown as Electron.BrowserWindow
+        );
+        marked.push(sender);
+        return sender;
+      }
+
+      afterEach(() => {
+        for (const sender of marked.splice(0)) sender.emit("destroyed");
+      });
+
+      async function sizedOnlyOnUse(sender: unknown, watchId: number | null, terminalId: string) {
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+
+        await invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, sender, watchId);
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+        expect(ptyClient.resize.mock.calls).toEqual([[terminalId, 100, 30]]);
+      }
+
+      it("sizes a lane's assistant only once the user works in it there", async () => {
+        const { sender, watchId } = await openAssistant(canopyWindowSender(9));
+        await sizedOnlyOnUse(sender, watchId, "assistant-1");
+      });
+
+      it("sizes the global session only once the user works in it there", async () => {
+        assistants.global = {
+          terminalId: "global-1",
+          generation: 5,
+          owner: 9,
+          holder: { attachmentId: "a9", epoch: 2 },
+        };
+        const { sender, watchId } = await openAssistant(
+          canopyWindowSender(9),
+          { hostId: "local", scope: { kind: "global" }, terminalId: "global-1", incarnation: 1 },
+          { attachmentId: "a9", inputEpoch: 2 }
+        );
+        await sizedOnlyOnUse(sender, watchId, "global-1");
+      });
+    });
+
+    describe("holding the global session's size (#16333)", () => {
+      const globalSubject = {
+        hostId: "local",
+        scope: { kind: "global" },
+        terminalId: "global-1",
+        incarnation: 1,
+      };
+
+      async function heldByOwner() {
+        assistants.global = {
+          terminalId: "global-1",
+          generation: 5,
+          owner: 7,
+          holder: { attachmentId: "a7", epoch: 2 },
+        };
+        const owner = await openAssistant(fakeSender(7), globalSubject, {
+          attachmentId: "a7",
+          inputEpoch: 2,
+        });
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, owner.sender, owner.watchId, 100, 30);
+        return owner;
+      }
+
+      it("takes no size back for a window that only reads the session", async () => {
+        const owner = await heldByOwner();
+        await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "global-1");
+
+        // Input moved to another window: this one reads, and its click claims nothing.
+        assistants.global!.holder = { attachmentId: "a9", epoch: 3 };
+        await invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, owner.sender, owner.watchId);
+
+        assistants.global!.holder = { attachmentId: "a7", epoch: 2 };
+        ptyClient.resize.mockClear();
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, owner.sender, owner.watchId, 100, 30);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+      });
+
+      it("tells the windows when the drive takes its hold away", async () => {
+        const pushed = () =>
+          pushes.mock.calls
+            .filter(
+              ([channel, envelope]) =>
+                channel === CHANNELS.EVENTS_PUSH &&
+                (envelope as { name: string }).name === "terminal:canopy-size-holds-changed"
+            )
+            .map(([, envelope]) => (envelope as { payload: string[] }).payload);
+        lease.holder = "self";
+        await heldByOwner();
+        expect(pushed().at(-1)).toEqual(["global-1"]);
+
+        lease.holder = "other";
+        for (const listener of lease.listeners) listener();
+
+        expect(pushed().at(-1)).toEqual([]);
+      });
+    });
+
     it("keeps the global session streaming beside a pane, through the panel closing (#16214)", async () => {
       assistants.global = { terminalId: "global-1", generation: 5, owner: 7 };
       const sender = fakeSender(7);
@@ -2423,6 +2948,23 @@ describe("canopy IPC", () => {
       };
     }
 
+    it("never treats a view from another machine as the Canopy window, whatever its handle (#16339)", async () => {
+      const local = fakeSender(-41);
+      markProjectlessView(
+        local as unknown as Electron.WebContents,
+        new EventEmitter() as unknown as Electron.BrowserWindow
+      );
+      try {
+        const opened = (await remoteView(-41).call(CANOPY_METHOD_CHANNELS.watchTerminal, "run-1", {
+          spawnedAt: 100,
+        })) as { ok: boolean; data: CanopyTerminalView };
+        expect(opened.ok).toBe(true);
+        expect(opened.data.following).toBeUndefined();
+      } finally {
+        local.emit("destroyed");
+      }
+    });
+
     describe("a Canopy panel reading this host from another machine (#13387)", () => {
       const viewer = (handle: number) => remoteView(handle, `canopy-viewer:v${-handle}`);
       async function openViewerStream(handle: number) {
@@ -2456,6 +2998,109 @@ describe("canopy IPC", () => {
         await view.call(CANOPY_METHOD_CHANNELS.unwatchTerminal);
         expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 80, 24);
         expect(sizeHolds().at(-1)).toEqual([]);
+      });
+
+      it("takes a pane's size only for a view that may touch the terminal (#16333)", async () => {
+        lease.holder = "self";
+        const sender = fakeSender(4);
+        const opened = (await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", {
+          spawnedAt: 100,
+        })) as { data?: { watchId: number }; watchId?: number };
+        await invoke(
+          CANOPY_METHOD_CHANNELS.terminalResize,
+          sender,
+          (opened.data ?? opened).watchId!,
+          100,
+          30
+        );
+        const take = (view: { call: ReturnType<typeof remoteView>["call"] }) =>
+          view.call(CANOPY_METHOD_CHANNELS.takeTerminalSize, "run-1");
+
+        await take(viewer(-31));
+        expect(sizeHolds().at(-1)).toEqual(["run-1"]);
+
+        state.terminalProject = "project-2";
+        await take(remoteView(-32));
+        expect(sizeHolds().at(-1)).toEqual(["run-1"]);
+
+        state.terminalProject = "project-1";
+        await take(remoteView(-33));
+        expect(sizeHolds().at(-1)).toEqual([]);
+      });
+
+      describe("against a pane showing the terminal (#16737)", () => {
+        const show = (view: { call: ReturnType<typeof remoteView>["call"] }, ids: string[]) =>
+          view.call(CANOPY_METHOD_CHANNELS.setVisiblePaneTerminals, ids);
+
+        it.each([
+          [
+            "a window on this machine",
+            (ids: string[]) =>
+              invoke(CANOPY_METHOD_CHANNELS.setVisiblePaneTerminals, fakeSender(5), ids),
+          ],
+          ["a window on the viewer's machine", (ids: string[]) => show(remoteView(-34), ids)],
+        ] as const)(
+          "follows while %s shows it, and takes the size again after",
+          async (_case, report) => {
+            lease.holder = "self";
+            const { view, watchId } = await openViewerStream(-16);
+            await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+            expect(sizeHolds().at(-1)).toEqual(["run-1"]);
+            ptyClient.resize.mockClear();
+            const sent = view.endpoint.send as ReturnType<typeof vi.fn>;
+            sent.mockClear();
+
+            await report(["run-1"]);
+
+            expect(sizeHolds().at(-1)).toEqual([]);
+            expect(ptyClient.resize).not.toHaveBeenCalled();
+            expect(sent).toHaveBeenCalledWith({
+              type: "event",
+              channel: CHANNELS.CANOPY_TERMINAL_DATA,
+              args: [expect.objectContaining({ kind: "resize", runId: "run-1", following: true })],
+            });
+            await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 90, 28);
+            expect(ptyClient.resize).not.toHaveBeenCalled();
+
+            await report([]);
+            await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 90, 28);
+            expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 90, 28);
+          }
+        );
+
+        it("counts a window on another machine only for its own project's terminals", async () => {
+          lease.holder = "self";
+          const { view, watchId } = await openViewerStream(-17);
+          await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+          state.terminalProject = "project-2";
+
+          await show(remoteView(-35), ["run-1"]);
+
+          expect(sizeHolds().at(-1)).toEqual(["run-1"]);
+        });
+
+        it("counts no pane a viewer reports: it shows panels", async () => {
+          lease.holder = "self";
+          const { view, watchId } = await openViewerStream(-18);
+          await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+
+          await show(viewer(-19), ["run-1"]);
+
+          expect(sizeHolds().at(-1)).toEqual(["run-1"]);
+        });
+
+        it("forgets a window on another machine once its view closes", async () => {
+          lease.holder = "self";
+          const { view, watchId } = await openViewerStream(-20);
+          const window = remoteView(-36);
+          await show(window, ["run-1"]);
+          await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+          expect(ptyClient.resize).not.toHaveBeenCalled();
+
+          window.close();
+          await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+          expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+        });
       });
 
       it("says to the viewer that this host takes its size", async () => {
@@ -2670,6 +3315,416 @@ describe("canopy IPC", () => {
       view.close();
       expect(activeTerminalWatches().has(-7)).toBe(false);
       expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("who holds a terminal's size (#16333)", () => {
+    function fakeWindow() {
+      const emitter = new EventEmitter();
+      return Object.assign(emitter, {
+        minimized: false,
+        visible: true,
+        isDestroyed: () => false,
+        isMinimized(this: { minimized: boolean }) {
+          return this.minimized;
+        },
+        isVisible(this: { visible: boolean }) {
+          return this.visible;
+        },
+      });
+    }
+
+    async function openHeld(sender = fakeSender(4)) {
+      const view = (await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", {
+        spawnedAt: 100,
+      })) as { data?: { watchId: number }; watchId?: number };
+      const watchId = (view.data ?? view).watchId!;
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+      ptyClient.resize.mockClear();
+      return { sender, watchId };
+    }
+
+    const holds = async (sender: unknown) => {
+      const result = (await invoke(CANOPY_METHOD_CHANNELS.getSizeHolds, sender)) as
+        { data: string[] } | string[];
+      return Array.isArray(result) ? result : result.data;
+    };
+
+    it("publishes a hold from a window here, and lets a pane's interaction take it", async () => {
+      const { sender, watchId } = await openHeld();
+      const pane = fakeSender(5);
+      expect(await holds(pane)).toEqual(["run-1"]);
+
+      await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, pane, "run-1");
+      expect(await holds(pane)).toEqual([]);
+      expect(ptyClient.resize).not.toHaveBeenCalled();
+
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+      expect(ptyClient.resize).not.toHaveBeenCalled();
+    });
+
+    it("leaves the size where it is for a view that doesn't drive the project", async () => {
+      lease.holder = "self";
+      await openHeld();
+      lease.holder = "other";
+      await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "run-1");
+      lease.holder = "self";
+      expect(await holds(fakeSender(5))).toEqual(["run-1"]);
+    });
+
+    it.each([
+      ["a click or a keystroke", CANOPY_METHOD_CHANNELS.terminalClaimSize, []],
+      ["a key from the composer", CANOPY_METHOD_CHANNELS.terminalSendKey, ["escape"]],
+      ["a message from the composer", CANOPY_METHOD_CHANNELS.terminalSubmit, ["navy"]],
+    ] as const)("takes the size back on %s", async (_case, channel, args) => {
+      const { sender, watchId } = await openHeld();
+      await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "run-1");
+
+      await invoke(channel, sender, watchId, ...args);
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+
+      expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+      expect(await holds(sender)).toEqual(["run-1"]);
+    });
+
+    it.each([
+      [
+        "a reply by the run",
+        (sender: unknown) =>
+          invoke(CANOPY_METHOD_CHANNELS.submitReply, sender, "run-1", { spawnedAt: 100 }, "navy"),
+      ],
+      [
+        "an answer by the run",
+        (sender: unknown) =>
+          invoke(CANOPY_METHOD_CHANNELS.answer, sender, "run-1", { spawnedAt: 100 }, "Yes"),
+      ],
+    ] as const)("takes the size back on %s", async (_case, send) => {
+      const { sender, watchId } = await openHeld();
+      await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "run-1");
+
+      await send(sender);
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+
+      expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+    });
+
+    it("takes nothing for a panel that doesn't drive the project", async () => {
+      lease.holder = "self";
+      const { sender, watchId } = await openHeld();
+      await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "run-1");
+      lease.holder = "other";
+      await invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, sender, watchId);
+      lease.holder = "self";
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+      expect(ptyClient.resize).not.toHaveBeenCalled();
+    });
+
+    it.each(["minimize", "hide"] as const)(
+      "lets go when its window is put away by %s, and not again on its return",
+      async (event) => {
+        const win = fakeWindow();
+        const sender = fakeSender(4);
+        state.windows.set(sender, win);
+        const { watchId } = await openHeld(sender);
+
+        win.emit(event);
+
+        expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 80, 24);
+        expect(await holds(sender)).toEqual([]);
+
+        ptyClient.resize.mockClear();
+        win.emit("restore");
+        win.emit("show");
+        win.emit("focus");
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+      }
+    );
+
+    it("listens to a window once, however many of its views open Canopy", async () => {
+      const win = fakeWindow();
+      const first = fakeSender(4);
+      const second = fakeSender(6);
+      state.windows.set(first, win);
+      state.windows.set(second, win);
+      await openHeld(first);
+      await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, second, "run-1", { spawnedAt: 100 });
+      expect(win.listenerCount("minimize")).toBe(1);
+      expect(win.listenerCount("hide")).toBe(1);
+    });
+
+    it("leaves the views of every other window alone", async () => {
+      const sender = fakeSender(4);
+      state.windows.set(sender, fakeWindow());
+      const elsewhere = fakeWindow();
+      const bystander = fakeSender(6);
+      state.windows.set(bystander, elsewhere);
+      await invoke(CANOPY_METHOD_CHANNELS.setActive, bystander, true);
+      await openHeld(sender);
+
+      elsewhere.emit("minimize");
+
+      expect(await holds(sender)).toEqual(["run-1"]);
+      expect(ptyClient.resize).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["minimized", { minimized: true }],
+      ["hidden", { visible: false }],
+    ] as const)("lets go on a measure that lands after the window was %s", async (_case, away) => {
+      const win = fakeWindow();
+      const sender = fakeSender(4);
+      state.windows.set(sender, win);
+      const { watchId } = await openHeld(sender);
+      Object.assign(win, away);
+
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 110, 32);
+
+      expect(ptyClient.resize.mock.calls).toEqual([["run-1", 80, 24]]);
+      expect(await holds(sender)).toEqual([]);
+    });
+
+    it.each([[1.5], [Number.MAX_SAFE_INTEGER + 1], ["7"]])(
+      "refuses a claim on a stream no integer names: %s",
+      async (watchId) => {
+        const { sender } = await openHeld();
+        const result = await outcome(
+          invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, sender, watchId)
+        );
+        expect(result).toEqual({ ok: false, message: expect.stringContaining("Invalid watch") });
+      }
+    );
+
+    it("leaves the size alone for a claim on a stream that isn't the view's", async () => {
+      const { sender, watchId } = await openHeld();
+      await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "run-1");
+
+      await invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, fakeSender(6), watchId);
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+
+      expect(ptyClient.resize).not.toHaveBeenCalled();
+    });
+
+    describe("a main window showing the terminal in a pane (#16737)", () => {
+      const show = (view: unknown, terminalIds: unknown) =>
+        invoke(CANOPY_METHOD_CHANNELS.setVisiblePaneTerminals, view, terminalIds);
+
+      it("outranks the panel's hold, and whatever the user does in the panel, until the pane goes", async () => {
+        const { sender, watchId } = await openHeld();
+        const pane = fakeSender(5);
+
+        await show(pane, ["run-1"]);
+        expect(await holds(pane)).toEqual([]);
+
+        await invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, sender, watchId);
+        await invoke(CANOPY_METHOD_CHANNELS.terminalSendKey, sender, watchId, "escape");
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+
+        await show(pane, []);
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+        expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+        expect(await holds(pane)).toEqual(["run-1"]);
+      });
+
+      it("counts a pane only while its view drives the project, and again once the drive moves to it", async () => {
+        lease.holder = "self";
+        const { sender, watchId } = await openHeld();
+        lease.holder = "other";
+        await show(fakeSender(5), ["run-1"]);
+        lease.holder = "self";
+
+        // Reported by a view that didn't drive: the panel still sizes the PTY.
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 90, 28);
+        expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 90, 28);
+        ptyClient.resize.mockClear();
+
+        // The drive moving makes the same report count, with nothing sent again.
+        for (const listener of lease.listeners) listener();
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 80, 26);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+        expect(await holds(sender)).toEqual([]);
+      });
+
+      it("lets go of the pane once its view goes, unasked", async () => {
+        const { sender, watchId } = await openHeld();
+        const pane = fakeSender(5);
+        await show(pane, ["run-1"]);
+
+        pane.emit("destroyed");
+
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+        expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+      });
+
+      it("counts no pane in the Canopy window's own view", async () => {
+        const canopy = fakeSender(9);
+        markProjectlessView(
+          canopy as unknown as Electron.WebContents,
+          fakeWindow() as unknown as Electron.BrowserWindow
+        );
+        try {
+          await openHeld();
+          await show(canopy, ["run-1"]);
+          expect(await holds(canopy)).toEqual(["run-1"]);
+        } finally {
+          canopy.emit("destroyed");
+        }
+      });
+
+      it.each([
+        ["no list", "run-1"],
+        ["an id no terminal has", [""]],
+        ["more terminals than any grid shows", Array.from({ length: 501 }, (_, i) => `t${i}`)],
+      ])("refuses %s", async (_case, terminalIds) => {
+        await openHeld();
+        const result = await outcome(show(fakeSender(5), terminalIds));
+        expect(result.ok).toBe(false);
+        expect(await holds(fakeSender(5))).toEqual(["run-1"]);
+      });
+    });
+
+    describe("in the Canopy window, which sizes nothing until used (#16339)", () => {
+      const marked: Array<ReturnType<typeof fakeSender>> = [];
+      /** A Canopy window's one view: no project, open all day. */
+      function canopyWindowView(id: number) {
+        const win = fakeWindow();
+        const sender = fakeSender(id);
+        state.windows.set(sender, win);
+        markProjectlessView(
+          sender as unknown as Electron.WebContents,
+          win as unknown as Electron.BrowserWindow
+        );
+        marked.push(sender);
+        return { win, sender };
+      }
+
+      // The mark is the app's, not the test's: a view left marked would follow in every later case.
+      afterEach(() => {
+        for (const sender of marked.splice(0)) sender.emit("destroyed");
+      });
+
+      const select = async (sender: unknown, runId: string) => {
+        const view = (await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, runId, {
+          spawnedAt: 100,
+        })) as { data?: CanopyTerminalView } & Partial<CanopyTerminalView>;
+        const opened = (view.data ?? view) as CanopyTerminalView;
+        // The panel measures whatever it is told, as a settled layout would.
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, opened.watchId, 100, 30);
+        return opened;
+      };
+
+      beforeEach(() => {
+        state.runs = [
+          { runId: "run-1", spawnedAt: 100, workspaceId: "project-1" },
+          { runId: "run-2", spawnedAt: 100, workspaceId: "project-1" },
+        ];
+      });
+
+      it("moves the PTY only when the user types there, and leaves taking it back to the pane's own fit", async () => {
+        const first = canopyWindowView(9);
+        await invoke(CANOPY_METHOD_CHANNELS.setActive, first.sender, true);
+        const opened = await select(first.sender, "run-1");
+        expect(opened.following).toBe(true);
+        await select(first.sender, "run-1");
+        const changed = await select(first.sender, "run-2");
+        await invoke(CANOPY_METHOD_CHANNELS.unwatchTerminal, first.sender, changed.watchId);
+        first.win.emit("focus");
+        first.win.emit("show");
+        await select(first.sender, "run-1");
+        first.sender.emit("destroyed");
+
+        const reopened = canopyWindowView(10);
+        await invoke(CANOPY_METHOD_CHANNELS.setActive, reopened.sender, true);
+        const shown = await select(reopened.sender, "run-1");
+        reopened.win.emit("focus");
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+        expect(await holds(reopened.sender)).toEqual([]);
+
+        // The keystroke's gesture claims, and the panel's next measure holds.
+        await invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, reopened.sender, shown.watchId);
+        await invoke(CANOPY_METHOD_CHANNELS.terminalInput, reopened.sender, shown.watchId, "y");
+        await invoke(
+          CANOPY_METHOD_CHANNELS.terminalResize,
+          reopened.sender,
+          shown.watchId,
+          100,
+          30
+        );
+        expect(ptyClient.resize.mock.calls).toEqual([["run-1", 100, 30]]);
+        expect(await holds(reopened.sender)).toEqual(["run-1"]);
+
+        // Main lets go and moves nothing: the pane's own fit is the one resize.
+        await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "run-1");
+        expect(await holds(reopened.sender)).toEqual([]);
+        await invoke(
+          CANOPY_METHOD_CHANNELS.terminalResize,
+          reopened.sender,
+          shown.watchId,
+          100,
+          30
+        );
+        reopened.sender.emit("destroyed");
+        expect(ptyClient.resize).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        ["a key from the composer", CANOPY_METHOD_CHANNELS.terminalSendKey, ["up"]],
+        ["a message from the composer", CANOPY_METHOD_CHANNELS.terminalSubmit, ["navy"]],
+      ] as const)("takes the size on %s", async (_case, channel, args) => {
+        const { sender } = canopyWindowView(9);
+        const shown = await select(sender, "run-1");
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+
+        await invoke(channel, sender, shown.watchId, ...args);
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, shown.watchId, 100, 30);
+
+        expect(ptyClient.resize.mock.calls).toEqual([["run-1", 100, 30]]);
+      });
+
+      it("takes the size on a reply sent by the run", async () => {
+        const { sender } = canopyWindowView(9);
+        const shown = await select(sender, "run-1");
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+
+        await invoke(
+          CANOPY_METHOD_CHANNELS.submitReply,
+          sender,
+          "run-1",
+          { spawnedAt: 100 },
+          "navy"
+        );
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, shown.watchId, 100, 30);
+
+        expect(ptyClient.resize.mock.calls).toEqual([["run-1", 100, 30]]);
+      });
+
+      it("leaves the dialog in a project window taking the size as a row is selected", async () => {
+        const dialog = fakeSender(4);
+        state.windows.set(dialog, fakeWindow());
+        const opened = await select(dialog, "run-1");
+        expect(opened.following).toBeUndefined();
+        expect(ptyClient.resize.mock.calls).toEqual([["run-1", 100, 30]]);
+      });
+    });
+
+    it("tells the windows when the drive takes a local hold away, for the driver's panes to fit", async () => {
+      const pushed = () =>
+        pushes.mock.calls
+          .filter(
+            ([channel, envelope]) =>
+              channel === CHANNELS.EVENTS_PUSH &&
+              (envelope as { name: string }).name === "terminal:canopy-size-holds-changed"
+          )
+          .map(([, envelope]) => (envelope as { payload: string[] }).payload);
+      lease.holder = "self";
+      await openHeld();
+      expect(pushed().at(-1)).toEqual(["run-1"]);
+
+      lease.holder = "other";
+      for (const listener of lease.listeners) listener();
+
+      expect(pushed().at(-1)).toEqual([]);
     });
   });
 

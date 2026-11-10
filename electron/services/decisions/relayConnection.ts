@@ -37,10 +37,11 @@ import {
   isRelaySocketUrl,
   retireable,
   socketBridgeStore,
-  watchNetwork,
   watchResume,
 } from "./relayTransport.js";
 import type { QuestionAttachments } from "./attachmentSpool.js";
+import { watchNetwork } from "../../utils/networkWatch.js";
+import { logWarn } from "../../utils/logger.js";
 
 /** The relay identity a connection is for, as the setting records it. */
 export interface RelayBinding {
@@ -804,6 +805,10 @@ export class RelayConnection {
   /** Stops for this lifetime and shows why; nothing here reconnects after it. */
   private halt(status: RelayConnectionStatus): void {
     if (this.ended) return;
+    logWarn("[Decisions] The relay connection stopped for this lifetime", {
+      state: status.state,
+      ...(status.state === "not-connected" ? { problem: status.problem } : {}),
+    });
     this.end();
     if (this.current) this.retire(this.current);
     this.publish(status);

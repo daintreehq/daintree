@@ -6,6 +6,8 @@ import type {
   ProjectState,
   ProjectSettings,
   ProjectStatus,
+  ProjectCloneState,
+  ProjectCreationIdentity,
   TerminalRecipe,
   RecipeNameCollision,
 } from "../types/index.js";
@@ -187,7 +189,47 @@ function rowToProject(row: ProjectRow): Project {
   if (typeof row.groupId === "string" && row.groupId.length > 0) project.groupId = row.groupId;
   const lastKnownStats = rowToRepoStats(row);
   if (lastKnownStats) project.lastKnownStats = lastKnownStats;
+  const cloneState = readCloneState(row.cloneState);
+  if (cloneState) project.cloneState = cloneState;
   return project;
+}
+
+const CLONE_STATES: readonly ProjectCloneState[] = ["cloning", "failed", "cancelled"];
+
+function readCloneState(value: unknown): ProjectCloneState | null {
+  return CLONE_STATES.includes(value as ProjectCloneState) ? (value as ProjectCloneState) : null;
+}
+
+/**
+ * The request behind a project registered before its clone finished (#16352),
+ * kept so Retry and the failed view survive a restart. Main-only: the URL is
+ * the one the user entered and may carry credentials.
+ */
+export interface PersistedCloneJob {
+  url: string;
+  shallow: boolean;
+  /** Git's error, already scrubbed. */
+  error?: string;
+  gitReason?: string;
+  /** The partial checkout that couldn't be removed. */
+  cleanupError?: string;
+}
+
+function readCloneJob(value: unknown): PersistedCloneJob | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<PersistedCloneJob> | null;
+    if (!parsed || typeof parsed.url !== "string" || parsed.url.length === 0) return null;
+    return {
+      url: parsed.url,
+      shallow: parsed.shallow === true,
+      ...(typeof parsed.error === "string" ? { error: parsed.error } : {}),
+      ...(typeof parsed.gitReason === "string" ? { gitReason: parsed.gitReason } : {}),
+      ...(typeof parsed.cleanupError === "string" ? { cleanupError: parsed.cleanupError } : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export class ProjectStore {
@@ -491,6 +533,15 @@ export class ProjectStore {
     return this.recipeSynchronizer.writeInRepoRecipeChecked(projectPath, recipe, options);
   }
 
+  async saveInRepoRecipe(
+    projectPath: string,
+    projectId: string,
+    recipe: TerminalRecipe,
+    options: { force?: boolean; previousName?: string } = {}
+  ): Promise<void> {
+    return this.recipeSynchronizer.saveInRepoRecipe(projectPath, projectId, recipe, options);
+  }
+
   async assertInRepoRecipesForwardCompatible(
     projectPath: string,
     recipeNames: string[]
@@ -646,6 +697,13 @@ export class ProjectStore {
       fresh?: boolean;
     }
   ): Promise<Project> {
+    // A project still awaiting its clone has no folder to classify. Opening its
+    // path (a new window, Recent Projects) finds the row the clone registered
+    // (#16352).
+    if (!options?.fresh) {
+      const pending = this.findProjectAwaitingCloneAt(projectPath);
+      if (pending) return pending;
+    }
     const classification = await this.classifyGitBacking(projectPath);
     const creationIdentity = options?.identity;
 
@@ -876,6 +934,130 @@ export class ProjectStore {
   }
 
   /**
+   * Register the project a clone is about to create (#16352), before the folder
+   * exists. Nothing on disk is read: the checkout isn't there yet, so the git
+   * root, the in-repo identity and a moved-project adoption all wait for
+   * {@link completeClone}. `normalizedPath` must already be canonical, as the
+   * git root of the finished clone will be.
+   */
+  insertCloningProject(
+    normalizedPath: string,
+    options: { identity?: ProjectCreationIdentity; groupId?: string; job: PersistedCloneJob }
+  ): Project {
+    const groupId = resolveCreationGroupId(options.groupId);
+    const now = Date.now();
+    const project: Project = {
+      id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
+      path: normalizedPath,
+      name: options.identity?.name ?? path.basename(normalizedPath),
+      emoji: options.identity?.emoji ?? DEFAULT_PROJECT_EMOJI,
+      lastOpened: now,
+      status: "closed",
+      frecencyScore: FRECENCY_COLD_START,
+      lastAccessedAt: now,
+      cloneState: "cloning",
+      ...(groupId ? { groupId } : {}),
+    };
+
+    getSharedDb()
+      .insert(projectsTable)
+      .values({
+        id: project.id,
+        path: project.path,
+        name: project.name,
+        emoji: project.emoji,
+        lastOpened: project.lastOpened,
+        status: project.status ?? null,
+        frecencyScore: FRECENCY_COLD_START,
+        lastAccessedAt: now,
+        groupId: project.groupId ?? null,
+        cloneState: "cloning",
+        cloneJob: JSON.stringify(options.job),
+      })
+      .run();
+    this.notifyRegistryListeners();
+
+    return project;
+  }
+
+  private findProjectAwaitingCloneAt(projectPath: string): Project | null {
+    const normalizedPath = path.normalize(projectPath).normalize("NFC");
+    const row = getSharedDb()
+      .select()
+      .from(projectsTable)
+      .where(
+        and(eq(projectsTable.path, normalizedPath), sql`${projectsTable.cloneState} IS NOT NULL`)
+      )
+      .get();
+    return row ? rowToProject(row) : null;
+  }
+
+  /** The persisted request behind a project still awaiting its clone. */
+  getCloneJob(projectId: string): PersistedCloneJob | null {
+    const row = getSharedDb()
+      .select({ cloneJob: projectsTable.cloneJob })
+      .from(projectsTable)
+      .where(eq(projectsTable.id, projectId))
+      .get();
+    return row ? readCloneJob(row.cloneJob) : null;
+  }
+
+  /** Every project still awaiting its clone, as recorded. */
+  getProjectsAwaitingClone(): Array<{ project: Project; job: PersistedCloneJob | null }> {
+    return getSharedDb()
+      .select()
+      .from(projectsTable)
+      .where(sql`${projectsTable.cloneState} IS NOT NULL`)
+      .all()
+      .map((row) => ({ project: rowToProject(row), job: readCloneJob(row.cloneJob) }))
+      .filter(({ project }) => project.cloneState !== undefined);
+  }
+
+  /** Record where a clone stands without changing what it was asked to do. */
+  setCloneState(projectId: string, state: ProjectCloneState, job: PersistedCloneJob): Project {
+    const db = getSharedDb();
+    db.update(projectsTable)
+      .set({ cloneState: state, cloneJob: JSON.stringify(job) })
+      .where(eq(projectsTable.id, projectId))
+      .run();
+    const row = db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).get();
+    if (!row) throw new Error(`Project not found: ${projectId}`);
+    return rowToProject(row);
+  }
+
+  /**
+   * Turn a cloning project into an ordinary one once its checkout is in place.
+   * The id issued when the clone started stays, so the views, history and
+   * group already pointing at it carry on. A committed `.daintree/project.json`
+   * names the project the way {@link addProject} would let it, but its id is
+   * never adopted: a clone is a fresh copy, not a moved folder.
+   */
+  async completeClone(projectId: string): Promise<Project> {
+    const project = this.getProjectById(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const inRepo = await this.readInRepoProjectIdentity(project.path);
+    const db = getSharedDb();
+    db.update(projectsTable)
+      .set({
+        cloneState: null,
+        cloneJob: null,
+        ...(inRepo.name ? { name: inRepo.name } : {}),
+        ...(inRepo.emoji ? { emoji: inRepo.emoji } : {}),
+        ...(inRepo.color ? { color: inRepo.color } : {}),
+        ...(inRepo.found ? { daintreeConfigPresent: true } : {}),
+      })
+      .where(eq(projectsTable.id, projectId))
+      .run();
+    this.notifyRegistryListeners();
+    // A hover prefetch taken while the folder was empty would hand the view
+    // that reloads into the checkout no in-repo presets.
+    invalidatePrefetchCache(projectId);
+    const row = db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).get();
+    if (!row) throw new Error(`Project not found: ${projectId}`);
+    return rowToProject(row);
+  }
+
+  /**
    * True if `candidate` may not be handed to a new project.
    *
    * A registered row is the obvious case, but a leftover *state directory* is
@@ -988,6 +1170,7 @@ export class ProjectStore {
         const result = tx.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
         const runs = tx.run(sql`DELETE FROM scheduled_runs WHERE project_id = ${projectId}`);
         tx.run(sql`DELETE FROM schedule_evaluation_points WHERE project_id = ${projectId}`);
+        tx.run(sql`DELETE FROM scheduled_run_worktree_claims WHERE project_id = ${projectId}`);
         return { removed: result, runsRemoved: runs.changes };
       },
       { behavior: "immediate" }
@@ -1451,6 +1634,8 @@ export class ProjectStore {
     await Promise.allSettled(
       projects.map(async (project) => {
         if (project.id === currentProjectId) return;
+        // No folder is the expected state until the clone lands (#16352).
+        if (project.cloneState !== undefined) return;
 
         let exists = false;
         try {

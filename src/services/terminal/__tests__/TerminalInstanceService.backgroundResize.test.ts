@@ -169,15 +169,38 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     // A PTY-only resize would leave a live TUI painting a wider frame into a
     // narrower alt grid, which never reflows — and the reattach resize dedupes
     // to no SIGWINCH, so the app never redraws to correct it.
-    service.instances.set("main", makeManaged({ lastWidth: 800, lastHeight: 600 }));
-    service.instances.set(
-      "alt",
-      makeManaged({ lastWidth: 800, lastHeight: 600, isAltBuffer: true })
-    );
+    const main = makeManaged({ lastWidth: 800, lastHeight: 600 });
+    const alt = makeManaged({ lastWidth: 800, lastHeight: 600, isAltBuffer: true });
+    alt.attachGeneration = 2;
+    service.instances.set("main", main);
+    service.instances.set("alt", alt);
 
     service.applyBackgroundWindowResize(1200, 840);
 
     expect(applyBackgroundResizeSpy.mock.calls.map((call) => call[0])).toEqual(["main"]);
+    // Skipped, not forgotten: its box changed, so the reveal repair owes it the
+    // real size once layout returns (#16359). A main-buffer pane was resized
+    // here and owes nothing.
+    expect(alt.revealPendingRepair).toBe(true);
+    expect(alt.revealPendingGeneration).toBe(2);
+    expect(main.revealPendingRepair).toBeFalsy();
+  });
+
+  it("owes an alt-buffer pane the reveal repair in a minimized, never-cached window too", () => {
+    const alt = makeManaged({ lastWidth: 800, lastHeight: 600, isAltBuffer: true });
+    alt.attachGeneration = 3;
+    service.instances.set("alt", alt);
+
+    // A live view whose real layout owns geometry again owes nothing.
+    setCached(false);
+    setViewport(1000, 700, "visible");
+    service.applyBackgroundWindowResize(1200, 840);
+    expect(alt.revealPendingRepair).toBeFalsy();
+
+    setViewport(1000, 700, "hidden");
+    service.applyBackgroundWindowResize(1200, 840);
+    expect(alt.revealPendingRepair).toBe(true);
+    expect(alt.revealPendingGeneration).toBe(3);
   });
 
   it("scales a pane that leaves the alternate screen mid-session from its pre-background size", () => {

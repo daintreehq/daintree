@@ -491,6 +491,28 @@ describe("resumeAgentSessionAsPane", () => {
     expect(result).toMatchObject({ status: "existing", terminalId: "pane-1" });
   });
 
+  // The fleet a restart leaves (#16341): the pane sits at its shell, and both its
+  // terminal and its saved record still name the session it was running.
+  it("launches beside a pane back at its shell whose saved record names the session", async () => {
+    const { deps, invoke } = resumeDeps({
+      terminals: {
+        "pane-1": { agentSessionId: SESSION, worktreeId: WORKTREE.id, agentState: "exited" },
+      },
+      state: {
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: [
+          { id: "pane-1", kind: "terminal", location: "grid", agentSessionId: SESSION },
+        ] as PanelSnapshot[],
+      },
+    });
+
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+
+    expect(result).toMatchObject({ status: "launched" });
+    expect(spawns(invoke)).toHaveLength(1);
+  });
+
   it.each([
     ["trashed", { isTrashed: true }],
     ["being closed", { isClosing: true }],
@@ -687,6 +709,77 @@ describe("resumeAgentSessionAsPane", () => {
     expect(spawns(invoke)).toHaveLength(1);
     expect(first).toMatchObject({ status: "launched" });
     expect(second).toEqual(first);
+  });
+
+  it("asks authorizeSpawn after every read, and spawns nothing when it refuses (#16341)", async () => {
+    const { deps, invoke, store } = resumeDeps();
+    const order: string[] = [];
+    const getProjectState = deps.getProjectState;
+    deps.getProjectState = async (projectId) => {
+      const state = await getProjectState(projectId);
+      await new Promise((resolve) => setImmediate(resolve));
+      order.push("layout read");
+      return state;
+    };
+    const authorizeSpawn = vi.fn(() => {
+      order.push("asked");
+      return "studio-02 has control of this project.";
+    });
+
+    const result = await resumeAgentSessionAsPane(
+      { ...REQUEST, authorizeSpawn },
+      deps,
+      makeRuntime()
+    );
+
+    // The panel count reads the layout first; the holder scan's read is the last.
+    expect(order).toEqual(["layout read", "layout read", "asked"]);
+    expect(authorizeSpawn).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      status: "refused",
+      reason: "not-authorized",
+      message: "studio-02 has control of this project.",
+    });
+    expect(spawns(invoke)).toHaveLength(0);
+    expect(store.read()?.terminals ?? []).toHaveLength(0);
+  });
+
+  it("asks only the call that launches, never one that joins it (#16341)", async () => {
+    const { deps, invoke } = resumeDeps();
+    const runtime = makeRuntime();
+    const first = vi.fn(() => null);
+    const second = vi.fn(() => "never asked");
+
+    const [launched, joined] = await Promise.all([
+      resumeAgentSessionAsPane({ ...REQUEST, authorizeSpawn: first }, deps, runtime),
+      resumeAgentSessionAsPane({ ...REQUEST, authorizeSpawn: second }, deps, runtime),
+    ]);
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    expect(launched).toMatchObject({ status: "launched" });
+    expect(joined).toEqual(launched);
+    expect(spawns(invoke)).toHaveLength(1);
+  });
+
+  it("launches for a joiner when only the first caller was refused (#16341)", async () => {
+    const { deps, invoke } = resumeDeps();
+    const runtime = makeRuntime();
+    const second = vi.fn(() => null);
+
+    const [refusedFirst, launched] = await Promise.all([
+      resumeAgentSessionAsPane(
+        { ...REQUEST, authorizeSpawn: () => "not this caller" },
+        deps,
+        runtime
+      ),
+      resumeAgentSessionAsPane({ ...REQUEST, authorizeSpawn: second }, deps, runtime),
+    ]);
+
+    expect(refusedFirst).toMatchObject({ status: "refused", reason: "not-authorized" });
+    expect(launched).toMatchObject({ status: "launched" });
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(spawns(invoke)).toHaveLength(1);
   });
 
   it("launches again after an earlier call for the session threw", async () => {

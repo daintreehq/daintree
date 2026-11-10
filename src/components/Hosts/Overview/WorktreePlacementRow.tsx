@@ -355,7 +355,7 @@ export function WorktreePlacementRow({
               action={
                 // The same window the failed attempt asked for.
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="xs"
                   onClick={() => void continueOnHost(lastNewWindow.current)}
                 >

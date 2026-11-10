@@ -56,6 +56,8 @@ import { categorizeWorktree } from "../../services/worktree/mood.js";
 import { GitStatusPass, type GitStatusPassHost } from "../GitStatusPass.js";
 import { StatPrecheck } from "../StatPrecheck.js";
 import { BaseDivergence } from "../BaseDivergence.js";
+import { GitStatusUnansweredError } from "../../utils/errorTypes.js";
+import { TimeoutError } from "../../utils/withTimeout.js";
 import type { WatcherController } from "../WatcherController.js";
 import type { AdaptivePollingStrategy } from "../../services/worktree/index.js";
 import type { NoteFileReader } from "../../services/worktree/index.js";
@@ -180,6 +182,8 @@ function makeHost(overrides: Partial<GitStatusPassHost> = {}): GitStatusPassHost
     set worktreeChanges(v) {
       state.worktreeChanges = v;
     },
+    onStatusUnanswered: vi.fn(),
+    onStatusAnswered: vi.fn(),
     clearPRInfo: vi.fn(),
     clearLinked: vi.fn(),
     onBranchChanged: vi.fn(),
@@ -823,6 +827,76 @@ describe("GitStatusPass", () => {
         "/test/worktree",
         expect.objectContaining({ abandonSignal: abandon.signal })
       );
+    });
+
+    it.each(["abandon", "stop"] as const)(
+      "stops the pass's divergence git on %s",
+      async (ending) => {
+        mockGetWorktreeChangesWithStats.mockResolvedValue(dirty());
+        vi.mocked(categorizeWorktree).mockResolvedValue("active");
+        let divergenceSignal: AbortSignal | undefined;
+        let finish!: (value: null) => void;
+        const compute = vi.fn((_hasUpstream: boolean, signal?: AbortSignal) => {
+          divergenceSignal = signal;
+          return new Promise<null>((resolve) => (finish = resolve));
+        });
+        const lifecycle = new AbortController();
+        const abandon = new AbortController();
+        const { pass } = makePass({ abortSignal: lifecycle.signal }, {
+          compute,
+        } as unknown as BaseDivergence);
+
+        const running = pass.run(false, abandon.signal);
+        await vi.waitFor(() => expect(compute).toHaveBeenCalled());
+        expect(divergenceSignal?.aborted).toBe(false);
+
+        (ending === "abandon" ? abandon : lifecycle).abort();
+        expect(divergenceSignal?.aborted).toBe(true);
+        finish(null);
+        await running;
+      }
+    );
+
+    it("reports a read that timed out before git started as unanswered", async () => {
+      const made = makeSeededPass();
+      mockGetWorktreeChangesWithStats.mockRejectedValue(new TimeoutError("stat: /test/worktree"));
+
+      await expect(made.pass.run(false)).rejects.toBeInstanceOf(TimeoutError);
+
+      expect(made.host.onStatusUnanswered).toHaveBeenCalledWith("timed-out");
+      expect(made.host.onStatusAnswered).not.toHaveBeenCalled();
+      expect(made.pass.isDegraded).toBe(true);
+    });
+
+    it.each(["timed-out", "previous-still-running"] as const)(
+      "reports an unanswered read (%s) to the host and keeps the last snapshot's mood",
+      async (reason) => {
+        const made = makeSeededPass();
+        await made.pass.run(false);
+        expect(made.host.onStatusAnswered).toHaveBeenCalledTimes(1);
+        mockGetWorktreeChangesWithStats.mockRejectedValue(
+          new GitStatusUnansweredError(reason, "/test/worktree")
+        );
+
+        await expect(made.pass.run(false)).rejects.toBeInstanceOf(GitStatusUnansweredError);
+
+        expect(made.host.onStatusUnanswered).toHaveBeenCalledWith(reason);
+        expect(made.host.onStatusAnswered).toHaveBeenCalledTimes(1);
+        expect(made.host.mood).toBe("active");
+        expect(made.pass.isDegraded).toBe(true);
+        expect(made.host.isUpdating).toBe(false);
+      }
+    );
+
+    it("treats a read that failed with git's own error as answered", async () => {
+      const made = makeSeededPass();
+      mockGetWorktreeChangesWithStats.mockRejectedValue(new Error("fatal: bad object"));
+
+      await expect(made.pass.run(false)).rejects.toThrow("bad object");
+
+      expect(made.host.onStatusAnswered).toHaveBeenCalledTimes(1);
+      expect(made.host.onStatusUnanswered).not.toHaveBeenCalled();
+      expect(made.host.mood).toBe("error");
     });
   });
 

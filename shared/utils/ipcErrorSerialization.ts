@@ -1,5 +1,5 @@
 import type { SerializedError, IpcSuccessEnvelope, IpcErrorEnvelope } from "../types/ipc/errors.js";
-import type { AppErrorDetails } from "../types/appError.js";
+import type { AppErrorDetails, CachedViewReleaseBlock } from "../types/appError.js";
 import {
   REQUIRED_PLUGIN_TOOLS_STATES,
   type RequiredPluginToolStatus,
@@ -200,9 +200,28 @@ function pickRequiredPluginTools(value: unknown): RequiredPluginToolStatus[] | u
   return tools;
 }
 
+const CACHED_VIEW_RELEASE_BLOCKS: ReadonlySet<string> = new Set<CachedViewReleaseBlock>([
+  "assistant",
+  "unsaved-work",
+  "mcp",
+  "flush",
+  "dictation",
+  "unavailable",
+]);
+
 export function pickAppErrorDetails(value: unknown): AppErrorDetails | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
+  if (raw.code === "PROJECT_HELD_ELSEWHERE") {
+    const { reason, showable } = raw;
+    if (typeof reason !== "string" || !CACHED_VIEW_RELEASE_BLOCKS.has(reason)) return undefined;
+    if (typeof showable !== "boolean") return undefined;
+    return {
+      code: "PROJECT_HELD_ELSEWHERE",
+      reason: reason as CachedViewReleaseBlock,
+      showable,
+    };
+  }
   if (raw.code === "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE") {
     const tools = pickRequiredPluginTools(raw.tools);
     return tools === undefined ? undefined : { code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE", tools };

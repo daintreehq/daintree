@@ -1,6 +1,7 @@
 import { RefreshCw, X } from "lucide-react";
 import { BookmarkCheck } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -131,7 +132,7 @@ export function ReviewMarkLine({
               )}
             >
               <span aria-hidden="true" className="hidden @[30rem]/mark-line:inline">
-                ·
+                <FactSeparator />
               </span>
               <span
                 className="truncate"
@@ -144,7 +145,7 @@ export function ReviewMarkLine({
               </span>
               {(canRetry || canReview) && (
                 <span aria-hidden="true" className="shrink-0">
-                  ·
+                  <FactSeparator />
                 </span>
               )}
               {canRetry && (

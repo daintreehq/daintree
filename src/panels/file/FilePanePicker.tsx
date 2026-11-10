@@ -468,7 +468,7 @@ export function FilePanePicker({ rootPath, onOpen }: FilePanePickerProps) {
           enterQueuedForRef.current = null;
           setFieldFocused(false);
         }}
-        placeholder="Search files"
+        placeholder="Search files…"
         aria-label="Search files"
         role="combobox"
         aria-expanded={hasRows}
@@ -493,7 +493,7 @@ export function FilePanePicker({ rootPath, onOpen }: FilePanePickerProps) {
             </p>
             {search.failed && (
               <Button
-                variant="ghost"
+                variant="outline"
                 size="xs"
                 onClick={retry}
                 loading={showRetrySpinner}

@@ -42,8 +42,6 @@ const SURVIVORS: Record<string, string> = {
   // A ribbon family whose dismiss shares one class with the exit and disarm
   // controls beside it; changing the X alone would split them.
   "src/components/Fleet/FleetArmingRibbon.tsx": "FLEET_RIBBON_ICON_BUTTON_CLASS ribbon family",
-  // A rounded-full scrim over a theme preview image, deliberately not chrome.
-  "src/components/ThemeBrowser/ThemeBrowser.tsx": "scrim close over a preview",
 };
 
 const CLOSE_NAME = /^(Dismiss|Hide|Close)\b/;

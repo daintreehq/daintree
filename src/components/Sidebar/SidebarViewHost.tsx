@@ -111,7 +111,7 @@ export function SidebarViewHost({ children }: { children: ReactNode }) {
             <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
               <SidebarViewHeading
                 viewId={active.id}
-                className="min-w-0 text-text-primary font-semibold text-sm tracking-wide"
+                className="min-w-0 text-text-primary font-semibold text-sm"
               >
                 {activeView.title}
               </SidebarViewHeading>

@@ -1,4 +1,13 @@
-import { useState, useCallback, useRef, useEffect, useEffectEvent, useId } from "react";
+import {
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useLayoutEffect,
+  type RefObject,
+} from "react";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Callout } from "@/components/ui/Callout";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
@@ -6,31 +15,23 @@ import type { GitPushCommitPreview, GitPushDestination } from "@shared/types/git
 import { cn } from "@/lib/utils";
 import { GitCommit, ArrowUpFromLine, AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { KbdChord } from "@/components/ui/Kbd";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { isMac } from "@/lib/platform";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
-import { REVIEW_HUB_DISABLED_CTA } from "./reviewHubUtils";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { CommitRows, RefChip, type PreviewCommit } from "@/components/Git/GitOperationPreview";
 import { PREVIEW_COMMIT_LIMIT } from "@/components/Git/gitRemoteOperationPreview";
 import { pluralize } from "@/lib/pluralize";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { PathTail } from "@/components/ui/PathTail";
+import { isCommitShortcut, type CommitShortcutHandler } from "./commitShortcut";
 
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
-
-// Shared by both primary CTAs so the panel shows one disabled treatment
-// regardless of whether the worktree has a remote.
-const DISABLED_CTA_CLASSES = cn(
-  REVIEW_HUB_DISABLED_CTA,
-  // Forced colours repaint every button ButtonText-on-ButtonFace, which made an
-  // unavailable primary indistinguishable from a live one.
-  "forced-colors:aria-disabled:text-[GrayText] forced-colors:aria-disabled:outline-[GrayText]"
-);
 
 const PRIMARY_SHORTCUT = "Cmd+Enter";
 // How long a push can go without a progress event before the composer says so.
@@ -173,6 +174,12 @@ interface CommitPanelProps {
    * act on a file list or branch that may have moved; typing stays open.
    */
   isVerifying?: boolean;
+  /**
+   * Where the panel registers the handler for its primary-action chord, so the
+   * hub's key handler can answer it while focus is on the file list or a hub
+   * control rather than the message box. Cleared when the panel unmounts.
+   */
+  shortcutRef?: RefObject<CommitShortcutHandler | null>;
 }
 
 export function CommitPanel({
@@ -199,6 +206,7 @@ export function CommitPanel({
   skipPushConfirm,
   onSetSkipPushConfirm,
   isVerifying = false,
+  shortcutRef,
 }: CommitPanelProps) {
   // Which submit is in flight. Commit & push holds it through the commit and the
   // refresh that follows, so the composer never looks idle before the push starts.
@@ -490,6 +498,36 @@ export function CommitPanel({
     setDontAskChecked(false);
   }, []);
 
+  // The one answer to Cmd+Enter, whichever element has focus. Mid-commit and
+  // behind the push confirm there is nothing to start: a second press would
+  // otherwise re-open the confirm, or send focus to a blocker the commit itself
+  // just created by emptying the staged list.
+  const runCommitShortcut = useCallback<CommitShortcutHandler>(
+    ({ commitOnly }) => {
+      if (isBusy || pushConfirmOpen) return;
+      if (isBlocked) {
+        focusBlocker();
+        return;
+      }
+      if (commitOnly && hasRemote) {
+        void handleCommit();
+      } else {
+        handlePrimaryClick();
+      }
+    },
+    [isBusy, pushConfirmOpen, isBlocked, focusBlocker, hasRemote, handleCommit, handlePrimaryClick]
+  );
+  // A layout effect so the hub's native key listener never sees the previous
+  // render's callback: a status refresh that has just turned up a conflict must
+  // not still answer the chord as if the commit were unblocked.
+  useLayoutEffect(() => {
+    if (!shortcutRef) return;
+    shortcutRef.current = runCommitShortcut;
+    return () => {
+      if (shortcutRef.current === runCommitShortcut) shortcutRef.current = null;
+    };
+  }, [shortcutRef, runCommitShortcut]);
+
   const progressEntries = [...pushProgress.values()];
 
   const handleKeyDown = useCallback(
@@ -600,25 +638,13 @@ export function CommitPanel({
         return;
       }
 
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      if (isCommitShortcut(e)) {
         e.preventDefault();
-        if (isBlocked) {
-          focusBlocker();
-          return;
-        }
-        if (e.shiftKey && hasRemote) {
-          void handleCommit();
-        } else {
-          void handlePrimaryClick();
-        }
+        runCommitShortcut({ commitOnly: e.shiftKey });
       }
     },
     [
-      handlePrimaryClick,
-      handleCommit,
-      hasRemote,
-      isBlocked,
-      focusBlocker,
+      runCommitShortcut,
       fetchHistoryMessages,
       applyHistoryMessage,
       onCommitMessageChange,
@@ -668,7 +694,7 @@ export function CommitPanel({
     if (!destinationLabel) statusTone = "warning";
     statusContent = destinationLabel ? (
       <>
-        {stagedSummary} · pushes to{" "}
+        {stagedSummary} <FactSeparator /> pushes to{" "}
         <span className="font-mono text-text-primary">{destinationLabel}</span>
       </>
     ) : (
@@ -802,7 +828,7 @@ export function CommitPanel({
           // Its own slot, so a long destination truncating beside it can never
           // hide the one line explaining a pause.
           <span className="shrink-0 whitespace-nowrap">
-            · no new progress in the last {PUSH_QUIET_MS / 1000}s
+            <FactSeparator /> no new progress in the last {PUSH_QUIET_MS / 1000}s
           </span>
         )}
         {showShortcut && (
@@ -1059,7 +1085,7 @@ export function CommitPanel({
           </Button>
         )}
         <Button
-          variant="default"
+          variant="contrast"
           size="sm"
           data-testid="review-hub-commit-primary"
           data-staged-count={stagedCount}
@@ -1068,9 +1094,7 @@ export function CommitPanel({
           aria-describedby={statusId}
           aria-keyshortcuts={primaryKeyshortcuts}
           loading={primaryBusy}
-          // Busy keeps the CTA's own fill under the spinner; the inset treatment
-          // is for "can't commit", not "committing".
-          className={cn("flex-1", !primaryBusy && DISABLED_CTA_CLASSES)}
+          className="flex-1"
         >
           {hasRemote ? <ArrowUpFromLine aria-hidden="true" /> : <GitCommit aria-hidden="true" />}
           {primaryLabel}

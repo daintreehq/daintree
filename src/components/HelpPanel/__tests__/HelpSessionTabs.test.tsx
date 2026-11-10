@@ -313,7 +313,7 @@ describe("HelpSessionTabs", () => {
       "New session",
       "New session with Claude",
       "New session with Codex",
-      "Restart conversation",
+      "Clear conversation",
       "Close session",
     ]);
     fireEvent.click(within(menu).getByRole("menuitem", { name: "New session" }));
@@ -325,7 +325,7 @@ describe("HelpSessionTabs", () => {
     expect(onOpenSessionWithAgent).toHaveBeenCalledWith("codex");
 
     fireEvent.click(
-      within(await openPicker()).getByRole("menuitem", { name: "Restart conversation" })
+      within(await openPicker()).getByRole("menuitem", { name: "Clear conversation" })
     );
     expect(onRestart).toHaveBeenCalledWith(1);
 
@@ -540,7 +540,7 @@ describe("HelpSessionTabs — what the tabs used to pin, as the picker carries i
       .getAllByRole("menuitem")
       .map((a) => a.textContent);
     expect(names).not.toContain("New session");
-    expect(names).not.toContain("Restart conversation");
+    expect(names).not.toContain("Clear conversation");
     expect(names).toContain("Close session");
   });
 

@@ -1,4 +1,5 @@
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import { pluralize } from "@/lib/pluralize";
 import { observedCanopyKind, observedCaughtUp } from "@shared/utils/canopyObservedKind";
 import {
   CANOPY_ATTENTION_CATEGORIES,
@@ -174,6 +175,11 @@ export function itemAwaitsPermission(item: CanopyItem): boolean {
  */
 export function itemAnswerAttention(item: CanopyItem): number {
   return item.row.run.answerAttention ?? 0;
+}
+
+/** How a row and its pane both name a count of answers needing attention. */
+export function answerAttentionLabel(count: number): string {
+  return count === 1 ? "Answer needs attention" : `${pluralize(count, "answer")} need attention`;
 }
 
 /**
@@ -679,18 +685,6 @@ export function buildCanopyInbox(
   return items;
 }
 
-/** The words of a search, each to be found somewhere on a run, ignoring case. */
-export function searchTerms(query: string): string[] {
-  return [
-    ...new Set(
-      query
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((term) => term !== "")
-    ),
-  ];
-}
-
 /**
  * Everything the panel can match a run on without its terminal: the names it
  * goes by (project, title, worktree, agent) and the words written about it —
@@ -724,15 +718,4 @@ export function itemSearchText(item: CanopyItem): string {
     .filter((text): text is string => typeof text === "string" && text !== "")
     .join("\n")
     .toLowerCase();
-}
-
-/**
- * The words of a search a run's names and words don't hold: what is left for
- * its terminal to answer. Each is matched as written, never by scattered
- * letters, which across a paragraph would find a little of anything.
- */
-export function unmatchedTerms(item: CanopyItem, terms: readonly string[]): string[] {
-  if (terms.length === 0) return [];
-  const text = itemSearchText(item);
-  return terms.filter((term) => !text.includes(term));
 }

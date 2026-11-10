@@ -1,5 +1,6 @@
 import { OctagonAlert, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 export type MetricTone = "default" | "warn" | "alert";
 
@@ -50,7 +51,11 @@ export function MetricTile({ label, value, unit, tone = "default", hint }: Metri
       <span className="flex items-baseline gap-1 truncate">
         <span className="text-sm font-medium tabular-nums text-text-primary">{value}</span>
         {unit ? <span className="text-2xs text-text-secondary">{unit}</span> : null}
-        {hint ? <span className="truncate text-2xs text-text-secondary">· {hint}</span> : null}
+        {hint ? (
+          <span className="truncate text-2xs text-text-secondary">
+            <FactSeparator /> {hint}
+          </span>
+        ) : null}
       </span>
     </div>
   );

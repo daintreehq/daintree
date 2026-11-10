@@ -36,6 +36,10 @@ A project's tools run as another machine's assistant's would: the `*Owned` termi
 
 An agent that stays `working` refuses a send. To get a message to it anyway, send with `whenBusy: "queue"`: Daintree holds it and types it the next time the agent waits at its own prompt with nothing typed there. The answer carries a `queuedSendToken`, not a `submissionToken`; read what became of it with `terminal.getStatus` and `queuedSendToken`, withdraw it with `terminal.cancelQueuedSend`, and add `notify: true` to hear when the agent answers. One held message per agent: a newer one replaces the older. It is dropped if someone else sends the agent input or its run changes first, when its time runs out (`queueTtlSeconds`, 30 minutes by default), and when your session ends. Keep a copy if it matters.
 
+## Messages From Project Assistants
+
+A prompt opening "From the Daintree Assistant of the project …" is that project's assistant on this machine raising something with you, not the user. Decide what to do within what the user asked of you, and ask the user what only they can settle. Answer with the handback it asks for, or brief it through `host.call` on `local`: `assistant.list`, then `terminal.sendCommandOwned`.
+
 ## Hearing When Agents Wait
 
 To cover agents stopping on an approval or a question, arm `host.watch` with `agentsWaiting: true`, on every host you control and `local`, or on one `hostId`, and end your turn instead of polling. The arm's `agents.matches` names those already waiting, which get no notice: handle them now. `agents.hosts` says how it hears each host: for `link-down`, also watch its `connection`; an `older-host` sends no reasons, and only `waitingReasons: ["any"]` hears it. Each notice is one shot: arm again once you've handled it. A reason is a reading of the agent's screen, so read the screen through `host.call` before answering it.
@@ -51,6 +55,12 @@ To cover agents stopping on an approval or a question, arm `host.watch` with `ag
 ## Agents You Launch
 
 A CLI you start can stop on a dialog (trust, permission, login) while reading `working`. Answer one only inside the authority the user already gave, and say you did; otherwise ask the user. Pick with `terminal.sendKeysOwned` and the label shown, never a guessed `y`. If the screen is unreadable, don't send a selection. After two waits with no change in an agent's output, report it as possibly stuck.
+
+## Recovering Agents After a Restart
+
+A restart can leave agents exited, with panes back at a shell. Through `host.call` on the project, `agentSessionHistory.list` gives each closed session's `sessionId`, `agentId` and `worktreeId`. `closedBy` says what ended it: `user` means its pane was closed, so leave those alone. `terminal.id` names the pane it came from. The list is a journal, not live state: a session stays listed after it is reopened.
+
+Reopen one with `agent.resumeOwned`, passing those three ids. `launched` returns a new `terminalId` that is yours; its process is starting, so wait for the agent before sending to it, and the old pane stays as it is. `existing` names a live pane that reads as holding the session: nothing launched and this call doesn't make it yours, so read it before assuming the agent is there. `refused` gives a `reason` and a `message` to pass on; never launch a fresh agent in its place. A `terminals-unavailable` refusal about a pane's saved record lasts until the person closes that pane. `DRIVEN_ELSEWHERE` means someone else has control of the project. A window already showing the project shows the new pane the next time it opens the project, so tell the user that.
 
 ## When an Action Needs the User
 

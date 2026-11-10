@@ -7,6 +7,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps, type TabInfo } from "@/components/Panel";
 import { useGridGroupAttention } from "@/components/Panel/gridGroupAttention";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { BrowserToolbar } from "../Browser/BrowserToolbar";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
 import { DevPreviewStuckBanner, DevPreviewHmrDeadBanner } from "./DevPreviewBanners";
@@ -125,6 +126,7 @@ export function DevPreviewPane({
   const setBrowserZoom = usePanelStore((state) => state.setBrowserZoom);
   const setDevPreviewConsoleOpen = usePanelStore((state) => state.setDevPreviewConsoleOpen);
   const setDevPreviewConsoleTab = usePanelStore((state) => state.setDevPreviewConsoleTab);
+  const showDevPreviewOutput = usePanelStore((state) => state.showDevPreviewOutput);
   const setViewportPreset = usePanelStore((state) => state.setViewportPreset);
   const setViewportRotated = usePanelStore((state) => state.setViewportRotated);
   const setViewportDpr = usePanelStore((state) => state.setViewportDpr);
@@ -418,12 +420,12 @@ export function DevPreviewPane({
   useEffect(() => {
     if (status === "error" && error && consoleAutoOpenedErrorRef.current !== error.message) {
       consoleAutoOpenedErrorRef.current = error.message;
-      setDevPreviewConsoleOpen(id, true);
+      showDevPreviewOutput(id);
     }
     if (status !== "error") {
       consoleAutoOpenedErrorRef.current = null;
     }
-  }, [status, error, id, setDevPreviewConsoleOpen]);
+  }, [status, error, id, showDevPreviewOutput]);
 
   useEffect(() => {
     if (status !== "starting" && status !== "installing") {
@@ -441,12 +443,12 @@ export function DevPreviewPane({
     const timer = setTimeout(() => {
       if ((status === "starting" || status === "installing") && !url && !phaseLabel) {
         consoleAutoOpenedStallRef.current = true;
-        setDevPreviewConsoleOpen(id, true);
+        showDevPreviewOutput(id);
       }
     }, 15_000);
 
     return () => clearTimeout(timer);
-  }, [status, url, phaseLabel, id, setDevPreviewConsoleOpen]);
+  }, [status, url, phaseLabel, id, showDevPreviewOutput]);
 
   const {
     crashState,
@@ -1067,9 +1069,16 @@ export function DevPreviewPane({
                 tone="outline"
                 className="absolute top-1 left-1/2 z-10 -translate-x-1/2 bg-surface/90"
               >
-                {getViewportPreset(viewportPreset).label} · {effectiveViewport.width}×
-                {effectiveViewport.height}
-                {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}
+                <span>
+                  {getViewportPreset(viewportPreset).label} <FactSeparator />{" "}
+                  {effectiveViewport.width}×{effectiveViewport.height}
+                  {viewportFit && fitScale < 1 && (
+                    <>
+                      {" "}
+                      <FactSeparator /> {Math.round(fitScale * 100)}%
+                    </>
+                  )}
+                </span>
               </Badge>
             )}
             {showEmptyState ? (
@@ -1080,7 +1089,7 @@ export function DevPreviewPane({
                 phaseLabel={phaseLabel}
                 error={error}
                 handleRetry={handleRetry}
-                setDevPreviewConsoleOpen={setDevPreviewConsoleOpen}
+                showDevPreviewOutput={showDevPreviewOutput}
                 id={id}
                 currentUrl={currentUrl}
                 handleOpenExternal={handleOpenExternal}
@@ -1244,7 +1253,7 @@ export function DevPreviewPane({
               id: "crash-loop-restart",
               label: "Restart dev server",
               icon: RotateCw,
-              variant: "danger",
+              variant: "dangerFilled",
               onClick: handleRestartDevServer,
               ariaLabel: "Restart dev server",
             }}

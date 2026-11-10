@@ -80,6 +80,18 @@ describe("diffNotesStore", () => {
     expect(notes[editedAfter.id]?.body).toBe("Changed my mind");
   });
 
+  it("leaves a note whose editor opened after the send began", () => {
+    const opened = add("src/a.ts");
+    const closed = add("src/b.ts");
+    useDiffNotesStore.getState().setEditing(opened.id, true);
+
+    const cleared = useDiffNotesStore.getState().clearSent([opened, closed]);
+
+    expect(cleared).toEqual([closed]);
+    expect(useDiffNotesStore.getState().notes[opened.id]).toEqual(opened);
+    useDiffNotesStore.getState().setEditing(opened.id, false);
+  });
+
   it("tracks open editors per note without persisting them", () => {
     const note = add();
     const { setEditing } = useDiffNotesStore.getState();

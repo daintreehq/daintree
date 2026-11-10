@@ -90,6 +90,11 @@ export const SPAWN_ERROR_BANNER_COPY = {
         : boundedErrorText(error.message);
     },
   },
+  PROJECT_NOT_READY: {
+    title: "Project still cloning",
+    description: () =>
+      "There's no checkout to start a terminal in yet. Wait for the clone to finish, then retry.",
+  },
   UNKNOWN: {
     title: "Couldn't start terminal",
     description: (error) => boundedErrorText(error.message),

@@ -143,22 +143,23 @@ describe("sidebar selection accent", () => {
     const offsets = ruleOffsets(
       /\[data-keyboard-cursor="true"\]\s*\.sidebar-worktree-card(?:\[data-label\])?\[data-active="true"\]/
     );
-    expect(offsets.length).toBe(2);
+    // One rule: the perimeter needs no labelled variant, as it shares no edge
+    // with the label bar.
+    expect(offsets.length).toBe(1);
     for (const offset of offsets) {
       const block = blockAt(offset);
       expect(insetEdges(block).some((e) => e.token === "accent-primary" && e.x < 0)).toBe(true);
-      // A left edge, or on a labelled card (whose left edge is its colour bar)
-      // a perimeter, in the cursor's neutral ink.
+      // A perimeter, in the cursor's neutral ink, on every card.
       expect(block).toContain("var(--theme-selection-outline)");
     }
   });
 });
 
 /**
- * The sidebar's keyboard cursor is marked by a 2px left inset edge, and it is
+ * The sidebar's keyboard cursor is marked by a 1px inset perimeter, and it is
  * the only mark a keyboard user has there: the row's focus ring is suppressed
- * and hover reveals the same toolbar. So the edge owes WCAG 1.4.11's 3:1 on
- * every built-in theme.
+ * and hover reveals the same toolbar. So the perimeter owes WCAG 1.4.11's 3:1
+ * on every built-in theme.
  *
  * This reads whichever theme token the rule names and measures it, rather
  * than pinning the token: any ink that clears 3:1 everywhere passes.
@@ -167,8 +168,8 @@ function keyboardCursorEdgeToken(): AppThemeTokenKey {
   const selector = CSS.indexOf('[data-keyboard-cursor="true"]\n  .sidebar-worktree-card');
   expect(selector, "keyboard-cursor card rule not found in sidebar.css").toBeGreaterThan(-1);
   const block = CSS.slice(CSS.indexOf("{", selector), CSS.indexOf("}", selector));
-  const match = block.match(/--card-edge:\s*inset 2px 0 0 var\(--theme-([a-z-]+)\)/);
-  expect(match, "keyboard-cursor edge must be a single theme token").not.toBeNull();
+  const match = block.match(/--card-edge:\s*inset 0 0 0 1px var\(--theme-([a-z-]+)\)/);
+  expect(match, "keyboard-cursor perimeter must be a single theme token").not.toBeNull();
   return match![1] as AppThemeTokenKey;
 }
 

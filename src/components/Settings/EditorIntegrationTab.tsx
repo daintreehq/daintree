@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useId } from "react";
 import { InlineError } from "@/components/ui/field";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { CheckCircle2, XCircle, RefreshCw, ExternalLink, ChevronRight } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -23,13 +24,17 @@ import { editorClient } from "@/clients/editorClient";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "@shared/types/editor";
 import { KNOWN_EDITOR_IDS } from "@shared/types/editor";
 import { useProjectStore, patchCachedProjectSettings } from "@/store";
-import { invalidateProjectSettingsCache } from "@/clients/projectClient";
+import { invalidateProjectSettingsCache, withProjectSettingsWrite } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { pluralize } from "@/lib/pluralize";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { announceOpenInEditorFallback } from "@/utils/openInEditorFallback";
+import { useSettingsTabFlush, type SettingsFlushFailure } from "./SettingsFlushRegistry";
+
+const EDITOR_SECTION_ID = "editor-external";
+const EDITOR_COMMAND_ID = "editor-external-command";
 
 const EDITOR_LABELS: Record<KnownEditorId, string> = {
   vscode: "VS Code",
@@ -45,6 +50,7 @@ const EDITOR_LABELS: Record<KnownEditorId, string> = {
 };
 
 const DEFAULT_CUSTOM_TEMPLATE = "{file}:{line}:{col}";
+const DEFAULT_EDITOR_ID: KnownEditorId = "vscode";
 
 function editorLabel(editor: EditorConfig): string {
   return editor.id === "custom"
@@ -64,6 +70,16 @@ function draftFieldsOf(config: EditorConfig) {
   };
 }
 
+/** The config a draft's fields stand for, trimmed as every write sends them. */
+function configOf(fields: ReturnType<typeof draftFieldsOf>): EditorConfig {
+  const isCustom = fields.id === "custom";
+  return {
+    id: fields.id,
+    customCommand: isCustom ? fields.command.trim() || undefined : undefined,
+    customTemplate: isCustom ? fields.template.trim() || undefined : undefined,
+  };
+}
+
 function sameEditor(a: EditorConfig | null, b: EditorConfig): boolean {
   if (!a || a.id !== b.id) return false;
   if (b.id !== "custom") return true;
@@ -78,9 +94,12 @@ export function EditorIntegrationTab() {
   // The project's own choice, and this machine's default for projects without one.
   const [preferredEditor, setPreferredEditor] = useState<EditorConfig | null>(null);
   const [defaultEditor, setDefaultEditor] = useState<EditorConfig | null>(null);
-  const [selectedId, setSelectedId] = useState<KnownEditorId>("vscode");
+  const [selectedId, setSelectedId] = useState<KnownEditorId>(DEFAULT_EDITOR_ID);
   const [customCommand, setCustomCommand] = useState("");
   const [customTemplate, setCustomTemplate] = useState(DEFAULT_CUSTOM_TEMPLATE);
+  // The draft the user has nothing pending against: what loaded, or what they last
+  // sent somewhere. Only a change from it is theirs for a close to keep.
+  const [acceptedDraft, setAcceptedDraft] = useState<EditorConfig | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isSettingDefault, setIsSettingDefault] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
@@ -129,20 +148,14 @@ export function EditorIntegrationTab() {
         setDiscoveredEditors(discovered);
         setPreferredEditor(pref ?? null);
         setDefaultEditor(fallback ?? null);
-        // The draft starts at what a launch would try first.
-        const effective = pref ?? fallback ?? null;
-        if (effective) {
-          const draft = draftFieldsOf(effective);
-          setSelectedId(draft.id);
-          setCustomCommand(draft.command);
-          setCustomTemplate(draft.template);
-        } else {
-          // Auto-select first available
-          const first = discovered.find((d) => d.available);
-          if (first) {
-            setSelectedId(first.id);
-          }
-        }
+        // The draft starts at what a launch would try first, else the first editor found.
+        const start = pref ??
+          fallback ?? { id: discovered.find((d) => d.available)?.id ?? DEFAULT_EDITOR_ID };
+        const draft = draftFieldsOf(start);
+        setSelectedId(draft.id);
+        setCustomCommand(draft.command);
+        setCustomTemplate(draft.template);
+        setAcceptedDraft(configOf(draft));
       })
       .catch((err) => {
         if (cancelled || !isMountedRef.current) return;
@@ -154,6 +167,13 @@ export function EditorIntegrationTab() {
       cancelled = true;
     };
   }, [activeProjectId, loadAttempt]);
+
+  const applyDraft = (config: EditorConfig) => {
+    const draft = draftFieldsOf(config);
+    setSelectedId(draft.id);
+    setCustomCommand(draft.command);
+    setCustomTemplate(draft.template);
+  };
 
   // Any edit makes the last test result about a different choice.
   const editDraft = () => {
@@ -177,11 +197,11 @@ export function EditorIntegrationTab() {
     }
   };
 
-  const draftEditor: EditorConfig = {
+  const draftEditor = configOf({
     id: selectedId,
-    customCommand: selectedId === "custom" ? customCommand.trim() || undefined : undefined,
-    customTemplate: selectedId === "custom" ? customTemplate.trim() || undefined : undefined,
-  };
+    command: customCommand,
+    template: customTemplate,
+  });
 
   const isBusy = isSaving || isSettingDefault || isResetting;
 
@@ -194,25 +214,30 @@ export function EditorIntegrationTab() {
     return draftEditor;
   };
 
-  const handleSave = async () => {
-    if (!activeProjectId || isBusy || isLoadingConfig || loadError) return;
+  const save = async (): Promise<SettingsFlushFailure | undefined> => {
+    if (!activeProjectId || isLoadingConfig || loadError) return undefined;
     const editor = validDraft();
-    if (!editor) return;
+    if (!editor) return { landOn: EDITOR_COMMAND_ID };
     const projectId = activeProjectId;
     setIsSaving(true);
     setSaveError(null);
     try {
-      await editorClient.setConfig({ editor, projectId });
-      // Main writes preferredEditor straight into the project settings file, so
-      // every renderer-side copy is now stale. Both must be refreshed before
-      // anything else reads or re-saves the whole settings object (#12326).
-      invalidateProjectSettingsCache(projectId);
-      patchCachedProjectSettings(projectId, { preferredEditor: editor });
-      if (!isCurrentProject(projectId)) return;
+      await withProjectSettingsWrite(projectId, async () => {
+        await editorClient.setConfig({ editor, projectId });
+        // Main writes preferredEditor straight into the project settings file, so
+        // every renderer-side copy is now stale. Both must be refreshed before
+        // anything else reads or re-saves the whole settings object (#12326).
+        invalidateProjectSettingsCache(projectId);
+        patchCachedProjectSettings(projectId, { preferredEditor: editor });
+      });
+      if (!isCurrentProject(projectId)) return undefined;
       setPreferredEditor(editor);
+      setAcceptedDraft(editor);
+      return undefined;
     } catch (err) {
-      if (!isCurrentProject(projectId)) return;
+      if (!isCurrentProject(projectId)) return undefined;
       setSaveError(formatErrorMessage(err, "Failed to save editor preference"));
+      return { landOn: EDITOR_SECTION_ID };
     } finally {
       if (isMountedRef.current) setIsSaving(false);
     }
@@ -220,19 +245,24 @@ export function EditorIntegrationTab() {
 
   // The default is this machine's fallback; no project's saved choice changes,
   // so neither project settings cache is touched.
-  const handleSetDefault = async () => {
-    if (!activeProjectId || isBusy || isLoadingConfig || loadError) return;
+  const setDefault = async (): Promise<SettingsFlushFailure | undefined> => {
+    if (!activeProjectId || isLoadingConfig || loadError) return undefined;
     const editor = validDraft();
-    if (!editor) return;
+    if (!editor) return { landOn: EDITOR_COMMAND_ID };
     setIsSettingDefault(true);
     setSaveError(null);
+    // Accepted before the write, not after: this draft was sent to the machine's
+    // default, so a close must not also pin it to the project, even if this fails.
+    setAcceptedDraft(editor);
     try {
       await editorClient.setDefault({ editor });
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current) return undefined;
       setDefaultEditor(editor);
+      return undefined;
     } catch (err) {
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current) return undefined;
       setSaveError(formatErrorMessage(err, "Failed to set the default editor"));
+      return { landOn: EDITOR_SECTION_ID };
     } finally {
       if (isMountedRef.current) setIsSettingDefault(false);
     }
@@ -240,31 +270,57 @@ export function EditorIntegrationTab() {
 
   // Clears the project's choice so it follows the default again, rather than
   // copying today's default into it.
-  const handleResetToDefault = async () => {
-    if (!activeProjectId || isBusy || isLoadingConfig || loadError) return;
+  const reset = async (): Promise<SettingsFlushFailure | undefined> => {
+    if (!activeProjectId || isLoadingConfig || loadError) return undefined;
     const projectId = activeProjectId;
     setIsResetting(true);
     setSaveError(null);
     setTestResult(null);
+    // The user asked for no project choice, so a close must not save one over it.
+    setAcceptedDraft(draftEditor);
     try {
-      await editorClient.clearProjectPreference({ projectId });
-      invalidateProjectSettingsCache(projectId);
-      patchCachedProjectSettings(projectId, { preferredEditor: undefined });
-      if (!isCurrentProject(projectId)) return;
+      await withProjectSettingsWrite(projectId, async () => {
+        await editorClient.clearProjectPreference({ projectId });
+        invalidateProjectSettingsCache(projectId);
+        patchCachedProjectSettings(projectId, { preferredEditor: undefined });
+      });
+      if (!isCurrentProject(projectId)) return undefined;
       setPreferredEditor(null);
       setCommandError(null);
       if (defaultEditor) {
-        const draft = draftFieldsOf(defaultEditor);
-        setSelectedId(draft.id);
-        setCustomCommand(draft.command);
-        setCustomTemplate(draft.template);
+        applyDraft(defaultEditor);
+        setAcceptedDraft(configOf(draftFieldsOf(defaultEditor)));
       }
+      return undefined;
     } catch (err) {
-      if (!isCurrentProject(projectId)) return;
+      if (!isCurrentProject(projectId)) return undefined;
       setSaveError(formatErrorMessage(err, "Failed to reset the editor"));
+      return { landOn: EDITOR_SECTION_ID };
     } finally {
       if (isMountedRef.current) setIsResetting(false);
     }
+  };
+
+  // One write at a time. A close that lands during one reports that write's outcome,
+  // not a success for something that can still fail.
+  const writeInFlightRef = useRef<Promise<SettingsFlushFailure | undefined> | null>(null);
+  const runWrite = (write: () => Promise<SettingsFlushFailure | undefined>) => {
+    if (!writeInFlightRef.current) {
+      writeInFlightRef.current = write().finally(() => {
+        writeInFlightRef.current = null;
+      });
+    }
+    return writeInFlightRef.current;
+  };
+  const handleSave = () => runWrite(save);
+  const handleSetDefault = () => runWrite(setDefault);
+  const handleResetToDefault = () => runWrite(reset);
+
+  const handleDiscard = () => {
+    if (acceptedDraft) applyDraft(acceptedDraft);
+    setCommandError(null);
+    setSaveError(null);
+    setTestResult(null);
   };
 
   const handleTest = async () => {
@@ -330,9 +386,20 @@ export function EditorIntegrationTab() {
   // No saved preference yet counts as dirty: saving pins the draft to this
   // project even when it matches the default, so it stops following the default.
   const isDirty = !sameEditor(preferredEditor, draftEditor);
+  // Not the same as isDirty: Save may pin what a project is already using, but only a
+  // choice the user made and hasn't sent anywhere is a draft a close should keep. It
+  // goes to this project, never to the machine's default.
+  const hasPendingDraft =
+    !isLoadingConfig && !loadError && isDirty && !sameEditor(acceptedDraft, draftEditor);
   const effectiveEditor = preferredEditor ?? defaultEditor;
   const draftIsEffective = sameEditor(effectiveEditor, draftEditor);
   const draftIsDefault = sameEditor(defaultEditor, draftEditor);
+
+  useSettingsTabFlush(
+    "integrations",
+    () => writeInFlightRef.current ?? (hasPendingDraft ? handleSave() : undefined),
+    hasPendingDraft || isBusy
+  );
 
   const editorRowDescription = isLoadingConfig
     ? undefined
@@ -354,7 +421,7 @@ export function EditorIntegrationTab() {
 
   return (
     <SettingsSection
-      id="editor-external"
+      id={EDITOR_SECTION_ID}
       title="External editor"
       description={`The editor that "Open in editor" launches from the diff viewer and worktree cards. Save chooses it for ${activeProjectName ?? "this project"}; Set default chooses it for projects without their own.`}
     >
@@ -495,6 +562,7 @@ export function EditorIntegrationTab() {
         {selectedId === "custom" && (
           <>
             <SettingsRow
+              id={EDITOR_COMMAND_ID}
               label="Command"
               layout="stacked"
               error={commandError ?? undefined}
@@ -560,12 +628,22 @@ export function EditorIntegrationTab() {
             ) : isLoadingConfig ? null : preferredEditor ? (
               <span>
                 Saved: <span className="font-medium">{editorLabel(preferredEditor)}</span>
-                {isDirty && " · Unsaved changes"}
+                {hasPendingDraft && (
+                  <>
+                    {" "}
+                    <FactSeparator /> Unsaved changes
+                  </>
+                )}
               </span>
             ) : defaultEditor ? (
               <span>
                 Using default: <span className="font-medium">{editorLabel(defaultEditor)}</span>
-                {!draftIsDefault && " · Unsaved changes"}
+                {hasPendingDraft && (
+                  <>
+                    {" "}
+                    <FactSeparator /> Unsaved changes
+                  </>
+                )}
               </span>
             ) : (
               "Not saved yet — Daintree uses the first editor it finds"
@@ -601,6 +679,11 @@ export function EditorIntegrationTab() {
           >
             Set default
           </Button>
+          {hasPendingDraft && (
+            <Button variant="outline" size="sm" onClick={handleDiscard} disabled={isBusy}>
+              Discard
+            </Button>
+          )}
           <Button
             variant="contrast"
             size="sm"

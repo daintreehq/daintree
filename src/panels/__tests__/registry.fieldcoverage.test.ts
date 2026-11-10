@@ -142,6 +142,9 @@ const PTY_FIELD_CLASSIFICATION = {
   // Cross-worktree move prompt (#11853) — NOT persisted: it asks the user to
   // say something to a running agent, and that agent is gone after a restart.
   worktreeMoveNotice: false,
+  // The user closed the full-screen notice (#16357) — a choice about this
+  // session's pane, so a restart offers the notice again.
+  altScreenNoticeDismissed: false,
   browserUrl: false,
   browserHistory: false,
   browserZoom: false,
@@ -489,6 +492,7 @@ const terminalFixture: PtySerializeInput = {
   scratchpad: { content: "- check CI", collapsed: true, width: 320 },
   firstPrompt: { text: "Fix the flaky test", via: "launch", at: 1_700_000_000_004 },
   worktreeMoveNotice: { destinationWorktreeId: "wt-feature" },
+  altScreenNoticeDismissed: true,
   runtimeStatus: "exited",
   exitCode: 3,
   createdAt: 1_700_000_000_000,

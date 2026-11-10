@@ -392,7 +392,6 @@ export const AgentPresetSchema = z.object({
   dangerousEnabled: z.boolean().optional(),
   dangerousMode: z.enum(["inherit", "on", "off"]).optional(),
   customFlags: z.string().optional(),
-  inlineMode: z.union([z.boolean(), z.enum(["inherit", "on", "off"])]).optional(),
   color: z.string().optional(),
   displayTitle: z.string().optional(),
   fallbacks: z.array(z.string()).optional(),
@@ -478,7 +477,7 @@ export const TerminalRestoredSchema = z
     lastSeen: z.object({ agentState: z.string(), at: z.number().optional() }).optional(),
   })
   .describe(
-    "Set when restore rebuilt the pane (`at`, epoch ms). lastSeen: agent state saved before then, not proof a run ended."
+    "Set when restore rebuilt the panel (`at`, epoch ms). lastSeen: agent state saved before then, not proof a run ended."
   );
 
 export const TerminalSummarySchema = z.object({
@@ -612,7 +611,7 @@ export const TerminalLastMessageResultSchema = z
       reason: z
         .enum(AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS)
         .describe(
-          "'provider-mismatch': an agent this cannot read. 'store-unknown': the pane's store is uncertain; nothing read. 'search-cap-reached': no reply within the bounded read; no older one substituted. 'message-not-found': no reply at that index, or the cursor's message changed."
+          "'provider-mismatch': an agent this cannot read. 'store-unknown': the panel's store is uncertain; nothing read. 'search-cap-reached': no reply within the bounded read; no older one substituted. 'message-not-found': no reply at that index, or the cursor's message changed."
         ),
     }),
     z.object({

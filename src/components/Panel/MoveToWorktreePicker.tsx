@@ -399,7 +399,7 @@ function MoveToWorktreePickerBody({
         clearLabel="Clear"
         onClear={() => onQueryChange("")}
         onKeyDown={handleNavigationKeyDown}
-        placeholder="Search worktrees"
+        placeholder="Search worktrees…"
         aria-label="Search worktrees"
         role="combobox"
         aria-autocomplete="list"
@@ -454,7 +454,7 @@ function MoveToWorktreePickerBody({
       </div>
 
       <AppPaletteDialog.Footer>
-        <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to move" }} />
+        <PaletteFooterHints primaryHint={{ keys: "Enter", label: "to move" }} />
       </AppPaletteDialog.Footer>
     </>
   );

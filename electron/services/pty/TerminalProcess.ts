@@ -16,6 +16,7 @@ import {
   type AgentProcessObservation,
   type DetectionResult,
 } from "../ProcessDetector.js";
+import { isDetectableAgentId } from "../ProcessDetector/registries.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { ImagePathProbe } from "./ImagePathProbe.js";
 import type { ActivityStateMetadata } from "../ActivityMonitor.js";
@@ -79,7 +80,11 @@ import type {
 import { TerminalExitObservers, type TerminalExitArgs } from "./TerminalExitObservers.js";
 import { TerminalExitHandler } from "./TerminalExitHandler.js";
 import { gracefulShutdown as runGracefulShutdown } from "./TerminalGracefulShutdown.js";
-import { handleAgentDetection as runHandleAgentDetection } from "./TerminalAgentDetection.js";
+import {
+  handleAgentDetection as runHandleAgentDetection,
+  revokeDetectedAgent,
+  type TerminalAgentDetectionHost,
+} from "./TerminalAgentDetection.js";
 import { offerAgentRunArgvSession } from "./agentRunArgv.js";
 import { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
 import { readScheduledRunRef } from "../../../shared/utils/scheduledRunProvenance.js";
@@ -262,8 +267,8 @@ export class TerminalProcess {
 
   /**
    * True when an agent is currently observed in this PTY. Used to drive
-   * chrome-level decisions (OSC color responder ownership, the agent output
-   * ring and, for the Assistant, agent:output). Detection wins, and durable launch affinity keeps
+   * chrome-level decisions (OSC color responder ownership and, for the
+   * Assistant, agent:output). Detection wins, and durable launch affinity keeps
    * cold-launched/restored agents wired until an explicit exit signal arrives.
    */
   private get isAgentLive(): boolean {
@@ -391,7 +396,6 @@ export class TerminalProcess {
       // terminals have no agent state.
       agentState: hasLaunchHint ? "idle" : undefined,
       lastStateChange: hasLaunchHint ? spawnedAt : undefined,
-      outputBuffer: "",
       lastInputTime: spawnedAt,
       lastOutputTime: spawnedAt,
       lastCheckTime: spawnedAt,
@@ -1910,7 +1914,7 @@ export class TerminalProcess {
    * Mirrors the data sinks of the live `onData` handler in `setupPtyHandlers`
    * (firstByteAt, lastOutputTime, headless write, renderer emit, forensics,
    * semantic buffer, snapshotter). Skips agent-only state (activityMonitor,
-   * agent:output, outputBuffer) — by the time an agent CLI is launched into
+   * agent:output) — by the time an agent CLI is launched into
    * the PTY the prelude is overwritten on screen anyway, and feeding shell-
    * prompt bytes into agent state machines would mis-classify the session.
    */
@@ -2071,6 +2075,8 @@ export class TerminalProcess {
         usedPercent: message.usedPercent,
         resetsAt: resolveResetsAt(message.resetText, now),
         observedAt: now,
+        configDir: this.terminalInfo.claudeConfigDir ?? null,
+        shell: this.terminalInfo.shell || null,
         timestamp: now,
       });
     }
@@ -2222,35 +2228,56 @@ export class TerminalProcess {
 
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void {
     this.flushAgentOutput();
+    runHandleAgentDetection(this.agentDetectionHost(), result, spawnedAt);
+  }
+
+  /**
+   * Drop this terminal's agent identity once the registry stops recognising
+   * it (#16469) — its plugin unloaded, or another plugin now claims its only
+   * name. The pty-host calls this on every terminal whenever main replaces
+   * the plugin agent registry.
+   */
+  revokeUnregisteredAgent(): void {
+    const committed = this.processDetector?.getLastDetected() ?? null;
+    this.processDetector?.dropRevokedAgentEvidence();
+    // A runtime promotion latches the detector's anchor; the next agent typed
+    // into this shell has to earn it again. Only when the committed agent was
+    // the one revoked — a built-in that still owns the pane keeps its anchor.
+    if (committed !== null && !isDetectableAgentId(committed)) {
+      this.processDetector?.setLaunchAnchored(Boolean(this.terminalInfo.launchAgentId));
+    }
+    const detected = this.terminalInfo.detectedAgentId;
+    if (detected === undefined || isDetectableAgentId(detected)) return;
+    this.flushAgentOutput();
+    revokeDetectedAgent(this.agentDetectionHost());
+  }
+
+  private agentDetectionHost(): TerminalAgentDetectionHost {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
-    runHandleAgentDetection(
-      {
-        id: this.id,
-        terminalInfo: this.terminalInfo,
-        agentStateService: this.deps.agentStateService,
-        headlineGenerator: this.headlineGenerator,
-        semanticBufferManager: this.semanticBufferManager,
-        get forensicsBuffer() {
-          return self.forensicsBuffer;
-        },
-        get hasActivityMonitor() {
-          return self.analysis.hasMonitor();
-        },
-        reconfigureActivityMonitor: (agentId, patternConfig) =>
-          this.analysis.reconfigureMonitor(agentId, patternConfig),
-        get lastDetectedProcessIconId() {
-          return self.lastDetectedProcessIconId;
-        },
-        set lastDetectedProcessIconId(v) {
-          self.lastDetectedProcessIconId = v;
-        },
-        startActivityMonitor: () => this.startActivityMonitor(),
-        stopActivityMonitor: () => this.stopActivityMonitor(),
-        growScrollback: (lines) => this.growScrollback(lines),
+    return {
+      id: this.id,
+      terminalInfo: this.terminalInfo,
+      agentStateService: this.deps.agentStateService,
+      headlineGenerator: this.headlineGenerator,
+      semanticBufferManager: this.semanticBufferManager,
+      get forensicsBuffer() {
+        return self.forensicsBuffer;
       },
-      result,
-      spawnedAt
-    );
+      get hasActivityMonitor() {
+        return self.analysis.hasMonitor();
+      },
+      reconfigureActivityMonitor: (agentId, patternConfig) =>
+        this.analysis.reconfigureMonitor(agentId, patternConfig),
+      get lastDetectedProcessIconId() {
+        return self.lastDetectedProcessIconId;
+      },
+      set lastDetectedProcessIconId(v) {
+        self.lastDetectedProcessIconId = v;
+      },
+      startActivityMonitor: () => this.startActivityMonitor(),
+      stopActivityMonitor: () => this.stopActivityMonitor(),
+      growScrollback: (lines) => this.growScrollback(lines),
+    };
   }
 }

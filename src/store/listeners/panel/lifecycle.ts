@@ -1,5 +1,8 @@
 import type { TerminalStatusPayload } from "@shared/types";
-import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
+import {
+  HIDDEN_VIEW_SKIP_REASON,
+  type TerminalReliabilityMetricPayload,
+} from "@shared/types/pty-host";
 import { isPtyPanel } from "@shared/types/panel";
 import { presetLaunchContent } from "@shared/utils/agentPresetLaunchConsent";
 import { fallbackHopApproved } from "@/services/plugin/pluginPresetLaunchApprovals";
@@ -616,6 +619,12 @@ export function setupLifecycleListeners(): DisposableStore {
         // never persist via updateFlowStatus or the runtime status would
         // freeze on "data-loss" forever.
         if (status === "data-loss") {
+          // Output skipped while no window showed this project is still in
+          // the host mirror: the pane repaints from it, with no marker.
+          if (data.reason === HIDDEN_VIEW_SKIP_REASON) {
+            peekTerminalService()?.noteHiddenOutputSkipped(id);
+            return;
+          }
           peekTerminalService()?.injectDataLossMarker(id, droppedBytes ?? 0);
           return;
         }

@@ -439,6 +439,54 @@ describe("isIpcEnvelope", () => {
 });
 
 describe("AppError details allowlist", () => {
+  it("rebuilds a held project's details, dropping extra fields and unknown reasons (#16724)", () => {
+    const serialized = serializeError(
+      Object.assign(new Error("x"), {
+        details: {
+          code: "PROJECT_HELD_ELSEWHERE",
+          reason: "assistant",
+          showable: true,
+          windowId: 2,
+          path: "/Users/me/project",
+        },
+      })
+    );
+    expect(serialized.details).toEqual({
+      code: "PROJECT_HELD_ELSEWHERE",
+      reason: "assistant",
+      showable: true,
+    });
+
+    expect(
+      pickAppErrorDetails({ code: "PROJECT_HELD_ELSEWHERE", reason: "gremlins", showable: true })
+    ).toBeUndefined();
+    expect(
+      pickAppErrorDetails({ code: "PROJECT_HELD_ELSEWHERE", reason: "mcp", showable: "yes" })
+    ).toBeUndefined();
+    expect(
+      pickAppErrorDetails({ code: "PROJECT_HELD_ELSEWHERE", showable: false })
+    ).toBeUndefined();
+  });
+
+  it("keeps every hold reason, shown or not", () => {
+    for (const reason of [
+      "assistant",
+      "unsaved-work",
+      "mcp",
+      "flush",
+      "dictation",
+      "unavailable",
+    ]) {
+      for (const showable of [true, false]) {
+        expect(pickAppErrorDetails({ code: "PROJECT_HELD_ELSEWHERE", reason, showable })).toEqual({
+          code: "PROJECT_HELD_ELSEWHERE",
+          reason,
+          showable,
+        });
+      }
+    }
+  });
+
   it("rebuilds required plugin tools details, dropping extra fields and unknown states", () => {
     const serialized = serializeError(
       Object.assign(new Error("x"), {

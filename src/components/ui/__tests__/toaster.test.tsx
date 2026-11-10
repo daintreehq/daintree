@@ -902,6 +902,19 @@ describe("Toast overflow menu", () => {
     expect(screen.queryByLabelText("Notification options")).toBeNull();
   });
 
+  it("leaves out what a standalone root can't reach: the options and the overflow", async () => {
+    render(<Toaster standalone />);
+    await act(async () => {
+      addToast({ context: { projectId: "p1", eventKind: "agent" }, duration: 0 });
+      useNotificationHistoryStore.setState({ evictedToInboxCount: 2 });
+      vi.advanceTimersByTime(16);
+    });
+
+    expect(screen.getByRole("region", { name: "Notifications" })).toBeTruthy();
+    expect(screen.queryByLabelText("Notification options")).toBeNull();
+    expect(screen.queryByTestId("toast-overflow-pill")).toBeNull();
+  });
+
   it("dispatches project.muteNotifications and dismisses when Mute is selected", async () => {
     render(<Toaster />);
     await act(async () => {

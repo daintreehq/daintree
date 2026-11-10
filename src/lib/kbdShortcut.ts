@@ -8,7 +8,12 @@
  *
  * `isMac` is injected as a parameter so the parser can be tested without
  * mutating the cached `navigator.platform` lookup in `src/lib/platform.ts`.
+ * `keyLabels` is injected the same way: the active layout's characters for
+ * the keys bindings match physically (see `src/lib/keyboardLayout.ts`), so a
+ * `Cmd+/` drawn on AZERTY names the key the user actually presses.
  */
+
+import type { KeyLabels } from "@/lib/keyboardLayout";
 
 const MAC_GLYPHS: Record<string, string> = {
   cmd: "⌘",
@@ -69,7 +74,25 @@ function ownLookup(table: Record<string, string>, key: string): string | undefin
   return Object.hasOwn(table, key) ? table[key] : undefined;
 }
 
-function mapToken(rawToken: string, isMac: boolean): string {
+/**
+ * What the active layout prints on the key a token names, or undefined when
+ * the token draws as itself. Only single punctuation characters are matched
+ * physically; names, letters and modifiers never have a label.
+ */
+function layoutLabel(token: string, keyLabels: KeyLabels | undefined): string | undefined {
+  if (!keyLabels || token.length !== 1) return undefined;
+  return keyLabels.get(token);
+}
+
+/** A layout label uppercased like a letter key, unless that spells two ("ß" → "SS"). */
+function labelCap(label: string): string {
+  const upper = label.toUpperCase();
+  return [...upper].length === 1 ? upper : label;
+}
+
+function mapToken(rawToken: string, isMac: boolean, keyLabels?: KeyLabels): string {
+  const label = layoutLabel(rawToken, keyLabels);
+  if (label !== undefined) return labelCap(label);
   const lower = rawToken.toLowerCase();
   const arrow = ownLookup(ARROW_GLYPHS, lower);
   if (arrow) return arrow;
@@ -134,10 +157,13 @@ function splitChordSteps(shortcut: string): string[][] {
  * parseChord("Cmd+K T", true)        // [["⌘","K"],["T"]]
  * parseChord("Ctrl++", false)        // [["Ctrl","+"]]
  * parseChord("", true)               // []
+ * parseChord("Cmd+/", true, azerty)  // [["⌘","!"]]
  */
-export function parseChord(shortcut: string, isMac: boolean): string[][] {
+export function parseChord(shortcut: string, isMac: boolean, keyLabels?: KeyLabels): string[][] {
   if (!shortcut || !shortcut.trim()) return [];
-  return splitChordSteps(shortcut).map((tokens) => tokens.map((token) => mapToken(token, isMac)));
+  return splitChordSteps(shortcut).map((tokens) =>
+    tokens.map((token) => mapToken(token, isMac, keyLabels))
+  );
 }
 
 // ── Search utilities ──────────────────────────────────────────────────────
@@ -255,7 +281,13 @@ const ARIA_KEY_NAMES: Record<string, string> = {
   end: "End",
 };
 
-function mapAriaToken(rawToken: string, modifiers: Record<string, string>): string {
+function mapAriaToken(
+  rawToken: string,
+  modifiers: Record<string, string>,
+  keyLabels?: KeyLabels
+): string {
+  const label = layoutLabel(rawToken, keyLabels);
+  if (label !== undefined) return ownLookup(ARIA_KEY_NAMES, label) ?? labelCap(label);
   const lower = rawToken.toLowerCase();
   const modifier = ownLookup(modifiers, lower);
   if (modifier) return modifier;
@@ -282,7 +314,8 @@ function mapAriaToken(rawToken: string, modifiers: Record<string, string>): stri
  */
 export function comboToAriaKeyshortcuts(
   combo: string | null | undefined,
-  isMac: boolean
+  isMac: boolean,
+  keyLabels?: KeyLabels
 ): string | undefined {
   if (!combo || !combo.trim()) return undefined;
 
@@ -290,7 +323,7 @@ export function comboToAriaKeyshortcuts(
   // The same step split the chips use, so a literal-plus chord is still seen
   // as two steps and omitted rather than merged into one wrong shortcut.
   const steps = splitChordSteps(combo).map((tokens) =>
-    tokens.map((token) => mapAriaToken(token, modifiers)).join("+")
+    tokens.map((token) => mapAriaToken(token, modifiers, keyLabels)).join("+")
   );
 
   if (steps.length === 0) return undefined;
@@ -402,6 +435,52 @@ function spokenToken(rawToken: string, isMac: boolean): string {
   return rawToken;
 }
 
+// The symbols other layouts put on the physically matched keys. Named because
+// a screen reader set to skip punctuation would otherwise drop the key.
+const SPOKEN_LAYOUT_SYMBOLS: Record<string, string> = {
+  "!": "Exclamation Mark",
+  "?": "Question Mark",
+  ":": "Colon",
+  "^": "Caret",
+  $: "Dollar",
+  "*": "Asterisk",
+  "<": "Less Than",
+  ">": "Greater Than",
+  "#": "Number Sign",
+  "&": "Ampersand",
+  "%": "Percent",
+  "@": "At",
+  "~": "Tilde",
+  "|": "Vertical Bar",
+  _: "Underscore",
+  '"': "Double Quote",
+  "(": "Left Parenthesis",
+  ")": "Right Parenthesis",
+  "{": "Left Brace",
+  "}": "Right Brace",
+  "§": "Section",
+  "°": "Degree",
+  "´": "Acute Accent",
+  "¨": "Diaeresis",
+  "¸": "Cedilla",
+  "¤": "Currency Sign",
+  "½": "One Half",
+  "²": "Superscript Two",
+  "¡": "Inverted Exclamation Mark",
+  "¿": "Inverted Question Mark",
+  "«": "Left Guillemet",
+  "»": "Right Guillemet",
+  "€": "Euro",
+  "£": "Pound",
+};
+
+/** A layout label read aloud: its name when it has one ("." → "Period", "!" → "Exclamation Mark"). */
+function spokenLabel(label: string): string {
+  return (
+    ownLookup(SPOKEN_KEY_NAMES, label) ?? ownLookup(SPOKEN_LAYOUT_SYMBOLS, label) ?? labelCap(label)
+  );
+}
+
 // The glyphs a literal key cap draws, as the token names the spoken tables use.
 const KEY_CAP_GLYPH_TOKENS: Record<string, string> = {
   "↑": "up",
@@ -458,11 +537,18 @@ export function describeKeyCap(cap: string, isMac: boolean): string {
  * `"Command K, then Command S"` on macOS, `"Ctrl K, then Ctrl S"` elsewhere.
  * Returns `""` for an empty shortcut.
  */
-export function describeChord(shortcut: string, isMac: boolean): string {
+export function describeChord(shortcut: string, isMac: boolean, keyLabels?: KeyLabels): string {
   if (!shortcut || !shortcut.trim()) return "";
   // The same step split the chips use, so what is spoken is what is shown.
   return splitChordSteps(shortcut)
-    .map((tokens) => tokens.map((token) => spokenToken(token, isMac)).join(" "))
+    .map((tokens) =>
+      tokens
+        .map((token) => {
+          const label = layoutLabel(token, keyLabels);
+          return label !== undefined ? spokenLabel(label) : spokenToken(token, isMac);
+        })
+        .join(" ")
+    )
     .join(", then ");
 }
 
@@ -473,8 +559,8 @@ export function describeChord(shortcut: string, isMac: boolean): string {
  * a toast body — so the text form never drifts into a fourth format such as
  * `"⌘+⇧+P"` or `"Option+P"`. Not for accessible names: use `describeChord`.
  */
-export function formatChordText(shortcut: string, isMac: boolean): string {
-  return parseChord(shortcut, isMac)
+export function formatChordText(shortcut: string, isMac: boolean, keyLabels?: KeyLabels): string {
+  return parseChord(shortcut, isMac, keyLabels)
     .map((tokens) => tokens.join(isMac ? "" : "+"))
     .join(", ");
 }
@@ -483,8 +569,9 @@ export function formatChordText(shortcut: string, isMac: boolean): string {
 export function labelWithShortcut(
   label: string,
   shortcut: string | null | undefined,
-  isMac: boolean
+  isMac: boolean,
+  keyLabels?: KeyLabels
 ): string {
-  const text = shortcut ? formatChordText(shortcut, isMac) : "";
+  const text = shortcut ? formatChordText(shortcut, isMac, keyLabels) : "";
   return text ? `${label} (${text})` : label;
 }

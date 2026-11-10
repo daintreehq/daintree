@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ChevronsUpDown, Plus, RotateCw, SquareTerminal, X } from "lucide-react";
+import { ChevronsUpDown, Eraser, Plus, SquareTerminal, X } from "lucide-react";
 import { SpinnerCircle, InteractingCircle } from "@/components/icons";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getAgentConfig } from "@/config/agents";
@@ -22,7 +22,11 @@ import { pluralize } from "@/lib/pluralize";
 import type { AgentState } from "@/types";
 import { STATE_COLORS, STATE_ICONS, STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
-import { NewSessionWithAgentLabel } from "./NewSessionWithAgentLabel";
+import {
+  NewSessionWithAgentLabel,
+  SessionCeilingReason,
+  announceSessionCeiling,
+} from "./NewSessionWithAgentLabel";
 
 /**
  * The states the header's scope switch marks on the scope that is off screen: work
@@ -161,7 +165,7 @@ export interface HelpSessionTab {
   agentId?: string | null;
   /**
    * The lane has a live terminal and agent, or is the paused lane on screen — the
-   * header's own gate for "Restart conversation".
+   * header's own gate for "Clear conversation".
    */
   canRestart?: boolean;
   /** A terminal and an agent are bound, so a lane at its prompt reads as ready. */
@@ -296,16 +300,20 @@ export function HelpSessionTabs({
   // One column per kind of leading glyph across every row, so titles share a left edge
   // whether or not their lane is busy.
   const stateColumn = tabs.some((t) => laneDisplayState(t) !== undefined);
-  const capReason = (
-    <span className="sr-only">, {MAX_ASSISTANT_SLOTS} sessions is the maximum for one project</span>
-  );
+  const ceilingParks =
+    atLimit &&
+    ((!!onOpenSession && !canOpenSession) || (hasAgentItems && !canOpenSessionWithAgent));
+  const handleMenuOpenChange = (open: boolean) => {
+    setIsMenuOpen(open);
+    if (open && ceilingParks) announceSessionCeiling();
+  };
 
   return (
     <div
       data-session-strip=""
       className="flex min-w-0 shrink-0 items-center px-1.5 py-1 border-b border-border-default"
     >
-      <DropdownMenu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
+      <DropdownMenu open={isMenuOpen} onOpenChange={handleMenuOpenChange}>
         <Tooltip open={hasTip && !isMenuOpen ? undefined : false}>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
@@ -477,12 +485,8 @@ export function HelpSessionTabs({
                 <Plus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 New session
               </span>
-              {/* A disabled item can't carry a tooltip, so the reason sits on the row. */}
               {atLimit && !canOpenSession && (
-                <>
-                  <DropdownMenuMeta>{`${tabs.length} of ${MAX_ASSISTANT_SLOTS} open`}</DropdownMenuMeta>
-                  {capReason}
-                </>
+                <SessionCeilingReason open={tabs.length} meta={DropdownMenuMeta} />
               )}
             </DropdownMenuItem>
           )}
@@ -494,7 +498,7 @@ export function HelpSessionTabs({
                 onSelect={handOff(() => onOpenSessionWithAgent?.(agentId))}
               >
                 <NewSessionWithAgentLabel agentId={agentId} />
-                {atLimit && !canOpenSessionWithAgent && capReason}
+                {atLimit && !canOpenSessionWithAgent && <SessionCeilingReason open={tabs.length} />}
               </DropdownMenuItem>
             ))}
           <DropdownMenuSeparator />
@@ -502,8 +506,8 @@ export function HelpSessionTabs({
               header's overflow item is. */}
           {canRestart && (
             <DropdownMenuItem destructive onSelect={() => onRestart?.(activeTab.slot)}>
-              <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-              Restart conversation
+              <Eraser data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              Clear conversation
             </DropdownMenuItem>
           )}
           <DropdownMenuItem onSelect={() => onClose(activeTab.slot)}>

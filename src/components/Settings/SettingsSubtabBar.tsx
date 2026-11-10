@@ -47,7 +47,7 @@ export function SettingsSubtabBar({
   if (subtabs.length === 0) return null;
 
   return (
-    <div className="border-b border-border-default mb-6">
+    <div className="border-b border-divider mb-6">
       <UnderlineTabs
         tabs={subtabs}
         activeId={activeId}

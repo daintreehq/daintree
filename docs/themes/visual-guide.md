@@ -229,13 +229,13 @@ The grip rests on `bg-selection-outline`, the neutral indicator ink the theme co
 
 The content grid fills the remaining space to the right of the sidebar. Its background is `surface-grid` — the darkest surface tier in dark themes, the lightest gray base in light themes.
 
-However, the empty grid area (when no panels are open) uses a special override:
+However, the panel grid element itself, which is both the empty workbench and the gutter between open panels, paints through an override:
 
 ```css
 --color-grid-bg: var(--panel-grid-bg, var(--terminal-grid-bg, var(--theme-surface-grid)));
 ```
 
-Themes can set `panel-grid-bg` to make the empty grid lighter than the structural grid surface. **Bondi sets this to `#FFFFFF`** — pure white, so the empty state feels bright and airy rather than gray. All light themes now have this extension. The legacy `terminal-grid-bg` variable is still supported as a fallback for custom themes.
+Themes can set `panel-grid-bg` to make the empty grid lighter than the structural grid surface. The same element is the gutter between panes, so the value is a plain colour that stays below `surface-panel`. Bondi, Svalbard and Serengeti set it to their sidebar tone and Hokkaido to its toolbar tone: at their mid-tone `surfaces.grid`, the canvas home's unfilled chips and recipe cards, whose only edge is `border-default`, barely drew. The legacy `terminal-grid-bg` variable is still supported as a fallback for custom themes.
 
 ### Panel Arrangement
 
@@ -268,7 +268,7 @@ When no panels are open, the grid shows a welcome/dashboard view:
 +-----------------------------------------------+
 ```
 
-Quick action buttons use `accent-primary` for the background and `accent-foreground` for text.
+The quick-launch chips and recipe cards are resting `ChoiceCard`s: no fill, with `border-default` as their only edge until hover adds the `overlay-subtle` wash and `border-strong`. That edge is what `panel-grid-bg` has to leave room for.
 
 ---
 

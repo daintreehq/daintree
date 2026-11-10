@@ -1,30 +1,36 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import type { PtyPanelData } from "@shared/types/panel";
+import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import type { AgentState } from "@/types";
 import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 import { act } from "react";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import {
+  __resetPanelCloseGuardsForTests,
+  registerPanelCloseGuard,
+} from "@/services/panelCloseGuard";
 
 const watchPanelMock = vi.fn();
 const unwatchPanelMock = vi.fn();
 const removePanelMock = vi.fn();
 const restoreBackgroundTerminalMock = vi.fn();
+const restoreBackgroundGroupMock = vi.fn();
 const activateTerminalMock = vi.fn();
 const pingTerminalMock = vi.fn();
 const fireWatchNotificationMock = vi.fn();
 const selectWorktreeMock = vi.fn();
 const trackTerminalFocusMock = vi.fn();
 
-let mockTerminals: PtyPanelData[] = [];
+let mockTerminals: PanelInstance[] = [];
 let mockBackgroundedTerminals = new Map<
   string,
   { groupRestoreId?: string; groupMetadata?: TrashedTerminalGroupMetadata }
 >();
 let mockWatchedPanels = new Set<string>();
+let lastConfirmTitle: React.ReactNode = null;
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
   useBackgroundedTerminals: () => mockTerminals,
@@ -38,22 +44,24 @@ vi.mock("@/hooks/useWorktrees", () => ({
     ]),
 }));
 
-vi.mock("@/store", () => ({
-  usePanelStore: (selector?: (state: unknown) => unknown) => {
-    const state = {
-      backgroundedTerminals: mockBackgroundedTerminals,
-      watchedPanels: mockWatchedPanels,
-      restoreBackgroundTerminal: restoreBackgroundTerminalMock,
-      restoreBackgroundGroup: vi.fn(),
-      activateTerminal: activateTerminalMock,
-      pingTerminal: pingTerminalMock,
-      removePanel: removePanelMock,
-      watchPanel: watchPanelMock,
-      unwatchPanel: unwatchPanelMock,
-    };
-    return selector ? selector(state) : state;
-  },
-}));
+vi.mock("@/store", () => {
+  const getState = () => ({
+    backgroundedTerminals: mockBackgroundedTerminals,
+    watchedPanels: mockWatchedPanels,
+    restoreBackgroundTerminal: restoreBackgroundTerminalMock,
+    restoreBackgroundGroup: restoreBackgroundGroupMock,
+    activateTerminal: activateTerminalMock,
+    pingTerminal: pingTerminalMock,
+    removePanel: removePanelMock,
+    watchPanel: watchPanelMock,
+    unwatchPanel: unwatchPanelMock,
+    panelsById: Object.fromEntries(mockTerminals.map((panel) => [panel.id, panel])),
+  });
+  const usePanelStore = (selector?: (state: unknown) => unknown) =>
+    selector ? selector(getState()) : getState();
+  usePanelStore.getState = getState;
+  return { usePanelStore };
+});
 
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: (selector: (s: unknown) => unknown) =>
@@ -73,13 +81,15 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
 }));
 
 vi.mock("@/utils/terminalChrome", () => ({
-  deriveTerminalChrome: () => ({
+  // As the real one: a registered non-PTY kind names itself, anything else,
+  // an unavailable plugin's kind included, falls through to a terminal's chrome.
+  deriveTerminalChrome: (panel?: { kind?: string }) => ({
     iconId: null,
-    label: "Terminal",
+    label: panel?.kind === "file" ? "File viewer" : "Terminal",
     isAgent: false,
     agentId: null,
     processId: null,
-    runtimeKind: "none",
+    runtimeKind: panel?.kind === "file" ? "panel" : "none",
   }),
 }));
 
@@ -164,20 +174,25 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
     title,
+    description,
     confirmLabel,
     onConfirm,
     onClose,
   }: {
     isOpen: boolean;
     title: React.ReactNode;
+    description: React.ReactNode;
     confirmLabel: string;
     onConfirm: () => void;
     onClose: () => void;
   }) => {
+    // The real dialog keeps drawing these through its exit animation.
+    lastConfirmTitle = title;
     if (!isOpen) return null;
     return (
       <div role="dialog" data-testid="kill-confirm-dialog">
         <div data-testid="confirm-title">{title}</div>
+        <div data-testid="confirm-description">{description}</div>
         <button type="button" onClick={onConfirm}>
           {confirmLabel}
         </button>
@@ -244,6 +259,7 @@ beforeEach(() => {
   unwatchPanelMock.mockReset();
   removePanelMock.mockReset();
   restoreBackgroundTerminalMock.mockReset();
+  restoreBackgroundGroupMock.mockReset();
   activateTerminalMock.mockReset();
   pingTerminalMock.mockReset();
   fireWatchNotificationMock.mockReset();
@@ -255,7 +271,20 @@ beforeEach(() => {
   mockTerminals = [];
   mockBackgroundedTerminals = new Map();
   mockWatchedPanels = new Set();
+  __resetPanelCloseGuardsForTests();
 });
+
+function makeFilePanel(overrides: Record<string, unknown> = {}): PanelInstance {
+  return {
+    id: "f1",
+    kind: "file",
+    title: "notes.md",
+    location: "background",
+    worktreeId: "wt-1",
+    filePath: "/tmp/notes.md",
+    ...overrides,
+  } as PanelInstance;
+}
 
 /** Where the real kill confirm holds focus: inside a backstop-managed dialog. */
 function focusInsideBackstopDialog() {
@@ -671,6 +700,263 @@ describe("BackgroundContainer", () => {
         const target = row.querySelector("[data-dock-row-target]");
         expect(target?.getAttribute("aria-label")).toMatch(/^Restore /);
       }
+    });
+  });
+
+  describe("a panel that isn't a terminal", () => {
+    it("shows the pill and counts it when it's the only backgrounded panel", () => {
+      mockTerminals = [makeFilePanel()];
+      const { container } = render(<BackgroundContainer />);
+      expect(container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe(
+        "true"
+      );
+      expect(screen.getByRole("button", { name: /^Background: 1 panel/ })).toBeTruthy();
+    });
+
+    it("counts alongside terminals, here and in other worktrees", () => {
+      mockTerminals = [
+        makeFilePanel({ id: "f1", worktreeId: "wt-1" }),
+        makeFilePanel({ id: "f2", worktreeId: "wt-2" }),
+        makeTerminal({ id: "t1", worktreeId: "wt-1" }),
+      ];
+      render(<BackgroundContainer />);
+      expect(screen.getByRole("button", { name: /^Background: 3 panels/ })).toBeTruthy();
+      expect(screen.getByText(/^3 panels across 2 worktrees/)).toBeTruthy();
+      expect(screen.getAllByTestId("background-single-item")).toHaveLength(3);
+    });
+
+    it("offers no Watch, which only means something for an agent", () => {
+      mockTerminals = [makeFilePanel()];
+      render(<BackgroundContainer />);
+      expect(screen.queryByTestId("bg-watch-button")).toBeNull();
+      expect(screen.queryByTestId("live-time-ago")).toBeNull();
+    });
+
+    it("keeps Watch on a terminal listed beside it", () => {
+      mockTerminals = [makeFilePanel(), makeTerminal({ id: "t1" })];
+      render(<BackgroundContainer />);
+      expect(screen.getAllByTestId("bg-watch-button")).toHaveLength(1);
+    });
+
+    it("keeps Restore the row's keyboard target without Watch beside it", () => {
+      mockTerminals = [makeFilePanel()];
+      render(<BackgroundContainer />);
+      const target = screen
+        .getByTestId("background-single-item")
+        .querySelector("[data-dock-row-target]");
+      expect(target?.getAttribute("aria-label")).toBe("Restore notes.md");
+    });
+
+    it("is never counted as waiting, whatever the fleet says about its id", () => {
+      mockTerminals = [makeFilePanel()];
+      deliverAsks(["f1"]);
+      render(<BackgroundContainer />);
+      expect(
+        screen.getByRole("button", { name: /^Background: 1 panel/ }).textContent
+      ).not.toContain("waiting");
+    });
+
+    it("falls back to its kind's name, not 'Terminal', when it has no title", () => {
+      mockTerminals = [makeFilePanel({ title: "" })];
+      render(<BackgroundContainer />);
+      expect(screen.getByRole("button", { name: "Restore File viewer" })).toBeTruthy();
+    });
+
+    it("is never called a terminal when an unavailable plugin's panel has no title", () => {
+      mockTerminals = [makeFilePanel({ kind: "acme.gone", title: "" })];
+      render(<BackgroundContainer />);
+      expect(screen.getByRole("button", { name: "Restore Panel" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Remove Panel" })).toBeTruthy();
+    });
+
+    it("restores to its own worktree, as a terminal does", () => {
+      mockTerminals = [makeFilePanel({ worktreeId: "wt-2" })];
+      render(<BackgroundContainer />);
+      fireEvent.click(screen.getByRole("button", { name: "Restore notes.md" }));
+      expect(selectWorktreeMock).toHaveBeenCalledWith("wt-2");
+      expect(trackTerminalFocusMock).toHaveBeenCalledWith("wt-2", "f1");
+      expect(restoreBackgroundTerminalMock).toHaveBeenCalledWith("f1");
+      expect(activateTerminalMock).toHaveBeenCalledWith("f1");
+      expect(pingTerminalMock).toHaveBeenCalledWith("f1");
+    });
+
+    it("says Remove rather than Kill, and removes on confirm", () => {
+      mockTerminals = [makeFilePanel()];
+      render(<BackgroundContainer />);
+      fireEvent.click(screen.getByRole("button", { name: "Remove notes.md" }));
+      expect(screen.getByTestId("confirm-title").textContent).toBe("Remove 'notes.md'?");
+      expect(removePanelMock).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Remove panel" }));
+      expect(removePanelMock).toHaveBeenCalledWith("f1");
+      expect(screen.queryByTestId("kill-confirm-dialog")).toBeNull();
+    });
+
+    it("says the consequence, asks about the row pressed, and holds it through the close", () => {
+      mockTerminals = [
+        makeFilePanel(),
+        makeFilePanel({ id: "f2", title: "todo.md" }),
+        makeTerminal({ id: "t1", title: "claude" }),
+      ];
+      render(<BackgroundContainer />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Remove notes.md" }));
+      expect(screen.getByTestId("confirm-description").textContent).toContain("can't be restored");
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByTestId("kill-confirm-dialog")).toBeNull();
+      expect(lastConfirmTitle).toBe("Remove 'notes.md'?");
+
+      fireEvent.click(screen.getByRole("button", { name: "Remove todo.md" }));
+      expect(screen.getByTestId("confirm-title").textContent).toBe("Remove 'todo.md'?");
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      fireEvent.click(screen.getByRole("button", { name: "Kill claude" }));
+      expect(screen.getByTestId("confirm-title").textContent).toBe("Kill terminal?");
+      expect(screen.getByTestId("confirm-description").textContent).toContain("claude");
+      fireEvent.click(screen.getByRole("button", { name: "Kill terminal" }));
+      expect(removePanelMock).toHaveBeenCalledTimes(1);
+      expect(removePanelMock).toHaveBeenCalledWith("t1");
+    });
+
+    it("keeps a terminal's Kill wording beside it", () => {
+      mockTerminals = [makeFilePanel(), makeTerminal({ id: "t1", title: "claude" })];
+      render(<BackgroundContainer />);
+      fireEvent.click(screen.getByRole("button", { name: "Kill claude" }));
+      expect(screen.getByTestId("confirm-title").textContent).toBe("Kill terminal?");
+      fireEvent.click(screen.getByRole("button", { name: "Kill terminal" }));
+      expect(removePanelMock).toHaveBeenCalledWith("t1");
+    });
+
+    it("keeps a panel with unsaved work when its prompt is cancelled", async () => {
+      const guard = vi.fn(async () => "cancel" as const);
+      registerPanelCloseGuard("f1", guard);
+      mockTerminals = [makeFilePanel()];
+      render(<BackgroundContainer />);
+      fireEvent.click(screen.getByRole("button", { name: "Remove notes.md" }));
+      // The prompt is the confirmation: a second one in front of it asks twice.
+      expect(screen.queryByTestId("kill-confirm-dialog")).toBeNull();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(removePanelMock).not.toHaveBeenCalled();
+    });
+
+    it("removes a panel with unsaved work once its prompt says to", async () => {
+      registerPanelCloseGuard("f1", async () => "proceed");
+      mockTerminals = [makeFilePanel()];
+      render(<BackgroundContainer />);
+      fireEvent.click(screen.getByRole("button", { name: "Remove notes.md" }));
+      await vi.waitFor(() => expect(removePanelMock).toHaveBeenCalledWith("f1"));
+    });
+
+    it("holds the popover open behind the prompt, then lets it go", async () => {
+      let answer!: (verdict: "proceed" | "cancel") => void;
+      const guard = vi.fn(
+        () =>
+          new Promise<"proceed" | "cancel">((resolve) => {
+            answer = resolve;
+          })
+      );
+      registerPanelCloseGuard("f1", guard);
+      mockTerminals = [makeFilePanel()];
+      render(<BackgroundContainer />);
+      fireEvent.click(screen.getByRole("button", { name: "Remove notes.md" }));
+      await vi.waitFor(() => expect(guard).toHaveBeenCalledTimes(1));
+
+      const whileUp = vi.fn();
+      popoverHandlers.onPointerDownOutside?.({ preventDefault: whileUp });
+      expect(whileUp).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        answer("cancel");
+        await Promise.resolve();
+      });
+
+      const afterwards = vi.fn();
+      popoverHandlers.onPointerDownOutside?.({ preventDefault: afterwards });
+      expect(afterwards).not.toHaveBeenCalled();
+    });
+
+    it("leaves a panel another path moved while its prompt was up", async () => {
+      let answer!: (verdict: "proceed" | "cancel") => void;
+      const guard = vi.fn(
+        () =>
+          new Promise<"proceed" | "cancel">((resolve) => {
+            answer = resolve;
+          })
+      );
+      registerPanelCloseGuard("f1", guard);
+      mockTerminals = [makeFilePanel()];
+      render(<BackgroundContainer />);
+      fireEvent.click(screen.getByRole("button", { name: "Remove notes.md" }));
+      await vi.waitFor(() => expect(guard).toHaveBeenCalledTimes(1));
+
+      mockTerminals = [makeFilePanel({ location: "trash" })];
+      await act(async () => {
+        answer("proceed");
+        await Promise.resolve();
+      });
+
+      expect(removePanelMock).not.toHaveBeenCalled();
+    });
+
+    it("asks once when Remove is pressed again while the prompt is up", async () => {
+      let answer!: (verdict: "proceed" | "cancel") => void;
+      const guard = vi.fn(
+        () =>
+          new Promise<"proceed" | "cancel">((resolve) => {
+            answer = resolve;
+          })
+      );
+      registerPanelCloseGuard("f1", guard);
+      mockTerminals = [makeFilePanel()];
+      render(<BackgroundContainer />);
+      const remove = screen.getByRole("button", { name: "Remove notes.md" });
+      fireEvent.click(remove);
+      await vi.waitFor(() => expect(guard).toHaveBeenCalledTimes(1));
+      fireEvent.click(remove);
+      await act(async () => {
+        answer("proceed");
+        await Promise.resolve();
+      });
+      await vi.waitFor(() => expect(removePanelMock).toHaveBeenCalledTimes(1));
+      expect(guard).toHaveBeenCalledTimes(1);
+    });
+
+    it("groups with a terminal it shared tabs with, and restores with it", () => {
+      const groupMetadata: TrashedTerminalGroupMetadata = {
+        panelIds: ["f1", "t1"],
+        activeTabId: "f1",
+        location: "grid",
+        worktreeId: "wt-1",
+      };
+      mockTerminals = [makeFilePanel(), makeTerminal({ id: "t1" })];
+      mockBackgroundedTerminals = new Map([
+        ["f1", { groupRestoreId: "g1", groupMetadata }],
+        ["t1", { groupRestoreId: "g1", groupMetadata }],
+      ]);
+      render(<BackgroundContainer />);
+      expect(screen.getByText(/Tab group \(2 tabs\)/)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Restore all" }));
+      expect(restoreBackgroundGroupMock).toHaveBeenCalledWith("g1");
+      expect(activateTerminalMock).toHaveBeenCalledWith("f1");
+    });
+
+    it("reads a group of non-terminal tabs as one group", () => {
+      const groupMetadata: TrashedTerminalGroupMetadata = {
+        panelIds: ["f1", "f2"],
+        activeTabId: "f2",
+        location: "grid",
+        worktreeId: "wt-1",
+      };
+      mockTerminals = [makeFilePanel({ id: "f1" }), makeFilePanel({ id: "f2", title: "todo.md" })];
+      mockBackgroundedTerminals = new Map([
+        ["f1", { groupRestoreId: "g1", groupMetadata }],
+        ["f2", { groupRestoreId: "g1", groupMetadata }],
+      ]);
+      render(<BackgroundContainer />);
+      expect(screen.getByRole("region", { name: "Group panels" })).toBeTruthy();
+      expect(screen.queryByTestId("bg-watch-button")).toBeNull();
     });
   });
 });

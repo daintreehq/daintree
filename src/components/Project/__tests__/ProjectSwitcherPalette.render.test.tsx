@@ -141,11 +141,15 @@ vi.mock("@/components/ui/popover", () => ({
   PopoverContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+// Tooltip content renders only where a suite opts in, so its text can't leak
+// into the names and text queries everywhere else.
+const tooltipMock = vi.hoisted(() => ({ renderContent: false }));
 vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipContent: () => null,
+  TooltipContent: ({ children }: { children: React.ReactNode }) =>
+    tooltipMock.renderContent ? <span data-testid="tooltip-content">{children}</span> : null,
 }));
 
 vi.mock("@/components/ui/ConfirmDialog", () => ({
@@ -1104,7 +1108,7 @@ describe("ProjectSwitcherPalette modal mode", () => {
     expect(screen.queryByText("Create new folder…")).toBeNull();
   });
 
-  it("shows the Sections hint but not Remove shortcut in modal mode browse footer", () => {
+  it("shows the section-keys hint but not Remove shortcut in modal mode browse footer", () => {
     // On a row elsewhere, as the hook opens: Enter on the current row closes.
     render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} selectedIndex={1} />);
     const footer = screen.getByTestId("palette-footer");
@@ -1113,7 +1117,7 @@ describe("ProjectSwitcherPalette modal mode", () => {
     // Browse spends the rail on band jumps; the right-click rail is for search,
     // where there are no headers to jump between.
     const bandKeys = within(footer).getByTestId("project-switcher-band-keys-hint");
-    expect(bandKeys.textContent).toContain("Sections");
+    expect(bandKeys.textContent).toContain("to jump sections");
     expect(bandKeys.textContent).toMatch(/(Option|Alt) plus up or down arrow/);
     expect(footer.textContent).not.toContain("Right-click for more");
   });
@@ -1541,7 +1545,8 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
 
     // Found through its origin label: the name itself is split by the match
     // emphasis on the query.
-    const nameLine = screen.getByText("· Scratch").parentElement!;
+    const row = document.getElementById("project-option-s1")!;
+    const nameLine = within(row).getByText("Scratch").parentElement!;
     expect(Array.from(nameLine.children).map((el) => el.textContent!.trim())).toEqual([
       "Spike notes",
       "· Scratch",
@@ -1558,7 +1563,8 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     expect(screen.queryByText(/^Opened /)).toBeNull();
     expect(screen.queryByTestId("workspace-status-dot")).toBeNull();
     // Provenance is identity, not status — it survives the collapse.
-    expect(screen.getByText("· Scratch")).toBeTruthy();
+    const row = document.getElementById("project-option-s1")!;
+    expect(within(row).getByText("Scratch").textContent!.trim()).toBe("· Scratch");
   });
 
   // The lone ranked result is also the cursor, so this is the both-at-once
@@ -2414,7 +2420,14 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
     useProjectSettingsStore.setState({ notificationOverridesByProjectId: {} });
   });
 
-  it("marks a project another window owns, in its accessible name", () => {
+  const control = () => screen.queryAllByTestId("project-open-elsewhere-marker");
+  const theControl = () => screen.getByTestId("project-open-elsewhere-marker");
+
+  afterEach(() => {
+    tooltipMock.renderContent = false;
+  });
+
+  it("says a project another window owns in its accessible name", () => {
     render(
       <ProjectSwitcherPalette
         {...modalProps}
@@ -2422,19 +2435,123 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
       />
     );
 
-    const marker = screen.getByTestId("project-open-elsewhere-marker");
-    expect(marker.getAttribute("aria-label")).toBe("Open in another window");
-    // Neutral, never accent — it appears on several rows at once.
-    expect(marker.getAttribute("class") ?? "").not.toMatch(/accent/);
     // The name-computation polyfill trims each node, so the separator survives
-    // as the comma alone (see the muted-bell spec above).
+    // as the comma alone (see the muted-bell spec below).
     expect(screen.getByRole("option", { name: /Payments,\s*Open in another window/ })).toBeTruthy();
   });
 
-  it("marks owners showing the project and still-activating ones the same way", () => {
+  it("puts a go-to-window control at the row's end (#16616)", () => {
+    const onSelect = vi.fn();
+    const onSelectNewWindow = vi.fn();
+    const project = makeProject({ name: "Payments", openInOtherWindow: "foreground" });
     render(
       <ProjectSwitcherPalette
         {...modalProps}
+        onSelect={onSelect}
+        onSelectNewWindow={onSelectNewWindow}
+        results={[project]}
+      />
+    );
+
+    const button = theControl();
+    const option = screen.getByRole("option", { name: /Payments/ });
+    const name = within(option).getByText("Payments");
+    // At the row's end, in its own slot after the name column, not inline beside the name.
+    const slot = Array.from(option.children).find((child) => child.contains(button));
+    expect(slot).toBeDefined();
+    expect(slot!.contains(name)).toBe(false);
+    expect(slot!.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    // Neutral, never accent — several rows can carry it. Kept out of the
+    // option's name, which already says it, and out of the tab order.
+    expect(button.getAttribute("class") ?? "").not.toMatch(/accent/);
+    // Shown on every qualifying row, lit or not: it is also the open-elsewhere mark.
+    expect(button.getAttribute("class") ?? "").not.toMatch(
+      /\binvisible\b|\bopacity-0\b|\bhidden\b/
+    );
+    expect(button.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(button.tabIndex).toBeLessThan(0);
+    expect(button.querySelector("button, a, input, [tabindex]")).toBeNull();
+    expect(screen.queryByRole("option", { name: /Go to window/ })).toBeNull();
+
+    // A mouse press leaves focus in the search input, which drives the list;
+    // a touch press stays live for the row's long-press context menu.
+    expect(fireEvent.pointerDown(button, { pointerType: "mouse" })).toBe(false);
+    expect(fireEvent.pointerDown(button, { pointerType: "touch" })).toBe(true);
+
+    fireEvent.click(button);
+    expect(onSelectNewWindow).toHaveBeenCalledTimes(1);
+    expect(onSelectNewWindow).toHaveBeenCalledWith(project);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("names its action in a tooltip", () => {
+    tooltipMock.renderContent = true;
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        onSelectNewWindow={vi.fn()}
+        results={[makeProject({ name: "Payments", openInOtherWindow: "foreground" })]}
+      />
+    );
+
+    const tip = within(theControl().parentElement!).getByTestId("tooltip-content");
+    expect(tip.textContent).toBe("Go to window");
+  });
+
+  it("goes to the window once on a modifier-click of the control, never through the row", () => {
+    const onSelect = vi.fn();
+    const onSelectNewWindow = vi.fn();
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        onSelect={onSelect}
+        onSelectNewWindow={onSelectNewWindow}
+        results={[makeProject({ name: "Payments", openInOtherWindow: "foreground" })]}
+      />
+    );
+
+    fireEvent.click(theControl(), { metaKey: true, ctrlKey: true });
+    expect(onSelectNewWindow).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("offers no control where the row's menu offers no Go to window", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        onSelectNewWindow={vi.fn()}
+        results={[
+          // This window is already bringing it in front: Enter switches here.
+          makeProject({
+            id: "here",
+            name: "Here",
+            openInOtherWindow: "foreground",
+            isOpenInThisWindow: true,
+          }),
+          // Its live view is cached here, so a new window moves it rather than going anywhere.
+          makeProject({
+            id: "kept",
+            name: "Kept",
+            openInOtherWindow: "activating",
+            isCachedInThisWindow: true,
+          }),
+        ]}
+      />
+    );
+
+    expect(control()).toHaveLength(0);
+    // Still marked at the row's end, without the action.
+    expect(screen.getAllByTestId("project-open-elsewhere-mark")).toHaveLength(2);
+    // Still said: only the control follows the menu's action.
+    expect(screen.getByRole("option", { name: /Here,\s*Open in another window/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /Kept,\s*Open in another window/ })).toBeTruthy();
+  });
+
+  it("offers the control on owners showing the project and still-activating ones alike", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        onSelectNewWindow={vi.fn()}
         results={[
           makeProject({ id: "a", name: "Alpha", openInOtherWindow: "foreground" }),
           makeProject({ id: "b", name: "Beta", openInOtherWindow: "activating" }),
@@ -2442,13 +2559,16 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
       />
     );
 
-    expect(screen.getAllByTestId("project-open-elsewhere-marker")).toHaveLength(2);
+    expect(control()).toHaveLength(2);
+    expect(screen.getByRole("option", { name: /Alpha,\s*Open in another window/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /Beta,\s*Open in another window/ })).toBeTruthy();
   });
 
   it("leaves unowned, locally held, current and missing rows unmarked", () => {
     render(
       <ProjectSwitcherPalette
         {...modalProps}
+        onSelectNewWindow={vi.fn()}
         results={[
           makeProject({ id: "free", name: "Free" }),
           makeProject({ id: "local", name: "Local", isOpenInThisWindow: true }),
@@ -2465,13 +2585,27 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
             id: "gone",
             name: "Gone",
             isMissing: true,
-            openInOtherWindow: "cached",
+            // Owned outright, so only the missing guard keeps it unmarked.
+            openInOtherWindow: "foreground",
           }),
         ]}
       />
     );
 
-    expect(screen.queryByTestId("project-open-elsewhere-marker")).toBeNull();
+    expect(control()).toHaveLength(0);
+    expect(screen.queryByRole("option", { name: /Open in another window/ })).toBeNull();
+  });
+
+  it("still says it where no Go to window action is wired, without a control", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={[makeProject({ name: "Payments", openInOtherWindow: "foreground" })]}
+      />
+    );
+
+    expect(control()).toHaveLength(0);
+    expect(screen.getByRole("option", { name: /Payments,\s*Open in another window/ })).toBeTruthy();
   });
 
   it("keeps the name readable next to the muted bell", () => {

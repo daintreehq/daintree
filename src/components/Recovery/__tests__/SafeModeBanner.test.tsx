@@ -14,6 +14,7 @@ import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SafeModeBanner } from "../SafeModeBanner";
 import { useSafeModeStore } from "@/store/safeModeStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 const resetAndRelaunch = vi.fn();
 const clearQuarantinedPanel = vi.fn();
@@ -216,6 +217,95 @@ describe("SafeModeBanner", () => {
     });
     expect(button.getAttribute("aria-disabled")).toBeNull();
     expect(button.textContent).toMatch(/Restart normally/);
+  });
+
+  describe("when the restart request fails", () => {
+    const confirmButton = () =>
+      within(screen.getByRole("dialog")).getByRole("button", { name: /^Restart normally$/ });
+    const dialogHint = () => within(screen.getByRole("dialog")).queryByTestId("app-dialog-hint");
+
+    async function openAndConfirm() {
+      fireEvent.click(screen.getByRole("button", { name: /Restart normally/i }));
+      await act(async () => {
+        fireEvent.click(confirmButton());
+      });
+    }
+
+    beforeEach(() => {
+      useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+      useSafeModeStore.setState({ safeMode: true });
+    });
+
+    it("says so in the dialog it left open, with the confirm available to retry", async () => {
+      resetAndRelaunch.mockRejectedValueOnce(new Error("EROFS"));
+      render(<SafeModeBanner />);
+      fireEvent.click(screen.getByRole("button", { name: /Restart normally/i }));
+      expect(dialogHint()).toBeNull();
+
+      await act(async () => {
+        fireEvent.click(confirmButton());
+      });
+      expect(dialogHint()?.textContent).toMatch(/Couldn't restart Daintree/);
+      expect(confirmButton().getAttribute("aria-disabled")).toBeNull();
+      expect(
+        within(screen.getByRole("dialog")).getByRole("button", { name: /View logs/ })
+      ).toBeTruthy();
+    });
+
+    it("announces the failure once", async () => {
+      resetAndRelaunch.mockRejectedValueOnce(new Error("EROFS"));
+      render(<SafeModeBanner />);
+      await openAndConfirm();
+      expect(useAnnouncerStore.getState().nextId).toBe(2);
+      expect(useAnnouncerStore.getState().polite?.msg).toMatch(/Couldn't restart Daintree/);
+    });
+
+    it("keeps the line on the banner after the dialog is cancelled", async () => {
+      resetAndRelaunch.mockRejectedValueOnce(new Error("EROFS"));
+      render(<SafeModeBanner />);
+      await openAndConfirm();
+      fireEvent.click(screen.getByRole("button", { name: /Cancel/i }));
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(screen.getByRole("status").textContent).toMatch(/Couldn't restart Daintree/);
+    });
+
+    it("clears the line when the retry starts, and keeps the lock once it is accepted", async () => {
+      resetAndRelaunch.mockRejectedValueOnce(new Error("EROFS"));
+      render(<SafeModeBanner />);
+      await openAndConfirm();
+      expect(dialogHint()).not.toBeNull();
+
+      let accept!: () => void;
+      resetAndRelaunch.mockReturnValueOnce(new Promise<void>((resolve) => (accept = resolve)));
+      await act(async () => {
+        fireEvent.click(confirmButton());
+      });
+      expect(resetAndRelaunch).toHaveBeenCalledTimes(2);
+      expect(dialogHint()).toBeNull();
+      expect(screen.getByRole("status").textContent).not.toMatch(/Couldn't restart Daintree/);
+      expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+
+      await act(async () => accept());
+      expect(dialogHint()).toBeNull();
+      expect(screen.getByRole("status").textContent).not.toMatch(/Couldn't restart Daintree/);
+      // The relaunch is under way: the dialog stays locked and nothing more is said.
+      expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+      expect(useAnnouncerStore.getState().nextId).toBe(2);
+    });
+
+    it("says nothing when the restart is accepted", async () => {
+      let accept!: () => void;
+      resetAndRelaunch.mockReturnValueOnce(new Promise<void>((resolve) => (accept = resolve)));
+      render(<SafeModeBanner />);
+      await openAndConfirm();
+      expect(resetAndRelaunch).toHaveBeenCalledTimes(1);
+      await act(async () => accept());
+      expect(dialogHint()).toBeNull();
+      expect(screen.getByRole("status").textContent).not.toMatch(/Couldn't restart Daintree/);
+      expect(useAnnouncerStore.getState().nextId).toBe(1);
+    });
   });
 
   it("uses role=status without redundant aria-live", () => {

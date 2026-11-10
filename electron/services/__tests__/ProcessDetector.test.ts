@@ -10,8 +10,16 @@ import {
   clearPluginProcessToolRegistryForTests,
   setPluginProcessToolRegistry,
 } from "../../../shared/config/pluginProcessToolRegistry.js";
-import { AGENT_CLI_NAMES } from "../ProcessDetector/registries.js";
-import { AGENT_REGISTRY } from "../../../shared/config/agentRegistry.js";
+import {
+  AGENT_CLI_NAMES,
+  getAgentCliNames,
+  isDetectableAgentId,
+} from "../ProcessDetector/registries.js";
+import { AGENT_REGISTRY, type AgentConfig } from "../../../shared/config/agentRegistry.js";
+import {
+  clearPluginAgentRegistryForTests,
+  setPluginAgentRegistry,
+} from "../../../shared/config/pluginAgentRegistry.js";
 import { buildDetectedCandidate } from "../ProcessDetector/candidateHelpers.js";
 import {
   executablePositionLimit,
@@ -2906,5 +2914,227 @@ describe("plugin-contributed process detections (#11613)", () => {
     for (const name of ["constructor", "toString", "valueOf"]) {
       expect(buildDetectedCandidate(name, undefined, 0), name).toBeNull();
     }
+  });
+});
+
+describe("plugin agents started in a plain terminal (#16469)", () => {
+  function pluginAgent(id: string, executableNames?: string[]): AgentConfig {
+    return {
+      id,
+      name: id,
+      command: id,
+      color: "#3366ff",
+      iconId: "terminal",
+      supportsContextInjection: false,
+      ...(executableNames ? { executableNames } : {}),
+    };
+  }
+
+  function register(...agents: AgentConfig[]) {
+    setPluginAgentRegistry(Object.fromEntries(agents.map((agent) => [agent.id, agent])));
+  }
+
+  function treeDetector(terminalId: string, nodes: ProcessNode[]) {
+    const cache = createCacheMock();
+    cache.setChildren(100, nodes);
+    const callback = vi.fn();
+    const detector = new ProcessDetector(terminalId, Date.now(), 100, callback, cache as never);
+    return { cache, callback, detector };
+  }
+
+  const agentCalls = (callback: ReturnType<typeof vi.fn>, agentType: string) =>
+    callback.mock.calls.filter(([result]) => result.agentType === agentType);
+
+  beforeEach(() => {
+    clearPluginAgentRegistryForTests();
+  });
+
+  afterEach(() => {
+    clearPluginAgentRegistryForTests();
+  });
+
+  it("promotes the plugin agent whose executable runs in the tree", () => {
+    const before = treeDetector("t-pi-before", [{ pid: 200, comm: "pi", command: "pi" }]);
+    before.detector.start();
+    before.cache.emitRefresh();
+    expect(agentCalls(before.callback, "pi")).toHaveLength(0);
+    before.detector.stop();
+
+    register(pluginAgent("pi", ["pi"]));
+
+    const after = treeDetector("t-pi-after", [{ pid: 200, comm: "pi", command: "pi" }]);
+    after.detector.start();
+    after.cache.emitRefresh();
+    expect(after.callback).toHaveBeenCalledWith(
+      expect.objectContaining({ detectionState: "agent", agentType: "pi" }),
+      expect.any(Number)
+    );
+    after.detector.stop();
+  });
+
+  it("resolves a typed command through the launchers the parser looks past", () => {
+    register(pluginAgent("pi", ["pi"]), pluginAgent("mini", ["mini", "mini-swe-agent"]));
+
+    expect(detectCommandIdentity("pi --model fast")?.agentType).toBe("pi");
+    expect(detectCommandIdentity("npx pi")?.agentType).toBe("pi");
+    expect(detectCommandIdentity("mise exec -- pi")?.agentType).toBe("pi");
+    expect(detectCommandIdentity("env FOO=1 pi")?.agentType).toBe("pi");
+    expect(detectCommandIdentity("uvx mini-swe-agent")?.agentType).toBe("mini");
+    expect(detectCommandIdentity("/usr/local/bin/mini task")?.agentType).toBe("mini");
+  });
+
+  it("never promotes from an argument that only names the agent", () => {
+    register(pluginAgent("pi", ["pi"]));
+
+    expect(detectCommandIdentity("cat pi")?.agentType).toBeUndefined();
+    expect(detectCommandIdentity("git show HEAD:pi")?.agentType).toBeUndefined();
+    expect(buildDetectedCandidate("vim", "vim pi", 0)?.agentType).toBeUndefined();
+  });
+
+  it("matches only declared names, never the agent's id", () => {
+    register(pluginAgent("pi"));
+
+    expect(detectCommandIdentity("pi")?.agentType).toBeUndefined();
+    expect(isDetectableAgentId("pi")).toBe(false);
+  });
+
+  it("never lets a plugin name shadow a built-in agent or tool", () => {
+    const [builtInName, builtInAgent] = Object.entries(AGENT_CLI_NAMES)[0];
+    const builtInTool = detectCommandIdentity("vite build");
+    expect(builtInTool?.processIconId).toBeDefined();
+
+    register(pluginAgent("shadow", [builtInName, "vite"]));
+
+    expect(detectCommandIdentity(builtInName)?.agentType).toBe(builtInAgent);
+    expect(detectCommandIdentity("vite build")).toEqual(builtInTool);
+    expect(isDetectableAgentId("shadow")).toBe(false);
+  });
+
+  it("leaves a name two agents claim to neither", () => {
+    // Main already strips contested names; the pty-host keeps the invariant
+    // for any snapshot that reaches it without that step.
+    register(pluginAgent("pi", ["pi"]), pluginAgent("other-pi", ["pi", "other"]));
+
+    expect(detectCommandIdentity("pi")?.agentType).toBeUndefined();
+    expect(detectCommandIdentity("other")?.agentType).toBe("other-pi");
+    expect(isDetectableAgentId("pi")).toBe(false);
+  });
+
+  it("is the built-in map itself while no plugin agent claims a name", () => {
+    expect(getAgentCliNames()).toBe(AGENT_CLI_NAMES);
+    register(pluginAgent("pi"));
+    expect(getAgentCliNames()).toBe(AGENT_CLI_NAMES);
+  });
+
+  it("drops revoked evidence so a still-running process can't re-promote", () => {
+    register(pluginAgent("pi", ["pi"]));
+    const { cache, callback, detector } = treeDetector("t-pi-revoke", [
+      { pid: 200, comm: "pi", command: "pi" },
+    ]);
+    detector.start();
+    cache.emitRefresh();
+    expect(detector.getLastDetected()).toBe("pi");
+
+    setPluginAgentRegistry({});
+    expect(detector.dropRevokedAgentEvidence()).toBe(true);
+    expect(detector.getLastDetected()).toBeNull();
+    // Nothing left to drop on a second sweep.
+    expect(detector.dropRevokedAgentEvidence()).toBe(false);
+
+    callback.mockClear();
+    cache.emitRefresh();
+    cache.emitRefresh();
+    expect(agentCalls(callback, "pi")).toHaveLength(0);
+    expect(detector.getLastDetected()).toBeNull();
+
+    // Registered again, the same process needs fresh confirmation, not the
+    // evidence it had before.
+    register(pluginAgent("pi", ["pi"]));
+    cache.emitRefresh();
+    expect(detector.getLastDetected()).toBeNull();
+    cache.emitRefresh();
+    expect(detector.getLastDetected()).toBe("pi");
+    detector.stop();
+  });
+
+  it("forgets a pending confirmation for a revoked agent", () => {
+    register(pluginAgent("pi", ["pi"]));
+    const { cache, detector } = treeDetector("t-pi-pending", [
+      { pid: 200, comm: "pi", command: "pi" },
+    ]);
+    // One pass: a candidate one confirmation short of committing.
+    detector.start();
+    expect(detector.getLastDetected()).toBeNull();
+
+    setPluginAgentRegistry({});
+    expect(detector.dropRevokedAgentEvidence()).toBe(true);
+
+    // Registered again at once: had the pending pass survived, this second
+    // pass would commit it.
+    register(pluginAgent("pi", ["pi"]));
+    cache.emitRefresh();
+    expect(detector.getLastDetected()).toBeNull();
+    cache.emitRefresh();
+    expect(detector.getLastDetected()).toBe("pi");
+    detector.stop();
+  });
+
+  it("drops typed-command evidence for a revoked agent so it can't come back", () => {
+    register(pluginAgent("pi", ["pi"]));
+    const { cache, callback, detector } = treeDetector("t-pi-shell", []);
+    detector.start();
+    const identity = detectCommandIdentity("pi")!;
+    expect(identity.agentType).toBe("pi");
+
+    detector.injectShellCommandEvidence(identity, "pi");
+    expect(detector.getLastDetected()).toBe("pi");
+
+    setPluginAgentRegistry({});
+    expect(detector.dropRevokedAgentEvidence()).toBe(true);
+    expect(detector.getLastDetected()).toBeNull();
+
+    // The typed command is still inside its sticky window, and the tree is
+    // empty: only the retained shell evidence could promote on these passes.
+    callback.mockClear();
+    cache.emitRefresh();
+    register(pluginAgent("pi", ["pi"]));
+    cache.emitRefresh();
+    cache.emitRefresh();
+    expect(agentCalls(callback, "pi")).toHaveLength(0);
+    expect(detector.getLastDetected()).toBeNull();
+    detector.stop();
+  });
+
+  it("refuses a typed command resolved before its plugin agent lost that name", () => {
+    register(pluginAgent("pi", ["pi"]));
+    const { callback, detector } = treeDetector("t-pi-stale", []);
+    detector.start();
+    // A capture made before the plugin unloaded, replayed afterwards.
+    const identity = detectCommandIdentity("pi")!;
+    setPluginAgentRegistry({});
+    detector.injectShellCommandEvidence(identity, "pi");
+    expect(agentCalls(callback, "pi")).toHaveLength(0);
+
+    // Its agent still holds another name, but `pi` is now contested.
+    register(pluginAgent("pi", ["pi", "pi-alt"]), pluginAgent("other", ["pi"]));
+    expect(isDetectableAgentId("pi")).toBe(true);
+    detector.injectShellCommandEvidence(identity, "pi");
+    expect(agentCalls(callback, "pi")).toHaveLength(0);
+    expect(detector.getLastDetected()).toBeNull();
+    detector.stop();
+  });
+
+  it("keeps built-in evidence through a registry sweep", () => {
+    const { cache, detector } = treeDetector("t-claude-sweep", [
+      { pid: 200, comm: "claude", command: "claude" },
+    ]);
+    detector.start();
+    cache.emitRefresh();
+    expect(detector.getLastDetected()).toBe("claude");
+
+    setPluginAgentRegistry({});
+    expect(detector.dropRevokedAgentEvidence()).toBe(false);
+    expect(detector.getLastDetected()).toBe("claude");
+    detector.stop();
   });
 });

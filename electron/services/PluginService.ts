@@ -279,12 +279,8 @@ import {
 import { isWorktreeDeleteNotesMuted } from "./plugin/pluginWorktreeDeleteNoteMutes.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import { unregisterWorktreeSetupStepHandlers } from "./worktreeSetupStepRegistry.js";
-import {
-  arbitrateContextProviders,
-  getRegisteredContextProviders,
-  unregisterContextProviderImpls,
-} from "./contextProviderRegistry.js";
-import { getContextProvidersOff } from "./plugin/contextProvidersOff.js";
+import { unregisterContextProviderImpls } from "./contextProviderRegistry.js";
+import { listContextProvidersForProject } from "./plugin/projectContextProviders.js";
 import type { ContextProviderEntry } from "../../shared/types/pluginContextProvider.js";
 import { reconcilePluginThemeSelection } from "./appThemePluginSelection.js";
 import {
@@ -638,6 +634,23 @@ function resolveGlobalConfigDir(): string | null {
 /** Cheap local predicate so the class body does not import the parser twice. */
 function isProjectPluginInstanceKey(pluginId: string): boolean {
   return parseProjectPluginInstanceKey(pluginId) !== null;
+}
+
+/**
+ * The view a hosted kind id names: one mounted outside the grid by its own
+ * location, or a panel view an app-wide instance offers in Canopy. Any other
+ * panel view stays reachable only through its panel kind.
+ */
+function findHostedView(plugin: LoadedPlugin, viewId: string) {
+  const { contributes } = plugin.manifest;
+  const hosted = contributes.views.find((v) => v.id === viewId && v.location !== "panel");
+  if (hosted !== undefined) return hosted;
+  const projectId = plugin.binding?.projectId;
+  if (plugin.origin === "project" || (projectId != null && projectId.length > 0)) return undefined;
+  if (!(contributes.canopyViews ?? []).some((entry) => entry.viewId === viewId)) return undefined;
+  const panel = contributes.panels.find((entry) => entry.id === viewId);
+  if (panel === undefined || panel.hasPty === true) return undefined;
+  return contributes.views.find((v) => v.id === viewId && v.location === "panel");
 }
 
 /**
@@ -3600,9 +3613,7 @@ export class PluginService {
     options: { remoteFrontend?: boolean }
   ): Promise<PluginActivationResult> {
     const plugin = this.plugins.get(pluginId);
-    const view = plugin?.manifest.contributes.views.find(
-      (v) => v.id === viewId && v.location !== "panel"
-    );
+    const view = plugin ? findHostedView(plugin, viewId) : undefined;
     if (!plugin || !view) return { ok: true };
     if (options.remoteFrontend && plugin.manifest.remote === "unsupported") {
       console.warn(
@@ -3633,19 +3644,9 @@ export class PluginService {
     };
   }
 
-  /**
-   * The `@` context providers a view of `projectId` sees (#13795), each with
-   * whether it holds its prefix there, was refused it, or is switched off.
-   */
+  /** The `@` context providers a view of `projectId` sees (#13795, #16382). */
   getContextProvidersForProject(projectId: string | null): ContextProviderEntry[] {
-    const visible = selectContributionsForProject(
-      getRegisteredContextProviders(),
-      (entry) => entry.pluginId,
-      projectId
-    );
-    if (visible.length === 0) return [];
-    const off = getContextProvidersOff();
-    return arbitrateContextProviders(visible, (pluginId) => off.has(pluginId));
+    return listContextProvidersForProject(projectId);
   }
 
   /**

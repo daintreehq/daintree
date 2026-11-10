@@ -767,6 +767,10 @@ export class ActionService {
         // And the preset half (#16047): the change a human was shown, so an
         // injected `contextOverride` cannot claim an approval for another.
         hostApprovedPresetWrite: options?.hostApprovedPresetWrite,
+        // Same unconditional stamp (#16667): it silences an action's own
+        // failure toast, so only the caller that will show the failure itself
+        // may set it, never a `contextOverride`.
+        callerReportsFailure: options?.callerReportsFailure,
         // Same unconditional stamp (#15648): an action that waits on a person
         // gives up at this deadline, so a `contextOverride` must not be able
         // to stretch or plant one.
@@ -983,9 +987,10 @@ export class ActionService {
       this.requiresArgsCache.set(definition.id, requiresArgs);
     }
 
-    // Project the palette behavior onto the manifest. Palette-only — these
-    // fields are read by useActionPalette and ignored by dispatch()/MCP, so
-    // keybindings, context menus, and the MCP tool surface are unaffected. The
+    // Project the palette behavior onto the manifest. These fields are read by
+    // useActionPalette (and the redirect by keybindings and the command HUD,
+    // through resolveInteractiveActionId) and ignored by dispatch()/MCP, so
+    // context menus and the MCP tool surface are unaffected. The
     // `requireContext` predicate fails CLOSED (disabled-with-reason) since
     // that's purely a palette-row state, not a dispatch gate.
     let paletteHidden: true | undefined;

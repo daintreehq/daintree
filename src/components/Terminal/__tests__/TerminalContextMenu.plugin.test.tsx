@@ -4,7 +4,7 @@
  *
  * A plugin-contributed kind matches none of the built-in panel type guards, so
  * before this it fell through to the terminal-flavored default branch and was
- * offered "Duplicate terminal", "Kill terminal" and friends — none of which mean
+ * offered "Duplicate", "Kill terminal…" and friends — none of which mean
  * anything for a plugin view. `hasPty` gated only some of those items, so the
  * mislabeled ones survived.
  */
@@ -92,6 +92,7 @@ vi.mock("@/services/ActionService", () => ({
 
 vi.mock("@/services/TerminalInstanceService", () => {
   const terminalInstanceService = {
+    get: () => undefined,
     getTerminal: () => undefined,
     getSelection: () => "",
   };
@@ -190,17 +191,11 @@ import { load as loadTerminalService } from "@/services/terminal/terminalInstanc
 const PTY_PLUGIN_KIND = "acme.shell";
 const VIEW_PLUGIN_KIND = "acme.dashboard";
 
-// Terminal-only labels that must never reach a plugin panel. "Rename terminal"
-// and "Trash terminal" are the sharp ones: the generic branch offers its own
-// "Rename panel"/"Trash panel", so a regression here shows up as the wrong noun
-// rather than a missing item.
-const TERMINAL_ONLY_LABELS = [
-  "Duplicate terminal",
-  "Rename terminal",
-  "Trash terminal",
-  "Kill terminal",
-  "View terminal info",
-];
+// Terminal-only labels that must never reach a plugin panel. Rename and Trash
+// read the same on both menus, so the branch shows in the rows only one of them
+// draws: the terminal's Kill and info rows against the generic Remove.
+const TERMINAL_ONLY_LABELS = ["Duplicate", "Kill terminal…", "View terminal info"];
+const GENERIC_ONLY_LABEL = "Remove panel";
 
 type Row = "---" | { label: string; disabled: boolean; destructive: boolean };
 
@@ -352,6 +347,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
   it.each(TERMINAL_ONLY_LABELS)("never offers %s on a plugin panel", (label) => {
     renderMenuFor(pluginPanel);
 
+    expect(screen.getByText(GENERIC_ONLY_LABEL)).toBeTruthy();
     expect(screen.queryByText(label)).toBeNull();
   });
 
@@ -474,8 +470,8 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     registerPlayableTour("acme.dashboard-intro");
     renderMenuFor(pluginPanel);
 
-    expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
-    findRow("Dashboard Welcome Tour")!.click();
+    expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard welcome tour" }));
+    findRow("Dashboard welcome tour")!.click();
 
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith(
@@ -493,7 +489,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
 
     registerPlayableTour("acme.dashboard-intro");
     renderMenuFor(pluginPanel);
-    expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
+    expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard welcome tour" }));
   });
 
   it("asks a panel holding unsaved work before removing it", async () => {
@@ -544,9 +540,9 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       worktreeId: "wt-1",
     });
 
-    expect(screen.queryByText("Rename panel")).toBeNull();
-    expect(screen.getByText("Rename terminal")).toBeTruthy();
-    expect(screen.getByText("Duplicate terminal")).toBeTruthy();
+    expect(screen.queryByText(GENERIC_ONLY_LABEL)).toBeNull();
+    // Every label the plugin-panel cases refuse is one this menu draws.
+    for (const label of TERMINAL_ONLY_LABELS) expect(screen.getByText(label)).toBeTruthy();
   });
 
   it("moves to the terminal menu when the plugin registers a PTY kind after mount", () => {
@@ -557,12 +553,13 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       pluginId: "acme",
       worktreeId: "wt-1",
     });
-    expect(screen.getByText("Rename panel")).toBeTruthy();
+    expect(screen.getByText(GENERIC_ONLY_LABEL)).toBeTruthy();
+    expect(screen.queryByText("Kill terminal…")).toBeNull();
 
     act(() => registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true }));
 
-    expect(screen.queryByText("Rename panel")).toBeNull();
-    expect(screen.getByText("Rename terminal")).toBeTruthy();
+    expect(screen.queryByText(GENERIC_ONLY_LABEL)).toBeNull();
+    expect(screen.getByText("Kill terminal…")).toBeTruthy();
   });
 
   it("keeps other plugins' rows above Trash and Kill, so destruction still ends the menu (#15236)", () => {
@@ -581,8 +578,8 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       const labels = rows.map((row) => (row === "---" ? row : row.label));
       const contributed = labels.indexOf("Explain output");
       expect(contributed).toBeGreaterThan(-1);
-      expect(contributed).toBeLessThan(labels.indexOf("Rename terminal"));
-      expect(labels.at(-1)).toBe("Kill terminal");
+      expect(contributed).toBeLessThan(labels.indexOf("Rename"));
+      expect(labels.at(-1)).toBe("Kill terminal…");
       // Its own group: a separator on either side.
       expect(labels[contributed - 1]).toBe("---");
       expect(labels[contributed + 1]).toBe("---");
@@ -605,11 +602,11 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       worktreeId: "wt-1",
     });
 
-    expect(screen.queryByText("Rename panel")).toBeNull();
-    expect(screen.getByText("Rename terminal")).toBeTruthy();
+    expect(screen.queryByText(GENERIC_ONLY_LABEL)).toBeNull();
+    expect(screen.getByText("Kill terminal…")).toBeTruthy();
     // Its kind has no duplicate recipe, so a Duplicate here would throw.
-    expect(screen.queryByText("Duplicate terminal")).toBeNull();
-    expect(screen.queryByText(/Welcome Tour$/)).toBeNull();
+    expect(screen.queryByText("Duplicate")).toBeNull();
+    expect(screen.queryByText(/welcome tour$/i)).toBeNull();
   });
 
   it("offers a tour a built-in kind declares, with no menu changes (#12774)", () => {
@@ -626,7 +623,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
         worktreeId: "wt-1",
       });
 
-      findRow(`${browser.name} Welcome Tour`)!.click();
+      findRow(`${browser.name} welcome tour`)!.click();
 
       expect(dispatch).toHaveBeenCalledWith(
         "help.tour.show",
@@ -655,7 +652,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       worktreeId: "wt-1",
     });
 
-    findRow("Shell Welcome Tour")!.click();
+    findRow("Shell welcome tour")!.click();
 
     expect(dispatch).toHaveBeenCalledWith(
       "help.tour.show",
@@ -883,7 +880,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       });
 
       const labels = menuRows().map((row) => (row === "---" ? row : row.label));
-      expect(labels).toContain("Rename terminal");
+      expect(labels).toContain("Kill terminal…");
       const info = labels.indexOf("View terminal info");
       expect(info).toBeGreaterThan(-1);
       expect(labels.slice(info + 1, info + 3)).toEqual(["Restart server", "Tail logs"]);
@@ -910,8 +907,8 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
         worktreeId: "wt-1",
       });
 
-      expect(screen.getByText("Rename terminal")).toBeTruthy();
-      expect(screen.queryByText("Rename panel")).toBeNull();
+      expect(screen.getByText("Kill terminal…")).toBeTruthy();
+      expect(screen.queryByText(GENERIC_ONLY_LABEL)).toBeNull();
       expect(findRow("Tail logs")).toBeUndefined();
     });
 
@@ -929,7 +926,8 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
         worktreeId: "wt-1",
       });
 
-      expect(screen.getByText("Rename terminal")).toBeTruthy();
+      expect(screen.getByText("Kill terminal…")).toBeTruthy();
+      expect(screen.queryByText(GENERIC_ONLY_LABEL)).toBeNull();
       expect(findRow("Tail logs")).toBeDefined();
     });
 

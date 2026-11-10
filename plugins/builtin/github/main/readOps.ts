@@ -1025,18 +1025,36 @@ interface CIRollupPage {
 async function fetchCIRollupPage(
   repo: RepoRef,
   prNumber: number,
-  cursor: string | null
+  cursor: string | null,
+  withIdentity = false
 ): Promise<CIRollupPage | null> {
-  const response = await runQuery(
-    PR_CI_STATUS_QUERY,
-    { owner: repo.owner, repo: repo.repo, number: prNumber, cursor },
-    "PR_CI_STATUS_QUERY",
-    true
-  );
+  const variables: Record<string, unknown> = {
+    owner: repo.owner,
+    repo: repo.repo,
+    number: prNumber,
+    cursor,
+  };
+  if (withIdentity) variables.withIdentity = true;
+
+  let response: GraphQlQueryResponseData;
+  let recoveredFrom: unknown = null;
+  try {
+    response = await runQuery(PR_CI_STATUS_QUERY, variables, "PR_CI_STATUS_QUERY", true);
+  } catch (error) {
+    const partial = withIdentity ? workflowRunOnlyPartialData(error) : null;
+    if (!partial) throw error;
+    response = partial;
+    recoveredFrom = error;
+  }
 
   const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
     Record<string, unknown> | null | undefined;
-  if (!pr) return null;
+  // A recovered response is only trusted to have lost workflow names. If the
+  // PR itself is missing from it, that is a failed read, not "no such PR".
+  if (!pr) {
+    if (recoveredFrom) throw recoveredFrom;
+    return null;
+  }
 
   const commits = pr.commits as
     { nodes?: Array<{ commit?: { oid?: string; statusCheckRollup?: unknown } }> } | undefined;
@@ -1053,6 +1071,15 @@ async function fetchCIRollupPage(
 
   const pageInfo = rollup?.contexts?.pageInfo;
   const nodes = rollup?.contexts?.nodes;
+  if (
+    recoveredFrom &&
+    (!rollup ||
+      !Array.isArray(nodes) ||
+      nodes.some((node) => !node || typeof node !== "object") ||
+      typeof pageInfo?.hasNextPage !== "boolean")
+  ) {
+    throw recoveredFrom;
+  }
   return {
     rollup,
     headOid: typeof commit?.oid === "string" && commit.oid ? commit.oid : null,
@@ -1064,6 +1091,54 @@ async function fetchCIRollupPage(
     // is how a list silently stops at 100.
     hasPageInfo: typeof pageInfo?.hasNextPage === "boolean",
   };
+}
+
+const ROLLUP_NODES_PATH: readonly (string | number)[] = [
+  "repository",
+  "pullRequest",
+  "commits",
+  "nodes",
+  0,
+  "commit",
+  "statusCheckRollup",
+  "contexts",
+  "nodes",
+];
+
+/**
+ * The partial data from a check read whose only errors are on
+ * `checkSuite.workflowRun`, else `null`. That field needs Actions read access a
+ * fine-grained or App token may not have, and GitHub then answers with every
+ * other field intact and `workflowRun: null` beside an error per check run. The
+ * list is still complete, so it is served without workflow names rather than
+ * failing outright. Any other error, or one without a path that pins it under a
+ * check's `workflowRun`, may have nulled something the list depends on, and
+ * stays fatal. `checkSuite` itself is not accepted: it is non-null in GitHub's
+ * schema, so an error there nulls the whole check node.
+ */
+function workflowRunOnlyPartialData(error: unknown): GraphQlQueryResponseData | null {
+  const cause = (error as { cause?: unknown } | null)?.cause as
+    { errors?: unknown; data?: unknown } | null | undefined;
+  if (!cause || typeof cause !== "object") return null;
+  const { errors, data } = cause;
+  if (!Array.isArray(errors) || errors.length === 0) return null;
+  if (!data || typeof data !== "object") return null;
+  return errors.every(isWorkflowRunFieldError) ? (data as GraphQlQueryResponseData) : null;
+}
+
+function isWorkflowRunFieldError(entry: unknown): boolean {
+  const path = (entry as { path?: unknown } | null)?.path;
+  if (!Array.isArray(path)) return false;
+  const base = ROLLUP_NODES_PATH.length;
+  if (path.length <= base + 2) return false;
+  for (let i = 0; i < base; i++) {
+    if (path[i] !== ROLLUP_NODES_PATH[i]) return false;
+  }
+  return (
+    Number.isInteger(path[base]) &&
+    path[base + 1] === "checkSuite" &&
+    path[base + 2] === "workflowRun"
+  );
 }
 
 /**
@@ -1100,7 +1175,7 @@ export async function getChecksImpl(
     let headOid: string | null = null;
 
     for (let page = 0; page < MAX_CHECK_PAGES; page++) {
-      const result: CIRollupPage | null = await fetchCIRollupPage(repo, prNumber, cursor);
+      const result: CIRollupPage | null = await fetchCIRollupPage(repo, prNumber, cursor, true);
       // Only the first page distinguishes "no such PR"; a later page losing the
       // PR means it moved under us, which is a failed traversal, not absence.
       if (!result) {

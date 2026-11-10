@@ -1,15 +1,15 @@
 /**
  * Canopy's local screen reader, run in its own `utilityProcess` child: the
- * downloaded ONNX model and its tokenizer, one screen at a time on the CPU. Out of process because ONNX Runtime can abort in native code, which
+ * ONNX model that ships with Daintree and its tokenizer, one screen at a time on the CPU. Out of process because ONNX Runtime can abort in native code, which
  * here ends this child and never main; and so inference never stalls main's
  * event loop.
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type * as Ort from "onnxruntime-node";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { CANOPY_READER_WEIGHTS } from "./canopyModels.js";
 import {
-  chooseWeightsFile,
   decodeReading,
   encodeScreen,
   isReaderMeta,
@@ -58,12 +58,7 @@ let chain: Promise<void> = Promise.resolve();
 let destroyed = false;
 
 async function load(dir: string): Promise<void> {
-  // An install from before Daintree fetched `config.json` holds the same
-  // contents as `reader.json`.
-  const metaText = await readFile(path.join(dir, "config.json"), "utf8").catch(() =>
-    readFile(path.join(dir, "reader.json"), "utf8")
-  );
-  const meta: unknown = JSON.parse(metaText);
+  const meta: unknown = JSON.parse(await readFile(path.join(dir, "config.json"), "utf8"));
   if (!isReaderMeta(meta)) throw new Error("This model needs a newer version of Daintree");
   const [tokenizerJson, tokenizerConfig] = await Promise.all([
     readFile(path.join(dir, "tokenizer.json"), "utf8").then((t) => JSON.parse(t) as object),
@@ -83,14 +78,7 @@ async function load(dir: string): Promise<void> {
       return id;
     },
   };
-  // The precision recorded beside the files: an install from before INT8 read
-  // right on every CPU may hold FP32 weights alone.
-  const manifest: unknown = await readFile(path.join(dir, "install.json"), "utf8")
-    .then((text) => JSON.parse(text) as unknown)
-    .catch(() => null);
-  const weights = chooseWeightsFile(manifest, await readdir(dir));
-  if (weights === null) throw new Error("The model's weights are missing");
-  const session = await ort.InferenceSession.create(path.join(dir, weights), {
+  const session = await ort.InferenceSession.create(path.join(dir, CANOPY_READER_WEIGHTS), {
     graphOptimizationLevel: "all",
     executionMode: "sequential",
     // Two threads: measured fastest on Apple silicon (Light 9 ms, Best 47 ms a
@@ -98,6 +86,14 @@ async function load(dir: string): Promise<void> {
     // with the user's work. Core ML was 3x slower at 6-9x the memory.
     intraOpNumThreads: 2,
     interOpNumThreads: 1,
+    // Memory-pattern planning is built for repeated input shapes, and every
+    // read here has its own (its token and line counts). Left on, the reader's
+    // footprint after 1,000 varying screens came out up to 15 MB higher,
+    // depending on screen order, for identical outputs and read time. The
+    // arena stays: reads ran about 50% slower without it. Measured on macOS
+    // arm64 with the 17M INT8 model and onnxruntime-node 1.31.1; re-measure
+    // when either changes.
+    enableMemPattern: false,
   });
   if (destroyed) {
     await session.release();

@@ -809,7 +809,7 @@ export function ElementPickerDrawer(props: DevPreviewToolSurfaceProps<InspectorC
             action={
               state.issue.recovery ? (
                 <Button
-                  variant="secondary"
+                  variant="outline"
                   size="xs"
                   onClick={() => void controller.recoverFromIssue()}
                 >
@@ -1147,7 +1147,7 @@ function SiteSourceFailure({
           title={copy.title}
           density="compact"
           action={
-            <Button variant="secondary" size="xs" onClick={() => void controller.openWorkspace()}>
+            <Button variant="outline" size="xs" onClick={() => void controller.openWorkspace()}>
               Retry
             </Button>
           }
@@ -1185,7 +1185,7 @@ function SiteSourceFailure({
           title={copy.title}
           density="compact"
           action={
-            <Button variant="secondary" size="xs" onClick={() => void controller.openWorkspace()}>
+            <Button variant="outline" size="xs" onClick={() => void controller.openWorkspace()}>
               Retry
             </Button>
           }

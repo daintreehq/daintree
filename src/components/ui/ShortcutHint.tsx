@@ -5,6 +5,7 @@ import type { ActionId } from "@shared/types/actions";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { describeChord } from "@/lib/kbdShortcut";
+import { useKeyLabels } from "@/lib/keyboardLayout";
 import {
   UI_ENTER_EASING,
   UI_EXIT_EASING,
@@ -52,6 +53,7 @@ function contains(rect: ShortcutHintRect, x: number, y: number): boolean {
 export function ShortcutHint() {
   const activeHint = useStore(shortcutHintStore, (s) => s.activeHint);
   const hide = useStore(shortcutHintStore, (s) => s.hide);
+  const keyLabels = useKeyLabels();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState(SIZE_ESTIMATE);
@@ -162,7 +164,7 @@ export function ShortcutHint() {
   const liveTitle = activeHint
     ? actionService.getTitle(activeHint.actionId as ActionId).trim()
     : "";
-  const spoken = activeHint ? describeChord(activeHint.combo, isMac()) : "";
+  const spoken = activeHint ? describeChord(activeHint.combo, isMac(), keyLabels) : "";
   const liveRegion = (
     <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
       {activeHint ? (liveTitle ? `${liveTitle}: ${spoken}` : `Shortcut: ${spoken}`) : ""}

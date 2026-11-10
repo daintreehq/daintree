@@ -2,6 +2,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { Button } from "@/components/ui/button";
 import { CountBadge } from "@/components/ui/badge";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import {
   APP_SOURCE_LABEL,
   UNKNOWN_PROJECT_LABEL,
@@ -78,7 +79,9 @@ export function ContextSectionHeader({
         // Sentence case, not the uppercase eyebrow the other labels use: this
         // one is a name. Branch names are case-sensitive and uppercasing
         // "feature/refine-inbox" misstates the thing it identifies.
-        className="flex items-center justify-between gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-2xs font-medium text-text-secondary"
+        // `min-h-7` holds the height Mark read gives it, so the list doesn't
+        // jump up under the pointer when that button goes.
+        className="flex min-h-7 items-center justify-between gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-2xs font-medium text-text-secondary"
       >
         <span className="flex min-w-0 items-baseline gap-1.5">
           {/* Two spans so the worktree survives a long project name. As one
@@ -89,10 +92,10 @@ export function ContextSectionHeader({
             className="flex min-w-0 items-baseline text-text-primary"
             title={label}
           >
-            {host ? <span className="shrink-0 truncate">{host}</span> : null}
+            {host ? <span className="min-w-[5ch] truncate">{host}</span> : null}
             {host && (project || worktree) ? (
-              <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
-                ·
+              <span aria-hidden="true" className="shrink-0 px-1">
+                <FactSeparator />
               </span>
             ) : null}
             {/* Both names give way in proportion to their length, each kept to
@@ -101,8 +104,8 @@ export function ContextSectionHeader({
                 the header is the only place the project is said at all. */}
             {project ? <span className="min-w-[5ch] truncate">{project}</span> : null}
             {project && worktree ? (
-              <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
-                ·
+              <span aria-hidden="true" className="shrink-0 px-1">
+                <FactSeparator />
               </span>
             ) : null}
             {worktree ? <span className="min-w-[5ch] truncate">{worktree}</span> : null}
@@ -111,7 +114,7 @@ export function ContextSectionHeader({
                 data-testid="context-section-unavailable"
                 className="shrink-0 pl-1 text-text-secondary"
               >
-                · unavailable
+                <FactSeparator /> unavailable
               </span>
             ) : null}
             {!host && !project && !worktree ? (
@@ -123,7 +126,7 @@ export function ContextSectionHeader({
           <CountBadge label={`${pluralize(count, "notification")}`}>{count}</CountBadge>
           {newCount > 0 && (
             <span data-testid="context-section-new" className="shrink-0 tabular-nums">
-              · {newCount} new
+              <FactSeparator /> {newCount} new
             </span>
           )}
         </span>

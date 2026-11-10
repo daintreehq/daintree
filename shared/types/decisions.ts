@@ -962,11 +962,13 @@ export interface DecisionsSetupUnexpected {
 /**
  * The claim: `recognised` when the relay lists this computer as its owner,
  * unrevoked, under the keys sealed here; `not-recognised` when it answered
- * with another owner or other keys.
+ * with another owner or other keys. `not-connected`: the relay is set up, but
+ * the connection stopped for `problem` (#16605), so nothing could be signed.
  */
 export type DecisionsSetupClaimObservation =
   | { result: "recognised" }
   | { result: "not-recognised" }
+  | { result: "not-connected"; problem: DecisionsConnectionProblem }
   | DecisionsRelayRequestFailure
   | DecisionsSetupUnexpected;
 

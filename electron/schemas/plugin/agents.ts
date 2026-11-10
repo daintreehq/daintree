@@ -12,8 +12,13 @@ import {
 import { LAUNCH_MCP_FORMATS } from "../../../shared/config/launchMcp.js";
 import {
   BINARY_EXEC_SUBCOMMANDS,
+  isLauncherCommandName,
   stripCommandExecutableExtension,
 } from "../../services/ProcessDetector/commandParser.js";
+import { isSafeShellOption } from "../../../shared/utils/shellEscape.js";
+import { AGENT_CLI_NAMES } from "../../services/ProcessDetector/registries.js";
+import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../../shared/config/processToolRegistry.js";
+import type { PluginAgentContribution } from "../../../shared/types/plugin.js";
 import { utf8Length } from "./common.js";
 
 /**
@@ -189,6 +194,48 @@ const RESERVED_PROCESS_TOOL_LAUNCHERS = new Set([
 ]);
 
 /**
+ * A bare executable name as the detector looks it up: the key space of the
+ * built-in `PROCESS_TOOL_REGISTRY` commands and of a plugin agent's
+ * `executableNames`.
+ */
+const ProcessCommandNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(PROCESS_TOOL_COMMAND_PATTERN, {
+    message:
+      "command must be a bare lowercase executable name (letters, digits, dot, dash, underscore)",
+  })
+  .refine((command) => !RESERVED_PROCESS_TOOL_COMMANDS.has(command), {
+    message: "command cannot be a reserved key (__proto__, constructor, prototype)",
+  })
+  // The detector strips launcher/script extensions off a process name before
+  // looking it up, so `acme.exe` or `serve.py` would register under a key
+  // nothing is ever looked up by — a detection that validates and then
+  // silently never fires. Reject the non-canonical form and name the one
+  // that works, rather than rewriting the author's value behind their back.
+  .refine((command) => stripCommandExecutableExtension(command) === command, {
+    message:
+      'command must omit the executable/script extension (write "acme", not "acme.exe" or "acme.py") — detection strips it before matching',
+  })
+  // `npm exec vite` puts the launcher subcommand at argv[1] and the real
+  // binary at argv[2]. A plugin owning `exec` would match first and win the
+  // equal-tier tie by being leftmost, reporting itself for a process it
+  // never launched.
+  .refine((command) => !BINARY_EXEC_SUBCOMMANDS.has(command), {
+    message:
+      "command cannot be a package-manager exec subcommand (exec, dlx, x) — those name the launcher, not a tool",
+  })
+  // Same failure, wider blast radius: a shell or prefix runner sits to the
+  // left of the real binary in argv and above it in the process tree, so a
+  // plugin owning one wins the equal-tier tie for commands it never
+  // launched — every pane, in the `bash` case.
+  .refine((command) => !RESERVED_PROCESS_TOOL_LAUNCHERS.has(command), {
+    message:
+      "command cannot be a shell or launcher wrapper (sh, bash, zsh, cmd, env, sudo, xargs, …) — those name the process that runs a tool, not the tool",
+  });
+
+/**
  * `contributes.processTools` manifest entry (#11613). One command name mapped
  * to the icon a terminal tab shows while that command runs. `iconId` is a
  * generic plugin icon id (`shared/config/pluginIconIds.ts`) — advisory, matching
@@ -200,45 +247,49 @@ const RESERVED_PROCESS_TOOL_LAUNCHERS = new Set([
  */
 export const ProcessToolContributionSchema = z
   .object({
-    command: z
-      .string()
-      .min(1)
-      .max(64)
-      .regex(PROCESS_TOOL_COMMAND_PATTERN, {
-        message:
-          "command must be a bare lowercase executable name (letters, digits, dot, dash, underscore)",
-      })
-      .refine((command) => !RESERVED_PROCESS_TOOL_COMMANDS.has(command), {
-        message: "command cannot be a reserved key (__proto__, constructor, prototype)",
-      })
-      // The detector strips launcher/script extensions off a process name before
-      // looking it up, so `acme.exe` or `serve.py` would register under a key
-      // nothing is ever looked up by — a detection that validates and then
-      // silently never fires. Reject the non-canonical form and name the one
-      // that works, rather than rewriting the author's value behind their back.
-      .refine((command) => stripCommandExecutableExtension(command) === command, {
-        message:
-          'command must omit the executable/script extension (write "acme", not "acme.exe" or "acme.py") — detection strips it before matching',
-      })
-      // `npm exec vite` puts the launcher subcommand at argv[1] and the real
-      // binary at argv[2]. A plugin owning `exec` would match first and win the
-      // equal-tier tie by being leftmost, reporting itself for a process it
-      // never launched.
-      .refine((command) => !BINARY_EXEC_SUBCOMMANDS.has(command), {
-        message:
-          "command cannot be a package-manager exec subcommand (exec, dlx, x) — those name the launcher, not a tool",
-      })
-      // Same failure, wider blast radius: a shell or prefix runner sits to the
-      // left of the real binary in argv and above it in the process tree, so a
-      // plugin owning one wins the equal-tier tie for commands it never
-      // launched — every pane, in the `bash` case.
-      .refine((command) => !RESERVED_PROCESS_TOOL_LAUNCHERS.has(command), {
-        message:
-          "command cannot be a shell or launcher wrapper (sh, bash, zsh, cmd, env, sudo, xargs, …) — those name the process that runs a tool, not the tool",
-      }),
+    command: ProcessCommandNameSchema,
     iconId: z.string().min(1).max(64),
   })
   .strict();
+
+/**
+ * One `contributes.agents[].executableNames` entry (#16469): a process-tool
+ * command name that the command parser also never reads as a launcher. A
+ * process tool may brand `mise` or `npx`; an agent may not, because a
+ * launcher's name says nothing about which program it is running.
+ */
+const AgentExecutableNameSchema = ProcessCommandNameSchema.refine(
+  (name) => !isLauncherCommandName(name),
+  {
+    message:
+      "an agent's executable name cannot be a launcher (npx, uvx, mise, direnv, node, python, …) — it runs another program rather than naming one",
+  }
+);
+
+/** Most names one agent may claim: its CLI and a few aliases, never a catalogue. */
+const MAX_AGENT_EXECUTABLE_NAMES = 16;
+
+/**
+ * The executable names a contributed agent claims (#16469). Declared names are
+ * taken as written (the schema and the manifest-level checks have vetted them).
+ * Without a declaration a bare lowercase `command` claims its own name, the
+ * way a built-in agent's command does, unless that name fails the same rules
+ * or a built-in agent or tool already owns it. A mixed-case command claims
+ * nothing implicitly — on a case-sensitive filesystem `Pi` and `pi` are two
+ * programs — and neither does a plugin-relative `./` command, whose process is
+ * named after its interpreter.
+ */
+export function resolveAgentExecutableNames(
+  agent: Pick<PluginAgentContribution, "command" | "executableNames">
+): string[] {
+  if (agent.executableNames) return [...agent.executableNames];
+  const name = agent.command;
+  if (!AgentExecutableNameSchema.safeParse(name).success) return [];
+  if (Object.hasOwn(AGENT_CLI_NAMES, name) || Object.hasOwn(PROCESS_TOOL_ICON_BY_COMMAND, name)) {
+    return [];
+  }
+  return [name];
+}
 
 /**
  * One `contributes.agents` entry (#9560). `id` and `command` use the shared
@@ -373,6 +424,50 @@ const PluginAgentStaticArgArraySchema = PluginAgentArgArraySchema.refine(
   { message: `Only a session-id resume's args can carry ${SESSION_ID_TOKEN}` }
 );
 
+function holdsSessionIdTokenOnce(args: readonly string[]): boolean {
+  return args.join("\0").split(SESSION_ID_TOKEN).length === 2;
+}
+
+/**
+ * An entry of the flag that assigns a CLI its session id at launch (#16470). A
+ * launch writes an option bare on every shell and quotes anything else, and a
+ * copied or replayed pane loses the flag by matching those bare words, so only
+ * these three forms can always come back off again. A placeholder with no flag
+ * to anchor it would match any word of a stored command, the binary included.
+ */
+const PluginAgentAssignSessionIdArgsSchema = PluginAgentArgArraySchema.min(1)
+  .refine(holdsSessionIdTokenOnce, {
+    message: `assignSessionIdArgs must contain ${SESSION_ID_TOKEN} exactly once`,
+  })
+  .refine(
+    (args) =>
+      args.every(
+        (arg) =>
+          arg === SESSION_ID_TOKEN ||
+          (arg.endsWith(`=${SESSION_ID_TOKEN}`) &&
+            isSafeShellOption(arg.slice(0, -SESSION_ID_TOKEN.length))) ||
+          isSafeShellOption(arg)
+      ),
+    {
+      message: `Each assignSessionIdArgs entry must be an option, --option=${SESSION_ID_TOKEN}, or ${SESSION_ID_TOKEN} on its own`,
+    }
+  )
+  .refine((args) => args[0] !== SESSION_ID_TOKEN, {
+    message: `assignSessionIdArgs needs an option before ${SESSION_ID_TOKEN}`,
+  });
+
+/**
+ * One token of the flag a CLI takes to skip its permission prompts (#16374).
+ * Launches carry it as the agent setting's space-separated bypass string, so a
+ * token holding whitespace would come back as two; and it is a fixed flag, so
+ * no template a launch would expand.
+ */
+const PluginAgentBypassArgSchema = PluginAgentArgSchema.min(1)
+  .refine((arg) => !/\s/.test(arg), { message: "A permission-bypass arg can't contain whitespace" })
+  .refine((arg) => !arg.includes(SESSION_ID_TOKEN) && !arg.includes("${"), {
+    message: `A permission-bypass arg can't carry ${SESSION_ID_TOKEN} or a \${settings:…} template`,
+  });
+
 /** Count the capture groups in a regex source, or `null` when it doesn't compile. */
 function countCaptureGroups(source: string): number | null {
   try {
@@ -390,7 +485,7 @@ function countCaptureGroups(source: string): number | null {
  * `{sessionId}` template stays a string all the way into every process that
  * mirrors the plugin agent snapshot, and is expanded where a resume command is
  * built (`getEffectiveRegistry`). Only the two kinds a plugin CLI has needed are
- * exposed; `named-target` and launch-time id assignment wait for a real case.
+ * exposed; `named-target` waits for a real case.
  */
 export const AgentResumeConfigSchema = z.discriminatedUnion("kind", [
   z
@@ -398,10 +493,10 @@ export const AgentResumeConfigSchema = z.discriminatedUnion("kind", [
       kind: z.literal("session-id"),
       // One occurrence across the whole template, so the id is substituted
       // exactly once whether the token is a whole arg or part of one.
-      args: PluginAgentArgArraySchema.min(1).refine(
-        (args) => args.join("\0").split(SESSION_ID_TOKEN).length === 2,
-        { message: `A session-id resume's args must contain ${SESSION_ID_TOKEN} exactly once` }
-      ),
+      args: PluginAgentArgArraySchema.min(1).refine(holdsSessionIdTokenOnce, {
+        message: `A session-id resume's args must contain ${SESSION_ID_TOKEN} exactly once`,
+      }),
+      assignSessionIdArgs: PluginAgentAssignSessionIdArgsSchema.optional(),
       // Same bounds as a detection pattern, plus the single capture group the
       // teardown scrape reads the id from.
       sessionIdPattern: PluginDetectionPatternSchema.refine(
@@ -433,6 +528,151 @@ export const AgentResumeConfigSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+/**
+ * The Windows roots a declared native path may start from (#16468), lowercase
+ * because Windows reads variable names without regard to case. Each is set by
+ * the system to a fully qualified location. Any other variable could hold
+ * nothing, a drive-relative path (`%HOMEPATH%`) or a network share
+ * (`%LOGONSERVER%`), and discovery checks known locations.
+ */
+const NATIVE_PATH_ENV_ROOTS = new Set([
+  "userprofile",
+  "appdata",
+  "localappdata",
+  "programfiles",
+  "programfiles(x86)",
+  "programdata",
+]);
+
+/**
+ * One directory or file name in a declared native path. The closed set leaves
+ * out separators, so a path can't mix them, and every character a shell, a
+ * `%VAR%` or `${settings:…}` expansion or an NTFS stream would read. The last
+ * character can't be a dot or a space because Win32 strips those, which would
+ * turn `.. ` back into `..`; that also refuses `.`, `..` and an empty name.
+ */
+const NATIVE_PATH_SEGMENT_PATTERN = /^[A-Za-z0-9 ._+@()-]*[A-Za-z0-9_+@()-]$/;
+
+/**
+ * Whether a declared native path is rooted at `~/`, `/` or an allowed `%VAR%\`,
+ * so nothing is ever probed relative to the working directory. Drive letters
+ * and UNC paths aren't among the roots, and `//server` fails on its empty name:
+ * a probe of a share would reach for the network, and a hit would launch from it.
+ */
+function isRootedNativePath(entry: string): boolean {
+  const envRoot = /^%([^%\\/]+)%\\/.exec(entry);
+  if (envRoot) {
+    if (!NATIVE_PATH_ENV_ROOTS.has((envRoot[1] as string).toLowerCase())) return false;
+    return hasOnlySafeSegments(entry.slice(envRoot[0].length), "\\");
+  }
+  if (entry.startsWith("~/")) return hasOnlySafeSegments(entry.slice(2), "/");
+  if (entry.startsWith("/")) return hasOnlySafeSegments(entry.slice(1), "/");
+  return false;
+}
+
+function hasOnlySafeSegments(rest: string, separator: string): boolean {
+  return rest.split(separator).every((segment) => NATIVE_PATH_SEGMENT_PATTERN.test(segment));
+}
+
+const PluginAgentNativePathSchema = z.string().min(1).max(256).refine(isRootedNativePath, {
+  message:
+    "A native path must start at ~/, / or %USERPROFILE%\\, %APPDATA%\\, %LOCALAPPDATA%\\, %ProgramFiles%\\, %ProgramFiles(x86)%\\ or %ProgramData%\\, use one kind of separator, and name only letters, digits, spaces and . _ + @ ( ) -, with no . or .. segment and no name ending in a dot or a space",
+});
+
+/**
+ * `contributes.agents[].packages` (#16468): the two ecosystems discovery can
+ * find an install from, and nothing else. The npm name only switches the
+ * npm-global probe on, and is checked so an author's tag, version or URL fails
+ * loudly instead of reading as accepted. The PyPI name goes into the uv and
+ * pipx paths, so it can't hold a separator, and it must be the normalized form
+ * those tools name their directories by: `Foo_Bar` would validate and then
+ * quietly never be found. Strict so other install metadata stays out, and
+ * neither name ever reaches an install command.
+ */
+export const AgentPackagesContributionSchema = z
+  .object({
+    npm: z
+      .string()
+      .max(214)
+      .regex(/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/, {
+        message: "packages.npm must be a bare npm package name, optionally scoped",
+      })
+      .optional(),
+    pypi: z
+      .string()
+      .max(128)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
+        message:
+          "packages.pypi must be the normalized PyPI name: lowercase letters and digits joined by single hyphens",
+      })
+      .optional(),
+  })
+  .strict()
+  .refine((packages) => packages.npm !== undefined || packages.pypi !== undefined, {
+    message: "packages must name an npm or a pypi package",
+  });
+
+/** The element of a prompt form's args a launch replaces with the prompt. */
+const PROMPT_TOKEN = "{prompt}";
+
+/**
+ * One fixed word of a prompt form. `TerminalSpawnOptionsSchema` refuses a
+ * command holding any control character, so one here is caught at the manifest
+ * rather than on every launch; the form describes argv's shape, so `{prompt}`
+ * is the only thing in it a launch fills in.
+ */
+const PluginAgentPromptFormArgSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  // eslint-disable-next-line no-control-regex
+  .refine((arg) => !/[\x00-\x1F\x7F-\x9F]/.test(arg), {
+    message: "A prompt form's args can't contain control characters",
+  })
+  .refine((arg) => !arg.includes(SESSION_ID_TOKEN) && !arg.includes("${"), {
+    message: `A prompt form's args can't carry ${SESSION_ID_TOKEN} or a \${settings:…} template`,
+  });
+
+/** A subcommand word: a launch swaps it in as is, so it can't be an option or a template. */
+const PluginAgentSubcommandWordSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, {
+    message:
+      "A prompt form's subcommand must be one word of letters, digits, '.', '_' or '-', starting with a letter or digit",
+  });
+
+/**
+ * One launch mode's first-prompt form (#16404), the data a built-in agent
+ * declares in its config. Only a whole `{prompt}` element is replaced, so one
+ * embedded in a longer arg would reach the CLI as literal text.
+ */
+const AgentPromptFormSchema = z
+  .object({
+    args: z
+      .array(PluginAgentPromptFormArgSchema)
+      .min(1)
+      .max(20)
+      .refine(
+        (args) =>
+          args.filter((arg) => arg === PROMPT_TOKEN).length === 1 &&
+          args.every((arg) => arg === PROMPT_TOKEN || !arg.includes(PROMPT_TOKEN)),
+        {
+          message: `A prompt form's args must contain ${PROMPT_TOKEN} exactly once, as a whole arg`,
+        }
+      ),
+    subcommand: z
+      .object({
+        name: PluginAgentSubcommandWordSchema,
+        replaces: PluginAgentSubcommandWordSchema,
+      })
+      .strict()
+      .optional(),
+    caveat: z.enum(["may-be-ignored", "exits-after-reply"]).optional(),
+  })
+  .strict();
+
 export const AgentContributionSchema = z
   .object({
     id: z
@@ -452,11 +692,39 @@ export const AgentContributionSchema = z
     color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
     iconId: z.string().min(1).max(64),
     supportsContextInjection: z.boolean().default(false),
+    nativePaths: z.array(PluginAgentNativePathSchema).min(1).max(16).optional(),
+    packages: AgentPackagesContributionSchema.optional(),
     detection: AgentDetectionConfigSchema.optional(),
     resume: AgentResumeConfigSchema.optional(),
+    // Both modes, as a built-in agent declares them: a launch reads its own.
+    initialPromptForm: z
+      .object({ interactive: AgentPromptFormSchema, headless: AgentPromptFormSchema })
+      .strict()
+      .optional(),
     launchMcp: z
       .object({ format: z.enum(LAUNCH_MCP_FORMATS) })
       .strict()
+      .optional(),
+    // Options only, each with at most one value after it: a bare token can't be
+    // told from another option's value, so it would be stripped out of one.
+    permissionBypassArgs: z
+      .array(PluginAgentBypassArgSchema)
+      .min(1)
+      .max(20)
+      .refine(
+        (args) =>
+          args.every(
+            (arg, index) => arg.startsWith("-") || args[index - 1]?.startsWith("-") === true
+          ),
+        { message: "permissionBypassArgs must be options, each followed by at most one value" }
+      )
+      .optional(),
+    executableNames: z
+      .array(AgentExecutableNameSchema)
+      .max(MAX_AGENT_EXECUTABLE_NAMES)
+      .refine((names) => new Set(names).size === names.length, {
+        message: "executableNames must not repeat a name",
+      })
       .optional(),
   })
   .strict();

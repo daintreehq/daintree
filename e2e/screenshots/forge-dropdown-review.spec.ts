@@ -16,8 +16,9 @@
  *   DAINTREE_SHOT_TAG     optional suffix to keep rounds side by side
  *   DAINTREE_SHOT_THEME   optional theme id (default: the app default)
  *   DAINTREE_SHOT_ONLY    comma-separated step filter
+ *   DAINTREE_SHOT_DIR     optional output directory (absolute)
  *
- * Output: artifacts/forge-shots/<NN-slug>[-tag].png (gitignored).
+ * Output: artifacts/forge-shots/<NN-slug>[-tag].png (gitignored), or DAINTREE_SHOT_DIR.
  */
 
 import { test, type Page, type Locator, type ElectronApplication } from "@playwright/test";
@@ -40,7 +41,9 @@ const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
 /** Comma-separated theme ids to sweep in one session (overrides DAINTREE_SHOT_THEME). */
 const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "").split(",").filter(Boolean);
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
-const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "forge-shots");
+const OUTPUT_DIR = process.env.DAINTREE_SHOT_DIR
+  ? path.resolve(process.env.DAINTREE_SHOT_DIR)
+  : path.resolve(process.cwd(), "artifacts", "forge-shots");
 
 const POLISH_CSS = `
   *, *::before, *::after {
@@ -277,6 +280,46 @@ test("forge dropdown review — issues and pull requests", async () => {
       await page.locator(SEL.github.listPrs).waitFor({ state: "visible", timeout: T_MEDIUM });
       await settle(page, 1200);
       await snap(page, "30-prs-dropdown", panel(page, SEL.github.listPrs));
+      await page.keyboard.press("Escape");
+      await settle(page, 400);
+    });
+
+    // A narrowed view: merged PRs, authored by me. Reached through whichever
+    // control the header offers, so the same step captures before and after.
+    await step("prs-filtered", async () => {
+      await page.locator(SEL.github.statPillPrs).click();
+      await page.locator(SEL.github.listPrs).waitFor({ state: "visible", timeout: T_MEDIUM });
+      await settle(page, 800);
+      const root = panel(page, SEL.github.listPrs);
+      const options = root.getByRole("button", { name: /^View options/ });
+      if ((await options.count()) > 0) {
+        await options.click();
+        await settle(page, 400);
+        await snap(page, "32-prs-view-options-menu");
+        await page.getByRole("menuitemradio", { name: "Merged" }).click();
+        await settle(page, 300);
+        await options.click();
+        await settle(page, 300);
+        await page.getByRole("menuitemradio", { name: "Mine" }).click();
+      } else {
+        await root.getByText("Merged", { exact: true }).click();
+        await settle(page, 300);
+        await root.getByText("Mine", { exact: true }).click();
+      }
+      await settle(page, 1000);
+      await snap(page, "31-prs-filtered", root);
+      // Put the defaults back so the theme sweep below shows the resting panel.
+      if ((await options.count()) > 0) {
+        await options.click();
+        await page.getByRole("menuitemradio", { name: "Open" }).click();
+        await settle(page, 300);
+        await options.click();
+        await page.getByRole("menuitemradio", { name: "All" }).click();
+      } else {
+        await root.getByText("Open", { exact: true }).click();
+        await root.getByText("Mine", { exact: true }).click();
+      }
+      await settle(page, 400);
       await page.keyboard.press("Escape");
       await settle(page, 400);
     });

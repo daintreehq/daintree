@@ -147,7 +147,7 @@ export function PluginGrantSwitch({
             <XCircle className="w-3 h-3 shrink-0 text-status-error" aria-hidden="true" />
             <span className="text-2xs text-text-secondary">{errorText}</span>
             <Button
-              variant="ghost"
+              variant="outline"
               size="xs"
               disabled={busy}
               onClick={() => (unsaved !== null ? save(unsaved) : setReadNonce((n) => n + 1))}

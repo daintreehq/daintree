@@ -77,16 +77,6 @@ async function openQuickSwitcher(window: Page): Promise<void> {
   expect(result.ok, "nav.quickSwitcher dispatch").toBe(true);
 }
 
-/**
- * Open the new-terminal palette via its dedicated event — it has no production
- * keyboard/toolbar trigger (see useAppEventListeners).
- */
-async function openNewTerminalPalette(window: Page): Promise<void> {
-  await window.evaluate(() =>
-    globalThis.window.dispatchEvent(new CustomEvent("daintree:open-new-terminal-palette"))
-  );
-}
-
 /** Opens the panel palette through its real binding (Cmd/Ctrl+N) from the toolbar. */
 async function openPanelPalette(window: Page): Promise<void> {
   const anchor = window.locator(SEL.toolbar.toggleSidebar);
@@ -835,8 +825,8 @@ test.describe("Core: Accessibility and focus", () => {
         const { window } = ctx;
         await ensureWindowFocused(ctx.app);
 
-        await openNewTerminalPalette(window);
-        const dialog = window.locator(SEL.newTerminalPalette.dialog);
+        await openPanelPalette(window);
+        const dialog = window.locator(SEL.panelPalette.dialog);
         await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
         // Structural assertion — unaffected by document.ariaNotify, which can bypass
@@ -849,21 +839,6 @@ test.describe("Core: Accessibility and focus", () => {
             timeout: T_MEDIUM,
           })
           .toBeGreaterThanOrEqual(1);
-      });
-
-      test("new terminal palette exposes a result-count live region", async () => {
-        const { window } = ctx;
-        await ensureWindowFocused(ctx.app);
-
-        await openNewTerminalPalette(window);
-        await expect(window.locator(SEL.newTerminalPalette.dialog)).toBeVisible({
-          timeout: T_MEDIUM,
-        });
-
-        // The new-terminal palette renders a hardcoded "{N} terminal types" status
-        // region (not announcer-driven), so its text is a reliable signal.
-        const liveRegion = window.locator(SEL.newTerminalPalette.liveRegion);
-        await expect(liveRegion).toContainText(/terminal types/, { timeout: T_MEDIUM });
       });
 
       test("reduced motion: palette still opens and closes", async () => {

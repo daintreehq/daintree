@@ -28,7 +28,7 @@ import {
 import type { TerminalLifecycleActionRunId } from "./terminalLifecycleActions.impl";
 
 const RestartOnPresetResultSchema = z.object({
-  terminalId: z.string().describe("The pane, respawned in place."),
+  terminalId: z.string().describe("The panel, respawned in place."),
   agentPresetId: z.string().describe("Preset it now runs on."),
   agentSessionIdCleared: z
     .boolean()
@@ -130,14 +130,14 @@ export function registerTerminalLifecycleActions(
 ): void {
   actions.set("terminal.close", () => ({
     id: "terminal.close",
-    title: "Close terminal",
+    title: "Close panel",
     description:
       "Close a terminal or any other panel, usually to the trash, where it stays briefly recoverable; remove-on-exit and dialog panels are discarded outright. Name the panel: the wrong one discards someone's work. An untracked panel is rejected; the result names what closed.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["trash", "hide", "dismiss", "remove"],
+    keywords: ["trash", "hide", "dismiss", "remove", "close terminal"],
     argsSchema: z
       .object({
         terminalId: z
@@ -208,7 +208,7 @@ export function registerTerminalLifecycleActions(
   // throws if the renderer ever invokes it directly.
   actions.set("terminal.closeOwned", () => ({
     id: "terminal.closeOwned",
-    title: "Close owned terminal",
+    title: "Close owned panel",
     description:
       "Close a panel this session created, usually to the trash, where it stays briefly recoverable. Panels opened by the user, another client or a plugin are refused, as are unknown ids. The result names what closed.",
     category: "terminal",
@@ -254,7 +254,7 @@ export function registerTerminalLifecycleActions(
   // returns success.
   actions.set("terminal.revealOwned", () => ({
     id: "terminal.revealOwned",
-    title: "Reveal owned terminal",
+    title: "Reveal owned panel",
     description:
       "Bring the user to a panel this session created or was handed (right-click > Hand to orchestrator), switching workspace and raising the window if needed. No other panel can be revealed. Use it when the user asked to be taken there, not to report progress.",
     category: "terminal",
@@ -284,12 +284,13 @@ export function registerTerminalLifecycleActions(
 
   actions.set("terminal.trash", () => ({
     id: "terminal.trash",
-    title: "Trash terminal",
-    description: "Move terminal to trash",
+    title: "Trash panel",
+    description: "Move panel to trash",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["trash terminal"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.trash", args, ctx),
@@ -299,7 +300,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.background",
     title: "Send to background",
     description:
-      "Hide a terminal from view while keeping its process alive; a grouped panel takes its group along. A panel not in this view, or one in the trash, an overlay or a dialog, is refused. The result names where the panel is now.",
+      "Hide a panel from view while keeping its process alive; a grouped panel takes its group along. A panel not in this view, or one in the trash, an overlay or a dialog, is refused. The result names where the panel is now.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -314,7 +315,7 @@ export function registerTerminalLifecycleActions(
 
   actions.set("terminal.kill", () => ({
     id: "terminal.kill",
-    title: "Kill terminal",
+    title: "Remove panel",
     description:
       "Permanently destroy a panel of any kind and its process: no trash, no recovery. A panel running an agent session is left alone unless confirmed, and the call then fails. Name the panel explicitly; close it instead when recovery matters.",
     category: "terminal",
@@ -322,7 +323,7 @@ export function registerTerminalLifecycleActions(
     danger: "confirm",
     scope: "renderer",
     dangerRationale: "Permanently kills the PTY process. Scrollback and session state are lost.",
-    keywords: ["terminate", "stop", "remove", "delete"],
+    keywords: ["kill terminal", "terminate", "stop", "remove", "delete"],
     argsSchema: z.object({
       terminalId: z.string().optional(),
       confirmed: z
@@ -338,7 +339,7 @@ export function registerTerminalLifecycleActions(
 
   actions.set("terminal.killBatch", () => ({
     id: "terminal.killBatch",
-    title: "Kill terminals",
+    title: "Remove panels",
     description:
       "Permanently destroy several named panels and their processes at once, with no trash step and no recovery. Raises one confirmation listing every target, each separately deselectable — one prompt for the whole batch rather than one per panel. Reports each id on its own: destroyed, deselected by the approver, already gone, newly busy, or errored.",
     category: "terminal",
@@ -364,7 +365,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restart",
     title: "Restart terminal",
     description:
-      "Restart a terminal's process in place, keeping the pane. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. Fails on a held pane.",
+      "Restart a terminal's process in place, keeping the panel. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. Fails on a held panel.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -391,9 +392,9 @@ export function registerTerminalLifecycleActions(
   // a held pane continues is the user's call (#12434).
   actions.set("terminal.startHeld", () => ({
     id: "terminal.startHeld",
-    title: "Start held pane",
+    title: "Start held panel",
     description:
-      "Start a held pane in place under its id, instead of launching a replacement beside it. Only the conversation its hold recorded can be resumed. Returns once the launch is queued; watch its status before sending.",
+      "Start a held panel in place under its id, instead of launching a replacement beside it. Only the conversation its hold recorded can be resumed. Returns once the launch is queued; watch its status before sending.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -452,7 +453,7 @@ export function registerTerminalLifecycleActions(
     palette: { mode: "hidden" },
     argsSchema: RestartOnAccountArgsSchema,
     resultSchema: z.object({
-      terminalId: z.string().describe("The pane, respawned in place."),
+      terminalId: z.string().describe("The panel, respawned in place."),
       agentAccountId: z
         .string()
         .nullable()
@@ -519,14 +520,14 @@ export function registerTerminalLifecycleActions(
 
   actions.set("terminal.rename", () => ({
     id: "terminal.rename",
-    title: "Rename terminal",
+    title: "Rename panel",
     description:
-      "Set a terminal tab's title, or clear it to the default. Pass the terminal and the title: an omitted title opens a dialog an automated caller cannot answer. Returns the title now shown; `applied` is false when a title the user set by hand kept its place.",
+      "Set a panel's title, or clear it to the default. Pass the panel and the title: an omitted title opens a dialog an automated caller cannot answer. Returns the title now shown; `applied` is false when a title the user set by hand kept its place.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["title", "label", "name", "edit"],
+    keywords: ["title", "label", "name", "edit", "rename terminal"],
     argsSchema: z.object({
       terminalId: z.string().optional(),
       name: z.string().optional().describe("New title; omitted, opens the rename dialog."),
@@ -602,7 +603,6 @@ export function registerTerminalLifecycleActions(
       lastOutputTime: z.number().optional(),
       lastStateChange: z.number().optional(),
       activityTier: z.string().optional(),
-      outputBufferSize: z.number().optional(),
       semanticBufferLines: z.number().optional(),
       restartCount: z.number().optional(),
       agentIncarnation: z.number().int().nonnegative().optional(),
@@ -742,14 +742,14 @@ export function registerTerminalLifecycleActions(
 
   actions.set("terminal.closeAll", () => ({
     id: "terminal.closeAll",
-    title: "Close all terminals",
+    title: "Close all panels",
     description:
       "Close every panel in the active worktree, not just terminals, including the user's shells and other agents' terminals; prefer closing individually. Most go to the trash; remove-on-exit panels are discarded. Internal and dialog panels are spared.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["trash", "hide", "clear", "cleanup"],
+    keywords: ["trash", "hide", "clear", "cleanup", "close all terminals"],
     resultSchema: PanelCloseResultSchema,
     mcpOutputSchema: true,
     // Eager for the same reason as terminal.close: "the active worktree" is
@@ -783,7 +783,7 @@ export function registerTerminalLifecycleActions(
 
   actions.set("terminal.killAll", () => ({
     id: "terminal.killAll",
-    title: "Kill all terminals",
+    title: "Remove all panels in project",
     description:
       "Permanently destroy every panel in the project, across all worktrees and kinds, including trashed and backgrounded, with no trash step and no recovery. It takes the user's own shells and other agents' work with it; only tooling-internal and dialog-hosted panels are spared. While an agent session runs it destroys nothing unless the call is confirmed. Automated callers should never need this.",
     category: "terminal",
@@ -791,8 +791,8 @@ export function registerTerminalLifecycleActions(
     danger: "confirm",
     scope: "renderer",
     dangerRationale:
-      "Permanently kills every user-facing terminal. All scrollback and session state are lost.",
-    keywords: ["terminate", "stop", "remove", "delete"],
+      "Permanently removes every user-facing panel. All scrollback and session state are lost.",
+    keywords: ["kill all terminals", "terminate", "stop", "remove", "delete"],
     argsSchema: z
       .object({
         confirmed: z
@@ -810,7 +810,7 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.restartAll", () => ({
     id: "terminal.restartAll",
     title: "Restart all terminals",
-    description: "Restart all terminals in the active worktree",
+    description: "Restart every terminal in the project",
     category: "terminal",
     kind: "command",
     danger: "confirm",

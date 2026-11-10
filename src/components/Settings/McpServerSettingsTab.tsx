@@ -1,5 +1,6 @@
 import { useState, useEffect, useReducer, useRef } from "react";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -20,6 +21,10 @@ import {
 } from "@/components/Settings/SettingsGroup";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
+import {
+  useSettingsTabFlush,
+  type SettingsFlushFailure,
+} from "@/components/Settings/SettingsFlushRegistry";
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
 import { ErrorRetryRow, InlineErrorRow } from "@/components/Settings/auditLogParts";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
@@ -58,6 +63,8 @@ const EXPORT_FEEDBACK_MS = 2000;
 /** A config copy abandoned because its payload changed while the status was re-read. */
 class StaleCopyError extends Error {}
 const STATUS_LOAD_TIMEOUT_MS = 10_000;
+const MCP_PORT_ROW_ID = "mcp-server-port";
+const MCP_RECORDS_KEPT_ROW_ID = "mcp-audit-records-kept";
 
 const MASKED_KEY = "•".repeat(24);
 
@@ -124,6 +131,8 @@ export function McpServerSettingsTab() {
   const [auditCleared, setAuditCleared] = useState(false);
   const [portError, setPortError] = useState<string | null>(null);
   const [maxRecordsError, setMaxRecordsError] = useState<string | null>(null);
+  const [isApplyingPort, setIsApplyingPort] = useState(false);
+  const [isApplyingMaxRecords, setIsApplyingMaxRecords] = useState(false);
 
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
@@ -415,14 +424,14 @@ export function McpServerSettingsTab() {
     clearConfigCopyFeedback();
   };
 
-  const handlePortSave = async () => {
+  const applyPort = async (): Promise<SettingsFlushFailure | undefined> => {
     try {
       setPortError(null);
       const portValue = portInput.trim();
       const port = portValue === "" ? null : parseInt(portValue, 10);
       if (port !== null && (isNaN(port) || port < 1024 || port > 65535)) {
         setPortError("Enter a port between 1024 and 65535");
-        return;
+        return { landOn: MCP_PORT_ROW_ID };
       }
       const newStatus = await window.electron.mcpServer.setPort(port);
       setStatus(newStatus);
@@ -430,10 +439,32 @@ export function McpServerSettingsTab() {
       clearConfigCopyFeedback();
       setPortInput(newStatus.configuredPort?.toString() ?? "");
       portDirtyRef.current = false;
+      return undefined;
     } catch (err) {
       setPortError(formatErrorMessage(err, "Failed to update port"));
       logError("Failed to update MCP port", err);
+      return { landOn: MCP_PORT_ROW_ID };
     }
+  };
+
+  // A close that lands during an Apply reports that Apply's outcome, not a success
+  // for a write that can still fail.
+  const portApplyRef = useRef<Promise<SettingsFlushFailure | undefined> | null>(null);
+  const handlePortSave = () => {
+    if (!portApplyRef.current) {
+      setIsApplyingPort(true);
+      portApplyRef.current = applyPort().finally(() => {
+        portApplyRef.current = null;
+        setIsApplyingPort(false);
+      });
+    }
+    return portApplyRef.current;
+  };
+
+  const handlePortDiscard = () => {
+    setPortInput(status.configuredPort?.toString() ?? "");
+    portDirtyRef.current = false;
+    setPortError(null);
   };
 
   const confirmRotateApiKey = async () => {
@@ -466,17 +497,16 @@ export function McpServerSettingsTab() {
     try {
       setAuditToggleError(null);
       const next = !auditEnabled;
+      // Capture only: a cap typed but not applied yet stays in its field.
       const cfg = await window.electron.mcpServer.setAuditEnabled(next);
       setAuditEnabled(cfg.enabled);
-      setAuditMaxRecords(cfg.maxRecords);
-      setMaxRecordsInput(cfg.maxRecords.toString());
     } catch (err) {
       setAuditToggleError(formatErrorMessage(err, "Failed to update audit logging"));
       logError("Failed to toggle MCP audit log", err);
     }
   };
 
-  const handleMaxRecordsSave = async () => {
+  const applyMaxRecords = async (): Promise<SettingsFlushFailure | undefined> => {
     const trimmed = maxRecordsInput.trim();
     const parsed = Number.parseInt(trimmed, 10);
     if (
@@ -487,7 +517,7 @@ export function McpServerSettingsTab() {
       setMaxRecordsError(
         `Enter a number between ${MCP_AUDIT_MIN_RECORDS} and ${MCP_AUDIT_MAX_RECORDS}`
       );
-      return;
+      return { landOn: MCP_RECORDS_KEPT_ROW_ID };
     }
     try {
       setMaxRecordsError(null);
@@ -496,10 +526,29 @@ export function McpServerSettingsTab() {
       setAuditMaxRecords(cfg.maxRecords);
       setMaxRecordsInput(cfg.maxRecords.toString());
       await refreshAuditRecords();
+      return undefined;
     } catch (err) {
       setMaxRecordsError(formatErrorMessage(err, "Failed to update audit cap"));
       logError("Failed to update audit cap", err);
+      return { landOn: MCP_RECORDS_KEPT_ROW_ID };
     }
+  };
+
+  const maxRecordsApplyRef = useRef<Promise<SettingsFlushFailure | undefined> | null>(null);
+  const handleMaxRecordsSave = () => {
+    if (!maxRecordsApplyRef.current) {
+      setIsApplyingMaxRecords(true);
+      maxRecordsApplyRef.current = applyMaxRecords().finally(() => {
+        maxRecordsApplyRef.current = null;
+        setIsApplyingMaxRecords(false);
+      });
+    }
+    return maxRecordsApplyRef.current;
+  };
+
+  const handleMaxRecordsDiscard = () => {
+    setMaxRecordsInput(auditMaxRecords.toString());
+    setMaxRecordsError(null);
   };
 
   const confirmClearAuditLog = async () => {
@@ -575,6 +624,30 @@ export function McpServerSettingsTab() {
 
   const portUnchanged = portInput.trim() === (status.configuredPort?.toString() ?? "");
   const maxRecordsUnchanged = maxRecordsInput === auditMaxRecords.toString();
+
+  // Each applies on its own, so a bad port doesn't cost a good cap. Only a close applies
+  // them: a new port drops every connected client and a lower cap deletes records, which
+  // minimizing the window or switching project mustn't do with a half-typed number. The
+  // port row collapses with the server, and a draft it isn't showing can't hold a close.
+  const portPending = status.enabled && !portUnchanged;
+  useSettingsTabFlush(
+    "mcp",
+    (reason) => {
+      if (reason !== "close") return undefined;
+      return portApplyRef.current ?? (portPending ? handlePortSave() : undefined);
+    },
+    portPending || isApplyingPort
+  );
+  useSettingsTabFlush(
+    "mcp",
+    (reason) => {
+      if (reason !== "close") return undefined;
+      return (
+        maxRecordsApplyRef.current ?? (maxRecordsUnchanged ? undefined : handleMaxRecordsSave())
+      );
+    },
+    !maxRecordsUnchanged || isApplyingMaxRecords
+  );
 
   const statusRow = !status.enabled ? null : loading ? (
     showLoading ? (
@@ -670,10 +743,9 @@ export function McpServerSettingsTab() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-xs text-text-primary">{bearer.userAgent}</div>
                       <div className="text-2xs text-text-secondary">
-                        <span className="font-mono">…{bearer.token4LastChars}</span>
-                        {" · "}
-                        {pluralize(bearer.requestsSinceLaunch, "request")}
-                        {" · "}
+                        <span className="font-mono">…{bearer.token4LastChars}</span>{" "}
+                        <FactSeparator /> {pluralize(bearer.requestsSinceLaunch, "request")}{" "}
+                        <FactSeparator />{" "}
                         <TimeAgo timestamp={bearer.lastActiveAt} verbose prefix="active " />
                       </div>
                     </div>
@@ -722,10 +794,8 @@ export function McpServerSettingsTab() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-xs text-text-primary">{bearer.userAgent}</div>
                       <div className="text-2xs text-text-secondary">
-                        {pluralize(bearer.sessionCount, "session")}
-                        {" · "}
-                        {pluralize(bearer.requestsSinceLaunch, "request")}
-                        {" · "}
+                        {pluralize(bearer.sessionCount, "session")} <FactSeparator />{" "}
+                        {pluralize(bearer.requestsSinceLaunch, "request")} <FactSeparator />{" "}
                         <TimeAgo timestamp={bearer.lastActiveAt} verbose prefix="active " />
                       </div>
                     </div>
@@ -844,7 +914,7 @@ export function McpServerSettingsTab() {
               )}
 
               <SettingsRow
-                id="mcp-server-port"
+                id={MCP_PORT_ROW_ID}
                 label="Port"
                 error={portError}
                 description={
@@ -899,6 +969,17 @@ export function McpServerSettingsTab() {
                     >
                       Apply
                     </Button>
+                    {!portUnchanged && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handlePortDiscard}
+                        disabled={isApplyingPort}
+                        aria-label="Discard port"
+                      >
+                        Discard
+                      </Button>
+                    )}
                   </>
                 )}
               />
@@ -931,7 +1012,7 @@ export function McpServerSettingsTab() {
                           onClick={() => setShowApiKey((v) => !v)}
                           className="shrink-0 -mr-1 [&_svg]:size-3.5"
                           aria-label="Show API key"
-                          pressed={showApiKey}
+                          aria-pressed={showApiKey}
                         >
                           {showApiKey ? <EyeOff /> : <Eye />}
                         </Button>
@@ -999,6 +1080,7 @@ export function McpServerSettingsTab() {
             )}
             {auditToggleError && <InlineErrorRow>{auditToggleError}</InlineErrorRow>}
             <SettingsRow
+              id={MCP_RECORDS_KEPT_ROW_ID}
               label="Records kept"
               description={`The oldest are dropped past this limit. ${MCP_AUDIT_MIN_RECORDS}–${MCP_AUDIT_MAX_RECORDS}, default ${MCP_AUDIT_DEFAULT_MAX_RECORDS}.`}
               error={maxRecordsError}
@@ -1033,6 +1115,17 @@ export function McpServerSettingsTab() {
                   >
                     Apply
                   </Button>
+                  {!maxRecordsUnchanged && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleMaxRecordsDiscard}
+                      disabled={isApplyingMaxRecords}
+                      aria-label="Discard max records"
+                    >
+                      Discard
+                    </Button>
+                  )}
                 </>
               )}
             />

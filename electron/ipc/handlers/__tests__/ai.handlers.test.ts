@@ -16,6 +16,7 @@ const addAgentMock = vi.hoisted(() => vi.fn(() => ({ success: true })));
 const updateAgentMock = vi.hoisted(() => vi.fn(() => ({ success: true })));
 const removeAgentMock = vi.hoisted(() => vi.fn(() => ({ success: true })));
 const reloadMock = vi.hoisted(() => vi.fn());
+const invalidateStoreValueCacheMock = vi.hoisted(() => vi.fn());
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const createApplicationMenuMock = vi.hoisted(() => vi.fn());
 const eventsEmitMock = vi.hoisted(() => vi.fn());
@@ -26,6 +27,7 @@ vi.mock("electron", () => ({
 
 vi.mock("../../../store.js", () => ({
   store: storeMock,
+  invalidateStoreValueCache: invalidateStoreValueCacheMock,
 }));
 
 vi.mock("../../../services/AgentHelpService.js", () => ({
@@ -221,38 +223,6 @@ describe("ai handler payload validation", () => {
     );
   });
 
-  it("rejects AGENT_SETTINGS_SET_GLOBAL_INLINE payload that is not a boolean (#10876)", async () => {
-    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE);
-    await expect(handler({} as never, "true" as never)).rejects.toThrow(
-      "Invalid globalUseAltScreen"
-    );
-    await expect(handler({} as never, 1 as never)).rejects.toThrow("Invalid globalUseAltScreen");
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
-  it("writes AGENT_SETTINGS_SET_GLOBAL_INLINE via a dot-path leaf without rewriting the slice (#10876)", async () => {
-    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE);
-    (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) => {
-      if (key === "agentSettings") {
-        return { agents: { codex: { inlineMode: "on" } }, settingsVersion: 1 };
-      }
-      return defaultValue;
-    });
-
-    const result = await handler({} as never, true as never);
-
-    // Dot-path leaf write — never the whole `agentSettings` slice.
-    expect(storeMock.set).toHaveBeenCalledWith("agentSettings.globalUseAltScreen", true);
-    expect(storeMock.set).not.toHaveBeenCalledWith("agentSettings", expect.anything());
-    // Per-agent records are preserved untouched (no inlineMode mutation).
-    expect(result).toEqual(
-      expect.objectContaining({
-        globalUseAltScreen: true,
-        agents: { codex: { inlineMode: "on" } },
-      })
-    );
-  });
-
   it("rejects AGENT_SETTINGS_SET_RESUME_ON_RESTART values it doesn't know (#13509)", async () => {
     const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART);
     for (const value of ["sometimes", true, undefined]) {
@@ -299,6 +269,43 @@ describe("ai handler payload validation", () => {
     expect(written.defaultAgent).toBe(expected);
     expect(written.globalSkipPermissions).toBe(false);
     expect(result.defaultAgent).toBe(expected);
+  });
+
+  it("keeps the plugin bypass history across a full AGENT_SETTINGS_RESET (#16374)", async () => {
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET);
+    const history = { hermes: [["--yolo"]] };
+    (storeMock.get as Mock).mockImplementation((key: string) =>
+      key === "agentSettings"
+        ? {
+            agents: { hermes: { dangerousMode: "on" } },
+            globalSkipPermissions: true,
+            pluginBypassArgHistory: history,
+          }
+        : undefined
+    );
+
+    await handler({} as never);
+
+    const written = (storeMock.set as Mock).mock.calls.find(
+      ([key]) => key === "agentSettings"
+    )?.[1];
+    expect(written.pluginBypassArgHistory).toEqual(history);
+    expect(written.globalSkipPermissions).toBe(false);
+    expect(written.agents.hermes).toBeUndefined();
+  });
+
+  it("writes no plugin bypass history on a reset that had none (#16374)", async () => {
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET);
+    (storeMock.get as Mock).mockImplementation((key: string) =>
+      key === "agentSettings" ? { agents: {} } : undefined
+    );
+
+    await handler({} as never);
+
+    const written = (storeMock.set as Mock).mock.calls.find(
+      ([key]) => key === "agentSettings"
+    )?.[1];
+    expect(Object.hasOwn(written, "pluginBypassArgHistory")).toBe(false);
   });
 
   it("leaves a never-set default unset on a full AGENT_SETTINGS_RESET (#13345)", async () => {
@@ -438,7 +445,10 @@ describe("APP_RELOAD_CONFIG handler", () => {
     const handler = getInvokeHandler(CHANNELS.APP_RELOAD_CONFIG);
     const result = await handler();
 
-    expect(reloadMock).toHaveBeenCalled();
+    expect(invalidateStoreValueCacheMock).toHaveBeenCalledTimes(1);
+    expect(invalidateStoreValueCacheMock.mock.invocationCallOrder[0]).toBeLessThan(
+      reloadMock.mock.invocationCallOrder[0]
+    );
     expect(createApplicationMenuMock).toHaveBeenCalledWith(mainWindow, cliAvailabilityService);
     expect(eventsEmitMock).toHaveBeenCalledWith("sys:config:reload");
     expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.APP_CONFIG_RELOADED);
@@ -500,12 +510,6 @@ describe("agent settings change broadcast (#14700)", () => {
       { agents: { claude: { customFlags: "--after" } } },
     ],
     ["setGlobal", CHANNELS.AGENT_SETTINGS_SET_GLOBAL, true, { globalSkipPermissions: true }],
-    [
-      "setGlobalInline",
-      CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE,
-      true,
-      { globalUseAltScreen: true },
-    ],
     [
       "setResumeOnRestart",
       CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART,

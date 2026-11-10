@@ -83,6 +83,11 @@ export interface CodexQuotaProfile {
   presetNames: string[];
   /** Names of the Codex accounts kept in this home (#16040), in account order. */
   accountNames?: string[];
+  /**
+   * Ids of those same accounts. Names aren't unique, so a choice is matched to
+   * its reading by id (#16407). Absent from a host that predates it.
+   */
+  accountIds?: string[];
   result: CodexQuotaProfileResult;
 }
 
@@ -127,4 +132,48 @@ export interface ClaudeUsageObservation {
   terminalId: string;
   /** Epoch ms the message appeared in the pane. */
   observedAt: number;
+}
+
+/**
+ * A Claude Code usage reading as Settings shows it (#16370): what one pane
+ * showed, with the pane named for display. Never the line, never a path.
+ */
+export interface ClaudeUsageReading {
+  window: ClaudeUsageWindow;
+  statement: ClaudeUsageStatement;
+  usedPercent: number | null;
+  resetsAt: number | null;
+  observedAt: number;
+  terminalId: string;
+  /** The pane's title when its host still knows the pane; null otherwise. */
+  paneTitle: string | null;
+  /** The name of the project the pane is in, when known. */
+  projectName: string | null;
+}
+
+/**
+ * Which login a group of readings belongs to: the folder an account-less
+ * launch uses, a saved account's, a folder neither names (a preset's or a
+ * shell's own `CLAUDE_CONFIG_DIR`), or a pane whose folder couldn't be
+ * resolved. Readings are never moved between kinds.
+ */
+export const CLAUDE_USAGE_ACCOUNT_KINDS = ["default", "account", "other", "unknown"] as const;
+
+export type ClaudeUsageAccountKind = (typeof CLAUDE_USAGE_ACCOUNT_KINDS)[number];
+
+/** One Claude Code config folder's readings. No path crosses to the renderer. */
+export interface ClaudeUsageAccount {
+  /** Opaque and stable for as long as the folder doesn't change. */
+  key: string;
+  kind: ClaudeUsageAccountKind;
+  /** Names of the saved accounts (#16040) whose folder this is, in account order. */
+  accountNames: string[];
+  /**
+   * Ids of those same accounts, so a choice is matched to its readings by id
+   * rather than by a name that may repeat (#16407). Absent from a host that
+   * predates it.
+   */
+  accountIds?: string[];
+  /** Latest per limit, in {@link CLAUDE_USAGE_WINDOWS} order. */
+  readings: ClaudeUsageReading[];
 }

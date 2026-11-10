@@ -149,6 +149,12 @@ export interface ProjectPluginActions {
   /** Turn an installed per-project package on or off in this project. */
   setInstanceEnabled: (pluginId: string, enabled: boolean) => Promise<void>;
   reload: () => Promise<void>;
+  /**
+   * Record a failure that stopped an action before it reached main, such as a
+   * panel read that has to answer before anything unloads, so it shows where
+   * that action's own failures do and offers the same retry.
+   */
+  reportFailure: (attempted: ProjectPluginFailedAction, reason: string) => void;
   clearError: () => void;
   reset: () => void;
 }
@@ -524,6 +530,12 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       } finally {
         set({ reloading: false });
       }
+    },
+
+    reportFailure: (attempted, reason) => {
+      const state = get();
+      if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
+      set({ error: reason, errorSource: { ...attempted, reason } });
     },
 
     clearError: () => set({ error: null, errorSource: null }),

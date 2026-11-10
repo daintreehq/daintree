@@ -227,6 +227,7 @@ export const CORE_TIER_TOOLS = [
  */
 export const FULL_TIER_ADDONS = [
   ACTIONS_LIST_TOOL,
+  "canopy.openWindow",
   "worktree.getCurrent",
   "worktree.setActive",
   "worktree.reviewReadiness",
@@ -247,6 +248,8 @@ export const FULL_TIER_ADDONS = [
   // Resume spawns a pane; the record owns its launch directory (#11908).
   "agentSessionHistory.list",
   "agentSessionHistory.resume",
+  // The same reopen as a pane the caller owns, run in main so it needs no view (#16341).
+  "agent.resumeOwned",
 
   "terminal.new",
   "terminal.inject",

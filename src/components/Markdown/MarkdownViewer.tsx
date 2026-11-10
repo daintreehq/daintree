@@ -1,9 +1,11 @@
-import { forwardRef, lazy, Suspense, useImperativeHandle, useRef } from "react";
+import { forwardRef, lazy, Suspense, useImperativeHandle, useRef, useState } from "react";
 import type { FileRenderMode } from "@shared/types/panel";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
+import { MarkdownFindBar } from "./MarkdownFindBar";
+import { useRenderedFind } from "./useRenderedFind";
 
 // The rendered document pulls react-markdown + remark-gfm; keep that weight
 // out of the first-paint chunk (FilePane is a firstRenderRestore seed).
@@ -34,7 +36,7 @@ const SKELETON_LINES = {
 } satisfies Record<MarkdownFontSize, { bar: string; gap: string; lead: string }>;
 
 export interface MarkdownViewerHandle {
-  /** Opens CodeMirror's find bar; no-op in rendered mode. */
+  /** Opens the find bar: CodeMirror's in source mode, the document's own in rendered mode. */
   openSearch: () => void;
 }
 
@@ -93,13 +95,18 @@ export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerPro
     ref
   ) {
     const codeViewerRef = useRef<CodeViewerHandle>(null);
+    const [documentElement, setDocumentElement] = useState<HTMLDivElement | null>(null);
+    const find = useRenderedFind(viewMode === "source" ? null : documentElement);
 
     useImperativeHandle(
       ref,
       () => ({
-        openSearch: () => codeViewerRef.current?.openSearch(),
+        openSearch: () => {
+          if (viewMode === "source") codeViewerRef.current?.openSearch();
+          else find.open();
+        },
       }),
-      []
+      [viewMode, find]
     );
 
     if (viewMode === "source") {
@@ -119,34 +126,49 @@ export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerPro
     const lines = SKELETON_LINES[fontSize ?? "sm"];
 
     return (
-      <Suspense
-        fallback={
-          // MarkdownDocument.css centres the document in a 48rem reading column,
-          // but that stylesheet ships in the lazy chunk, so the placeholder
-          // restates the column (`max-w-3xl` is 48rem). Without it a maximized
-          // pane's bars run the full width and snap inward on the swap.
-          <div className={cn(DOCUMENT_INSET, "mx-auto max-w-3xl")}>
-            <Skeleton label="Loading markdown">
-              <SkeletonText
-                lines={10}
-                lineHeightClassName={lines.bar}
-                gapClassName={lines.gap}
-                className={lines.lead}
-              />
-            </Skeleton>
+      <>
+        {find.isOpen && (
+          // A sticky row: the bar floats over the top-right corner of whichever
+          // pane scrolls the document and stays there while the document
+          // scrolls beneath it, as the browser panel's bar does. The row keeps
+          // the bar's depth clear above the document, so the top of the
+          // document (a title, a match in it) can always be scrolled out from
+          // under the bar. Chromium's scroll anchoring holds the reader's place
+          // when the row appears or goes away mid-document.
+          <div className="pointer-events-none sticky top-0 z-20 flex h-12 items-start justify-end">
+            <MarkdownFindBar find={find} className="pointer-events-auto mt-2 mr-2" />
           </div>
-        }
-      >
-        <LazyMarkdownDocument
-          content={content}
-          filePath={filePath}
-          rootPath={rootPath}
-          cacheBust={cacheBust}
-          fontSize={fontSize}
-          className={cn(DOCUMENT_INSET, className)}
-          onRendered={onRendered}
-        />
-      </Suspense>
+        )}
+        <Suspense
+          fallback={
+            // MarkdownDocument.css centres the document in a 48rem reading column,
+            // but that stylesheet ships in the lazy chunk, so the placeholder
+            // restates the column (`max-w-3xl` is 48rem). Without it a maximized
+            // pane's bars run the full width and snap inward on the swap.
+            <div className={cn(DOCUMENT_INSET, "mx-auto max-w-3xl")}>
+              <Skeleton label="Loading markdown">
+                <SkeletonText
+                  lines={10}
+                  lineHeightClassName={lines.bar}
+                  gapClassName={lines.gap}
+                  className={lines.lead}
+                />
+              </Skeleton>
+            </div>
+          }
+        >
+          <LazyMarkdownDocument
+            content={content}
+            filePath={filePath}
+            rootPath={rootPath}
+            cacheBust={cacheBust}
+            fontSize={fontSize}
+            className={cn(DOCUMENT_INSET, className)}
+            onRendered={onRendered}
+            documentRef={setDocumentElement}
+          />
+        </Suspense>
+      </>
     );
   }
 );

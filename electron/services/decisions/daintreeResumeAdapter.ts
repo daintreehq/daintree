@@ -76,6 +76,8 @@ const LAUNCH_REFUSALS: Record<AgentSessionPaneRefusal, ResumeFailure> = {
   "spawn-failed": "resume_spawn_failed",
   // Only once delivery stopped, which the adapter throws for first.
   cancelled: "resume_failed",
+  // Only a caller that passes `authorizeSpawn` hears it, and this adapter doesn't.
+  "not-authorized": "resume_failed",
 };
 
 /**

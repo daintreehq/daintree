@@ -26,9 +26,9 @@ paths:
 
 Two sanctioned exceptions:
 
-- A **display-only** launch switch declared as a registry capability with a user-facing setting (`inlineModeFlag`/`altScreenFlag`, `decorations`).
+- A **display-only** launch switch declared as a registry capability, passed as a CLI flag or an environment variable at launch and never through the user's config: one Daintree applies on every launch to keep the agent on the main screen (`inlineModeEnv`), or one behind a user-facing setting (`inlineModeFlag`/`altScreenFlag`, `decorations`).
 - Handing an agent Daintree's **own** MCP servers beside the user's through `capabilities.launchMcp` — additive only, nothing written into the repo or the agent's config dir (`docs/plugins/agent-extensions.md`, "Reaching an agent").
 
 ## Observed state
 
-Agent state comes from passive PTY output heuristics (`AgentStateService`, FSM in `shared/utils/agentFsm.ts`) and is frequently wrong. `running` is a runtime status, not an agent state. The one exception to "observations, not interpretations" is Canopy, the opt-in local-model reader, which may suggest an attention bucket beside the observed state but never replace it (`docs/architecture/agent-state-tracking-strategy.md`, "Canopy").
+Agent state comes from passive PTY output heuristics (`AgentStateService`, FSM in `shared/utils/agentFsm.ts`) and is frequently wrong. `running` is a runtime status, not an agent state. The one exception to "observations, not interpretations" is Canopy, the local-model reader (on by default, and turned off or hidden from Settings), which may suggest an attention bucket beside the observed state but never replace it (`docs/architecture/agent-state-tracking-strategy.md`, "Canopy").

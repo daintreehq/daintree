@@ -1,5 +1,6 @@
 import { useState, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -11,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { ArrowDown, ArrowRight, ChevronRight, Plus, X } from "lucide-react";
+import { ArrowDown, ArrowRight, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   SECTION_LABELS,
@@ -462,12 +463,12 @@ export function DiagnosticsReviewDialog({
                     <div className="w-7 shrink-0">
                       {replacements.length > 1 && (
                         <Button
-                          variant="ghost"
+                          variant="ghost-danger"
                           size="icon-sm"
                           onClick={() => removeReplacement(i)}
                           aria-label={`Remove rule ${i + 1}`}
                         >
-                          <X aria-hidden="true" />
+                          <Trash2 aria-hidden="true" />
                         </Button>
                       )}
                     </div>
@@ -535,7 +536,7 @@ export function DiagnosticsReviewDialog({
               Files in the report
             </h3>
             <p className="text-xs text-text-secondary tabular-nums">
-              {pluralize(files.length, "file")} · {formatBytes(filesBytes)}
+              {pluralize(files.length, "file")} <FactSeparator /> {formatBytes(filesBytes)}
             </p>
           </div>
           <p className="text-xs text-text-secondary">
@@ -570,10 +571,15 @@ export function DiagnosticsReviewDialog({
                 className="text-xs text-text-secondary tabular-nums"
               >
                 {pluralize(previewLines, "line")}
-                {replacementCount > 0 &&
-                  (activeReplacement === null
-                    ? ` · ${replacementCount.toLocaleString()} replaced`
-                    : ` · replacement ${activeReplacement + 1} of ${replacementCount}`)}
+                {replacementCount > 0 && (
+                  <>
+                    {" "}
+                    <FactSeparator />{" "}
+                    {activeReplacement === null
+                      ? `${replacementCount.toLocaleString()} replaced`
+                      : `replacement ${activeReplacement + 1} of ${replacementCount}`}
+                  </>
+                )}
               </p>
               {replacementCount > 0 && (
                 <Button variant="ghost" size="sm" onClick={showNextReplacement}>

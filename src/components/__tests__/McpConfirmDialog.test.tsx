@@ -19,6 +19,7 @@ import type { ActionDanger } from "@shared/types/actions";
 import type { McpBearerIdentity } from "@shared/types/ipc/mcpServer";
 import type { McpConfirmRequester } from "@/store/mcpConfirmStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { WORKTREE_DELETE_BLOCK_COPY } from "@shared/utils/worktreeDeletePreview";
 
 vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
@@ -335,7 +336,7 @@ describe("McpConfirmDialog", () => {
         visibility = "hidden";
         act(() => {
           document.dispatchEvent(new Event("visibilitychange"));
-          useMcpConfirmStore.getState().setPreview("req-preview", ["worktree wt-1"]);
+          useMcpConfirmStore.getState().setPreview("req-preview", { lines: ["worktree wt-1"] });
         });
         await act(async () => {
           await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
@@ -425,7 +426,7 @@ describe("McpConfirmDialog", () => {
           await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS - 5_000);
         });
         act(() => {
-          useMcpConfirmStore.getState().setPreview("req-late-preview", ["M src/app.ts"]);
+          useMcpConfirmStore.getState().setPreview("req-late-preview", { lines: ["M src/app.ts"] });
         });
         await act(async () => {
           await vi.advanceTimersByTimeAsync(5_000);
@@ -775,7 +776,7 @@ describe("McpConfirmDialog", () => {
         screen.getByRole("checkbox", { name: /claude · api/ }).getAttribute("aria-label")
       ).toBe(null);
       expect(screen.getByRole("checkbox", { name: /Agent running/ })).toBeTruthy();
-      expect(screen.getByRole("checkbox", { name: /feature\/x · Terminal/ })).toBeTruthy();
+      expect(screen.getByRole("checkbox", { name: /feature\/x Terminal t2$/ })).toBeTruthy();
     });
 
     it("approves only the rows left checked, in display order", async () => {
@@ -1006,6 +1007,141 @@ describe("McpConfirmDialog", () => {
     expect(screen.queryByLabelText(/to confirm$/)).toBeNull();
   });
 
+  // #16436: the host throws on these before it reads `force`, so the dialog
+  // must not offer an approval, or a typed name, that could only end in a toast.
+  describe("a delete the host refuses outright (#16436)", () => {
+    const HELD_LINES = [
+      "No uncommitted changes in the worktree itself.",
+      "⚠ 1 commit inside submodules is on no remote this clone knows about — the worktree cannot be deleted until it is pushed:",
+      "  a1b2c3d Vendored fix",
+    ];
+
+    it("offers only Cancel, says why, and puts up no typed-name gate", async () => {
+      vi.useFakeTimers();
+      try {
+        // Enqueued carrying a gate as well, so only the dialog stands between
+        // the refusal and a typed-name input; `setPreview` never pairs them.
+        const pending = requestMcpConfirmation({
+          requestId: "req-held",
+          actionId: "worktree.delete",
+          actionTitle: "Delete worktree",
+          actionDescription: "Permanently delete a worktree.",
+          argsSummary: '{"worktreeId":"wt-1","force":true}',
+          danger: "confirm",
+          preview: HELD_LINES,
+          typedNameTarget: "feature/x",
+          worktreeDeleteBlock: "at-risk-commits",
+        });
+        render(<McpConfirmDialog />);
+        // Past the cooldown, which would otherwise disable the button on its own.
+        act(() => {
+          vi.advanceTimersByTime(1200);
+        });
+
+        expect(screen.queryByLabelText(/to confirm$/)).toBeNull();
+        const copy = WORKTREE_DELETE_BLOCK_COPY["at-risk-commits"];
+        expect(screen.getByText(copy.title)).toBeTruthy();
+        expect(screen.getByText(copy.hint)).toBeTruthy();
+        const confirmBtn = screen.getByRole("button", { name: "Delete worktree" });
+        expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
+        // No Retry without a fetch to re-run.
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+        act(() => {
+          fireEvent.click(confirmBtn);
+        });
+        await expectStillPending(pending);
+
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        });
+        await expect(pending).resolves.toEqual({ decision: "rejected" });
+      } finally {
+        vi.runOnlyPendingTimers();
+        vi.useRealTimers();
+      }
+    });
+
+    it("re-checks on Retry, keeps the refusal up while it reads, and reopens approval once it clears", async () => {
+      vi.useFakeTimers();
+      try {
+        const retry = vi.fn();
+        void requestMcpConfirmation(
+          {
+            requestId: "req-retry",
+            actionId: "worktree.delete",
+            actionTitle: "Delete worktree",
+            actionDescription: "Permanently delete a worktree.",
+            argsSummary: '{"worktreeId":"wt-1"}',
+            danger: "confirm",
+            previewPending: true,
+          },
+          undefined,
+          { retryPreview: retry }
+        );
+        render(<McpConfirmDialog />);
+        const held = {
+          lines: ["⚠ Could not finish checking this worktree's submodules."],
+          worktreeDeleteBlock: "unverified" as const,
+        };
+        act(() => {
+          useMcpConfirmStore.getState().setPreview("req-retry", held);
+        });
+        act(() => {
+          vi.advanceTimersByTime(1200);
+        });
+        const title = WORKTREE_DELETE_BLOCK_COPY.unverified.title;
+        expect(screen.getByText(title)).toBeTruthy();
+        const confirmBtn = () => screen.getByRole("button", { name: "Delete worktree" });
+        const pressRetry = () => {
+          const retryBtn = screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement;
+          act(() => {
+            retryBtn.focus();
+            fireEvent.click(retryBtn);
+          });
+        };
+
+        // A re-check that finds the same refusal still says what it found.
+        pressRetry();
+        const beforeAnswer = useAnnouncerStore.getState().polite;
+        act(() => {
+          useMcpConfirmStore.getState().setPreview("req-retry", held);
+        });
+        const stillBlocked = useAnnouncerStore.getState().polite;
+        expect(stillBlocked).not.toBe(beforeAnswer);
+        expect(stillBlocked?.msg).toMatch(/still blocked/);
+        expect(confirmBtn().getAttribute("aria-disabled")).toBe("true");
+
+        pressRetry();
+        expect(retry).toHaveBeenCalledTimes(2);
+        // The refusal stays up while the re-check reads, and approval stays shut.
+        expect(screen.getByText(title)).toBeTruthy();
+        expect(screen.getByText("Checking again")).toBeTruthy();
+        expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(
+          true
+        );
+        expect(confirmBtn().getAttribute("aria-disabled")).toBe("true");
+        // Nothing is announced until the answer lands.
+        expect(useAnnouncerStore.getState().polite).toBe(stillBlocked);
+
+        act(() => {
+          useMcpConfirmStore
+            .getState()
+            .setPreview("req-retry", { lines: ["No uncommitted changes."] });
+        });
+
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+        expect(confirmBtn().hasAttribute("aria-disabled")).toBe(false);
+        expect(useAnnouncerStore.getState().polite?.msg).toMatch(/no longer blocked/);
+        // The Retry that had focus went with the refusal.
+        expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+      } finally {
+        vi.runOnlyPendingTimers();
+        vi.useRealTimers();
+      }
+    });
+  });
+
   // #12692: an agent pane is asked, not refused, above its tier — and may keep
   // allowing the tool for the rest of the session.
   describe("agent-pane approval (#12692)", () => {
@@ -1015,7 +1151,7 @@ describe("McpConfirmDialog", () => {
 
       const box = screen.getByRole("checkbox", { name: "Allow for this session" });
       expect(box.getAttribute("aria-checked")).toBe("false");
-      expect(screen.getByText("Agent in a terminal pane")).toBeTruthy();
+      expect(screen.getByText("Agent in a terminal panel")).toBeTruthy();
     });
 
     it("renders no session option for any other requester", () => {
@@ -1096,7 +1232,7 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
       expect(requesterRow()).toContain("feature/moved");
       expect(requesterRow()).not.toContain("feature/auth");
-      expect(screen.getByRole("button", { name: "Show pane" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Show panel" })).toBeTruthy();
     });
 
     it("names the pane a session grant would cover", () => {
@@ -1108,7 +1244,11 @@ describe("McpConfirmDialog", () => {
       });
       render(<McpConfirmDialog />);
 
-      expect(screen.getByText(/Later Push calls from 'Orchestrator' · any arguments/)).toBeTruthy();
+      const grant = screen.getByRole("checkbox", { name: "Allow for this session" });
+      const description = document.getElementById(grant.getAttribute("aria-describedby") ?? "");
+      expect(description?.textContent).toBe(
+        "Later Push calls from 'Orchestrator' · any arguments · up to 30 minutes"
+      );
     });
 
     it("names the Assistant tab that asked", () => {
@@ -1130,7 +1270,7 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
 
       expect(requesterRow()).toContain("No longer open");
-      expect(screen.queryByRole("button", { name: "Show pane" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Show panel" })).toBeNull();
     });
 
     it("still names an unnamed pane as a pane when it can't offer the session grant", () => {
@@ -1138,7 +1278,7 @@ describe("McpConfirmDialog", () => {
       void enqueue({ danger: "safe", requester: { identity: PANE.identity } });
       render(<McpConfirmDialog />);
 
-      expect(requesterRow()).toContain("Agent in a terminal pane");
+      expect(requesterRow()).toContain("Agent in a terminal panel");
       expect(requesterRow()).not.toContain("Unidentified client");
       expect(requesterRow()).not.toContain("No longer open");
     });
@@ -1153,7 +1293,7 @@ describe("McpConfirmDialog", () => {
         render(<McpConfirmDialog />);
 
         act(() => {
-          fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+          fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
         });
         await act(async () => {
           await Promise.resolve();
@@ -1185,7 +1325,7 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
 
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+        fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
       });
       await act(async () => {
         await Promise.resolve();
@@ -1208,7 +1348,7 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
 
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+        fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
       });
       act(() => {
         fireEvent.click(screen.getByRole("button", { name: "Review request" }));
@@ -1254,7 +1394,7 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
 
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+        fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
       });
       await act(async () => {
         await Promise.resolve();
@@ -1278,7 +1418,7 @@ describe("McpConfirmDialog", () => {
         );
         render(<McpConfirmDialog />);
         act(() => {
-          fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+          fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
         });
 
         await act(async () => {
@@ -1310,7 +1450,7 @@ describe("McpConfirmDialog", () => {
       expect(promoted?.msg).toContain("The previous request, 'Push', timed out");
 
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+        fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
       });
       await act(async () => {
         await Promise.resolve();
@@ -1334,7 +1474,7 @@ describe("McpConfirmDialog", () => {
         );
         render(<McpConfirmDialog />);
         act(() => {
-          fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+          fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
         });
 
         await act(async () => {
@@ -1348,7 +1488,7 @@ describe("McpConfirmDialog", () => {
           fireEvent.click(screen.getByRole("button", { name: "Review request" }));
         });
         expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
-        expect(screen.queryByRole("button", { name: "Show pane" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Show panel" })).toBeNull();
       } finally {
         vi.useRealTimers();
       }
@@ -1404,7 +1544,9 @@ describe("McpConfirmDialog", () => {
 
       // Only the preview landing unblocks it.
       act(() => {
-        useMcpConfirmStore.getState().setPreview("req-pending", ["No uncommitted changes."]);
+        useMcpConfirmStore
+          .getState()
+          .setPreview("req-pending", { lines: ["No uncommitted changes."] });
       });
       expect(
         screen.getByRole("button", { name: "Delete worktree" }).hasAttribute("aria-disabled")
@@ -1427,7 +1569,7 @@ describe("McpConfirmDialog", () => {
     act(() => {
       useMcpConfirmStore
         .getState()
-        .setPreview("req-title", ["Branch: main", "  abcdef1 Fix — Ada"]);
+        .setPreview("req-title", { lines: ["Branch: main", "  abcdef1 Fix — Ada"] });
     });
 
     expect(screen.getByText("Branch and local commits")).toBeTruthy();
@@ -1724,7 +1866,7 @@ describe("McpConfirmDialog", () => {
     render(<McpConfirmDialog />);
 
     act(() => {
-      useMcpConfirmStore.getState().setPreview("req-empty", []);
+      useMcpConfirmStore.getState().setPreview("req-empty", { lines: [] });
     });
 
     expect(screen.getByText("Working tree changes")).toBeTruthy();

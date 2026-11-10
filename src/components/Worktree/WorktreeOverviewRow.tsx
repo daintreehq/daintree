@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
 import {
-  AlertTriangle,
+  ArrowDownWideNarrow,
   ChevronRight,
   CircleDot,
   ExternalLink,
@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
 import {
   LIST_ROW_HOVER_CLASS,
+  PALETTE_ROW_FOCUS_CLASS,
   PALETTE_SECTION_LABEL_CLASS,
   ROW_MENU_TARGET_CLASS,
 } from "@/components/ui/paletteRowStyles";
@@ -27,6 +28,7 @@ import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -55,7 +57,7 @@ import {
 } from "./WorktreeCard/WorktreePluginStatusChips";
 import { getAgentConfig } from "@/config/agents";
 import type { ChipState } from "./utils/computeChipState";
-import { BranchLabel } from "./BranchLabel";
+import { BranchLabel, splitBranchType } from "./BranchLabel";
 import { LiveTimeAgo } from "./LiveTimeAgo";
 import { SECTION_ROW } from "./WorktreeCard/sectionChrome";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
@@ -73,9 +75,13 @@ import { useRunFleetBands } from "@/hooks/useRunSessionPresentation";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { ActivityLight } from "./ActivityLight";
 import { CollapsedSessionIndicators } from "./WorktreeCard/CollapsedSessionIndicators";
-import { Badge } from "@/components/ui/badge";
+import { PaletteCurrentLabel } from "@/components/ui/PaletteCurrentLabel";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { pluralize } from "@/lib/pluralize";
 import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
+import type { WorktreeDiskUsage } from "@/hooks/useWorktreeDiskUsage";
+import { formatBytes } from "@/lib/formatBytes";
+import { SkeletonBone } from "@/components/ui/Skeleton";
 
 /**
  * Column tracks shared by the header and every row, so each section sits on
@@ -83,19 +89,32 @@ import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
  * ones leave — at the workspace tier a little wider than the sidebar card
  * itself, which is what keeps a row's left half reading as that card.
  */
-export const OVERVIEW_ROW_COLUMNS = "grid-cols-[minmax(0,1fr)_232px_104px_48px]";
+export const OVERVIEW_ROW_COLUMNS = "grid-cols-[minmax(0,1fr)_216px_104px_72px_48px]";
 const OVERVIEW_ROW_GAP = "gap-x-5";
 const OVERVIEW_ROW_INSET = "px-4";
+
+const APPROXIMATE_SIZE_NOTE =
+  "Sizes are approximate. Hard links or copy-on-write clones shared with other folders, and compressed files, can mean deleting a worktree frees less. Nested worktrees and symlinked folders aren't counted.";
 
 /**
  * Names the sections once, above the list, in the palette's section-label
  * type — so the columns read as labelled zones rather than a spreadsheet, and
  * nobody has to decode a column from its contents.
+ *
+ * The labels are decorative (each row says what it holds); the Size heading is
+ * the one control, ordering the list largest first while pressed. Its tooltip
+ * carries the approximation caveat, where a keyboard reaches it — the rows'
+ * own size tooltips are hover-only, like the rest of a row's detail.
  */
-export function WorktreeOverviewColumnHeaders() {
+export function WorktreeOverviewColumnHeaders({
+  sortBySize,
+  onSortBySizeChange,
+}: {
+  sortBySize: boolean;
+  onSortBySizeChange: (sortBySize: boolean) => void;
+}) {
   return (
     <div
-      aria-hidden="true"
       className={cn(
         "grid shrink-0 items-end py-1.5 border-b border-divider",
         OVERVIEW_ROW_COLUMNS,
@@ -104,11 +123,88 @@ export function WorktreeOverviewColumnHeaders() {
         PALETTE_SECTION_LABEL_CLASS
       )}
     >
-      <span className="pl-6">Worktree</span>
-      <span>Sessions</span>
-      <span className="text-right">Changes</span>
-      <span className="text-right">Active</span>
+      <span aria-hidden="true" className="pl-6">
+        Worktree
+      </span>
+      <span aria-hidden="true">Terminals</span>
+      <span aria-hidden="true" className="text-right">
+        Changes
+      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-pressed={sortBySize}
+            aria-label="Order by size, largest first"
+            data-testid="worktree-overview-sort-size"
+            onClick={() => onSortBySizeChange(!sortBySize)}
+            className={cn(
+              "-my-0.5 inline-flex items-center justify-self-end gap-1 rounded-[var(--radius-sm)] px-1 py-0.5",
+              "uppercase tracking-wider transition-colors duration-150 ease-out",
+              "hover:text-text-primary aria-pressed:text-text-primary",
+              PALETTE_ROW_FOCUS_CLASS
+            )}
+          >
+            {sortBySize && <ArrowDownWideNarrow className="h-3 w-3" aria-hidden="true" />}
+            Size
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="text-xs">
+          <span className="flex flex-col gap-1">
+            <span>Order by size, largest first</span>
+            <span className="text-text-secondary">{APPROXIMATE_SIZE_NOTE}</span>
+          </span>
+        </TooltipContent>
+      </Tooltip>
+      <span aria-hidden="true" className="text-right">
+        Active
+      </span>
     </div>
+  );
+}
+
+/**
+ * The worktree's size on disk. Every figure is marked approximate: no cheap
+ * scan can tell a hard link or clone shared outside the worktree from space
+ * only it holds. Pending and unknown are distinct, and neither reads as zero.
+ */
+function WorktreeSizeCell({ usage }: { usage: WorktreeDiskUsage | undefined }) {
+  if (!usage || usage.status === "pending") {
+    return (
+      <div className="flex h-5 items-center justify-end">
+        <span className="sr-only">Measuring size</span>
+        <SkeletonBone heightPx={12} className="w-10 rounded-[var(--radius-sm)]" />
+      </div>
+    );
+  }
+  if (usage.status === "unknown") {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="text-right text-xs leading-5 text-text-secondary">
+            <span aria-hidden="true">Unknown</span>
+            <span className="sr-only">Size unknown</span>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="text-xs">
+          Couldn&apos;t measure this worktree&apos;s size
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+  const size = formatBytes(usage.bytes);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="text-right text-xs leading-5 tabular-nums text-text-secondary">
+          <span aria-hidden="true">≈ {size}</span>
+          <span className="sr-only">About {size} on disk</span>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        {APPROXIMATE_SIZE_NOTE}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -175,8 +271,13 @@ function leadLine(mark: SessionMark | undefined): { text: string; mono: boolean 
   if (!mark) return null;
   const { terminal, chrome } = mark;
   if (chrome.isAgent) {
-    const task = terminal.lastObservedTitle?.trim();
-    return { text: task || terminal.title, mono: false };
+    // Through the title pipeline every other surface uses, which strips the
+    // agent's own status glyph and identity echoes from the raw OSC title. A
+    // launched agent the detector hasn't confirmed yet still has a task to show.
+    const panel = terminal.detectedAgentId
+      ? terminal
+      : { ...terminal, detectedAgentId: chrome.agentId ?? undefined };
+    return { text: composeTitledPanel(panel, "compact"), mono: false };
   }
   const command = terminal.lastCommand?.trim();
   return command ? { text: command, mono: true } : { text: terminal.title, mono: false };
@@ -264,6 +365,8 @@ export interface WorktreeOverviewRowProps {
   /** True while any row is selected: every row shows its checkbox, not its type glyph. */
   isSelecting: boolean;
   isLast: boolean;
+  /** Size on disk while the overview is measuring; absent reads as pending. */
+  diskUsage?: WorktreeDiskUsage;
   onActivate: (worktreeId: string) => void;
   onToggleSelect: (worktreeId: string, event: React.MouseEvent) => void;
   /** Called as a context-menu action starts, so the overview gets out of its way. */
@@ -281,6 +384,7 @@ export function WorktreeOverviewRow({
   isCursor,
   isSelecting,
   isLast,
+  diskUsage,
   onActivate,
   onToggleSelect,
   onBeforeMenuAction,
@@ -316,7 +420,9 @@ export function WorktreeOverviewRow({
       ? CircleDot
       : headline.kind === "pr"
         ? getPrStateGlyph(headlinePr?.state)
-        : GitBranch;
+        : // The branch's type mark, as the sidebar card draws it, so a row
+          // carries the same glyph in both lists.
+          ((isBranchTitled ? splitBranchType(branchLabel).Icon : undefined) ?? GitBranch);
   const typeIconColor =
     headline.kind === "issue"
       ? "text-pr-open"
@@ -519,17 +625,16 @@ export function WorktreeOverviewRow({
                   <span
                     className={cn(
                       "truncate text-text-primary",
-                      isBranchTitled ? "font-mono text-xs" : "text-sm",
-                      isCurrent && "font-medium"
+                      isBranchTitled ? "font-mono text-xs" : "text-sm"
                     )}
                   >
                     {title}
                   </span>
                 </TruncatedTooltip>
-                {isCurrent && <Badge size="xs">Current</Badge>}
+                {isCurrent && <PaletteCurrentLabel />}
                 {exception && (
                   <span className="flex shrink-0 items-center gap-1 text-2xs font-medium text-status-error">
-                    <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                    <SEVERITY_GLYPH.error className="h-3.5 w-3.5" aria-hidden="true" />
                     {exception}
                   </span>
                 )}
@@ -589,7 +694,7 @@ export function WorktreeOverviewRow({
                 full — icon, what it is on, state — like the sidebar's session
                 rows; past that the row collapses to the sidebar's own
                 "N active" strip with its state counts, and expands in place. */}
-            <div className="min-w-0" role="group" aria-label={sessionsLabel || "No sessions"}>
+            <div className="min-w-0" role="group" aria-label={sessionsLabel || "No terminals"}>
               {marks.length === 0 ? (
                 <span className="text-xs leading-5 text-text-secondary" aria-hidden="true">
                   —
@@ -616,7 +721,7 @@ export function WorktreeOverviewRow({
                       type="button"
                       tabIndex={-1}
                       aria-expanded={sessionsExpanded}
-                      aria-label={`${pluralize(marks.length, "active session")}${sessionSummary.breakdown ? `: ${sessionSummary.breakdown}` : ""}`}
+                      aria-label={`${pluralize(marks.length, "active terminal")}${sessionSummary.breakdown ? `: ${sessionSummary.breakdown}` : ""}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         setSessionsExpanded((v) => !v);
@@ -710,6 +815,8 @@ export function WorktreeOverviewRow({
               )}
             </div>
 
+            <WorktreeSizeCell usage={diskUsage} />
+
             {/* Age of the last activity, with the sidebar's recency light. */}
             <div className="flex h-5 items-center justify-end gap-1.5 text-xs tabular-nums text-text-secondary">
               {worktree.lastActivityTimestamp ? (
@@ -730,7 +837,7 @@ export function WorktreeOverviewRow({
               hover: Shift+F10 on the cursor row opens this menu. */}
           {sessionLines.length > 0 && (
             <>
-              <ContextMenuLabel>Sessions</ContextMenuLabel>
+              <ContextMenuLabel>Terminals</ContextMenuLabel>
               {sessionLines.map((line) => (
                 <ContextMenuItem
                   key={line.id}
@@ -779,7 +886,7 @@ export function WorktreeOverviewRow({
             onSelect={onBeforeMenuAction}
           >
             <GitCommitHorizontal data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            Open review hub
+            Open Review Hub
           </ContextMenuActionItem>
           {(showPr || worktree.issueNumber) && <ContextMenuSeparator />}
           {showPr && (

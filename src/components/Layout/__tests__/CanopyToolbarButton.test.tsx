@@ -1,12 +1,18 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
-import { act, render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { CanopyCard, CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CanopyToolbarButton } from "../CanopyToolbarButton";
+
+const dispatchMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+vi.mock("@/services/ActionService", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/services/ActionService")>();
+  return { ...actual, actionService: { ...actual.actionService, dispatch: dispatchMock } };
+});
 
 function snapshot(activated: boolean, cards: CanopyCard[] = []): CanopySnapshot {
   return {
@@ -214,5 +220,76 @@ describe("CanopyToolbarButton", () => {
   it("flags nothing until Canopy is turned on: the button opens the offer, not the inbox", async () => {
     setFleet([asking("r1")]);
     expect(await pip(false)).toMatchObject({ label: "Canopy", visible: "false" });
+  });
+});
+
+describe("where the button opens Canopy (#16578)", () => {
+  afterEach(() => dispatchMock.mockClear());
+
+  async function openMenu(activated: boolean) {
+    const view = renderButton(activated);
+    await act(async () => {});
+    fireEvent.contextMenu(view.container.querySelector("button")!);
+    await act(async () => {});
+  }
+
+  it.each([true, false])(
+    "offers no second way in from the right-click menu (Canopy on: %s)",
+    async (activated) => {
+      await openMenu(activated);
+
+      // The menu itself still opens, with the toolbar's own items.
+      expect(screen.getAllByRole("menuitem").length).toBeGreaterThan(0);
+      expect(screen.queryByRole("menuitem", { name: "Open in new window" })).toBeNull();
+      expect(dispatchMock).not.toHaveBeenCalledWith(
+        "canopy.openWindow",
+        undefined,
+        expect.anything()
+      );
+    }
+  );
+
+  it.each([true, false])(
+    "leaves the click to the toggle, which decides where Canopy opens (Canopy on: %s)",
+    async (activated) => {
+      const view = renderButton(activated);
+      await act(async () => {});
+
+      fireEvent.click(view.container.querySelector("button")!);
+
+      expect(dispatchMock).toHaveBeenCalledWith("canopy.toggle", undefined, { source: "user" });
+    }
+  );
+
+  it("says it opens a dialog only before Canopy is on, when it opens the offer here", async () => {
+    const on = renderButton(true);
+    await act(async () => {});
+    const onButton = on.container.querySelector("button")!;
+    expect(onButton.hasAttribute("aria-haspopup")).toBe(false);
+    expect(onButton.hasAttribute("aria-expanded")).toBe(false);
+    on.unmount();
+
+    const off = renderButton(false);
+    await act(async () => {});
+    const offButton = off.container.querySelector("button")!;
+    expect(offButton.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(offButton.getAttribute("aria-expanded")).toBe("false");
+
+    act(() => useCanopyStore.setState({ isOpen: true }));
+    expect(offButton.getAttribute("aria-expanded")).toBe("true");
+    act(() => useCanopyStore.setState({ isOpen: false }));
+  });
+
+  it("says it opens no dialog in a view on a remote host, which asks for the window (#16581)", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "host-1" };
+    try {
+      const off = renderButton(false);
+      await act(async () => {});
+      const button = off.container.querySelector("button")!;
+      expect(button.hasAttribute("aria-haspopup")).toBe(false);
+      expect(button.hasAttribute("aria-expanded")).toBe(false);
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
   });
 });

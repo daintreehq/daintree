@@ -728,11 +728,40 @@ describe("buildBatchPRsQuery", () => {
   });
 });
 
+/** The full body of the first `{ ... }` selection after `marker`, nested selections included. */
+function selectionAfter(query: string, marker: string): string {
+  const start = query.indexOf("{", query.indexOf(marker));
+  if (query.indexOf(marker) === -1 || start === -1) return "";
+  let depth = 0;
+  for (let i = start; i < query.length; i++) {
+    if (query[i] === "{") depth++;
+    else if (query[i] === "}" && --depth === 0) return query.slice(start + 1, i);
+  }
+  return "";
+}
+
+/**
+ * The fields a selection asks for at its own level, without arguments,
+ * directives or nested selections — so `app { name }` can't stand in for a
+ * missing top-level `name`.
+ */
+function directFields(selection: string): string[] {
+  let depth = 0;
+  let flat = "";
+  for (const ch of selection) {
+    if (ch === "{" || ch === "(") depth++;
+    else if (ch === "}" || ch === ")") depth--;
+    else if (depth === 0) flat += ch;
+  }
+  return flat.split(/\s+/).filter((token) => /^[A-Za-z_]\w*$/.test(token));
+}
+
 describe("PR_CI_STATUS_QUERY", () => {
   const contextsArgs = /contexts\(([^)]*)\)/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
-  const checkRunSelection = /\.\.\. on CheckRun\s*\{([^}]*)\}/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
-  const statusContextSelection =
-    /\.\.\. on StatusContext\s*\{([^}]*)\}/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
+  const checkRunSelection = selectionAfter(PR_CI_STATUS_QUERY, "... on CheckRun");
+  const statusContextSelection = selectionAfter(PR_CI_STATUS_QUERY, "... on StatusContext");
+  const checkRunFields = directFields(checkRunSelection);
+  const statusContextFields = directFields(statusContextSelection);
 
   it("pages the contexts connection forward with a cursor", () => {
     expect(contextsArgs).toContain("first: 100");
@@ -751,18 +780,18 @@ describe("PR_CI_STATUS_QUERY", () => {
   it("selects each union member's own link field on its own fragment", () => {
     // detailsUrl belongs to CheckRun and targetUrl to StatusContext — swapping
     // them is a GraphQL validation error the mapper could not detect.
-    expect(checkRunSelection).toContain("detailsUrl");
+    expect(checkRunFields).toContain("detailsUrl");
     expect(checkRunSelection).not.toContain("targetUrl");
-    expect(statusContextSelection).toContain("targetUrl");
+    expect(statusContextFields).toContain("targetUrl");
     expect(statusContextSelection).not.toContain("detailsUrl");
   });
 
   it("selects every field the check mapper reads from each union member", () => {
-    for (const field of ["name", "conclusion", "status", "isRequired"]) {
-      expect(checkRunSelection).toContain(field);
+    for (const field of ["name", "conclusion", "status", "isRequired", "checkSuite"]) {
+      expect(checkRunFields).toContain(field);
     }
     for (const field of ["context", "state", "isRequired"]) {
-      expect(statusContextSelection).toContain(field);
+      expect(statusContextFields).toContain(field);
     }
   });
 
@@ -772,6 +801,23 @@ describe("PR_CI_STATUS_QUERY", () => {
     for (const variable of used) {
       expect(declared).toContain(variable);
     }
+  });
+
+  it("selects check identity only behind a flag that defaults off", () => {
+    // `workflowRun` needs Actions read access some tokens lack, and GitHub then
+    // reports an error the client throws on. The roll-up never sends the flag,
+    // so its read keeps asking for nothing that permission gates.
+    const declared = /query GetPRCIStatus\(([^)]*)\)/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
+    expect(declared).toMatch(/\$withIdentity:\s*Boolean!\s*=\s*false/);
+    expect(checkRunSelection).toMatch(/checkSuite\s+@include\(if:\s*\$withIdentity\)\s*\{/);
+    const suite = selectionAfter(checkRunSelection, "checkSuite");
+    expect(directFields(suite)).toEqual(["app", "workflowRun"]);
+    expect(directFields(selectionAfter(suite, "app"))).toEqual(["name"]);
+    const workflowRun = selectionAfter(suite, "workflowRun");
+    expect(directFields(workflowRun)).toEqual(["workflow"]);
+    expect(directFields(selectionAfter(workflowRun, "workflow"))).toEqual(["name"]);
+    expect(PR_CI_STATUS_QUERY.match(/checkSuite/g)).toHaveLength(1);
+    expect(statusContextSelection).not.toContain("checkSuite");
   });
 
   it("keeps the cursor optional so the first page needs no argument value", () => {

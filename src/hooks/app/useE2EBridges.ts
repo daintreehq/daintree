@@ -76,7 +76,7 @@ export function useE2EBridges(): void {
         void requestMcpConfirmation(item as Omit<PendingMcpConfirm, "enqueuedAt">);
       };
       window.__DAINTREE_E2E_SET_MCP_PREVIEW__ = (requestId, preview) => {
-        useMcpConfirmStore.getState().setPreview(requestId, preview);
+        useMcpConfirmStore.getState().setPreview(requestId, { lines: preview });
       };
       window.__DAINTREE_E2E_RESET_MCP_CONFIRM__ = () => {
         useMcpConfirmStore.getState().reset();

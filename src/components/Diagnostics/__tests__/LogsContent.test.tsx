@@ -9,11 +9,31 @@ vi.mock("../../Logs/LogFilters", () => ({
   LogFilters: () => <div data-testid="log-filters" />,
 }));
 
-vi.mock("react-virtuoso", () => ({
-  Virtuoso: ({ data }: { data: unknown[] }) => (
-    <div data-testid="virtuoso" data-count={data.length} />
-  ),
+type FollowOutput = (isAtBottom: boolean) => "smooth" | "auto" | false;
+
+const virtuoso = vi.hoisted(() => ({
+  props: null as {
+    atBottomStateChange: (bottom: boolean) => void;
+    followOutput: false | FollowOutput;
+  } | null,
+  scrollToIndex: vi.fn(),
 }));
+
+vi.mock("react-virtuoso", async () => {
+  const React = await import("react");
+  return {
+    Virtuoso: React.forwardRef(function VirtuosoMock(
+      props: { data: unknown[] } & NonNullable<typeof virtuoso.props>,
+      ref: React.Ref<{ scrollToIndex: typeof virtuoso.scrollToIndex }>
+    ) {
+      React.useLayoutEffect(() => {
+        virtuoso.props = props;
+      });
+      React.useImperativeHandle(ref, () => ({ scrollToIndex: virtuoso.scrollToIndex }));
+      return <div data-testid="virtuoso" data-count={props.data.length} />;
+    }),
+  };
+});
 
 const mockGetAll = vi.fn<() => Promise<LogEntry[]>>().mockResolvedValue([]);
 const mockGetSources = vi.fn<() => Promise<string[]>>().mockResolvedValue([]);
@@ -147,5 +167,165 @@ describe("LogsContent — failed reads", () => {
     render(<LogsContent />);
 
     await waitFor(() => expect(useLogsStore.getState().logs.map((l) => l.id)).toEqual(["fresh"]));
+  });
+});
+
+describe("LogsContent — auto-scroll follows the toggle and the scroll position", () => {
+  const reportBottom = (bottom: boolean) => act(() => virtuoso.props?.atBottomStateChange(bottom));
+  const followFor = (isAtBottom: boolean) => {
+    const follow = virtuoso.props?.followOutput;
+    return typeof follow === "function" ? follow(isAtBottom) : follow;
+  };
+  const setFlag = (value: boolean) => act(() => useLogsStore.getState().setAutoScroll(value));
+  const renderList = async () => {
+    const view = render(<LogsContent />);
+    await view.findByTestId("virtuoso");
+    await waitFor(() => expect(useLogsStore.getState().logs.length).toBeGreaterThan(0));
+    return view;
+  };
+
+  beforeEach(() => {
+    mockGetAll.mockReset().mockResolvedValue([makeLog("a"), makeLog("b")]);
+    mockGetSources.mockReset().mockResolvedValue([]);
+    virtuoso.props = null;
+    virtuoso.scrollToIndex.mockReset();
+    useLogsStore.setState({ logs: [], filters: {}, autoScroll: true, expandedIds: new Set() });
+  });
+
+  it("scrolls the newest line into view when the toggle turns on while scrolled away", async () => {
+    const { queryByText } = await renderList();
+    reportBottom(true);
+    reportBottom(false);
+    expect(useLogsStore.getState().autoScroll).toBe(false);
+    expect(queryByText("Jump to latest")).not.toBeNull();
+
+    setFlag(true);
+
+    expect(virtuoso.scrollToIndex).toHaveBeenCalledTimes(1);
+    expect(virtuoso.scrollToIndex.mock.calls[0]?.[0]).toMatchObject({ index: "LAST" });
+    // Virtuoso reports the bottom once the scroll lands, and the pill goes with it.
+    reportBottom(true);
+    expect(queryByText("Jump to latest")).toBeNull();
+    expect(useLogsStore.getState().autoScroll).toBe(true);
+    expect(followFor(true)).not.toBe(false);
+    expect(followFor(false)).toBe(false);
+  });
+
+  it("scrolls once when the pill resumes following", async () => {
+    const { findByText } = await renderList();
+    reportBottom(true);
+    reportBottom(false);
+
+    fireEvent.click(await findByText("Jump to latest"));
+
+    expect(useLogsStore.getState().autoScroll).toBe(true);
+    expect(virtuoso.scrollToIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it("scrolls again when the pill is used while the flag is already on", async () => {
+    const { findByText } = await renderList();
+    reportBottom(true);
+    reportBottom(false);
+    // Scrolled away, but the flag has not caught up yet (it is still on).
+    setFlag(true);
+    virtuoso.scrollToIndex.mockClear();
+
+    fireEvent.click(await findByText("Jump to latest"));
+
+    expect(virtuoso.scrollToIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not scroll when the toggle turns on while already at the bottom", async () => {
+    await renderList();
+    reportBottom(true);
+    setFlag(false);
+    expect(virtuoso.props?.followOutput).toBe(false);
+
+    setFlag(true);
+
+    expect(virtuoso.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("resumes following when the list is scrolled back to the bottom by hand", async () => {
+    await renderList();
+    reportBottom(true);
+    reportBottom(false);
+    expect(useLogsStore.getState().autoScroll).toBe(false);
+
+    reportBottom(true);
+
+    expect(useLogsStore.getState().autoScroll).toBe(true);
+    // Reaching the bottom is the user's own scroll: nothing should animate.
+    expect(virtuoso.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("counts lines that arrive while scrolled away and clears the count on resume", async () => {
+    mockGetAll.mockResolvedValue([makeLog("a", { timestamp: 1 }), makeLog("b", { timestamp: 2 })]);
+    const { findByText, queryByText } = await renderList();
+    reportBottom(true);
+    reportBottom(false);
+
+    act(() => useLogsStore.getState().addLogs([makeLog("c", { timestamp: 3, message: "c" })]));
+    expect(await findByText("1 new")).not.toBeNull();
+
+    setFlag(true);
+    expect(queryByText("1 new")).toBeNull();
+    reportBottom(true);
+
+    expect(queryByText("Jump to latest")).toBeNull();
+  });
+
+  it("keeps following off when the toggle is turned off at the bottom", async () => {
+    await renderList();
+    reportBottom(true);
+
+    setFlag(false);
+
+    expect(useLogsStore.getState().autoScroll).toBe(false);
+    expect(virtuoso.props?.followOutput).toBe(false);
+    expect(virtuoso.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("keeps a flag switched off at the bottom off when the bottom is reported again", async () => {
+    await renderList();
+    reportBottom(true);
+    setFlag(false);
+
+    reportBottom(true);
+
+    expect(useLogsStore.getState().autoScroll).toBe(false);
+  });
+
+  it("ignores the not-at-bottom report from the first layout", async () => {
+    await renderList();
+
+    reportBottom(false);
+    reportBottom(true);
+
+    expect(useLogsStore.getState().autoScroll).toBe(true);
+  });
+
+  it("does not resume following when a remounted list reports its first bottom", async () => {
+    await renderList();
+    reportBottom(true);
+    reportBottom(false);
+    expect(useLogsStore.getState().autoScroll).toBe(false);
+
+    act(() => useLogsStore.setState({ filters: { levels: ["debug"] } }));
+    await waitFor(() => expect(document.querySelector("[data-testid=virtuoso]")).toBeNull());
+    act(() => useLogsStore.setState({ filters: {} }));
+    await waitFor(() => expect(document.querySelector("[data-testid=virtuoso]")).not.toBeNull());
+    reportBottom(true);
+
+    expect(useLogsStore.getState().autoScroll).toBe(false);
+  });
+
+  it("does not turn a flag the user switched off back on when the list first opens at the bottom", async () => {
+    useLogsStore.setState({ autoScroll: false });
+    await renderList();
+
+    reportBottom(true);
+
+    expect(useLogsStore.getState().autoScroll).toBe(false);
   });
 });

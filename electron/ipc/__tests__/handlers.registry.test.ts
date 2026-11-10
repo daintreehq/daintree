@@ -24,6 +24,7 @@ const registerMocks = vi.hoisted(() => ({
   registerCopyTreeHandlers: vi.fn(),
   registerAiHandlers: vi.fn(),
   registerSlashCommandHandlers: vi.fn(),
+  registerUserPromptTemplatesHandlers: vi.fn(),
   registerSystemShellHandlers: vi.fn(),
   registerEditorConfigHandlers: vi.fn(),
   registerWindowChromeHandlers: vi.fn(),
@@ -85,6 +86,7 @@ const registerMocks = vi.hoisted(() => ({
   registerConnectivityHandlers: vi.fn(),
   registerAgentDefaultsHandlers: vi.fn(),
   registerProjectPresenceHandlers: vi.fn(),
+  registerOnlineOnlyFilesHandlers: vi.fn(),
   registerProjectPresentationHandlers: vi.fn(),
   registerScratchHandlers: vi.fn(),
   registerWatchdogHandlers: vi.fn(),
@@ -107,6 +109,9 @@ vi.mock("../handlers/ai.js", () => ({
 }));
 vi.mock("../handlers/slashCommands.js", () => ({
   registerSlashCommandHandlers: registerMocks.registerSlashCommandHandlers,
+}));
+vi.mock("../handlers/userPromptTemplates.js", () => ({
+  registerUserPromptTemplatesHandlers: registerMocks.registerUserPromptTemplatesHandlers,
 }));
 vi.mock("../handlers/systemShell.js", () => ({
   registerSystemShellHandlers: registerMocks.registerSystemShellHandlers,
@@ -287,6 +292,9 @@ vi.mock("../handlers/agentDefaults.js", () => ({
 }));
 vi.mock("../handlers/projectPresence.js", () => ({
   registerProjectPresenceHandlers: registerMocks.registerProjectPresenceHandlers,
+}));
+vi.mock("../handlers/onlineOnlyFiles.js", () => ({
+  registerOnlineOnlyFilesHandlers: registerMocks.registerOnlineOnlyFilesHandlers,
 }));
 vi.mock("../handlers/projectPresentation.js", () => ({
   registerProjectPresentationHandlers: registerMocks.registerProjectPresentationHandlers,

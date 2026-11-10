@@ -88,6 +88,20 @@ describe("voiceSubmitWaitCaption", () => {
     }
   });
 
+  it("names the send-now key as the keyboard layout prints it", () => {
+    const keys = { ...ELSEWHERE, skip: "Cmd+Alt+/" };
+    const wait = polishing(1_000, 3_000, 5_000, true);
+    const azerty = new Map([["/", "!"]]);
+    expect(voiceSubmitWaitCaption(wait, keys, azerty)).toContain(
+      `${formatChordText("Cmd+Alt+/", isMac(), azerty)} to send as dictated`
+    );
+    expect(voiceSubmitWaitCaption(wait, keys, azerty)).not.toContain("/");
+    expect(voiceSubmitWaitStatus(wait, keys, azerty)).toContain(
+      describeChord("Cmd+Alt+/", isMac(), azerty)
+    );
+    expect(voiceSubmitWaitCaption(wait, keys)).toContain("/");
+  });
+
   it("says what the wait is on, whichever keys reach it", () => {
     for (const keys of [IN_REACH, ELSEWHERE, { ...ELSEWHERE, skip: SKIP_COMBO }]) {
       expect(voiceSubmitWaitCaption(polishing(1_000, 3_000, 5_000, true), keys)).toMatch(

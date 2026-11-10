@@ -250,7 +250,7 @@ export const ContextProviderContributionSchema = z
         message: "prefix is one to sixteen lowercase letters",
       })
       .refine((prefix) => !CONTEXT_PROVIDER_RESERVED_PREFIXES.has(prefix), {
-        message: "prefix can't be diff, terminal or selection, which the composer reserves",
+        message: "prefix can't be diff, terminal, selection or notes, which the composer reserves",
       }),
     label: z.string().min(1).max(60),
   })

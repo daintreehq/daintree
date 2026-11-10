@@ -11,7 +11,7 @@ import React, {
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { PaneState } from "@/components/ui/PaneState";
 import { useShallow } from "zustand/react/shallow";
-import { Plug, RotateCcw, Hourglass, Folders, XCircle } from "lucide-react";
+import { Plug, RefreshCw, Hourglass, Folders, XCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -88,11 +88,13 @@ import {
 } from "@/store";
 import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import { useFleetMembership } from "./hooks/useFleetMembership";
 import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
-import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
+import type { AgentId } from "@shared/types/agent";
 import {
   load as loadTerminalService,
   peek as peekTerminalService,
@@ -126,6 +128,9 @@ import {
 import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import { submitPaneComposerText } from "./submitComposerText";
+import { HeldComposerSendRow } from "./HeldComposerSend";
+import { hasHeldComposerSend, useHeldComposerSendStore } from "@/store/heldComposerSendStore";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import {
   captureFocusEpoch,
   holdPaneFocus,
@@ -146,6 +151,8 @@ import {
   usePaneInputNotice,
 } from "./TerminalInputBlockBanner";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
+import { AgentAltScreenBanner } from "./AgentAltScreenBanner";
+import { altScreenNoticeAgentId, useAgentAltScreenBanner } from "./useAgentAltScreenBanner";
 import { CanopyPaneOffer, useCanopyPaneOffer } from "@/components/Canopy/CanopyPaneOffer";
 import { RelayDeployBanner } from "./RelayDeployBanner";
 import { RelayUpdateBanner } from "./RelayUpdateBanner";
@@ -376,7 +383,7 @@ export interface TerminalPaneProps {
   /** Launch hint — the agent this terminal was launched to run, if any. */
   agentId?: string;
   /** Runtime-detected agent identity (cleared on agent exit). Drives panel chrome (icons, badges). */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   runtimeIdentity?: TerminalRuntimeIdentity;
   chrome?: TerminalChromeDescriptor;
   /** Sticky flag: has an agent ever been live-detected. Drives the chrome demotion rule. */
@@ -592,15 +599,14 @@ function TerminalPaneComponent({
   // so the visual rule is just "bright header = part of the active set".
   // The fleet ribbon (which only mounts at size>=2) tells the user when
   // typing actually broadcasts.
-  const armedIds = useFleetArmingStore((state) => state.armedIds);
-  const isArmed = armedIds.has(id);
+  const { isArmed, isFleetComposing } = useFleetMembership(id);
   const isSelected = isArmed;
   // A "follower" is any armed pane that isn't currently the focused/origin
   // pane while the fleet is broadcasting (size >= 2). The follower stripe
   // is suppressed on a single-armed seed selection because nothing fans out
   // until a second pane joins.
-  const isFleetFollower = isArmed && !isFocused && armedIds.size >= 2;
-  const isFleetPrimary = isArmed && isFocused && armedIds.size >= 2;
+  const isFleetFollower = isFleetComposing && !isFocused;
+  const isFleetPrimary = isFleetComposing && isFocused;
 
   // Consolidate terminal state selectors to avoid multiple scans and ensure consistent snapshots
   const terminalState = usePanelStore(
@@ -743,7 +749,8 @@ function TerminalPaneComponent({
       hasAgentIdentity: effectiveAgentId !== undefined,
       hybridInputEnabled,
       isFleetArmed: isArmed,
-      fleetSize: armedIds.size,
+      // Only the two-member threshold matters here, so the pane never needs the real size.
+      fleetSize: isFleetComposing ? 2 : 0,
     });
 
   // Below `showHybridInputBar`/`isHybridInputDisabled` because it needs both:
@@ -753,7 +760,7 @@ function TerminalPaneComponent({
     route: resolveWorktreeMoveRoute({
       isHybridInputDisabled,
       hasHybridInputBar: showHybridInputBar,
-      isFleetComposing: isArmed && armedIds.size >= 2,
+      isFleetComposing,
     }),
     inputBarRef,
   });
@@ -781,8 +788,11 @@ function TerminalPaneComponent({
     restartKey,
   });
 
-  const { showBanner: showForceResumeStall, resetQueue: resetForceResumeQueue } =
-    useForceResumeCycleWatchdog(id);
+  const {
+    showBanner: showForceResumeStall,
+    isRetrying: isRetryingForceResumeStall,
+    retry: retryForceResumeStall,
+  } = useForceResumeCycleWatchdog(id, restartKey);
 
   const {
     cancel: cancelInjection,
@@ -880,6 +890,11 @@ function TerminalPaneComponent({
   // straight to XtermAdapter can't churn its attach effect.
   const [attachEpoch, bumpAttachEpoch] = useReducer((epoch: number) => epoch + 1, 0);
 
+  // The pane's current agent identity, built-in or contributed: a plain shell
+  // that runs `vim` or `htop` has none and is never told it is full-screen.
+  const altScreenAgentId = altScreenNoticeAgentId(chrome);
+  const agentAltScreenBanner = useAgentAltScreenBanner(id, altScreenAgentId, attachEpoch);
+
   // This mount is also what discharges the worktree-switch reveal obligation
   // (#11640): the switch's policy pass ran before React re-rendered, so its wake
   // could not paint a host that was still parked offscreen. The coordinator
@@ -940,21 +955,48 @@ function TerminalPaneComponent({
 
   // Says whether the terminal took the composer's text: the composer keeps a
   // refused draft where it was typed (#14945).
-  const submitFromComposer = (text: string, imagePaths: readonly string[] | undefined) =>
-    submitPaneComposerText(id, text, imagePaths, {
-      canTakeInput: () => {
-        const panel = usePanelStore.getState().panelsById[id];
-        const pty = panel && isPtyPanel(panel) ? panel : undefined;
-        return (
-          !(isInputLockedOverride ?? pty?.isInputLocked === true) && pty?.isRestarting !== true
-        );
+  const submitFromComposer = (
+    text: string,
+    imagePaths: readonly string[] | undefined,
+    submissionToken?: string
+  ) =>
+    submitPaneComposerText(
+      id,
+      text,
+      imagePaths,
+      {
+        canTakeInput: () => {
+          const panel = usePanelStore.getState().panelsById[id];
+          const pty = panel && isPtyPanel(panel) ? panel : undefined;
+          return (
+            !(isInputLockedOverride ?? pty?.isInputLocked === true) && pty?.isRestarting !== true
+          );
+        },
+        onSending: () => withTerminalService((service) => service.notifyUserInput(id), id),
+        onAccepted: () => {
+          reportCanopySent(id);
+          handleInput(buildTerminalSendPayload(text).trackerData);
+          useHeldComposerSendStore.getState().clearDropped(id);
+        },
+        // Mid-turn, a CLI not declared to queue input keeps it for its next
+        // prompt rather than risk losing it (#16379); main has the last word.
+        hold: {
+          isHolding: () => hasHeldComposerSend(id),
+          mayHold: () => {
+            const panel = usePanelStore.getState().panelsById[id];
+            if (!panel || !isPtyPanel(panel) || panel.agentState !== "working") return false;
+            const agentId = panel.detectedAgentId;
+            return (
+              agentId !== undefined &&
+              getEffectiveAgentConfig(agentId)?.capabilities?.queuesInputWhileWorking !== true
+            );
+          },
+          onHeld: (send) => useHeldComposerSendStore.getState().noteHeld(send),
+          onRefused: () => useHeldComposerSendStore.getState().noteRefused(id),
+        },
       },
-      onSending: () => withTerminalService((service) => service.notifyUserInput(id), id),
-      onAccepted: () => {
-        reportCanopySent(id);
-        handleInput(buildTerminalSendPayload(text).trackerData);
-      },
-    });
+      submissionToken
+    );
 
   useEffect(() => {
     const handleFindInPanel = () => {
@@ -1669,12 +1711,16 @@ function TerminalPaneComponent({
           <InlineStatusBanner
             severity="error"
             title="Terminal output stalled"
-            description="Output keeps backing up faster than it can render. Reset the queue to recover."
+            description="An automatic refresh didn't clear it. Retry redraws the terminal from its latest output."
             action={{
-              id: "reset-force-resume-queue",
-              label: "Reset queue",
-              icon: RotateCcw,
-              onClick: resetForceResumeQueue,
+              id: "retry-stalled-output",
+              label: "Retry",
+              icon: RefreshCw,
+              variant: "primary",
+              onClick: retryForceResumeStall,
+              title: "Redraw the terminal from its latest output",
+              ariaLabel: "Retry stalled terminal output",
+              loading: isRetryingForceResumeStall,
             }}
           />
         </BannerSlot>
@@ -1856,6 +1902,15 @@ function TerminalPaneComponent({
           )}
         </BannerSlot>
 
+        <BannerSlot visible={agentAltScreenBanner.visible}>
+          {altScreenAgentId && (
+            <AgentAltScreenBanner
+              agentId={altScreenAgentId}
+              onDismiss={agentAltScreenBanner.dismiss}
+            />
+          )}
+        </BannerSlot>
+
         <BannerSlot visible={isDecisionsDeployTerminalId(id) && !relayDeployBannerDismissed}>
           <RelayDeployBanner onDismiss={() => setRelayDeployBannerDismissed(true)} />
         </BannerSlot>
@@ -2007,6 +2062,12 @@ function TerminalPaneComponent({
                 )}
               </div>
 
+              {/* Outlives the composer: an agent that exited still says what became of the send. */}
+              <HeldComposerSendRow
+                terminalId={id}
+                agentId={effectiveAgentId}
+                canEdit={showHybridInputBar && !isHybridInputDisabled}
+              />
               {showHybridInputBar && (
                 <Suspense fallback={null}>
                   <LazyHybridInputBar

@@ -181,6 +181,25 @@ jobs:
       - name: Test (perf scenario liveness)
         run: npx vitest run scripts/perf/__tests__/scenarioLiveness.test.ts
 
+  # The host installer's swap and rollback scripts run on a Mac's /bin/sh and BSD
+  # tools as well as Linux's, and the shards above only see Linux's. Only this
+  # file needs a Mac, so the rest of the unit suite stays on Ubuntu.
+  host-scripts-macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        uses: ./.github/actions/install
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Test (host swap and rollback scripts)
+        run: npx vitest run electron/remote/client/__tests__/hostInstaller.realShell.test.ts
+
   # The plugin packages as an outside author gets them: packed tarballs, every
   # exports subpath, the bins, and a scaffolded plugin built against them. The
   # release workflow runs the same script before publishing; this catches a
@@ -237,6 +256,14 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      # Canopy's reader model (#16415): the build fetches it from its pinned
+      # revision and hashes whatever is here, restored or not.
+      - name: Cache Canopy reader model
+        uses: actions/cache@v5
+        with:
+          path: electron/resources/canopy-reader
+          key: canopy-reader-${{ runner.os }}-${{ hashFiles('electron/services/canopy/canopy-reader-manifest.json') }}
+
       - name: Build
         run: npm run build
 
@@ -279,7 +306,7 @@ jobs:
   # Insulates against matrix/job name changes breaking required checks.
   ci-ok:
     if: always()
-    needs: [static, lint, test, perf-liveness, packages, build]
+    needs: [static, lint, test, perf-liveness, host-scripts-macos, packages, build]
     runs-on: ubuntu-latest
     timeout-minutes: 2
 

@@ -19,8 +19,8 @@ export interface SlashCommand {
    */
   insertText?: string;
   /**
-   * Extra search-only tokens matched during ranking but never displayed or
-   * inserted. Mirrors `searchAliases` on the panel-kind registry.
+   * Other names the agent runs this command under: found by ranking, valid when
+   * typed or dictated, but never displayed or inserted by the menu.
    */
   aliases?: readonly string[];
   /**
@@ -43,8 +43,8 @@ export interface BuiltinSlashCommandEntry {
   description: string;
   descriptions?: Partial<Record<BuiltInAgentId, string>>;
   /**
-   * Search-only alternate names, per agent: one agent's alias can be another
-   * agent's real command (agy's `/clear` answers to `new`, Claude has its own
+   * Alternate names, per agent: one agent's alias can be another
+   * agent's real command (Claude's `/clear` answers to `new`, Codex has its own
    * `/new`), so an alias never applies beyond the agent it is declared for.
    */
   aliases?: Partial<Record<BuiltInAgentId, readonly string[]>>;
@@ -58,16 +58,21 @@ export interface BuiltinSlashCommandEntry {
 // empty query, so array order is the order the menu shows on a bare `/`.
 const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
   // Shared by claude, gemini, codex and antigravity
+  // This text is how a person decides whether picking the command ends their
+  // conversation, so each one is that CLI's own: Gemini 0.67.0 (the base), Claude
+  // 2.1.319, Codex 0.167.0 and agy 1.4.10. Only Codex ships `/new` as a command
+  // of its own; for the others it is an alias of `/clear`.
   {
     id: "clear",
     label: "/clear",
-    description: "Clear the terminal display",
+    description: "Clear the screen and start a new session",
     descriptions: {
-      claude: "Reset display and attention buffer",
+      claude:
+        "Start a new session with empty context; previous session stays on disk (resumable with /resume)",
       codex: "Clear the terminal and start a new chat",
       antigravity: "Clear conversation and start a new one",
     },
-    aliases: { antigravity: ["new"] },
+    aliases: { claude: ["reset", "new"], gemini: ["new"], antigravity: ["new"] },
     supportedAgents: ["claude", "gemini", "codex", "antigravity"],
   },
   {
@@ -126,19 +131,12 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     supportedAgents: ["claude", "gemini", "codex", "antigravity"],
   },
 
-  // Shared by claude, gemini and codex. agy 1.4.10 has none of these: its
-  // `/new` is only an alias of its own `/clear`.
+  // Shared by claude, gemini and codex. agy 1.4.10 has none of these.
   {
     id: "init",
     label: "/init",
     description: "Initialize project configuration",
     descriptions: { codex: "Scaffold AGENTS.md instructions" },
-    supportedAgents: ["claude", "gemini", "codex"],
-  },
-  {
-    id: "new",
-    label: "/new",
-    description: "Reset conversation context",
     supportedAgents: ["claude", "gemini", "codex"],
   },
   {
@@ -536,6 +534,12 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     id: "mention",
     label: "/mention",
     description: "Mention a file",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "new",
+    label: "/new",
+    description: "Start a new chat during a conversation",
     supportedAgents: ["codex"],
   },
   {

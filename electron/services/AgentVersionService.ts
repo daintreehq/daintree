@@ -9,29 +9,38 @@ import {
   getEffectiveAgentConfig,
   getEffectiveAgentIds,
 } from "../../shared/config/agentRegistry.js";
-import type { AgentVersionInfo } from "../../shared/types/ipc/system.js";
+import type { AgentCliCopy, AgentVersionInfo } from "../../shared/types/ipc/system.js";
 import type { AgentId } from "../../shared/types/agent.js";
 import { CliAvailabilityService } from "./CliAvailabilityService.js";
-import { isAgentInstalled } from "../../shared/utils/agentAvailability.js";
+import { isAgentInstalled, isAgentLaunchable } from "../../shared/utils/agentAvailability.js";
 import { buildProbeEnv } from "../utils/spawnEnv.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
+import { stripAnsiAndOscCodes } from "../../shared/utils/urlUtils.js";
 
 interface CachedVersionInfo {
   info: AgentVersionInfo;
   timestamp: number;
-  generation: number;
 }
+
+/** How much of a line a copy printed instead of a version is worth showing. */
+const REPORTED_LINE_MAX_LENGTH = 80;
+/** Version probes running at once for copies, across every agent. */
+const MAX_CONCURRENT_COPY_PROBES = 2;
 
 export class AgentVersionService {
   private cache = new Map<AgentId, CachedVersionInfo>();
   private readonly CACHE_TTL_MS = 12 * 60 * 60 * 1000;
   private readonly TIMEOUT_MS = 10000;
+  private readonly COPY_PROBE_START_GRACE_MS = 5000;
   // Grace window after `exit` for stdout to flush before we settle without
   // waiting on `close` (which a pipe-inheriting grandchild can stall forever).
   private readonly EXIT_DRAIN_MS = 200;
   private readonly MAX_BUFFER = 256 * 1024;
   private inFlightChecks = new Map<AgentId, Promise<AgentVersionInfo>>();
-  private generation = 0;
+  /** Bumped when the copy an agent launches changes, so no older answer is kept. */
+  private readonly generations = new Map<string, number>();
+  private runningCopyProbes = 0;
+  private readonly copyProbeWaiters: Array<() => void> = [];
 
   constructor(private cliAvailabilityService: CliAvailabilityService) {}
 
@@ -54,6 +63,17 @@ export class AgentVersionService {
       lastChecked: Date.now(),
       error: this.toErrorString(error),
     };
+  }
+
+  /**
+   * Forgets what is known about an agent's version once the copy it launches
+   * changes. A check already under way still answers its caller, but its answer
+   * is never kept for anyone else.
+   */
+  invalidate(agentId: string): void {
+    this.generations.set(agentId, (this.generations.get(agentId) ?? 0) + 1);
+    this.cache.delete(agentId as AgentId);
+    this.inFlightChecks.delete(agentId as AgentId);
   }
 
   async getVersions(refresh = false): Promise<AgentVersionInfo[]> {
@@ -105,18 +125,14 @@ export class AgentVersionService {
       }
     }
 
-    const currentGeneration = this.generation;
+    const generation = this.generations.get(agentId);
     const checkPromise = this.checkVersion(agentId);
     this.inFlightChecks.set(agentId, checkPromise);
 
     try {
       const result = await checkPromise;
-      if (this.generation === currentGeneration) {
-        this.cache.set(agentId, {
-          info: result,
-          timestamp: Date.now(),
-          generation: currentGeneration,
-        });
+      if (this.generations.get(agentId) === generation) {
+        this.cache.set(agentId, { info: result, timestamp: Date.now() });
       }
       return result;
     } catch (error) {
@@ -129,6 +145,95 @@ export class AgentVersionService {
       if (this.inFlightChecks.get(agentId) === checkPromise) {
         this.inFlightChecks.delete(agentId);
       }
+    }
+  }
+
+  /**
+   * Every copy of an agent's CLI on this machine, each asked for its own version
+   * by path. {@link getVersion} runs the registry command, so it can only ever
+   * describe whichever copy PATH reaches first.
+   *
+   * Never cached: this is read when someone goes looking for why an update didn't
+   * take, so an answer from before that update would hide what they came to see.
+   */
+  async getCopies(agentId: string): Promise<AgentCliCopy[]> {
+    const config = getEffectiveAgentConfig(agentId);
+    if (!config) return [];
+    const paths = await this.cliAvailabilityService.findCopies(agentId, config);
+    const detail = this.cliAvailabilityService.getDetails()?.[agentId];
+    // A chosen copy that can't launch leaves every copy found unmarked.
+    const launchPath = detail && isAgentLaunchable(detail.state) ? detail.resolvedPath : null;
+    const versionArgs = config.version?.args;
+    return Promise.all(
+      paths.map(async (path) => ({
+        path,
+        version: versionArgs ? await this.readCopyVersion(path, versionArgs) : null,
+        launches: path === launchPath,
+      }))
+    );
+  }
+
+  private async readCopyVersion(path: string, args: string[]): Promise<string | null> {
+    try {
+      return this.reportedVersion(
+        await this.withCopyProbeSlot(() => this.withCopyProbeDeadline(path, args))
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * What a copy said it was. Coercion would turn "error 12" into 12.0.0, a version
+   * nothing reported, so output without a version shows as its first line instead.
+   */
+  private reportedVersion(output: string): string | null {
+    const text = stripAnsiAndOscCodes(output);
+    const matched = this.matchVersion(text);
+    if (matched) return matched;
+    const firstLine = text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+    return firstLine ? scrubSecrets(firstLine).slice(0, REPORTED_LINE_MAX_LENGTH) : null;
+  }
+
+  /**
+   * The probe's own deadline starts once its child spawns, and working out how to
+   * spawn a Windows path reads the disk first. A share that dropped since the copy
+   * was found must not hold a slot for good, leaving every other agent's copies
+   * waiting behind it.
+   */
+  private async withCopyProbeDeadline(path: string, args: string[]): Promise<string> {
+    const abandoned = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<string>((resolve) => {
+      timer = setTimeout(() => {
+        abandoned.abort();
+        resolve("");
+      }, this.TIMEOUT_MS + this.COPY_PROBE_START_GRACE_MS);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([this.runVersionProbe(path, args, abandoned.signal), deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async withCopyProbeSlot<T>(task: () => Promise<T>): Promise<T> {
+    if (this.runningCopyProbes < MAX_CONCURRENT_COPY_PROBES) {
+      this.runningCopyProbes++;
+    } else {
+      // A finishing probe hands its slot straight to the waiter it wakes.
+      await new Promise<void>((resolve) => this.copyProbeWaiters.push(resolve));
+    }
+    try {
+      return await task();
+    } finally {
+      const next = this.copyProbeWaiters.shift();
+      if (next) next();
+      else this.runningCopyProbes--;
     }
   }
 
@@ -197,9 +302,18 @@ export class AgentVersionService {
       return null;
     }
 
+    // A chosen copy is asked by its path, and only while it can launch: the
+    // registry command would answer for whichever copy PATH reaches first.
+    let command = config.command;
+    const detail = (await this.cliAvailabilityService.getSettledDetails())?.[agentId];
+    if (detail?.chosenPath !== undefined) {
+      if (!isAgentLaunchable(detail.state) || !detail.resolvedPath) return null;
+      command = detail.resolvedPath;
+    }
+
     let output: string;
     try {
-      output = await this.runVersionProbe(config.command, config.version.args);
+      output = await this.runVersionProbe(command, config.version.args);
     } catch (error: any) {
       if (error.code === "ENOENT") {
         return null;
@@ -208,7 +322,7 @@ export class AgentVersionService {
       // toErrorString → .message), so it is scrubbed/sanitized; the original is
       // preserved only as `cause` for local debugging, never surfaced to the UI.
       if (error.code === "EACCES") {
-        throw new Error(`Permission denied: ${config.command}`, { cause: error });
+        throw new Error(`Permission denied: ${command}`, { cause: error });
       }
       throw new Error(`Command failed: ${scrubSecrets(error.message ?? "")}`, { cause: error });
     }
@@ -243,10 +357,15 @@ export class AgentVersionService {
    * empty string → `parseVersion` → null → "indeterminate" → the launch proceeds
    * rather than blocking on an outdated-CLI gate).
    */
-  private async runVersionProbe(command: string, args: string[]): Promise<string> {
+  private async runVersionProbe(
+    command: string,
+    args: string[],
+    abandoned?: AbortSignal
+  ): Promise<string> {
     // An npm-installed agent is a `.cmd` shim on Windows (see windowsCliSpawn).
     const env = buildProbeEnv();
     const target = await cliSpawnTarget(command, args, process.platform, { env });
+    if (abandoned?.aborted) return "";
     return new Promise<string>((resolve, reject) => {
       // `detached` puts the child in its own process group (POSIX) so the
       // deadline can SIGKILL the entire tree, including a grandchild that
@@ -568,6 +687,19 @@ export class AgentVersionService {
       return null;
     }
 
+    const matched = this.matchVersion(versionString);
+    if (matched) return matched;
+
+    const coerced = semver.coerce(versionString, { includePrerelease: true });
+    if (coerced) {
+      return coerced.version;
+    }
+
+    return null;
+  }
+
+  /** A version the text actually spells out, without coercing a lone number into one. */
+  private matchVersion(versionString: string): string | null {
     const cleanedDirect = semver.clean(versionString);
     if (cleanedDirect && semver.valid(cleanedDirect)) {
       return cleanedDirect;
@@ -589,11 +721,6 @@ export class AgentVersionService {
       }
     }
 
-    const coerced = semver.coerce(versionString, { includePrerelease: true });
-    if (coerced) {
-      return coerced.version;
-    }
-
     return null;
   }
 
@@ -613,17 +740,6 @@ export class AgentVersionService {
       return semver.gt(latestVersion, installedVersion);
     } catch {
       return false;
-    }
-  }
-
-  clearCache(agentId?: AgentId): void {
-    this.generation++;
-    if (agentId) {
-      this.cache.delete(agentId);
-      this.inFlightChecks.delete(agentId);
-    } else {
-      this.cache.clear();
-      this.inFlightChecks.clear();
     }
   }
 }

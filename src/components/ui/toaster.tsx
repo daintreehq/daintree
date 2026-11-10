@@ -133,7 +133,15 @@ function ToastProgress({ progress }: { progress: NotificationProgress }) {
   );
 }
 
-function Toast({ notification, isTopmost }: { notification: Notification; isTopmost: boolean }) {
+function Toast({
+  notification,
+  isTopmost,
+  standalone,
+}: {
+  notification: Notification;
+  isTopmost: boolean;
+  standalone: boolean;
+}) {
   const { dismissNotification, removeNotification } = useNotificationStore(
     useShallow((state) => ({
       dismissNotification: state.dismissNotification,
@@ -511,12 +519,11 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
           // The severity edge must follow `border`: cn() resolves conflicts
           // last-wins, and a later `border` erases a left width set before it.
           FLOATING_CARD_RADIUS_CLASS,
-          "border border-tint/[0.08] border-l-[3px]",
+          "border border-border-default border-l-[3px]",
           "bg-surface-panel/85 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
           "text-sm text-text-primary",
           "shadow-[var(--theme-shadow-floating)]",
-          "ring-1 ring-inset ring-tint/[0.05]",
           accentClass
         )}
       >
@@ -697,7 +704,8 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
           })()}
         </div>
 
-        {(notification.context?.projectId || notification.context?.eventKind) &&
+        {!standalone &&
+          (notification.context?.projectId || notification.context?.eventKind) &&
           (() => {
             const eventKind = notification.context?.eventKind;
             return (
@@ -778,7 +786,7 @@ function OverflowPill({ count }: { count: number }) {
         "pointer-events-auto self-end",
         "inline-flex h-6 items-center gap-1 rounded-full",
         "bg-surface-panel/85 backdrop-blur-xl",
-        "border border-tint/[0.08] ring-1 ring-inset ring-tint/[0.05]",
+        "border border-border-default",
         "px-2.5 text-2xs font-medium leading-none tabular-nums",
         "text-text-secondary hover:text-text-primary",
         "shadow-[var(--theme-shadow-floating)]",
@@ -791,7 +799,11 @@ function OverflowPill({ count }: { count: number }) {
   );
 }
 
-export function Toaster() {
+/**
+ * `standalone` is for a root with no actions and no notification center: its
+ * toasts leave out the controls that would reach for them.
+ */
+export function Toaster({ standalone = false }: { standalone?: boolean }) {
   const notifications = useNotificationStore((state) => state.notifications);
   const evictedToInboxCount = useNotificationHistoryStore((s) => s.evictedToInboxCount);
   const [mounted, setMounted] = useState(false);
@@ -804,7 +816,8 @@ export function Toaster() {
     (notification) => notification.placement !== "grid-bar"
   );
 
-  if (!mounted || (toastNotifications.length === 0 && evictedToInboxCount === 0)) return null;
+  const overflow = standalone ? 0 : evictedToInboxCount;
+  if (!mounted || (toastNotifications.length === 0 && overflow === 0)) return null;
 
   // Newest renders first (top of the visual stack). Only the topmost active
   // notification owns the Escape handler — the parent decides which one
@@ -825,9 +838,10 @@ export function Toaster() {
           key={notification.id}
           notification={notification}
           isTopmost={notification.id === topmostActiveId}
+          standalone={standalone}
         />
       ))}
-      {evictedToInboxCount > 0 && <OverflowPill count={evictedToInboxCount} />}
+      {overflow > 0 && <OverflowPill count={overflow} />}
     </div>,
     document.body
   );

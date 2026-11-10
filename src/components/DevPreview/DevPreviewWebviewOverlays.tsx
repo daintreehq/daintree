@@ -4,6 +4,7 @@ import {
   Download,
   Eraser,
   ExternalLink,
+  Info,
   RefreshCw,
   RotateCw,
   XCircle,
@@ -18,7 +19,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { Spinner } from "@/components/ui/Spinner";
-import { PaneState, PaneStateActions } from "@/components/ui/PaneState";
+import { PaneState, PaneStateActions, withInlineCode } from "@/components/ui/PaneState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
 import { BannerOverflowMenu } from "../Terminal/BannerOverflowMenu";
@@ -29,6 +30,7 @@ import { FindBar } from "../Browser/FindBar";
 import type { FindInPageState } from "@/hooks/useFindInPage";
 import { WebviewDialog, type WebviewDialogRequest } from "../Browser/WebviewDialog";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { useStoppedLoadFocus } from "@/hooks/useStoppedLoadFocus";
 
 // The main-process clipboard: the guest page may hold focus.
 const writeMainClipboard = (text: string) => window.electron.clipboard.writeText(text);
@@ -104,6 +106,14 @@ export function DevPreviewWebviewOverlays({
   onDialogRespond,
   children,
 }: DevPreviewWebviewOverlaysProps) {
+  const restartLabel = onRequestRestartAndClearCache
+    ? "Restart dev server"
+    : "Pause and resume resource environment";
+  const { wrapCancel, actionRef } = useStoppedLoadFocus();
+  // A load the user stopped is not a failure: the neutral mark, a polite status,
+  // and Reload rather than Retry. Failures keep the error mark and the alert.
+  const stopped = webviewLoadError?.code === "aborted";
+
   return (
     <>
       {reconnectAttempt > 0 && !webviewLoadError && (
@@ -117,16 +127,23 @@ export function DevPreviewWebviewOverlays({
       )}
       {webviewLoadError && (
         <PaneState
-          live="alert"
+          live={stopped ? "status" : "alert"}
+          announceAfterMount={stopped}
           className="z-20"
-          icon={<XCircle className="text-status-error" />}
+          icon={
+            stopped ? (
+              <Info className="text-text-secondary" />
+            ) : (
+              <XCircle className="text-status-error" />
+            )
+          }
           title={webviewLoadErrorHeading(webviewLoadError.code)}
-          description={webviewLoadError.message}
+          description={withInlineCode(webviewLoadError.message)}
         >
           <PaneStateActions>
             {webviewLoadError.code === "cert" && (
               <CopyButton
-                label="Copy `mkcert -install`"
+                label="Copy mkcert -install"
                 variant="ghost"
                 size="sm"
                 text="mkcert -install"
@@ -199,8 +216,13 @@ export function DevPreviewWebviewOverlays({
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
+            ) : stopped ? (
+              <Button ref={actionRef} onClick={onRetryWebviewLoad} variant="outline" size="sm">
+                <RotateCw />
+                Reload
+              </Button>
             ) : (
-              <Button onClick={onRetryWebviewLoad} variant="subtle" size="sm">
+              <Button onClick={onRetryWebviewLoad} variant="outline" size="sm">
                 <RefreshCw />
                 Retry
               </Button>
@@ -244,11 +266,11 @@ export function DevPreviewWebviewOverlays({
               ariaLabel="More preview recovery options"
               actions={[
                 {
-                  id: "hard-restart",
-                  label: "Hard restart",
+                  id: "restart-dev-server",
+                  label: restartLabel,
                   icon: RotateCw,
                   onClick: onRestartDevServer,
-                  ariaLabel: "Hard restart preview",
+                  ariaLabel: restartLabel,
                 },
               ]}
             />
@@ -265,12 +287,12 @@ export function DevPreviewWebviewOverlays({
           animated={false}
           actions={[
             {
-              id: "hard-restart",
-              label: "Hard restart",
+              id: "restart-dev-server",
+              label: restartLabel,
               icon: RotateCw,
-              variant: "danger",
+              variant: "primary",
               onClick: onRestartDevServer,
-              ariaLabel: "Hard restart preview",
+              ariaLabel: restartLabel,
             },
           ]}
           onClose={onCloseUnresponsive}
@@ -281,7 +303,7 @@ export function DevPreviewWebviewOverlays({
           variant="overlay"
           isLoading={isLoading}
           phaseLabel="Loading preview"
-          onCancel={onCancelLoad}
+          onCancel={wrapCancel(onCancelLoad)}
         />
       )}
       {showRecoverySpinner && !webviewLoadError && (

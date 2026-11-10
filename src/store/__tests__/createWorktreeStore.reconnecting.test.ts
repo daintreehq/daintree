@@ -1601,6 +1601,46 @@ describe("createWorktreeStore — command approval flag", () => {
   });
 });
 
+// Clone results land while setup is still `running` in `copy-config`, so the
+// update that carries them changes nothing else in the snapshot.
+describe("createWorktreeStore — setup clone results", () => {
+  const running = { state: "running" as const, stage: "copy-config" as const, startedAt: 1 };
+
+  it("surfaces an update whose only change is the clone results", () => {
+    const store = createWorktreeStore();
+    store.getState().applyUpdate(makeSnapshot("wt-1", { setupStatus: running }), nextV());
+    const mapBefore = store.getState().worktrees;
+
+    const clones = [
+      { path: "node_modules", outcome: "skipped" as const, reason: "Different volume" },
+    ];
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { setupStatus: { ...running, clones } }), nextV());
+
+    expect(store.getState().worktrees).not.toBe(mapBefore);
+    expect(store.getState().worktrees.get("wt-1")?.setupStatus?.clones).toEqual(clones);
+  });
+
+  it("does not churn the map identity when the clone results are unchanged", () => {
+    const store = createWorktreeStore();
+    const clones = [{ path: "node_modules", outcome: "cloned" as const }];
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { setupStatus: { ...running, clones } }), nextV());
+    const mapBefore = store.getState().worktrees;
+
+    store.getState().applyUpdate(
+      makeSnapshot("wt-1", {
+        setupStatus: { ...running, clones: clones.map((c) => ({ ...c })) },
+      }),
+      nextV()
+    );
+
+    expect(store.getState().worktrees).toBe(mapBefore);
+  });
+});
+
 // `snapshotsEqual` compares snapshot fields by hand, so a field it doesn't
 // compare is a field whose changes never reach the renderer (#11434). These
 // tests pin `isExternal` into that comparison.
@@ -1633,6 +1673,91 @@ describe("createWorktreeStore — external classification updates", () => {
     const mapBefore = store.getState().worktrees;
 
     store.getState().applyUpdate(makeSnapshot("wt-1", { isExternal: true }), nextV());
+
+    expect(store.getState().worktrees).toBe(mapBefore);
+  });
+});
+
+describe("createWorktreeStore — waiting for a download", () => {
+  it("surfaces an update whose only change is the wait, and its end", () => {
+    const store = createWorktreeStore();
+    store.getState().applyUpdate(makeSnapshot("wt-1"), nextV());
+    const clearMap = store.getState().worktrees;
+
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { gitStatusWaitingForDownload: true }), nextV());
+    expect(store.getState().worktrees).not.toBe(clearMap);
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusWaitingForDownload).toBe(true);
+
+    const waitingMap = store.getState().worktrees;
+    store.getState().applyUpdate(makeSnapshot("wt-1"), nextV());
+    expect(store.getState().worktrees).not.toBe(waitingMap);
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusWaitingForDownload).toBeUndefined();
+  });
+});
+
+// Pins the unanswered git status observation into `snapshotsEqual`: it changes
+// nothing else in the snapshot, so an unpinned field would never reach the card.
+describe("createWorktreeStore — unanswered git status", () => {
+  const since = 1_700_000_000_000;
+
+  it("surfaces an update whose only change is the unanswered observation, and its clearing", () => {
+    const store = createWorktreeStore();
+    store.getState().applyUpdate(makeSnapshot("wt-1"), nextV());
+    const clearMap = store.getState().worktrees;
+
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { gitStatusUnanswered: { reason: "timed-out", since } }),
+        nextV()
+      );
+    expect(store.getState().worktrees).not.toBe(clearMap);
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusUnanswered?.reason).toBe("timed-out");
+
+    const timedOutMap = store.getState().worktrees;
+    store.getState().applyUpdate(
+      makeSnapshot("wt-1", {
+        gitStatusUnanswered: { reason: "previous-still-running", since },
+      }),
+      nextV()
+    );
+    expect(store.getState().worktrees).not.toBe(timedOutMap);
+
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusUnanswered).toEqual({
+      reason: "previous-still-running",
+      since,
+    });
+
+    // A new streak can carry the same reason with a later start.
+    const earlierStreakMap = store.getState().worktrees;
+    store.getState().applyUpdate(
+      makeSnapshot("wt-1", {
+        gitStatusUnanswered: { reason: "previous-still-running", since: since + 60_000 },
+      }),
+      nextV()
+    );
+    expect(store.getState().worktrees).not.toBe(earlierStreakMap);
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusUnanswered?.since).toBe(since + 60_000);
+
+    const stillRunningMap = store.getState().worktrees;
+    store.getState().applyUpdate(makeSnapshot("wt-1"), nextV());
+    expect(store.getState().worktrees).not.toBe(stillRunningMap);
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusUnanswered).toBeUndefined();
+  });
+
+  it("does not churn the map identity for an unchanged observation", () => {
+    const store = createWorktreeStore();
+    const unanswered = { reason: "timed-out" as const, since };
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { gitStatusUnanswered: unanswered }), nextV());
+    const mapBefore = store.getState().worktrees;
+
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { gitStatusUnanswered: { ...unanswered } }), nextV());
 
     expect(store.getState().worktrees).toBe(mapBefore);
   });

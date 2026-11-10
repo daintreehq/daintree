@@ -4,9 +4,11 @@ import {
   MAX_BACKGROUND_PROJECTS_PER_WINDOW,
   MAX_RESTORED_WINDOWS,
   OPEN_WINDOWS_MANIFEST_VERSION,
+  dropPickerWindows,
   filterRestorableWindows,
   isReadableOpenWindowsManifest,
   isRemoteWorkspaceKey,
+  parseCanopyWindowOpen,
   parseOpenWindowsManifest,
   serializeOpenWindowsManifest,
   type OpenWindowRecord,
@@ -197,6 +199,54 @@ describe("filterRestorableWindows", () => {
 
   it("keeps both windows when a duplicated project still exists", () => {
     expect(filterRestorableWindows([record("a"), record("a")], new Set(["a"]))).toHaveLength(2);
+  });
+});
+
+// A picker holds nothing to restore (#16740).
+describe("dropPickerWindows", () => {
+  it("returns the windows with a workspace as they were when no picker carries anything", () => {
+    const kept = { projectId: "a", backgroundProjectIds: ["x"] };
+    expect(dropPickerWindows([record(null), kept, record(null), record("b")])).toEqual([
+      kept,
+      record("b"),
+    ]);
+  });
+
+  it("keeps the staying window's own background projects ahead of a picker's under the cap", () => {
+    const own = Array.from({ length: MAX_BACKGROUND_PROJECTS_PER_WINDOW - 1 }, (_, i) => `own${i}`);
+    expect(
+      dropPickerWindows([
+        { projectId: null, backgroundProjectIds: ["a", "b", "late1", "late2"] },
+        { projectId: "a", backgroundProjectIds: own },
+        record("b"),
+      ])
+    ).toEqual([{ projectId: "a", backgroundProjectIds: [...own, "late1"] }, record("b")]);
+  });
+
+  it("never lets another window's project hold a background slot a carried project needs", () => {
+    // An older manifest can list B in A's background while B has its own window.
+    const xs = Array.from({ length: MAX_BACKGROUND_PROJECTS_PER_WINDOW - 1 }, (_, i) => `x${i}`);
+    expect(
+      dropPickerWindows([
+        { projectId: null, backgroundProjectIds: ["z"] },
+        { projectId: "a", backgroundProjectIds: ["b", ...xs] },
+        record("b"),
+      ])
+    ).toEqual([{ projectId: "a", backgroundProjectIds: [...xs, "z"] }, record("b")]);
+  });
+
+  it("carries every picker's background projects on one picker when no window has a workspace", () => {
+    expect(
+      dropPickerWindows([
+        record(null),
+        { projectId: null, backgroundProjectIds: ["x", "y"] },
+        { projectId: null, backgroundProjectIds: ["y", "z"] },
+      ])
+    ).toEqual([{ projectId: null, backgroundProjectIds: ["x", "y", "z"] }]);
+  });
+
+  it("leaves nothing when every window was an empty picker", () => {
+    expect(dropPickerWindows([record(null), record(null)])).toEqual([]);
   });
 });
 
@@ -422,5 +472,77 @@ describe("background host projects (#13932)", () => {
       ...local.slice(0, MAX_BACKGROUND_PROJECTS_PER_WINDOW),
       ...remote.slice(0, MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW),
     ]);
+  });
+});
+
+describe("the Canopy window's record (#16336)", () => {
+  const records = [record("alpha"), record(null), record("beta")];
+
+  it("round-trips beside the windows it was saved with", () => {
+    const raw = serializeOpenWindowsManifest(records, { canopyWindowOpen: true });
+    expect(parseCanopyWindowOpen(raw)).toBe(true);
+    expect(parseOpenWindowsManifest(raw)).toEqual(records);
+  });
+
+  it("round-trips closed as no record at all", () => {
+    expect(
+      parseCanopyWindowOpen(serializeOpenWindowsManifest(records, { canopyWindowOpen: false }))
+    ).toBe(false);
+  });
+
+  it("is never read as a project or picker window, nor takes one's place under the cap", () => {
+    const full = Array.from({ length: MAX_RESTORED_WINDOWS }, (_, i) => record(`p${i}`));
+    const raw = serializeOpenWindowsManifest(full, { canopyWindowOpen: true });
+    expect(parseOpenWindowsManifest(raw)).toEqual(full);
+    expect(parseCanopyWindowOpen(raw)).toBe(true);
+  });
+
+  it("stands alone in a manifest that names no window, which still reads as empty", () => {
+    const raw = serializeOpenWindowsManifest([], { canopyWindowOpen: true });
+    expect(isReadableOpenWindowsManifest(raw)).toBe(true);
+    expect(parseOpenWindowsManifest(raw)).toEqual([]);
+    expect(parseCanopyWindowOpen(raw)).toBe(true);
+  });
+
+  it("leaves a manifest written before it reading, and writing, exactly as it did", () => {
+    const before =
+      '{"version":1,"windows":[{"projectId":"alpha","backgroundProjectIds":["beta"]},{"projectId":null}]}';
+    const parsed = parseOpenWindowsManifest(before);
+
+    expect(parsed).toEqual([{ projectId: "alpha", backgroundProjectIds: ["beta"] }, record(null)]);
+    expect(parseCanopyWindowOpen(before)).toBe(false);
+    expect(serializeOpenWindowsManifest(parsed)).toBe(before);
+  });
+
+  it.each([
+    ["a string", "yes"],
+    ["a number", 1],
+    ["an object", {}],
+    ["false", false],
+  ])("reads a marker that is %s as closed, and keeps the windows", (_label, marker) => {
+    const raw = JSON.stringify({
+      version: OPEN_WINDOWS_MANIFEST_VERSION,
+      windows: [{ projectId: "alpha" }],
+      canopyWindow: marker,
+    });
+    expect(parseCanopyWindowOpen(raw)).toBe(false);
+    expect(parseOpenWindowsManifest(raw)).toEqual([record("alpha")]);
+  });
+
+  it.each([
+    ["another version", { version: OPEN_WINDOWS_MANIFEST_VERSION + 1, windows: [] }],
+    ["no window list", { version: OPEN_WINDOWS_MANIFEST_VERSION }],
+  ])("refuses a marker in a manifest with %s", (_label, envelope) => {
+    expect(parseCanopyWindowOpen(JSON.stringify({ ...envelope, canopyWindow: true }))).toBe(false);
+  });
+
+  it.each([
+    ["null", null],
+    ["not JSON", "{not json"],
+    ["a JSON array", "[]"],
+    ["JSON null", "null"],
+    ["a JSON scalar", "true"],
+  ])("reads %s as closed", (_label, raw) => {
+    expect(parseCanopyWindowOpen(raw)).toBe(false);
   });
 });

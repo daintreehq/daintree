@@ -225,6 +225,69 @@ describe("restoreFleetAfterCrash", () => {
     expect(deps.enableSaves).not.toHaveBeenCalled();
   });
 
+  it("reopens the Canopy window the manifest had open, before the saves it rewrites (#16336)", async () => {
+    const restoreCanopyWindow = vi.fn();
+    const { deps, events } = harness({
+      readManifest: () => ({
+        hadManifest: true,
+        records: [{ projectId: "a" }],
+        canopyWindow: true,
+      }),
+      restoreCanopyWindow: () => {
+        restoreCanopyWindow();
+        events.push("canopy");
+      },
+    });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(restoreCanopyWindow).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["suppress", "canopy", "create:a", "enable", "resume:true"]);
+  });
+
+  it("reopens the Canopy window beside a manifest of picker windows (#16740)", async () => {
+    // Pickers name no workspace, so the reader reports no manifest, but the
+    // Canopy window and the saves a clean restore lifts still follow.
+    const restoreCanopyWindow = vi.fn();
+    const { deps, createWindow } = harness({
+      readManifest: () => ({ hadManifest: false, records: [], canopyWindow: true }),
+      restoreCanopyWindow,
+    });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(createWindow).not.toHaveBeenCalled();
+    expect(restoreCanopyWindow).toHaveBeenCalledTimes(1);
+    expect(deps.enableSaves).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays read-only when a picker carried background projects no window here can take", async () => {
+    const restoreCanopyWindow = vi.fn();
+    const { deps, createWindow } = harness({
+      readManifest: () => ({
+        hadManifest: false,
+        records: [{ projectId: null, backgroundProjectIds: ["x"] }],
+        canopyWindow: true,
+      }),
+      restoreCanopyWindow,
+    });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(createWindow).not.toHaveBeenCalled();
+    expect(deps.adoptBackgroundProjects).not.toHaveBeenCalled();
+    expect(deps.enableSaves).not.toHaveBeenCalled();
+  });
+
+  it("opens no Canopy window the manifest didn't have open", async () => {
+    const restoreCanopyWindow = vi.fn();
+    const { deps } = harness({ restoreCanopyWindow });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(restoreCanopyWindow).not.toHaveBeenCalled();
+  });
+
   it("skips picker windows", async () => {
     const { deps, createWindow } = harness({
       readManifest: () => ({

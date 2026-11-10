@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { systemClient } from "@/clients/systemClient";
 import { Badge } from "@/components/ui/badge";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatMediumDate, formatTimeAgo } from "@/utils/timeAgo";
@@ -209,7 +210,9 @@ export function PulseHealthSignals({
       }
     >
       {formatCompactCount(mergedInRange)} merged
-      <span className="text-text-secondary">· {rangeDays}d</span>
+      <span className="text-text-secondary">
+        <FactSeparator /> {rangeDays}d
+      </span>
       <span className="sr-only"> in the last {rangeDays} days</span>
     </HealthChip>
   );

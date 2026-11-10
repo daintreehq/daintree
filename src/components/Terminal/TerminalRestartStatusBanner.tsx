@@ -160,12 +160,12 @@ export function TerminalRestartStatusBanner({
           layout="pane"
           action={{
             id: "restart",
-            label: "Restart session",
+            label: "Restart terminal",
             icon: RotateCw,
             variant: "dangerFilled",
             onClick: onRestart,
-            title: "Restart session",
-            ariaLabel: "Restart session",
+            title: "Restart terminal",
+            ariaLabel: "Restart terminal",
           }}
           onClose={onDismiss}
         />

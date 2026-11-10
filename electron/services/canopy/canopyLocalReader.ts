@@ -7,7 +7,11 @@
 import { CANOPY_CATEGORIES, type CanopyCategory } from "../../../shared/types/ipc/canopy.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { displayText, readerCard, type Reading, type ReaderState } from "./canopyReader.js";
-import { CanopyReaderError, CanopyReaderProcess } from "./canopyReaderProcess.js";
+import {
+  CanopyReaderError,
+  CanopyReaderProcess,
+  READER_RETIRE_KILL_MS,
+} from "./canopyReaderProcess.js";
 import {
   CanopyProviderError,
   toDescriberResult,
@@ -29,6 +33,9 @@ export interface CanopyReading {
 
 /** Rows above an approval's prompt that can hold the command it asks about. */
 const APPROVAL_LOOKBACK_ROWS = 8;
+
+/** How long past its kill backstop a trial reader is waited for before its folder is moved anyway. */
+const TRIAL_EXIT_GRACE_MS = 2_000;
 
 /** Times a reader may die in a row before Canopy stops starting new ones until the model changes. */
 const MAX_CRASHES = 3;
@@ -134,6 +141,57 @@ export function toCanopyReading(reading: Reading, input: CanopyScreenInput): Can
 }
 
 /**
+ * Loads the model in `dir` in a reader process of its own, reads one screen
+ * with it, and waits for that process to exit, so the folder can be moved
+ * (#16416). Throws when the model can't load or read, when the process won't
+ * exit, or once `signal` aborts.
+ */
+export async function tryReaderModel(
+  dir: string,
+  signal?: AbortSignal,
+  spawn: (dir: string, onExit: () => void) => CanopyReaderProcess = (d, onExit) =>
+    new CanopyReaderProcess(d, onExit)
+): Promise<void> {
+  if (signal?.aborted) throw new Error("cancelled");
+  const trial = spawn(dir, () => {});
+  let stop: () => void = () => {};
+  const stopped = new Promise<never>((_resolve, reject) => {
+    stop = () => reject(new Error("cancelled"));
+    signal?.addEventListener("abort", stop, { once: true });
+  });
+  stopped.catch(() => {});
+  let failure: unknown = null;
+  try {
+    await Promise.race([trial.ready, stopped]);
+    await Promise.race([
+      trial.read({ agent_program: "shell", terminal_title: "" }, ["$ "]),
+      stopped,
+    ]);
+  } catch (error) {
+    failure = error;
+  } finally {
+    signal?.removeEventListener("abort", stop);
+  }
+  trial.retire();
+  // Gone before its folder is moved: Windows holds the files of a live reader.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const exited = await Promise.race([
+    trial.whenExited.then(() => true),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), READER_RETIRE_KILL_MS + TRIAL_EXIT_GRACE_MS);
+      timer.unref?.();
+    }),
+  ]);
+  clearTimeout(timer);
+  if (!exited) {
+    throw new Error("the trial reader hasn't exited yet", {
+      cause: failure ?? undefined,
+    });
+  }
+  if (failure !== null) throw failure;
+}
+
+/**
  * The reader process for the chosen model: started on the first read, let go
  * on `release()`, and swapped when the model changes. A process that dies is
  * replaced on the next read, up to `MAX_CRASHES` in a row.
@@ -164,7 +222,7 @@ export class CanopyLocalReader {
   async read(input: CanopyScreenInput, signal: AbortSignal): Promise<CanopyReading> {
     const generation = this.generation;
     const dir = await this.modelDir();
-    if (dir === null) throw new CanopyProviderError("classifier", "model not downloaded", true);
+    if (dir === null) throw new CanopyProviderError("classifier", "model not available");
     if (signal.aborted || generation !== this.generation) {
       throw new CanopyProviderError("classifier", "request cancelled");
     }

@@ -1,11 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Mock } from "vitest";
 import { createHash } from "crypto";
 import type { CodexRestoreMatchRequest } from "@shared/types/ipc/agentSubagents";
-import { launchPromptArgText } from "@shared/types/agentSettings";
+import { launchPromptMatchText } from "@shared/utils/launchPromptArg";
 import {
   registerPluginAgents,
   clearPluginAgentRegistryForTests,
+  getPluginAgentRegistry,
 } from "@shared/config/pluginAgentRegistry";
 import type {
   TerminalState,
@@ -1851,6 +1852,117 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
     }
   });
 
+  describe("a plugin agent's assigned session ids (#16470)", () => {
+    const PI = {
+      id: "pi",
+      name: "Pi",
+      command: "pi",
+      color: "#3366ff",
+      iconId: "claude",
+      resume: {
+        kind: "session-id" as const,
+        args: ["--session-id", "{sessionId}"],
+        assignSessionIdArgs: ["--session-id", "{sessionId}"],
+        resumeLatestArgs: ["--continue"],
+      },
+    };
+    const piPanel = (id: string, overrides: Partial<TerminalState> = {}) =>
+      panel(id, { kind: "agent", launchAgentId: "pi", ...overrides });
+
+    afterEach(() => {
+      clearPluginAgentRegistryForTests();
+      vi.unstubAllGlobals();
+    });
+
+    function stubPluginAgents(getAgents: Mock): void {
+      vi.stubGlobal("window", { electron: { plugin: { getAgents } } });
+    }
+
+    it("lets two panes in one directory each resume their own id", async () => {
+      registerPluginAgents("digitalfrontier.agents", [PI]);
+      const ctx = makeContext();
+
+      await restorePanelsPhase(
+        [
+          piPanel("left", { agentSessionId: "id-left", lastActiveAt: 1 }),
+          piPanel("right", { agentSessionId: "id-right", lastActiveAt: 2 }),
+          piPanel("older", { lastActiveAt: 3 }),
+        ],
+        ctx
+      );
+
+      expect(sessionAllowanceById(ctx).get("left")).toBe(true);
+      expect(sessionAllowanceById(ctx).get("right")).toBe(true);
+      // A pane from before the plugin declared this must not take "latest" from
+      // them: that session may be one of theirs.
+      expect(allowanceById(ctx).get("older")).toBe(false);
+    });
+
+    it("gives one of two panes sharing an id the conversation, and starts the other over", async () => {
+      registerPluginAgents("digitalfrontier.agents", [PI]);
+      const ctx = makeContext();
+
+      await restorePanelsPhase(
+        [
+          piPanel("copy", { agentSessionId: "shared", lastActiveAt: 1 }),
+          piPanel("source", { agentSessionId: "shared", lastActiveAt: 2 }),
+        ],
+        ctx
+      );
+
+      expect(sessionAllowanceById(ctx).get("source")).toBe(true);
+      expect(sessionAllowanceById(ctx).get("copy")).toBe(false);
+    });
+
+    it("waits for the plugin agents before restoring anything, on a cold start", async () => {
+      registerPluginAgents("digitalfrontier.agents", [PI]);
+      const answer = structuredClone(getPluginAgentRegistry());
+      clearPluginAgentRegistryForTests();
+      let respond: (agents: typeof answer) => void = () => {};
+      const getAgents = vi.fn(
+        () =>
+          new Promise<typeof answer>((resolve) => {
+            respond = resolve;
+          })
+      );
+      stubPluginAgents(getAgents as unknown as Mock);
+      const ctx = makeContext();
+
+      const restored = restorePanelsPhase(
+        [piPanel("older", { lastActiveAt: 1 }), piPanel("newer", { lastActiveAt: 2 })],
+        ctx
+      );
+      await vi.waitFor(() => expect(getAgents).toHaveBeenCalledWith({ forRestore: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(ctx.addPanel).not.toHaveBeenCalled();
+
+      respond(answer);
+      await restored;
+
+      // Only a known agent has a resume-latest slot to elect over.
+      expect(Object.fromEntries(allowanceById(ctx))).toEqual({ older: false, newer: true });
+    });
+
+    it("loads them for the panes a safe-mode restore keeps, which would lose their ids", async () => {
+      const getAgents = vi.fn(async () => ({}));
+      stubPluginAgents(getAgents);
+
+      await restorePanelsPhase([piPanel("left")], makeContext({ safeMode: true }));
+
+      expect(getAgents).toHaveBeenCalledWith({ forRestore: true });
+    });
+
+    it("asks for nothing when no saved pane names an unknown agent", async () => {
+      const getAgents = vi.fn(async () => ({}));
+      stubPluginAgents(getAgents);
+
+      await restorePanelsPhase([codexPanel("solo"), panel("shell")], makeContext());
+
+      expect(getAgents).not.toHaveBeenCalled();
+    });
+  });
+
   it("elects one pane per directory for a rolling-history agent and for Cursor (#13847)", async () => {
     // Neither captures an id, so each pane would otherwise reopen the same
     // latest conversation in that directory.
@@ -3019,7 +3131,7 @@ describe("restorePanelsPhase — naming held panes' conversations by launch prom
     expect(byId.get("c")?.allowResumeLatest).toBe(false);
   });
 
-  it("sends a digest of the prompt as the CLI received it, never the prompt", async () => {
+  it("sends a digest of the prompt as restore compares it, never the prompt", async () => {
     const prompt = "  Review the parser\nand report back  ";
 
     await restore([
@@ -3027,7 +3139,9 @@ describe("restorePanelsPhase — naming held panes' conversations by launch prom
       codexPane("a", prompt),
     ]);
 
-    const expected = createHash("sha256").update(launchPromptArgText(prompt), "utf8").digest("hex");
+    const expected = createHash("sha256")
+      .update(launchPromptMatchText(prompt), "utf8")
+      .digest("hex");
     expect(sentPanes()).toEqual([{ key: "a", promptHash: expected, at: AT, resolve: true }]);
     expect(JSON.stringify(matchRestoreSessionsMock.mock.calls[0]?.[0])).not.toContain("parser");
   });

@@ -14,6 +14,14 @@ import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { CodexFolderSession } from "@shared/types/ipc/agentSubagents";
 
 const findSessions = vi.hoisted(() => vi.fn());
+const resolveBase = vi.hoisted(() =>
+  vi.fn(async (_agentId: string) => undefined as string | undefined)
+);
+
+vi.mock("@/utils/agentLaunchCommand", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/agentLaunchCommand")>()),
+  resolveCurrentAgentLaunchBaseCommand: resolveBase,
+}));
 
 vi.mock("@/clients/codexClient", () => ({
   codexClient: { findSessions },
@@ -289,6 +297,39 @@ describe("FindCodexSessionAction", () => {
 
     // Never opened — the recheck caught the just-claimed session instead of
     // trusting the now-stale list.
+    await waitFor(() => expect(screen.queryByText("pick me")).toBeNull());
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  // Finding the executable can wait on detection; a claim made meanwhile still
+  // has to stop the spawn (#16399).
+  it("re-checks for a sibling claim after finding the executable to start", async () => {
+    findSessions.mockResolvedValue(ok([{ id: "sess-1", preview: "pick me", updatedAt: 1 }]));
+    seed(panel("t-1"));
+    let found!: (base: string | undefined) => void;
+    resolveBase.mockReturnValueOnce(
+      new Promise((resolve) => {
+        found = resolve;
+      })
+    );
+
+    render(<FindCodexSessionAction panelId="t-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Find session" }));
+    await screen.findByText("pick me");
+    fireEvent.click(screen.getByText("pick me"));
+    await waitFor(() => expect(resolveBase).toHaveBeenCalledWith("codex"));
+
+    act(() => {
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "t-2": panel("t-2", { agentSessionId: "sess-1" }),
+        },
+        panelIds: [...state.panelIds, "t-2"],
+      }));
+    });
+    await act(async () => found("/chosen/codex"));
+
     await waitFor(() => expect(screen.queryByText("pick me")).toBeNull());
     expect(addPanel).not.toHaveBeenCalled();
   });

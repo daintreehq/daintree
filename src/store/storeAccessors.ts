@@ -43,6 +43,7 @@ let _getWorktreeIdSet: (() => Set<string> | null) | null = null;
 let _getWorktreeGitDirById: ((worktreeId: string) => string | undefined) | null = null;
 let _getWorktreePathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
 let _getProjectPathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
+let _isCurrentProjectAwaitingClone: (() => boolean) | null = null;
 let _getViewedMarkSources: ((worktreePath: string) => ViewedMarkSources) | null = null;
 let _setPanelExtensionState: ((panelId: string, patch: Record<string, unknown>) => boolean) | null =
   null;
@@ -52,7 +53,6 @@ let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
 let _getFleetLastArmedId: (() => string | null) | null = null;
 let _getAgentSettingsEntry: ((agentId: string) => AgentSettingsEntry | undefined) | null = null;
-let _getGlobalUseAltScreen: (() => boolean | undefined) | null = null;
 let _exitProjectHome: (() => void) | null = null;
 let _isProjectHomePresented: (() => boolean) | null = null;
 let _panelMaximize: { isMaximized: () => boolean; exit: () => void } | null = null;
@@ -71,15 +71,6 @@ export function setAgentSettingsEntryAccessor(
  */
 export function getAgentSettingsEntrySnapshot(agentId: string): AgentSettingsEntry | null {
   return _getAgentSettingsEntry?.(agentId) ?? null;
-}
-
-export function setGlobalUseAltScreenAccessor(getter: () => boolean | undefined): void {
-  _getGlobalUseAltScreen = getter;
-}
-
-/** The global "use the alternate screen" switch, `undefined` until settings load. */
-export function getGlobalUseAltScreenSnapshot(): boolean | undefined {
-  return _getGlobalUseAltScreen?.();
 }
 
 export function setPanelStoreAccessor(getter: () => PanelStoreSnapshot): void {
@@ -179,6 +170,18 @@ export function getProjectPathIndex(): ReadonlyMap<string, string> | null {
  * the host a leaf, which is the same reason every other cross-store read in the
  * renderer goes through this module.
  */
+export function setCurrentProjectAwaitingCloneAccessor(getter: () => boolean): void {
+  _isCurrentProjectAwaitingClone = getter;
+}
+
+/**
+ * Whether this view's project has no checkout yet because its clone is running
+ * or ended without one (#16352). `false` until the project store registers.
+ */
+export function isCurrentProjectAwaitingClone(): boolean {
+  return _isCurrentProjectAwaitingClone?.() ?? false;
+}
+
 export function setPanelExtensionStateAccessor(
   setter: (panelId: string, patch: Record<string, unknown>) => boolean
 ): void {
@@ -304,6 +307,7 @@ export function resetStoreAccessorsForTesting(): void {
   _getWorktreeGitDirById = null;
   _getWorktreePathIndex = null;
   _getProjectPathIndex = null;
+  _isCurrentProjectAwaitingClone = null;
   _getViewedMarkSources = null;
   _setPanelExtensionState = null;
   _setPanelTitle = null;

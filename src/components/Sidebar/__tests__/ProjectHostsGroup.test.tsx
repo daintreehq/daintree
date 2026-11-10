@@ -178,6 +178,11 @@ function hasRow(hostId: string): boolean {
   return document.querySelector(`[data-host-id="${hostId}"]`) !== null;
 }
 
+/** A row's accessible name: where a quiet host's words live, as the row draws none. */
+function spoken(hostId: string): string {
+  return rowFor(hostId).getAttribute("aria-label") ?? "";
+}
+
 function rowFor(hostId: string): HTMLElement {
   const row = document.querySelector<HTMLElement>(
     `[data-host-id="${hostId}"] [data-testid="project-hosts-host-row"]`
@@ -299,7 +304,7 @@ describe("ProjectHostsGroup", () => {
     expect(section()).toBeNull();
   });
 
-  it("says what the host listed in place of counts: no agents, how many agents, no worktrees", async () => {
+  it("draws no words for a host with nothing to count, and says what it listed in its name", async () => {
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
 
@@ -310,15 +315,21 @@ describe("ProjectHostsGroup", () => {
       });
     };
     await reread([worktree("remote-p", "develop")]);
-    await waitFor(() => expect(rowFor("linux").textContent).toContain("No agents"));
+    await waitFor(() => expect(spoken("linux")).toContain("no agents"));
+    // The same phrase down every idle host outweighed the live ones: the row
+    // dims its name and says nothing on the right.
+    expect(rowFor("linux").getAttribute("data-status")).toBe("quiet");
+    expect(rowFor("linux").textContent).not.toContain("No agents");
     // Agents in bands the row doesn't count: how many, never a verdict on what they are doing.
     await reread([worktree("remote-p", "develop", [finished("t4")])]);
-    await waitFor(() => expect(rowFor("linux").textContent).toContain("1 agent"));
+    await waitFor(() => expect(spoken("linux")).toContain("1 finished"));
+    expect(rowFor("linux").textContent).not.toContain("1 agent");
     expect(countsShown(rowFor("linux"))).toBe("");
     expect(rowFor("linux").getAttribute("aria-label")).toBe("name-linux: 1 finished (observed)");
     // A host lists nothing for a project it couldn't read too: said as listed, not as "closed".
     await reread([]);
-    await waitFor(() => expect(rowFor("linux").textContent).toContain("No worktrees"));
+    await waitFor(() => expect(spoken("linux")).toContain("no worktrees"));
+    expect(rowFor("linux").textContent).not.toContain("No worktrees");
   });
 
   it("shows a dropped host in its link's words and nothing it said before", async () => {
@@ -358,6 +369,26 @@ describe("ProjectHostsGroup", () => {
     );
     expect(rowFor("linux").getAttribute("aria-label")).toMatch(/^name-linux, no reply/);
     expect(countsShown(rowFor("linux"))).toBe("");
+  });
+
+  it("drops a host it can't reach, and brings its row back once it answers", async () => {
+    const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
+    // Unreachable, then dialled again: no row either way, so a host that comes
+    // and goes doesn't flicker in and out. Only this machine is left.
+    hostList.hosts = [
+      host("linux", { status: "unreachable", lastSeenAt: 1, detail: null }),
+      host("away", false),
+    ];
+    rerender(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(section()).toBeNull());
+    hostList.hosts = [host("linux", { status: "connecting", attempt: 3 }), host("away", false)];
+    rerender(<ProjectHostsGroup projectId={PROJECT} />);
+    expect(section()).toBeNull();
+
+    hostList.hosts = [host("linux"), host("away", false)];
+    rerender(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
   });
 
   it("reads a host again when it says its list changed, and only that host", async () => {
@@ -465,6 +496,33 @@ describe("ProjectHostsGroup", () => {
     });
   });
 
+  it("counts a host's agents while its link is up only for the assistant's agents there, with nobody opening it (#16492)", async () => {
+    // The assistant launched agents on a host no one in this window opened:
+    // main keeps its link up for them, and that is all this row hears of it.
+    hostList.hosts = [host("linux", false)];
+    presence = [has("linux")];
+    lists.linux = [worktree("remote-p", "feature/a", [working("t1"), waiting("t2")])];
+    const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
+    expect(hasRow("linux")).toBe(false);
+    expect(locate).not.toHaveBeenCalled();
+    expect(listWorktrees).not.toHaveBeenCalledWith({ hostId: "linux" });
+
+    hostList.hosts = [host("linux")];
+    rerender(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("1"));
+    expect(count(rowFor("linux"), "asking")).toBe("1");
+    expect(switchToHost).not.toHaveBeenCalled();
+    expect(openProjectOnHost).not.toHaveBeenCalled();
+
+    // An agent there finishing reads through as the host says it.
+    lists.linux = [worktree("remote-p", "feature/a", [waiting("t2")])];
+    await act(async () => {
+      emit({ type: "worktrees", hostId: "linux" });
+    });
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBeUndefined());
+    expect(count(rowFor("linux"), "asking")).toBe("1");
+  });
+
   it("shows a matched host whose copy closed as having no worktrees, without asking again", async () => {
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
@@ -474,7 +532,7 @@ describe("ProjectHostsGroup", () => {
     await act(async () => {
       emit({ type: "worktrees", hostId: "linux" });
     });
-    await waitFor(() => expect(rowFor("linux").textContent).toContain("No worktrees"));
+    await waitFor(() => expect(spoken("linux")).toContain("no worktrees"));
     expect(locate).toHaveBeenCalledTimes(1);
   });
 
@@ -586,7 +644,7 @@ describe("ProjectHostsGroup", () => {
       emit({ type: "projects", hostId: "linux" });
     });
     await waitFor(() => expect(locate).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(rowFor("linux").textContent).toContain("No worktrees"));
+    await waitFor(() => expect(spoken("linux")).toContain("no worktrees"));
     fireEvent.click(rowFor("linux"), { metaKey: true });
     expect(switchToHost).toHaveBeenLastCalledWith("linux", true, "remote-p");
   });
@@ -745,7 +803,7 @@ describe("ProjectHostsGroup", () => {
       presence = [...presence, has("n", "n-p")];
       lists.n = [worktree("n-p", "develop", [finished("n1")])];
       rerender(<ProjectHostsGroup projectId={PROJECT} />);
-      await waitFor(() => expect(rowFor("n").textContent).toContain("1 agent"));
+      await waitFor(() => expect(spoken("n")).toContain("1 finished"));
       const landed = hostOrder();
       expect(landed).toContain("n");
 
@@ -820,7 +878,7 @@ describe("ProjectHostsGroup", () => {
       lists.h6 = [worktree("h6-p", "develop")];
       rerender(<ProjectHostsGroup projectId={PROJECT} />);
       // Everything has answered, h6 included: only the pointer holds the fold now.
-      await waitFor(() => expect(rowFor("h6").textContent).toContain("No agents"));
+      await waitFor(() => expect(spoken("h6")).toContain("no agents"));
       expect(rows()).toHaveLength(7);
       expect(screen.queryByTestId("project-hosts-more-row")).toBeNull();
 
@@ -867,7 +925,7 @@ describe("ProjectHostsGroup", () => {
       fleet({ h1: [], h2: [], h3: [], h4: [], h5: [], h6: [] });
       render(<ProjectHostsGroup projectId={PROJECT} />);
       await screen.findByTestId("project-hosts-more-row");
-      await waitFor(() => expect(rowFor("h1").textContent).toContain("No agents"));
+      await waitFor(() => expect(spoken("h1")).toContain("no agents"));
       const section = screen.getByTestId("project-hosts-group");
       fireEvent.pointerEnter(section);
 
@@ -944,24 +1002,31 @@ describe("ProjectHostsGroup", () => {
     expect(rows()).toHaveLength(2);
   });
 
-  it("marks the collapsed asking total blocked when another host has a blocked agent", async () => {
+  it("counts blocked agents apart from the asking ones in the collapsed totals", async () => {
     const blocked = { terminalId: "b1", band: "blocked", agentState: "waiting" } as const;
     lists.linux = [worktree("remote-p", "feature/a", [waiting("w1"), blocked])];
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("linux"), "asking")).toBe("2"));
     fireEvent.click(screen.getByTestId("project-hosts-toggle"));
-    const mark = screen
-      .getByTestId("project-hosts-totals")
-      .querySelector('[data-total="asking"] [data-mark]')
-      ?.getAttribute("data-mark");
-    expect(mark).toBe("blocked");
+    // Summed over hosts, a blocked mark on the whole asking count would claim
+    // every one of them blocked; each gets its own count and its own mark.
+    const totals = screen.getByTestId("project-hosts-totals");
+    const cell = (key: string) => totals.querySelector(`[data-total="${key}"]`);
+    expect(cell("blocked")?.textContent).toBe("1");
+    expect(cell("blocked")?.querySelector("[data-mark]")?.getAttribute("data-mark")).toBe(
+      "blocked"
+    );
+    expect(cell("asking")?.textContent).toBe("1");
+    expect(cell("asking")?.querySelector("[data-mark]")?.getAttribute("data-mark")).toBe(
+      "needs-you"
+    );
   });
 
   it("shows no totals when collapsed if only this machine has agents", async () => {
     lists.local = [worktree(PROJECT, "develop", [working("l1"), waiting("l2")])];
     lists.linux = [worktree("remote-p", "develop", [finished("t1")])];
     render(<ProjectHostsGroup projectId={PROJECT} />);
-    await waitFor(() => expect(rowFor("linux").textContent).toContain("1 agent"));
+    await waitFor(() => expect(spoken("linux")).toContain("1 finished"));
     const toggle = screen.getByTestId("project-hosts-toggle");
     fireEvent.click(toggle);
     expect(screen.queryByTestId("project-hosts-totals")).toBeNull();

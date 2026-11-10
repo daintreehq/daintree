@@ -100,7 +100,7 @@ describe("Decisions terminal snapshots switch", () => {
     fireEvent.click(snapshotsSwitch());
     const dialog = screen.getByRole("dialog");
     for (const promise of [
-      "the title of the pane that asked it",
+      "the title of the panel that asked it",
       "the agent state Daintree observed there",
       "its last terminal lines",
       "While a question is open",

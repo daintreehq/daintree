@@ -436,16 +436,6 @@ export const REVIEW_HUB_SECTION_BAND =
  */
 export const REVIEW_HUB_COUNT_CHIP = cn(COUNT_BADGE_CLASS, "ml-1.5");
 
-/**
- * Disabled treatment for the hub's full-width primary CTAs (Commit, Push,
- * Continue). Fading a chromatic CTA to 50% produces a dusty slab of the accent
- * that still dominates the dialog, and drops the label to ~2.1:1 in every light
- * theme. Neutral inset surface + muted ink instead. Keyed on `aria-disabled`
- * so the button stays focusable; the caller vetoes activation itself.
- */
-export const REVIEW_HUB_DISABLED_CTA =
-  "aria-disabled:bg-surface-inset aria-disabled:text-text-muted aria-disabled:shadow-none aria-disabled:cursor-not-allowed";
-
 export type BulkScope = "selection" | "shown" | "all";
 
 /**

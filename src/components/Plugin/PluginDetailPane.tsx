@@ -6,7 +6,7 @@ import {
   resolvePluginCategory,
 } from "@shared/config/pluginCategoryRegistry";
 import { PluginIconTile } from "./pluginIcons";
-import { CapabilityRow } from "./capabilityMeta";
+import { CapabilityRow, permissionBypassAgentNames } from "./capabilityMeta";
 import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
 import { PluginPerformanceSection, PluginStylesSection } from "./PluginPerformanceTab";
@@ -23,6 +23,7 @@ import { PluginTerminalLinksSection } from "./PluginTerminalLinksSection";
 import { PluginGrantSwitch } from "./PluginGrantSwitch";
 import { PluginPresetGrants } from "./PluginPresetGrants";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import {
   SettingsSubtabBar,
   subtabPanelProps,
@@ -93,6 +94,7 @@ function PluginCapabilityList({
 }) {
   const allowedUrls = plugin.manifest.scopes?.network?.allowedUrls;
   const allowedSocketPaths = plugin.manifest.scopes?.socket?.allowedPaths;
+  const permissionBypassAgents = permissionBypassAgentNames(plugin.manifest.contributes.agents);
 
   return (
     <div className="space-y-2">
@@ -121,6 +123,7 @@ function PluginCapabilityList({
             capability={capability}
             allowedUrls={allowedUrls}
             allowedSocketPaths={allowedSocketPaths}
+            permissionBypassAgents={permissionBypassAgents}
           />
         ))}
       </ul>
@@ -234,7 +237,7 @@ function PluginContributedAgents({ agents }: { agents: PluginAgentContribution[]
           <li key={agent.id} className="text-xs">
             <div className="text-text-primary">{agent.name}</div>
             <div className="text-2xs text-text-secondary mt-0.5">
-              Launch it from the new-terminal menu
+              Launch it from the New panel palette
             </div>
           </li>
         ))}
@@ -263,7 +266,12 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
             <li key={`${name}-${index}`} className="text-xs">
               <div className="text-text-primary">
                 {name}
-                {role && <span className="text-2xs text-text-secondary"> · {role}</span>}
+                {role && (
+                  <span className="text-2xs text-text-secondary">
+                    {" "}
+                    <FactSeparator /> {role}
+                  </span>
+                )}
               </div>
               {(url || email) && (
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
@@ -521,9 +529,13 @@ export function PluginDetailPane({
                 // says whether the running backend and the mounted view came
                 // out of the same build (#12277).
                 <Badge size="xs">
-                  {runtimeStatus?.viewGeneration != null
-                    ? `Dev · gen ${runtimeStatus.viewGeneration}`
-                    : "Dev"}
+                  {runtimeStatus?.viewGeneration != null ? (
+                    <span>
+                      Dev <FactSeparator /> gen {runtimeStatus.viewGeneration}
+                    </span>
+                  ) : (
+                    "Dev"
+                  )}
                 </Badge>
               )}
               {restartRequired && <Badge size="xs">Restart required</Badge>}
@@ -682,7 +694,7 @@ export function PluginDetailPane({
         <div className="mt-3 flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default">
           <ArrowUpCircle className="w-3.5 h-3.5 text-status-warning shrink-0" aria-hidden="true" />
           <p className="text-2xs text-text-primary min-w-0 flex-1">
-            Update available &middot; {updateAvailable.version}
+            Update available <FactSeparator /> {updateAvailable.version}
           </p>
           <Button variant="outline" size="xs" onClick={onCheckForUpdate} disabled={checkingUpdate}>
             Update plugin

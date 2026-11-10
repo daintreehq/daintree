@@ -325,6 +325,26 @@ export function hasStreamingWrites(managed: ManagedTerminal, now: number): boole
   );
 }
 
+/**
+ * True while an alt-screen pane's output has not all reached xterm's buffer —
+ * a batch still parsing or ingest bytes still held — or a DEC 2026 frame is
+ * open (#16359). xterm's `resize()` parses pending writes before it moves the
+ * grid, so a resize now would land wherever those bytes leave the pane: inside
+ * a synchronized frame the app sized for the old grid, or on a buffer they
+ * switched to, after every check here had passed. Unlike
+ * {@link hasStreamingWrites} this asks only that the parser be caught up, not
+ * that the app be quiet; a full-screen TUI redraws too often to wait for a
+ * quiet window. Shared with the watchdog so a deferral there burns no breaker
+ * attempt.
+ */
+export function altFrameInFlight(managed: ManagedTerminal, queuedBytes: number): boolean {
+  return (
+    (managed.pendingWrites ?? 0) > 0 ||
+    queuedBytes > 0 ||
+    managed.terminal.modes?.synchronizedOutputMode === true
+  );
+}
+
 interface SettledResizeRequest {
   timer: number;
   cols: number;
@@ -851,14 +871,18 @@ export class TerminalResizeController {
       return null;
     }
     // Choke point for the alt-screen exclusion: a live full-screen TUI paints an
-    // absolutely-positioned frame that xterm never reflows, and racing its own
-    // SIGWINCH redraw is the #10805/#10632 corruption. Leaving BOTH grids at the
-    // stale size keeps them consistent until real layout returns on reattach.
-    // Enforced here rather than only at the caller because a resize stashed in
-    // `pendingBackgroundResize` while main-buffer is replayed by `lockResize`
-    // long after the pane may have entered the alternate screen.
+    // absolutely-positioned frame and redraws all of it on every SIGWINCH, so
+    // sizing it to this window-ratio estimate would only buy a second redraw
+    // when real layout corrects the estimate on reveal. Both grids stay at the
+    // stale size, which keeps them consistent, and the pane is handed to the
+    // reveal repair, which measures the real box and moves both together
+    // (#16359). Enforced here rather than only at the caller because a resize
+    // stashed in `pendingBackgroundResize` while main-buffer is replayed by
+    // `lockResize` long after the pane may have entered the alternate screen.
     if (managed.isAltBuffer) {
       managed.pendingBackgroundResize = undefined;
+      managed.revealPendingRepair = true;
+      managed.revealPendingGeneration = managed.attachGeneration;
       return null;
     }
     if (this.isResizeLocked(id)) {
@@ -939,8 +963,8 @@ export class TerminalResizeController {
   // Computes cols/rows from cached cell metrics with no DOM reads — a hidden or
   // detached view has no live layout to measure. Pure computation + state
   // update; the caller owns the commit policy, and the two callers differ in
-  // more than timing. `applyBackgroundResize` refuses alt-screen panes, stashes
-  // under a resize lock, and commits directly (its burst was already debounced
+  // more than timing. `applyBackgroundResize` leaves alt-screen panes to the
+  // reveal repair, stashes under a resize lock, and commits directly (its burst was already debounced
   // in Main); `resize`'s background-unfocused branch has no such exclusions and
   // goes through `applyResize` to keep the per-agent resize strategy the live
   // ResizeObserver path relies on. What they share is the invariant that
@@ -1177,16 +1201,20 @@ export class TerminalResizeController {
    * cached dims can equal the now-stale xterm grid), which applyDeferredResize's
    * cache==current early-return would miss.
    *
-   * @param options `force: true` skips ONLY the streaming-quiescence gate below
-   * (#11638) — the explicit user Redraw path. Every other guard here still
-   * applies. Automatic callers must omit it.
+   * @param options `force: true` skips ONLY the write wait below (#11638) — the
+   * main buffer's quiet window, or an alt-screen pane's wait for in-flight
+   * output — for the explicit user Redraw path. Every other guard here still
+   * applies, an alt pane's open-block wait included. Automatic callers must
+   * omit it.
    *
    * @returns true once a fresh measurement landed (whether or not a resize was
    * needed); false when the box is not measurable yet (zero/occluded/transitional
-   * layout) so the reveal sweep retries on a later frame. The boolean is
-   * measurability, NOT convergence — an alt-buffer pane reports true without
-   * touching geometry at all, and a serialized restore parks the xterm resize,
-   * so no caller may treat it as proof the grid now matches the container.
+   * layout), or a grid change has to wait (a streaming main-buffer pane, an
+   * alt-screen pane mid-frame), so the reveal sweep retries on a later frame.
+   * The boolean is measurability, NOT convergence — a serialized restore parks
+   * the xterm resize, and a geometry hold reports true without touching
+   * anything, so no caller may treat it as proof the grid now matches the
+   * container.
    */
   reconcileGeometryFresh(id: string, options: TerminalResyncOptions = {}): boolean {
     const managed = this.deps.getInstance(id);
@@ -1197,19 +1225,6 @@ export class TerminalResizeController {
 
     const rect = managed.hostElement.getBoundingClientRect();
     if (!isViableResizeBox(rect.width, rect.height)) return false;
-
-    // Never reflow a live alt-screen TUI here. A full-screen app (OpenCode, and
-    // any agent with blockAltScreen disabled) paints an absolutely-positioned
-    // frame and emits only cursor-positioned deltas; an out-of-band xterm
-    // resize/reflow at this point mangles that frame and races the app's own
-    // SIGWINCH redraw — the "settled OpenCode goes weird on click / garbles
-    // intermittently" corruption. This one-shot, lock-exempt reconcile was added
-    // (#10632) to re-fit main-buffer scrollback that wrapped at the wrong column
-    // after a project switch-back; it must not touch the alternate buffer. An
-    // alt-screen pane's geometry is reconciled by the ResizeObserver-driven
-    // applyResize path and the app's own redraw. Report success so the reveal
-    // repaint doesn't treat this as "not paintable yet" and spin in a retry loop.
-    if (managed.isAltBuffer) return true;
 
     // Prefer the fit addon's own DOM measurement so the grid matches exactly
     // what a manual Redraw's fit() would compute; fall back to cell-metric math
@@ -1254,11 +1269,22 @@ export class TerminalResizeController {
     // gate protects against is real but it is the AUTOMATIC case; a user who
     // pressed Redraw has already judged the pane broken and accepts a frame of
     // churn to fix it.
-    if (
-      !options.force &&
-      (managed.terminal.cols !== cols || managed.terminal.rows !== rows) &&
-      hasStreamingWrites(managed, Date.now())
-    ) {
+    //
+    // An alt-screen pane has no scrollback to re-wrap, and a full-screen TUI
+    // redraws often enough that waiting for quiet would never end, so it skips
+    // this gate (#16359). What it must never do is move the grid in the middle
+    // of a frame, so it waits instead for the parser to catch up and any DEC
+    // 2026 block to close. `force` drops the parser wait for the same reason
+    // it drops the quiet window above — a pane whose output never lets the
+    // parser catch up would otherwise strand Redraw too — but still waits out
+    // a block it can see open.
+    const gridChanges = managed.terminal.cols !== cols || managed.terminal.rows !== rows;
+    if (managed.isAltBuffer) {
+      const midFrame = options.force
+        ? managed.terminal.modes?.synchronizedOutputMode === true
+        : altFrameInFlight(managed, this.deps.dataBuffer.getQueuedBytes(id));
+      if (gridChanges && midFrame) return false;
+    } else if (!options.force && gridChanges && hasStreamingWrites(managed, Date.now())) {
       return false;
     }
 
@@ -1279,8 +1305,16 @@ export class TerminalResizeController {
     // this hazard because the streaming gate above already turned them away —
     // a forced resync (#11638) runs precisely when a backlog is most likely,
     // so the flush has to be explicit here.
+    //
+    // For an alt-screen pane this is the whole of what #10805 allows: the same
+    // xterm-then-PTY pair the ResizeObserver path commits, and only when the
+    // grid really moved. For every automatic caller nothing is left to parse
+    // (the gate above), so the frame on screen is a finished one; a forced
+    // Redraw may land a frame early, the churn #11638 accepts. The alternate
+    // buffer has no scrollback, so xterm crops or pads that frame rather than
+    // reflowing it, and the app's SIGWINCH redraw repaints it at the new size.
     let heldBytesFlushed = true;
-    if (managed.terminal.cols !== cols || managed.terminal.rows !== rows) {
+    if (gridChanges) {
       heldBytesFlushed = this.flushHeldBytesBeforeResize(id);
       this.resizeTerminal(managed, cols, rows);
     }
@@ -1293,7 +1327,8 @@ export class TerminalResizeController {
     if (!heldBytesFlushed) {
       this.deps.dataBuffer.resumeFlush(id);
     }
-    this.pinToBottomAfterResize(managed);
+    // Never scroll a live full-screen TUI (#11316): its frame is the app's.
+    if (!managed.isAltBuffer) this.pinToBottomAfterResize(managed);
     return true;
   }
 

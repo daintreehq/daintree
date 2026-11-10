@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  FALLBACK_CHAIN_MAX,
   getAgentConfigFolderAccount,
   getEffectiveAgentConfig,
   isEffectivelyRegisteredAgent,
@@ -95,7 +96,6 @@ interface PresetPatch {
   args?: string[];
   customFlags?: string | null;
   dangerousMode?: PresetMode;
-  inlineMode?: PresetMode;
   color?: string;
   displayTitle?: string;
   fallbacks?: string[];
@@ -110,7 +110,6 @@ const PATCH_FIELDS = [
   "args",
   "customFlags",
   "dangerousMode",
-  "inlineMode",
   "color",
   "displayTitle",
   "fallbacks",
@@ -427,10 +426,6 @@ function applyPresetPatch(base: AgentPreset, patch: PresetPatch): AgentPreset {
       next.dangerousEnabled = patch.dangerousMode === "on";
     }
   }
-  if (patch.inlineMode !== undefined) {
-    if (patch.inlineMode === "inherit") delete next.inlineMode;
-    else next.inlineMode = patch.inlineMode;
-  }
   if (patch.color !== undefined) {
     if (patch.color === "") delete next.color;
     else next.color = patch.color;
@@ -585,7 +580,9 @@ function presetProblems(
   if (patch.fallbacks !== undefined && patch.fallbacks.length > 0) {
     const kept = probe({ fallbacks: patch.fallbacks })?.fallbacks ?? [];
     if (canonical(kept) !== canonical(patch.fallbacks)) {
-      problems.push("fallbacks: up to 3 distinct preset ids, not this preset's own.");
+      problems.push(
+        `fallbacks: up to ${FALLBACK_CHAIN_MAX} distinct preset ids, not this preset's own.`
+      );
     } else {
       for (const id of patch.fallbacks) {
         if (!knownIds.has(id)) {

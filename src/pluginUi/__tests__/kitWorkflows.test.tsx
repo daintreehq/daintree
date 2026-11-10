@@ -56,7 +56,9 @@ describe("AttachmentList", () => {
   it("draws rows with their detail and a failure's cause, still saying it failed", () => {
     render(createElement(kit.AttachmentList, { attachments: files, layout: "rows" }));
     const list = screen.getByRole("list", { name: "Attachments" });
-    expect(within(list).getByText("Failed · Too large")).toBeTruthy();
+    expect(
+      within(list).getByText((_, element) => element?.textContent === "Failed · Too large")
+    ).toBeTruthy();
     expect(within(list).getByText("Uploading")).toBeTruthy();
   });
 

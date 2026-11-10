@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { GitLabSettingsTab } from "../components/GitLabSettingsTab";
 import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 
@@ -90,5 +90,42 @@ describe("GitLabSettingsTab — switching instance with a saved token", () => {
     await waitFor(() => expect(setCredential).toHaveBeenCalled());
     expect(stored.instanceUrl).toBe("https://gitlab.example.com");
     expect(clearCredential).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("GitLabSettingsTab — Enter in the token field", () => {
+  it("saves once on Enter, and does nothing while the field is empty", async () => {
+    await renderLoaded();
+    const token = screen.getByLabelText("GitLab personal access token");
+    fireEvent.keyDown(token, { key: "Enter" });
+    expect(setCredential).not.toHaveBeenCalled();
+
+    fireEvent.change(token, { target: { value: "glpat-new" } });
+    fireEvent.keyDown(token, { key: "Enter" });
+    fireEvent.keyDown(token, { key: "Enter" });
+
+    await waitFor(() => expect(setCredential).toHaveBeenCalledTimes(1));
+    expect(setCredential).toHaveBeenCalledWith("daintree.gitlab.gitlab", { token: "glpat-new" });
+  });
+
+  it("does nothing on Enter before the saved state has loaded", async () => {
+    let release: (value: { values: Record<string, unknown> }) => void = () => {};
+    getSettingValues.mockImplementationOnce(
+      () => new Promise<{ values: Record<string, unknown> }>((resolve) => (release = resolve))
+    );
+    render(<GitLabSettingsTab />);
+    // The credential status settles while the settings read is still pending.
+    await screen.findByText(/Token saved|No token saved/);
+    const token = screen.getByLabelText("GitLab personal access token");
+    fireEvent.change(token, { target: { value: "glpat-early" } });
+    fireEvent.keyDown(token, { key: "Enter" });
+    // A started save re-reads the stored instance URL first, so a second read means it ran.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(getSettingValues).toHaveBeenCalledTimes(1);
+    expect(setCredential).not.toHaveBeenCalled();
+    release({ values: { ...stored } });
+    await screen.findByText("Token saved for gitlab.com");
   });
 });

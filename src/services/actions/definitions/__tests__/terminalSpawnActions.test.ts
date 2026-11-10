@@ -18,6 +18,14 @@ const flushOptimisticClosesMock = vi.hoisted(() => vi.fn());
 const buildResumePanelOptionsMock = vi.hoisted(() => vi.fn());
 const listAgentSessionsMock = vi.hoisted(() => vi.fn());
 
+// The launch executable comes from this view's CLI detection, which these tests
+// don't load: stand it in directly.
+vi.mock("@/utils/agentLaunchCommand", () => ({
+  resolveCurrentAgentLaunchBaseCommand: vi.fn(async () => undefined),
+  getCurrentLaunchCliDetail: vi.fn(async () => undefined),
+  resolveAgentLaunchBaseCommand: vi.fn((registryCommand: string) => registryCommand),
+}));
+
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/layoutUndoStore", () => ({ useLayoutUndoStore: layoutUndoMock }));
 vi.mock("@/services/terminal/panelDuplicationService", () => ({
@@ -68,6 +76,7 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 }));
 
 import { registerTerminalSpawnActions } from "../terminalSpawnActions";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 
 function setupActions(overrides?: { activeWorktreeId?: string | undefined }) {
   const actions: ActionRegistry = new Map();
@@ -562,15 +571,18 @@ describe("terminal.reopenLast journal fallback", () => {
     // Newest-first: only the first record should be resumed.
     listAgentSessionsMock.mockResolvedValue([session, { ...session, sessionId: "s-old" }]);
     buildResumePanelOptionsMock.mockReturnValue(resumeOptions);
+    vi.mocked(resolveCurrentAgentLaunchBaseCommand).mockResolvedValueOnce("/chosen/claude");
     const run = setupActions();
 
     await run("terminal.reopenLast");
 
     expect(listAgentSessionsMock).toHaveBeenCalledWith("wt-1");
-    expect(buildResumePanelOptionsMock).toHaveBeenCalledWith(session, {
-      cwd: "/cwd",
-      worktreeId: "wt-1",
-    });
+    // Resumed with the executable a launch starts now, the chosen copy included (#16399).
+    expect(buildResumePanelOptionsMock).toHaveBeenCalledWith(
+      session,
+      { cwd: "/cwd", worktreeId: "wt-1" },
+      "/chosen/claude"
+    );
     expect(addPanel).toHaveBeenCalledWith(resumeOptions);
   });
 

@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PresetSelector } from "../PresetSelector";
 import { SettingsSection } from "../SettingsSection";
@@ -11,7 +12,7 @@ import { EnvBlock } from "./EnvBlock";
 import { FallbackChainEditor } from "./FallbackChainEditor";
 import { PresetAccountRow } from "./PresetAccountRow";
 import { ReadOnlyDetail } from "./ReadOnlyDetail";
-import { savedPresetStatus } from "./scopeUtils";
+import { savedPresetStatus, storedFallbacksFor } from "./scopeUtils";
 import type { AgentPreset } from "@/config/agents";
 import type { AgentSettingsEntry } from "@shared/types";
 import type { PresetInventoryState } from "@shared/utils/agentPresets";
@@ -65,6 +66,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
           data-testid="preset-add-button"
           onClick={scope.openAddDialog}
         >
+          <Plus aria-hidden="true" />
           Add preset
         </Button>
       }
@@ -168,18 +170,13 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
                 dangerousMode={scope.dangerousMode}
                 effectiveSkipPerms={scope.effectiveSkipPerms}
                 inheritResolvesToOn={scope.inheritResolvesToOn}
-                inheritOriginLabel={scope.inheritOriginLabel}
-                inlineMode={scope.inlineMode}
-                inlineInheritResolvesToInline={scope.inlineInheritResolvesToInline}
-                inlineInheritOriginLabel={scope.inlineInheritOriginLabel}
+                inheritHint={scope.inheritHint}
                 customArgsValue={scope.customArgsValue}
                 customArgsPlaceholder={scope.customArgsPlaceholder}
                 customArgsDescription={scope.customArgsDescription}
                 customFlagsOverride={scope.customFlagsOverride}
-                supportsInlineMode={scope.supportsInlineMode}
                 defaultDangerousArg={defaultDangerousArg}
                 onDangerousModeChange={scope.handleDangerousModeChange}
-                onInlineModeChange={scope.handleInlineModeChange}
                 onCustomFlagsChange={scope.handleCustomFlagsChange}
                 onCustomFlagsOverrideReset={scope.handleCustomFlagsOverrideReset}
               />
@@ -189,6 +186,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
               <FallbackChainEditor
                 agentId={props.agentId}
                 selectedPreset={scope.selectedPreset}
+                storedFallbacks={storedFallbacksFor(scope.customPresets, scope.selectedPreset.id)}
                 allPresets={scope.allPresets}
                 onUpdatePreset={scope.handleUpdatePreset}
               />
@@ -202,7 +200,6 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
                   agentName={agentName}
                   agentCustomFlags={scope.agentDefaultCustomFlags}
                   effectiveSkipPerms={scope.effectiveSkipPerms}
-                  effectiveInline={scope.supportsInlineMode ? scope.effectiveInlineMode : undefined}
                   onDuplicate={scope.handleDuplicatePreset}
                 />
               )}

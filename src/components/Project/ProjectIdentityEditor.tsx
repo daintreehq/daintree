@@ -8,6 +8,7 @@ import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projec
 import type { Project } from "@shared/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 interface ProjectIdentityEditorProps {
   project: Project;
@@ -242,7 +243,7 @@ export function ProjectIdentityEditor({
               {/* The commit model is settled but invisible — this is the only
                   place it is written down. */}
               <span id="project-identity-name-hint" className="text-xs text-text-secondary">
-                Enter saves · Esc cancels
+                Enter saves <FactSeparator /> Esc cancels
               </span>
             </div>
             <Input

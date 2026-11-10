@@ -265,7 +265,6 @@ vi.mock("@/config/agents", () => ({
 vi.mock("@shared/types/agentSettings", () => ({
   reconcileDecorationFlags: (flags: string[]) => flags,
   reconcileInlineModeFlag: (flags: string[]) => flags,
-  resolveEffectiveInlineMode: () => false,
   resolveKeepDecorations: () => false,
   buildResumeCommand: (...args: unknown[]) => mockBuildResumeCommand(...args),
   buildResumeLatestCommand: (...args: unknown[]) => mockBuildResumeLatestCommand(...args),
@@ -444,6 +443,7 @@ vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 import { HelpPanel } from "../HelpPanel";
 import { assistantSlotKey as slotKey } from "@shared/config/assistantSlots";
 import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
+import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
 
 // Drain the full async chain (pull-on-mount peek → setState → re-render →
 // fire-effect → async launch) by yielding to a macrotask: setTimeout(0) runs
@@ -683,7 +683,9 @@ describe("HelpPanel — resume from hibernated session", () => {
       render(<HelpPanel width={380} />);
     });
 
-    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined);
+    // Started with the executable a launch starts now: the registry command, with
+    // nothing detected here (#16399).
+    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined, "claude");
     expect(panelStoreState.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "terminal",
@@ -942,7 +944,9 @@ describe("HelpPanel — Resume affordance for eviction-captured sessions", () =>
     });
 
     // Resumes the captured session via the agent's --resume command...
-    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined);
+    // Started with the executable a launch starts now: the registry command, with
+    // nothing detected here (#16399).
+    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined, "claude");
     expect(panelStoreState.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         launchAgentId: "claude",
@@ -1204,7 +1208,9 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
         removeOnExit: true,
       })
     );
-    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined);
+    // Started with the executable a launch starts now: the registry command, with
+    // nothing detected here (#16399).
+    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined, "claude");
     // Auto-resuming a stranded session is recovery, NOT billed-auto-launch
     // consent — same separation as the manual Resume CTA (#10699).
     expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
@@ -1868,10 +1874,12 @@ describe("HelpPanel — resume preserves user-configured launch flags", () => {
       render(<HelpPanel width={380} />);
     });
 
-    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", [
-      "--model",
-      "claude-opus-4-5",
-    ]);
+    expect(mockBuildResumeCommand).toHaveBeenCalledWith(
+      "claude",
+      "abc-123",
+      ["--model", "claude-opus-4-5"],
+      "claude"
+    );
     expect(panelStoreState.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         agentLaunchFlags: ["--model", "claude-opus-4-5"],
@@ -2326,7 +2334,7 @@ describe("HelpPanel — + New session clears hibernated entry", () => {
     // The restart control moved from a header "+" into the overflow menu, where it is
     // named for the conversation it discards.
     const restartBtn = Array.from(container.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Restart conversation")
+      b.textContent?.includes("Clear conversation")
     )!;
     expect(restartBtn).toBeTruthy();
 
@@ -2339,12 +2347,18 @@ describe("HelpPanel — + New session clears hibernated entry", () => {
 });
 
 describe("HelpPanel — cold-view lane restore (#12108)", () => {
-  it("recreates a tab for every lane holding an eviction-captured conversation", async () => {
-    // A cold view knows only slot 0, so lanes 1+ would have no tab to reach
-    // their captured conversations from even though the entries are on disk.
+  it("recreates a tab for every lane captured from a view that went away with the panel open", async () => {
+    // A cold view knows only slot 0, so lanes 1+ the person had in front of them
+    // when an eviction or crash took the view would have no tab to reach them from.
     helpPanelState.terminalId = null;
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockListPendingHibernationSlots.mockResolvedValue([0, 2]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) => ({
+      agentId: "claude",
+      agentSessionId: `conv-${slot}`,
+      cwd: "/tmp/help",
+      panelWasOpen: true,
+    }));
 
     await act(async () => {
       render(<HelpPanel width={380} />);
@@ -2359,6 +2373,220 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
     // visible lane and follows the ordinary auto-launch consent path.)
     expect(mockProvisionSession).not.toHaveBeenCalledWith(expect.objectContaining({ slot: 2 }));
   });
+
+  it("gives a cold view no tab for a lane that only holds a captured conversation (#16495)", async () => {
+    // Slots 1 and 3 are where earlier scheduled runs ran and exited (slot 3's
+    // never learned its conversation id); slot 2's assistant is still running
+    // with no view. Only the running one is in use.
+    helpPanelState.terminalId = null;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockListPendingHibernationSlots.mockResolvedValue([1, 2, 3]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) => ({
+      agentId: "claude",
+      agentSessionId: slot === 3 ? "" : `conv-${slot}`,
+      cwd: "/tmp/help",
+      panelWasOpen: false,
+      ...(slot === 2 ? { live: true } : {}),
+    }));
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(2);
+    expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(1);
+    expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(3);
+  });
+
+  it("adds no tab for a slot an earlier scheduled run used once the run is recorded (#16495)", async () => {
+    helpPanelState.terminalId = "term-live";
+    helpPanelState.agentId = "claude";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    const listeners: Array<(payload: { projectId: string; scheduleIds: string[] }) => void> = [];
+    const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
+    electron.events = {
+      on: vi.fn((channel: string, listener: (typeof listeners)[number]) => {
+        if (channel === "scheduled-runs:changed") listeners.push(listener);
+        return () => listeners.splice(listeners.indexOf(listener), 1);
+      }),
+    };
+    // Slot 3 was captured from a view that went with the panel open: a cold
+    // view's tab to restore, never one a run change adds.
+    mockListPendingHibernationSlots.mockResolvedValue([1, 2, 3]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) => ({
+      agentId: "claude",
+      agentSessionId: `conv-${slot}`,
+      cwd: "/tmp/help",
+      panelWasOpen: slot === 3,
+      ...(slot === 2 ? { live: true } : {}),
+    }));
+
+    try {
+      await act(async () => {
+        render(<HelpPanel width={380} />);
+      });
+      await flushAsyncWork();
+
+      await act(async () => {
+        for (const listener of listeners) listener({ projectId: "proj-1", scheduleIds: ["s"] });
+      });
+      await flushAsyncWork();
+
+      expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(2);
+      expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(1);
+      expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(3);
+    } finally {
+      delete electron.events;
+    }
+  });
+
+  it("lets a newer read win over a cold view's older one that saw the run still going (#16495)", async () => {
+    helpPanelState.terminalId = null;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    const listeners: Array<(payload: { projectId: string; scheduleIds: string[] }) => void> = [];
+    const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
+    electron.events = {
+      on: vi.fn((channel: string, listener: (typeof listeners)[number]) => {
+        if (channel === "scheduled-runs:changed") listeners.push(listener);
+        return () => listeners.splice(listeners.indexOf(listener), 1);
+      }),
+    };
+    const entry = {
+      agentId: "claude",
+      agentSessionId: "conv-1",
+      cwd: "/tmp/help",
+      panelWasOpen: false,
+    };
+    let answerColdRead: (value: typeof entry & { live: true }) => void = () => {};
+    let slotOnePeeks = 0;
+    mockListPendingHibernationSlots.mockResolvedValue([1]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) => {
+      if (slot !== 1) return null;
+      slotOnePeeks += 1;
+      // The cold view's read is answered last, and saw the run still going.
+      if (slotOnePeeks === 1) return new Promise((resolve) => (answerColdRead = resolve));
+      return entry;
+    });
+
+    try {
+      await act(async () => {
+        render(<HelpPanel width={380} />);
+      });
+      await flushAsyncWork();
+      expect(slotOnePeeks).toBe(1);
+
+      await act(async () => {
+        for (const listener of listeners) listener({ projectId: "proj-1", scheduleIds: ["s"] });
+      });
+      await flushAsyncWork();
+      expect(slotOnePeeks).toBe(2);
+
+      await act(async () => {
+        answerColdRead({ ...entry, live: true });
+      });
+      await flushAsyncWork();
+
+      expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(1);
+    } finally {
+      delete electron.events;
+    }
+  });
+
+  it.each([
+    ["nobody touched it", {}, true],
+    ["it is on screen", { onScreen: true }, false],
+    ["it was on screen before", { visited: true }, false],
+    ["its conversation was touched", { touched: true }, false],
+    ["a launch has claimed it", { claimed: true }, false],
+  ] as const)(
+    "closes the tab it opened for a scheduled run once the run ends, unless %s (#16495)",
+    async (
+      _case,
+      lane: { onScreen?: boolean; visited?: boolean; touched?: boolean; claimed?: boolean },
+      hidden
+    ) => {
+      helpPanelState.terminalId = "term-live";
+      helpPanelState.agentId = "claude";
+      projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+      const listeners: Array<(payload: { projectId: string; scheduleIds: string[] }) => void> = [];
+      const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
+      const help = electron.help as Record<string, unknown>;
+      const discard = vi.fn().mockResolvedValue(undefined);
+      help.discardConversation = discard;
+      electron.events = {
+        on: vi.fn((channel: string, listener: (typeof listeners)[number]) => {
+          if (channel === "scheduled-runs:changed") listeners.push(listener);
+          return () => listeners.splice(listeners.indexOf(listener), 1);
+        }),
+      };
+      helpPanelState.ensureSlot = vi.fn((slot: number) => {
+        helpPanelState.sessions = {
+          ...helpPanelState.sessions,
+          [slot]: {
+            terminalId: null,
+            agentId: null,
+            sessionId: null,
+            conversationTouched: lane.touched === true,
+          },
+        };
+      });
+      helpPanelState.closeSlot = vi.fn();
+      let running = true;
+      mockListPendingHibernationSlots.mockResolvedValue([1]);
+      mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) =>
+        slot === 1
+          ? {
+              agentId: "claude",
+              agentSessionId: "conv-1",
+              cwd: "/tmp/help",
+              panelWasOpen: false,
+              ...(running ? { live: true } : {}),
+            }
+          : null
+      );
+      const runChanged = async () => {
+        await act(async () => {
+          for (const listener of listeners) listener({ projectId: "proj-1", scheduleIds: ["s"] });
+        });
+        await flushAsyncWork();
+      };
+
+      try {
+        let view: ReturnType<typeof render> | undefined;
+        await act(async () => {
+          view = render(<HelpPanel width={380} />);
+        });
+        await flushAsyncWork();
+        await runChanged();
+        expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(1);
+
+        if (lane.visited) {
+          for (const slot of [1, 0]) {
+            helpPanelState.activeSlot = slot;
+            await act(async () => {
+              view!.rerender(<HelpPanel width={380} />);
+            });
+          }
+        }
+        if (lane.onScreen) helpPanelState.activeSlot = 1;
+        if (lane.claimed) claimedHelpLaneKeys.add(slotKey("proj-1", 1));
+        running = false;
+        await runChanged();
+
+        if (hidden) expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
+        else expect(helpPanelState.closeSlot).not.toHaveBeenCalled();
+        // Hiding a tab leaves its conversation where it was.
+        expect(discard).not.toHaveBeenCalledWith("proj-1", 1);
+        expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalledWith("proj-1", 1);
+      } finally {
+        delete electron.events;
+        helpPanelState.sessions = {};
+        helpPanelState.activeSlot = 0;
+        claimedHelpLaneKeys.clear();
+      }
+    }
+  );
 
   it("does not recreate lanes for a view that already holds a live session", async () => {
     helpPanelState.terminalId = "term-live";
@@ -2388,6 +2616,17 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
       }),
     };
     mockListPendingHibernationSlots.mockResolvedValue([1]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) =>
+      slot === 1
+        ? {
+            agentId: "claude",
+            agentSessionId: "",
+            cwd: "/tmp/help",
+            panelWasOpen: false,
+            live: true,
+          }
+        : null
+    );
 
     try {
       await act(async () => {

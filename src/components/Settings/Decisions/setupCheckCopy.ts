@@ -60,6 +60,8 @@ const OBSERVED: {
         return "The relay lists this computer as its owner, under the keys stored here";
       case "not-recognised":
         return "The relay answered, but it lists another owner, or other keys for this computer";
+      case "not-connected":
+        return `The relay is set up, but Decisions stopped connecting to it. ${CONNECTION_PROBLEM[claim.problem]}.`;
       case "unexpected":
         return UNEXPECTED;
       default:

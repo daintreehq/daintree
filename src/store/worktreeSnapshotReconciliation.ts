@@ -329,6 +329,9 @@ export function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolea
     a.lastFetchedAt === b.lastFetchedAt &&
     a.fetchAuthFailed === b.fetchAuthFailed &&
     a.fetchNetworkFailed === b.fetchNetworkFailed &&
+    a.gitStatusUnanswered?.reason === b.gitStatusUnanswered?.reason &&
+    a.gitStatusUnanswered?.since === b.gitStatusUnanswered?.since &&
+    a.gitStatusWaitingForDownload === b.gitStatusWaitingForDownload &&
     a.hasRemote === b.hasRemote &&
     a.isFetchInFlight === b.isFetchInFlight &&
     a.matchedForgeProviderId === b.matchedForgeProviderId &&
@@ -456,8 +459,27 @@ function setupStatusEqual(
     a.startedAt === b.startedAt &&
     a.completedAt === b.completedAt &&
     a.error === b.error &&
-    setupPluginStepsEqual(a.pluginSteps, b.pluginSteps)
+    setupPluginStepsEqual(a.pluginSteps, b.pluginSteps) &&
+    setupClonesEqual(a.clones, b.clones)
   );
+}
+
+/** Clone results land while the stage stays `copy-config`, so they can be the only change. */
+function setupClonesEqual(
+  a: NonNullable<WorktreeSnapshot["setupStatus"]>["clones"],
+  b: NonNullable<WorktreeSnapshot["setupStatus"]>["clones"]
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null || a.length !== b.length) return false;
+  return a.every((clone, index) => {
+    const other = b[index];
+    return (
+      other !== undefined &&
+      clone.path === other.path &&
+      clone.outcome === other.outcome &&
+      clone.reason === other.reason
+    );
+  });
 }
 
 /** A plugin step moving from running to failed is, on its own, a whole update. */

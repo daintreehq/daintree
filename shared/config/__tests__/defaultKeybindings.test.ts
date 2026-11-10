@@ -20,6 +20,14 @@ describe("buildDefaultKeybindings", () => {
   const windows = buildDefaultKeybindings(true);
   const linux = buildDefaultKeybindings(false, true);
 
+  it("describes the grid object as a panel, never a pane", () => {
+    const offenders = [mac, windows, linux]
+      .flat()
+      .filter((b) => /\bpanes?\b/i.test(b.description ?? ""))
+      .map((b) => `${b.actionId}: ${b.description}`);
+    expect(offenders).toEqual([]);
+  });
+
   it("puts dictation on Cmd+D on macOS and keeps Ctrl+D, a shell's EOF, free elsewhere", () => {
     expect(globalCombo(mac, "voiceInput.toggle")).toEqual(["Cmd+D"]);
     expect(globalCombo(windows, "voiceInput.toggle")).toEqual(["Ctrl+."]);

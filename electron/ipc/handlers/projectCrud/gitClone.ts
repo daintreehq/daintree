@@ -105,6 +105,92 @@ export interface ExecuteCloneOptions {
   recurseSubmodules?: boolean;
   signal: AbortSignal;
   onProgress: (stage: string, progress: number, message: string) => void;
+  /**
+   * Git's own stderr as it arrives, unscrubbed: the caller scrubs before
+   * showing it. Only the plain-git path has a stream to hand over; a
+   * provider's clone command reports through `onProgress` alone.
+   */
+  onOutput?: (chunk: string) => void;
+}
+
+/** A clone request that passed every check that doesn't touch the disk. */
+export interface ResolvedCloneTarget {
+  url: string;
+  parentPath: string;
+  folderName: string;
+  /** `parentPath/folderName`, proven to stay inside `parentPath`. */
+  targetPath: string;
+}
+
+/**
+ * Validate a clone request's URL, parent and folder name. Throws the message
+ * the dialog shows for each, before anything touches the disk.
+ */
+export function resolveCloneTarget(options: {
+  url?: unknown;
+  parentPath?: unknown;
+  folderName?: unknown;
+}): ResolvedCloneTarget {
+  const { url, parentPath, folderName } = options;
+
+  if (typeof url !== "string" || !url.trim()) {
+    throw new Error("Repository URL is required");
+  }
+  if (!isSupportedCloneUrl(url)) {
+    throw new Error("Only HTTP(S) and SSH (git@ or ssh://) URLs are supported");
+  }
+  if (typeof parentPath !== "string" || !parentPath.trim()) {
+    throw new Error("Parent path is required");
+  }
+  if (!path.isAbsolute(parentPath)) {
+    throw new Error("Parent path must be absolute");
+  }
+  if (typeof folderName !== "string") {
+    throw new Error("Folder name is required");
+  }
+
+  const folderNameError = validateFolderName(folderName);
+  if (folderNameError) {
+    throw new Error(folderNameError);
+  }
+  const trimmedFolder = folderName.trim();
+
+  const targetPath = path.join(parentPath, trimmedFolder);
+  const normalizedParent = path.resolve(parentPath);
+  const normalizedTarget = path.resolve(targetPath);
+  if (!normalizedTarget.startsWith(normalizedParent + path.sep)) {
+    throw new Error("Folder name resolves outside of the parent directory");
+  }
+  return { url, parentPath, folderName: trimmedFolder, targetPath };
+}
+
+/** The parent must be an existing directory and the target must not exist. */
+export async function assertCloneDestination(
+  parentPath: string,
+  targetPath: string,
+  folderName: string
+): Promise<void> {
+  const fs = await import("fs");
+  try {
+    const parentStat = await fs.promises.stat(parentPath);
+    if (!parentStat.isDirectory()) {
+      throw new Error("Parent path is not a directory");
+    }
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new Error("Parent directory does not exist", { cause: err });
+    }
+    throw err;
+  }
+
+  const targetExists = await fs.promises
+    .access(targetPath)
+    .then(() => true)
+    .catch(() => false);
+  if (targetExists) {
+    throw new Error(`Folder "${folderName}" already exists in this location`);
+  }
 }
 
 function cloneArgs(depth: CloneDepth | undefined): string[] {
@@ -194,6 +280,13 @@ export async function executeClone(options: ExecuteCloneOptions): Promise<void> 
         ],
       });
 
+      const onOutput = options.onOutput;
+      if (onOutput) {
+        git.outputHandler((_command, _stdout, stderr) => {
+          stderr.on("data", (chunk: Buffer | string) => onOutput(String(chunk)));
+        });
+      }
+
       const pluginStore = (git as unknown as { _plugins?: PluginStoreLike })._plugins;
       pluginStore?.append?.("spawn.after", (data, context) => {
         cloneChildPid = context?.spawned?.pid;
@@ -206,6 +299,12 @@ export async function executeClone(options: ExecuteCloneOptions): Promise<void> 
     if (options.recurseSubmodules) {
       emitProgress("submodules", 0, "Updating submodules");
       const submoduleGit = await createAuthenticatedGit(targetPath, { signal });
+      const onOutput = options.onOutput;
+      if (onOutput) {
+        submoduleGit.outputHandler((_command, _stdout, stderr) => {
+          stderr.on("data", (chunk: Buffer | string) => onOutput(String(chunk)));
+        });
+      }
       await submoduleGit.raw(["submodule", "update", "--init", "--recursive"]);
     }
 
@@ -291,36 +390,8 @@ export function registerGitCloneHandlers(): () => void {
       throw new Error("Invalid options object");
     }
 
-    const { url, parentPath, folderName } = options;
-
-    if (typeof url !== "string" || !url.trim()) {
-      throw new Error("Repository URL is required");
-    }
-    if (!isSupportedCloneUrl(url)) {
-      throw new Error("Only HTTP(S) and SSH (git@ or ssh://) URLs are supported");
-    }
-    if (typeof parentPath !== "string" || !parentPath.trim()) {
-      throw new Error("Parent path is required");
-    }
-    if (!path.isAbsolute(parentPath)) {
-      throw new Error("Parent path must be absolute");
-    }
-    if (typeof folderName !== "string") {
-      throw new Error("Folder name is required");
-    }
-
-    const folderNameError = validateFolderName(folderName);
-    if (folderNameError) {
-      throw new Error(folderNameError);
-    }
-    const trimmedFolder = folderName.trim();
-
-    const targetPath = path.join(parentPath, trimmedFolder);
-    const normalizedParent = path.resolve(parentPath);
+    const { url, folderName: trimmedFolder, targetPath } = resolveCloneTarget(options);
     const normalizedTarget = path.resolve(targetPath);
-    if (!normalizedTarget.startsWith(normalizedParent + path.sep)) {
-      throw new Error("Folder name resolves outside of the parent directory");
-    }
 
     const opId = normalizeOperationId(options.opId);
     if (options.opId !== undefined && opId === null) {
@@ -390,28 +461,7 @@ export function registerGitCloneHandlers(): () => void {
     localController: AbortController
   ): Promise<CloneRepoResult> => {
     const { url, parentPath, shallowClone } = options;
-    const fs = await import("fs");
-
-    try {
-      const parentStat = await fs.promises.stat(parentPath);
-      if (!parentStat.isDirectory()) {
-        throw new Error("Parent path is not a directory");
-      }
-    } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") {
-        throw new Error("Parent directory does not exist", { cause: err });
-      }
-      throw err;
-    }
-
-    const targetExists = await fs.promises
-      .access(targetPath)
-      .then(() => true)
-      .catch(() => false);
-    if (targetExists) {
-      throw new Error(`Folder "${trimmedFolder}" already exists in this location`);
-    }
+    await assertCloneDestination(parentPath, targetPath, trimmedFolder);
 
     const emitProgress = (stage: string, progress: number, message: string) => {
       const progressEvent: CloneRepoProgressEvent = {

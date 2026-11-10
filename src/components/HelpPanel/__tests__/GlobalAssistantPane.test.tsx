@@ -137,6 +137,7 @@ function makeHelp(initial: GlobalAssistantView, attachmentId: string) {
     setGlobalAssistantInputEligible: vi.fn(async () => {}),
     restartGlobalAssistant: vi.fn(),
     discardGlobalAssistant: vi.fn(),
+    cancelGlobalAssistantLaunch: vi.fn(async () => viewOf()),
     onGlobalAssistantChanged: vi.fn((callback: (state: GlobalAssistantView) => void) => {
       listeners.add(callback);
       return () => listeners.delete(callback);
@@ -484,7 +485,7 @@ describe("GlobalAssistantPane (#14454)", () => {
     // The menu stays for docs; it offers nothing that would act on the hidden successor.
     fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
     await screen.findByText("Open docs");
-    expect(screen.queryByText("Restart conversation")).toBeNull();
+    expect(screen.queryByText("Clear conversation")).toBeNull();
     expect(screen.queryByText("Stop global assistant")).toBeNull();
     expect(screen.queryByTestId("help-global-take-input")).toBeNull();
   });
@@ -498,8 +499,8 @@ describe("GlobalAssistantPane (#14454)", () => {
     renderPane();
     await flush();
     fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
-    fireEvent.click(await screen.findByText("Restart conversation"));
-    fireEvent.click(await screen.findByRole("button", { name: "Restart conversation" }));
+    fireEvent.click(await screen.findByText("Clear conversation"));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear conversation" }));
     await flush();
     expect(useHelpPanelStore.getState().globalTarget).toBeNull();
     expect(screen.getByTestId("global-terminal").getAttribute("data-run")).toBe("g2");
@@ -570,9 +571,9 @@ describe("GlobalAssistantPane (#14454)", () => {
     renderPane();
     await flush();
     fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
-    fireEvent.click(await screen.findByText("Restart conversation"));
+    fireEvent.click(await screen.findByText("Clear conversation"));
     expect(help.restartGlobalAssistant).not.toHaveBeenCalled();
-    fireEvent.click(await screen.findByRole("button", { name: "Restart conversation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear conversation" }));
     await flush();
     expect(help.restartGlobalAssistant).toHaveBeenCalledWith(7);
   });
@@ -593,6 +594,195 @@ describe("GlobalAssistantPane (#14454)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Stop global assistant" }));
     await flush();
     expect(help.discardGlobalAssistant).toHaveBeenCalledWith(7);
+  });
+
+  describe("while it starts (#16603)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const cancelButton = () => screen.queryByRole("button", { name: "Cancel" });
+    const advance = (ms: number) =>
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+    /** The options Start was focused with, by whatever focused it. */
+    function startFocusOptions(focus: ReturnType<typeof vi.spyOn>) {
+      const start = screen.getByTestId("help-global-start");
+      const at = focus.mock.contexts.indexOf(start);
+      return at === -1 ? undefined : focus.mock.calls[at]![0];
+    }
+    /** A launch long enough for Cancel, with Cancel's answer held until the test gives it. */
+    async function heldCancel() {
+      vi.useFakeTimers();
+      installHelp(viewOf({ phase: "launching", generation: 4, agentId: "claude" }));
+      let answer!: (state: GlobalAssistantView) => void;
+      help.cancelGlobalAssistantLaunch.mockImplementationOnce(
+        () => new Promise<GlobalAssistantView>((resolve) => (answer = resolve))
+      );
+      const pane = renderPane();
+      await flush();
+      advance(5_000);
+      return { pane, answer: (state: GlobalAssistantView) => act(async () => answer(state)) };
+    }
+
+    it("offers Cancel once the wait runs long, and stops that launch without forgetting the conversation", async () => {
+      vi.useFakeTimers();
+      installHelp(viewOf({ phase: "launching", generation: 4, agentId: "claude" }));
+      renderPane();
+      await flush();
+      expect(cancelButton()).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      // Cancel holds the keyboard, and loses it as the launch goes.
+      act(() => cancelButton()!.focus());
+      fireEvent.click(cancelButton()!);
+      await flush();
+      expect(help.cancelGlobalAssistantLaunch).toHaveBeenCalledWith(4);
+      expect(help.discardGlobalAssistant).not.toHaveBeenCalled();
+      expect(help.restartGlobalAssistant).not.toHaveBeenCalled();
+      advance(50);
+      expect(document.activeElement).toBe(screen.getByTestId("help-global-start"));
+    });
+
+    it("hands a click's Cancel on to Start without a ring", async () => {
+      const { answer } = await heldCancel();
+      const focus = vi.spyOn(HTMLElement.prototype, "focus");
+      try {
+        // jsdom reads a dispatched click as a pointer press, as Chromium does.
+        act(() => cancelButton()!.focus());
+        fireEvent.click(cancelButton()!);
+        push(viewOf({ generation: 5 }));
+        await answer(viewOf({ generation: 5 }));
+        advance(50);
+        expect(startFocusOptions(focus)).toMatchObject({ focusVisible: false });
+      } finally {
+        focus.mockRestore();
+      }
+    });
+
+    it("waits for the launching state to go when main answers before it has", async () => {
+      const { answer } = await heldCancel();
+      act(() => cancelButton()!.focus());
+      fireEvent.click(cancelButton()!);
+      // Answered while every view still shows the launch: Cancel keeps the keyboard a frame or two.
+      await answer(viewOf({ phase: "launching", generation: 4, agentId: "claude" }));
+      advance(20);
+      expect(document.activeElement).toBe(cancelButton());
+      push(viewOf({ generation: 5 }));
+      advance(50);
+      expect(document.activeElement).toBe(screen.getByTestId("help-global-start"));
+    });
+
+    it("moves no keyboard once the pane is gone, as a switch to a project leaves it", async () => {
+      const { pane, answer } = await heldCancel();
+      const { focusRequest } = useHelpPanelStore.getState();
+      act(() => cancelButton()!.focus());
+      fireEvent.click(cancelButton()!);
+      pane.unmount();
+      await answer(viewOf({ generation: 5 }));
+      advance(200);
+      expect(useHelpPanelStore.getState().focusRequest).toBe(focusRequest);
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it("leaves the keyboard where it went if it moved on before the launch stopped", async () => {
+      vi.useFakeTimers();
+      installHelp(viewOf({ phase: "launching", generation: 4, agentId: "claude" }));
+      const elsewhere = document.createElement("button");
+      document.body.appendChild(elsewhere);
+      try {
+        let answerCancel!: (state: GlobalAssistantView) => void;
+        help.cancelGlobalAssistantLaunch.mockImplementationOnce(
+          () => new Promise<GlobalAssistantView>((resolve) => (answerCancel = resolve))
+        );
+        renderPane();
+        await flush();
+        act(() => {
+          vi.advanceTimersByTime(5_000);
+        });
+        act(() => cancelButton()!.focus());
+        fireEvent.click(cancelButton()!);
+        act(() => elsewhere.focus());
+        push(viewOf({ generation: 5 }));
+        await act(async () => answerCancel(viewOf({ generation: 5 })));
+        act(() => {
+          vi.advanceTimersByTime(50);
+        });
+        expect(document.activeElement).toBe(elsewhere);
+      } finally {
+        elsewhere.remove();
+      }
+    });
+
+    it("says nothing went wrong when the launch it asked for is cancelled, but says why one failed", async () => {
+      installHelp(viewOf());
+      help.ensureGlobalAssistant.mockRejectedValueOnce(
+        new Error("[AppError|CANCELLED] The global assistant was stopped while starting.")
+      );
+      renderPane();
+      await flush();
+      fireEvent.click(screen.getByTestId("help-global-start"));
+      await flush();
+      expect(screen.queryByText(/stopped while starting|didn't start/)).toBeNull();
+      expect(screen.getByTestId("help-global-start")).toBeTruthy();
+
+      help.ensureGlobalAssistant.mockRejectedValueOnce(
+        refusedBy("INTERNAL", "Its agent couldn't be found.")
+      );
+      fireEvent.click(screen.getByTestId("help-global-start"));
+      await flush();
+      expect(screen.getByText("Its agent couldn't be found.")).toBeTruthy();
+    });
+
+    it("offers Start again once a launch is cancelled anywhere, before that launch has wound down", async () => {
+      installHelp(viewOf({ generation: 2 }));
+      const first = holdNext(help.ensureGlobalAssistant);
+      let answerSecond!: (state: GlobalAssistantView) => void;
+      help.ensureGlobalAssistant.mockImplementationOnce(
+        () => new Promise<GlobalAssistantView>((resolve) => (answerSecond = resolve))
+      );
+      renderPane();
+      await flush();
+      const startButton = () => screen.getByTestId("help-global-start") as HTMLButtonElement;
+      fireEvent.click(startButton());
+      await flush();
+      expect(startButton().disabled).toBe(true);
+      push(viewOf({ phase: "launching", generation: 2, agentId: "claude" }));
+      expect(screen.queryByTestId("help-global-start")).toBeNull();
+
+      // Cancelled from another window: main moves on while this Start is still answering.
+      push(viewOf({ generation: 3 }));
+      expect(startButton().disabled).toBe(false);
+      fireEvent.click(startButton());
+      await flush();
+      expect(help.ensureGlobalAssistant).toHaveBeenCalledTimes(2);
+      expect(startButton().disabled).toBe(true);
+
+      // The first Start answering at last neither shows an error nor frees the second's guard.
+      await first.refuse(
+        new Error("[AppError|CANCELLED] The global assistant was stopped while starting.")
+      );
+      expect(screen.queryByText(/stopped while starting|didn't start/)).toBeNull();
+      expect(startButton().disabled).toBe(true);
+
+      await act(async () =>
+        answerSecond(running({ generation: 3, inputOwner: "a1", inputEpoch: 1 }))
+      );
+      expect(screen.getByTestId("global-terminal")).toBeTruthy();
+    });
+
+    it("says in main's words why it couldn't attach", async () => {
+      installHelp(viewOf());
+      help.attachGlobalAssistant.mockRejectedValueOnce(
+        refusedBy("UNSUPPORTED", "Global assistants aren't available here.")
+      );
+      renderPane();
+      await flush();
+      expect(screen.getByText("Global assistants aren't available here.")).toBeTruthy();
+    });
   });
 
   describe("a refused send or key (#14977)", () => {

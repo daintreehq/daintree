@@ -287,6 +287,7 @@ describe("pty-host IPC fallback drift guard", () => {
   const SHIPPED = block(`        if (ipcQueueManager.isAtCapacity(id, dataBytes)) {
           const utilization = ipcQueueManager.getUtilization(id);
           console.warn(\`full (\${utilization}%)\`);
+          ipcQueueManager.applyBackpressure(id, utilization);
           return;
         }
         ipcQueueManager.addBytes(id, dataBytes);
@@ -347,14 +348,14 @@ describe("pty-host IPC fallback drift guard", () => {
   it("splits the shipped block into the accept and drop paths", () => {
     expect(extractIpcFallbackSequences(SHIPPED)).toEqual({
       accept: ["isAtCapacity", "addBytes", "getUtilization", "applyBackpressure"],
-      drop: ["isAtCapacity", "getUtilization"],
+      drop: ["isAtCapacity", "getUtilization", "applyBackpressure"],
     });
   });
 
   it("observes the mirror's own two paths rather than declaring them", () => {
     expect(observeIpcFallbackSequences()).toEqual({
       accept: ["isAtCapacity", "addBytes", "getUtilization", "applyBackpressure"],
-      drop: ["isAtCapacity", "getUtilization"],
+      drop: ["isAtCapacity", "getUtilization", "applyBackpressure"],
     });
   });
 
@@ -392,9 +393,9 @@ describe("pty-host IPC fallback drift guard", () => {
         const utilization = ipcQueueManager.getUtilization(id);
         ipcQueueManager.applyBackpressure(id, utilization);`);
     expect(extractIpcFallbackSequences(braceless)).toBeNull();
-    expect(ipcFallbackMirrorMissesIn(braceless)).toBe(6);
+    expect(ipcFallbackMirrorMissesIn(braceless)).toBe(7);
     expect(extractIpcFallbackSequences("nothing here")).toBeNull();
-    expect(ipcFallbackMirrorMissesIn("nothing here")).toBe(6);
+    expect(ipcFallbackMirrorMissesIn("nothing here")).toBe(7);
   });
 
   it("agrees with what the shipped visual-output router actually contains today", () => {

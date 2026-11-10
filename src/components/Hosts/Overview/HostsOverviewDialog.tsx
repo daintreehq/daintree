@@ -12,7 +12,7 @@ import { PortsView } from "../PortsView";
 import { useHostFigures } from "../hostList";
 import { buildHostMenuRows, clientPlatform } from "../hostModel";
 import { switchToHost } from "../hostSwitching";
-import { useHostProjectLists } from "../hostProjects";
+import { retryHostProjects, useHostProjectLists } from "../hostProjects";
 import { HostAddProjectDialog } from "./HostAddProjectDialog";
 import {
   openHostsSettingsTab,
@@ -99,6 +99,7 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
                 onOpenProject={(projectId, newWindow) =>
                   openProject(row.hostId, projectId, newWindow)
                 }
+                onRetryProjects={() => retryHostProjects(row.hostId)}
               >
                 <PluginParitySummary
                   hostId={row.hostId}

@@ -9,6 +9,7 @@ import { useResumeAgentSession } from "@/hooks/useResumeAgentSession";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { pluralNoun } from "@/lib/pluralize";
+import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 
 /**
  * First-run-quiet resume affordance for the launcher: one line for the single
@@ -34,9 +35,10 @@ export function ResumeSessionLine() {
 
   const primary = resumable[0];
   const extraCount = resumable.length - 1;
-  const meta = primary
-    ? [primary.location, primary.modelName].filter((part): part is string => !!part).join(" · ")
-    : "";
+  const metaParts = primary
+    ? [primary.location, primary.modelName].filter((part): part is string => !!part)
+    : [];
+  const meta = metaParts.join(" · ");
 
   if (!hasLoaded || !primary) return null;
 
@@ -48,8 +50,9 @@ export function ResumeSessionLine() {
 
   return (
     // Left-aligned on the column's edge, like the chip row above and the pulse
-    // strip below. The `px-3` inset puts the agent glyph on the same line as the
-    // chips' glyphs and the pulse strip's; "+N more…" takes the right edge.
+    // strip below. Every band on this surface is drawn as a chip is: a 1px edge
+    // (transparent here), a 12px inset, a 16px glyph slot and an 8px gap, so
+    // glyphs share one line and labels another. "+N more…" takes the right edge.
     <div className="flex w-full min-w-0 items-center justify-start gap-1">
       {/* Persistent and hoverable: this discloses clipped content rather than
           a transient hint, so the app-wide 2.5s auto-dismiss and the
@@ -71,10 +74,10 @@ export function ResumeSessionLine() {
             // and risk breaking Label in Name. Below the narrow breakpoint the
             // description is dropped from the row entirely, and the tooltip is
             // then the only place it survives.
-            className="group flex h-8 min-w-0 cursor-pointer items-center gap-2.5 rounded-[var(--radius-md)] px-3 text-left transition-colors hover:bg-overlay-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+            className="group flex h-8 min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-transparent px-3 text-left contrast-more:border-text-secondary transition-colors hover:bg-overlay-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
           >
-            <span className="shrink-0">
-              <PanelKindIcon iconId={primary.iconId} color={primary.color} size={15} />
+            <span className="flex w-4 shrink-0 justify-center">
+              <PanelKindIcon iconId={primary.iconId} color={primary.color} size={16} />
             </span>
             {/* The title is what identifies the session, so it is the one thing
                 here in primary ink, and it has first claim on the width. */}
@@ -96,9 +99,9 @@ export function ResumeSessionLine() {
               // outright rather than truncating both halves of the row at once.
               <span className="-ml-1 min-w-0 flex-[1_1_0%] truncate text-xs text-text-secondary @max-[31rem]/launcher:hidden">
                 <span aria-hidden="true" className="mr-1.5">
-                  ·
+                  <FactSeparator />
                 </span>
-                {meta}
+                <FactRun facts={metaParts} />
               </span>
             )}
           </button>
@@ -120,7 +123,7 @@ export function ResumeSessionLine() {
           // surface keeps each band's secondary action (Manage recipes, the
           // pulse's counts). Left to follow the description it landed wherever
           // the strings ended, and read as one more fact about the session.
-          className="ml-auto h-8 shrink-0 px-2"
+          className="ml-auto h-8 shrink-0 border border-transparent contrast-more:border-text-secondary"
           // Opens with the visible string verbatim, `+` included. WCAG 2.2
           // SC 2.5.3 (Label in Name) wants what is on the control to appear in
           // its accessible name, so a speech-input user can say what they read;

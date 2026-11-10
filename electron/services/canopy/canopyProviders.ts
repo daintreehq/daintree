@@ -16,8 +16,8 @@ export class CanopyProviderError extends Error {
     readonly provider: "classifier" | "describer",
     message: string,
     /**
-     * Worth trying again shortly rather than reporting: the model still
-     * downloading, its process restarting, or a read that ran out of time.
+     * Worth trying again shortly rather than reporting: the model's process
+     * restarting, or a read that ran out of time.
      */
     readonly transient = false
   ) {

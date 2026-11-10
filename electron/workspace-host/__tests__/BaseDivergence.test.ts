@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { join } from "node:path";
 
 const mockGitRaw = vi.fn();
 const { mockCreateHardenedGit, mockCreateWslHardenedGit } = vi.hoisted(() => ({
@@ -218,6 +219,99 @@ describe("BaseDivergence", () => {
     expect((await divergence.compute(true))?.matchesUpstream).toBe(false);
   });
 
+  it("runs its git on the signal the caller hands it", async () => {
+    installRepo({
+      remoteBaseRefs: ["refs/remotes/origin/main"],
+      revList: { "origin/main...HEAD": "0\t0\n" },
+    });
+    const pass = new AbortController();
+    const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
+
+    await divergence.compute(false, pass.signal);
+
+    expect(mockCreateHardenedGit).toHaveBeenCalled();
+    for (const call of mockCreateHardenedGit.mock.calls) {
+      expect(call).toEqual(["/test/worktree", pass.signal]);
+    }
+  });
+
+  it("caches nothing a cancelled computation read", async () => {
+    installRepo({
+      remoteBaseRefs: ["refs/remotes/origin/main"],
+      revList: { "origin/main...HEAD": "0\t0\n" },
+      symbolicRefs: { "@{u}": "refs/remotes/origin/feature/x" },
+      revParsePair: "abc123\nabc123\n",
+    });
+    const answer = mockGitRaw.getMockImplementation()!;
+    const pass = new AbortController();
+    // The pass is abandoned while its git runs: the upstream comparison dies.
+    mockGitRaw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] !== "--symbolic-full-name") {
+        pass.abort();
+        throw new Error("Abort signal received");
+      }
+      return answer(args);
+    });
+    const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
+
+    expect(await divergence.compute(true, pass.signal)).toBeNull();
+
+    mockGitRaw.mockImplementation(answer);
+    expect((await divergence.compute(true))?.matchesUpstream).toBe(true);
+  });
+
+  it("keeps no remote resolution a cancelled computation read", async () => {
+    installRepo({
+      remotes: ["origin", "upstream"],
+      remoteBaseRefs: ["refs/remotes/origin/main", "refs/remotes/upstream/main"],
+      revList: { "upstream/main...HEAD": "0\t0\n", "main...HEAD": "0\t0\n" },
+    });
+    const answer = mockGitRaw.getMockImplementation()!;
+    const pass = new AbortController();
+    mockGitRaw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "remote") {
+        pass.abort();
+        throw new Error("Abort signal received");
+      }
+      return answer(args);
+    });
+    const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
+
+    await divergence.compute(false, pass.signal);
+    expect(divergence.availableRemotes).toEqual([]);
+
+    mockGitRaw.mockImplementation(answer);
+    await divergence.compute(false);
+    expect(divergence.availableRemotes).toEqual(["origin", "upstream"]);
+  });
+
+  it("keeps the last real resolution through a cancelled re-resolution", async () => {
+    installRepo({
+      remotes: ["origin", "upstream"],
+      remoteBaseRefs: ["refs/remotes/origin/main", "refs/remotes/upstream/main"],
+      revList: { "upstream/main...HEAD": "0\t0\n", "main...HEAD": "0\t0\n" },
+    });
+    const answer = mockGitRaw.getMockImplementation()!;
+    const statPrecheck = makeStatPrecheck();
+    const divergence = new BaseDivergence(makeHost(), statPrecheck);
+    await divergence.compute(false);
+    expect(divergence.availableRemotes).toEqual(["origin", "upstream"]);
+
+    // The config moves, so the next pass re-resolves, and is abandoned mid-way.
+    vi.mocked(statPrecheck.statMtime).mockResolvedValue(2_000);
+    const pass = new AbortController();
+    mockGitRaw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "remote") {
+        pass.abort();
+        throw new Error("Abort signal received");
+      }
+      return answer(args);
+    });
+    await divergence.compute(false, pass.signal);
+
+    expect(divergence.availableRemotes).toEqual(["origin", "upstream"]);
+  });
+
   it("reuses the cached result when the stat-derived key is unchanged", async () => {
     installRepo({
       remoteBaseRefs: ["refs/remotes/origin/main"],
@@ -253,6 +347,32 @@ describe("BaseDivergence", () => {
     });
     const second = await divergence.compute(false);
 
+    expect(second?.behindCount).toBe(1);
+  });
+
+  // A commit to the local base writes its loose ref and leaves packed-refs
+  // alone, and siblings no longer refresh for the packed-refs.lock it takes
+  // (#16678). The pass that does run must still see the move from that ref.
+  it.each([
+    ["the repository has no remotes", { remotes: [] }],
+    ["the remote base ref is missing", {}],
+  ])("recounts against the local base when only its loose ref moves and %s", async (_, repo) => {
+    installRepo({ ...repo, revList: { "main...HEAD": "0\t1\n" } });
+    const statPrecheck = makeStatPrecheck();
+    const divergence = new BaseDivergence(makeHost(), statPrecheck);
+
+    const first = await divergence.compute(false);
+    expect(first?.baseCompareRef).toBe("main");
+    expect(first?.behindCount).toBe(0);
+
+    const localBaseRef = join("/test/worktree/.git", "refs", "heads", "main");
+    vi.mocked(statPrecheck.statMtime).mockImplementation(async (path: string) =>
+      path === localBaseRef ? 2_000 : 1_000
+    );
+    installRepo({ ...repo, revList: { "main...HEAD": "1\t1\n" } });
+
+    const second = await divergence.compute(false);
+    expect(second?.baseCompareRef).toBe("main");
     expect(second?.behindCount).toBe(1);
   });
 

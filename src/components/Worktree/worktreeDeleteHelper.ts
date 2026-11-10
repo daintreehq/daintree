@@ -4,6 +4,10 @@ import { buildResumeCommand, stripAssignedSessionIdArgs } from "@shared/types";
 import { reconcileResumeLaunchFlags } from "@/services/agentResume";
 import { readSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
 import { logWarn } from "@/utils/logger";
+import {
+  rebaseToCurrentAgentLaunch,
+  resolveCurrentAgentLaunchBaseCommand,
+} from "@/utils/agentLaunchCommand";
 
 const WORKTREE_DELETE_TERMINAL_CLOSE_TIMEOUT_MS = 10_000;
 const WORKTREE_DELETE_TERMINAL_CLOSE_POLL_MS = 100;
@@ -213,9 +217,22 @@ export async function restoreClosedTerminals(
             reconcileResumeLaunchFlags({
               agentId: snap.launchAgentId,
               agentLaunchFlags: snap.agentLaunchFlags,
-            })
+            }),
+            await resolveCurrentAgentLaunchBaseCommand(snap.launchAgentId)
           )
         : undefined;
+    // The snapshot's command can still carry the id this pane was launched
+    // with, and re-offering a spent one gets the relaunch rejected outright
+    // — so the fallback has to be the plain fresh launch it means (#11782),
+    // started with the copy a launch starts now (#16399).
+    const freshCommand = snap.command
+      ? stripAssignedSessionIdArgs(snap.command, snap.launchAgentId)
+      : snap.command;
+    const command =
+      resumeCommand ??
+      (freshCommand && snap.launchAgentId
+        ? await rebaseToCurrentAgentLaunch(freshCommand, snap.launchAgentId)
+        : freshCommand);
 
     try {
       await store.addPanel({
@@ -228,14 +245,7 @@ export async function restoreClosedTerminals(
         worktreeIdSource: "explicit",
         cwd: snap.cwd,
         location: snap.location,
-        // The snapshot's command can still carry the id this pane was launched
-        // with, and re-offering a spent one gets the relaunch rejected outright
-        // — so the fallback has to be the plain fresh launch it means (#11782).
-        command:
-          resumeCommand ??
-          (snap.command
-            ? stripAssignedSessionIdArgs(snap.command, snap.launchAgentId)
-            : snap.command),
+        command,
         launchAgentId: snap.launchAgentId,
         agentModelId: snap.agentModelId,
         agentLaunchFlags: snap.agentLaunchFlags,

@@ -1670,6 +1670,22 @@ describe("terminal.restartAll confirm gate", () => {
 
     expect(bulkRestartAll).toHaveBeenCalledTimes(1);
   });
+
+  it("counts only the terminals it restarts, leaving a browser panel out", async () => {
+    setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid", detectedAgentId: "claude", agentState: "working" },
+        { id: "web", location: "grid", kind: "browser" },
+      ],
+    });
+    const run = setupActions();
+
+    await expect(run("terminal.restartAll")).rejects.toThrow(/needs confirmation/);
+
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "restartAll", targetCount: 1 })
+    );
+  });
 });
 
 describe("terminal.rename DOM handoff", () => {
@@ -2417,7 +2433,9 @@ describe("restored panes and the plugin hold (#14017)", () => {
         lastInputTime: 0,
         lastOutputTime: 5_100,
         activityTier: "focused",
-        outputBufferSize: 10,
+        // #16426: retired from the schema, so a host on an older build answering
+        // with this number doesn't reach the caller.
+        outputBufferSize: 2_000,
         semanticBufferLines: 2,
         restartCount: 0,
         hasPty: true,
@@ -2432,9 +2450,12 @@ describe("restored panes and the plugin hold (#14017)", () => {
         hasPty: true,
         restored: { at: 5_000, disposition: "resume", lastSeen },
       });
-      expect(def.resultSchema?.parse(info)).toMatchObject({
+      const parsed = def.resultSchema?.parse(info);
+      expect(parsed).toMatchObject({
+        semanticBufferLines: 2,
         restored: { at: 5_000, disposition: "resume", lastSeen },
       });
+      expect(parsed).not.toHaveProperty("outputBufferSize");
     });
 
     it("reports no restore for a pane restore never rebuilt", async () => {

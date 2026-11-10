@@ -146,6 +146,28 @@ describe("project:save-settings with an installed plugin's provider (#15583)", (
     expect(projectStoreMock.saveProjectSettings).toHaveBeenCalledTimes(1);
   });
 
+  it("still pushes a remote change when the committed settings file can't be written", async () => {
+    const { broadcastToRenderer } = await import("../../utils.js");
+    projectStoreMock.getProjectById.mockReturnValueOnce({
+      id: "p1",
+      path: "/repo",
+      inRepoSettings: true,
+    } as never);
+    const unreadable = new Error("settings.json can't be read");
+    projectStoreMock.writeInRepoSettings.mockRejectedValueOnce(unreadable);
+
+    await expect(save({ runCommands: [], forgeRemote: "upstream" })).rejects.toBe(unreadable);
+
+    // The local save landed, so what follows from it must too; a retry would
+    // otherwise see no change to push.
+    expect(projectStoreMock.saveProjectSettings).toHaveBeenCalledTimes(1);
+    expect(updateForgeSettings).toHaveBeenCalledWith("/repo");
+    expect(broadcastToRenderer).toHaveBeenCalledWith(expect.anything(), {
+      name: "forge:remote-changed",
+      payload: { projectId: "p1" },
+    });
+  });
+
   it("still accepts a built-in provider", async () => {
     await save({ runCommands: [], forgeProviderOverride: "daintree.github.github" });
 

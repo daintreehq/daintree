@@ -13,6 +13,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { InsetSurface } from "@/components/ui/insetSurface";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { SettingsSubpageProvider, type SettingsSubpage } from "./SettingsSubpage";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isPointerClaimed } from "@/lib/pointerClaim";
@@ -44,7 +45,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { appClient } from "@/clients";
 import type { AppVersionInfo } from "@shared/types/ipc/app";
-import { AppDialog } from "@/components/ui/AppDialog";
+import { AppDialog, useBodyEdgesReport } from "@/components/ui/AppDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { GeneralTab } from "./GeneralTab";
@@ -91,6 +92,7 @@ import {
   SettingsFlushProvider,
   SettingsFlushContext,
   type FailedSettingsFlush,
+  type SettingsFlushReason,
 } from "./SettingsFlushRegistry";
 import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
@@ -532,10 +534,10 @@ function SettingsDialogInner({
   // Coalesced: a cache or hide landing mid-close would otherwise re-issue
   // every registered tab flusher alongside the one already in flight.
   const flushInFlightRef = useRef<Promise<FailedSettingsFlush[]> | null>(null);
-  const flushDialog = () => {
+  const flushDialog = (reason: SettingsFlushReason) => {
     if (flushInFlightRef.current) return flushInFlightRef.current;
     const pending = (async () => {
-      const failed = flushAllTabs ? await flushAllTabs() : [];
+      const failed = flushAllTabs ? await flushAllTabs(reason) : [];
       if (await projectForm.flush()) {
         // The project page shown, else the one last shown: that is where the
         // edit was made, and every project page carries the form's error.
@@ -560,7 +562,7 @@ function SettingsDialogInner({
   // waits for the whole sequence on the cached edge. Unlike a close, neither
   // keeps Settings open, so a page that couldn't save is left as it is.
   useFlushOnHide(async () => {
-    await flushDialog();
+    await flushDialog("hide");
   }, isOpen);
 
   const [globalEnvVars, setGlobalEnvVars] = useState<Record<string, string>>({});
@@ -639,10 +641,10 @@ function SettingsDialogInner({
   // or uses that page's Discard. The page shown wins over others that failed.
   const flushBeforeClose = async () => {
     // A cache or hide flush still running took its list of drafts when it
-    // started, so one made since isn't in it: let it finish, then flush again.
-    const lifecycleFlush = flushInFlightRef.current;
-    if (lifecycleFlush) await lifecycleFlush;
-    const failed = await flushDialog();
+    // started, so one made since isn't in it, and it left the writes only a close
+    // makes: let it finish, then flush again.
+    while (flushInFlightRef.current) await flushInFlightRef.current;
+    const failed = await flushDialog("close");
     const shown = failed.find((f) => f.tab === activeTabRef.current) ?? failed[0];
     if (shown) {
       revealFailedFlush(shown);
@@ -984,7 +986,7 @@ function SettingsDialogInner({
     >
       <div className="flex h-full overflow-hidden">
         <div
-          className="settings-sidebar w-52 border-r border-border-default p-3 flex flex-col shrink-0"
+          className="settings-sidebar w-52 border-r border-divider p-3 flex flex-col shrink-0"
           // Escape clears an active search before it closes the dialog wherever focus sits
           // in the sidebar, not only inside the field — Tab to the nav and back out was
           // otherwise one keypress from losing the whole dialog.
@@ -1104,7 +1106,7 @@ function SettingsDialogInner({
             ))}
           </ScrollShadow>
 
-          <div className="pt-2 mt-2 border-t border-border-default px-3">
+          <div className="pt-2 mt-2 border-t border-divider px-3">
             <span className="settings-meta font-mono">{appVersion}</span>
           </div>
         </div>
@@ -2234,9 +2236,7 @@ export function ScopeChip({
       <span className="shrink-0">{scopeWord}</span>
       {entity && (
         <>
-          <span aria-hidden="true" className="opacity-40">
-            ·
-          </span>
+          <FactSeparator />
           <span className="truncate">{entity}</span>
         </>
       )}
@@ -2593,11 +2593,19 @@ export function SearchResults({
   );
 }
 
-/** The page column: inset content, so a status banner in it is a box, not a band. */
+/**
+ * The page column: inset content, so a status banner in it is a box, not a band.
+ * It reports its scroll edges to the dialog like `AppDialog.Body`, so the
+ * header's rule shows only once a page runs under it; at rest the page and its
+ * header are one surface, as in every other dialog.
+ */
 function SettingsPageScroll(props: ComponentProps<typeof ScrollShadow>) {
+  const reportEdges = useBodyEdgesReport();
   return (
     <InsetSurface>
-      <ScrollShadow {...props} />
+      {/* The fade stays: the header rule answers the top edge, but Settings
+          has no footer whose rule could answer the bottom one. */}
+      <ScrollShadow {...props} onEdgesChange={reportEdges} />
     </InsetSurface>
   );
 }

@@ -34,6 +34,8 @@ import type {
 } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
+import type { ForgeNewPRLinkRequest } from "../shared/types/ipc/forge.js";
+import type { ProjectCloneJobSnapshot } from "../shared/types/ipc/projectClone.js";
 import type { KeybindingOverridesSnapshot } from "../shared/types/ipc/api.js";
 import type { GitPushReview } from "../shared/types/git.js";
 import type { PluginPerfSnapshot } from "../shared/types/pluginMetrics.js";
@@ -54,6 +56,7 @@ import {
   buildGitDiscardPreloadBindings,
 } from "./ipc/handlers/fileMutation.preload.js";
 import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
+import { buildUserPromptTemplatesPreloadBindings } from "./ipc/handlers/userPromptTemplates.preload.js";
 import { buildGlobalEnvPreloadBindings } from "./ipc/handlers/globalEnv.preload.js";
 import { buildAccessibilityPreloadBindings } from "./ipc/handlers/accessibility.preload.js";
 import { buildConfigBundlePreloadBindings } from "./ipc/handlers/configBundle.preload.js";
@@ -75,6 +78,7 @@ import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preloa
 import { buildProjectGroupsPreloadBindings } from "./ipc/handlers/projectGroups.preload.js";
 import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
 import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHistory.preload.js";
+import { buildWorktreeDiskUsagePreloadBindings } from "./ipc/handlers/worktreeDiskUsage.preload.js";
 import { buildScheduledRunsPreloadBindings } from "./ipc/handlers/scheduledRuns.preload.js";
 import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
 import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
@@ -98,6 +102,7 @@ import { buildHostSwitchPreloadBindings } from "./ipc/handlers/hostSwitch.preloa
 import { buildProjectMatchPreloadBindings } from "./ipc/handlers/projectMatch.preload.js";
 import { buildHostMetricsPreloadBindings } from "./ipc/handlers/hostMetrics.preload.js";
 import { buildCanopyHostPreloadBindings } from "./ipc/handlers/canopyHost.preload.js";
+import { buildCanopyWindowPreloadBindings } from "./ipc/handlers/canopyWindow.preload.js";
 import { buildPortForwardsPreloadBindings } from "./ipc/handlers/portForwards.preload.js";
 import { buildPluginParityPreloadBindings } from "./ipc/handlers/pluginParity.preload.js";
 import { buildSettingsCopyPreloadBindings } from "./ipc/handlers/settingsCopy.preload.js";
@@ -105,6 +110,7 @@ import { buildHostSettingsPreloadBindings } from "./ipc/handlers/hostSettings.pr
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
 import { buildProjectPresencePreloadBindings } from "./ipc/handlers/projectPresence.preload.js";
+import { buildOnlineOnlyFilesPreloadBindings } from "./ipc/handlers/onlineOnlyFiles.preload.js";
 import { buildProjectPresentationPreloadBindings } from "./ipc/handlers/projectPresentation.preload.js";
 import { buildProjectThemePreloadBindings } from "./ipc/handlers/projectTheme.preload.js";
 import { buildWorktreeTitlesPreloadBindings } from "./ipc/handlers/worktreeTitles.preload.js";
@@ -120,9 +126,11 @@ import { buildWindowOpeningPreloadBindings } from "./ipc/handlers/windowOpening.
 import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildTerminalWhenDonePreloadBindings } from "./ipc/handlers/terminalWhenDone.preload.js";
+import { buildComposerHoldPreloadBindings } from "./ipc/handlers/composerHold.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
 import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
+import { buildSafeModePreloadBindings } from "./ipc/handlers/safeMode.preload.js";
 import { buildResourceProfilePreloadBindings } from "./ipc/handlers/resourceProfile.preload.js";
 import { buildWhySlowPreloadBindings } from "./ipc/handlers/whySlow.preload.js";
 import { buildMemoryPressurePreloadBindings } from "./ipc/handlers/memoryPressure.preload.js";
@@ -137,7 +145,9 @@ import { buildPluginAgentMcpPreloadBindings } from "./ipc/handlers/pluginAgentMc
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildAgentDefaultsPreloadBindings } from "./ipc/handlers/agentDefaults.preload.js";
 import { buildAgentToolbarPinsPreloadBindings } from "./ipc/handlers/agentToolbarPins.preload.js";
+import { buildProjectClonePreloadBindings } from "./ipc/handlers/projectClone.preload.js";
 import { buildAgentAccountsPreloadBindings } from "./ipc/handlers/agentAccounts.preload.js";
+import { buildAgentCliCopiesPreloadBindings } from "./ipc/handlers/agentCliCopies.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
@@ -345,6 +355,10 @@ const instanceRole: "attended" | "worker" = rawInstanceRole === "worker" ? "work
 const SURFACE_HOST_ARG = "--daintree-surface-host=";
 const surfaceHostId: string | null =
   process.argv.find((a) => a.startsWith(SURFACE_HOST_ARG))?.slice(SURFACE_HOST_ARG.length) ?? null;
+
+// The Canopy window's role: makes src/main.tsx mount Canopy's own root instead
+// of the project app shell. Mirrors CANOPY_WINDOW_ARG in shared/types/canopyWindow.ts.
+const isCanopyWindow = process.argv.includes("--daintree-window-kind=canopy");
 
 const E2E_MODE_ARG = "--daintree-e2e-mode";
 const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
@@ -1237,6 +1251,7 @@ function buildElectronApi(): ElectronAPI {
 
     // Slash Commands API
     slashCommands: buildSlashCommandsPreloadBindings(_unwrappingInvoke),
+    userPromptTemplates: buildUserPromptTemplatesPreloadBindings(_unwrappingInvoke),
 
     // Artifact API
     artifact: {
@@ -1386,9 +1401,6 @@ function buildElectronApi(): ElectronAPI {
         lastAutoCheck: number | null;
       }) => _unwrappingInvoke(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS, settings),
 
-      startAgentUpdate: (payload: { agentId: string; method?: string }) =>
-        _unwrappingInvoke(CHANNELS.SYSTEM_START_AGENT_UPDATE, payload),
-
       healthCheck: (options?: import("../shared/types/ipc/system.js").SystemHealthCheckOptions) =>
         _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK, options),
 
@@ -1477,6 +1489,8 @@ function buildElectronApi(): ElectronAPI {
 
       clearQuarantinedPanel: (panelId: string) =>
         _unwrappingInvoke(CHANNELS.APP_CLEAR_QUARANTINED_PANEL, panelId),
+
+      ...buildSafeModePreloadBindings(_unwrappingInvoke),
 
       skeletonParsed: () => ipcRenderer.send(CHANNELS.APP_SKELETON_PARSED),
 
@@ -1642,6 +1656,7 @@ function buildElectronApi(): ElectronAPI {
           focusIntent?: import("../shared/types/ipc/project.js").ProjectFocusOnActivateIntent;
           trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace;
           ignoreMemoryPressure?: boolean;
+          showInOtherWindow?: boolean;
         }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId, outgoingState, options),
 
@@ -1720,6 +1735,7 @@ function buildElectronApi(): ElectronAPI {
         options?: {
           trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace;
           ignoreMemoryPressure?: boolean;
+          showInOtherWindow?: boolean;
         }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId, outgoingState, options),
 
@@ -1792,7 +1808,7 @@ function buildElectronApi(): ElectronAPI {
       exportRecipeToFile: (name: string, json: string): Promise<boolean> =>
         _unwrappingInvoke(CHANNELS.RECIPE_EXPORT_FILE, { name, json }),
 
-      importRecipeFromFile: (): Promise<string | null> =>
+      importRecipeFromFile: (): Promise<{ fileName: string; json: string } | null> =>
         _unwrappingInvoke(CHANNELS.RECIPE_IMPORT_FILE),
 
       getInRepoRecipes: (
@@ -1828,12 +1844,6 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.PROJECT_GET_INREPO_PRESETS, projectId),
 
       ...buildTerminalLayoutPreloadBindings(_unwrappingInvoke),
-
-      readClaudeMd: (projectId: string): Promise<string | null> =>
-        _unwrappingInvoke(CHANNELS.PROJECT_READ_CLAUDE_MD, projectId),
-
-      writeClaudeMd: (projectId: string, content: string): Promise<void> =>
-        _unwrappingInvoke(CHANNELS.PROJECT_WRITE_CLAUDE_MD, { projectId, content }),
 
       enableInRepoSettings: (projectId: string): Promise<Project> =>
         _unwrappingInvoke(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, projectId),
@@ -1921,9 +1931,6 @@ function buildElectronApi(): ElectronAPI {
 
       setGlobal: (value: boolean) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL, value),
 
-      setGlobalInline: (value: boolean) =>
-        _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE, value),
-
       setResumeOnRestart: (value: ResumeOnRestart) =>
         _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART, value),
 
@@ -1971,6 +1978,20 @@ function buildElectronApi(): ElectronAPI {
 
     // An agent's accounts (#16040)
     agentAccounts: buildAgentAccountsPreloadBindings(_unwrappingInvoke),
+    agentCliCopies: {
+      ...buildAgentCliCopiesPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (change: { agentId: string }) => void) =>
+        _typedOn(CHANNELS.AGENT_CLI_COPIES_CHANGED, callback),
+    },
+
+    // A clone that runs in the background as its own project (#16352)
+    projectClone: {
+      ...buildProjectClonePreloadBindings(_unwrappingInvoke),
+
+      onJobUpdated: (callback: (snapshot: ProjectCloneJobSnapshot) => void) =>
+        _typedOn(CHANNELS.PROJECT_CLONE_JOB_UPDATED, callback),
+    },
 
     // Per-service connectivity API
     connectivity: {
@@ -1985,6 +2006,17 @@ function buildElectronApi(): ElectronAPI {
       ...buildProjectPresencePreloadBindings(_unwrappingInvoke),
 
       onChanged: (callback: () => void) => _typedOn(CHANNELS.PROJECT_PRESENCE_CHANGED, callback),
+    },
+
+    // The sender project's online-only files, while it watches them (#16363)
+    onlineOnlyFiles: {
+      ...buildOnlineOnlyFilesPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (
+        callback: (
+          files: import("../shared/types/onlineOnlyFiles.js").ProjectOnlineOnlyFiles
+        ) => void
+      ) => _typedOn(CHANNELS.ONLINE_ONLY_FILES_CHANGED, callback),
     },
 
     // The sender project's presentation profile (#13771)
@@ -2061,6 +2093,14 @@ function buildElectronApi(): ElectronAPI {
       ) => {
         ipcRenderer.send(CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY, reply);
       },
+    },
+
+    // A pane composer's send held while its agent works (#16379)
+    composerHold: {
+      ...buildComposerHoldPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (change: IpcEventMap["composer-hold:changed"]) => void) =>
+        _typedOn(CHANNELS.COMPOSER_HOLD_CHANGED, callback),
     },
 
     // Decisions, as main observes it (#16001)
@@ -2924,6 +2964,7 @@ function buildElectronApi(): ElectronAPI {
       onEvent: (callback: (event: IpcEventMap["canopy-host:event"]) => void) =>
         _typedOn("canopy-host:event", callback),
     },
+    canopyWindow: buildCanopyWindowPreloadBindings(_unwrappingInvoke),
     portForwards: {
       ...buildPortForwardsPreloadBindings(_unwrappingInvoke),
       onEvent: (callback: (event: IpcEventMap["port-forwards:event"]) => void) =>
@@ -2974,6 +3015,8 @@ function buildElectronApi(): ElectronAPI {
       openRepo: (payload: { cwd: string }) => _unwrappingInvoke(CHANNELS.FORGE_OPEN_REPO, payload),
       getRepoUrl: (payload: { cwd: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_URL, payload),
+      getNewPRLink: (payload: ForgeNewPRLinkRequest) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_NEW_PR_LINK, payload),
       assignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
       unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
@@ -3151,6 +3194,7 @@ function buildElectronApi(): ElectronAPI {
     projectGroups: buildProjectGroupsPreloadBindings(_unwrappingInvoke),
     runHistory: buildRunHistoryPreloadBindings(_unwrappingInvoke),
     copyTreeHistory: buildCopyTreeHistoryPreloadBindings(_unwrappingInvoke),
+    worktreeDiskUsage: buildWorktreeDiskUsagePreloadBindings(_unwrappingInvoke),
     scheduledRuns: buildScheduledRunsPreloadBindings(_unwrappingInvoke),
 
     // Voice Input API
@@ -4051,6 +4095,8 @@ contextBridge.exposeInMainWorld("__DAINTREE_INSTANCE_ROLE__", {
 contextBridge.exposeInMainWorld("__DAINTREE_SURFACE_HOST__", {
   surfaceId: surfaceHostId,
 });
+
+contextBridge.exposeInMainWorld("__DAINTREE_CANOPY_WINDOW__", isCanopyWindow);
 
 // Flush the per-view preload evaluation cost (#9770). Runs at preload bottom —
 // before any renderer page script — so the main process can attribute the

@@ -34,7 +34,11 @@ import type {
   PluginCanDispatchResult,
 } from "./actions.js";
 import type { AgentState, WaitingReason } from "./agent.js";
-import type { AgentDetectionConfig, AgentResumeTemplate } from "../config/agentRegistry.js";
+import type {
+  AgentDetectionConfig,
+  AgentInitialPromptForm,
+  AgentResumeTemplate,
+} from "../config/agentRegistry.js";
 import type { LaunchMcpFormat } from "../config/launchMcp.js";
 import type {
   ContextProviderContribution,
@@ -281,6 +285,22 @@ export interface ToolbarButtonPopover {
    * A `contributes.views[].id` with `location: "panel"` whose panel is not
    * `hasPty`. The same view stays spawnable as a panel; in the popover it sees
    * `hostContext.kind === "popover"` and can close it with `hostContext.close`.
+   */
+  viewId: string;
+}
+
+/**
+ * One of the plugin's panel views offered in the Canopy window, which spans
+ * every project and has none of its own. Naming the view is the author saying
+ * it works without a project: no `worktreeId`, `openRequest`, `requestReload`
+ * or `setTitle`, and `"project"`/`"local"` settings that follow the app's
+ * active project. App-wide plugins only.
+ */
+export interface CanopyViewContribution {
+  /**
+   * A `contributes.views[].id` with `location: "panel"` whose panel is not
+   * `hasPty`. The same view stays spawnable as a panel; in Canopy it sees
+   * `hostContext.kind === "canopy"`, under its panel's name and icon.
    */
   viewId: string;
 }
@@ -1189,14 +1209,15 @@ export interface PluginSettingsPageContribution {
  * as narrow as the sidebar's minimum width. `"fileEditor"` is a view-backed
  * file editor inside the file panel. `"popover"` is the anchored popover
  * a toolbar button opens (`contributes.toolbarButtons[].popover`), again one of
- * the plugin's panel views.
+ * the plugin's panel views. `"canopy"` is the Canopy window
+ * (`contributes.canopyViews`), a panel view shown with no project around it.
  *
  * Open-ended: hosts added later arrive as new members, so a view that switches
  * on this must give unknown kinds a sensible default rather than treat the list
  * as exhaustive.
  */
 export type PluginViewHostKind =
-  "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover";
+  "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover" | "canopy";
 
 export interface PluginViewHostContext {
   readonly kind: PluginViewHostKind;
@@ -1210,8 +1231,9 @@ export interface PluginViewHostContext {
 
 /**
  * A plugin view that mounts outside the panel grid — every `contributes.views`
- * entry whose location is not `"panel"`. Registered by main at plugin load,
- * never as a panel kind, so nothing can spawn it from the launcher, palette or
+ * entry whose location is not `"panel"`, and every panel view named in
+ * `contributes.canopyViews`. Registered by main at plugin load, never as a
+ * panel kind of its own, so nothing can spawn it from the launcher, palette or
  * dock, and served only to the views of projects that may see the plugin.
  */
 interface PluginHostedViewDescriptorBase {
@@ -1253,10 +1275,28 @@ export interface PluginSidebarHostedViewDescriptor extends PluginHostedViewDescr
   when?: string;
 }
 
+/**
+ * A panel view an app-wide plugin offers in the Canopy window
+ * (`contributes.canopyViews`). Its `viewId` names a `location: "panel"` view,
+ * so it carries what its row needs from that view's panel.
+ */
+export interface PluginCanopyHostedViewDescriptor extends PluginHostedViewDescriptorBase {
+  location: "canopy";
+  /** The panel's `name`: the row's title. */
+  title: string;
+  /** The plugin's display name, which attributes the row. */
+  pluginName: string;
+  /** The panel's `iconId`, with a custom SVG reference resolved to its runtime key. */
+  iconId?: string;
+  /** The panel's `stateVersion`, which judges a persisted bag as it does on the panel. */
+  stateVersion?: number;
+}
+
 export type PluginHostedViewDescriptor =
   | PluginSettingsHostedViewDescriptor
   | PluginFileEditorHostedViewDescriptor
-  | PluginSidebarHostedViewDescriptor;
+  | PluginSidebarHostedViewDescriptor
+  | PluginCanopyHostedViewDescriptor;
 
 /**
  * The synthetic view-kind id a hosted view mounts under. It names no panel
@@ -2118,6 +2158,14 @@ export interface PluginMcpCaller {
   readonly projectId: string;
   readonly terminalId: string;
   readonly launchAgentIdHint?: string;
+  /**
+   * `"assistant"` when the host issued this credential to the project's Daintree
+   * Assistant; absent for every other launch. Fixed at issue and never taken
+   * from what the client sends. It describes the credential, so it is no more
+   * proof of what is calling than the rest of this record, and never proof that
+   * a person asked: other agents' replies are submitted into the Assistant's pane.
+   */
+  readonly consumer?: "assistant";
 }
 
 /** A JSON Schema object describing a tool's arguments or result. Must be `type: "object"`. */
@@ -2652,7 +2700,8 @@ export interface PluginManifestScopes {
  *
  * Plugin agents launch as named, untracked terminals: the schema surfaces
  * `id`, `name`, `command`, `args`, `color`, `iconId`,
- * `supportsContextInjection`, an optional `resume` block (#13687), and an
+ * `supportsContextInjection`, optional `nativePaths` and `packages` for finding
+ * an install off PATH (#16468), an optional `resume` block (#13687), and an
  * optional `detection` block. The
  * `detection` field (#10587) lets a contributed agent describe its
  * working/waiting/completed output patterns so it participates in the
@@ -2670,6 +2719,22 @@ export interface PluginAgentContribution {
   iconId: string;
   supportsContextInjection?: boolean;
   /**
+   * Where the CLI's native installer puts it, for an install PATH doesn't reach
+   * (#16468). Each entry ends in this agent's own `command`, plus a Windows
+   * launcher suffix only when the command has none, and is rooted at `~/`, `/` or
+   * `%VAR%\` for a listed variable. Checked for existence and never run. Not
+   * allowed beside a `./` command, which is probed directly.
+   */
+  nativePaths?: string[];
+  /**
+   * The packages the CLI ships as, for an install PATH doesn't reach (#16468).
+   * `npm` switches on the npm-global shim check, and `pypi` names the uv and
+   * pipx tool directories, in its normalized form. Discovery only: nothing
+   * installs or updates from these. Not allowed beside a `./` command, or a
+   * command that already names its launcher (`acme.cmd`).
+   */
+  packages?: { npm?: string; pypi?: string };
+  /**
    * Optional output-pattern detection config (#10587). Passive observation
    * only — patterns are matched against terminal output to drive the
    * working/waiting/completed state machine, consistent with the agent-config
@@ -2678,10 +2743,18 @@ export interface PluginAgentContribution {
   detection?: AgentDetectionConfig;
   /**
    * Optional session resume (#13687): `session-id` with a `{sessionId}` args
-   * template, or `project-scoped` static args. Plain data, expanded where a
-   * resume command is built. Plugin agents never claim a `continuity` tier.
+   * template, or `project-scoped` static args. A `session-id` CLI that takes its
+   * id at launch also declares `assignSessionIdArgs` (#16470). Plain data,
+   * expanded where a resume command is built. Plugin agents never claim a
+   * `continuity` tier.
    */
   resume?: AgentResumeTemplate;
+  /**
+   * How the CLI takes the prompt a launch opens with, interactive and headless
+   * (#16404). Plain data, the same form a built-in agent declares. Unset, the
+   * prompt goes last as a bare positional argument.
+   */
+  initialPromptForm?: AgentInitialPromptForm;
   /**
    * Optional additive launch mechanism (#13803): the CLI's own way of merging
    * extra MCP servers over the user's, which Daintree uses to hand the agent its
@@ -2690,6 +2763,23 @@ export interface PluginAgentContribution {
    * settings. Only the format is declared; Daintree owns any env var name.
    */
   launchMcp?: { format: LaunchMcpFormat };
+  /**
+   * The arguments the CLI takes to skip its permission prompts (#16374).
+   * Declaring them turns nothing on: they ride only a launch whose resolved
+   * bypass setting is on (the global switch, the agent's setting and its
+   * preset, an explicit "off" included), exactly as a built-in agent's flag
+   * does. Without them the agent is never eligible for the global switch.
+   */
+  permissionBypassArgs?: string[];
+  /**
+   * Bare executable names that identify this agent when someone runs it in a
+   * plain terminal (#16469), the same key space as a built-in agent's command.
+   * Omitted, a bare lowercase `command` claims its own name; `[]` claims none.
+   * Only an exact executable identity counts: a name never matches output text,
+   * and a launcher (`npx`, `mise`, `uvx`, a shell) is never an agent's name.
+   * Two enabled plugins claiming one name both lose it.
+   */
+  executableNames?: string[];
 }
 
 /**
@@ -2873,6 +2963,12 @@ export interface PluginManifest {
   contributes: {
     panels: PanelContribution[];
     toolbarButtons: ToolbarButtonContribution[];
+    /**
+     * Panel views offered in the Canopy window. Optional in the type but
+     * always materialized by the manifest schema's `.default([])`. Refused for
+     * a `scope: "project"` plugin and an `instanceMode: "project"` package.
+     */
+    canopyViews?: CanopyViewContribution[];
     menuItems: MenuItemContribution[];
     keybindings: KeybindingContribution[];
     contextMenus: ContextMenuContribution[];
@@ -3959,6 +4055,13 @@ export interface PluginArchiveManifestPreview {
    * install is where the user first hears about it.
    */
   projectTemplates: Array<{ title: string; projectPlugins: string[] }>;
+  /**
+   * Contributed agents, by name, that declare the flag their CLI takes to skip
+   * permission prompts (#16374). Declaring it turns nothing on, but the agent
+   * then runs without prompts whenever the person's Skip permission prompts
+   * setting says so, which install is the place to say.
+   */
+  permissionBypassAgents: string[];
 }
 
 /**
@@ -4007,6 +4110,12 @@ export type PluginCheckUpdateResult =
       version: string;
       displayName?: string;
       capabilities: PluginCapability[];
+      /**
+       * The new version's contributed agents, by name, that declare a flag for
+       * skipping permission prompts (#16374), so the update review can say so.
+       * Absent from a host that predates the field.
+       */
+      permissionBypassAgents?: string[];
       /**
        * SHA-256 of the archive this preview was read from. A confirmed update
        * passes it back as {@link PluginInstallExpectation.archiveHash} so the

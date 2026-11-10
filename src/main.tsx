@@ -103,6 +103,27 @@ async function bootstrap() {
     return;
   }
 
+  // The Canopy window: the inbox over every project, so none of the project
+  // shell below. `app:boot` still answers for it, with no project, and seeds the
+  // theme and terminal settings the inbox reads.
+  if (window.__DAINTREE_CANOPY_WINDOW__ === true) {
+    // Its app-wide plugins' views, as main narrows them for a window with no
+    // project; listening before the first render, as a project window does.
+    usePluginHostedViewsStore.getState().init();
+    const { CanopyWindowRoot } = await import("./canopyWindow/CanopyWindowRoot");
+    document.getElementById("startup-skeleton")?.remove();
+    createRoot(document.getElementById("root")!, {
+      onCaughtError,
+      onUncaughtError,
+      onRecoverableError,
+    }).render(
+      <StrictMode>
+        <CanopyWindowRoot />
+      </StrictMode>
+    );
+    return;
+  }
+
   try {
     localStorage.removeItem("project-groups-storage");
   } catch {

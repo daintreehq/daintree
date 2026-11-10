@@ -11,6 +11,22 @@ const LazyProjectPulseCard = lazy(() =>
   import("./ProjectPulseCard").then((m) => ({ default: m.ProjectPulseCard }))
 );
 
+// On the canvas home's rails: a transparent 1px edge, the 12px inset and a
+// 16px glyph slot put the label on the line every band's text starts on.
+const STRIP_ROW_CLASS =
+  "group flex h-8 w-full min-w-0 items-center gap-3 rounded-[var(--radius-md)] border border-transparent px-3 text-left contrast-more:border-text-secondary transition-colors hover:bg-overlay-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
+
+function StripLabel() {
+  return (
+    <span className="flex shrink-0 items-center gap-2">
+      <span className="flex w-4 shrink-0 justify-center">
+        <Activity className="h-3.5 w-3.5 text-text-secondary" aria-hidden="true" />
+      </span>
+      <span className="text-xs text-text-secondary">Project pulse</span>
+    </span>
+  );
+}
+
 interface ProjectPulseStripProps {
   worktreeId: string;
 }
@@ -176,17 +192,23 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   if (expanded) {
     return (
       <div className="flex w-full flex-col items-center gap-2">
+        {/* The same row the strip is, with its chevron turned: the toggle stays
+            under the pointer that opened it and keeps its name. It used to
+            become a left-aligned "Collapse" stub, so closing the card meant
+            crossing the column from the chevron just clicked. */}
         <button
           ref={collapseButtonRef}
           type="button"
           onClick={collapse}
-          // `px-3`, the strip's own inset, so the chevron lands on the glyph
-          // line the strip it replaced was drawn on.
-          className="inline-flex h-8 items-center gap-1 self-start rounded-[var(--radius-md)] px-3 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           aria-expanded={true}
+          aria-label="Project pulse — hide activity"
+          className={STRIP_ROW_CLASS}
         >
-          <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
-          Collapse
+          <StripLabel />
+          <ChevronUp
+            className="-mr-0.5 ml-auto h-4 w-4 text-text-secondary transition-colors group-hover:text-text-primary"
+            aria-hidden="true"
+          />
         </button>
         <Suspense fallback={null}>
           <LazyProjectPulseCard worktreeId={worktreeId} />
@@ -227,10 +249,9 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
       // surface — so the two now share a visual language instead of each having
       // their own. Both accessibility media modes still draw their own button
       // boundary, so nothing is lost where a boundary is load-bearing.
-      className="group flex h-8 w-full min-w-0 items-center gap-3 rounded-[var(--radius-md)] px-3 text-left transition-colors hover:bg-overlay-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+      className={STRIP_ROW_CLASS}
     >
-      <Activity className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
-      <span className="shrink-0 text-xs text-text-secondary">Project pulse</span>{" "}
+      <StripLabel />{" "}
       {/* A narrowing column sheds detail in reverse priority: the streak goes
           first, then the ribbon, and the counts and the chevron stay. Every
           part used to be `shrink-0`, so below ~35rem the strip ran past the
@@ -262,8 +283,10 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
         ) : (
           <span className="text-xs text-text-secondary">View activity</span>
         )}
+        {/* `-mr-0.5` takes back the glyph's own side bearing, so its ink ends
+            on the column's secondary-action edge with ⌘N and Manage. */}
         <ChevronDown
-          className="h-4 w-4 text-text-secondary transition-colors group-hover:text-text-primary"
+          className="-mr-0.5 h-4 w-4 text-text-secondary transition-colors group-hover:text-text-primary"
           aria-hidden="true"
         />
       </span>

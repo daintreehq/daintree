@@ -13,7 +13,9 @@ import type { PtyPanelData } from "@shared/types/panel";
 const broadcastMock = vi.hoisted(() =>
   vi.fn<(ids: string[], data: string, reportSuccess?: boolean) => void>()
 );
-const notifyUserInputMock = vi.hoisted(() => vi.fn<(id: string, data?: string) => void>());
+const notifyUserInputMock = vi.hoisted(() =>
+  vi.fn<(id: string, data?: string, options?: { takesSize?: boolean }) => void>()
+);
 const notifyEnterPressedMock = vi.hoisted(() => vi.fn<(id: string) => void>());
 const clearDirectingStateMock = vi.hoisted(() => vi.fn<(id: string) => void>());
 
@@ -287,6 +289,8 @@ describe("broadcastFleetRawInput", () => {
     // Raw payload is passed through (not "") so Phase 2 escalation still
     // engages for large pastes — see #3565.
     expect(calls.every(([, data]) => data === "abc")).toBe(true);
+    // A follower's pane wasn't touched, so a Canopy hold on it stands (#16333).
+    expect(calls.every(([, , options]) => options?.takesSize === false)).toBe(true);
   });
 
   it("does not call notifyUserInput when the broadcast is rejected", () => {

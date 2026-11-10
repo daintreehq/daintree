@@ -10,6 +10,7 @@ import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore"
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
+import { recipeContextFromWorktree } from "@/utils/recipeVariables";
 import { ConfirmationTimeoutError } from "../confirmationTimeout";
 import { PANEL_LIMIT_CONFIRM_EXPIRED_REASON } from "./panelLimitError";
 import {
@@ -84,7 +85,7 @@ const RecipeEditorOpenArgsSchema = z.object({
     .max(MAX_TERMINALS_PER_RECIPE)
     .optional()
     .describe(
-      `Prefilled panes, for callers that already hold them (max ${MAX_TERMINALS_PER_RECIPE}). Capture a live layout instead.`
+      `Prefilled panels, for callers that already hold them (max ${MAX_TERMINALS_PER_RECIPE}). Capture a live layout instead.`
     ),
 });
 
@@ -168,7 +169,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       id: "recipe.run",
       title: "Run recipe",
       description:
-        "Launch the terminals a saved recipe defines in one worktree, starting their commands or agents. For a single pane, launch an agent or terminal instead. An approved call starts every terminal, a pre-authorized one at most three, so check what started.",
+        "Launch the terminals a saved recipe defines in one worktree, starting their commands or agents. For a single panel, launch an agent or terminal instead. An approved call starts every terminal, a pre-authorized one at most three, so check what started.",
       category: "recipes",
       kind: "command",
       danger: "confirm",
@@ -216,10 +217,8 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         }
 
         const recipeContext = {
-          issueNumber: worktree?.issueNumber,
-          prNumber: worktree?.linked?.pr?.ref.number,
+          ...(worktree ? recipeContextFromWorktree(worktree) : {}),
           worktreePath,
-          branchName: worktree?.branch,
         };
         // Always forward dispatchSource so runRecipeWithResults can apply the
         // agent-source terminal cap, and the host's record of what an approver

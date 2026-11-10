@@ -156,11 +156,26 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
           menu is not a visible path, so the band names the one that is. */}
       {!runner.showSearch && (
         <div className="mt-2 flex items-center justify-between gap-2">
-          <Button variant="ghost" size="sm" onClick={runner.handleCreate}>
-            <Plus aria-hidden />
+          {/* On the surface's rails: a transparent 1px edge and a 16px glyph
+              slot put the label on the cards' text line, and Manage's end on
+              the column's secondary-action edge. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={runner.handleCreate}
+            className="gap-2 border border-transparent contrast-more:border-text-secondary"
+          >
+            <span className="flex w-4 shrink-0 justify-center">
+              <Plus aria-hidden />
+            </span>
             Create new recipe…
           </Button>
-          <Button variant="ghost" size="sm" onClick={runner.handleManage}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={runner.handleManage}
+            className="border border-transparent contrast-more:border-text-secondary"
+          >
             Manage recipes…
           </Button>
         </div>

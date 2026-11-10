@@ -9,6 +9,7 @@ import {
   getPluginAgentRegistrySnapshot,
 } from "../pluginAgentRegistry.js";
 import {
+  getAgentPromptForm,
   getEffectiveAgentConfig,
   isEffectivelyRegisteredAgent,
   isBuiltInAgent,
@@ -124,6 +125,208 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     });
   });
 
+  describe("declared permissionBypassArgs (#16374)", () => {
+    it("copies the args onto the config without claiming assistant support", () => {
+      const declared = ["--approval", "never"];
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, permissionBypassArgs: declared }]);
+      const config = getEffectiveAgentConfig("acme-agent");
+      expect(config?.permissionBypassArgs).toEqual(["--approval", "never"]);
+      expect(config?.permissionBypassArgs).not.toBe(declared);
+      expect(config?.supports).toBeUndefined();
+    });
+
+    it("leaves the field absent when nothing is declared", () => {
+      registerPluginAgents("acme.plugin", [ACME_AGENT]);
+      expect(getEffectiveAgentConfig("acme-agent")).not.toHaveProperty("permissionBypassArgs");
+    });
+
+    it("survives the structured clone the snapshot broadcast goes through", () => {
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, permissionBypassArgs: ["--yolo"] }]);
+      const cloned = structuredClone(getPluginAgentRegistry());
+      setPluginAgentRegistry({});
+      expect(getEffectiveAgentConfig("acme-agent")).toBeUndefined();
+      setPluginAgentRegistry(cloned);
+      expect(getEffectiveAgentConfig("acme-agent")?.permissionBypassArgs).toEqual(["--yolo"]);
+    });
+  });
+
+  describe("declared discovery metadata (#16468)", () => {
+    const DISCOVERABLE: PluginAgentContribution = {
+      ...ACME_AGENT,
+      nativePaths: ["~/.acme/bin/acme", "%LOCALAPPDATA%\\Programs\\acme\\acme.exe"],
+      packages: { npm: "@acme/agent", pypi: "acme-agent" },
+    };
+
+    it("reaches the resolved config and survives the snapshot broadcast", () => {
+      registerPluginAgents("acme.plugin", [DISCOVERABLE]);
+      const config = getEffectiveAgentConfig("acme-agent");
+      expect(config?.nativePaths).toEqual(DISCOVERABLE.nativePaths);
+      expect(config?.packages).toEqual(DISCOVERABLE.packages);
+      const cloned = structuredClone(getPluginAgentRegistry());
+      expect(cloned["acme-agent"]?.nativePaths).toEqual(DISCOVERABLE.nativePaths);
+      expect(cloned["acme-agent"]?.packages).toEqual(DISCOVERABLE.packages);
+    });
+
+    it("shares nothing with the contribution it came from", () => {
+      registerPluginAgents("acme.plugin", [DISCOVERABLE]);
+      const config = getEffectiveAgentConfig("acme-agent");
+      expect(config?.nativePaths).not.toBe(DISCOVERABLE.nativePaths);
+      expect(config?.packages).not.toBe(DISCOVERABLE.packages);
+    });
+
+    it("carries one package ecosystem without inventing the other", () => {
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, packages: { pypi: "acme-agent" } }]);
+      expect(Object.keys(getEffectiveAgentConfig("acme-agent")?.packages ?? {})).toEqual(["pypi"]);
+    });
+
+    it("leaves the fields absent when nothing is declared", () => {
+      registerPluginAgents("acme.plugin", [ACME_AGENT]);
+      const config = getEffectiveAgentConfig("acme-agent");
+      expect(config).not.toHaveProperty("nativePaths");
+      expect(config).not.toHaveProperty("packages");
+    });
+
+    it("carries nothing that would run the agent or install anything", () => {
+      // Each of these switches on a probe that runs a command, an update or an
+      // install in a built-in's config, and none is part of the contribution.
+      const contribution = {
+        ...DISCOVERABLE,
+        packages: { ...DISCOVERABLE.packages, brew: "acme", cargo: "acme" },
+        supportsWsl: true,
+        npmGlobalPackage: "@acme/agent",
+        version: { args: ["--version"] },
+        update: { npm: "npm i -g @acme/agent" },
+        install: { byOs: {} },
+      } as PluginAgentContribution;
+      registerPluginAgents("acme.plugin", [contribution]);
+      const config = getEffectiveAgentConfig("acme-agent");
+      expect(config?.packages).toEqual(DISCOVERABLE.packages);
+      for (const field of ["supportsWsl", "npmGlobalPackage", "version", "update", "install"]) {
+        expect(config).not.toHaveProperty(field);
+      }
+    });
+
+    it("is replaced on reload and gone on unload", () => {
+      registerPluginAgents("acme.plugin", [DISCOVERABLE]);
+      registerPluginAgents("acme.plugin", [ACME_AGENT]);
+      expect(getEffectiveAgentConfig("acme-agent")).not.toHaveProperty("nativePaths");
+      expect(getEffectiveAgentConfig("acme-agent")).not.toHaveProperty("packages");
+      registerPluginAgents("acme.plugin", [DISCOVERABLE]);
+      unregisterPluginAgents("acme.plugin");
+      expect(getEffectiveAgentConfig("acme-agent")).toBeUndefined();
+    });
+  });
+
+  describe("declared initialPromptForm (#16404)", () => {
+    const FORM = {
+      interactive: { args: ["--task", "{prompt}"] },
+      headless: {
+        subcommand: { name: "run", replaces: "chat" },
+        args: ["--print", "{prompt}"],
+        caveat: "exits-after-reply" as const,
+      },
+    };
+
+    it("carries the form onto the effective config", () => {
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, initialPromptForm: FORM }]);
+      expect(getEffectiveAgentConfig("acme-agent")?.initialPromptForm).toEqual(FORM);
+    });
+
+    it("leaves the field absent when nothing is declared", () => {
+      registerPluginAgents("acme.plugin", [ACME_AGENT]);
+      expect(getEffectiveAgentConfig("acme-agent")).not.toHaveProperty("initialPromptForm");
+    });
+
+    it("survives the structured clone the snapshot broadcast goes through", () => {
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, initialPromptForm: FORM }]);
+      const cloned = structuredClone(getPluginAgentRegistry());
+      setPluginAgentRegistry({});
+      expect(getAgentPromptForm("acme-agent", "headless")).toEqual({ args: ["{prompt}"] });
+      setPluginAgentRegistry(cloned);
+      expect(getAgentPromptForm("acme-agent", "interactive")).toEqual(FORM.interactive);
+      expect(getAgentPromptForm("acme-agent", "headless")).toEqual(FORM.headless);
+    });
+
+    it("never lets a declared form replace a built-in's", () => {
+      const builtIn = getEffectiveAgentConfig("claude")?.initialPromptForm;
+      expect(builtIn).toBeDefined();
+      expect(builtIn).not.toEqual(FORM);
+      registerPluginAgents("acme.plugin", [
+        { ...ACME_AGENT, id: "claude", initialPromptForm: FORM },
+      ]);
+      expect(getPluginAgentRegistry().claude?.initialPromptForm).toEqual(FORM);
+      expect(getEffectiveAgentConfig("claude")?.initialPromptForm).toEqual(builtIn);
+    });
+  });
+
+  describe("executable names (#16469)", () => {
+    const claimed = (agentId: string) => getPluginAgentRegistry()[agentId]?.executableNames;
+
+    beforeEach(() => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("carries the claimed names lowercased and once each, and nothing when none", () => {
+      registerPluginAgents("acme.plugin", [
+        { ...ACME_AGENT, executableNames: ["Mini", "mini", "mini-swe-agent"] },
+        { ...ACME_AGENT, id: "quiet-agent" },
+      ]);
+      expect(claimed("acme-agent")).toEqual(["mini", "mini-swe-agent"]);
+      expect(getPluginAgentRegistry()["quiet-agent"]).not.toHaveProperty("executableNames");
+    });
+
+    it("gives neither plugin a name both claim, and only that name", () => {
+      registerPluginAgents("pi.plugin", [{ ...ACME_AGENT, id: "pi", executableNames: ["pi"] }]);
+      registerPluginAgents("other.plugin", [
+        { ...ACME_AGENT, id: "other-pi", executableNames: ["pi", "other"] },
+      ]);
+      expect(claimed("pi")).toBeUndefined();
+      expect(claimed("other-pi")).toEqual(["other"]);
+    });
+
+    it("hands the name back once the competing plugin unloads", () => {
+      registerPluginAgents("pi.plugin", [{ ...ACME_AGENT, id: "pi", executableNames: ["pi"] }]);
+      registerPluginAgents("other.plugin", [
+        { ...ACME_AGENT, id: "other-pi", executableNames: ["pi"] },
+      ]);
+      expect(claimed("pi")).toBeUndefined();
+      unregisterPluginAgents("other.plugin");
+      expect(claimed("pi")).toEqual(["pi"]);
+    });
+
+    it("counts a claim from an agent that lost its id to an earlier plugin", () => {
+      // The second plugin's `pi` never reaches the flattened snapshot, so only
+      // counting before flattening sees that two plugins claim the name.
+      registerPluginAgents("first.plugin", [{ ...ACME_AGENT, id: "pi", executableNames: ["pi"] }]);
+      registerPluginAgents("second.plugin", [
+        { ...ACME_AGENT, id: "pi", name: "Second", executableNames: ["pi"] },
+      ]);
+      expect(getEffectiveAgentConfig("pi")?.name).toBe(ACME_AGENT.name);
+      expect(claimed("pi")).toBeUndefined();
+    });
+
+    it("counts two agents of one plugin claiming the same name as a contest", () => {
+      registerPluginAgents("acme.plugin", [
+        { ...ACME_AGENT, id: "one", executableNames: ["shared"] },
+        { ...ACME_AGENT, id: "two", executableNames: ["shared"] },
+      ]);
+      expect(claimed("one")).toBeUndefined();
+      expect(claimed("two")).toBeUndefined();
+    });
+
+    it("survives the structured clone the snapshot broadcast goes through", () => {
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, executableNames: ["acme"] }]);
+      const cloned = structuredClone(getPluginAgentRegistry());
+      setPluginAgentRegistry({});
+      expect(claimed("acme-agent")).toBeUndefined();
+      setPluginAgentRegistry(cloned);
+      expect(claimed("acme-agent")).toEqual(["acme"]);
+    });
+  });
+
   describe("declared resume (#13687)", () => {
     const HERMES: PluginAgentContribution = {
       ...ACME_AGENT,
@@ -164,6 +367,43 @@ describe("pluginAgentRegistry (issue #9560)", () => {
       const resume = getEffectiveAgentConfig("hermes")?.resume;
       if (resume?.kind !== "session-id") throw new Error("expected session-id resume");
       expect(resume.args("a$&b$1")).toEqual(["--session=a$&b$1"]);
+    });
+
+    it("expands a declared assignment into the same hook a built-in uses (#16470)", () => {
+      registerPluginAgents("me.extra-agents", [
+        {
+          ...HERMES,
+          resume: {
+            kind: "session-id",
+            args: ["--session-id", "{sessionId}"],
+            assignSessionIdArgs: ["--session-id={sessionId}"],
+            resumeLatestArgs: ["--continue"],
+          },
+        },
+      ]);
+      const config = getEffectiveAgentConfig("hermes");
+      const resume = config?.resume;
+      if (resume?.kind !== "session-id") throw new Error("expected session-id resume");
+      expect(resume.assignSessionIdArgs?.("a$&b$1")).toEqual(["--session-id=a$&b$1"]);
+      // The id can't survive folder moves on the strength of this alone.
+      expect(config?.continuity).toBeUndefined();
+    });
+
+    it("keeps a declared assignment as data across a mirrored snapshot", () => {
+      const assignSessionIdArgs = ["--session-id", "{sessionId}"];
+      registerPluginAgents("me.extra-agents", [
+        {
+          ...HERMES,
+          resume: { kind: "session-id", args: ["--resume", "{sessionId}"], assignSessionIdArgs },
+        },
+      ]);
+      const mirrored = structuredClone(getPluginAgentRegistry());
+      expect(mirrored.hermes?.resumeTemplate).toMatchObject({ assignSessionIdArgs });
+      clearPluginAgentRegistryForTests();
+      setPluginAgentRegistry(mirrored);
+      const resume = getEffectiveAgentConfig("hermes")?.resume;
+      if (resume?.kind !== "session-id") throw new Error("expected session-id resume");
+      expect(resume.assignSessionIdArgs?.("abc")).toEqual(["--session-id", "abc"]);
     });
 
     it("expands a project-scoped resume in a mirrored (renderer/pty-host) snapshot", () => {
@@ -326,6 +566,19 @@ describe("pluginAgentRegistry subscription (issue #9879)", () => {
     subscribeToPluginAgentRegistry(listener);
     unregisterPluginAgents("acme.plugin");
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("wakes no one when an empty registry replaces an empty one", () => {
+    // A plugin-free renderer's mount-time pull hands over a fresh `{}`, and every
+    // mounted TerminalIcon subscribes.
+    const before = getPluginAgentRegistrySnapshot();
+    const listener = vi.fn();
+    subscribeToPluginAgentRegistry(listener);
+
+    setPluginAgentRegistry({});
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(getPluginAgentRegistrySnapshot()).toBe(before);
   });
 
   it("notifies subscribers when setPluginAgentRegistry replaces the snapshot", () => {

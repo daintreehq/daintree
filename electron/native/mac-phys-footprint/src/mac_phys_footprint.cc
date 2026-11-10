@@ -15,6 +15,8 @@
 
 #include <napi.h>
 #include <libproc.h>
+
+#include "dataless_policy.h"
 #include <sys/resource.h>
 
 #include <climits>
@@ -62,6 +64,7 @@ Napi::Value ReadPhysFootprints(const Napi::CallbackInfo& info) {
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("readPhysFootprints", Napi::Function::New(env, ReadPhysFootprints));
+  RegisterDatalessPolicy(env, exports);
   return exports;
 }
 

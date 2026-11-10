@@ -3,7 +3,6 @@ import type { SettingsNavTarget } from "@/components/Settings";
 import { SettingsNavTargetSchema } from "./schemas";
 import { z } from "zod";
 import { appClient } from "@/clients";
-import { appThemeClient } from "@/clients/appThemeClient";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
@@ -14,6 +13,7 @@ import {
 import { invalidateGlobalEnvCache } from "@/clients/globalEnvClient";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { notify } from "@/lib/notify";
+import { commitAppThemeSelection } from "@/lib/commitAppThemeSelection";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { getBuiltInAppSchemeForType, resolveAppTheme } from "@shared/theme";
@@ -289,13 +289,8 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     keywords: ["appearance", "mode", "dark", "light"],
     run: async () => {
       const state = useAppThemeStore.getState();
-      const {
-        selectedSchemeId,
-        customSchemes,
-        preferredDarkSchemeId,
-        preferredLightSchemeId,
-        setSelectedSchemeId,
-      } = state;
+      const { selectedSchemeId, customSchemes, preferredDarkSchemeId, preferredLightSchemeId } =
+        state;
       const current = resolveAppTheme(selectedSchemeId, selectSelectableSchemes(state));
       const targetType: "dark" | "light" = current.type === "light" ? "dark" : "light";
       const preferredTargetId =
@@ -308,19 +303,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
         target = getBuiltInAppSchemeForType(targetType);
       }
       if (target.id === selectedSchemeId) return;
-      setSelectedSchemeId(target.id);
-      try {
-        await appThemeClient.setColorScheme(target.id);
-      } catch (error) {
-        logError("Failed to persist theme toggle", error);
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          priority: "high",
-          message: `Couldn't save theme preference — '${target.name}' is applied but the choice will be lost on restart.`,
-          duration: 3000,
-        });
-      }
+      await commitAppThemeSelection(target.id, null, { reveal: false });
     },
   }));
 

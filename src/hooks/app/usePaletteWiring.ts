@@ -1,10 +1,5 @@
-import { useCallback, useState } from "react";
-import {
-  useWorktrees,
-  useNewTerminalPalette,
-  usePanelPalette,
-  useProjectSwitcherPalette,
-} from "@/hooks";
+import { useState } from "react";
+import { useWorktrees, usePanelPalette, useProjectSwitcherPalette } from "@/hooks";
 import { useActionPalette } from "@/hooks/useActionPalette";
 import { useQuickSwitcher } from "@/hooks/useQuickSwitcher";
 import { useWorktreePalette } from "@/hooks/useWorktreePalette";
@@ -13,11 +8,9 @@ import { useSendToAgentPalette } from "@/hooks/useSendToAgentPalette";
 import { useProjectMruSwitcher } from "@/hooks/useProjectMruSwitcher";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { usePaletteStore } from "@/store";
-import { useWorktreeStoreApi } from "@/hooks/useWorktreeStore";
-import { getNormalizedWorktreeMap } from "@/hooks/useWorktrees";
 
 /**
- * Composes the app's ~10 palette hooks (new-terminal, panel, project-switcher,
+ * Composes the app's palette hooks (panel, project-switcher,
  * action, quick-switcher, send-to-agent, worktree, quick-create) plus the
  * theme/log-level/resume-sessions/recent-dictations palette-store flags and every palette's
  * `useKeepMounted` exit-animation latch (#9917) into one typed bag.
@@ -38,13 +31,6 @@ export function usePaletteWiring({ isWorktreeOverviewOpen }: { isWorktreeOvervie
   }
   const worktrees = isWorktreeListShown ? liveWorktrees : lastShownWorktrees;
 
-  const worktreeStore = useWorktreeStoreApi();
-  const getWorktree = useCallback(
-    (worktreeId: string) =>
-      getNormalizedWorktreeMap(worktreeStore.getState().worktrees).get(worktreeId),
-    [worktreeStore]
-  );
-  const newTerminalPalette = useNewTerminalPalette({ getWorktree });
   const panelPalette = usePanelPalette();
   const projectSwitcherPalette = useProjectSwitcherPalette();
   const actionPalette = useActionPalette();
@@ -71,7 +57,6 @@ export function usePaletteWiring({ isWorktreeOverviewOpen }: { isWorktreeOvervie
     projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal";
   const shouldMountQuickSwitcher = useKeepMounted(quickSwitcher.isOpen);
   const shouldMountSendToAgentPalette = useKeepMounted(sendToAgentPalette.isOpen);
-  const shouldMountNewTerminalPalette = useKeepMounted(newTerminalPalette.isOpen);
   const shouldMountWorktreePalette = useKeepMounted(worktreePalette.isOpen);
   const shouldMountQuickCreatePalette = useKeepMounted(quickCreatePalette.isOpen);
   const shouldMountPanelPalette = useKeepMounted(panelPalette.isOpen);
@@ -84,7 +69,6 @@ export function usePaletteWiring({ isWorktreeOverviewOpen }: { isWorktreeOvervie
   return {
     worktrees,
     isLoading,
-    newTerminalPalette,
     panelPalette,
     projectSwitcherPalette,
     actionPalette,
@@ -99,7 +83,6 @@ export function usePaletteWiring({ isWorktreeOverviewOpen }: { isWorktreeOvervie
     isProjectSwitcherModalOpen,
     shouldMountQuickSwitcher,
     shouldMountSendToAgentPalette,
-    shouldMountNewTerminalPalette,
     shouldMountWorktreePalette,
     shouldMountQuickCreatePalette,
     shouldMountPanelPalette,

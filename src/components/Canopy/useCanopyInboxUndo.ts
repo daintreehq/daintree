@@ -4,6 +4,7 @@ import type { HostId } from "@shared/types/remoteHosts";
 import { notify } from "@/lib/notify";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { CANOPY_SURFACE } from "./canopyFrame";
 import type { CanopyApi } from "./canopyHostSource";
 
 /** How long the panel's undo line stays up, as a mail client's "Undo send". */
@@ -121,16 +122,17 @@ export function useCanopyInboxUndo({
   }, [clearLine]);
   // Z takes the newest action back from anywhere in the panel: a row, the
   // folded Archived bar, or Refresh once the last row archived away — never
-  // from the pane's terminal or composer, or any text field, where Z is a letter.
+  // from the pane's terminal or composer, any text field, where Z is a letter,
+  // or a plugin's view, whose keys are its own.
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || event.shiftKey || event.altKey) return;
       if (event.key !== "z" && event.key !== "Z") return;
       const target = event.target instanceof Element ? event.target : null;
-      if (!target?.closest('[data-testid="canopy-dialog"]')) return;
+      if (!target?.closest(CANOPY_SURFACE)) return;
       if (
         target.closest(
-          'input, textarea, select, [contenteditable="true"], [data-canopy-terminal], [data-canopy-detail] .cm-editor'
+          'input, textarea, select, [contenteditable="true"], [data-canopy-terminal], [data-canopy-detail] .cm-editor, [data-canopy-plugin-view]'
         )
       ) {
         return;

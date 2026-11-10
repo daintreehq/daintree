@@ -21,7 +21,6 @@ import {
   signalFirstInteractive,
 } from "../window/deferredInitQueue.js";
 import {
-  getAgentUpdateHandler,
   getAgentVersionService,
   getCliAvailabilityServiceRef,
   getPtyClient,
@@ -62,7 +61,6 @@ function createDefaultHostRuntime(windowRegistry: WindowRegistry): HostRuntime {
         ptyClient,
         cliAvailabilityService: getCliAvailabilityServiceRef() ?? undefined,
         agentVersionService: getAgentVersionService() ?? undefined,
-        agentUpdateHandler: getAgentUpdateHandler() ?? undefined,
         isDemoMode,
         windowRegistry,
       });

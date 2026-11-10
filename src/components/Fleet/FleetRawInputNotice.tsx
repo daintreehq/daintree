@@ -2,6 +2,7 @@ import type { ReactElement } from "react";
 import { Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { FLOATING_CARD_CLASS } from "@/components/ui/floatingSurface";
 import type { HostId } from "@shared/types/remoteHosts";
 import { useArmedCrossHostTargets, type CrossHostFleetTarget } from "./crossHostFleet";
@@ -72,7 +73,13 @@ function SkippedTargetsNotice({
     >
       <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
       <span className="min-w-0 wrap-anywhere">
-        {composerReachesFleet ? `${skipped} · send from the composer to reach them` : skipped}
+        {composerReachesFleet ? (
+          <>
+            {skipped} <FactSeparator /> send from the composer to reach them
+          </>
+        ) : (
+          skipped
+        )}
       </span>
     </div>
   );

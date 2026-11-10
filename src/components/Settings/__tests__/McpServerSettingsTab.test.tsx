@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
+import { useContext, type ContextType } from "react";
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { parse as parseToml } from "smol-toml";
 import { McpServerSettingsTab } from "../McpServerSettingsTab";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
+import {
+  SettingsFlushContext,
+  SettingsFlushProvider,
+  type SettingsFlushReason,
+} from "../SettingsFlushRegistry";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { MCP_CLIENT_CONFIGS } from "@shared/config/mcpClientConfigs";
@@ -951,6 +957,277 @@ describe("McpServerSettingsTab", () => {
 
     const applyButton = screen.getByRole("button", { name: "Apply port" }) as HTMLButtonElement;
     expect(applyButton.disabled).toBe(true);
+  });
+
+  describe("flushed by a close", () => {
+    async function renderFlushable(overrides: Partial<typeof window.electron.mcpServer> = {}) {
+      installMcpApi(overrides);
+      let registry: ContextType<typeof SettingsFlushContext> = null;
+      const Capture = () => {
+        registry = useContext(SettingsFlushContext);
+        return null;
+      };
+      render(
+        <SettingsFlushProvider>
+          <Capture />
+          <SettingsValidationProvider>
+            <McpServerSettingsTab />
+          </SettingsValidationProvider>
+        </SettingsFlushProvider>
+      );
+      await waitFor(() => expect(portField().value).toBe("9020"));
+      await waitFor(() => expect(capField().disabled).toBe(false));
+      return async (reason?: SettingsFlushReason) => {
+        let failed: Array<{ tab: string; landOn: string }> = [];
+        await act(async () => {
+          failed = await registry!.flushAll(reason);
+        });
+        return failed;
+      };
+    }
+
+    const portField = () => screen.getByLabelText("MCP server port") as HTMLInputElement;
+    const capField = () => screen.getByLabelText("Records kept") as HTMLInputElement;
+    const typePort = (value: string) => fireEvent.change(portField(), { target: { value } });
+    const typeCap = (value: string) => fireEvent.change(capField(), { target: { value } });
+    const rowOf = (field: HTMLElement) => field.closest("[data-settings-row]");
+    // Matches main: the cap comes back as sent, and capture is left as it was.
+    const echoCap = () => vi.fn(async (maxRecords: number) => ({ enabled: true, maxRecords }));
+
+    const applied = (configuredPort: number | null) => ({
+      enabled: true,
+      port: configuredPort ?? 9020,
+      configuredPort,
+      apiKey: "dnt-key-abc123",
+    });
+
+    it("applies nothing it wasn't given", async () => {
+      const flush = await renderFlushable();
+
+      await expect(flush()).resolves.toEqual([]);
+
+      expect(window.electron.mcpServer.setPort).not.toHaveBeenCalled();
+      expect(window.electron.mcpServer.setAuditMaxRecords).not.toHaveBeenCalled();
+    });
+
+    it("clears a typed port back to the default on a close, as Apply does", async () => {
+      const flush = await renderFlushable({
+        setPort: vi.fn().mockResolvedValue(applied(null)),
+      });
+      typePort("");
+
+      await expect(flush()).resolves.toEqual([]);
+
+      expect(window.electron.mcpServer.setPort).toHaveBeenCalledWith(null);
+    });
+
+    it("applies a valid cap though the port beside it is invalid, and lands on the port", async () => {
+      const flush = await renderFlushable({ setAuditMaxRecords: echoCap() });
+      typePort("80");
+      typeCap("800");
+
+      const failed = await flush();
+
+      expect(failed).toHaveLength(1);
+      expect(document.getElementById(failed[0]!.landOn)).toBe(rowOf(portField()));
+      expect(window.electron.mcpServer.setPort).not.toHaveBeenCalled();
+      expect(window.electron.mcpServer.setAuditMaxRecords).toHaveBeenCalledWith(800);
+      expect(portField().value).toBe("80");
+      expect(capField().value).toBe("800");
+      expect(screen.queryByRole("button", { name: "Discard max records" })).toBeNull();
+    });
+
+    it("lands on the cap's own row, which holds its field, when the cap is empty", async () => {
+      const flush = await renderFlushable();
+      typeCap("");
+
+      const [failure] = await flush();
+
+      expect(window.electron.mcpServer.setAuditMaxRecords).not.toHaveBeenCalled();
+      expect(document.getElementById(failure!.landOn)).toBe(rowOf(capField()));
+      expect(screen.getByText(/^Enter a number between/)).toBeTruthy();
+    });
+
+    it("keeps the typed number and its error when applying it fails", async () => {
+      const flush = await renderFlushable({
+        setAuditMaxRecords: vi.fn().mockRejectedValue(new Error("disk full")),
+      });
+      typeCap("800");
+
+      const [failure] = await flush();
+
+      expect(document.getElementById(failure!.landOn)).toBe(rowOf(capField()));
+      expect(await screen.findByText(/disk full/)).toBeTruthy();
+      expect(capField().value).toBe("800");
+    });
+
+    it("leaves both for a real close when the window only hides", async () => {
+      const flush = await renderFlushable({
+        setPort: vi.fn().mockResolvedValue(applied(9021)),
+      });
+      typePort("9021");
+      typeCap("50");
+
+      await expect(flush("hide")).resolves.toEqual([]);
+
+      expect(window.electron.mcpServer.setPort).not.toHaveBeenCalled();
+      expect(window.electron.mcpServer.setAuditMaxRecords).not.toHaveBeenCalled();
+      expect(portField().value).toBe("9021");
+      expect(capField().value).toBe("50");
+
+      await expect(flush("close")).resolves.toEqual([]);
+      expect(window.electron.mcpServer.setPort).toHaveBeenCalledWith(9021);
+      expect(window.electron.mcpServer.setAuditMaxRecords).toHaveBeenCalledWith(50);
+    });
+
+    it("reports the outcome of an Apply still running rather than applying again", async () => {
+      let failApply!: (reason: Error) => void;
+      const setPort = vi.fn(
+        () => new Promise((_resolve, reject) => (failApply = reject))
+      ) as unknown as typeof window.electron.mcpServer.setPort;
+      const flush = await renderFlushable({ setPort });
+      typePort("9021");
+      fireEvent.click(screen.getByRole("button", { name: "Apply port" }));
+      await waitFor(() => expect(setPort).toHaveBeenCalledTimes(1));
+
+      const flushing = flush();
+      await act(async () => failApply(new Error("disk full")));
+      const [failure] = await flushing;
+
+      expect(document.getElementById(failure!.landOn)).toBe(rowOf(portField()));
+      expect(setPort).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits for a cap Apply still running and succeeds with it, without applying again", async () => {
+      let finishApply!: (cfg: { enabled: boolean; maxRecords: number }) => void;
+      const setAuditMaxRecords = vi.fn(
+        () => new Promise((resolve) => (finishApply = resolve))
+      ) as unknown as typeof window.electron.mcpServer.setAuditMaxRecords;
+      const flush = await renderFlushable({ setAuditMaxRecords });
+      typeCap("800");
+      fireEvent.click(screen.getByRole("button", { name: "Apply max records" }));
+      await waitFor(() => expect(setAuditMaxRecords).toHaveBeenCalledTimes(1));
+
+      let settled = false;
+      const flushing = flush().then((failed) => {
+        settled = true;
+        return failed;
+      });
+      await act(async () => {});
+      expect(settled).toBe(false);
+
+      await act(async () => finishApply({ enabled: true, maxRecords: 800 }));
+
+      await expect(flushing).resolves.toEqual([]);
+      expect(setAuditMaxRecords).toHaveBeenCalledTimes(1);
+      expect(capField().value).toBe("800");
+    });
+
+    it("keeps Discard off through an Apply, and a close still waits for that Apply", async () => {
+      let failApply!: (reason: Error) => void;
+      const setAuditMaxRecords = vi.fn(
+        () => new Promise((_resolve, reject) => (failApply = reject))
+      ) as unknown as typeof window.electron.mcpServer.setAuditMaxRecords;
+      const flush = await renderFlushable({ setAuditMaxRecords });
+      typeCap("50");
+      fireEvent.click(screen.getByRole("button", { name: "Apply max records" }));
+      await waitFor(() => expect(setAuditMaxRecords).toHaveBeenCalledTimes(1));
+      const discard = screen.getByRole("button", {
+        name: "Discard max records",
+      }) as HTMLButtonElement;
+      expect(discard.disabled).toBe(true);
+      // The draft back at the saved value doesn't take the running write off the close.
+      typeCap("500");
+
+      const flushing = flush();
+      await act(async () => failApply(new Error("disk full")));
+
+      expect((await flushing)[0]?.landOn).toBe(rowOf(capField())?.id);
+      await waitFor(() => expect(discard.isConnected).toBe(false));
+    });
+
+    it("doesn't hold a close on a port draft whose row went with the server", async () => {
+      const flush = await renderFlushable({
+        setEnabled: vi.fn().mockResolvedValue({ ...applied(9020), enabled: false }),
+      });
+      typePort("80");
+      fireEvent.click(screen.getByRole("switch", { name: /MCP server|Enable/i }));
+      await waitFor(() => expect(screen.queryByLabelText("MCP server port")).toBeNull());
+
+      await expect(flush()).resolves.toEqual([]);
+      expect(window.electron.mcpServer.setPort).not.toHaveBeenCalled();
+    });
+
+    it("keeps a typed cap when the capture switch flips", async () => {
+      const flush = await renderFlushable({
+        setAuditEnabled: vi.fn().mockResolvedValue({ enabled: false, maxRecords: 500 }),
+        setAuditMaxRecords: vi.fn(async (maxRecords: number) => ({ enabled: false, maxRecords })),
+      });
+      typeCap("800");
+
+      fireEvent.click(screen.getByRole("switch", { name: /Capture audit log/i }));
+      await waitFor(() => expect(window.electron.mcpServer.setAuditEnabled).toHaveBeenCalled());
+      await act(async () => {});
+
+      expect(capField().value).toBe("800");
+      await expect(flush()).resolves.toEqual([]);
+      expect(window.electron.mcpServer.setAuditMaxRecords).toHaveBeenCalledWith(800);
+      expect(capField().value).toBe("800");
+      expect(
+        screen.getByRole("switch", { name: /Capture audit log/i }).getAttribute("aria-checked")
+      ).toBe("false");
+
+      await expect(flush()).resolves.toEqual([]);
+      expect(window.electron.mcpServer.setAuditMaxRecords).toHaveBeenCalledTimes(1);
+    });
+
+    it("follows the configured port again after a Discard, leaving nothing to write back", async () => {
+      let pushRuntime!: (next: unknown) => void;
+      const getStatus = vi.fn().mockResolvedValue(applied(9020));
+      const flush = await renderFlushable({
+        getStatus,
+        onRuntimeStateChanged: vi.fn((callback: (next: unknown) => void) => {
+          pushRuntime = callback;
+          return vi.fn();
+        }) as unknown as typeof window.electron.mcpServer.onRuntimeStateChanged,
+      });
+      typePort("9021");
+      fireEvent.click(screen.getByRole("button", { name: "Discard port" }));
+
+      getStatus.mockResolvedValue(applied(9030));
+      await act(async () => {
+        pushRuntime({ enabled: true, state: "ready", port: 9030, lastError: null });
+      });
+
+      await waitFor(() => expect(portField().value).toBe("9030"));
+      await expect(flush()).resolves.toEqual([]);
+      expect(window.electron.mcpServer.setPort).not.toHaveBeenCalled();
+    });
+
+    it("offers Discard only for a changed field, and discarding leaves nothing to apply", async () => {
+      const flush = await renderFlushable({
+        setPort: vi.fn().mockRejectedValue(new Error("disk full")),
+      });
+      expect(screen.queryByRole("button", { name: "Discard port" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Discard max records" })).toBeNull();
+
+      typePort("9021");
+      typeCap("1");
+      await flush();
+      expect(await screen.findByText(/disk full/)).toBeTruthy();
+      expect(screen.getByText(/^Enter a number between/)).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Discard port" }));
+      fireEvent.click(screen.getByRole("button", { name: "Discard max records" }));
+
+      expect(portField().value).toBe("9020");
+      expect(capField().value).toBe("500");
+      expect(screen.queryByText(/disk full/)).toBeNull();
+      expect(screen.queryByText(/^Enter a number between/)).toBeNull();
+      vi.mocked(window.electron.mcpServer.setPort).mockClear();
+      await expect(flush()).resolves.toEqual([]);
+      expect(window.electron.mcpServer.setPort).not.toHaveBeenCalled();
+    });
   });
 
   it("subscribes to runtime state changes on mount and unsubscribes on unmount", async () => {

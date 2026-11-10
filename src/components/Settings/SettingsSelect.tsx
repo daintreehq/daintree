@@ -22,6 +22,8 @@ export interface SettingsSelectOption {
   label: string;
   description?: string;
   disabled?: boolean;
+  /** Marks the option the setting falls back to, drawn as a trailing "Default" beside its label. */
+  isDefault?: boolean;
   /** A brand mark shown beside the label in the list and, once picked, in the trigger. */
   icon?: ComponentType<{ size?: number; className?: string }>;
 }
@@ -52,6 +54,8 @@ interface SettingsSelectProps {
   disabledReason?: string;
   /** Inside a group: a transient state beside the label, such as "Saving…". */
   status?: ReactNode;
+  /** Lets an option's description be read only while the list is showing. */
+  onOpenChange?: (open: boolean) => void;
 }
 
 const SCOPE_LABEL = { project: "Project", global: "Global", default: "Default" } as const;
@@ -77,6 +81,7 @@ export function SettingsSelect({
   controlWidth = "select",
   disabledReason,
   status,
+  onOpenChange,
 }: SettingsSelectProps) {
   const group = useSettingsGroup();
   const id = useId();
@@ -97,6 +102,7 @@ export function SettingsSelect({
       value={option.value}
       description={option.description}
       disabled={option.disabled}
+      meta={option.isDefault ? "Default" : undefined}
     >
       {option.icon ? (
         <span className="inline-flex items-center gap-2 align-middle">
@@ -133,7 +139,13 @@ export function SettingsSelect({
         disabledReason={disabledReason}
         error={isError ? error : undefined}
         control={({ labelId, descriptionId: rowDescriptionId, disabled: rowDisabled }) => (
-          <Select value={value} onValueChange={onValueChange} disabled={rowDisabled} name={name}>
+          <Select
+            value={value}
+            onValueChange={onValueChange}
+            onOpenChange={onOpenChange}
+            disabled={rowDisabled}
+            name={name}
+          >
             <SelectTrigger
               aria-labelledby={labelId}
               aria-describedby={rowDescriptionId}
@@ -177,7 +189,13 @@ export function SettingsSelect({
           />
         )}
       </div>
-      <Select value={value} onValueChange={onValueChange} disabled={disabled} name={name}>
+      <Select
+        value={value}
+        onValueChange={onValueChange}
+        onOpenChange={onOpenChange}
+        disabled={disabled}
+        name={name}
+      >
         <SelectTrigger
           id={id}
           aria-describedby={describedBy}

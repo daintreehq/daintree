@@ -20,8 +20,15 @@
  *   DAINTREE_SHOT_ONLY    comma-separated step filter (see step names below)
  *   DAINTREE_SHOT_MEDIA   "reduced" | "forced-colors" | "contrast" — emulate
  *                         the matching media state for the whole run
+ *   DAINTREE_SHOT_SCHEME  "dark" | "light" — emulate the OS colour scheme. The
+ *                         first-run Appearance step replaces the default theme
+ *                         with the OS's, so this, not DAINTREE_SHOT_THEME, is
+ *                         what picks the theme a first-run sweep renders in
  *
- * Output: artifacts/wizard-shots/<NN-slug>[-tag].png (gitignored).
+ * Output: artifacts/wizard-shots/<NN-slug>[-tag].png (gitignored), or
+ * DESIGN_CAPTURE_DIR when set. The privacy and settings-preview steps also write
+ * a JSON note of what activating the telemetry preview did: where focus went,
+ * whether the diagnostics dock opened, and whether the switch or step moved.
  *
  * Unlike a pass/fail spec this harness exists to produce artifacts, so it fails
  * loudly rather than quietly: a step that throws is recorded and re-raised at
@@ -48,8 +55,11 @@ const STEP = '[data-testid="agent-setup-step"]';
 const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
 const TAG = process.env.DAINTREE_SHOT_TAG ? `-${process.env.DAINTREE_SHOT_TAG}` : "";
 const MEDIA = process.env.DAINTREE_SHOT_MEDIA ?? "";
+const SCHEME = process.env.DAINTREE_SHOT_SCHEME ?? "";
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
-const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "wizard-shots");
+const OUTPUT_DIR = process.env.DESIGN_CAPTURE_DIR
+  ? path.resolve(process.env.DESIGN_CAPTURE_DIR)
+  : path.resolve(process.cwd(), "artifacts", "wizard-shots");
 
 /**
  * Kills the caret and scrollbars so a re-run diffs cleanly. Animations are NOT
@@ -209,6 +219,7 @@ test("agent setup wizard review — every step of both flows", async () => {
     });
     const page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, "Helios Dashboard");
     if (THEME) await setAppTheme(page, THEME);
+    if (SCHEME === "dark" || SCHEME === "light") await page.emulateMedia({ colorScheme: SCHEME });
     if (MEDIA === "reduced") await page.emulateMedia({ reducedMotion: "reduce" });
     if (MEDIA === "forced-colors") await page.emulateMedia({ forcedColors: "active" });
     if (MEDIA === "contrast") await page.emulateMedia({ contrast: "more" }).catch(() => {});
@@ -319,16 +330,129 @@ test("agent setup wizard review — every step of both flows", async () => {
       await closeWizard(page);
     });
 
-    // 8. Privacy toggle on — the only step whose control has two visual states.
-    await step("privacy-on", async () => {
+    // 8. Privacy — the consent step at rest, then its "what would be sent"
+    // control activated from the keyboard. Whatever it shows has to be usable
+    // without leaving the wizard, so the note records where focus went, whether
+    // the diagnostics dock opened behind the scrim, and whether the switch or
+    // the step moved, next to the pixels.
+    await step("privacy", async () => {
       await openWizard(page, true);
       await clickContinue(page); // appearance -> agents
       await clickContinue(page); // agents -> privacy
-      if ((await currentStep(page)) === "privacy") {
-        await page.locator(`${DIALOG} [role="switch"]`).first().click();
-        await snap(page, "70-privacy-toggle-on", PANEL);
+      expect(await currentStep(page), "never reached the privacy step").toBe("privacy");
+      await snap(page, "70-privacy-rest", PANEL);
+
+      const control = page
+        .locator(`${STEP} button`)
+        .filter({ hasText: /preview|crash report/i })
+        .first();
+      await control.waitFor({ state: "visible", timeout: 5_000 });
+      // Reach it the way a keyboard user does, so the ring is the real one.
+      const handle = await control.elementHandle();
+      for (let guard = 0; guard < 8; guard++) {
+        const onControl = await page.evaluate((el) => document.activeElement === el, handle);
+        if (onControl) break;
+        await page.keyboard.press("Tab");
       }
+      await page.keyboard.press("Enter");
+      await settle(page, 700);
+      await snap(page, "71-privacy-preview", PANEL);
+      await snap(page, "72-privacy-preview-window");
+
+      const observed = await page.evaluate(async (dialog) => {
+        const el = document.activeElement as HTMLElement | null;
+        const dock = document.querySelector<HTMLElement>('[aria-label="Diagnostics dock"]');
+        const sw = document.querySelector(`${dialog} [role="switch"]`);
+        const preview = await window.electron.telemetry.preview.getState().catch(() => null);
+        return {
+          step: document.querySelector("[data-step]")?.getAttribute("data-step") ?? null,
+          focus: {
+            tag: el?.tagName ?? "none",
+            text: (el?.textContent ?? "").trim().slice(0, 80),
+            inDialog: !!el?.closest(dialog),
+          },
+          switchChecked: sw?.getAttribute("aria-checked") ?? null,
+          dockVisible: !!dock && dock.getBoundingClientRect().height > 0,
+          previewActive: preview?.active ?? null,
+        };
+      }, DIALOG);
+      writeFileSync(
+        path.join(OUTPUT_DIR, `privacy-preview-state${TAG}.json`),
+        JSON.stringify(observed, null, 2)
+      );
+
+      await page.locator(`${DIALOG} [role="switch"]`).first().click();
+      await snap(page, "73-privacy-preview-toggle-on", PANEL);
       await closeWizard(page);
+    });
+
+    // 9. Settings → Privacy & data → "Open preview" — the same action from
+    // inside the Settings dialog. The dock it opens has to be the thing in front
+    // of the user afterwards, not something dimmed behind the Settings scrim.
+    await step("settings-preview", async () => {
+      await page.evaluate(() => window.electron.telemetry.preview.toggle(false)).catch(() => {});
+      const closeDock = page.locator('[aria-label="Close diagnostics dock"]');
+      if (await closeDock.isVisible().catch(() => false)) await closeDock.click();
+      await settle(page, 300);
+
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:open-settings-tab", {
+            detail: { tab: "privacy", subtab: "telemetry" },
+          })
+        );
+      });
+      const openPreview = page.getByRole("button", { name: "Open preview" });
+      await openPreview.waitFor({ state: "visible", timeout: 15_000 });
+      await openPreview.scrollIntoViewIfNeeded();
+      await snap(page, "80-settings-privacy");
+      // The same crash-report contents the wizard discloses, as Settings lists them.
+      const collected = page.getByText("What's collected at each level");
+      await collected.scrollIntoViewIfNeeded();
+      await page.evaluate(() =>
+        document
+          .evaluate(
+            '//*[text()="What\'s collected at each level"]',
+            document,
+            null,
+            XPathResult.FIRST_ORDERED_NODE_TYPE,
+            null
+          )
+          .singleNodeValue?.parentElement?.scrollIntoView({ block: "start" })
+      );
+      await snap(page, "82-settings-whats-collected");
+      await openPreview.scrollIntoViewIfNeeded();
+      // From the keyboard, so the capture shows where a keyboard user lands.
+      await openPreview.focus();
+      await page.keyboard.press("Enter");
+      await settle(page, 1200);
+      await snap(page, "81-settings-open-preview-window");
+
+      const observed = await page.evaluate(async (settingsClose) => {
+        const el = document.activeElement as HTMLElement | null;
+        const dock = document.querySelector<HTMLElement>('[aria-label="Diagnostics dock"]');
+        const preview = await window.electron.telemetry.preview.getState().catch(() => null);
+        return {
+          settingsOpen: !!document.querySelector(settingsClose),
+          dockVisible: !!dock && dock.getBoundingClientRect().height > 0,
+          focusInDock: !!el && !!dock?.contains(el),
+          focus: {
+            tag: el?.tagName ?? "none",
+            role: el?.getAttribute("role") ?? null,
+            text: (el?.textContent ?? "").trim().slice(0, 80),
+          },
+          previewActive: preview?.active ?? null,
+        };
+      }, SEL.settings.closeButton);
+      writeFileSync(
+        path.join(OUTPUT_DIR, `settings-preview-state${TAG}.json`),
+        JSON.stringify(observed, null, 2)
+      );
+
+      const closeSettings = page.locator(SEL.settings.closeButton);
+      if (await closeSettings.isVisible().catch(() => false)) await closeSettings.click();
+      if (await closeDock.isVisible().catch(() => false)) await closeDock.click();
+      await page.evaluate(() => window.electron.telemetry.preview.toggle(false)).catch(() => {});
     });
   } finally {
     if (ctx?.app) await closeApp(ctx.app);

@@ -24,6 +24,7 @@ export type {
   PanelMenuItemContribution,
   ToolbarButtonContribution,
   ToolbarButtonPopover,
+  CanopyViewContribution,
   MenuItemContribution,
   MenuItemLocation,
   ViewContribution,

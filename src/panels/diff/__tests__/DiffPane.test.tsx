@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import type { ReactNode } from "react";
-import { act, cleanup, render, fireEvent, screen, waitFor } from "@testing-library/react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import { act, cleanup, render, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "@shared/types/git";
 import type { DiffChangeSetEntry } from "@shared/types/git";
@@ -10,24 +10,30 @@ import type { DiffChangeSetEntry } from "@shared/types/git";
 // itself. These tests target that logic only, so the diff renderer, the
 // sidebar and the content fetch are all stubbed out.
 
-// A fragment, so the toolbar stays a sibling of the keydown host rather than
-// wrapping it — the stepping shortcuts bubble through the same subtree as before.
+// A focusable root wrapping the toolbar and the body, as the real ContentPanel's
+// is: the pane root is where focus lands when the pane is focused, and the
+// toolbar and footer are siblings of the body inside it.
 // It reads its tab group's edge and reorder the way the real ContentPanel does.
 vi.mock("@/components/Panel/ContentPanel", async () => {
+  const { forwardRef } = await import("react");
   const { useGridGroupAttention } = await import("@/components/Panel/gridGroupAttention");
   const { useGridGroupTabReorder } = await import("@/components/Panel/gridGroupTabReorder");
   return {
-    ContentPanel: (props: {
-      id: string;
-      location?: "grid" | "dock" | "dialog";
-      tabs?: Array<{ id: string }>;
-      toolbar?: ReactNode;
-      children?: ReactNode;
-    }) => {
+    ContentPanel: forwardRef<
+      HTMLDivElement,
+      {
+        id: string;
+        location?: "grid" | "dock" | "dialog";
+        tabs?: Array<{ id: string }>;
+        toolbar?: ReactNode;
+        children?: ReactNode;
+        onKeyDown?: (event: ReactKeyboardEvent) => void;
+      }
+    >(function ContentPanelMock(props, ref) {
       const attention = useGridGroupAttention(props.id, props.location ?? "grid");
       const reorder = useGridGroupTabReorder(props.id, props.location ?? "grid");
       return (
-        <>
+        <div ref={ref} data-testid="panel-root" tabIndex={-1} onKeyDown={props.onKeyDown}>
           <span
             data-testid="group-edge"
             data-group-ambient={attention?.ambientAgentState}
@@ -41,10 +47,10 @@ vi.mock("@/components/Panel/ContentPanel", async () => {
             }
           />
           {props.toolbar}
-          {props.children}
-        </>
+          <div data-pane-body="">{props.children}</div>
+        </div>
       );
-    },
+    }),
   };
 });
 
@@ -55,20 +61,36 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-vi.mock("@/components/Worktree/DiffViewer", () => ({
-  // Surfaces `wrapLines` so the auto/override resolution is observable from the
-  // prop the viewer actually receives, not just from the toolbar's pressed state.
-  // `diff` rides along so a test can prove the viewer received the patch it
-  // names, not merely that something mounted.
-  DiffViewer: (props: { wrapLines?: boolean; diff?: string }) => (
-    <div
-      data-testid="diff-viewer-mock"
-      data-wrap-lines={String(props.wrapLines)}
-      data-diff={props.diff}
-    />
-  ),
-  FULL_FILE_MAX_LINES: 5000,
-}));
+// Set by a test that needs an overlay the pane opened: a React child of the
+// pane portalled out of its DOM, the way a menu or popover is.
+const { viewerOverlay } = vi.hoisted(() => ({ viewerOverlay: { open: false } }));
+vi.mock("@/components/Worktree/DiffViewer", async () => {
+  const { createPortal } = await import("react-dom");
+  return {
+    // Surfaces `wrapLines` so the auto/override resolution is observable from the
+    // prop the viewer actually receives, not just from the toolbar's pressed state.
+    // `diff` rides along so a test can prove the viewer received the patch it
+    // names, not merely that something mounted.
+    DiffViewer: (props: { wrapLines?: boolean; diff?: string }) => (
+      <div
+        data-testid="diff-viewer-mock"
+        data-wrap-lines={String(props.wrapLines)}
+        data-diff={props.diff}
+      >
+        {viewerOverlay.open &&
+          createPortal(
+            <div role="menu" aria-label="Viewer overlay">
+              <button type="button" role="menuitem">
+                Overlay item
+              </button>
+            </div>,
+            document.body
+          )}
+      </div>
+    ),
+    FULL_FILE_MAX_LINES: 5000,
+  };
+});
 
 // The rendered layout pulls react-markdown behind a lazy boundary; these tests
 // exercise the toolbar's plumbing, not the renderer, so it stays a stub.
@@ -125,14 +147,27 @@ vi.mock("@/components/ui/EmptyState", () => ({
 
 // Exposes the resolved index so the identity resolution is observable from the
 // sidebar as well as from the footer position indicator.
+// Its one row claims `v` for its own file the way the real row button does:
+// `preventDefault()` without stopping propagation.
 const sidebarSelect = vi.fn<(index: number) => void>();
+const { sidebarRowViewed } = vi.hoisted(() => ({ sidebarRowViewed: vi.fn() }));
 vi.mock("@/components/FileViewer/DiffFileSidebar", () => ({
   DiffFileSidebar: (props: { files: DiffChangeSetEntry[]; currentIndex: number }) => (
     <div
       data-testid="diff-sidebar-mock"
       data-current-index={props.currentIndex}
       data-file-count={props.files.length}
-    />
+    >
+      <button
+        type="button"
+        data-testid="diff-sidebar-row"
+        onKeyDown={(event) => {
+          if (event.key !== "v") return;
+          event.preventDefault();
+          sidebarRowViewed();
+        }}
+      />
+    </div>
   ),
 }));
 
@@ -222,13 +257,13 @@ function seedPanel(overrides: Record<string, unknown>): void {
   panelsById[PANEL_ID] = { id: PANEL_ID, kind: "diff", diffSource: "working-tree", ...overrides };
 }
 
-function paneElement(isFocused = true) {
+function paneElement(isFocused = true, location: "grid" | "dialog" = "dialog") {
   return (
     <DiffPane
       id={PANEL_ID}
       title="pane"
       isFocused={isFocused}
-      location="dialog"
+      location={location}
       worktreeId={WORKTREE_ID}
       onFocus={() => {}}
       onClose={() => {}}
@@ -236,8 +271,8 @@ function paneElement(isFocused = true) {
   );
 }
 
-function renderPane(isFocused = true) {
-  return render(paneElement(isFocused));
+function renderPane(isFocused = true, location: "grid" | "dialog" = "dialog") {
+  return render(paneElement(isFocused, location));
 }
 
 /** The stepping shortcuts ride bubbling from inside the pane, not the document. */
@@ -261,6 +296,8 @@ beforeEach(() => {
     retry: vi.fn(),
   });
   viewedKeys.clear();
+  viewerOverlay.open = false;
+  sidebarRowViewed.mockReset();
   isImageDiffCandidateMock.mockReset();
   isImageDiffCandidateMock.mockReturnValue(false);
   preferences.diffShowFileList = true;
@@ -324,7 +361,7 @@ describe("DiffPane — current-file resolution", () => {
     );
 
     // The viewed marker follows the resolved entry, not the first path match.
-    fireEvent.click(screen.getByRole("button", { name: "Viewed" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Viewed" }));
     expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, "unstaged:a.ts");
   });
 
@@ -527,6 +564,193 @@ describe("DiffPane — file stepping", () => {
       "modified",
       narrow[0]!.viewedKey
     );
+  });
+});
+
+describe("DiffPane — file keys across the whole pane (#16643)", () => {
+  const changeSet = [entry("a.ts"), entry("b.ts", "added"), entry("c.ts")];
+
+  /** Exactly one step since the last check, and to `changeSet[index]`. */
+  function expectStepTo(index: number): void {
+    const target = changeSet[index]!;
+    expect(setDiffPanelFileMock).toHaveBeenCalledTimes(1);
+    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
+      PANEL_ID,
+      target.path,
+      target.status,
+      target.viewedKey
+    );
+    setDiffPanelFileMock.mockClear();
+  }
+
+  /** Where the store's setter would leave the panel after a step to `index`. */
+  function seedAt(index: number): void {
+    const target = changeSet[index]!;
+    seedPanel({
+      filePath: target.path,
+      fileStatus: target.status,
+      viewedKey: target.viewedKey,
+      changeSet,
+    });
+  }
+
+  it.each(["grid", "dialog"] as const)(
+    "keeps stepping from the footer buttons the keys are advertised on (%s)",
+    (location) => {
+      seedAt(0);
+      const { rerender } = renderPane(true, location);
+      const next = screen.getByRole("button", { name: "Next file" });
+      next.focus();
+      fireEvent.click(next);
+      expectStepTo(1);
+      seedAt(1);
+      rerender(paneElement(true, location));
+      expect(document.activeElement).toBe(next);
+
+      fireEvent.keyDown(next, { key: "]" });
+      expectStepTo(2);
+      fireEvent.keyDown(screen.getByRole("button", { name: "Previous file" }), { key: "[" });
+      expectStepTo(0);
+      fireEvent.keyDown(next, { key: "v" });
+      expect(toggleViewedMock).toHaveBeenCalledTimes(1);
+      expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, changeSet[1]!.viewedKey);
+    }
+  );
+
+  it.each(["grid", "dialog"] as const)(
+    "toggles Viewed and steps from the footer's Viewed checkbox (%s)",
+    (location) => {
+      seedAt(0);
+      renderPane(true, location);
+      const viewed = screen.getByRole("checkbox", { name: "Viewed" });
+      fireEvent.click(viewed);
+      expect(toggleViewedMock).toHaveBeenCalledTimes(1);
+
+      fireEvent.keyDown(viewed, { key: "v" });
+      expect(toggleViewedMock).toHaveBeenCalledTimes(2);
+      expect(toggleViewedMock).toHaveBeenLastCalledWith(WORKTREE_PATH, changeSet[0]!.viewedKey);
+      fireEvent.keyDown(viewed, { key: "]" });
+      expectStepTo(1);
+    }
+  );
+
+  it.each(["grid", "dialog"] as const)(
+    "steps from the pane root, where focus lands when the pane is focused (%s)",
+    (location) => {
+      seedAt(1);
+      renderPane(true, location);
+      const root = screen.getByTestId("panel-root");
+      root.focus();
+
+      fireEvent.keyDown(root, { key: "]" });
+      expectStepTo(2);
+      fireEvent.keyDown(root, { key: "[" });
+      expectStepTo(0);
+    }
+  );
+
+  it("steps from the header toolbar's controls", () => {
+    seedAt(1);
+    renderPane();
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "Wrap long lines" }), { key: "]" });
+    expectStepTo(2);
+    const split = within(screen.getByRole("radiogroup", { name: "Diff layout" })).getByRole(
+      "radio",
+      { name: "Split" }
+    );
+    fireEvent.keyDown(split, { key: "[" });
+    expectStepTo(0);
+  });
+
+  it("leaves a key the focused control already claimed to that control", () => {
+    seedAt(0);
+    renderPane();
+
+    fireEvent.keyDown(screen.getByTestId("diff-sidebar-row"), { key: "v" });
+
+    // The row marked its own file; the pane's current file is left alone.
+    expect(sidebarRowViewed).toHaveBeenCalledTimes(1);
+    expect(toggleViewedMock).not.toHaveBeenCalled();
+  });
+
+  it("lets the keys type into text fields anywhere in the pane", () => {
+    seedAt(1);
+    renderPane();
+    const search = document.createElement("input");
+    search.type = "search";
+    const select = document.createElement("select");
+    const note = document.createElement("textarea");
+    const editor = document.createElement("div");
+    editor.contentEditable = "true";
+    // jsdom leaves `isContentEditable` unimplemented.
+    Object.defineProperty(editor, "isContentEditable", { value: true });
+    screen.getByTestId("diff-pane-body").append(search, select);
+    screen.getByTestId("diff-pane-footer").append(note, editor);
+
+    for (const field of [search, select, note, editor]) {
+      for (const key of ["[", "]", "v"]) {
+        // Not cancelled, so the character still reaches the field.
+        expect(fireEvent.keyDown(field, { key })).toBe(true);
+      }
+    }
+
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+    expect(toggleViewedMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves keys pressed in an overlay the pane opened alone", () => {
+    viewerOverlay.open = true;
+    seedAt(1);
+    renderPane();
+    const item = screen.getByRole("menuitem", { name: "Overlay item" });
+    expect(screen.getByTestId("panel-root").contains(item)).toBe(false);
+
+    for (const key of ["[", "]", "v"]) expect(fireEvent.keyDown(item, { key })).toBe(true);
+
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+    expect(toggleViewedMock).not.toHaveBeenCalled();
+  });
+
+  it("stays inert everywhere in a background pane", () => {
+    seedAt(1);
+    renderPane(false);
+
+    fireEvent.keyDown(screen.getByTestId("panel-root"), { key: "]" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Next file" }), { key: "]" });
+    fireEvent.keyDown(screen.getByRole("checkbox", { name: "Viewed" }), { key: "v" });
+
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+    expect(toggleViewedMock).not.toHaveBeenCalled();
+  });
+
+  it("follows the pane's focus as it leaves and returns", () => {
+    seedAt(1);
+    const { rerender } = renderPane();
+    const press = () =>
+      fireEvent.keyDown(screen.getByRole("button", { name: "Next file" }), { key: "]" });
+
+    rerender(paneElement(false));
+    press();
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+
+    rerender(paneElement(true));
+    press();
+    expectStepTo(2);
+  });
+
+  it("leaves modified chords to the app", () => {
+    seedAt(1);
+    renderPane();
+    const root = screen.getByTestId("panel-root");
+
+    // Not cancelled either, so the chord still reaches whatever owns it.
+    expect(fireEvent.keyDown(root, { key: "]", metaKey: true })).toBe(true);
+    expect(fireEvent.keyDown(root, { key: "[", ctrlKey: true })).toBe(true);
+    expect(fireEvent.keyDown(root, { key: "v", altKey: true })).toBe(true);
+
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+    expect(toggleViewedMock).not.toHaveBeenCalled();
   });
 });
 

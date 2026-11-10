@@ -771,6 +771,50 @@ describe("EnvVarEditor", () => {
       expect(target).toBe(screen.getByTestId("env-editor-import"));
     });
 
+    describe("with inheritedEnv and an echoing parent", () => {
+      function EchoParent({ inherited }: { inherited: Record<string, string> }) {
+        const [env, setEnv] = useState<Record<string, string>>({});
+        return (
+          <EnvVarEditor
+            env={env}
+            inheritedEnv={inherited}
+            onChange={(next) => {
+              onChange(next);
+              setEnv(next);
+            }}
+          />
+        );
+      }
+
+      function importText(text: string) {
+        fireEvent.click(screen.getByTestId("env-editor-import"));
+        fireEvent.change(screen.getByTestId("import-env-textarea"), { target: { value: text } });
+        fireEvent.click(screen.getByTestId("app-dialog-primary"));
+      }
+
+      it("keeps inherited rows with a working Override after an import", () => {
+        render(<EchoParent inherited={{ AGENT_VAR: "1" }} />);
+        importText("NEW_KEY=2");
+
+        const keys = (screen.getAllByTestId("env-editor-key") as HTMLInputElement[]).map(
+          (el) => el.value
+        );
+        expect(keys).toEqual(["NEW_KEY", "AGENT_VAR"]);
+        expect(screen.getAllByTestId("env-editor-override")).toHaveLength(1);
+      });
+
+      it("shows one override row and no duplicate inherited row for an inherited key", () => {
+        render(<EchoParent inherited={{ AGENT_VAR: "1" }} />);
+        importText("AGENT_VAR=9");
+
+        const keys = (screen.getAllByTestId("env-editor-key") as HTMLInputElement[]).map(
+          (el) => el.value
+        );
+        expect(keys).toEqual(["AGENT_VAR"]);
+        expect(screen.queryAllByTestId("env-editor-override")).toHaveLength(0);
+      });
+    });
+
     it("clicking Import opens the dialog", () => {
       renderEditor({ FOO: "bar" });
       fireEvent.click(screen.getByTestId("env-editor-import"));

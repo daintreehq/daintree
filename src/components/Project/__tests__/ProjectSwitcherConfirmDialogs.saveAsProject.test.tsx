@@ -63,6 +63,8 @@ vi.mock("@/components/ui/ConfirmDialog", async () => {
   };
 });
 
+import type { SearchableProject } from "@/hooks/projectSwitcher/types";
+
 const { ProjectSwitcherConfirmDialogs } = await import("../ProjectSwitcherConfirmDialogs");
 
 const followUp = {
@@ -133,6 +135,78 @@ describe("Save as project follow-up", () => {
 
     expect(screen.getByTestId("confirm-dialog").getAttribute("data-restore-focus")).toBe(
       "palette-input"
+    );
+  });
+});
+
+describe("Remove project confirm", () => {
+  function renderRemove(isActive: boolean, cloneState?: SearchableProject["cloneState"]) {
+    const project: SearchableProject = {
+      id: "p1",
+      name: "retry-queue",
+      path: "/Users/me/code/retry-queue",
+      emoji: "🚀",
+      lastOpened: 0,
+      status: "closed",
+      isActive,
+      cloneState,
+      isBackground: false,
+      isMissing: false,
+      isPinned: false,
+      frecencyScore: 0,
+      displayPath: "retry-queue",
+      section: "other",
+      processCount: 0,
+      activeAgentCount: 0,
+      waitingAgentCount: 0,
+      blockedAgentCount: 0,
+      completedAgentCount: 0,
+      unacknowledgedCompletedAgentCount: 0,
+      snoozedAgentCount: 0,
+    };
+    render(
+      <ProjectSwitcherConfirmDialogs
+        removeConfirmProject={project}
+        onRemoveConfirmClose={vi.fn()}
+        onConfirmRemove={vi.fn()}
+        paletteInputRef={createRef<HTMLInputElement>()}
+      />
+    );
+  }
+
+  it("names the saved state a removal deletes and leaves the folder alone", () => {
+    renderRemove(false);
+
+    expect(screen.getByTestId("confirm-title").textContent).toBe("Remove 'retry-queue'?");
+    const body = screen.getByTestId("confirm-body").textContent ?? "";
+    for (const word of [
+      "settings",
+      "recipes stored outside the repository",
+      "schedules",
+      "layout",
+    ]) {
+      expect(body).toContain(word);
+    }
+    expect(body).toContain("ends any running terminals");
+    expect(body).toContain("The folder itself isn't touched");
+    expect(body).toContain(".daintree/recipes/");
+    expect(body).not.toContain("open it again later");
+  });
+
+  it("says a still-running clone is cancelled rather than promising the folder is untouched", () => {
+    renderRemove(false, "cloning");
+
+    const body = screen.getByTestId("confirm-body").textContent ?? "";
+    expect(body).toContain("cancels the clone");
+    expect(body).not.toContain("The folder itself isn't touched");
+  });
+
+  it("keeps the Close copy for the project on screen", () => {
+    renderRemove(true);
+
+    expect(screen.getByTestId("confirm-title").textContent).toBe("Close 'retry-queue'?");
+    expect(screen.getByTestId("confirm-body").textContent).toContain(
+      "The project will remain in your list"
     );
   });
 });

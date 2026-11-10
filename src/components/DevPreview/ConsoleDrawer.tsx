@@ -1,6 +1,7 @@
 import { Suspense, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { ChevronUp, CircleStop, Download, Eraser, MoreHorizontal, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SeverityMark } from "@/lib/statusSeverity";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -61,45 +62,16 @@ interface ConsoleDrawerProps {
   isPanelVisible?: boolean;
 }
 
-const STATUS_LABEL: Record<
-  DevPreviewStatus,
-  { label: string; textClass: string; dotClass: string }
-> = {
-  stopped: {
-    label: "Stopped",
-    textClass: "text-text-secondary",
-    dotClass: "bg-text-muted",
-  },
-  starting: {
-    label: "Starting",
-    textClass: "text-server-starting",
-    dotClass: "bg-server-starting",
-  },
-  installing: {
-    label: "Installing",
-    textClass: "text-server-starting",
-    dotClass: "bg-server-starting",
-  },
-  running: {
-    label: "Running",
-    textClass: "text-server-running",
-    dotClass: "bg-server-running",
-  },
-  stopping: {
-    label: "Stopping",
-    textClass: "text-server-starting",
-    dotClass: "bg-server-starting",
-  },
-  error: {
-    label: "Error",
-    textClass: "text-server-error",
-    dotClass: "bg-server-error",
-  },
-  "restored-stopped": {
-    label: "Stopped",
-    textClass: "text-text-secondary",
-    dotClass: "bg-text-muted",
-  },
+// The dev-server dashboard's words and marks: the state rides the dot, the word
+// stays neutral sentence case.
+const STATUS_LABEL: Record<DevPreviewStatus, { label: string; dotClass: string }> = {
+  stopped: { label: "Stopped", dotClass: "bg-server-stopped" },
+  starting: { label: "Starting", dotClass: "bg-server-starting" },
+  installing: { label: "Installing", dotClass: "bg-server-starting" },
+  running: { label: "Running", dotClass: "bg-server-running" },
+  stopping: { label: "Stopping", dotClass: "bg-server-starting" },
+  error: { label: "Error", dotClass: "bg-server-error" },
+  "restored-stopped": { label: "Stopped", dotClass: "bg-server-stopped" },
 };
 
 const DRAWER_HEIGHT = 300;
@@ -181,7 +153,7 @@ export function ConsoleDrawer({
   }, [isOutputVisible]);
 
   const statusLabel = isRestarting
-    ? { label: "Restarting", textClass: "text-server-starting", dotClass: "bg-server-starting" }
+    ? { label: "Restarting", dotClass: "bg-server-starting" }
     : (STATUS_LABEL[status] ?? STATUS_LABEL.stopped);
   const hasRestartControls = !!onRestartDevServer;
   const restartDisabled = !hasRestartControls || isRestarting || status === "starting";
@@ -201,9 +173,8 @@ export function ConsoleDrawer({
       status === "stopping");
   const stopDisabled = (isRestarting && !canStopWhileRestarting) || status === "stopping";
   const statusClass = cn(
-    "inline-flex min-h-8 items-center px-3 text-3xs font-semibold uppercase tracking-wide",
-    (hasRestartControls || stopVisible) && "border-r border-overlay",
-    statusLabel.textClass
+    "inline-flex min-h-8 items-center px-3 text-xs text-text-secondary",
+    (hasRestartControls || stopVisible) && "border-r border-overlay"
   );
 
   const idSuffix = terminalId ?? paneId;
@@ -241,12 +212,18 @@ export function ConsoleDrawer({
         </button>
 
         <div className={statusClass} role="status" aria-live="polite">
-          <span
-            className={cn(
-              "status-mark mr-2 h-1.5 w-1.5 shrink-0 rounded-full",
-              statusLabel.dotClass
-            )}
-          />
+          {status === "error" && !isRestarting ? (
+            <SeverityMark
+              severity="error"
+              label={statusLabel.label}
+              className="mr-2 h-3.5 w-3.5 shrink-0"
+              decorative
+            />
+          ) : (
+            <span
+              className={cn("status-mark mr-2 h-2 w-2 shrink-0 rounded-full", statusLabel.dotClass)}
+            />
+          )}
           {statusLabel.label}
         </div>
 

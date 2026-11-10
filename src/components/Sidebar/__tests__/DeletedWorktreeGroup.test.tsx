@@ -136,7 +136,7 @@ describe("DeletedWorktreeGroup", () => {
 
     const summary = screen.getByRole("button", { expanded: false });
     expect(summary.textContent).toContain("2 deleted worktrees");
-    expect(summary.textContent).toContain("3 terminals");
+    expect(summary.textContent).toContain("3 panels");
   });
 
   it("keeps every surviving terminal mounted as a drag source while collapsed", () => {
@@ -198,7 +198,7 @@ describe("DeletedWorktreeGroup", () => {
       { id: "t2", worktreeId: "wt-2" },
     ]);
     const { rerender } = renderGroup();
-    expect(screen.getByRole("button", { expanded: false }).textContent).toContain("2 terminals");
+    expect(screen.getByRole("button", { expanded: false }).textContent).toContain("2 panels");
 
     // Membership is derived, so re-homing a panel is enough to shrink the group.
     setPanels([{ id: "t2", worktreeId: "wt-2" }]);
@@ -208,7 +208,7 @@ describe("DeletedWorktreeGroup", () => {
       </TooltipProvider>
     );
 
-    expect(screen.getByRole("button", { expanded: false }).textContent).toContain("1 terminal");
+    expect(screen.getByRole("button", { expanded: false }).textContent).toContain("1 panel");
   });
 
   it("omits trashed and overlay panels, matching what the clear would close", () => {
@@ -219,7 +219,7 @@ describe("DeletedWorktreeGroup", () => {
     ]);
     renderGroup();
 
-    expect(screen.getByRole("button", { name: "Close 1 terminal" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Close 1 panel" })).toBeTruthy();
   });
 
   it("gives each member its own deadline in the rail, not one shared readout", () => {
@@ -375,7 +375,7 @@ describe("DeletedWorktreeGroup", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1" }]);
     renderGroup();
 
-    const clear = screen.getByRole("button", { name: "Close 1 terminal" });
+    const clear = screen.getByRole("button", { name: "Close 1 panel" });
     const restingDanger = clear.className
       .split(/\s+/)
       .filter((c) => c.includes("status-error") && !/^(hover|focus-visible):/.test(c));
@@ -389,7 +389,7 @@ describe("DeletedWorktreeGroup", () => {
     ]);
     renderGroup();
 
-    fireEvent.click(screen.getByRole("button", { name: "Close 2 terminals" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close 2 panels" }));
 
     const pending = useTerminalPendingDestructiveActionStore.getState().pending;
     expect(pending).toMatchObject({ kind: "deletedWorktreeGroupDismiss", targetCount: 2 });
@@ -413,7 +413,7 @@ describe("DeletedWorktreeGroup", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1", title: "claude" }]);
     renderGroup();
 
-    fireEvent.click(screen.getByRole("button", { name: "Close 1 terminal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close 1 panel" }));
 
     expect(useTerminalPendingDestructiveActionStore.getState().pending?.preview).toHaveLength(1);
   });
@@ -429,7 +429,7 @@ describe("DeletedWorktreeGroup", () => {
     ]);
     renderGroup();
 
-    fireEvent.click(screen.getByRole("button", { name: "Close 3 terminals" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close 3 panels" }));
 
     const preview = useTerminalPendingDestructiveActionStore.getState().pending?.preview;
     expect(preview?.[0]?.terminals.map((t) => t.terminalTitle)).toEqual([

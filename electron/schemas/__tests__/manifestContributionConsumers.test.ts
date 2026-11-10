@@ -11,6 +11,8 @@ import {
   AgentDetectionConfigSchema,
   AgentMcpContributionSchema,
   AgentMcpToolGroupSchema,
+  AgentPackagesContributionSchema,
+  CanopyViewContributionSchema,
   CommandContributionSchema,
   ContextMenuContributionSchema,
   CredentialFieldSchema,
@@ -133,6 +135,7 @@ const AGENT_REGISTRY = "shared/config/pluginAgentRegistry.ts";
 const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
 const PLUGIN_TOOLBAR_POPOVER = "src/components/Layout/PluginToolbarPopover.tsx";
+const CANOPY_PLUGIN_SECTION = "src/components/Canopy/CanopyPluginSection.tsx";
 const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
 const ASSISTANT_PLUGIN_KNOWLEDGE = "electron/services/AssistantPluginKnowledge.ts";
 const PROMPT_TEMPLATE_UTIL = "shared/utils/pluginPromptTemplates.ts";
@@ -206,6 +209,7 @@ const SERVICE_BROKER = "electron/services/plugin/PluginServiceBroker.ts";
 const SWEPT_SCHEMAS = {
   panels: PanelContributionObjectSchema,
   toolbarButtons: ToolbarButtonContributionSchema,
+  canopyViews: CanopyViewContributionSchema,
   launchEntries: LaunchEntryContributionSchema,
   layouts: LayoutContributionSchema,
   searchProviders: SearchProviderContributionSchema,
@@ -245,6 +249,7 @@ const SWEPT_SCHEMAS = {
   "panels.menu": PanelMenuItemSchema,
   "panels.toolbar": PanelToolbarItemSchema,
   "agents.detection": AgentDetectionConfigSchema,
+  "agents.packages": AgentPackagesContributionSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
   "surfaces.projectHome": SurfaceViewSlotSchema,
   "surfaces.worktreeCreate": SurfaceViewSlotSchema,
@@ -290,6 +295,7 @@ type SweptGroup = keyof typeof SWEPT_SCHEMAS;
 const TOP_LEVEL_GROUPS = [
   "panels",
   "toolbarButtons",
+  "canopyViews",
   "launchEntries",
   "layouts",
   "searchProviders",
@@ -346,6 +352,7 @@ type ForgeSlots = NonNullable<z.infer<typeof ForgeProviderContributionSchema>["s
 type FieldConsumerCoverage = {
   panels: Record<keyof z.infer<typeof PanelContributionObjectSchema>, ConsumerDescriptor>;
   toolbarButtons: Record<keyof z.infer<typeof ToolbarButtonContributionSchema>, ConsumerDescriptor>;
+  canopyViews: Record<keyof z.infer<typeof CanopyViewContributionSchema>, ConsumerDescriptor>;
   launchEntries: Record<keyof z.infer<typeof LaunchEntryContributionSchema>, ConsumerDescriptor>;
   "launchEntries.panel": Record<
     keyof z.infer<typeof LaunchEntryPanelTargetSchema>,
@@ -436,6 +443,10 @@ type FieldConsumerCoverage = {
   "panels.menu": Record<keyof z.infer<typeof PanelMenuItemSchema>, ConsumerDescriptor>;
   "panels.toolbar": Record<keyof z.infer<typeof PanelToolbarItemSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
+  "agents.packages": Record<
+    keyof z.infer<typeof AgentPackagesContributionSchema>,
+    ConsumerDescriptor
+  >;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "surfaces.projectHome": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "surfaces.worktreeCreate": Record<
@@ -1953,14 +1964,36 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Copied into the runtime agent config color.",
     },
     iconId: {
-      mode: "verbatim",
-      consumers: [{ file: AGENT_REGISTRY, symbol: "toPluginAgentConfig" }],
-      note: "Copied into the runtime agent config icon.",
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_ICON_ASSETS, symbol: "loadPluginCustomIcons" },
+        { file: PLUGIN_CONTRIBUTION_REGISTRAR, symbol: "registerPluginAgents" },
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "src/config/agentIcons.ts", symbol: "resolveAgentIcon" },
+      ],
+      note: "A loaded `./…svg` reference is rewritten to the plugin's custom-icon key before the agent registers. The renderer draws that key or a bundled brand mark, and a generic glyph for anything else, never another agent's mark.",
     },
     supportsContextInjection: {
       mode: "verbatim",
       consumers: [{ file: AGENT_REGISTRY, symbol: "toPluginAgentConfig" }],
       note: "Copied into the runtime agent config context-injection flag.",
+    },
+    nativePaths: {
+      mode: "verbatim",
+      consumers: [
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "probedNativePaths" },
+      ],
+      note: "Copied onto the agent config, where discovery checks each path for an executable file and launch starts from a hit; nothing is run to find it.",
+    },
+    packages: {
+      mode: "verbatim",
+      consumers: [
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "probeCommand" },
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "collectCopies" },
+      ],
+      note: "Copied onto the agent config, key by key (see agents.packages).",
     },
     detection: {
       mode: "verbatim",
@@ -1982,6 +2015,39 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: "shared/config/agentRegistry.ts", symbol: "expandResumeTemplate" },
       ],
       note: "Kept as data on resumeTemplate across the snapshot broadcast, then expanded into the function-shaped resume in each process's effective registry.",
+    },
+    initialPromptForm: {
+      mode: "verbatim",
+      consumers: [
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "shared/config/agentRegistry.ts", symbol: "getAgentPromptForm" },
+        { file: "shared/types/agentSettings.ts", symbol: "appendPromptForm" },
+      ],
+      note: "Copied as data onto the runtime agent config, where a launch with a prompt reads its mode's form to build the prompt's arguments.",
+    },
+    permissionBypassArgs: {
+      mode: "derived-input",
+      consumers: [
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "shared/types/agentSettings.ts", symbol: "getDefaultDangerousArgs" },
+        { file: "shared/types/agentSettings.ts", symbol: "isAgentTerminalBypassSupported" },
+        { file: "electron/setup/archiveInstallIntent.ts", symbol: "permissionBypassAgents" },
+        { file: "electron/services/plugin/PluginInstaller.ts", symbol: "permissionBypassAgents" },
+        {
+          file: "electron/services/plugin/pluginAgentBypassHistory.ts",
+          symbol: "recordPluginAgentBypassArgs",
+        },
+      ],
+      note: "Names the CLI's bypass flag only: it is the agent's default bypass args and its eligibility for the global skip switch, added to a launch only when the resolved setting is on; every declaration is also recorded as strip-only history for restore, and the agents declaring it are named in the install and update consent.",
+    },
+    executableNames: {
+      mode: "derived-input",
+      consumers: [
+        { file: "electron/schemas/plugin/agents.ts", symbol: "resolveAgentExecutableNames" },
+        { file: AGENT_REGISTRY, symbol: "findContestedExecutableNames" },
+        { file: PROCESS_DETECTOR_REGISTRIES, symbol: "getAgentCliNames" },
+      ],
+      note: "Resolved in main (a bare command claims its own name when the list is omitted), stripped of any name two plugin agents claim, then keyed into the pty-host detector's name → agent map, which promotes a plain terminal running that executable (#16469).",
     },
   },
   processTools: {
@@ -2564,6 +2630,23 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Handed to the opened panel as initialArgs, or as openRequest to a panel it reuses.",
     },
   },
+  "agents.packages": {
+    npm: {
+      mode: "derived-input",
+      consumers: [
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "probeCommand" },
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "collectCopies" },
+      ],
+      note: "Only switches the npm-global shim check on: the name reaches no path and no command.",
+    },
+    pypi: {
+      mode: "derived-input",
+      consumers: [
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "synthesisePypiProbePaths" },
+      ],
+      note: "Names the uv and pipx tool directories discovery checks for the agent's command.",
+    },
+  },
   "agents.detection": {
     primaryPatterns: {
       mode: "verbatim",
@@ -2857,6 +2940,24 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: SERVICE_BROKER, symbol: "PluginServiceBroker.status (required)" },
       ],
       note: "A required import that can't be reached is written to the plugin's log once; optional ones aren't.",
+    },
+  },
+  canopyViews: {
+    viewId: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (canopy_view_unknown)",
+        },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (canopy hosted view → registerPluginHostedViews)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "findHostedView (activatePluginForHostedView)" },
+        { file: CANOPY_PLUGIN_SECTION, symbol: "CanopyPluginSection (the Canopy window's rows)" },
+      ],
+      note: "Names the panel view Canopy shows; the panel lends its name, icon and stateVersion.",
     },
   },
   "toolbarButtons.popover": {

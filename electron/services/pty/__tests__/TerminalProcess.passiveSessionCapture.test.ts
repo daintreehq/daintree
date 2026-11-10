@@ -9,6 +9,7 @@ import { events } from "../../events.js";
 import type { DaintreeEventMap } from "../../events.js";
 import { getAgentConfig } from "../../../../shared/config/agentRegistry.js";
 import { getGitBranch } from "../../../utils/gitUtils.js";
+import { createSessionIdMatcher } from "../sessionIdCapture.js";
 import {
   finishAgentSessionCaptures,
   resetAgentSessionCaptureDeliveryForTests,
@@ -49,6 +50,24 @@ function codexHint(id: string): string {
     throw new Error("fixture no longer matches codex's declared sessionIdPattern");
   }
   return line;
+}
+
+/**
+ * Claude Code's exit farewell as 2.1.319 writes it — each line dimmed, then a
+ * dimmed empty line — checked against the registry so a pattern change fails
+ * these tests.
+ */
+function claudeFarewell(id: string): string {
+  const resume = getAgentConfig("claude")?.resume;
+  if (resume?.kind !== "session-id" || !resume.sessionIdPattern) {
+    throw new Error("claude must declare a sessionIdPattern");
+  }
+  const line = `claude --resume ${id}`;
+  if (new RegExp(resume.sessionIdPattern).exec(line)?.[1] !== id) {
+    throw new Error("fixture no longer matches claude's declared sessionIdPattern");
+  }
+  const dim = (text: string) => `\x1b[2m${text}\x1b[22m`;
+  return `${dim("Resume this session with:")}\r\n${dim(line)}\r\n${dim("")}`;
 }
 
 type MockPty = IPty & {
@@ -528,6 +547,165 @@ describe("passive agent session capture", () => {
       expect(captured).toHaveLength(1);
       expect(captured[0].record.sessionId).toBe("assigned-at-launch");
       expect(captured[0].record.agentId).toBe("claude");
+    });
+
+    describe("after a switch inside the CLI (#16377)", () => {
+      const LAUNCH_ID = "b385c7f7-e72d-476d-ae70-c608446c8b81";
+      const ENDED_ID = "af2ad2f5-cbb1-4eb8-a5cc-26f56d37b075";
+
+      function promoteClaude(terminal: TerminalProcess): void {
+        detect(terminal, makeAgentResult({ agentType: "claude", processIconId: "claude" }));
+      }
+
+      function launchedClaude(): TerminalProcess {
+        return track(createTerminal({ launchAgentId: "claude", agentSessionId: LAUNCH_ID }));
+      }
+
+      /** The run's last output, then its end: back at the shell prompt, or the PTY gone. */
+      function endRun(
+        terminal: TerminalProcess,
+        boundary: "exit" | "demotion",
+        tail: string
+      ): void {
+        if (boundary === "demotion") {
+          mockPty(terminal).__emitData(`${tail}user@host project % `);
+          demote(terminal);
+        } else {
+          mockPty(terminal).__emitData(tail);
+          mockPty(terminal).__emitExit(0);
+        }
+      }
+
+      /** What the registry's own pattern makes of `text`, with no farewell window. */
+      function claudeMatch(text: string, boundary: "stream" | "eof") {
+        const resume = getAgentConfig("claude")?.resume;
+        if (resume?.kind !== "session-id") throw new Error("claude must resume by session id");
+        return createSessionIdMatcher(resume.sessionIdPattern)!(text, {
+          occurrence: "last",
+          boundary,
+        });
+      }
+
+      it.each([
+        ["a demotion to the shell", "demotion"],
+        ["a PTY exit", "exit"],
+      ] as const)("files the conversation the farewell names on %s", async (_label, boundary) => {
+        const terminal = launchedClaude();
+        promoteClaude(terminal);
+        terminal.getInfo().lastObservedTitle = "Where the run ended";
+        // `/resume` moved the run to another conversation; argv still says A.
+        endRun(terminal, boundary, claudeFarewell(ENDED_ID));
+
+        await flushCapture();
+        expect(captured).toHaveLength(1);
+        expect(captured[0].record.sessionId).toBe(ENDED_ID);
+        expect(captured[0].record.title).toBe("Where the run ended");
+        expect(captured[0].boundary).toBe(boundary);
+        // Main reads the launched run from this to move the saved pane.
+        expect(captured[0].run).toEqual({ launchGeneration: 7, agentIncarnation: 0 });
+        // What a renderer reload and a later close read follows it too.
+        expect(terminal.getInfo().agentSessionId).toBe(ENDED_ID);
+      });
+
+      it("takes the newest id when the tail names several", async () => {
+        const terminal = launchedClaude();
+        promoteClaude(terminal);
+        mockPty(terminal).__emitData(
+          `try claude --resume ${OTHER_SESSION_ID}\n${claudeFarewell(ENDED_ID)}$ `
+        );
+        demote(terminal);
+
+        await flushCapture();
+        expect(captured.map((c) => c.record.sessionId)).toEqual([ENDED_ID]);
+      });
+
+      it.each([
+        ["demotion", "a farewell naming it", claudeFarewell(LAUNCH_ID)],
+        ["demotion", "no farewell", "bye\r\n"],
+        ["exit", "a farewell naming it", claudeFarewell(LAUNCH_ID)],
+        ["exit", "no farewell", "bye\r\n"],
+      ] as const)("keeps the assigned id on a %s with %s", async (boundary, _label, tail) => {
+        const terminal = launchedClaude();
+        promoteClaude(terminal);
+        terminal.getInfo().lastObservedTitle = "Same conversation";
+        endRun(terminal, boundary, tail);
+
+        await flushCapture();
+        expect(captured.map((c) => c.record.sessionId)).toEqual([LAUNCH_ID]);
+        expect(captured[0].record.title).toBe("Same conversation");
+        expect(terminal.getInfo().agentSessionId).toBe(LAUNCH_ID);
+      });
+
+      it.each(["exit", "demotion"] as const)(
+        "keeps the assigned id when an exit with no farewell leaves prose naming another (%s)",
+        async (boundary) => {
+          // A double Ctrl-C prints no farewell, so the answer on screen is the tail.
+          const terminal = launchedClaude();
+          promoteClaude(terminal);
+          const tail =
+            "To pick this up later, run claude --resume abc123.\r\nPress Ctrl-C again to exit\r\n";
+          expect(claudeMatch(tail, "eof")).toEqual({ kind: "match", sessionId: "abc123" });
+          endRun(terminal, boundary, tail);
+
+          await flushCapture();
+          expect(captured.map((c) => c.record.sessionId)).toEqual([LAUNCH_ID]);
+          expect(terminal.getInfo().agentSessionId).toBe(LAUNCH_ID);
+        }
+      );
+
+      it("files nothing more when the shell the run left exits", async () => {
+        const terminal = launchedClaude();
+        promoteClaude(terminal);
+        endRun(terminal, "demotion", claudeFarewell(ENDED_ID));
+        mockPty(terminal).__emitExit(0);
+
+        await flushCapture();
+        expect(captured.map((c) => c.record.sessionId)).toEqual([ENDED_ID]);
+      });
+
+      it("keeps the assigned id when a demotion's farewell may still be arriving", async () => {
+        // Nothing has ended the id yet, so it could be a prefix of the real one.
+        const terminal = launchedClaude();
+        promoteClaude(terminal);
+        const output = `Resume this session with:\nclaude --resume ${ENDED_ID}`;
+        expect(claudeMatch(output, "stream")).toEqual({ kind: "needs-boundary" });
+        mockPty(terminal).__emitData(output);
+        demote(terminal);
+
+        await flushCapture();
+        expect(captured.map((c) => c.record.sessionId)).toEqual([LAUNCH_ID]);
+        expect(terminal.getInfo().agentSessionId).toBe(LAUNCH_ID);
+      });
+
+      it("keeps the assigned id when the hint scrolled out of the farewell window", async () => {
+        const terminal = launchedClaude();
+        promoteClaude(terminal);
+        const later = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
+        const output = `${claudeFarewell(ENDED_ID)}${later}\n$ `;
+        expect(claudeMatch(output, "stream")).toEqual({ kind: "match", sessionId: ENDED_ID });
+        mockPty(terminal).__emitData(output);
+        demote(terminal);
+
+        await flushCapture();
+        expect(captured.map((c) => c.record.sessionId)).toEqual([LAUNCH_ID]);
+      });
+
+      it("files a later run's own conversation without moving the pane's id", async () => {
+        const terminal = launchedClaude();
+        promoteClaude(terminal);
+        mockPty(terminal).__emitData("bye\n$ ");
+        demote(terminal);
+        // A `claude` the user typed into the shell the launched one left.
+        terminal.getInfo().agentIncarnation = 1;
+        promoteClaude(terminal);
+        mockPty(terminal).__emitData(`${claudeFarewell(ENDED_ID)}$ `);
+        demote(terminal);
+
+        await flushCapture();
+        expect(captured.map((c) => c.record.sessionId)).toEqual([LAUNCH_ID, ENDED_ID]);
+        expect(captured[1].run).toEqual({ launchGeneration: 7, agentIncarnation: 1 });
+        expect(terminal.getInfo().agentSessionId).toBe(LAUNCH_ID);
+      });
     });
 
     it("does not file the launch agent's id under a different agent", async () => {

@@ -220,11 +220,32 @@ describe("useProjectSwitcherPalette shell re-renders", () => {
     await pushStats(PUSHES);
     report("open x50 pushes", metrics, performance.now() - start);
 
-    expect(metrics.commits).toBe(PUSHES);
+    // Push 1 repeats the seeded map (only even pushes flip a row), so the store
+    // keeps its reference and that push commits nothing.
+    expect(metrics.commits).toBe(PUSHES - 1);
     const last = statsFor(PUSHES);
     const flippedId = Object.keys(last).find((id) => last[id]!.waitingAgentCount > 0);
     const row = latest!.results.find((r) => r.id === flippedId);
     expect(row && row.kind === "project" ? row.waitingAgentCount : -1).toBe(1);
+  });
+
+  it("commits nothing for a push equal to the stats it already shows", async () => {
+    // A replayed snapshot, or a bulk answer that agrees, arrives as a fresh
+    // object with the same counts. It must not rebuild the rows (#16418).
+    const { metrics } = mount();
+    await act(async () => {});
+    await act(async () => {
+      latest!.open("modal");
+    });
+    metrics.commits = 0;
+    const before = useProjectStatsStore.getState().stats;
+
+    await act(async () => {
+      useProjectStatsStore.getState().setStats(statsFor(0));
+    });
+
+    expect(useProjectStatsStore.getState().stats).toBe(before);
+    expect(metrics.commits).toBe(0);
   });
 
   it("opens onto the stats that arrived while it was closed", async () => {

@@ -22,6 +22,9 @@ export const CHANNELS = {
   WORKTREE_RESTART_SERVICE: "worktree:restart-service",
   WORKTREE_RETRY_PROJECT_LOAD: "worktree:retry-project-load",
   WORKTREE_RETRY_AUTH_FETCH: "worktree:retry-auth-fetch",
+  // Sizes for the Worktrees overview (#16393), measured only while it asks.
+  WORKTREE_DISK_USAGE_MEASURE: "worktree-disk-usage:measure",
+  WORKTREE_DISK_USAGE_CANCEL: "worktree-disk-usage:cancel",
   PROJECT_WORKTREE_LOAD_STATUS: "project:worktree-load-status",
 
   TERMINAL_SPAWN: "terminal:spawn",
@@ -142,7 +145,6 @@ export const CHANNELS = {
   SYSTEM_REFRESH_AGENT_VERSIONS: "system:refresh-agent-versions",
   SYSTEM_GET_AGENT_UPDATE_SETTINGS: "system:get-agent-update-settings",
   SYSTEM_SET_AGENT_UPDATE_SETTINGS: "system:set-agent-update-settings",
-  SYSTEM_START_AGENT_UPDATE: "system:start-agent-update",
   SETUP_AGENT_INSTALL: "setup:agent-install",
   SETUP_AGENT_INSTALL_PROGRESS: "setup:agent-install-progress",
 
@@ -184,6 +186,8 @@ export const CHANNELS = {
   APP_QUIT: "app:quit",
   APP_FORCE_QUIT: "app:force-quit",
   APP_RESET_AND_RELAUNCH: "app:reset-and-relaunch",
+  APP_RESTART_IN_SAFE_MODE: "app:restart-in-safe-mode",
+  APP_REPORT_STARTUP_STUCK: "app:report-startup-stuck",
   APP_CLEAR_QUARANTINED_PANEL: "app:clear-quarantined-panel",
   APP_SKELETON_PARSED: "app:skeleton-parsed",
   APP_FIRST_INTERACTIVE: "app:first-interactive",
@@ -282,7 +286,9 @@ export const CHANNELS = {
   CANOPY_SET_ACTIVE: "canopy:set-active",
   CANOPY_REFRESH: "canopy:refresh",
   CANOPY_TRASH: "canopy:trash",
+  CANOPY_TRASH_BATCH: "canopy:trash-batch",
   CANOPY_UNTRASH: "canopy:untrash",
+  CANOPY_UNTRASH_BATCH: "canopy:untrash-batch",
   CANOPY_RESTORE_TRASHED: "canopy:restore-trashed",
   CANOPY_REMOVE_TRASHED: "canopy:remove-trashed",
   CANOPY_EMPTY_TRASH: "canopy:empty-trash",
@@ -301,6 +307,7 @@ export const CHANNELS = {
   CANOPY_SET_SCOPE: "canopy:set-scope",
   CANOPY_RUN_BRANCH: "canopy:run-branch",
   CANOPY_SEARCH_SCREENS: "canopy:search-screens",
+  CANOPY_READ_INPUT_LINES: "canopy:read-input-lines",
   CANOPY_WATCH_TERMINAL: "canopy:watch-terminal",
   CANOPY_WATCH_ASSISTANT_TERMINAL: "canopy:watch-assistant-terminal",
   CANOPY_RESOLVE_ASSISTANT: "canopy:resolve-assistant",
@@ -310,11 +317,14 @@ export const CHANNELS = {
   CANOPY_SET_MODE: "canopy:set-mode",
   CANOPY_GET_MODEL: "canopy:get-model",
   CANOPY_GET_SIZE_HOLDS: "canopy:get-size-holds",
+  CANOPY_TAKE_TERMINAL_SIZE: "canopy:take-terminal-size",
+  CANOPY_SET_VISIBLE_PANE_TERMINALS: "canopy:set-visible-pane-terminals",
   CANOPY_RETRY_MODEL: "canopy:retry-model",
   CANOPY_REMOVE_MODELS: "canopy:remove-models",
   CANOPY_RENAME: "canopy:rename",
   CANOPY_TERMINAL_INPUT: "canopy:terminal-input",
   CANOPY_TERMINAL_RESIZE: "canopy:terminal-resize",
+  CANOPY_TERMINAL_CLAIM_SIZE: "canopy:terminal-claim-size",
   CANOPY_TERMINAL_SEND_KEY: "canopy:terminal-send-key",
   CANOPY_TERMINAL_SUBMIT: "canopy:terminal-submit",
   CANOPY_SUBMIT_REPLY: "canopy:submit-reply",
@@ -327,6 +337,12 @@ export const CHANNELS = {
   PROJECT_CLONE_REPO: "project:clone-repo",
   PROJECT_CLONE_PROGRESS: "project:clone-progress",
   PROJECT_CLONE_CANCEL: "project:clone-cancel",
+  // A clone that runs in the background as its own project (#16352).
+  PROJECT_CLONE_START: "project-clone:start",
+  PROJECT_CLONE_GET_JOB: "project-clone:get-job",
+  PROJECT_CLONE_STOP: "project-clone:stop",
+  PROJECT_CLONE_RETRY: "project-clone:retry",
+  PROJECT_CLONE_JOB_UPDATED: "project-clone:job-updated",
   PROJECT_GET_RECIPES: "project:get-recipes",
   PROJECT_SAVE_RECIPES: "project:save-recipes",
   PROJECT_ADD_RECIPE: "project:add-recipe",
@@ -357,8 +373,6 @@ export const CHANNELS = {
   PROJECT_SET_TAB_GROUPS: "project:set-tab-groups",
   PROJECT_GET_FOCUS_MODE: "project:get-focus-mode",
   PROJECT_SET_FOCUS_MODE: "project:set-focus-mode",
-  PROJECT_READ_CLAUDE_MD: "project:read-claude-md",
-  PROJECT_WRITE_CLAUDE_MD: "project:write-claude-md",
   PROJECT_ENABLE_IN_REPO_SETTINGS: "project:enable-in-repo-settings",
   PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
   PROJECT_CHECK_MISSING: "project:check-missing",
@@ -368,7 +382,6 @@ export const CHANNELS = {
   AGENT_SETTINGS_GET: "agent-settings:get",
   AGENT_SETTINGS_SET: "agent-settings:set",
   AGENT_SETTINGS_SET_GLOBAL: "agent-settings:set-global",
-  AGENT_SETTINGS_SET_GLOBAL_INLINE: "agent-settings:set-global-inline",
   AGENT_SETTINGS_SET_RESUME_ON_RESTART: "agent-settings:set-resume-on-restart",
   AGENT_SETTINGS_RESET: "agent-settings:reset",
   AGENT_SETTINGS_STAMP_VERSION: "agent-settings:stamp-version",
@@ -587,10 +600,13 @@ export const CHANNELS = {
   CODEX_MATCH_RESTORE_SESSIONS: "codex:match-restore-sessions",
   CODEX_READ_QUOTA: "codex:read-quota",
   CODEX_REFRESH_QUOTA: "codex:refresh-quota",
+  CODEX_READ_CONTEXT_USAGE: "codex:read-context-usage",
 
   CLAUDE_LIST_SUBAGENTS: "claude:list-subagents",
   CLAUDE_READ_SUBAGENT_TRANSCRIPT: "claude:read-subagent-transcript",
   CLAUDE_FIND_REPLY_SPAN: "claude:find-reply-span",
+  CLAUDE_READ_USAGE: "claude:read-usage",
+  CLAUDE_READ_CONTEXT_USAGE: "claude:read-context-usage",
 
   TERMINAL_SESSION_FILE_GET: "terminal-session-file:get",
 
@@ -680,6 +696,7 @@ export const CHANNELS = {
   HELP_GLOBAL_ASSISTANT_INPUT_ELIGIBLE: "help:global-assistant-input-eligible",
   HELP_GLOBAL_ASSISTANT_RESTART: "help:global-assistant-restart",
   HELP_GLOBAL_ASSISTANT_DISCARD: "help:global-assistant-discard",
+  HELP_GLOBAL_ASSISTANT_CANCEL_LAUNCH: "help:global-assistant-cancel-launch",
   HELP_GLOBAL_ASSISTANT_CHANGED: "help:global-assistant-changed",
   HELP_WINDOW_GLOBAL_ASSISTANT_PANEL: "help:window-global-assistant-panel",
   HELP_REPORT_WINDOW_GLOBAL_ASSISTANT_PANEL: "help:report-window-global-assistant-panel",
@@ -1070,6 +1087,7 @@ export const CHANNELS = {
   FORGE_OPEN_ISSUE: "forge:open-issue",
   FORGE_GET_ISSUE_URL: "forge:get-issue-url",
   FORGE_GET_REPO_URL: "forge:get-repo-url",
+  FORGE_GET_NEW_PR_LINK: "forge:get-new-pr-link",
   FORGE_ASSIGN_ISSUE: "forge:assign-issue",
   FORGE_UNASSIGN_ISSUE: "forge:unassign-issue",
   FORGE_APPROVE_PR: "forge:approve-pr",
@@ -1463,9 +1481,20 @@ export const CHANNELS = {
   AGENT_TOOLBAR_PINS_SET: "agent-toolbar-pins:set",
   AGENT_TOOLBAR_PINS_CHANGED: "agent-toolbar-pins:changed",
 
+  // The person's own prompt templates, from a folder on this machine (#16398)
+  USER_PROMPT_TEMPLATES_LIST: "user-prompt-templates:list",
+  USER_PROMPT_TEMPLATES_OPEN_FOLDER: "user-prompt-templates:open-folder",
+
   // An agent's accounts (#16040)
   AGENT_ACCOUNTS_ADD: "agent-accounts:add",
   AGENT_ACCOUNTS_REMOVE: "agent-accounts:remove",
+
+  // Every copy of an agent's CLI, read when its settings page is open (#16409)
+  AGENT_CLI_COPIES_LIST: "agent-cli-copies:list",
+  // Which copy launches, chosen from those found (#16399)
+  AGENT_CLI_COPIES_CHOOSE: "agent-cli-copies:choose",
+  AGENT_CLI_COPIES_RESET: "agent-cli-copies:reset",
+  AGENT_CLI_COPIES_CHANGED: "agent-cli-copies:changed",
 
   // Per-project presentation profile (#13771)
   PROJECT_PRESENTATION_GET: "project-presentation:get",
@@ -1529,6 +1558,12 @@ export const CHANNELS = {
   // Main asks each view whether someone is using a pane before moving it
   TERMINAL_WHEN_DONE_IN_USE_QUERY: "terminal-when-done:in-use-query",
   TERMINAL_WHEN_DONE_IN_USE_REPLY: "terminal-when-done:in-use-reply",
+
+  // A pane composer's send held while its agent works (#16379)
+  COMPOSER_HOLD_HOLD: "composer-hold:hold",
+  COMPOSER_HOLD_WITHDRAW: "composer-hold:withdraw",
+  COMPOSER_HOLD_LIST: "composer-hold:list",
+  COMPOSER_HOLD_CHANGED: "composer-hold:changed",
 
   // Decisions, as main observes it (#16001). The owner's machine only.
   DECISIONS_GET_STATUS: "decisions:get-status",
@@ -1610,6 +1645,11 @@ export const CHANNELS = {
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
   CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",
+
+  // A project's online-only files, for the views watching it (#16363)
+  ONLINE_ONLY_FILES_WATCH: "online-only-files:watch",
+  ONLINE_ONLY_FILES_UNWATCH: "online-only-files:unwatch",
+  ONLINE_ONLY_FILES_CHANGED: "online-only-files:changed",
 
   // Which windows hold a live view of which projects (#12597)
   PROJECT_PRESENCE_GET_SNAPSHOT: "project-presence:get-snapshot",
@@ -1765,6 +1805,10 @@ export const CHANNELS = {
   CANOPY_HOST_ASSISTANT_INVOKE: "canopy-host:assistant-invoke",
   CANOPY_HOST_RELEASE_ASSISTANT: "canopy-host:release-assistant",
   CANOPY_HOST_EVENT: "canopy-host:event",
+  CANOPY_WINDOW_OPEN: "canopy-window:open",
+  CANOPY_WINDOW_FOCUS: "canopy-window:focus",
+  CANOPY_WINDOW_FOCUS_LAST_PROJECT_WINDOW: "canopy-window:focus-last-project-window",
+  CANOPY_WINDOW_GO_TO_RUN: "canopy-window:go-to-run",
 
   // Remote Hosts: portForwards (shell).
   PORT_FORWARDS_LIST: "port-forwards:list",

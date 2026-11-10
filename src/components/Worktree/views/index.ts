@@ -10,6 +10,7 @@ export { WorktreePathPicker, PathResolvedHint } from "./WorktreePathPicker";
 export { EnvironmentRadioGroup, EnvironmentHint } from "./EnvironmentRadioGroup";
 export { RecipePickerPopover, type RecipeOption } from "./RecipePickerPopover";
 export { AgentPickerPopover } from "./AgentPickerPopover";
+export { IssuePromptToggle } from "./IssuePromptToggle";
 export {
   FormGrid,
   FormSection,

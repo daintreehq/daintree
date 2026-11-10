@@ -6,7 +6,8 @@ import { create } from "zustand";
  * instead of rendering nothing while still holding it; the entry is cleared
  * when the condition clears, so the next occurrence shows again.
  */
-export type DismissibleGlobalBannerSlot = "watchdog-disabled" | "plugin-document";
+export type DismissibleGlobalBannerSlot =
+  "watchdog-disabled" | "plugin-document" | "online-only-files";
 
 interface GlobalBannerDismissalState {
   dismissed: ReadonlySet<DismissibleGlobalBannerSlot>;

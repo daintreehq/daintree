@@ -1,0 +1,24 @@
+{
+  "id": "daintreehq/canopy-reader-17m",
+  "revision": "eb00edfd11d640d412e6b9fffcf812c795d308d4",
+  "published": "2026-10-25T19:08:24.000Z",
+  "weights": "model.int8.onnx",
+  "files": [
+    { "name": "config.json", "size": 1703, "blobId": "ff12926090370f57579a3d9b641adf1311d8f381" },
+    {
+      "name": "tokenizer.json",
+      "size": 3583228,
+      "blobId": "2f4d8583e507b7466d2490e2d6c045647a822698"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "size": 368,
+      "blobId": "e3ce044f1db95b6884796f4fdf7d3f78fb6b9df4"
+    },
+    {
+      "name": "model.int8.onnx",
+      "size": 17410374,
+      "sha256": "da4e9eb4a873d1349fd38d2e86c5b120cc82d802844833ef3a901f48282c0fd1"
+    }
+  ]
+}

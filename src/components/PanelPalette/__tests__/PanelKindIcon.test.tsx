@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { PanelKindIcon } from "../PanelKindIcon";
 import { PLUGIN_ICON_COMPONENTS } from "@/components/icons/pluginIconRegistry";
 import type { PluginIconId } from "@/components/icons/pluginIconRegistry";
+import { setPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
+import { setPluginCustomIcons } from "@/components/icons/pluginCustomIconStore";
 
 function markup(iconId: string, props: { color?: string; size?: number } = {}): string {
   return render(<PanelKindIcon iconId={iconId} {...props} />).container.innerHTML;
@@ -55,6 +57,40 @@ describe("PanelKindIcon", () => {
     const agent = glyph("claude");
     expect(agent).not.toBe(registryGlyph("terminal"));
     expect(agent).not.toBe(glyph("no-such-icon"));
+  });
+
+  describe("a plugin agent named by its registry id (#16467)", () => {
+    const KEY = "plugin-icon:acme.agents:./icons/pi.svg";
+    const SVG =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>';
+    const agent = {
+      name: "Pi",
+      command: "pi",
+      color: "#3366ff",
+      supportsContextInjection: false,
+    };
+
+    afterEach(() => {
+      setPluginCustomIcons([]);
+      setPluginAgentRegistry({});
+    });
+
+    it("draws its own SVG through the agent treatment", () => {
+      setPluginCustomIcons([{ key: KEY, pluginId: "acme.agents", pluginName: "Acme", svg: SVG }]);
+      setPluginAgentRegistry({ pi: { ...agent, id: "pi", iconId: KEY } });
+      const svg = render(<PanelKindIcon iconId="pi" color="#3366ff" />).container.querySelector(
+        "svg"
+      )!;
+      expect(svg.getAttribute("data-plugin-icon")).toBe(KEY);
+      expect(svg.getAttribute("class")).toContain("brand-mark");
+      expect(svg.getAttribute("width")).toBe("16");
+    });
+
+    it("draws the terminal glyph, not Claude's, when it has no mark to draw", () => {
+      setPluginAgentRegistry({ pi: { ...agent, id: "pi", iconId: "node-ish" } });
+      expect(glyph("pi")).toBe(registryGlyph("terminal"));
+      expect(glyph("pi")).not.toBe(glyph("claude"));
+    });
   });
 
   it("applies the caller's color and size to a registry glyph", () => {

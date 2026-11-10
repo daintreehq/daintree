@@ -16,6 +16,7 @@ import { openPluginSearchHit } from "@/components/QuickSwitcher/openPluginSearch
 import { SEARCH_PROVIDER_BLENDED_TOTAL } from "@shared/config/pluginSearchProviders";
 import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 import type { PluginSearchProviderInfo } from "@shared/types/plugin";
+import { getWorktreeBranchLabel } from "@/lib/worktreeHeadline";
 
 export type QuickSwitcherItemType = "terminal" | "worktree" | "plugin";
 
@@ -39,6 +40,12 @@ export interface QuickSwitcherItem {
   agentState?: AgentState;
   /** The focused panel, or the worktree being shown: where the user is now. */
   isCurrent?: boolean;
+  /**
+   * A worktree row's identity for its glyph, as the sidebar card draws it: the
+   * sprout for main, the branch's type mark otherwise. Not search keys.
+   */
+  isMainWorktree?: boolean;
+  branchLabel?: string;
   /** A plugin search provider's result (#13792): what it opens and who it came from. */
   pluginHit?: PluginSearchHit;
 }
@@ -183,6 +190,8 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
         title: w.name ?? w.branch ?? "Worktree",
         subtitle: w.path,
         isCurrent: w.id === activeWorktreeId,
+        isMainWorktree: w.isMainWorktree,
+        branchLabel: getWorktreeBranchLabel(w),
       });
     }
 

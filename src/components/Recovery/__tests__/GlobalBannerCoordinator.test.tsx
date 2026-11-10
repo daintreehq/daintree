@@ -21,6 +21,7 @@ import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
+import { useOnlineOnlyFilesStore } from "@/store/onlineOnlyFilesStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
@@ -111,6 +112,7 @@ function resetStores() {
   useRestoreConfirmationStore.setState({ visible: false, suspectCount: 0, crashCount: 0 });
   useForgeProviderHealthStore.setState({ providers: {} });
   useCloudSyncBannerStore.setState({ service: null, projectId: null });
+  useOnlineOnlyFilesStore.getState().reset();
   useRosettaBannerStore.setState({ visible: false });
   useGlobalBannerDismissalStore.setState({ dismissed: new Set() });
   useMissingPrerequisiteStore.setState({
@@ -428,6 +430,164 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(screen.getByText("Terminal service crashed")).toBeTruthy();
     expect(screen.queryByText(cloudSyncTitle)).toBeNull();
+  });
+
+  describe("online-only files", () => {
+    const onlineOnlyTitle = "Some files aren't downloaded yet";
+    const counts = (files: number) => ({ files, directories: 0, complete: true });
+    const report = (git: number | null, workingTree: number | null, revision = 1) => {
+      useOnlineOnlyFilesStore.setState({
+        phase: "answered",
+        revision,
+        files: {
+          projectId: "p1",
+          service: "Dropbox",
+          revision,
+          git: git === null ? null : counts(git),
+          workingTree: workingTree === null ? null : counts(workingTree),
+        },
+      });
+    };
+
+    beforeEach(() => {
+      useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    });
+
+    it("takes the slot from cloud sync while anything is outstanding", () => {
+      report(5, 0);
+      render(<GlobalBannerCoordinator />);
+
+      expect(screen.getByText(onlineOnlyTitle)).toBeTruthy();
+      expect(screen.queryByText(cloudSyncTitle)).toBeNull();
+    });
+
+    it("takes the slot for project files alone, and for folders alone", () => {
+      report(0, 5);
+      const { unmount } = render(<GlobalBannerCoordinator />);
+      expect(screen.getByText(onlineOnlyTitle)).toBeTruthy();
+      expect(screen.queryByText(cloudSyncTitle)).toBeNull();
+      unmount();
+
+      useOnlineOnlyFilesStore.setState({
+        files: {
+          projectId: "p1",
+          service: "Dropbox",
+          revision: 2,
+          git: counts(0),
+          workingTree: { files: 0, directories: 2, complete: true },
+        },
+      });
+      render(<GlobalBannerCoordinator />);
+      expect(screen.getByText(onlineOnlyTitle)).toBeTruthy();
+    });
+
+    it("clears project files by itself too, and keeps a dismissal until then", () => {
+      report(0, 5);
+      render(<GlobalBannerCoordinator />);
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss online-only files notice" }));
+      expect(screen.queryByText(onlineOnlyTitle)).toBeNull();
+      expect(screen.queryByText(cloudSyncTitle)).toBeNull();
+
+      act(() => report(0, 4, 2));
+      expect(screen.queryByText(onlineOnlyTitle)).toBeNull();
+
+      act(() => report(0, 0, 3));
+      expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
+
+      act(() => report(0, 3, 4));
+      expect(screen.getByText(onlineOnlyTitle)).toBeTruthy();
+    });
+
+    it("shows even after the cloud warning was turned off for the project", () => {
+      useCloudSyncBannerStore.setState({ service: null, projectId: null });
+      report(5, 0);
+      render(<GlobalBannerCoordinator />);
+
+      expect(screen.getByText(onlineOnlyTitle)).toBeTruthy();
+    });
+
+    it("yields to a recovery banner", () => {
+      usePanelStore.setState({ watchdogStatus: "disabled" });
+      report(5, 0);
+      render(<GlobalBannerCoordinator />);
+
+      expect(screen.getByText("Crash watchdog disabled")).toBeTruthy();
+      expect(screen.queryByText(onlineOnlyTitle)).toBeNull();
+    });
+
+    it("clears by itself at zero, leaving exactly today's banner", () => {
+      report(5, 0);
+      render(<GlobalBannerCoordinator />);
+
+      act(() => report(0, 0, 2));
+
+      expect(screen.queryByText(onlineOnlyTitle)).toBeNull();
+      expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
+    });
+
+    it("clears to nothing for a project with no cloud warning to return to", () => {
+      useCloudSyncBannerStore.setState({ service: null, projectId: null });
+      report(5, 0);
+      render(<GlobalBannerCoordinator />);
+
+      act(() => report(0, 0, 2));
+
+      expect(screen.queryByText(onlineOnlyTitle)).toBeNull();
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("doesn't flash the cloud warning while the first walk is out", () => {
+      useOnlineOnlyFilesStore.getState().ask();
+      render(<GlobalBannerCoordinator />);
+      expect(screen.queryByText(cloudSyncTitle)).toBeNull();
+
+      act(() => report(null, null));
+      expect(screen.queryByText(cloudSyncTitle)).toBeNull();
+
+      act(() => report(5, null, 2));
+      expect(screen.getByText(onlineOnlyTitle)).toBeTruthy();
+    });
+
+    it("shows the cloud warning as today once a walk finds everything downloaded", () => {
+      useOnlineOnlyFilesStore.getState().ask();
+      render(<GlobalBannerCoordinator />);
+
+      act(() => report(0, 0));
+
+      expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
+    });
+
+    it("shows the cloud warning as today where none of this applies", () => {
+      useOnlineOnlyFilesStore.getState().ask();
+      render(<GlobalBannerCoordinator />);
+
+      act(() => useOnlineOnlyFilesStore.getState().answer(null));
+
+      expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
+    });
+
+    it("doesn't hand a dismissed notice's slot to advice to move the project", () => {
+      report(5, 0);
+      render(<GlobalBannerCoordinator />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss online-only files notice" }));
+
+      expect(screen.queryByText(onlineOnlyTitle)).toBeNull();
+      expect(screen.queryByText(cloudSyncTitle)).toBeNull();
+    });
+
+    it("stays dismissed as the count falls, and returns for a later batch", () => {
+      report(5, 0);
+      render(<GlobalBannerCoordinator />);
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss online-only files notice" }));
+
+      act(() => report(2, 0, 2));
+      expect(screen.queryByText(onlineOnlyTitle)).toBeNull();
+
+      act(() => report(0, 0, 3));
+      act(() => report(4, 0, 4));
+      expect(screen.getByText(onlineOnlyTitle)).toBeTruthy();
+    });
   });
 
   it("renders the Rosetta banner when only the translation warning is active", () => {

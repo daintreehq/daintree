@@ -15,6 +15,10 @@ const installBlocks = vi.hoisted(() => ({
   current: null as null | { label: string; commands: string[] }[],
 }));
 
+// No grid to open a terminal in: install commands stay copy-only here.
+vi.mock("@/hooks/terminal/useInstallCommandRunner", () => ({
+  useInstallCommandRunner: () => null,
+}));
 vi.mock("@/lib/agentInstall", () => ({
   getInstallBlocksForCurrentOS: () => installBlocks.current,
   extractInspectUrl: () => undefined,
@@ -102,6 +106,8 @@ describe("AgentInstallSection tri-state rendering", () => {
     // state is launchable and the CLI resolves credentials at run time.
     expect(container.textContent).toContain("no credentials were detected");
     expect(container.textContent).not.toMatch(/will prompt/i);
+    // The launchable path belongs to the page's Detected CLI section, not a second row here.
+    expect(container.textContent).not.toContain("/usr/local/bin/claude");
   });
 
   it("renders the WSL 'Needs setup' message for installed WSL agents (not an auth nudge)", () => {
@@ -159,5 +165,40 @@ describe("AgentInstallSection tri-state rendering", () => {
     };
     const { container } = renderSection({ availability: "blocked", detail });
     expect(container.textContent).toContain("Blocked");
+  });
+
+  // The fix for a chosen copy that's gone is choosing again, not installing (#16399).
+  it("names a chosen copy that's gone, with its path, and offers no install", () => {
+    installBlocks.current = [{ label: "npm", commands: ["npm install -g claude-cli"] }];
+    try {
+      const detail: AgentCliDetail = {
+        state: "missing",
+        resolvedPath: null,
+        via: null,
+        chosenPath: "/old/bin/claude",
+        message: "The copy chosen to launch isn't there any more.",
+      };
+      const { container } = renderSection({ availability: "missing", detail });
+      expect(container.textContent).toContain("Chosen copy not found");
+      expect(container.textContent).toContain("Chosen copy: /old/bin/claude");
+      expect(container.textContent).toContain("Choose another copy below or use the default");
+      expect(container.textContent).not.toContain("Not installed");
+      expect(container.textContent).not.toContain("npm install -g claude-cli");
+    } finally {
+      installBlocks.current = null;
+    }
+  });
+
+  it("shows the chosen path for a chosen copy that can't run", () => {
+    const detail: AgentCliDetail = {
+      state: "blocked",
+      resolvedPath: "/locked/claude",
+      via: "chosen",
+      chosenPath: "/locked/claude",
+      blockReason: "permissions",
+    };
+    const { container } = renderSection({ availability: "blocked", detail });
+    expect(container.textContent).toContain("Blocked");
+    expect(container.textContent).toContain("Chosen copy: /locked/claude");
   });
 });

@@ -10,12 +10,21 @@ import {
   getPanelSlotReservations,
   resetPanelSlotReservations,
 } from "@/store/slices/panelRegistry/panelSlotReservations";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 
 const mockAddPanel = vi.fn();
 const mockAgentSettingsGet = vi.fn();
 const mockSystemGetTmpDir = vi.fn();
 const mockGetAgentConfig = vi.fn();
 const mockGenerateAgentCommand = vi.fn();
+
+// The launch executable comes from this view's CLI detection, which these tests
+// don't load: the registry command stands.
+vi.mock("@/utils/agentLaunchCommand", () => ({
+  resolveCurrentAgentLaunchBaseCommand: vi.fn(async () => undefined),
+  getCurrentLaunchCliDetail: vi.fn(async () => undefined),
+  resolveAgentLaunchBaseCommand: vi.fn((registryCommand: string) => registryCommand),
+}));
 
 vi.mock("@/clients", () => ({
   agentSettingsClient: { get: (...args: unknown[]) => mockAgentSettingsGet(...args) },
@@ -168,7 +177,6 @@ describe("spawnPanelsFromRecipe", () => {
         clipboardDirectory: "/tmp/daintree/daintree-clipboard",
         modelId: "sonnet",
         globalSkipPermissions: false,
-        globalUseAltScreen: false,
       })
     );
     expect(mockAddPanel).toHaveBeenCalledWith(
@@ -185,6 +193,26 @@ describe("spawnPanelsFromRecipe", () => {
       expect.objectContaining({ agentSessionId: generatedSessionId })
     );
     expect(cb).toHaveBeenCalledWith(0, "panel-id-123");
+  });
+
+  // A cloned layout starts what a launch of the agent starts now, the chosen copy
+  // included, and reads it once per agent before any pane spawns (#16399).
+  it("starts the executable a launch of each agent starts now", async () => {
+    vi.mocked(resolveCurrentAgentLaunchBaseCommand).mockResolvedValue("/chosen/claude");
+    try {
+      await spawnPanelsFromRecipe({
+        terminals: [makeAgent(), makeAgent()],
+        worktreeId: "wt-1",
+        cwd: "/path/to/wt",
+        agentSettings: { agents: {} },
+      });
+    } finally {
+      vi.mocked(resolveCurrentAgentLaunchBaseCommand).mockResolvedValue(undefined);
+    }
+
+    expect(resolveCurrentAgentLaunchBaseCommand).toHaveBeenCalledTimes(1);
+    expect(mockGenerateAgentCommand).toHaveBeenCalledTimes(2);
+    for (const call of mockGenerateAgentCommand.mock.calls) expect(call[0]).toBe("/chosen/claude");
   });
 
   it("persists computed launch flags so resume reproduces the launch (#9650)", async () => {

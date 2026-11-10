@@ -855,6 +855,26 @@ describe("store Proxy", () => {
       expect(onDisk).toMatchObject({ a: 1, b: 2, c: 3 });
     });
 
+    it("keeps both writes when a change listener writes over a warm snapshot", () => {
+      initializeStore(testOptions(tempDir));
+      expect(store.get("_schemaVersion" as never)).toBe(0);
+      const instance = _peekStoreInstance() as unknown as {
+        onDidChange(key: string, cb: () => void): () => void;
+      };
+      let fired = false;
+      const off = instance.onDidChange("a", () => {
+        if (fired) return;
+        fired = true;
+        store.set("b" as never, 2 as never);
+      });
+      store.set("a" as never, 1 as never);
+      off();
+      expect(store.get("a" as never)).toBe(1);
+      expect(store.get("b" as never)).toBe(2);
+      const onDisk = JSON.parse(fs.readFileSync(path.join(tempDir, "config.json"), "utf8"));
+      expect(onDisk).toMatchObject({ a: 1, b: 2 });
+    });
+
     it("invalidates on appendToArray() so a later set() cannot drop the append", () => {
       initializeStore(testOptions(tempDir));
       store.set("list" as never, [] as never);

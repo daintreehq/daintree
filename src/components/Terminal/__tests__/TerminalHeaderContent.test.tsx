@@ -70,6 +70,14 @@ vi.mock("../SubagentChip", () => ({
     mockSubagentChipVisible ? <button type="button" data-testid="subagent-chip" /> : null,
 }));
 
+let mockContextChipVisible = false;
+
+// The real chip only renders once the host reads a Claude transcript.
+vi.mock("../AgentContextUsageChip", () => ({
+  AgentContextUsageChip: () =>
+    mockContextChipVisible ? <span data-testid="terminal-context-usage" /> : null,
+}));
+
 let mockTerminal: Record<string, unknown> = {};
 
 vi.mock("zustand/react/shallow", () => ({
@@ -87,6 +95,7 @@ vi.mock("@/store", () => ({
 beforeEach(() => {
   mockTerminal = { id: "t1" };
   mockSubagentChipVisible = false;
+  mockContextChipVisible = false;
   mockResourceEnabled = false;
   mockResourceState = null;
   vi.useFakeTimers();
@@ -747,6 +756,37 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     expect(subagent.compareDocumentPosition(lock!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
       lock!.compareDocumentPosition(resource!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  // The context reading is telemetry too: the controls ahead of it outlast it
+  // in a narrow pane, and the resource readout clips first.
+  it("places the context reading after the row's controls and before the resource readout", () => {
+    mockTerminal = { id: "t1", isInputLocked: true };
+    mockSubagentChipVisible = true;
+    mockContextChipVisible = true;
+    mockResourceEnabled = true;
+    mockResourceState = { cpuPercent: 12, memoryKb: 2048, cpuHistory: [1, 2, 3], breakdown: [] };
+    const { container } = render(
+      <TerminalHeaderContent id="t1" kind="terminal" agentState="waiting" />
+    );
+    const subagent = screen.getByTestId("subagent-chip");
+    const context = screen.getByTestId("terminal-context-usage");
+    const lock = screen
+      .getAllByTestId("tooltip-content")
+      .find((el) => el.textContent?.includes("Input locked"))
+      ?.parentElement?.querySelector('[role="status"]');
+    const resource = container.querySelector<HTMLElement>(
+      '[data-testid="terminal-resource-badge"]'
+    );
+    expect(lock).toBeTruthy();
+    expect(resource).toBeTruthy();
+    expect(
+      subagent.compareDocumentPosition(context) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(lock!.compareDocumentPosition(context) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      context.compareDocumentPosition(resource!) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
 

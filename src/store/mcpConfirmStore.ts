@@ -9,6 +9,7 @@ import type {
   McpSessionOrigin,
 } from "@shared/types/ipc/mcpServer";
 import { MCP_CONFIRM_DECISION_MS, MCP_DISPATCH_TIMEOUT_MS } from "@shared/config/mcpConfirmWindow";
+import type { WorktreeSubmoduleDeleteBlock } from "@shared/utils/worktreeDeletePreview";
 
 /**
  * Main's deadline for a dispatch before its view has asked for longer: what a
@@ -37,6 +38,20 @@ export interface McpConfirmDeadline {
   /** Main's deadline as of the request, on this renderer's clock. */
   deadlineAt: number;
   hold?: McpConfirmHold;
+}
+
+/**
+ * Re-run a request's preview fetch (#16436). The bridge that built the preview
+ * owns the fetch and patches the result in through `setPreview`; the store only
+ * marks the request pending and calls this.
+ */
+export type McpConfirmPreviewRetry = () => void;
+
+/** One preview fetch's answer, as `setPreview` applies it. */
+export interface McpConfirmPreviewPatch {
+  lines: string[];
+  typedNameTarget?: string;
+  worktreeDeleteBlock?: WorktreeSubmoduleDeleteBlock;
 }
 
 /**
@@ -141,6 +156,20 @@ export interface PendingMcpConfirm {
    * to still be true when the human finally clicks.
    */
   typedNameTarget?: string;
+  /**
+   * Why the host will refuse this worktree delete whatever the approver says
+   * (#16436): submodule commits on no known remote, or a submodule check that
+   * couldn't finish. Patched in by `setPreview` from the same fetch as the
+   * lines, and never beside {@link typedNameTarget}. While it is set the
+   * request cannot be approved, only cancelled or re-checked.
+   */
+  worktreeDeleteBlock?: WorktreeSubmoduleDeleteBlock;
+  /**
+   * The bridge registered a way to re-run this request's preview fetch, which
+   * the dialog offers as Retry on a blocked delete (#16436). Set by
+   * `requestMcpConfirmation`, never by a caller.
+   */
+  previewRetryable?: true;
   /**
    * The individually-deselectable targets this dispatch acts on (#12123), for a
    * batch whose approval is per-target rather than all-or-nothing.
@@ -300,7 +329,12 @@ interface McpConfirmState {
 
 interface McpConfirmActions {
   enqueue: (item: PendingMcpConfirm) => void;
-  setPreview: (requestId: string, preview: string[], typedNameTarget?: string) => void;
+  setPreview: (requestId: string, preview: McpConfirmPreviewPatch) => void;
+  /**
+   * Re-run a blocked request's preview fetch (#16436). A no-op unless the
+   * request is live, blocked, not already re-checking, and has a retry.
+   */
+  retryPreview: (requestId: string) => void;
   resolveCurrent: (
     decision: McpConfirmationDecision,
     selectedTargetIds?: readonly string[],
@@ -343,6 +377,9 @@ const resolvers = new Map<string, (resolution: McpConfirmResolution) => void>();
 /** Each request's way of asking main for more time, beside its resolver. */
 const holds = new Map<string, McpConfirmHold>();
 
+/** Each request's way of re-running its preview fetch, beside its resolver. */
+const previewRetries = new Map<string, McpConfirmPreviewRetry>();
+
 /**
  * Requests whose on-screen grant has landed. Main's grant for being on screen
  * replaces its grant for waiting, so only once it has landed is a waiting
@@ -353,6 +390,7 @@ const shownGrants = new Set<string>();
 function forget(requestId: string): void {
   resolvers.delete(requestId);
   holds.delete(requestId);
+  previewRetries.delete(requestId);
   shownGrants.delete(requestId);
 }
 
@@ -448,15 +486,43 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
   // item (current or queued) in place and re-enable approval. A no-op if the
   // request already resolved/dropped — the fetch is best-effort and must never
   // resurrect a settled confirmation.
-  setPreview: (requestId, preview, typedNameTarget) => {
-    // Spread the optional field rather than assigning it unconditionally: a
-    // patch that carries no gate must leave the item without one, not stamp an
-    // explicit `undefined` that reads the same but serialises differently.
-    patchItem(requestId, {
-      preview,
-      previewPending: false,
-      ...(typedNameTarget === undefined ? {} : { typedNameTarget }),
+  setPreview: (requestId, { lines, typedNameTarget, worktreeDeleteBlock }) => {
+    // Replaces the gate and the refusal rather than merging them: a re-check
+    // that clears a refusal, or puts a gate up, must not inherit the last
+    // fetch's answer. Absent fields are left off rather than stamped
+    // `undefined`, which reads the same but serialises differently.
+    updateItem(requestId, (item) => {
+      const { typedNameTarget: _previousGate, worktreeDeleteBlock: _previousBlock, ...rest } = item;
+      return {
+        ...rest,
+        preview: lines,
+        previewPending: false,
+        // A refusal is never gated: there is nothing for a typed name to attest to.
+        ...(worktreeDeleteBlock !== undefined
+          ? { worktreeDeleteBlock }
+          : typedNameTarget !== undefined
+            ? { typedNameTarget }
+            : {}),
+      };
     });
+  },
+
+  retryPreview: (requestId) => {
+    const item = findItem(requestId);
+    const retry = previewRetries.get(requestId);
+    if (
+      item === undefined ||
+      retry === undefined ||
+      item.expired ||
+      item.previewPending === true ||
+      item.worktreeDeleteBlock === undefined
+    ) {
+      return;
+    }
+    // The refusal stays on screen through the re-check, so the reason the
+    // request can't be approved never blinks out before the answer lands.
+    patchItem(requestId, { previewPending: true });
+    retry();
   },
 
   markShown: (requestId) => {
@@ -513,6 +579,9 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
     const { current, queue } = get();
     // An expired request was already answered as a timeout.
     if (current === null || current.expired) return;
+    // A delete the host refuses can't be approved, only cancelled (#16436).
+    // The dialog never offers it; this holds for any other caller too.
+    if (decision === "approved" && current.worktreeDeleteBlock !== undefined) return;
     const resolve = resolvers.get(current.requestId);
     forget(current.requestId);
     // Only an approval carries a selection. A rejection or timeout resolved
@@ -549,6 +618,7 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
   reset: () => {
     resolvers.clear();
     holds.clear();
+    previewRetries.clear();
     shownGrants.clear();
     set({ queue: [], current: null });
   },
@@ -560,19 +630,27 @@ function findItem(requestId: string): PendingMcpConfirm | undefined {
   return queue.find((item) => item.requestId === requestId);
 }
 
-/** Patch one request in place, current or queued; a no-op once it has gone. */
-function patchItem(requestId: string, patch: Partial<PendingMcpConfirm>): void {
+/** Replace one request in place, current or queued; a no-op once it has gone. */
+function updateItem(
+  requestId: string,
+  update: (item: PendingMcpConfirm) => PendingMcpConfirm
+): void {
   const { current, queue } = useMcpConfirmStore.getState();
   if (current !== null && current.requestId === requestId) {
-    useMcpConfirmStore.setState({ current: { ...current, ...patch } });
+    useMcpConfirmStore.setState({ current: update(current) });
     return;
   }
   const idx = queue.findIndex((item) => item.requestId === requestId);
   const target = queue[idx];
   if (target === undefined) return;
   const next = [...queue];
-  next[idx] = { ...target, ...patch };
+  next[idx] = update(target);
   useMcpConfirmStore.setState({ queue: next });
+}
+
+/** Patch one request in place, current or queued; a no-op once it has gone. */
+function patchItem(requestId: string, patch: Partial<PendingMcpConfirm>): void {
+  updateItem(requestId, (item) => ({ ...item, ...patch }));
 }
 
 /**
@@ -585,9 +663,16 @@ function patchItem(requestId: string, patch: Partial<PendingMcpConfirm>): void {
 export function requestMcpConfirmation(
   item: Omit<
     PendingMcpConfirm,
-    "enqueuedAt" | "deadlineAt" | "shownAt" | "decisionEndsAt" | "expired" | "followsExpired"
+    | "enqueuedAt"
+    | "deadlineAt"
+    | "shownAt"
+    | "decisionEndsAt"
+    | "expired"
+    | "followsExpired"
+    | "previewRetryable"
   >,
-  deadline?: McpConfirmDeadline
+  deadline?: McpConfirmDeadline,
+  options?: { retryPreview?: McpConfirmPreviewRetry }
 ): Promise<McpConfirmResolution> {
   return new Promise((resolve) => {
     if (resolvers.has(item.requestId)) {
@@ -600,10 +685,12 @@ export function requestMcpConfirmation(
     }
     resolvers.set(item.requestId, resolve);
     if (deadline?.hold) holds.set(item.requestId, deadline.hold);
+    if (options?.retryPreview) previewRetries.set(item.requestId, options.retryPreview);
     useMcpConfirmStore.getState().enqueue({
       ...item,
       enqueuedAt: Date.now(),
       ...(deadline ? { deadlineAt: deadline.deadlineAt } : {}),
+      ...(options?.retryPreview ? { previewRetryable: true as const } : {}),
     });
     // Held while it waits, whether behind another prompt or in a hidden view:
     // its decision window only starts once it is on screen.

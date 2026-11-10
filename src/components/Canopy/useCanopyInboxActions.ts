@@ -1,33 +1,36 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RefObject } from "react";
-import type { CanopyReadMark } from "@shared/types/ipc/canopy";
+import type { CanopyReadMark, CanopyTrashOutcome } from "@shared/types/ipc/canopy";
 import type { HostId } from "@shared/types/remoteHosts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { useCanopyStore } from "@/store/canopyStore";
-import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
-import { switchToHost } from "@/components/Hosts/hostSwitching";
 import type { AgentSnoozeDurationOption } from "@shared/utils/agentSnoozeDurations";
-import { itemArchived, itemSubject, type CanopyItem } from "./canopyModel";
+import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { itemAnswerAttention, itemArchived, itemSubject, type CanopyItem } from "./canopyModel";
 import {
   canopyCardDomId,
   type CanopyCardHandle,
   type CanopyCardHandlers,
   type CanopyPaneFocus,
 } from "./CanopyCard";
-import type { CanopyRowMenuActions } from "./CanopyRowMenu";
-import type { CanopyApi, CanopyTerminalApi } from "./canopyHostSource";
+import type { CanopyAnswerActions, CanopyRowMenuActions } from "./CanopyRowMenu";
+import {
+  hostRefusal,
+  refusedOutcomes,
+  type CanopyApi,
+  type CanopyTerminalApi,
+} from "./canopyHostSource";
+import { bulkTrashTarget } from "./canopyBulkTrash";
+import { useCanopyFrame } from "./canopyFrame";
 import { placeOf } from "./canopyInboxPlace";
 
 /** An error toast whose one recovery is the place the action can be done by hand. */
 function failToast(
   title: string,
   error: unknown,
-  recovery: { label: string; onClick: () => void }
+  recovery: { label: string; onClick: () => void } | undefined
 ) {
   notify({
     type: "error",
@@ -35,7 +38,7 @@ function failToast(
     message: formatErrorMessage(error, "Something went wrong."),
     context: { eventKind: "agent" },
     duration: 6000,
-    actions: [recovery],
+    actions: recovery ? [recovery] : [],
   });
 }
 
@@ -69,8 +72,6 @@ export function useCanopyInboxActions({
   leavePane,
   showsHost,
   isSelected,
-  captureFocusAfterClose,
-  closeForTerminal,
   reserveUndo,
   undoReads,
   menuOpenChanged,
@@ -95,13 +96,12 @@ export function useCanopyInboxActions({
   leavePane: (item: CanopyItem) => void;
   showsHost: (hostId: HostId | null) => boolean;
   isSelected: (runId: string) => boolean;
-  captureFocusAfterClose: () => void;
-  closeForTerminal: (runId: string) => void;
   reserveUndo: () => UndoReservation;
   undoReads: (before: CanopyReadMark[], after: CanopyReadMark[]) => void;
   menuOpenChanged: (open: boolean) => void;
   requestRank: () => void;
 }) {
+  const frame = useCanopyFrame();
   // A deliberate act on a run reads it at once — going to it, a click,
   // answering, replying — through the turn it showed. Merely arriving on it
   // reads it only once it has stayed in front of the user (main's dwell).
@@ -117,51 +117,14 @@ export function useCanopyInboxActions({
 
   const handlers = useMemo<CanopyCardHandlers>(() => {
     const openRun = (item: CanopyItem, newWindow = false) => {
+      if (!frame.goToRun) return;
       readNow(item);
-      const place = placeOf(item, hostId, ownHostId);
-      if (place.hostId !== null) {
-        // Another host's run: the window moves to that host and project (or a
-        // new one opens there, or the window already showing it comes
-        // forward), and the pane is focused wherever it lands. The panel
-        // stays open on a switch that didn't happen; its toast says why, and
-        // its Retry closes the panel once it lands.
-        const focusIntent = { intent: "focus-panel", panelId: place.runId } as const;
-        const placeHostId = place.hostId;
-        void switchToHost(placeHostId, newWindow, place.workspaceId, {
-          focusIntent,
-          onLanded: () => {
-            // A panel since closed, or showing another host, is the user's newer choice.
-            if (!showsHost(hostId)) return;
-            if (useCanopyStore.getState().isOpen) closeForTerminal(item.runId);
-          },
-        });
-        return;
-      }
-      const args = { runId: place.runId, workspaceId: place.workspaceId };
-      if (place.workspaceId !== getViewWorkspaceId()) {
-        // The switch replaces this view, so the panel closes first; the view
-        // is kept, and the panel opens where it was left when it comes back.
-        closeForTerminal(item.runId);
-        void actionService.dispatch("pilot.openRun", args, { source: "user" });
-        return;
-      }
-      // Here already: focus the terminal while the panel is still open, and
-      // close only once that worked. `pilot.openRun` arms the palette's
-      // focus-restore suppression on success, so the close can't hand focus
-      // back to whatever opened the panel.
-      void actionService.dispatch("pilot.openRun", args, { source: "user" }).then((result) => {
-        if (!result.ok) return;
-        // `pilot.openRun` arms the palettes' one-shot restore suppression; this
-        // is a dialog, which hands focus on by its own target instead, so the
-        // flag is taken here rather than left for the next palette to close.
-        consumePaletteFocusRestoreSuppression();
-        captureFocusAfterClose();
-        closeForTerminal(item.runId);
-      });
+      frame.goToRun({ place: placeOf(item, hostId, ownHostId), newWindow });
     };
     // The incarnation on screen, so main refuses a terminal respawned since.
     const target = (item: CanopyItem) => ({ spawnedAt: item.row.run.spawnedAt });
-    const goTo = (item: CanopyItem) => ({ label: "Go to terminal", onClick: () => openRun(item) });
+    const goTo = (item: CanopyItem) =>
+      frame.goToRun ? { label: "Go to terminal", onClick: () => openRun(item) } : undefined;
     const archive = (item: CanopyItem, expectTurn?: number) =>
       expectTurn === undefined
         ? api.archive(item.runId, target(item))
@@ -329,6 +292,7 @@ export function useCanopyInboxActions({
       },
     };
   }, [
+    frame,
     readNow,
     focusCardNow,
     selectNow,
@@ -338,8 +302,6 @@ export function useCanopyInboxActions({
     leavePane,
     showsHost,
     isSelected,
-    captureFocusAfterClose,
-    closeForTerminal,
     searchRef,
     detailRef,
     reserveUndo,
@@ -418,6 +380,57 @@ export function useCanopyInboxActions({
     );
   };
 
+  /**
+   * Trash the runs a bulk trash confirmed, one call per host, and answer what
+   * became of each. One Undo, Z or the line, takes back every run it trashed,
+   * on the host that trashed it, whichever host the panel shows by then.
+   */
+  const trashMany = (items: readonly CanopyItem[]): Promise<CanopyTrashOutcome[]> => {
+    const trashedOn = api;
+    const targets = items.map(bulkTrashTarget);
+    const undo = reserveUndo();
+    return trashedOn
+      .trashBatch(targets)
+      .catch((error: unknown) => refusedOutcomes(targets, error))
+      .then((outcomes) => {
+        const receipts = outcomes.flatMap((outcome) =>
+          "receipt" in outcome ? [outcome.receipt] : []
+        );
+        if (receipts.length === 0) {
+          undo.forget();
+          return outcomes;
+        }
+        undo.land(
+          () =>
+            safeFireAndForget(
+              trashedOn
+                .untrashBatch(receipts)
+                .then((restored) => restored.filter((outcome) => outcome.error !== undefined))
+                .catch((error: unknown) => {
+                  const reason = hostRefusal(error);
+                  return receipts.map((receipt) => ({ receipt, error: reason }));
+                })
+                .then((failed) => {
+                  if (failed.length === 0) return;
+                  // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+                  notify({
+                    type: "error",
+                    title: "Couldn't restore terminals",
+                    message:
+                      failed.length === 1
+                        ? failed[0]!.error!
+                        : `${pluralize(failed.length, "terminal")} weren't restored. ${failed[0]!.error!}`,
+                    context: { eventKind: "agent" },
+                    duration: 6000,
+                  });
+                })
+            ),
+          { line: `Trashed ${pluralize(receipts.length, "agent")}` }
+        );
+        return outcomes;
+      });
+  };
+
   // Trash from a row's menu arms it as its first press does; the pane's
   // button or ⌘⌫ confirms. Bumped per request, for the run it names.
   const [trashArm, setTrashArm] = useState<{ runId: string; request: number } | null>(null);
@@ -493,8 +506,26 @@ export function useCanopyInboxActions({
     },
   };
 
+  // Decisions' list holds this computer's answers: a run on another host
+  // keeps its own there, which this window can't read or act on.
+  const canReviewAnswers = (item: CanopyItem) =>
+    itemAnswerAttention(item) > 0 && placeOf(item, hostId, ownHostId).hostId === null;
+  const answers: CanopyAnswerActions = {
+    canReviewAnswers,
+    // Its first answer for the run takes the focus; once the run's last
+    // answer has gone, and the control that opened the list with it, the
+    // close returns to the run's row.
+    onReviewAnswers: (item) => {
+      if (!canReviewAnswers(item)) return;
+      useDecisionsAttentionStore.getState().open(placeOf(item, hostId, ownHostId).runId, {
+        returnFocusTo: canopyCardDomId(item.runId),
+      });
+    },
+  };
+
   const rowMenu: CanopyRowMenuActions = {
     ...setAside,
+    ...answers,
     onOpen: handlers.onOpen,
     // The run already open keeps its pane mounted, so the composer is focused
     // directly; another run's pane takes the keyboard there as it opens.
@@ -505,12 +536,17 @@ export function useCanopyInboxActions({
     onToggleRead: toggleRead,
     onReread: function reread(item) {
       safeFireAndForget(
-        api.reread(item.runId, { spawnedAt: item.row.run.spawnedAt }).catch((error: unknown) =>
-          failToast("Couldn't read the screen again", error, {
-            label: "Go to terminal",
-            onClick: () => handlers.onOpen(item),
-          })
-        )
+        api
+          .reread(item.runId, { spawnedAt: item.row.run.spawnedAt })
+          .catch((error: unknown) =>
+            failToast(
+              "Couldn't read the screen again",
+              error,
+              frame.goToRun
+                ? { label: "Go to terminal", onClick: () => handlers.onOpen(item) }
+                : undefined
+            )
+          )
       );
     },
     onArchive: handlers.onArchive,
@@ -546,9 +582,11 @@ export function useCanopyInboxActions({
     handlers,
     toggleRead,
     markAllRead,
+    trashMany,
     askRename,
     rowMenu,
     setAside,
+    answers,
     parkRunId,
     closePark,
     trashArm,

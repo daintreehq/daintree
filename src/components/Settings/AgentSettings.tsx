@@ -10,7 +10,6 @@ import {
 } from "@/store";
 import { useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
 import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
-import { cliAvailabilityClient } from "@/clients";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -24,7 +23,6 @@ import {
   DEFAULT_AGENT_SETTINGS,
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
-  type AgentCliDetails,
 } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
@@ -40,11 +38,14 @@ import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentInstallSection } from "@/components/agents/AgentCard";
+import { InstallCommandHandoffContext } from "@/hooks/terminal/installCommandHandoffContext";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AgentInputSettings } from "./AgentInputSettings";
+import { UserPromptTemplatesSection } from "./UserPromptTemplatesSection";
 import { AgentInventorySection } from "./AgentInventorySection";
 import { AgentQuotaSection } from "./AgentQuotaSection";
 import { AgentAccountsSection } from "./AgentAccountsSection";
+import { AgentCliCopiesSection } from "./AgentCliCopiesSection";
 import type { SettingsTabClose } from "./settingsTabClose";
 import { isAgentLaunchable, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
@@ -179,6 +180,8 @@ interface AgentSettingsProps {
   onSettingsChange?: () => void;
   /** Closes Settings, so a sign-in terminal opened from here can be used. */
   onClose?: SettingsTabClose;
+  /** False while this tab is mounted but hidden, as a prefetched tab is. */
+  isActive?: boolean;
 }
 
 export function AgentSettings({
@@ -186,6 +189,7 @@ export function AgentSettings({
   onSubtabChange,
   onSettingsChange,
   onClose,
+  isActive = true,
 }: AgentSettingsProps) {
   const {
     settings,
@@ -194,7 +198,6 @@ export function AgentSettings({
     refresh,
     updateAgent,
     setGlobalSkipPermissions,
-    setGlobalUseAltScreen,
     reset,
   } = useAgentSettingsStore();
   // The toolbar is this screen's, so its pins are this machine's even on a
@@ -207,8 +210,12 @@ export function AgentSettings({
   const isCliLoading = useCliAvailabilityStore((state) => state.isLoading);
   const isRefreshingCli = useCliAvailabilityStore((state) => state.isRefreshing);
   const cliError = useCliAvailabilityStore((state) => state.error);
+  // What launches read, so the page shows the copy they start, and a copy chosen
+  // in another window shows here too.
+  const cliDetails = useCliAvailabilityStore((state) => state.details);
   const initializeCliAvailability = useCliAvailabilityStore((state) => state.initialize);
   const refreshCliAvailability = useCliAvailabilityStore((state) => state.refresh);
+  const syncCliFromHost = useCliAvailabilityStore((state) => state.syncFromHost);
 
   // initialize() is singleflight via the store's `initPromise` — retries must
   // route through refresh() to issue a fresh IPC. The store catches load
@@ -225,26 +232,6 @@ export function AgentSettings({
     void initializeCliAvailability();
   }, [initializeCliAvailability]);
 
-  // Detail map (resolved path, probe source, block reason) is a separate,
-  // read-only IPC call populated by the same detection cycle as availability.
-  // Refetched after a user-initiated refresh so the surfaced path/blocked
-  // state stays in sync.
-  const [cliDetails, setCliDetails] = useState<AgentCliDetails>({});
-  const fetchCliDetails = useCallback(async () => {
-    try {
-      const details = await cliAvailabilityClient.getDetails();
-      setCliDetails(details);
-    } catch (error) {
-      logError("[AgentSettings] Failed to fetch CLI details", error);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isCliLoading) {
-      void fetchCliDetails();
-    }
-  }, [isCliLoading, fetchCliDetails]);
-
   const [recheckStatus, setRecheckStatus] = useState("");
   const pickerRowRef = useRef<HTMLDivElement>(null);
 
@@ -255,7 +242,6 @@ export function AgentSettings({
       // Explicit user gesture — bypass the 30s throttle that exists for
       // passive triggers (tray-open, window focus, visibility change).
       await refreshCliAvailability(true);
-      await fetchCliDetails();
       const agentId = activeAgentId;
       if (agentId) {
         const state = useCliAvailabilityStore.getState().availability[agentId];
@@ -503,7 +489,7 @@ export function AgentSettings({
               label="Default agent"
               description={
                 <>
-                  Used by the help dock button{helpShortcut && ` (${helpShortcut})`} and automated
+                  Used by the Daintree Assistant{helpShortcut && ` (${helpShortcut})`} and automated
                   workflows such as "What's next?", onboarding and project explanations. The
                   portal's default new tab agent is set separately
                 </>
@@ -542,48 +528,67 @@ export function AgentSettings({
                 })();
               }}
             />
-            <SettingsSwitchCard
-              id="agents-alt-screen"
-              title="Use alt-screen mode"
-              subtitle="Render supported agents on the full-screen alternate buffer instead of inline. Inline is smoother (WebGL scrollback, clean resize); alt-screen matches the CLI's native full-screen TUI."
-              isEnabled={settings?.globalUseAltScreen ?? false}
-              onChange={() => {
-                void (async () => {
-                  await setGlobalUseAltScreen(!(settings?.globalUseAltScreen ?? false));
-                  onSettingsChange?.();
-                })();
-              }}
-              isModified={
-                (settings?.globalUseAltScreen ?? false) !==
-                DEFAULT_AGENT_SETTINGS.globalUseAltScreen
-              }
-              onReset={() => {
-                void (async () => {
-                  await setGlobalUseAltScreen(DEFAULT_AGENT_SETTINGS.globalUseAltScreen ?? false);
-                  onSettingsChange?.();
-                })();
-              }}
-            />
           </SettingsGroup>
         </SettingsSection>
       )}
 
       {isGeneralActive && <AgentInputSettings />}
 
+      {isGeneralActive && <UserPromptTemplatesSection />}
+
       {!isGeneralActive && activeAgent && (
         <>
           {/* First on the page when it renders at all: an agent that is missing,
               blocked or has no credentials is usually why this page was opened. */}
-          <AgentInstallSection
-            agentId={activeAgent.id}
-            agentName={activeAgent.name}
-            availability={cliAvailability[activeAgent.id]}
-            detail={cliDetails[activeAgent.id]}
-            isCliLoading={isCliLoading}
-            isRefreshingCli={isRefreshingCli}
-            cliError={cliError}
-            onRefresh={() => void handleRefreshCliAvailability()}
-          />
+          {/* Settings closes before an install command opens in a terminal, so
+              the terminal can be typed into; without a way to close, the
+              commands stay copy-only. */}
+          <InstallCommandHandoffContext.Provider
+            value={
+              onClose
+                ? (open) =>
+                    void onClose((closed) => {
+                      if (closed) open();
+                    })
+                : null
+            }
+          >
+            <AgentInstallSection
+              agentId={activeAgent.id}
+              agentName={activeAgent.name}
+              availability={cliAvailability[activeAgent.id]}
+              detail={cliDetails[activeAgent.id]}
+              isCliLoading={isCliLoading}
+              isRefreshingCli={isRefreshingCli}
+              cliError={cliError}
+              onRefresh={() => void handleRefreshCliAvailability()}
+            />
+          </InstallCommandHandoffContext.Provider>
+
+          {/* Also while detection loads: the duplicate-install toast opens this section
+              by id, and only gets one chance to land on it. A chosen copy that can't
+              launch keeps it too, since the way back is choosing here. */}
+          {(isCliLoading ||
+            isAgentLaunchable(cliAvailability[activeAgent.id]) ||
+            cliDetails[activeAgent.id]?.chosenPath !== undefined) && (
+            // Keyed so one agent's copies never show under another while it loads.
+            <AgentCliCopiesSection
+              key={activeAgent.id}
+              agentId={activeAgent.id}
+              launchPath={
+                isCliLoading
+                  ? undefined
+                  : isAgentLaunchable(cliAvailability[activeAgent.id])
+                    ? (cliDetails[activeAgent.id]?.resolvedPath ?? null)
+                    : null
+              }
+              chosenPath={isCliLoading ? undefined : cliDetails[activeAgent.id]?.chosenPath}
+              isActive={isActive}
+              isRefreshing={isRefreshingCli}
+              onRefresh={handleRefreshCliAvailability}
+              onChosen={syncCliFromHost}
+            />
+          )}
 
           <SettingsSection title="Launching">
             <SettingsGroup>

@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -726,7 +727,13 @@ export function ProcessesDialog({
             terminal.isTrashed ? (
               <Badge tone="outline">
                 <Trash2 aria-hidden="true" className="text-status-warning" />
-                {secondsLeft === null ? "In trash" : `In trash · ${secondsLeft}s`}
+                {secondsLeft === null ? (
+                  "In trash"
+                ) : (
+                  <>
+                    In trash <FactSeparator /> {secondsLeft}s
+                  </>
+                )}
               </Badge>
             ) : null
           }
@@ -1005,7 +1012,7 @@ export function ProcessesDialog({
                 size="compact"
                 role="status"
                 action={
-                  <Button variant="ghost" size="sm" onClick={() => void fetchRef.current()}>
+                  <Button variant="outline" size="sm" onClick={() => void fetchRef.current()}>
                     <RefreshCw aria-hidden="true" />
                     Retry
                   </Button>
@@ -1099,7 +1106,10 @@ export function ProcessesDialog({
                       >
                         Name
                         {stale && sampleAge !== null && (
-                          <span>{` · sampled ${formatAgo(sampleAge)}`}</span>
+                          <span>
+                            {" "}
+                            <FactSeparator /> sampled {formatAgo(sampleAge)}
+                          </span>
                         )}
                       </th>
                       <th
@@ -1197,7 +1207,7 @@ export function ProcessesDialog({
                   : ""
               }.${
                 target?.terminal.isTrashed
-                  ? " It's in the trash, so its pane is removed and can't be restored."
+                  ? " It's in the trash, so its panel is removed and can't be restored."
                   : ""
               }`
         }

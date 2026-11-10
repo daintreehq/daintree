@@ -162,7 +162,7 @@ describe("RestoreRecoveryGate (#12434)", () => {
 
     render(<RestoreRecoveryGate panelId="p-1" />);
 
-    expect(screen.getByRole("heading", { name: "Choose this pane's conversation" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Choose this panel's conversation" })).toBeTruthy();
     expect(screen.getByText("/repo")).toBeTruthy();
     expect(screen.getByText("/worktrees/task-a")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Find session" })).toBeTruthy();
@@ -362,7 +362,7 @@ describe("RestoreRecoveryGate — held by the resume setting (#13509)", () => {
     seed(deferred("sess-c"));
 
     const { rerender } = render(<RestoreRecoveryGate panelId="p-1" isFocused={false} />);
-    expect(screen.getByRole("heading", { name: "Resumes when you focus this pane" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Resumes when you focus this panel" })).toBeTruthy();
     expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
 
     rerender(<RestoreRecoveryGate panelId="p-1" isFocused />);
@@ -548,7 +548,7 @@ describe("RestoreRecoveryGate — held by the resume setting (#13509)", () => {
 
     render(<RestoreRecoveryGate panelId="p-1" isFocused />);
 
-    expect(screen.queryByRole("heading", { name: "Resumes when you focus this pane" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Resumes when you focus this panel" })).toBeNull();
     expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
   });
 });

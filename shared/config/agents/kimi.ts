@@ -13,6 +13,11 @@ export const config: AgentConfig = {
   name: "Kimi Code",
   command: "kimi",
   args: [],
+  // No bare-positional prompt form; --prompt/-p runs the query in both modes.
+  initialPromptForm: {
+    interactive: { args: ["-p", "{prompt}"] },
+    headless: { args: ["-p", "{prompt}"] },
+  },
   color: "#1E90FF",
   iconId: "kimi",
   supportsContextInjection: true,

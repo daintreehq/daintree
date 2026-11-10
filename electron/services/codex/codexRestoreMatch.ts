@@ -4,9 +4,9 @@
  *
  * Restore never guesses (#12434), so this is a filter, not a ranking. A thread
  * is a candidate for a pane only when its first message is the pane's launch
- * prompt exactly, as the CLI received it, and it was created within a fixed
- * interval of that launch. A pane resolves only when it has one candidate,
- * that thread is a candidate for no other pane, and nobody already holds it.
+ * prompt exactly, line breaks aside (`launchPromptMatchText`), and it was created
+ * within a fixed interval of that launch. A pane resolves only when it has one
+ * candidate, that thread is a candidate for no other pane, and nobody already holds it.
  * Excluded threads still count as candidates: a pane whose prompt fits a held
  * thread and a free one is ambiguous, not answered by elimination.
  */
@@ -16,6 +16,7 @@ import {
   HANDBACK_CODE_TOKEN,
   HANDBACK_INSTRUCTION_TEMPLATES,
 } from "../../../shared/types/handback.js";
+import { launchPromptMatchText } from "../../../shared/utils/launchPromptArg.js";
 
 /**
  * A thread can't predate the launch that opened it. The slack covers the
@@ -54,8 +55,8 @@ function escapeRegExp(text: string): string {
 
 /**
  * A handback launch appends one of Daintree's instructions after a blank line,
- * which the single-line launch form turns into two spaces. The same code
- * appears in every marker of an instruction.
+ * which `launchPromptMatchText` reads as two spaces. The same code appears in
+ * every marker of an instruction.
  */
 const HANDBACK_SUFFIXES = HANDBACK_INSTRUCTION_TEMPLATES.map((template) => {
   const [head, ...rest] = template.split(HANDBACK_CODE_TOKEN).map(escapeRegExp);
@@ -72,13 +73,14 @@ const HANDBACK_SUFFIXES = HANDBACK_INSTRUCTION_TEMPLATES.map((template) => {
  * pane records the prompt as the caller wrote it, without the instruction.
  */
 export function promptHashesForFirstMessage(firstMessage: string): string[] {
-  if (firstMessage.length === 0) return [];
-  const hashes = [hashPromptText(firstMessage)];
-  const handback = HANDBACK_SUFFIXES.map((suffix) => suffix.exec(firstMessage)).find(
+  const message = launchPromptMatchText(firstMessage);
+  if (message.length === 0) return [];
+  const hashes = [hashPromptText(message)];
+  const handback = HANDBACK_SUFFIXES.map((suffix) => suffix.exec(message)).find(
     (match) => match !== null
   );
   if (handback) {
-    const prompt = firstMessage.slice(0, handback.index).trimEnd();
+    const prompt = message.slice(0, handback.index).trimEnd();
     if (prompt.length > 0) hashes.push(hashPromptText(prompt));
   }
   return hashes;

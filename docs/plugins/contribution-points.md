@@ -45,6 +45,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `themes` | Rejected — the app theme is one machine-wide selection painted into every window, with no per-project theme to narrow to |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
 | `projectTemplates` | Rejected — a template is offered while a new project folder is being created, before any project exists for a project plugin to belong to. Ship the template from an installed plugin |
+| `canopyViews` | Rejected — the Canopy window spans every project and belongs to none, so a project's plugin has no project to run its view in there. An `"instanceMode": "project"` package is refused for the same reason |
 | `fileEditors` | Allowed, view-backed only — editors apply only in the plugin's own project and may also match project-relative `paths`, and an Edit editor may be the `default` for them. A `slot` is built-in only |
 
 Each rejection is a manifest error naming the obstacle, not a silent drop, and each is deferred rather than closed — the reason says what has to be built before the rule can go.
@@ -205,14 +206,14 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 `shared/config/pluginIconIds.ts` is authoritative — run `daintree-plugin validate` to check a manifest against the set your installed host actually ships. Panel `iconId` also accepts a built-in agent ID (e.g. `claude`) to render that agent's brand mark.
 
-<a id="custom-icons"></a>**Custom icons** — when no generic ID fits, `iconId` on a panel, toolbar button or process tool can point at an SVG file in your plugin instead: a lowercase path starting with `./`, relative to `plugin.json`, ending in `.svg`, at most 64 characters (`"iconId": "./icons/flutter.svg"`). It renders on every surface the generic IDs do, including the terminal tab of a detected process tool.
+<a id="custom-icons"></a>**Custom icons** — when no generic ID fits, `iconId` on a panel, toolbar button, process tool or agent can point at an SVG file in your plugin instead: a lowercase path starting with `./`, relative to `plugin.json`, ending in `.svg`, at most 64 characters (`"iconId": "./icons/flutter.svg"`). It renders on every surface the generic IDs do, including the terminal tab of a detected process tool or a running agent.
 
-- **Draw it monochrome.** The host paints the icon as a mask in the surrounding text colour, so it follows the theme like the built-in glyphs do. Only the shape's opacity counts — fills and stroke colours are ignored, and a multi-colour logo flattens to its silhouette.
+- **Draw it monochrome.** The host paints the icon as a mask in the surrounding text colour, so it follows the theme like the built-in glyphs do. Only the shape's opacity counts — fills and stroke colours are ignored, and a multi-colour logo flattens to its silhouette. An agent's mark takes the agent's `color` instead of the text colour, adjusted against the theme the way a built-in agent's mark is.
 - **Size it like a 24×24 glyph.** Give the `<svg>` root `xmlns="http://www.w3.org/2000/svg"` and a `viewBox` (for example `0 0 24 24`); the host scales it into the same box as the built-in icons. The file has to be well-formed XML with a single `<svg>` root and at least one shape.
 - **Keep it static and self-contained.** At most 64 KB of UTF-8. No scripts, event handlers, `foreignObject`, animation, external or `data:` references, DOCTYPE or entity declarations. A file that needs anything removed is refused rather than silently cleaned.
 - **It has to live inside the plugin.** Paths with `..`, backslashes, URL syntax, or a symlink that resolves outside the plugin directory are refused, and `daintree-plugin package` fails if the file wouldn't make it into the archive.
 
-`daintree-plugin validate` reports a missing or unusable icon file as an error. At runtime a broken icon doesn't stop the plugin loading; that one surface draws the generic fallback glyph instead. An older Daintree that predates custom icons treats the path as an unknown ID and draws the same fallback, so a manifest using one still loads there. Edits to an icon file take effect when the plugin reloads.
+`daintree-plugin validate` reports a missing or unusable icon file as an error. At runtime a broken icon doesn't stop the plugin loading; that one surface draws the generic fallback glyph instead. An older Daintree that predates custom icons treats the path as an unknown ID and draws the same fallback (Claude's mark, on an agent), so a manifest using one still loads there. Edits to an icon file take effect when the plugin reloads.
 
 **Panel state versioning** — `persistState` writes an opaque bag that survives restarts, so a change to its shape meets bags written by every version of your plugin the user has ever run. `stateVersion` is how you tell those apart.
 
@@ -642,6 +643,32 @@ A `menu` lists your own actions only — a built-in or another plugin's id fails
 ```
 
 `viewId` names a `location: "panel"` view whose panel is not `hasPty` (`toolbar_popover_view_unknown`, `toolbar_popover_view_settings`, `toolbar_popover_view_sidebar`, `toolbar_popover_view_file_editor` and `toolbar_popover_view_pty` otherwise). The same view stays spawnable as a panel. The host draws the popover itself — 450 by up to 500 pixels, clamped to the room on screen — anchored under the promoted button, or under the plugin tray or the toolbar's overflow menu when the button is picked from one of their rows. It stays open while a dialog, menu or picker your view opened is up, and closes on Escape or a click outside; closing it from inside hands focus back to the button that opened it. Only one plugin popover is open at a time. Your view mounts fresh on each opening, with `hostContext.kind` set to `"popover"` and `hostContext.close()` to dismiss it, after a quick-add submits for example. Like a project surface, it has no panel record behind it: `persistState` writes to the durable view-state store and `initialArgs` reads it back on the next opening, `setHasUnsavedChanges` is offered, and the other panel-record props are absent (see [Views → State outside the grid](./views.md#state-outside-the-grid)). A popover button takes `when` and [`host.setToolbarButtonState`](./host-api.md#settoolbarbuttonstate) like any other: a disabled or busy one doesn't open, and an open popover closes when its button's `when` turns false. Works the same for installed and project plugins.
+
+## Canopy views — _Shipped_
+
+The Canopy window watches every project at once, so it is where a tool that spans projects belongs: an issue tracker across all your repositories, a timesheet. An installed plugin offers it one of its panel views by naming it:
+
+```json
+{
+  "contributes": {
+    "panels": [{ "id": "triage", "name": "Triage", "iconId": "list", "color": "#7c3aed" }],
+    "views": [{ "id": "triage", "componentPath": "dist/triage.js", "location": "panel" }],
+    "canopyViews": [{ "viewId": "triage" }]
+  }
+}
+```
+
+`viewId` names a `location: "panel"` view whose panel is not `hasPty` (`canopy_view_unknown`, `canopy_view_not_panel` and `canopy_view_pty` otherwise), each at most once (`canopy_view_duplicate`), five at most. The same view stays a panel in every project window. Canopy lists it under Plugins, below its inbox, by the panel's `name` and `iconId` with your plugin's name beneath, and choosing it fills Canopy's pane with your view; picking an agent or searching gives the pane back to the inbox. Canopy shows its inbox only in its own window, so that is where the view is offered.
+
+Naming a view is your word that it works with no project around it, because Canopy gives it none:
+
+- `hostContext.kind` is `"canopy"`, and there is no panel record: `worktreeId`, `openRequest`, `requestReload`, `setTitle` and the panel toolbar and menu setters are absent.
+- `persistState` and `initialArgs` work, with your panel's `stateVersion`, in one bag per view for the Canopy window, apart from every project's (see [Views → State outside the grid](./views.md#state-outside-the-grid)).
+- Your plugin's `"project"` and `"local"` settings follow the app's active project, as they do from any window, and writing one fails while no project is active. Keep what the view needs in `"user"` settings, or read a repository's own value from your backend.
+- Actions run in a project window, so dispatching one from your view in Canopy, a built-in or your own, fails; call your own backend instead.
+- Escape is yours: one your view leaves alone takes the keyboard back to its row in the list, and never closes Canopy.
+
+Only an app-wide plugin can offer one. A `"scope": "project"` plugin or an `"instanceMode": "project"` package is refused (`canopyViews_project_scope_forbidden`): Canopy belongs to no project for it to run in.
 
 ## Launch entries — _Shipped_
 
@@ -1315,7 +1342,7 @@ Markdown the Daintree Assistant is given about the plugin's agent tools: short `
 
 ## Prompt templates — _Shipped_
 
-Prompt templates a plugin offers in the composer's `/` menu, for the well-worn prompts of its domain. They are listed under their own "Prompt templates" heading after the agent CLI's own commands, each row naming the plugin it comes from, and what is typed after the `/` narrows them by title, id or plugin name. Choosing one, by Enter, Tab or a click, asks for its arguments if it has any, then puts the expanded text in the composer's draft for the user to edit and send; the `/` token it was chosen with is taken out of the draft. A template **never submits**, and it never appears in the `$` menu. Templates are declarative content and require no capability. An installed plugin's templates appear in every project; a [project plugin](./project-local.md)'s appear only in its own project.
+Prompt templates a plugin offers in the composer's `/` menu, for the well-worn prompts of its domain. They are listed under their own "Prompt templates" heading after the agent CLI's own commands, each row naming the plugin it comes from, and what is typed after the `/` narrows them by title, id or plugin name. Choosing one, by Enter, Tab or a click, asks for its arguments if it has any, then puts the expanded text in the composer's draft for the user to edit and send; the `/` token it was chosen with is taken out of the draft. A template **never submits**, and it never appears in the `$` menu. Templates are declarative content and require no capability. An installed plugin's templates appear in every project; a [project plugin](./project-local.md)'s appear only in its own project. A person keeps their own the same way, without a plugin, as [Markdown files in a folder](../prompt-templates.md).
 
 ```json
 {
@@ -1437,14 +1464,14 @@ export async function activate(host: PluginHostApi) {
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Unique within the plugin's `contextProviders`; `host.registerContextProvider` binds to it. |
-| `prefix` | yes | One to sixteen lowercase letters. Never `diff`, `terminal` or `selection`, which the composer reserves, and never two of the plugin's own providers' prefix. |
+| `prefix` | yes | One to sixteen lowercase letters. Never `diff`, `terminal`, `selection` or `notes`, which the composer reserves, and never two of the plugin's own providers' prefix. |
 | `label` | yes | What the provider offers ("Records"). Shown on its chips' card and in Project settings. At most 60 characters. |
 
 **The impl.** `search(query, { signal })` gets only what the user typed after `@{prefix}:` — never the rest of the draft — and returns at most 50 `{ id, label, description? }` rows, best first. `resolve(id, { signal })` returns `{ text, title? }`, or `null` when the item is gone. An item `id` is one draft token: up to 128 letters, digits and `_ - . : / # ~ + =`, not ending in `.` or `:`. Rows with any other id are dropped.
 
 **Deadlines.** A search has 3 seconds and a resolve 5, both counted from the host's request, so a plugin's first activation is inside them. When the host stops waiting it aborts `signal`. All of a draft's chips resolve in parallel, at most 20 distinct items per message. A chip whose provider fails, times out, returns `null` or returns more than 32,768 characters sends as a visible placeholder in its place (`[Couldn't attach @rec:142 from Kanban: timed out]`) rather than holding the send. Content is never cut short to fit.
 
-**Prefix collisions.** The first plugin to claim a prefix holds it wherever both are visible; a later one is refused that prefix, keeps its other contributions, and is listed under Project settings → Plugins → Context providers with the plugin that holds it. Switching the holder's providers off there hands the prefix to the next plugin in line. Project plugins in different projects never collide.
+**Prefix collisions.** Daintree itself holds `issue`, for `@issue:`, which attaches an issue from whichever issues provider the project is bound to; a plugin claiming `issue` is refused it while that is switched on. Otherwise, the first plugin to claim a prefix holds it wherever both are visible; a later one is refused that prefix, keeps its other contributions, and is listed under Project settings → Plugins → Context providers with the plugin that holds it. Switching the holder's providers off there hands the prefix to the next plugin in line. Project plugins in different projects never collide.
 
 **Switching off.** Each plugin's providers have one switch in Project settings → Plugins. An installed plugin's switch applies to every project; a project plugin's to its own project. A chip whose provider is switched off sends as a placeholder.
 
@@ -2145,13 +2172,53 @@ Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CL
 | `command` | yes | At most 256 characters, in one of two forms: a bare binary name resolved on `PATH`, with the same safe-id pattern as `id` (no shell metacharacters), or a `./`-prefixed path to a file inside the plugin, resolved against the plugin directory when the agent registers (`"./bin/agent.mjs"`). Absolute paths, backslashes, NUL, and empty, `.` or `..` segments are rejected. Supports `${settings:settingId}` — see below. |
 | `args` | no | Default launch arguments (≤20 entries, each ≤256 characters, no `\r`, `\n` or NUL). Supports `${settings:settingId}` — see below. |
 | `color` | yes | Brand color as a 6-digit hex (`#rrggbb`). |
-| `iconId` | yes | At most 64 characters. **A different namespace from panel/toolbar icon IDs** — agents render bundled brand marks, so this must name one of Daintree's built-in agent IDs (`claude`, `codex`, `gemini`, …). A panel icon ID like `terminal` doesn't resolve here; unrecognized values silently fall back to the Claude mark. Shipping a custom icon asset isn't supported yet. |
+| `iconId` | yes | At most 64 characters. Your own mark as a [custom SVG](#custom-icons) inside your plugin (`"./icons/acme.svg"`), or one of Daintree's bundled brand marks by its ID (`claude`, `codex`, `gemini`, …). **A different namespace from panel/toolbar icon IDs** — don't use a panel icon ID like `gauge` here, since only the agent's terminal tab would draw it. An unrecognized value, or an SVG that can't be loaded, draws a generic terminal glyph. |
 | `supportsContextInjection` | no | Whether copy-tree context injection targets this agent. Defaults to `false`. |
+| `nativePaths` | no | Where the CLI's native installer puts it, for an install `PATH` doesn't reach: 1–16 paths, each at most 256 characters. Each ends in the agent's own `command`, with `.cmd`, `.exe`, `.bat` or `.com` allowed after it unless the command already ends in one of those or `.ps1`, and starts at `~/`, `/`, `%USERPROFILE%\`, `%APPDATA%\`, `%LOCALAPPDATA%\`, `%ProgramFiles%\`, `%ProgramFiles(x86)%\` or `%ProgramData%\`. Names use only letters, digits, spaces and `. _ + @ ( ) -`, none is `.` or `..` or ends in a dot or a space, and a path keeps to the separator of its root: `/` after `~/` and `/`, `\` after a variable. Rejected beside a `./` command. See **Finding an install off `PATH`** below. |
+| `packages` | no | `{ "npm": …, "pypi": … }`, the packages the CLI ships as, naming at least one. `npm` is a bare package name, optionally scoped, at most 214 characters. `pypi` is the normalized name, lowercase letters and digits joined by single hyphens, at most 128 characters. Rejected beside a `./` command, or a command that already names its launcher (`acme.cmd`, `acme.ps1`). See **Finding an install off `PATH`** below. |
 | `launchMcp` | no | `{ "format": … }`, one of the additive mechanisms in [Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints): `claude-mcp-config`, `codex-config-overrides`, `gemini-system-defaults`, `qwen-mcp-config`, `opencode-config-content`, `copilot-additional-mcp-config`, `amp-mcp-config`, `vibe-mcp-servers-env`. Declare the one your CLI actually merges over the user's own servers. It grants nothing: the agent gets the orchestration server and plugin endpoints only as the project's MCP tier and plugin access allow. Daintree owns any environment variable the format uses, so a manifest cannot name one. |
+| `permissionBypassArgs` | no | The arguments the CLI takes to skip its permission prompts, e.g. `["--yolo"]` or `["--approval", "never"]`: 1–20 options, each optionally followed by one value, every token 1–256 characters with no whitespace, NUL, `{sessionId}` or `${…}` template. Declaring them turns nothing on: they are added only to a launch whose resolved **Skip permission prompts** setting is on, which follows the same order as for a built-in agent (a preset's on/off, then the agent's own on/off, then the global switch), and they make the agent eligible for the global switch, which skips any agent that declares none. Restore, restart and resume strip a declared flag from a pane's saved launch when the setting is now off, including a flag from an earlier version of the declaration. None of these options (with its value) may also appear in `args`, `resume.args`, `resume.assignSessionIdArgs`, `resume.resumeLatestArgs` or an `initialPromptForm` mode's `args`, where it would skip prompts on every launch; that check catches the obvious mistake, not a determined plugin, which can always pass a flag some other way. The install dialog, the update review and the plugin's Permissions tab name each agent that declares them. |
+| `executableNames` | no | The bare executable names that identify the agent when someone runs it in a plain terminal instead of launching it from Daintree (#16469): typing `pi` into a shell turns the pane into the Pi agent, with its name, icon and `detection` states, once the process is confidently running, and the pane goes back to a plain terminal when the agent exits. Omitted, a bare lowercase `command` claims its own name; `[]` claims none; a `./` command claims nothing implicitly. At most 16 names, each a lowercase executable name of 1–64 characters (letters, digits, `.`, `-`, `_`) with no extension. A name the command parser treats as a launcher is refused — a shell, `env`, `sudo`, `mise`, `direnv`, a runtime or package manager such as `node`, `npx` or `uvx`, or `exec`, `dlx` or `x` — as is a name a built-in agent or tool already has, so `npx pi` and `mise exec -- pi` still resolve to `pi`. Only the process's own name counts, never text on screen. When two enabled plugins claim the same name, neither gets it; unloading or disabling the plugin returns a pane it promoted to a plain terminal. |
 
 A plugin agent is launchable and selectable as a named entry in the effective registry. It launches as a named terminal. Without a `detection` block it runs as a plain named terminal whose working/waiting state Daintree doesn't track; declare `detection` (below) to wire it into the agent-state UI like a built-in agent. Without a `launchMcp` block a plugin agent is never handed Daintree's own MCP servers or any plugin's agent MCP credentials at launch; declare one (below) to receive them the way a built-in agent with the same mechanism does.
 
 `command` and `args` support the same `${settings:settingId}` syntax as MCP servers — e.g. `"args": ["--token", "${settings:apiToken}"]`. Templates resolve at spawn time against the plugin's **user-scope** setting with that ID (project scope is never read). If a referenced setting is unset, the launch fails with a clear error rather than spawning the agent with a literal `${settings:…}` (or a silently blanked value) on its command line — so a missing credential surfaces as a spawn error instead of an opaque auth failure inside the agent. Unlike MCP server tokens, `${settings:*}` tokens in agent `command`/`args` are **not** validated at manifest parse time — an undeclared setting id only surfaces as a spawn-time error, not a load error.
+
+**Finding an install off `PATH`.** A bare `command` is looked up on `PATH`, which often misses an install that a person's shell finds but Daintree's inherited environment doesn't. `nativePaths` and `packages` add the locations a built-in agent falls back to, and a hit is the file the agent launches from:
+
+```json
+{
+  "contributes": {
+    "agents": [
+      {
+        "id": "pi",
+        "name": "Pi",
+        "command": "pi",
+        "color": "#3366ff",
+        "iconId": "claude",
+        "packages": { "npm": "@earendil-works/pi-coding-agent" }
+      },
+      {
+        "id": "mini-swe-agent",
+        "name": "mini-swe-agent",
+        "command": "mini",
+        "color": "#3366ff",
+        "iconId": "claude",
+        "packages": { "pypi": "mini-swe-agent" },
+        "nativePaths": ["~/.mini/bin/mini", "%LOCALAPPDATA%\\Programs\\mini\\mini.exe"]
+      }
+    ]
+  }
+}
+```
+
+After `PATH` misses, Daintree checks these in order and stops at the first file it finds:
+
+1. **Each of `nativePaths`, as listed.** A `%VAR%\` entry is read only on Windows, and skipped if the variable is unset or doesn't hold a fully qualified path. A `/` entry is read everywhere but Windows, where it would name no drive. On Windows an entry with no launcher suffix is checked with `.cmd`, `.exe`, `.bat` and `.com` appended, so `~/.mini/bin/mini` also covers a Windows install with the same layout.
+2. **The uv and pipx locations `packages.pypi` names.** The package names the tool's directory and `command` names the file in it, so the two can differ, as they do for mini-swe-agent: `~/.local/bin/<command>`, `~/.local/share/uv/tools/<pypi>/bin/<command>`, `~/.local/share/pipx/venvs/<pypi>/bin/<command>` and `~/.local/pipx/venvs/<pypi>/bin/<command>`, or on Windows `%USERPROFILE%\.local\bin\<command>.exe`, `%APPDATA%\uv\tools\<pypi>\Scripts\<command>.exe`, `%USERPROFILE%\.local\pipx\venvs\<pypi>\Scripts\<command>.exe` and `%LOCALAPPDATA%\pipx\pipx\venvs\<pypi>\Scripts\<command>.exe`. These are the tools' default layouts; a relocated `UV_TOOL_DIR` or `PIPX_HOME` isn't followed. Declare that location in `nativePaths` if your CLI's users commonly have it.
+3. **The global npm shim `packages.npm` switches on.** The name is only the switch: Daintree asks the npm on `PATH` for its prefix and looks for `<prefix>/bin/<command>`, or `<prefix>\<command>.cmd` on Windows. Another npm's prefix isn't searched.
+
+Discovery is passive. It checks whether each file exists and can be executed (on Windows, only whether it exists) and never runs one, so the one command these locations add is `npm config get prefix`, when `packages.npm` is declared. It never installs or updates anything, and declaring a package adds no install offer. A declared file the system denies access to reads `blocked`, the same as a built-in. When neither `PATH` nor anything declared has the CLI, the agent reads `missing`; there is no separate state for a platform the CLI doesn't run on. A `./` command is checked directly and never reaches these locations, so declaring them beside one is rejected.
 
 **Output-pattern detection** is supported (#10587). An optional `detection` block on an agent contribution lets the plugin describe its working/waiting/completed states with regex patterns and confidence weights, so the agent joins the same agent-state UI as built-in agents instead of running as an untracked named terminal. The block is `strict` — a typo'd field is a loud manifest error.
 
@@ -2184,12 +2251,45 @@ Every other pattern array holds at most 50 entries, and each entry is 1–256 ch
 | Field | Kinds | Notes |
 | --- | --- | --- |
 | `kind` | both | `session-id` for a CLI that resumes by an id it prints, `project-scoped` for one that resumes the latest session in the launch directory. |
-| `args` | both | Resume arguments, under the same rules as `args` above. In a `session-id` block exactly one entry contains `{sessionId}`, which is replaced by the captured id (it can be the whole entry or part of one, such as `--session={sessionId}`). No other field may contain it. |
-| `sessionIdPattern` | `session-id` | Regex matched against the output the agent prints after `quitCommand`. Exactly one capture group, which is the id. Same bounds as a detection pattern, and it needs a `quitCommand`. Omit it when the agent prints no id: the pane then resumes only through `resumeLatestArgs`. |
+| `args` | both | Resume arguments, under the same rules as `args` above. In a `session-id` block exactly one entry contains `{sessionId}`, which is replaced by the captured id (it can be the whole entry or part of one, such as `--session={sessionId}`). Only `assignSessionIdArgs` may also contain it. |
+| `assignSessionIdArgs` | `session-id` | Arguments that hand the CLI a session id Daintree chooses at launch, for a CLI that accepts one. `{sessionId}` appears exactly once and is replaced by a UUID. The first entry is an option, and each entry is an option, `--option={sessionId}`, or `{sessionId}` on its own, so a copied pane can drop them from its command. Don't declare the same option in the agent's top-level `args`; `resume.args` may match, as below. |
+| `sessionIdPattern` | `session-id` | Regex matched against the output the agent prints after `quitCommand`. Exactly one capture group, which is the id. Same bounds as a detection pattern, and it needs a `quitCommand`. Omit it when the agent prints no id: a pane with no assigned id then resumes only through `resumeLatestArgs`. |
 | `quitCommand` | both | Text sent to the running agent at shutdown so it exits cleanly and prints its resume hint. Same rules as an `args` entry. |
 | `resumeLatestArgs` | `session-id` | Arguments that reopen the most recent session in the launch directory, used when no id was captured. |
 
 When a pane has no captured id, `project-scoped` args and `resumeLatestArgs` reopen the latest session in that directory. Only one pane per agent and directory gets that slot on restore; the others start fresh, so two panes never reopen the same conversation. A plugin agent's conversation is never described as surviving a project-folder move, whatever it declares.
+
+**Assigning the id at launch** lets each pane restore its own conversation even after a crash or force quit, when no quit command ran and nothing was printed. Every new pane gets its own id before its process starts, a duplicated pane gets a new one, and shutting a pane down sends nothing into it: `quitCommand` is only used for a pane that has no id, such as one started before the plugin declared this.
+
+```json
+"resume": {
+  "kind": "session-id",
+  "args": ["--session-id", "{sessionId}"],
+  "assignSessionIdArgs": ["--session-id", "{sessionId}"],
+  "quitCommand": "/quit",
+  "resumeLatestArgs": ["--continue"]
+}
+```
+
+Declare it only when every CLI version you support takes the flag, because a version that doesn't will fail on launch, and there's no version check to catch it. Daintree can't look inside a plugin CLI's session store, so restore always runs `args` with the pane's id, even for a pane nobody typed into. If your CLI's assigning flag opens an existing session or creates it, use the same arguments for `args` as above: an untouched pane then still launches, and a pane brought back after the PTY host crashes reopens its own conversation. A CLI whose resume flag refuses an id it never saw would fail on that untouched pane, and its panes start new conversations after a PTY host crash.
+
+**First prompt** can be declared (#16404). A recipe step, `agent.launch` call or launch entry that carries a prompt hands it to a plugin agent as a bare positional argument. If your CLI reads its positional as something else (a project path, a file list, a subcommand) or takes the prompt through a flag, declare an `initialPromptForm`. It's plain data, `strict`, and the same form a built-in agent uses:
+
+```json
+"initialPromptForm": {
+  "interactive": { "args": ["--task", "{prompt}"] },
+  "headless": { "args": ["--print", "{prompt}"] }
+}
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `interactive` / `headless` | yes | The form for each launch mode. Declare both, and use `["{prompt}"]` for a mode that takes the prompt positionally. Recipe steps and launch entries launch interactively; `headless` is read by an `agent.launch` with `interactive: false`. |
+| `args` | yes | Added after the arguments Daintree builds from the agent's `args`, preset and settings, only when the launch has a prompt. 1–20 entries, each 1–256 characters with no control characters. Exactly one entry is `{prompt}`, standing alone: the prompt replaces it, quoted as one argument, so `--task={prompt}` is rejected. No `{sessionId}` or `${…}` template; a value from your settings belongs in the agent's `args`. |
+| `subcommand` | no | `{ "name": "run", "replaces": "chat" }`. A launch with a prompt runs `name` in place of the first `replaces` among the agent's own `args`, which is the word an earlier option's value would be if it spelled the same, or straight after the command when they don't hold it. Both are single words of letters, digits, `.`, `_` or `-`, starting with a letter or digit. |
+| `caveat` | no | What the CLI does in this mode, as you observed it: `may-be-ignored` when it can start without acting on the prompt, `exits-after-reply` when it answers and exits. It changes nothing about the launch. |
+
+Without the field the prompt stays positional in both modes, and a launch with no prompt adds nothing from the form either way. Quoting keeps the prompt one argument, but whether your CLI reads one starting with `-` as an option is up to its parser. `["--", "{prompt}"]` protects a positional prompt on a CLI that honours `--`, but anything added after the form lands behind it: flags an `agent.launch` caller passes would reach your CLI as positional arguments, and a `launchMcp` format that adds flags is refused beside a `--`, since the agent would lose its tools. The formats that use an environment variable (`gemini-system-defaults`, `opencode-config-content`, `vibe-mcp-servers-env`) add none.
 
 ## Process tools — _Shipped_
 

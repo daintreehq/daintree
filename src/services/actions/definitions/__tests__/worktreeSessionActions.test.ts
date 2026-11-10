@@ -355,6 +355,26 @@ describe("worktree.sessions.restartAll confirm gate", () => {
 
     expect(bulkRestartByWorktree).not.toHaveBeenCalled();
   });
+
+  it("counts only the terminals it restarts, leaving a browser panel out", async () => {
+    setPanelState([
+      {
+        id: "p1",
+        location: "grid",
+        worktreeId: "wt-1",
+        detectedAgentId: "claude",
+        agentState: "working",
+      },
+      { id: "web", location: "grid", worktreeId: "wt-1", kind: "browser" },
+    ]);
+    const run = setupActions();
+
+    await run("worktree.sessions.restartAll", { worktreeId: "wt-1" });
+
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "worktreeRestartAll", targetCount: 1 })
+    );
+  });
 });
 
 describe("worktree.sessions.clearHistory confirm gate", () => {

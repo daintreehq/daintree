@@ -1,5 +1,5 @@
 import { useState, useCallback, useSyncExternalStore } from "react";
-import { RotateCcw, X, Layers, ChevronRight, Unlink } from "lucide-react";
+import { RotateCcw, Trash2, Layers, ChevronRight, Unlink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DOCK_POPOVER_ROW_HOVER_CLASS } from "./dockStatusPill";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slic
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { resolveTrashedPanelName } from "./trashedPanelName";
 import {
   subscribeToPluginAgentRegistry,
@@ -153,16 +154,12 @@ export function TrashGroupItem({
             <TrashCountdownLabel countdown={countdown} name={groupName} />
             {worktreeName && showWorktree ? (
               <>
-                <span aria-hidden="true" className="text-text-muted">
-                  &middot;
-                </span>
+                <FactSeparator />
                 <span className="truncate text-text-secondary">{worktreeName}</span>
               </>
             ) : isOrphan && showWorktree ? (
               <>
-                <span aria-hidden="true" className="text-text-muted">
-                  &middot;
-                </span>
+                <FactSeparator />
                 <span className="inline-flex shrink-0 items-center gap-1 text-text-secondary">
                   <Unlink className="h-2.5 w-2.5 text-status-warning" aria-hidden="true" />
                   Worktree deleted
@@ -212,7 +209,7 @@ export function TrashGroupItem({
                 onClick={handleRemoveAll}
                 aria-label={`Remove all ${tabCount} tabs permanently`}
               >
-                <X aria-hidden="true" />
+                <Trash2 aria-hidden="true" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">{`Remove all ${tabCount} tabs permanently`}</TooltipContent>
@@ -306,7 +303,7 @@ export function TrashGroupItem({
                           }
                           aria-label={`Remove ${terminalName} permanently`}
                         >
-                          <X aria-hidden="true" />
+                          <Trash2 aria-hidden="true" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>

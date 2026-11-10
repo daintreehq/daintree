@@ -204,7 +204,11 @@ const ContextMenuSubTrigger = React.forwardRef<
       onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
       {children}
-      <ChevronRight className="ml-auto h-3.5 w-3.5" aria-hidden="true" />
+      {/* The shortcut column's clearance and ink, so a submenu's chevron and a
+          sibling row's shortcut read as one trailing column. */}
+      <span aria-hidden="true" className="ml-auto shrink-0 pl-4 text-text-secondary">
+        <ChevronRight className="h-3.5 w-3.5" />
+      </span>
     </SubTrigger>
   );
 });

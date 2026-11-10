@@ -22,6 +22,7 @@ import { excerptPreview, findPreviewMatches } from "@/utils/promptHistoryPreview
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/projectStore";
 import { isMac } from "@/lib/platform";
+import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 
 /**
  * The composer opens this palette with Mod+R (`inputEditorExtensions/base.ts`),
@@ -74,7 +75,7 @@ export function PromptHistoryRow({
   // recall puts the text in this composer and nothing else.
   const counts = [
     item.lineCount > 1 ? `${item.lineCount} lines` : null,
-    targets > 1 ? `${targets} panes` : null,
+    targets > 1 ? `${targets} terminals` : null,
   ].filter(Boolean);
 
   return (
@@ -95,11 +96,7 @@ export function PromptHistoryRow({
     >
       {/* The terminal glyph for a prompt whose agent was never recorded: it was
           sent to a pane, and that is all the history knows. */}
-      <PanelKindIcon
-        iconId={agentConfig?.iconId ?? item.agentId ?? "terminal"}
-        color={agentConfig?.color}
-        size={16}
-      />
+      <PanelKindIcon iconId={item.agentId ?? "terminal"} color={agentConfig?.color} size={16} />
       <span className="flex-1 min-w-0 truncate text-sm font-medium text-text-primary">
         <HighlightedText text={excerpt.text} indices={excerpt.indices} />
       </span>
@@ -108,8 +105,12 @@ export function PromptHistoryRow({
       {(projectName || counts.length > 0) && (
         <span className="flex shrink-0 items-center gap-1 text-xs text-text-secondary tabular-nums">
           {projectName && <span className="max-w-32 truncate">{projectName}</span>}
-          {projectName && counts.length > 0 && <span aria-hidden="true">·</span>}
-          {counts.length > 0 && <span>{counts.join(" · ")}</span>}
+          {projectName && counts.length > 0 && <FactSeparator />}
+          {counts.length > 0 && (
+            <span>
+              <FactRun facts={counts} />
+            </span>
+          )}
         </span>
       )}
       <TimeAgo
@@ -202,7 +203,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
     <div className="flex items-center gap-3 w-full">
       <div className="flex-1 min-w-0">
         {/* Only while Enter would recall something. */}
-        {hasSelection && <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to recall" }} />}
+        {hasSelection && <PaletteFooterHints primaryHint={{ keys: "Enter", label: "to recall" }} />}
       </div>
       {/* Pointer-down is held so a click switches scope without taking focus
           out of the search field — the list keys live there. */}

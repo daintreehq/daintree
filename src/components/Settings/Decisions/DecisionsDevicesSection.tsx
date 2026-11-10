@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { SkeletonBone } from "@/components/ui/Skeleton";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { TimeAgo } from "@/components/ui/TimeAgo";
@@ -27,13 +28,13 @@ function DeviceFacts({ device }: { device: DecisionsDevice }) {
     <>
       <span className="inline-flex flex-wrap items-center gap-x-1">
         <span>{deviceRoleLabel(device.role)}</span>
-        <span aria-hidden="true">·</span>
+        <FactSeparator />
         {device.lastSeenAt ? (
           <TimeAgo timestamp={device.lastSeenAt} verbose prefix="Seen " />
         ) : (
           <span>Not seen since pairing</span>
         )}
-        <span aria-hidden="true">·</span>
+        <FactSeparator />
         {device.pushEnabled ? (
           <span>Notifications on</span>
         ) : (

@@ -12,9 +12,10 @@ import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
 // + mode wiring renders, and capture the viewMode handed to MarkdownViewer —
 // the seam the toggle drives for markdown. HTML has no such prop (HtmlViewer is
 // rendered-only), so there the mode shows up as which mock is on screen.
-const { readMock, openSearchMock } = vi.hoisted(() => ({
+const { readMock, openSearchMock, markdownOpenSearchMock } = vi.hoisted(() => ({
   readMock: vi.fn(),
   openSearchMock: vi.fn(),
+  markdownOpenSearchMock: vi.fn(),
 }));
 vi.mock("@/clients/filesClient", () => ({
   filesClient: { read: readMock },
@@ -32,14 +33,20 @@ vi.mock("@/services/ActionService", () => ({
 // observable — without it the mode plumbing could be deleted and stay green.
 // cacheBust rides along for the same reason (#11587).
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
-  MarkdownViewer: (props: Pick<MarkdownViewerProps, "viewMode" | "cacheBust" | "fontSize">) => (
-    <div
-      data-testid="markdown-viewer-mock"
-      data-view-mode={props.viewMode}
-      data-cache-bust={props.cacheBust ?? ""}
-      data-font-size={props.fontSize ?? ""}
-    />
-  ),
+  MarkdownViewer: forwardRef<
+    { openSearch: () => void },
+    Pick<MarkdownViewerProps, "viewMode" | "cacheBust" | "fontSize">
+  >(function MarkdownViewerMock(props, ref) {
+    useImperativeHandle(ref, () => ({ openSearch: () => markdownOpenSearchMock(props.viewMode) }));
+    return (
+      <div
+        data-testid="markdown-viewer-mock"
+        data-view-mode={props.viewMode}
+        data-cache-bust={props.cacheBust ?? ""}
+        data-font-size={props.fontSize ?? ""}
+      />
+    );
+  }),
 }));
 // The reading size is one app-level preference shared with the file panel; this
 // suite owns the toolbar gate and the forwarding, not the store's persistence.
@@ -507,6 +514,20 @@ describe("FileBrowserViewer Source/Rendered toggle (#11319, #12205)", () => {
     rerender(viewerJsx("/repo/src/notes.txt", { isFocused: true }));
     window.dispatchEvent(new Event("daintree:find-in-panel"));
     expect(openSearchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // #16642: Markdown opens rendered, and Cmd+F there used to reach no viewer at
+  // all, so the default view of the most-read document type had no find.
+  it("hands Cmd+F to the rendered Markdown document, leaving the mode alone", async () => {
+    markdownOpenSearchMock.mockClear();
+    renderViewer("/repo/docs/a.md", { isFocused: true });
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+
+    window.dispatchEvent(new Event("daintree:find-in-panel"));
+
+    expect(markdownOpenSearchMock).toHaveBeenCalledTimes(1);
+    expect(markdownOpenSearchMock).toHaveBeenCalledWith("rendered");
+    expect(currentViewMode()).toBe("rendered");
   });
 
   it("shows the toggle and defaults an HTML file to source (#12205)", async () => {

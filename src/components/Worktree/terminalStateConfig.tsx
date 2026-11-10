@@ -149,7 +149,7 @@ export function getEffectiveStateLabel(agentState: AgentState): string {
 
 export interface SessionStateSummary {
   visibleStates: { state: SessionPresentationState; count: number }[];
-  /** "3 sessions: 2 working, 1 waiting" — also the collapsed indicator's tooltip. */
+  /** "3 terminals: 2 working, 1 waiting" — also the collapsed indicator's tooltip. */
   label: string;
   /** "2 working, 1 waiting", or "" when every session is idle. */
   breakdown: string;
@@ -176,6 +176,6 @@ export function summarizeSessionStates(
   }));
   if (total <= 0) return { visibleStates, label: "", breakdown: "" };
   const breakdown = visibleStates.map((v) => `${v.count} ${SESSION_LABELS[v.state]}`).join(", ");
-  const sessions = `${pluralize(total, "session")}`;
+  const sessions = `${pluralize(total, "terminal")}`;
   return { visibleStates, label: breakdown ? `${sessions}: ${breakdown}` : sessions, breakdown };
 }

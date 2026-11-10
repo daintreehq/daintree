@@ -154,6 +154,8 @@ describe("cross-host fleet targets", () => {
     expect(new Set(opIds).size).toBe(2);
     // Directing state is this view's terminals' business only.
     expect(notifyUserInput.mock.calls.map(([id]) => id)).toEqual(["local-1"]);
+    // Sent from the fleet's controls, so a Canopy hold on the pane stands (#16333).
+    expect(notifyUserInput.mock.calls[0]?.[2]).toEqual({ takesSize: false });
     expect(notifyEnterPressed.mock.calls.map(([id]) => id)).toEqual(["local-1"]);
   });
 

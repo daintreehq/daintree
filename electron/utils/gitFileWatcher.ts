@@ -30,49 +30,64 @@ const MACOS_EMFILE_LIMIT_HELP =
   "Permanent fix: create /Library/LaunchDaemons/limit.maxfiles.plist (see launchd.plist(5)). " +
   "/etc/sysctl.conf may not be respected on macOS 14+.";
 
-/**
- * Ignore globs for the cross-platform recursive watcher adapter.
- * Each bare directory name maps to a glob matching at any depth.
- * .git is included for both the bare worktree pointer file and
- * all child paths, replacing the old JS-side prefix check.
- */
 /** Name of the git config file inside the common dir. */
 const GIT_CONFIG_FILE_NAME = "config";
+/** Name of the packed refs file inside the common dir. */
+const PACKED_REFS_FILE_NAME = "packed-refs";
 
-const WORKTREE_IGNORE_GLOBS = [
-  "**/node_modules/**",
-  "**/dist/**",
-  "**/build/**",
-  "**/.next/**",
-  "**/target/**",
-  "**/coverage/**",
-  "**/.cache/**",
-  "**/.turbo/**",
-  "**/out/**",
-  "**/__pycache__/**",
-  "**/.venv/**",
+/**
+ * Names the recursive worktree watcher ignores at any depth: the entry itself
+ * and everything beneath it. `.git` covers both a linked worktree's `.git`
+ * pointer file and a `.git` directory's contents. Matched case-sensitively.
+ */
+const WORKTREE_IGNORED_NAMES = [
+  "node_modules",
+  "dist",
+  "build",
+  ".next",
+  "target",
+  "coverage",
+  ".cache",
+  ".turbo",
+  "out",
+  "__pycache__",
+  ".venv",
   // Python/Java agent-tooling cache dirs not covered by __pycache__/.venv.
   // Writes here during sustained tool runs would otherwise trigger a forced
   // full status chain (~3-5 git spawns) on every debounce flush.
-  "**/.pytest_cache/**",
-  "**/.mypy_cache/**",
-  "**/.ruff_cache/**",
-  "**/venv/**",
-  "**/.tox/**",
-  "**/.gradle/**",
-  "**/.git",
-  "**/.git/**",
-];
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  "venv",
+  ".tox",
+  ".gradle",
+  ".git",
+] as const;
+
+type WorktreeIgnoredName = (typeof WORKTREE_IGNORED_NAMES)[number];
+
+/**
+ * `WORKTREE_IGNORED_NAMES` as the single ignore entry the recursive watcher
+ * gets, tested against the path relative to the watch root with `/`
+ * separators. One expression, not a glob per name: @parcel/watcher compiles
+ * every entry into its own `std::regex` and runs each against every event on
+ * the FSEvents thread, and with a glob per name a write burst pinned that
+ * thread until FSEvents dropped events (#16676). Flagless, because the native
+ * matcher receives only the source and the Windows adapter rejects flags.
+ */
+export const WORKTREE_IGNORE_PATTERN = new RegExp(
+  `(?:^|/)(?:${WORKTREE_IGNORED_NAMES.map((name) => name.replace(/[.*+?^$()[\]{}|\\]/g, "\\$&")).join("|")})(?:/|$)`
+);
 
 /**
  * Top-level directories to exclude from the recursive stream at the OS level,
- * highest priority first — FSEvents takes at most eight. Every name must
- * already be covered by `WORKTREE_IGNORE_GLOBS`: an exclusion only stops churn
- * the globs would have discarded anyway, so nothing the user cares about goes
- * quiet. `.git` qualifies because the dedicated `fs.watch` handles, not this
- * stream, observe git state.
+ * highest priority first — FSEvents takes at most eight. Typed as ignored
+ * names because an exclusion may only stop churn `WORKTREE_IGNORE_PATTERN`
+ * would have discarded anyway, so nothing the user cares about goes quiet.
+ * `.git` qualifies because the dedicated `fs.watch` handles, not this stream,
+ * observe git state.
  */
-const WORKTREE_EXCLUSION_CANDIDATES = [
+const WORKTREE_EXCLUSION_CANDIDATES: readonly WorktreeIgnoredName[] = [
   "node_modules",
   ".git",
   "dist",
@@ -92,6 +107,13 @@ const WORKTREE_EXCLUSION_CANDIDATES = [
  * for nothing. Bounds both the retained set and the stdin body written to git.
  */
 const WORKTREE_BURST_PATH_CAP = 2048;
+
+/**
+ * Most paths one watcher remembers as known to be relevant, oldest forgotten
+ * first. An editing session names far fewer. A wide burst pushing answers out
+ * costs only the check-ignore spawn each of them would have paid anyway.
+ */
+const KNOWN_RELEVANT_PATH_CAP = 1024;
 
 /**
  * Most paths an update-only burst may name and still be checked as content-only.
@@ -237,6 +259,13 @@ function isWatchableRef(ref: string): boolean {
   return ref.startsWith("refs/") && !ref.split("/").some((part) => part === "" || part === "..");
 }
 
+// git refuses ref names ending in `.lock`, so the suffix never hides a real
+// ref. An unnamed event stays a signal: the platform couldn't say what changed.
+function isLockFileName(changedFileName: string | Buffer | null): boolean {
+  if (!changedFileName) return false;
+  return changedFileName.toString().endsWith(".lock");
+}
+
 export class GitFileWatcher {
   private watchers: FSWatcher[] = [];
   private readonly watchedFilesByDirectory = new Map<string, Set<string>>();
@@ -277,6 +306,13 @@ export class GitFileWatcher {
    */
   private pendingWorktreePaths: Set<string> | null = new Set();
   /**
+   * Paths in the current (unflushed) burst whose latest event was a delete.
+   * git cannot type a path that is gone, so a directory-only rule (`.output/`)
+   * reads as not ignored for it. Remembering that answer would refresh for every
+   * later rebuild of a directory that is in fact ignored.
+   */
+  private pendingDeletedPaths = new Set<string>();
+  /**
    * Whether the current (unflushed) burst carried anything but `update` events.
    * Sticky like an unknown burst. Only half the proof of a content-only burst:
    * Parcel folds a delete and re-create of one path into `update`, so the flush
@@ -302,8 +338,21 @@ export class GitFileWatcher {
    * opportunity".
    */
   private trackedIgnoredProbe: Promise<boolean> | null = null;
+  /**
+   * Paths a completed check-ignore reported as not ignored, so a burst naming
+   * one can refresh without a spawn. Only this direction is remembered: a stale
+   * entry costs an extra refresh and can never skip one, which is also why the
+   * ignore sources nothing watches (`core.excludesFile`) are acceptable here.
+   *
+   * Replaced rather than cleared on invalidation: a classification holds the Set
+   * it started with, so an answer that straddled the change lands in the retired
+   * one.
+   */
+  private knownRelevantPaths = new Set<string>();
   /** Directory holding `.git/config` — always the common dir. */
   private gitConfigDir: string | null = null;
+  /** Directory holding the shared `packed-refs` — always the common dir. */
+  private packedRefsDir: string | null = null;
   private readonly onWatcherFailed: (() => void) | undefined;
   private readonly onInotifyLimitReached: ((limit: InotifyLimit) => void) | undefined;
   private readonly onWorktreeWatcherReady: (() => void) | undefined;
@@ -382,7 +431,11 @@ export class GitFileWatcher {
       const headPath = pathJoin(gitDir, "HEAD");
 
       this.watchFile(headPath);
-      this.watchFile(pathJoin(commonDir, "packed-refs"));
+      const packedRefsPath = pathJoin(commonDir, PACKED_REFS_FILE_NAME);
+      // The directory `watchFile` will report events from: a `commondir` read
+      // with a trailing separator keeps it, and the join drops it.
+      this.packedRefsDir = dirname(packedRefsPath);
+      this.watchFile(packedRefsPath);
       this.watchFile(pathJoin(commonDir, "logs", "HEAD"));
       // Watch .git/config so `git push -u` / `git branch --set-upstream-to`
       // triggers a poll deterministically — without this the new tracking
@@ -625,7 +678,8 @@ export class GitFileWatcher {
     // to run out its deadline against a worktree nobody is watching.
     this.abortClassification();
     this.pendingWorktreePaths = new Set();
-    this.trackedIgnoredProbe = null;
+    this.pendingDeletedPaths = new Set();
+    this.invalidateIgnoreAnswers();
 
     for (const watcher of this.watchers) {
       try {
@@ -684,9 +738,9 @@ export class GitFileWatcher {
         // tracked status at all (#12235).
         this.handleWorktreeChange(events);
       },
-      // The globs stay: the exclusions cover only directories that existed
+      // The pattern stays: the exclusions cover only directories that existed
       // at subscribe time, only at the top level, and only eight of them.
-      { ignore: [...WORKTREE_IGNORE_GLOBS, ...exclusions] }
+      { ignore: [WORKTREE_IGNORE_PATTERN, ...exclusions] }
     )
       .then((sub) => {
         if (this.disposed) {
@@ -804,17 +858,21 @@ export class GitFileWatcher {
   }
 
   /**
-   * Watch a git-internal directory for *any* change and route it through the
-   * fast debounce. Used for refs/remotes/origin, where the relevant events are
-   * loose-ref writes (and their `.lock` churn) from a fetch rather than a fixed
-   * set of tracked filenames — so unlike `watchFile`, every event in the
-   * directory is a conservative "refs may have moved" signal.
+   * Watch refs/remotes/origin for loose-ref writes from a fetch and route them
+   * through the fast debounce. Unlike `watchFile`, any ref name in the
+   * directory is a conservative "refs may have moved" signal, but lock files
+   * are not: git 2.48+ takes `HEAD.lock` on every `git fetch <remote>` to
+   * follow the remote HEAD, even when no ref moves, and every watched worktree
+   * shares this directory (#16677). A committed write renames its lock onto
+   * the ref's own name and a deletion removes that name, so a moved ref always
+   * reports a non-lock event.
    */
   private watchRemoteRefsDir(dirPath: string): void {
     try {
       // A fetch moves remote-tracking refs and nothing in the working tree, so
       // this is the one git-internal signal that never reports membership.
-      const watcher = fsWatch(dirPath, { persistent: false }, () => {
+      const watcher = fsWatch(dirPath, { persistent: false }, (_eventType, changedFileName) => {
+        if (isLockFileName(changedFileName)) return;
         this.handleGitFileChange({ pathMembership: false });
       });
 
@@ -828,9 +886,9 @@ export class GitFileWatcher {
       this.watchers.push(watcher);
     } catch {
       // The directory may not exist yet (no fetch has written loose remote
-      // refs, or they are all packed). Silent fallback: packed-refs watching,
-      // Daintree's own fetch-triggered status refresh, and the timed poll
-      // still cover origin movement.
+      // refs, or they are all packed). Silent fallback: a fetch that packs its
+      // refs rewrites the watched packed-refs, and Daintree's own
+      // fetch-triggered status refresh and the timed poll cover the rest.
     }
   }
 
@@ -847,7 +905,7 @@ export class GitFileWatcher {
     try {
       const trackedFiles = new Set<string>([fileName]);
       const watcher = fsWatch(watchDir, { persistent: false }, (_eventType, changedFileName) => {
-        if (this.shouldHandleDirectoryEvent(changedFileName, trackedFiles)) {
+        if (this.shouldHandleDirectoryEvent(watchDir, changedFileName, trackedFiles)) {
           if (this.isGitConfigEvent(watchDir, changedFileName)) {
             this.gitConfigChangePending = true;
           }
@@ -871,6 +929,7 @@ export class GitFileWatcher {
   }
 
   private shouldHandleDirectoryEvent(
+    watchDir: string,
     changedFileName: string | Buffer | null,
     trackedFiles: Set<string>
   ): boolean {
@@ -878,9 +937,16 @@ export class GitFileWatcher {
       return true;
     }
 
+    // Every ref transaction takes `packed-refs.lock`, even a commit that only
+    // writes its own loose ref, and every worktree of the repository watches
+    // the common dir (#16678). A real rewrite renames the lock onto
+    // `packed-refs`, so the final name still reports it.
+    const inPackedRefsDir =
+      this.packedRefsDir !== null && pathNormalize(watchDir) === pathNormalize(this.packedRefsDir);
     const changedName = changedFileName.toString().replaceAll("\\", "/");
     for (const trackedFile of trackedFiles) {
-      if (this.matchesTrackedFile(changedName, trackedFile)) {
+      const matchLock = !(inPackedRefsDir && trackedFile === PACKED_REFS_FILE_NAME);
+      if (this.matchesTrackedFile(changedName, trackedFile, matchLock)) {
         return true;
       }
     }
@@ -906,16 +972,15 @@ export class GitFileWatcher {
     return this.matchesTrackedFile(changedName, GIT_CONFIG_FILE_NAME);
   }
 
-  private matchesTrackedFile(changedName: string, trackedFile: string): boolean {
-    if (changedName === trackedFile || changedName === `${trackedFile}.lock`) {
+  private matchesTrackedFile(changedName: string, trackedFile: string, matchLock = true): boolean {
+    if (changedName === trackedFile || changedName.endsWith(`/${trackedFile}`)) {
       return true;
     }
-
-    if (changedName.endsWith(`/${trackedFile}`) || changedName.endsWith(`/${trackedFile}.lock`)) {
-      return true;
+    if (!matchLock) {
+      return false;
     }
-
-    return false;
+    const lockName = `${trackedFile}.lock`;
+    return changedName === lockName || changedName.endsWith(`/${lockName}`);
   }
 
   /** Handle git-internal file changes (HEAD, refs, reflog). Fast debounce. */
@@ -932,9 +997,9 @@ export class GitFileWatcher {
 
     // A git-internal write is where the tracked/ignored overlap can change:
     // `git add -f` of an ignored file writes the index, and a checkout can
-    // move a tracked file into an ignored directory. Drop the cached answer
+    // move a tracked file into an ignored directory. Drop the cached answers
     // rather than reasoning about which write it was.
-    this.trackedIgnoredProbe = null;
+    this.invalidateIgnoreAnswers();
 
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -1050,12 +1115,17 @@ export class GitFileWatcher {
         // Such a write can also create the tracked/ignored overlap the hazard
         // probe caches an answer about — newly ignoring a directory that holds
         // a tracked file — and that change reaches no watched git-internal
-        // file, so the cached answer has to be dropped here too.
-        this.trackedIgnoredProbe = null;
+        // file, so the cached answers have to be dropped here too.
+        this.invalidateIgnoreAnswers();
         this.pendingWorktreePaths = null;
         return;
       }
       pending.add(path);
+      if (event.type === "delete") {
+        this.pendingDeletedPaths.add(path);
+      } else {
+        this.pendingDeletedPaths.delete(path);
+      }
       if (pending.size > WORKTREE_BURST_PATH_CAP) {
         this.pendingWorktreePaths = null;
         return;
@@ -1181,6 +1251,32 @@ export class GitFileWatcher {
     return this.trackedIgnoredProbe;
   }
 
+  /**
+   * Stop trusting anything remembered about the ignore rules or the index. Only
+   * the remembering is fenced, not a burst decided by an answer already in
+   * flight: each event landing here brings its own later refresh, and that pass
+   * sees whatever such a burst wrote.
+   */
+  private invalidateIgnoreAnswers(): void {
+    this.trackedIgnoredProbe = null;
+    this.knownRelevantPaths = new Set();
+  }
+
+  /**
+   * A flush runs on a timer tick, where a throw would reach the workspace host's
+   * fatal `uncaughtException` handler. Logged, never retried.
+   */
+  private refreshAfterBurst(): void {
+    try {
+      this.onChange();
+    } catch (error) {
+      logWarn("Worktree status refresh threw while flushing a burst", {
+        path: this.worktreePath,
+        error: (error as Error)?.message ?? String(error),
+      });
+    }
+  }
+
   private abortClassification(): void {
     this.classifyGeneration += 1;
     if (this.classifyController) {
@@ -1205,6 +1301,8 @@ export class GitFileWatcher {
     // landing while they execute belongs to the next burst, not this one.
     const burst = this.pendingWorktreePaths;
     this.pendingWorktreePaths = new Set();
+    const deletedPaths = this.pendingDeletedPaths;
+    this.pendingDeletedPaths = new Set();
     const typedMembershipChange = this.pendingMembershipChange;
     this.pendingMembershipChange = false;
 
@@ -1216,6 +1314,10 @@ export class GitFileWatcher {
     this.abortClassification();
 
     if (this.disposed) return;
+
+    // An unknown burst may hold a rule edit nothing else reports: an overflow
+    // lost the event, and collection stops reading names once a burst is unknown.
+    if (burst === null) this.invalidateIgnoreAnswers();
 
     // Raw-filesystem signal first, and unconditionally: a browser subscriber
     // that only cares about files-on-disk shouldn't have to wait for the
@@ -1243,9 +1345,15 @@ export class GitFileWatcher {
       void this.verifyContentOnlyBurst([...burst], this.worktreeBurstStartedAt);
     }
 
+    // Dropped here, not as the delete arrives, so a classification answering
+    // between the two cannot put the path back after the fact.
+    const knownRelevant = this.knownRelevantPaths;
+    for (const path of deletedPaths) knownRelevant.delete(path);
+
+    // One relevant path decides the whole burst, so the rest need no answer.
     const paths = burst === null || superseded ? null : [...burst];
-    if (paths === null || paths.length === 0) {
-      this.onChange();
+    if (paths === null || paths.length === 0 || paths.some((path) => knownRelevant.has(path))) {
+      this.refreshAfterBurst();
       return;
     }
 
@@ -1270,6 +1378,13 @@ export class GitFileWatcher {
           // Skip only when EVERY path is provably irrelevant. A mixed burst
           // exits 0 too, so the exit code is not the test — membership is.
           if (!paths.every((path) => ignored.has(path))) {
+            for (const path of paths) {
+              if (!ignored.has(path) && !deletedPaths.has(path)) knownRelevant.add(path);
+            }
+            for (const oldest of knownRelevant) {
+              if (knownRelevant.size <= KNOWN_RELEVANT_PATH_CAP) break;
+              knownRelevant.delete(oldest);
+            }
             this.classifyController = null;
             this.onChange();
             return;

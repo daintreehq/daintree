@@ -39,12 +39,13 @@ import {
 import { BAND_GLYPH, BAND_GLYPH_TONE, PilotRunState } from "./PilotRunState";
 import { PilotFilterBar } from "./PilotFilterBar";
 import { PilotFooterHint } from "./PilotFooterHint";
-import { pilotDrillKeys, pilotParkKeys } from "./pilotKeys";
+import { PILOT_DRILL_COMBO, PILOT_PARK_COMBO } from "./pilotKeys";
 import { PilotParkEditor, type PilotGateCandidate, type PilotParkTarget } from "./PilotParkEditor";
 import { isMac } from "@/lib/platform";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import {
   usePaletteTreeNavigation,
@@ -52,7 +53,7 @@ import {
   type PaletteTreeGroupInput,
 } from "@/hooks/usePaletteTreeNavigation";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
-import { FolderGit2 } from "@/components/icons";
+import { FolderGit2, Sprout } from "@/components/icons";
 import { TILE_BASE, WorkspaceTile } from "./WorkspaceTile";
 // Direction glyphs, not app concepts, so they come straight from Lucide the way
 // every other chevron in the app does rather than through the icon aliases.
@@ -323,7 +324,8 @@ function GroupHeader({
 
       {/*
         The shared section-label treatment every other palette gives this
-        element — 10px, tracked, uppercase, muted. A project is structure, and
+        element — 10px, muted — though not its uppercase, since a name is spelled
+        as its owner spells it. A project is structure, and
         structure has to weigh less than the content it organises; the 14px
         semibold name plus a second coloured line outweighed the very rows it
         was meant to be filing.
@@ -333,7 +335,9 @@ function GroupHeader({
         time on the way past.
       */}
       <div aria-hidden="true" className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span className={cn(PALETTE_SECTION_LABEL_CLASS, "truncate")}>{group.name}</span>
+        <span className={cn(PALETTE_SECTION_LABEL_CLASS, "normal-case tracking-normal truncate")}>
+          {group.name}
+        </span>
         {/*
           Which workspace you are already in decides whether opening a run is
           instant or swaps the whole view, so it is worth a word. Muted and
@@ -356,7 +360,7 @@ function GroupHeader({
         <ChevronRight
           aria-hidden="true"
           data-testid="pilot-group-drill"
-          className="h-3 w-3 shrink-0 text-daintree-text/25"
+          className="h-3 w-3 shrink-0 text-text-muted"
         />
       )}
     </div>
@@ -375,21 +379,34 @@ function GroupHeader({
  * exists for the one project a renderer owns. The question this answers is
  * which unit of work owns these agents, not whether that branch is safe to push.
  */
-function WorktreeGroupHeader({ group }: { group: PilotWorktreeGroup }) {
+function WorktreeGroupHeader({
+  group,
+  isMainWorktree,
+}: {
+  group: PilotWorktreeGroup;
+  /** Only ever true for this view's own project, where its store tagged the id main. */
+  isMainWorktree: boolean;
+}) {
+  // The sidebar's sprout for the root checkout. The snapshot carries no branch,
+  // so every other worktree keeps the plain worktree glyph rather than a type
+  // mark guessed from its folder name.
+  const Glyph = isMainWorktree ? Sprout : FolderGit2;
   return (
     <div
       data-testid="pilot-worktree-header"
       className="flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none"
     >
       <div className={cn(TILE_BASE, "bg-tint/[0.04] text-muted-foreground")}>
-        <FolderGit2 className="h-2.5 w-2.5" aria-hidden="true" />
+        <Glyph className="h-2.5 w-2.5" aria-hidden="true" />
       </div>
 
       {/* Hidden for the reason the project heading's name is: the enclosing
           `role="group"` already carries it as the label for every option
           inside, so announcing it here would say it twice. */}
       <div aria-hidden="true" className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span className={cn(PALETTE_SECTION_LABEL_CLASS, "truncate")}>{group.name}</span>
+        <span className={cn(PALETTE_SECTION_LABEL_CLASS, "normal-case tracking-normal truncate")}>
+          {group.name}
+        </span>
       </div>
 
       <GroupDemandChip group={group} />
@@ -518,12 +535,7 @@ function RunRow({
         />
       </span>
 
-      <span
-        className={cn(
-          "min-w-0 flex-1 truncate text-sm leading-tight",
-          isSelected ? "text-text-primary" : "text-daintree-text/85"
-        )}
-      >
+      <span className="min-w-0 flex-1 truncate text-sm leading-tight text-text-primary">
         {row.title}
       </span>
 
@@ -552,7 +564,9 @@ function RunRow({
           className="flex max-w-[45%] min-w-0 shrink items-baseline gap-1 text-xs leading-tight text-text-secondary"
         >
           <span className="min-w-0 truncate">{row.canopyEvidence.claim}</span>
-          <span className="shrink-0">· {row.canopyEvidence.attribution}</span>
+          <span className="shrink-0">
+            <FactSeparator /> {row.canopyEvidence.attribution}
+          </span>
         </span>
       )}
 
@@ -616,8 +630,8 @@ function RunRow({
  * lift in one key, so the verb names the inverse once one is in force.
  */
 const PLUGIN_SHELF_VERB: Partial<Record<FleetBand, string>> = {
-  parked: "Unpark",
-  snoozed: "Wake now",
+  parked: "to unpark",
+  snoozed: "to wake now",
 };
 
 /**
@@ -687,7 +701,11 @@ function PluginPanelRow({
       >
         {plugin.reason !== null && <span className="min-w-0 truncate">{plugin.reason}</span>}
         <span className="shrink-0">
-          {plugin.reason !== null ? "· " : ""}
+          {plugin.reason !== null && (
+            <>
+              <FactSeparator />{" "}
+            </>
+          )}
           {`Reported by ${plugin.pluginName}`}
         </span>
       </span>
@@ -697,7 +715,7 @@ function PluginPanelRow({
 
 /**
  * `actionLabel` is null when nothing is listed, and the hint goes with it — a
- * footer offering "↵ Open" over a loading or empty list is chrome promising a
+ * footer offering "to open" over a loading or empty list is chrome promising a
  * key that visibly does nothing.
  *
  * What Enter does to the highlighted row is the whole of the left edge. Arrow
@@ -739,26 +757,35 @@ function PilotFooter({
   onShowSummary: (() => void) | null;
 }) {
   return (
-    <div className="flex w-full items-center justify-between gap-3">
-      <div className="-ml-1 flex items-center gap-2">
+    <div className="@container/pilot-footer flex w-full items-center justify-between gap-3">
+      <div className="-ml-1 flex min-w-0 items-center gap-2">
         {actionLabel !== null && (
-          <PilotFooterHint keys="↵" label={actionLabel} onClick={onOpen} testId="pilot-open-hint" />
+          <PilotFooterHint
+            keys="Enter"
+            label={actionLabel}
+            onClick={onOpen}
+            testId="pilot-open-hint"
+          />
         )}
         {parkLabel !== null && (
           <PilotFooterHint
-            keys={pilotParkKeys(isMac())}
+            keys={PILOT_PARK_COMBO}
             label={parkLabel}
             onClick={onPark}
             testId="pilot-park-hint"
           />
         )}
         {drillLabel !== null && (
-          <PilotFooterHint
-            keys={pilotDrillKeys(isMac())}
-            label={drillLabel}
-            onClick={onDrill}
-            testId="pilot-drill-hint"
-          />
+          // First to go in a narrow window, where three spelled-out chords no
+          // longer fit beside the summary: the heading still drills by mouse.
+          <span className="contents @max-[520px]/pilot-footer:hidden">
+            <PilotFooterHint
+              keys={PILOT_DRILL_COMBO}
+              label={drillLabel}
+              onClick={onDrill}
+              testId="pilot-drill-hint"
+            />
+          </span>
         )}
       </div>
       {summary &&
@@ -1831,7 +1858,7 @@ export function PilotView() {
   // something else. Gated on the bar still being here as well, because a bar
   // that unmounts while focused — the fleet drains, or the dialog closes —
   // never gets its blur, and the flag alone would suppress the hints for good.
-  const actionLabel = selectedRow === null || (isFilterFocused && showFilterBar) ? null : "Open";
+  const actionLabel = selectedRow === null || (isFilterFocused && showFilterBar) ? null : "to open";
 
   // The second verb rides the same gating as the first — no selection or a
   // focused filter segment drops both hints — plus one of its own: parking
@@ -1841,18 +1868,18 @@ export function PilotView() {
     actionLabel === null || selectedRow === null || selectedRow.kind !== "item"
       ? null
       : selectedRow.item.run === undefined
-        ? (PLUGIN_SHELF_VERB[selectedRow.item.band] ?? "Park")
+        ? (PLUGIN_SHELF_VERB[selectedRow.item.band] ?? "to park")
         : status.kind !== "live"
           ? null
           : selectedRow.item.band === "parked"
-            ? "Edit park"
-            : "Park";
+            ? "to edit park"
+            : "to park";
 
   // The drill verb rides the same "is a row actually actionable" gating as the
   // other two, and disappears with the target itself — a hint naming a chord
-  // that would do nothing is the same false promise as an "↵ Open" over an
+  // that would do nothing is the same false promise as "to open" over an
   // empty list.
-  const drillLabel = actionLabel === null || drillTarget === null ? null : "Worktrees";
+  const drillLabel = actionLabel === null || drillTarget === null ? null : "to show worktrees";
 
   return (
     // The park editor is the one thing Escape has to get past before the
@@ -1934,7 +1961,7 @@ export function PilotView() {
                   <ChevronLeft aria-hidden="true" />
                   All agents
                 </Button>
-                <span aria-hidden="true" className="shrink-0 text-daintree-text/25">
+                <span aria-hidden="true" className="shrink-0 text-text-muted">
                   /
                 </span>
                 <span data-testid="pilot-scope-name" className="min-w-0 truncate text-text-primary">
@@ -2181,7 +2208,17 @@ export function PilotView() {
                 className={groupIndex > 0 ? "mt-2" : undefined}
               >
                 {group.axis === "worktree" ? (
-                  <WorktreeGroupHeader group={group} />
+                  <WorktreeGroupHeader
+                    group={group}
+                    // The same three conditions the lead position rests on
+                    // (`buildPilotWorktreeGroups`): this view's own project, an
+                    // id its store tagged main, and a miss that costs only the mark.
+                    isMainWorktree={
+                      scopedProject?.isCurrent === true &&
+                      viewMainWorktreeId !== null &&
+                      group.worktreeId === viewMainWorktreeId
+                    }
+                  />
                 ) : group.axis === "plugin" ? (
                   <PluginGroupHeader group={group} />
                 ) : (

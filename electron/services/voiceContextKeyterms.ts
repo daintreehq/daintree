@@ -494,7 +494,9 @@ async function getTerminalLines(ptyClient: PtyClient, terminalId: string): Promi
 }
 
 // Bounds one dynamic read so leading speech isn't held up; a slow or failed
-// read yields `fallback`. The read itself isn't cancelled.
+// read yields `fallback`. The read itself isn't cancelled, which is why the
+// repository's files are read through the project I/O gate: an abandoned read
+// holds that project's one slot of Main's libuv pool, never another worker.
 export async function withinBudget<T>(
   read: Promise<T>,
   fallback: T,

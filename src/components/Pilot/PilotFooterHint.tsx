@@ -1,8 +1,6 @@
 import { cn } from "@/lib/utils";
-import { KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { KbdChord } from "@/components/ui/Kbd";
 import { Spinner } from "@/components/ui/Spinner";
-import { describeKeyCap } from "@/lib/kbdShortcut";
-import { isMac } from "@/lib/platform";
 
 /**
  * The footer's key hints, which are also its buttons.
@@ -16,12 +14,13 @@ import { isMac } from "@/lib/platform";
  * already describing.
  *
  * The keycap stays inside the button rather than beside it, so the accessible
- * name is "⌥↵ Park" and voice control's "click Park" still matches on the
- * visible word.
+ * name is the keys spoken by name and then the visible verb ("Option Return to
+ * park"), and it contains the words a voice-control user reads off the button.
  *
  * Shared by the list's footer and the park editor's, so the dialog speaks one
  * grammar for "this key does this" in both modes — the same grammar every
- * palette footer uses. `keys` is optional for a verb with no chord (Unpark).
+ * palette footer uses: the key drawn by `KbdChord`, then a lowercase "to …".
+ * `keys` is optional for a plain button with no chord (Unpark).
  *
  * `busy` works the way `Button`'s loading does, for the same two reasons: the
  * content goes invisible under a centred spinner so the footer never reflows,
@@ -38,6 +37,7 @@ export function PilotFooterHint({
   describedBy,
   noSubmit = false,
 }: {
+  /** A canonical combo ("Enter", "Alt+Enter"), drawn in the platform's own key names. */
   keys?: string;
   label: string;
   onClick: () => void;
@@ -61,21 +61,23 @@ export function PilotFooterHint({
       data-no-submit={noSubmit ? "" : undefined}
       data-testid={testId}
       className={cn(
-        "relative flex shrink-0 items-center rounded-[var(--radius-sm)] px-1 py-0.5 transition-colors",
+        "relative flex min-w-0 items-center rounded-[var(--radius-sm)] px-1 py-0.5 transition-colors",
         "hover:bg-overlay-subtle hover:text-text-primary disabled:pointer-events-none disabled:opacity-50",
         "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
       )}
     >
-      <span className={cn("flex items-center", busy && "invisible")}>
+      {/* The verb gives way before the keys do: off a Mac the chords are
+          spelled out, and three of them overrun a narrow Linux window. */}
+      <span className={cn("flex min-w-0 items-center", busy && "invisible")}>
         {keys !== undefined && (
+          // The space isn't rendered between flex items, but it keeps the
+          // spoken keys and the verb two words in the button's name ("Alt
+          // Enter to park") wherever the items aren't blockified.
           <>
-            <span className="sr-only">{describeKeyCap(keys, isMac())}</span>
-            <kbd aria-hidden="true" className={KBD_CLASS}>
-              {keys}
-            </kbd>
+            <KbdChord shortcut={keys} className="shrink-0" />{" "}
           </>
         )}
-        <span className={cn(keys !== undefined && "ml-1.5")}>{label}</span>
+        <span className={cn("min-w-0 truncate", keys !== undefined && "ml-1.5")}>{label}</span>
       </span>
       {busy && (
         <span className="absolute inset-0 flex items-center justify-center">

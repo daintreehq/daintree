@@ -331,6 +331,7 @@ beforeEach(() => {
   filterStore.setPrSearchQuery("");
   filterStore.setIssueFilter("open");
   filterStore.setPrFilter("open");
+  filterStore.setPrScope("all");
   filterStore.setIssueSortOrder("created");
   filterStore.setPrSortOrder("created");
   worktreeMap.clear();
@@ -2820,105 +2821,119 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
 });
 
 describe("GitHubResourceList polish (#7202)", () => {
-  it("state filter renders as a radiogroup with aria-checked + roving tabindex", async () => {
+  const openViewOptions = async () => {
+    const trigger = await screen.findByRole("button", { name: "View options" });
+    act(() => {
+      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    });
+    await screen.findByRole("menu");
+    return trigger;
+  };
+
+  const groupItems = (name: string) =>
+    Array.from(screen.getByRole("group", { name }).querySelectorAll('[role="menuitemradio"]')).map(
+      (item) => [item.textContent, item.getAttribute("aria-checked")]
+    );
+
+  it("puts state and sort, and involvement for PRs only, in labelled menu groups", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+    const issues = render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await openViewOptions();
+    expect(groupItems("State")).toEqual([
+      ["Open", "true"],
+      ["Closed", "false"],
+    ]);
+    expect(screen.queryByRole("group", { name: "Involvement" })).toBeNull();
+    expect(groupItems("Sort by")).toEqual([
+      ["Newest", "true"],
+      ["Recently updated", "false"],
+    ]);
+    issues.unmount();
+
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.setState({ prScope: "needs-review" });
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await openViewOptions();
+    expect(groupItems("State").map(([label]) => label)).toEqual(["Open", "Merged", "Closed"]);
+    expect(groupItems("Involvement")).toEqual([
+      ["All", "false"],
+      ["Mine", "false"],
+      ["Needs my review", "true"],
+    ]);
+  });
+
+  it("picks a state from the menu and hands focus back to the search field", async () => {
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await openViewOptions();
 
-    const group = await screen.findByRole("radiogroup", { name: /filter by state/i });
-    const radios = group.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    expect(radios.length).toBe(2); // Open, Closed for issues
-
-    const openRadio = radios[0]!;
-    const closedRadio = radios[1]!;
-    expect(openRadio.getAttribute("aria-checked")).toBe("true");
-    expect(openRadio.tabIndex).toBe(0);
-    expect(closedRadio.getAttribute("aria-checked")).toBe("false");
-    expect(closedRadio.tabIndex).toBe(-1);
-
-    // ArrowRight on the active radio moves checked state, tabindex, and focus to the next.
     act(() => {
-      openRadio.focus();
-      openRadio.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      screen.getByRole("menuitemradio", { name: "Closed" }).click();
     });
 
     await waitFor(() => {
-      const updated = group.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-      expect(updated[1]!.getAttribute("aria-checked")).toBe("true");
-      expect(updated[0]!.getAttribute("aria-checked")).toBe("false");
-      expect(updated[1]!.tabIndex).toBe(0);
-      expect(updated[0]!.tabIndex).toBe(-1);
-      expect(document.activeElement).toBe(updated[1]);
+      expect(useGitHubFilterStore.getState().issueFilter).toBe("closed");
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+    // The grid's keys live on the search field; a change that left focus on
+    // the trigger would leave the arrows and Enter dead.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByPlaceholderText(/search issues/i));
     });
   });
 
-  it("sort menu picks an order and hands focus back to the search field", async () => {
+  it("picks a sort order from the same menu and hands focus back to the search field", async () => {
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-
-    const sortButton = await screen.findByRole("button", { name: /^sort/i });
-    act(() => {
-      fireEvent.pointerDown(sortButton, { button: 0, ctrlKey: false });
-    });
-
-    const newest = await screen.findByRole("menuitemradio", { name: /newest/i });
-    expect(newest.getAttribute("aria-checked")).toBe("true");
-    const recent = screen.getByRole("menuitemradio", { name: /recently updated/i });
-    expect(recent.getAttribute("aria-checked")).toBe("false");
+    await openViewOptions();
 
     act(() => {
-      recent.click();
+      screen.getByRole("menuitemradio", { name: /recently updated/i }).click();
     });
 
     await waitFor(() => {
       expect(useGitHubFilterStore.getState().issueSortOrder).toBe("updated");
       expect(screen.queryByRole("menu")).toBeNull();
     });
-    // The grid's keys live on the search field; a sort change that left focus
-    // on the trigger would leave the arrows and Enter dead.
     await waitFor(() => {
       expect(document.activeElement).toBe(screen.getByPlaceholderText(/search issues/i));
     });
   });
 
-  it("sort popover trigger reflects open state via aria-expanded", async () => {
+  it("view options trigger reflects open state via aria-expanded", async () => {
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
-    const sortButton = await screen.findByRole("button", { name: /^sort/i });
-    expect(sortButton.getAttribute("aria-expanded")).toBe("false");
-
-    act(() => {
-      fireEvent.pointerDown(sortButton, { button: 0, ctrlKey: false });
-    });
-
+    const trigger = await screen.findByRole("button", { name: "View options" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await openViewOptions();
     await waitFor(() => {
-      expect(sortButton.getAttribute("aria-expanded")).toBe("true");
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
     });
   });
 
-  it("marks a non-default sort with a neutral lift, never a status badge", async () => {
+  it("marks a non-default view with a neutral lift, never a status badge", async () => {
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
 
-    // The default order is the baseline: whatever the lift is, it has to be a
+    // The default view is the baseline: whatever the lift is, it has to be a
     // difference from this, not a fixed class.
     const defaultView = render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-    const defaultSortClass = (await screen.findByRole("button", { name: /^sort/i })).className;
+    const defaultClass = (await screen.findByRole("button", { name: "View options" })).className;
     defaultView.unmount();
 
     useGitHubFilterStore.getState().setIssueSortOrder("updated");
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
-    const sortButton = await screen.findByRole("button", { name: /^sort/i });
-    // The old signal was a `bg-status-info` dot, which read as unread activity
-    // and said nothing about which order was in force.
-    expect(sortButton.querySelector("span.bg-status-info")).toBeNull();
-    expect(sortButton.classList.contains("text-status-info")).toBe(false);
-    expect(sortButton.className).not.toBe(defaultSortClass);
-    // ...and the order itself is now stated, not implied.
-    expect(sortButton.getAttribute("aria-label")).toMatch(/sorted by recently updated/i);
+    const trigger = await screen.findByRole("button", { name: "View options" });
+    // The old signal was a `bg-status-info` dot, which read as unread activity.
+    expect(trigger.querySelector("span.bg-status-info")).toBeNull();
+    expect(trigger.classList.contains("text-status-info")).toBe(false);
+    expect(trigger.className).not.toBe(defaultClass);
+    // A sort hides nothing, so it earns no filter line.
+    expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
   });
 
   it("declares aria-multiselectable as a capability, not as current state", async () => {
@@ -3349,12 +3364,12 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
   it("keeps the trigger in the header's fixed icon row, selection live or not", async () => {
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
 
-    // Same parent as Refresh and Sort — that row is the one whose height does
+    // Same parent as Refresh and View options — that row is the one whose height does
     // not move, which is the whole point of putting the control there.
     const sharesTheIconRow = async () => {
       const row = (await trigger()).parentElement;
       expect(row?.contains(screen.getByRole("button", { name: /refresh issues/i }))).toBe(true);
-      expect(row?.contains(screen.getByRole("button", { name: /^sort/i }))).toBe(true);
+      expect(row?.contains(screen.getByRole("button", { name: "View options" }))).toBe(true);
     };
 
     const view = render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
@@ -3381,11 +3396,11 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
     await screen.findByTestId("item-1");
 
-    // The header is the search/icon row plus the state tabs, and stays that
-    // way with a live selection. Nothing about the helpers is on the page
-    // until the menu is opened.
+    // At the default filters the header is the search/icon row alone, and
+    // stays that way with a live selection. Nothing about the helpers is on
+    // the page until the menu is opened.
     const header = (await trigger()).closest(".space-y-2");
-    expect(header?.children).toHaveLength(2);
+    expect(header?.children).toHaveLength(1);
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
@@ -4089,8 +4104,6 @@ describe("cold panel skeleton parity (#14415)", () => {
     "justify-self-start",
     "justify-self-end",
   ];
-  const SEGMENT_GEOMETRY = ["flex-1", "min-w-0", "px-2.5", "py-1", "text-xs", "font-medium"];
-  const TRACK_GEOMETRY = ["flex", "w-full", "p-0.5", "bg-surface-inset"];
 
   const pick = (el: Element, tokens: string[]) => tokens.filter((t) => el.classList.contains(t));
   const geometryOf = (el: Element, tokens: string[]) => ({
@@ -4099,24 +4112,20 @@ describe("cold panel skeleton parity (#14415)", () => {
   });
 
   function readLive(container: HTMLElement) {
-    const track = container.querySelector('[role="radiogroup"]')!;
     const footer = container.querySelector(".border-t.h-10")!;
     const field = container.querySelector(".search-field")!;
     const input = field.querySelector("input")!;
+    const line = container.querySelector('[id$="-filter-summary"]')?.parentElement ?? null;
     return {
-      headerClass: track.parentElement!.className,
+      headerClass: field.parentElement!.parentElement!.className,
       search: {
         size: field.getAttribute("data-size"),
         text: input.value || input.placeholder,
         clear: field.querySelector(".search-field-clear") !== null,
       },
-      track: pick(track, TRACK_GEOMETRY),
-      segments: Array.from(track.querySelectorAll('[role="radio"]')).map((el) =>
-        geometryOf(el, SEGMENT_GEOMETRY)
-      ),
-      checked: track.querySelector('[role="radio"][aria-checked="true"]')?.textContent,
-      sortLifted: screen
-        .getByRole("button", { name: /^Sort issues/ })
+      filterLine: line && { className: line.className, text: line.textContent },
+      optionsLifted: screen
+        .getByRole("button", { name: "View options" })
         .classList.contains("bg-overlay-soft"),
       selectDimmed: (screen.getByRole("button", { name: "Select issues" }) as HTMLButtonElement)
         .disabled,
@@ -4129,8 +4138,8 @@ describe("cold panel skeleton parity (#14415)", () => {
 
   function readSkeleton(container: HTMLElement) {
     const field = container.querySelector("[data-search-field]")!;
-    const track = container.querySelector("[data-segment]")!.parentElement!;
     const footer = container.querySelector("[data-panel-footer]")!;
+    const line = container.querySelector("[data-filter-summary]");
     return {
       headerClass: field.parentElement!.parentElement!.className,
       search: {
@@ -4138,14 +4147,9 @@ describe("cold panel skeleton parity (#14415)", () => {
         text: field.textContent,
         clear: field.querySelector(".search-field-clear") !== null,
       },
-      track: pick(track, TRACK_GEOMETRY),
-      segments: Array.from(track.querySelectorAll("[data-segment]")).map((el) =>
-        geometryOf(el, SEGMENT_GEOMETRY)
-      ),
-      checked: container.querySelector("[data-skeleton-thumb]")?.closest("[data-segment]")
-        ?.textContent,
-      sortLifted: container
-        .querySelector('[data-header-slot="sort"]')!
+      filterLine: line && { className: line.className, text: line.textContent },
+      optionsLifted: container
+        .querySelector('[data-header-slot="view-options"]')!
         .classList.contains("bg-overlay-soft"),
       selectDimmed: container
         .querySelector('[data-header-slot="select"]')!
@@ -4176,8 +4180,8 @@ describe("cold panel skeleton parity (#14415)", () => {
 
   it("matches the loading list at its defaults", async () => {
     const shape = await compare({});
-    expect(shape.checked).toBe("Open");
-    expect(shape.sortLifted).toBe(false);
+    expect(shape.filterLine).toBeNull();
+    expect(shape.optionsLifted).toBe(false);
     expect(shape.search.clear).toBe(false);
     expect(shape.selectDimmed).toBe(true);
     expect(shape.footerColumns).toHaveLength(3);
@@ -4189,8 +4193,239 @@ describe("cold panel skeleton parity (#14415)", () => {
       issueSortOrder: "updated",
       issueSearchQuery: "skeleton",
     });
-    expect(shape.checked).toBe("Closed");
-    expect(shape.sortLifted).toBe(true);
+    expect(shape.filterLine?.text).toBe("Showing closed issuesClear filters");
+    expect(shape.optionsLifted).toBe(true);
     expect(shape.search).toMatchObject({ text: "skeleton", clear: true });
+  });
+});
+
+describe("GitHubResourceList — Mine and Needs my review (#16384)", () => {
+  const lastPRSearch = () => mockListPRs.mock.calls.at(-1)?.[0]?.search;
+  const pickScope = async (name: string) => {
+    act(() => {
+      fireEvent.pointerDown(screen.getByRole("button", { name: "View options" }), {
+        button: 0,
+        ctrlKey: false,
+      });
+    });
+    const item = await screen.findByRole("menuitemradio", { name });
+    act(() => {
+      item.click();
+    });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  };
+  const filterLine = () => document.querySelector('[id$="-filter-summary"]')?.textContent ?? null;
+
+  it("narrows to the user's own PRs from the menu and Clear filters returns to the full list", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
+    expect(lastPRSearch()).toBeUndefined();
+    expect(filterLine()).toBeNull();
+
+    await pickScope("Mine");
+    await waitFor(() => expect(lastPRSearch()).toBe("author:@me"));
+    expect(useGitHubFilterStore.getState().prScope).toBe("mine");
+    expect(filterLine()).toBe("Showing open pull requests by you");
+
+    act(() => {
+      screen.getAllByRole("button", { name: "Clear filters" })[0]!.click();
+    });
+    await waitFor(() => expect(lastPRSearch()).toBeUndefined());
+    expect(useGitHubFilterStore.getState().prScope).toBe("all");
+    expect(filterLine()).toBeNull();
+  });
+
+  it("asks for PRs requesting the user's review", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
+
+    await pickScope("Needs my review");
+    await waitFor(() => expect(lastPRSearch()).toBe("review-requested:@me"));
+    expect(filterLine()).toBe("Showing open pull requests waiting on your review");
+  });
+
+  it("keeps the two scopes exclusive", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
+
+    await pickScope("Mine");
+    await pickScope("Needs my review");
+    await waitFor(() => expect(lastPRSearch()).toBe("review-requested:@me"));
+    expect(useGitHubFilterStore.getState().prScope).toBe("needs-review");
+  });
+
+  it("describes only the involvement an exact number lookup can apply", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setPrScope("mine");
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(filterLine()).toBe("Showing open pull requests by you"));
+    const search = screen.getByPlaceholderText(/search pull requests/i);
+    expect(search.getAttribute("aria-describedby")).toBeTruthy();
+
+    act(() => {
+      useGitHubFilterStore.getState().setPrSearchQuery("#123");
+    });
+    await waitFor(() => expect(filterLine()).toBeNull());
+    expect(search.getAttribute("aria-describedby")).toBeNull();
+  });
+
+  it("combines with the state filter and the search box", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setPrFilter("merged");
+    useGitHubFilterStore.getState().setPrSearchQuery("retry");
+    useGitHubFilterStore.getState().setPrScope("mine");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(lastPRSearch()).toBe("author:@me retry"));
+    expect(mockListPRs.mock.calls.at(-1)?.[0]?.state).toBe("merged");
+  });
+
+  it("is not offered on the issue list, which ignores a stored PR scope", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setPrScope("mine");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Mine" })).toBeNull();
+    expect(mockListIssues.mock.calls.at(-1)?.[0]?.search).toBeUndefined();
+  });
+
+  it("leaves the open-count badge alone, since a scoped page is not the open total", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([], 7));
+    useGitHubFilterStore.getState().setPrScope("mine");
+    const onCountUpdate = vi.fn();
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" onCountUpdate={onCountUpdate} />);
+
+    await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
+    await act(async () => {});
+    expect(onCountUpdate).not.toHaveBeenCalled();
+  });
+
+  it("never paints the unscoped cached page for a scoped view, nor writes the scoped page into it", async () => {
+    const prKey = buildCacheKey("/test/proj", "pr", "open", "created");
+    setCache(prKey, {
+      items: [makeIssue(40)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+    });
+    useGitHubFilterStore.getState().setPrScope("mine");
+    let release: (page: Page<Issue>) => void = () => {};
+    mockListPRs.mockReturnValue(new Promise<Page<Issue>>((resolve) => (release = resolve)));
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(lastPRSearch()).toBe("author:@me"));
+    expect(screen.queryByTestId("item-40")).toBeNull();
+
+    await act(async () => {
+      release(makeResponse([makeIssue(41)]));
+    });
+    await waitFor(() => expect(screen.getByTestId("item-41")).toBeTruthy());
+    expect(getCache(prKey)?.items.map((i) => i.number)).toEqual([40]);
+  });
+
+  it("restores the unscoped cached page when the scope is cleared", async () => {
+    const prKey = buildCacheKey("/test/proj", "pr", "open", "created");
+    setCache(prKey, {
+      items: [makeIssue(40)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+    });
+    // Only the first unscoped request answers: the one after clearing the scope
+    // stays open, so item 40 can only come back from the cached slot.
+    let unscopedCalls = 0;
+    mockListPRs.mockImplementation((opts: ListOptions) => {
+      if (opts.search) return Promise.resolve(makeResponse([makeIssue(41)]));
+      unscopedCalls += 1;
+      return unscopedCalls === 1
+        ? Promise.resolve(makeResponse([makeIssue(40)]))
+        : new Promise<Page<Issue>>(() => {});
+    });
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByTestId("item-40")).toBeTruthy());
+
+    await pickScope("Mine");
+    await waitFor(() => expect(screen.getByTestId("item-41")).toBeTruthy());
+    expect(screen.queryByTestId("item-40")).toBeNull();
+
+    await pickScope("All");
+    await waitFor(() => expect(screen.getByTestId("item-40")).toBeTruthy());
+  });
+
+  it("says an exact number lookup is not narrowed by the scope", async () => {
+    mockGetPRByNumber.mockResolvedValue(makeIssue(12));
+    useGitHubFilterStore.getState().setPrScope("mine");
+    useGitHubFilterStore.getState().setPrSearchQuery("#12");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing PR #12 · Mine not applied")).toBeTruthy();
+    });
+  });
+
+  it("names the scope in the empty state and clears it with the action", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setPrScope("needs-review");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No pull requests waiting on your review in this view")).toBeTruthy();
+    });
+    expect(screen.queryByText("No open pull requests")).toBeNull();
+    // The filter line offers the same action; this is the empty state's.
+    const clears = screen.getAllByRole("button", { name: "Clear filters" });
+    expect(clears).toHaveLength(2);
+    act(() => {
+      clears.at(-1)!.click();
+    });
+    expect(useGitHubFilterStore.getState().prScope).toBe("all");
+  });
+
+  it("leaves the scope off the browser query for an exact number lookup", async () => {
+    mockGetPRByNumber.mockResolvedValue(makeIssue(12));
+    dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+    useGitHubFilterStore.getState().setPrScope("mine");
+    useGitHubFilterStore.getState().setPrSearchQuery("#12");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByText(/Mine not applied/)).toBeTruthy());
+
+    act(() => {
+      screen.getByRole("button", { name: "View on GitHub" }).click();
+    });
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "forge.openPRs",
+      { projectPath: "/test/proj", query: "#12", state: "open" },
+      { source: "user" }
+    );
+  });
+
+  it("hands the scope to GitHub with Open on GitHub", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+    useGitHubFilterStore.getState().setPrScope("mine");
+    useGitHubFilterStore.getState().setPrSearchQuery("retry");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
+
+    act(() => {
+      screen.getByRole("button", { name: "View on GitHub" }).click();
+    });
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "forge.openPRs",
+      { projectPath: "/test/proj", query: "author:@me retry", state: "open" },
+      { source: "user" }
+    );
   });
 });

@@ -57,6 +57,7 @@ import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { onRendererScopeChanged } from "../window/webContentsRegistry.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
 import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
+import { handleAgentResumeOwned } from "./mcp-server/agentResumeOwned.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
 import { handleProjectRunCommand } from "./mcp-server/projectCommand.js";
 import {
@@ -403,15 +404,7 @@ export class McpServerService {
     this.workerSteerQueue = new WorkerSteerQueue({
       enqueueWake: (pane, projectId, wake) =>
         this.terminalNotify.enqueueWake(pane, projectId, wake),
-      // The worker's own line, so a notice it arms later joins this one
-      // rather than replacing it.
-      paneFor: (terminalId) => {
-        const principal = this.workerPrincipalResolver?.(terminalId) ?? null;
-        return {
-          key: principal !== null ? paneNotifyKey(principal) : workerNotifyKey(terminalId),
-          terminalId,
-        };
-      },
+      paneFor: (terminalId) => this.workerNoticePane(terminalId),
       getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
       getTerminalProjectId: (terminalId) =>
         getPtyClient()?.getTerminalProjectId(terminalId) ?? null,
@@ -527,8 +520,10 @@ export class McpServerService {
         handleProjectRunCheck(rawArgs, signal, authorize),
       handleProjectRunCommand: (rawArgs, signal, authorize) =>
         handleProjectRunCommand(rawArgs, signal, authorize),
-      handleTerminalGetStatusViewless: (rawArgs, workspaceId, admittedAssistants) =>
-        handleTerminalGetStatusViewless(rawArgs, workspaceId, admittedAssistants),
+      handleAgentResumeOwned: (rawArgs, projectId, signal, authorize) =>
+        handleAgentResumeOwned(rawArgs, projectId, signal, authorize),
+      handleTerminalGetStatusViewless: (rawArgs, workspaceId, admittedAssistants, admittedGlobal) =>
+        handleTerminalGetStatusViewless(rawArgs, workspaceId, admittedAssistants, admittedGlobal),
       machineName: () => (localMachineName ??= machineDisplayName()),
       readCodexQuota: async () => {
         const { readCodexQuota } = await import("./codex/CodexQuotaService.js");
@@ -741,7 +736,23 @@ export class McpServerService {
     this.workerPrincipalResolver = resolver;
   }
 
-  /** Where the global Assistant's prompts for busy workers are held (#16187). */
+  /**
+   * A terminal's own notice line, for a wake no MCP call of its own queued: a
+   * notice it arms later joins this one rather than replacing it. An
+   * assistant's is its help session's (#16620), the line its own notices
+   * ride, since a line opened for the terminal under another key ends that one.
+   */
+  workerNoticePane(terminalId: string): OwnPane {
+    const helpSessionId = this.getSessionIdForTerminal(terminalId);
+    if (helpSessionId !== null) return { key: helpNotifyKey(helpSessionId), terminalId };
+    const principal = this.workerPrincipalResolver?.(terminalId) ?? null;
+    return {
+      key: principal !== null ? paneNotifyKey(principal) : workerNotifyKey(terminalId),
+      terminalId,
+    };
+  }
+
+  /** Where prompts held for a busy worker or assistant wait (#16187, #16620). */
   getWorkerSteerQueue(): WorkerSteerQueue {
     return this.workerSteerQueue;
   }

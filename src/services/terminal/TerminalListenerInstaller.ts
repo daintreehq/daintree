@@ -12,6 +12,7 @@ import {
   isNonKeyboardInput,
   isTerminalReply,
 } from "./inputUtils";
+import { takeCanopySize } from "./canopySizeHolds";
 import { installLinuxPrimarySelectionListeners } from "./primarySelection";
 import { writeTerminalInputOrFleet } from "./fleetInputRouter";
 import {
@@ -345,6 +346,7 @@ export function installTerminalBoundListeners(
 ): void {
   const hostElement = managed.hostElement;
   const initialIsAltBuffer = terminal.buffer.active.type === "alternate";
+  const wasAltBuffer = managed.isAltBuffer === true;
   managed.isAltBuffer = initialIsAltBuffer;
 
   const bufferDisposable = terminal.buffer.onBufferChange(() => {
@@ -356,8 +358,10 @@ export function installTerminalBoundListeners(
   });
   managed.listeners.push(() => bufferDisposable.dispose());
 
-  if (initialIsAltBuffer) {
-    deps.onBufferModeChange(id, true);
+  // A rebuilt terminal can start on the main screen under subscribers that last
+  // heard "alternate"; without this they keep reporting a screen it left.
+  if (initialIsAltBuffer || wasAltBuffer) {
+    deps.onBufferModeChange(id, initialIsAltBuffer);
   }
 
   // Padding extension (#13160): re-sample the grid's edge backgrounds after a
@@ -724,14 +728,21 @@ export function installTerminalBoundListeners(
       viewportAnchor.cancel();
     }
   };
+  // A click is the user's as a keystroke is, in a program that reports the
+  // mouse or not. Focus arriving by any other road takes nothing.
+  const takeSizeOnPress = (e: PointerEvent) => {
+    if (e.button === 0) takeCanopySize(id);
+  };
   hostElement.addEventListener("wheel", cancelAnchorOnWheel, { capture: true, passive: true });
   hostElement.addEventListener("keydown", cancelAnchorOnKey, { capture: true });
   hostElement.addEventListener("pointerdown", cancelAnchorOnScrollbar, { capture: true });
+  hostElement.addEventListener("pointerdown", takeSizeOnPress, { capture: true });
   hostElement.addEventListener("touchstart", cancelAnchorOnWheel, { capture: true, passive: true });
   managed.listeners.push(() => {
     hostElement.removeEventListener("wheel", cancelAnchorOnWheel, { capture: true });
     hostElement.removeEventListener("keydown", cancelAnchorOnKey, { capture: true });
     hostElement.removeEventListener("pointerdown", cancelAnchorOnScrollbar, { capture: true });
+    hostElement.removeEventListener("pointerdown", takeSizeOnPress, { capture: true });
     hostElement.removeEventListener("touchstart", cancelAnchorOnWheel, { capture: true });
   });
 
@@ -965,7 +976,10 @@ export function installTerminalBoundListeners(
       if (isTerminalReply(data)) terminalClient.writeReply(id, data);
       return;
     }
-    if (!isTerminalReply(data) && !isMouseReport(data)) deps.noteUserInput(id);
+    if (!isTerminalReply(data) && !isMouseReport(data)) {
+      deps.noteUserInput(id);
+      takeCanopySize(id);
+    }
     const nonKeyboard = isNonKeyboardInput(data);
     if (nonKeyboard) {
       if (data === "\x1b") {

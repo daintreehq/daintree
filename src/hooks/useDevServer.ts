@@ -6,6 +6,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { onHostResync } from "@/store/hostResyncSignal";
 import { onDevPreviewResume } from "@/store/devPreviewResumeSignal";
+import { onDevPreviewStopRequested } from "@/store/devPreviewStopSignal";
 
 export type DevPreviewStatus =
   "stopped" | "starting" | "installing" | "running" | "stopping" | "error" | "restored-stopped";
@@ -99,8 +100,16 @@ const offDevPreviewResume = onDevPreviewResume(({ panelIds }) => {
   for (const panelId of panelIds) persistedEnsureCache.delete(panelId);
 });
 
+// Module scope for the same reason: the pane is gone before Main's stopped event
+// lands, and a panel that comes back must ensure again. Its ensure queues behind
+// the stop in Main, so a restore while the server is still going down is covered.
+const offDevPreviewStopRequested = onDevPreviewStopRequested((panelId) => {
+  persistedEnsureCache.delete(panelId);
+});
+
 if (import.meta.hot) {
   import.meta.hot.dispose(offDevPreviewResume);
+  import.meta.hot.dispose(offDevPreviewStopRequested);
 }
 
 function serializeEnv(env?: Record<string, string>): string {

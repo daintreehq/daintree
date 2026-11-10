@@ -9,15 +9,12 @@ import React, {
   type ReactNode,
 } from "react";
 import {
-  Bell,
-  BellOff,
   ChevronDown,
   CirclePlay,
   CopyPlus,
   DatabaseBackup,
   Ellipsis,
   Grid2X2,
-  Lock,
   Maximize2,
   Minimize2,
   PanelBottomClose,
@@ -31,7 +28,6 @@ import {
   Settings,
   ShieldAlert,
   Trash2,
-  Unlock,
   X,
 } from "lucide-react";
 import {
@@ -92,9 +88,12 @@ import { usePanelStore } from "@/store/panelStore";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { PopoverAnchor } from "@/components/ui/popover";
@@ -465,10 +464,12 @@ function PanelHeaderComponent({
   const moveToDockShortcut = useEffectiveCombo("terminal.moveToDock");
   const maximizeShortcut = useEffectiveCombo("terminal.maximize");
   const closeShortcut = useEffectiveCombo("terminal.close");
+  const watchShortcut = useEffectiveCombo("terminal.watch");
   const duplicateAriaShortcut = useAriaKeyshortcuts("terminal.duplicate");
   const moveToDockAriaShortcut = useAriaKeyshortcuts("terminal.moveToDock");
   const maximizeAriaShortcut = useAriaKeyshortcuts("terminal.maximize");
   const closeAriaShortcut = useAriaKeyshortcuts("terminal.close");
+  const watchAriaShortcut = useAriaKeyshortcuts("terminal.watch");
   const addTabTooltipContent = createTooltipContent(
     "Duplicate panel as new tab",
     duplicateShortcut
@@ -1090,9 +1091,11 @@ function PanelHeaderComponent({
         align="end"
         className="min-w-[200px] max-w-[320px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
       >
-        {hiddenTabs.map((tab) => (
-          <HiddenTabMenuItem key={tab.id} tab={tab} onSelect={() => onTabClick?.(tab.id)} />
-        ))}
+        <DropdownMenuRadioGroup value={hiddenTabs.find((tab) => tab.isActive)?.id ?? ""}>
+          {hiddenTabs.map((tab) => (
+            <HiddenTabMenuItem key={tab.id} tab={tab} onSelect={() => onTabClick?.(tab.id)} />
+          ))}
+        </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -1647,7 +1650,7 @@ function PanelHeaderComponent({
             <Grid2X2 className="w-3 h-3 shrink-0" aria-hidden="true" />
             <span className="whitespace-pre">
               <AnimatedLabel label={String(activeCount)} textClassName="tabular-nums" />{" "}
-              {pluralNoun(activeCount, "other pane")}
+              {pluralNoun(activeCount, "other panel")}
             </span>
           </span>
           {workingCount > 0 && (
@@ -1813,7 +1816,7 @@ function PanelHeaderComponent({
                   {canRestart && onRestart && (
                     <DropdownMenuItem onSelect={handleRestartSelect} data-testid="panel-restart">
                       <RotateCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      Restart session
+                      Restart terminal
                     </DropdownMenuItem>
                   )}
 
@@ -1915,7 +1918,8 @@ function PanelHeaderComponent({
                     </DropdownMenuItem>
                   )}
                   {hasPty && (
-                    <DropdownMenuItem
+                    <DropdownMenuCheckboxItem
+                      checked={isInputLocked}
                       onSelect={() =>
                         void actionService.dispatch(
                           "terminal.toggleInputLock",
@@ -1924,23 +1928,18 @@ function PanelHeaderComponent({
                         )
                       }
                     >
-                      {isInputLocked ? (
-                        <Unlock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      ) : (
-                        <Lock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      )}
-                      {isInputLocked ? "Unlock input" : "Lock input"}
-                    </DropdownMenuItem>
+                      Lock input
+                    </DropdownMenuCheckboxItem>
                   )}
                   {showWatchButton && (
-                    <DropdownMenuItem onSelect={handleWatchToggle}>
-                      {isWatched ? (
-                        <BellOff className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      ) : (
-                        <Bell className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      )}
-                      {isWatched ? "Cancel watch" : "Watch"}
-                    </DropdownMenuItem>
+                    <DropdownMenuCheckboxItem
+                      checked={isWatched}
+                      onSelect={handleWatchToggle}
+                      aria-keyshortcuts={watchAriaShortcut}
+                    >
+                      Watch
+                      <DropdownMenuShortcut shortcut={watchShortcut} />
+                    </DropdownMenuCheckboxItem>
                   )}
 
                   {/* Header actions slot */}
@@ -2111,7 +2110,7 @@ function PanelHeaderComponent({
               aria-label={formatShortcutForTooltip(
                 location === "dock"
                   ? "Dismiss preview. Hold Alt and click to force close without recovery."
-                  : "Close session. Hold Alt and click to force close without recovery."
+                  : "Close panel. Hold Alt and click to force close without recovery."
               )}
               // Dock previews dismiss non-destructively; the terminal.close chord
               // (Cmd+W) still trashes the focused panel, so don't advertise it as
@@ -2125,7 +2124,7 @@ function PanelHeaderComponent({
             <div className="flex flex-col gap-1">
               {location === "dock"
                 ? createTooltipContent("Dismiss preview")
-                : createTooltipContent("Close session", closeShortcut)}
+                : createTooltipContent("Close panel", closeShortcut)}
               <span className="text-text-secondary text-2xs">
                 {formatShortcutForTooltip("Alt+Click to force close")}
               </span>

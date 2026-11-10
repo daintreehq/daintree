@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { SettingsRow } from "../SettingsGroup";
 import { stripCcrPrefix } from "./scopeUtils";
 import type { AgentPreset } from "@/config/agents";
-import { resolveDangerousMode, resolveInlineMode } from "@shared/types";
+import { resolveDangerousMode } from "@shared/types";
 import { isSecretEnvEntry, maskSecretValue } from "@/utils/secretDetection";
 
 interface ReadOnlyDetailProps {
@@ -15,8 +15,6 @@ interface ReadOnlyDetailProps {
   agentCustomFlags: string;
   /** Resolved the way a launch resolves them, preset over agent over global. */
   effectiveSkipPerms: boolean;
-  /** Undefined for agents without a screen-mode choice. */
-  effectiveInline: boolean | undefined;
   onDuplicate: (preset: AgentPreset) => void;
 }
 
@@ -32,7 +30,6 @@ export function ReadOnlyDetail({
   agentName,
   agentCustomFlags,
   effectiveSkipPerms,
-  effectiveInline,
   onDuplicate,
 }: ReadOnlyDetailProps) {
   const displayName =
@@ -48,7 +45,6 @@ export function ReadOnlyDetail({
   const presetSetsArgs = selectedPreset.customFlags !== undefined;
   const args = presetSetsArgs ? selectedPreset.customFlags : agentCustomFlags;
   const presetSetsSkip = resolveDangerousMode(selectedPreset) !== "inherit";
-  const presetSetsInline = resolveInlineMode(selectedPreset) !== "inherit";
 
   const value = (text: string) => <span className="text-sm text-text-primary">{text}</span>;
 
@@ -157,13 +153,6 @@ export function ReadOnlyDetail({
         description={presetSetsSkip ? fromPreset : fromAgent}
         control={value(effectiveSkipPerms ? "On" : "Off")}
       />
-      {effectiveInline !== undefined && (
-        <SettingsRow
-          label="Alt-screen mode"
-          description={presetSetsInline ? fromPreset : fromAgent}
-          control={value(effectiveInline ? "Inline" : "Alt screen")}
-        />
-      )}
     </>
   );
 }

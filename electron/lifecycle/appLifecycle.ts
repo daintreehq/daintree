@@ -8,6 +8,7 @@ import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
 import { noteWindowClosing, refreshOpenWindowMenu } from "../windowMenuState.js";
 import { onWindowTitlesChanged } from "../window/windowTitle.js";
+import { getProjectlessWindows } from "../window/projectlessViews.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
 import { finishIfGroupStop } from "./groupStop.js";
@@ -609,9 +610,16 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
       if (plainRelaunch) focusWindow(liveWindow);
       return;
     }
+    // Only a window with no project is up. It answers a plain relaunch; an
+    // install needs a project window, so that goes on to get one.
+    const projectlessWindow = getProjectlessWindows()[0];
+    if (projectlessWindow && plainRelaunch && dntrPaths.length === 0) {
+      focusWindow(projectlessWindow);
+      return;
+    }
     // Unless this process runs windowless, a relaunch with nothing on screen
     // behaves as it always has (the folder routing above still applies).
-    if (!opts.keepsRunningWithoutWindows?.() && !stopWaitingOnRuns) return;
+    if (!opts.keepsRunningWithoutWindows?.() && !stopWaitingOnRuns && !projectlessWindow) return;
     if (!app.isReady() || !(opts.isLaunchSettled?.() ?? true)) {
       // The launch is still bringing up its own windows or its windowless
       // Host; decided once it has, against whatever is on screen then.
@@ -644,8 +652,9 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   const closingQuits = (win: BrowserWindow): boolean => {
     if (getActiveShutdown() !== null || isWindowRecreating()) return false;
     if (opts.keepsRunningWithoutWindows?.() || opts.scheduledRuns?.hasOpen()) return false;
+    // A window with no project keeps the process up too, unlisted as it is.
     const others = opts.windowRegistry
-      ? opts.windowRegistry.all().map((ctx) => ctx.browserWindow)
+      ? [...opts.windowRegistry.all().map((ctx) => ctx.browserWindow), ...getProjectlessWindows()]
       : BrowserWindow.getAllWindows();
     return others.every((other) => other === win || other.isDestroyed());
   };

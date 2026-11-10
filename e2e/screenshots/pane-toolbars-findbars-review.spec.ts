@@ -583,7 +583,7 @@ async function captureDiffPane(run: Run, worktreeId: string): Promise<void> {
     await settle(page, 1200);
 
     const listToggle = footer.getByRole("button", { name: "Toggle file list" });
-    const viewed = footer.getByRole("button", { name: "Viewed" });
+    const viewed = footer.getByRole("checkbox", { name: "Viewed" });
     const prev = footer.getByRole("button", { name: "Previous file" });
     const position = footer.locator('[data-testid="diff-file-position-indicator"]');
 
@@ -592,7 +592,7 @@ async function captureDiffPane(run: Run, worktreeId: string): Promise<void> {
       await listToggle.click();
       await settle(page, 300);
     }
-    if ((await viewed.getAttribute("aria-pressed")) === "true") {
+    if ((await viewed.getAttribute("aria-checked")) === "true") {
       await viewed.click();
       await settle(page, 300);
     }
@@ -623,7 +623,7 @@ async function captureDiffPane(run: Run, worktreeId: string): Promise<void> {
       if (!match || Number(match[1]) < 3) throw new Error(`position indicator reads "${text}"`);
       await expectAttr(prev, "aria-disabled", "true", "Previous file on the first file");
       await expectAttr(listToggle, "aria-expanded", "false", "file list toggle");
-      await expectAttr(viewed, "aria-pressed", "false", "Viewed toggle");
+      await expectAttr(viewed, "aria-checked", "false", "Viewed toggle");
       await snap(page, "diffpane-footer", theme, [footer]);
     });
 
@@ -635,7 +635,7 @@ async function captureDiffPane(run: Run, worktreeId: string): Promise<void> {
       await parkPointer(page);
       await settle(page, 500);
       await expectAttr(listToggle, "aria-expanded", "true", "file list toggle");
-      await expectAttr(viewed, "aria-pressed", "true", "Viewed toggle");
+      await expectAttr(viewed, "aria-checked", "true", "Viewed toggle");
       await snap(page, "diffpane-footer-pressed", theme, [footer]);
       await viewed.click();
       await settle(page, 300);

@@ -1,6 +1,6 @@
 import type { PanelInstance, PtyPanelData, TerminalInstance } from "../types/panel.js";
 import { isPtyPanel } from "../types/panel.js";
-import { AGENT_REGISTRY } from "../config/agentRegistry.js";
+import { getEffectiveAgentConfig } from "../config/agentRegistry.js";
 import { isUselessTitle } from "./isUselessTitle.js";
 import { cleanTaskTitle, stripIdentityAffixes } from "./taskTitle.js";
 
@@ -95,9 +95,10 @@ interface ObservedTask {
 // Bounded memo over the exact fields `computeObservedTask` reads. Title
 // surfaces (tab strips, headers, dock rows) re-derive titles on every
 // panel-store flush — per animation frame during agent output — while the
-// inputs only change on real title/identity transitions. AGENT_REGISTRY is
-// static, so the six fields fully determine the result. FIFO eviction: the
-// live working set is panels × recent titles, far below the cap.
+// inputs only change on real title/identity transitions. A plugin agent's name
+// and command arrive or change with its plugin, so they are part of the key.
+// FIFO eviction: the live working set is panels × recent titles, far below
+// the cap.
 const OBSERVED_TASK_CACHE_MAX = 500;
 const observedTaskCache = new Map<string, ObservedTask | null>();
 
@@ -105,9 +106,15 @@ function getObservedTask(panel: TitledPanel): ObservedTask | null {
   // JSON-encoded tuple: field values are OSC/terminal-controlled strings, so
   // a delimiter-join could collide across positions; JSON escaping cannot.
   // null stands in for undefined to keep it distinct from an empty string.
+  const agent =
+    panel.detectedAgentId === undefined
+      ? undefined
+      : getEffectiveAgentConfig(panel.detectedAgentId);
   const key = JSON.stringify([
     panel.titleMode ?? "default",
     panel.detectedAgentId ?? null,
+    agent?.name ?? null,
+    agent?.command ?? null,
     panel.agentState === "exited",
     panel.lastObservedTitle ?? null,
     panel.title,
@@ -156,7 +163,7 @@ function computeObservedTask(panel: TitledPanel): ObservedTask | null {
   if (panel.detectedAgentId === undefined || panel.agentState === "exited") return null;
   const cleaned = cleanTaskTitle(panel.lastObservedTitle);
   if (!cleaned || isUselessTitle(cleaned)) return null;
-  const agent = AGENT_REGISTRY[panel.detectedAgentId];
+  const agent = getEffectiveAgentConfig(panel.detectedAgentId);
   const identity = new Set([
     ...titleTokens(panel.title),
     ...titleTokens(agent?.name),

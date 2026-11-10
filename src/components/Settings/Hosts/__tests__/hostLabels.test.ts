@@ -52,7 +52,7 @@ describe("connectionLabel", () => {
       { status: "connecting", attempt: 4, restarting: true },
       { status: "unreachable", lastSeenAt: 1, detail: "no host.json", restarting: true },
     ] as const) {
-      expect(connectionLabel(state)).toBe("Restarting");
+      expect(connectionLabel(state)).toBe("Restarting…");
     }
   });
 
@@ -81,7 +81,7 @@ describe("connectionLabel", () => {
         detail: "Daintree isn't running in Host mode there (no host.json).",
         hostModeOff: true,
       })
-    ).toBe("Daintree isn't listening there · never seen");
+    ).toBe("Not listening · never seen");
     const now = Date.UTC(2026, 9, 22, 12);
     expect(
       connectionLabel(
@@ -94,7 +94,7 @@ describe("connectionLabel", () => {
         },
         now
       )
-    ).toBe("Daintree isn't listening there · last seen 7 minutes ago");
+    ).toBe("Not listening · last seen 7 minutes ago");
   });
 
   it("says when a link has stopped retrying until the user connects", () => {

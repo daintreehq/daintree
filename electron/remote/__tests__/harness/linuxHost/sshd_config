@@ -1,0 +1,8 @@
+# Containers have no audit or login session for PAM to open.
+UsePAM no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthorizedKeysFile /etc/ssh/e2e_authorized_keys
+PermitRootLogin no
+AllowTcpForwarding yes
+AllowStreamLocalForwarding yes

@@ -8,27 +8,23 @@ import {
   useRef,
   useState,
 } from "react";
-import { Globe, Keyboard, RefreshCw } from "lucide-react";
+import { Globe, Keyboard, RefreshCw, Trash2 } from "lucide-react";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { Telescope } from "@/components/icons";
 import { useCanopyStore } from "@/store/canopyStore";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { actionService } from "@/services/ActionService";
-import { notify } from "@/lib/notify";
-import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { pluralize } from "@/lib/pluralize";
 import { isMac } from "@/lib/platform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { clientErrorCode } from "@/utils/clientAppError";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { useOverlayClaim } from "@/hooks/useOverlayState";
 import { useEffectiveCombo } from "@/hooks";
+import { isTerminalReservedCombo } from "@/services/terminalReservedKeys";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { KbdChord } from "@/components/ui/Kbd";
 import { SearchField } from "@/components/ui/SearchField";
 import { Spinner } from "@/components/ui/Spinner";
@@ -38,8 +34,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
-import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
-import { isWorkerEntry } from "./canopyInboxProjection";
+import { itemArchived, itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
+import { searchPasteText } from "./canopySearch";
+import { isWorkerEntry, type CanopyInboxEntry } from "./canopyInboxProjection";
 import { CanopyCard, REPLY_GO_TO_TERMINAL, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
 import { CanopyRowMenu } from "./CanopyRowMenu";
@@ -50,12 +47,15 @@ import {
   type CanopyTrashSectionHandle,
 } from "./CanopyTrashSection";
 import { CanopyEmptyLine } from "./CanopyEmptyLine";
-import { CanopyStatusBar, formatModelBytes } from "./CanopyStatusBar";
+import { CanopyStatusBar } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
+import { hideCanopy } from "./canopyHide";
 import { CanopyListColumn } from "./CanopyListColumn";
 import { CANOPY_TITLE } from "./canopyTerms";
 import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
+import { CanopyFrameContext, useCanopyFrame, type CanopyFrame } from "./canopyFrame";
+import { CanopySurface } from "./CanopySurface";
 import { CanopyHostOffer, CanopyHostOutdated } from "./CanopyHostOffer";
 import { useCanopyInboxData } from "./useCanopyInboxData";
 import { useCanopyInboxOrder } from "./useCanopyInboxOrder";
@@ -75,24 +75,24 @@ import {
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { isActiveVoiceSession } from "@shared/types";
 import { placeOf } from "./canopyInboxPlace";
-import { restoreInItsProject } from "./canopyRestoreElsewhere";
 import type { CanopyTrashItem } from "./canopyTrash";
 import { parseAllHostsKey } from "./canopyAllHosts";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
 import { CanopyDetailSplit } from "./CanopyDetailSplit";
+import { CanopyPluginSection } from "./CanopyPluginSection";
+import { canopyPluginRowDomId, useCanopyPluginViews } from "./canopyPluginViews";
 import { CanopyGlobalAssistant } from "./CanopyGlobalAssistant";
 import { isOwnGlobalAssistant } from "./useCanopyInboxFilters";
 import { canopyAssistantDomId } from "./openAssistantItem";
 import { CANOPY_ROLE_FILTERS, type CanopyRoleFilter } from "./canopyAssistants";
 import { isFullAgentDirectory } from "@shared/types/agentDirectory";
 import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
+import { CanopyBulkTrashDialog, type BulkTrashEntry } from "./CanopyBulkTrashDialog";
+import { hasReplyDraft } from "./canopyBulkTrash";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { CANOPY_TRASH_LIMIT } from "@shared/config/trash";
 import type { BulkTarget } from "@shared/utils/canopyBulkEnable";
-import {
-  canopyBulkTransport,
-  ownCanopyApi,
-  remoteCanopyApi,
-  unlessHostDisconnected,
-} from "./canopyHostSource";
+import { canopyBulkTransport, unlessHostDisconnected } from "./canopyHostSource";
 import { ALL_HOSTS_ID, canopyOwnHostId } from "@/store/canopyStore";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
@@ -102,6 +102,14 @@ import { readsWithHostedService, type CanopyTrashEntry } from "@shared/types/ipc
 // Loaded on first use: the dialog pulls in Pilot's row and band modules.
 const LazyParkRunDialog = lazy(() =>
   import("@/components/Fleet/ParkRunDialog").then((m) => ({ default: m.ParkRunDialog }))
+);
+// Off the inbox's chunk: only a window offering a plugin view loads the
+// plugin loader and the kit, and the kit's host is in before the first draws.
+const LazyCanopyPluginView = lazy(() =>
+  import("./CanopyPluginView").then((m) => {
+    m.installCanopyPluginKitHost();
+    return { default: m.CanopyPluginView };
+  })
 );
 
 interface HostIssue {
@@ -167,60 +175,12 @@ function agoPhrase(sinceMs: number, nowMs: number): string {
 }
 
 /**
- * Hides Canopy from its offer. The panel closes as the hidden snapshot lands;
- * the toast says where it went and takes it back — unless Canopy was shown,
- * hidden again or turned on since, here or in another view, which stands.
- */
-async function hideCanopy(): Promise<void> {
-  const { applySnapshot } = useCanopyStore.getState();
-  const hidden = await window.electron.canopy.setMode("hidden");
-  applySnapshot(hidden);
-  // The revision this hide left, as main counts them: an Undo applies only
-  // while main still stands there.
-  const revision = hidden.modeRevision ?? 0;
-  notify({
-    type: "success",
-    title: "Canopy hidden",
-    message: "Show it again from Settings > Canopy.",
-    context: { eventKind: "settings" },
-    priority: "high",
-    transient: true,
-    duration: UNDO_TOAST_DURATION_MS,
-    action: {
-      label: "Undo",
-      onClick: latestUndoOnly("canopy-hide", () => {
-        if (useCanopyStore.getState().mode !== "hidden") return;
-        window.electron.canopy.setMode("unset", revision).then(applySnapshot, () =>
-          notify({
-            type: "error",
-            title: "Couldn't show Canopy",
-            message: "Show it again from Settings > Canopy.",
-            // Settings events default to the inbox alone; a failed Undo is seen now.
-            priority: "high",
-            context: { eventKind: "settings" },
-            action: {
-              label: "Open settings",
-              onClick: () =>
-                void actionService.dispatch(
-                  "app.settings.openTab",
-                  { tab: "canopy" },
-                  { source: "user" }
-                ),
-            },
-          })
-        );
-      }),
-    },
-  });
-}
-
-/**
  * Every agent across every project, read off its screen and ranked in one list
  * by what it needs from you: menus to answer, questions to reply to, finished
  * work to look at, and working agents gone a while without a look. Pilot's
  * population, with the words and the controls to act without leaving the panel.
  */
-export function CanopyView() {
+export function CanopyView({ frame }: { frame: CanopyFrame }) {
   const [bulkTargets, setBulkTargets] = useState<readonly BulkTarget[] | null>(null);
   // Frozen when the person opens it: hosts listed later are not in this run.
   const openBulk = useCallback((rows: readonly HostMenuRow[]) => {
@@ -232,11 +192,22 @@ export function CanopyView() {
       }))
     );
   }, []);
-  // The panel put away — closed, or its project view cached — takes the run with it.
+  // The inbox put away takes the run with it.
   const panelOpen = useCanopyStore((s) => s.isOpen);
   useEffect(() => {
     if (!panelOpen) setBulkTargets(null);
   }, [panelOpen]);
+  // Its window shows the inbox for as long as it mounts it: nothing else opens
+  // it there. Hidden, it stays shut, and comes back with Canopy.
+  const hidden = useCanopyStore((s) => s.mode === "hidden");
+  useLayoutEffect(() => {
+    if (hidden) return;
+    useCanopyStore.getState().open();
+    return () => {
+      const { isOpen, close } = useCanopyStore.getState();
+      if (isOpen) close();
+    };
+  }, [hidden]);
   const transportFor = useCallback(
     (target: BulkTarget) =>
       canopyBulkTransport(target.hostId, {
@@ -249,7 +220,7 @@ export function CanopyView() {
     []
   );
   return (
-    <>
+    <CanopyFrameContext value={frame}>
       <CanopyPanel onEnableAll={openBulk} />
       <CanopyBulkEnableDialog
         isOpen={bulkTargets !== null}
@@ -257,27 +228,21 @@ export function CanopyView() {
         targets={bulkTargets ?? NO_BULK_TARGETS}
         deps={{ transportFor }}
       />
-    </>
+    </CanopyFrameContext>
   );
 }
 
 const NO_BULK_TARGETS: readonly BulkTarget[] = [];
+const NO_BULK_TRASH: readonly BulkTrashEntry[] = [];
 
 function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow[]) => void }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
-  const close = useCanopyStore((s) => s.close);
   const activated = useCanopyStore((s) => s.snapshot?.activated ?? null);
-  // The offer to turn reading on is one press from the list, never in front of it.
-  const [pitchOpen, setPitchOpen] = useState(false);
-  useEffect(() => {
-    if (!isOpen || activated !== false) setPitchOpen(false);
-  }, [isOpen, activated]);
   const outdatedOwnHost = useCanopyStore((s) => s.outdatedHost);
   const applySnapshot = useCanopyStore((s) => s.applySnapshot);
   // Another host the panel shows, or null for the window's own.
   const hostId = useCanopyStore((s) => s.hostId);
   const setHostId = useCanopyStore((s) => s.setHostId);
-  useEffect(() => setPitchOpen(false), [hostId]);
   const allHosts = hostId === ALL_HOSTS_ID;
   const hostRows = useCanopyHostRows(hostId ?? canopyOwnHostId());
   const hostPicker = hostRows ? (
@@ -296,48 +261,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   useEffect(() => {
     if (!hostListed) setHostId(null);
   }, [hostListed, setHostId]);
-  useOverlayClaim("canopy", isOpen);
-  // A view put in the background — another project shown in its place — can
-  // be seen by no one: an inbox left open there would keep its pages held
-  // back, and hold an agent's terminal at its size.
-  useEffect(() => {
-    if (!isOpen) return;
-    // Already there: opened by a key while the panel's code loaded, and the
-    // project switched away before it mounted.
-    if (isProjectViewCached()) {
-      close();
-      return;
-    }
-    return subscribeProjectViewLifecycle((phase) => {
-      if (phase === "cached") close();
-    });
-  }, [isOpen, close]);
-  // What had the keyboard when the panel opened, kept here because the dialog
-  // can be replaced while open (loading, then the offer or the inbox), and a
-  // new one would take the old one's own content for its opener.
-  const openerRef = useRef<HTMLElement | null>(null);
-  useLayoutEffect(() => {
-    if (!isOpen) return;
-    const active = document.activeElement;
-    openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
-  }, [isOpen]);
-  const restoreOpener = useCallback(
-    () => (openerRef.current?.isConnected ? openerRef.current : null),
-    []
-  );
-  // A dialog replaced while the panel stays open — loading giving way to the
-  // offer or the inbox, the offer to the inbox — hands the keyboard straight
-  // to the one replacing it: back on the opener, even for the frames before
-  // the next one places it, keys would reach a terminal behind the panel.
-  const restoreOnReplace = useCallback(() => {
-    if (useCanopyStore.getState().isOpen) {
-      const successor = document.querySelector<HTMLElement>(
-        '[data-testid="canopy-dialog"] [tabindex="-1"]'
-      );
-      if (successor?.isConnected) return successor;
-    }
-    return restoreOpener();
-  }, [restoreOpener]);
   const loadingRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!isOpen || activated !== null) return;
@@ -371,7 +294,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   if (readingAll) {
     return (
       <CanopyInbox
-        restoreOpener={restoreOnReplace}
         hostId={ALL_HOSTS_ID}
         hostRow={null}
         hostRows={hostRows}
@@ -384,13 +306,7 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   if (hostId !== null && !allHosts) {
     const hostRow = hostRows?.find((row) => row.hostId === hostId) ?? null;
     return (
-      <CanopyInbox
-        restoreOpener={restoreOnReplace}
-        hostId={hostId}
-        hostRow={hostRow}
-        hostRows={null}
-        hostPicker={hostPicker}
-      />
+      <CanopyInbox hostId={hostId} hostRow={hostRow} hostRows={null} hostPicker={hostPicker} />
     );
   }
 
@@ -398,26 +314,15 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   // inbox, so neither flashes before the other replaces it.
   if (activated === null) {
     return (
-      <AppDialog
-        isOpen={isOpen}
-        onClose={close}
-        placement="window"
-        // Nothing to land on yet, and Close is no place for a reflexive Enter.
-        initialFocus="none"
-        restoreFocusTo={restoreOnReplace}
-        preferRestoreFocusTo
-        data-testid="canopy-dialog"
-      >
+      <CanopySurface isOpen={isOpen}>
         <AppDialog.Header>
           <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
           <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
-          <AppDialog.CloseButton />
         </AppDialog.Header>
-        {/* The keyboard waits here, inside the dialog, rather than on
-            whatever opened it — a terminal behind the scrim would take the
-            keys — and not on Close, where a reflexive Enter would dismiss it. */}
+        {/* The keyboard waits here, inside the window, rather than on the
+            host picker, where a reflexive Enter would open it. */}
         <div ref={loadingRef} tabIndex={-1} className="flex-1" aria-busy="true" />
-      </AppDialog>
+      </CanopySurface>
     );
   }
 
@@ -425,48 +330,31 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   // nothing it read is shown, and Canopy isn't offered until it is updated.
   if (outdatedOwnHost && !allHosts) {
     return (
-      <AppDialog
-        isOpen={isOpen}
-        onClose={close}
-        placement="window"
-        restoreFocusTo={restoreOnReplace}
-        preferRestoreFocusTo
-        data-testid="canopy-dialog"
-      >
+      <CanopySurface isOpen={isOpen}>
         <AppDialog.Header>
           <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
           <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
-          <AppDialog.CloseButton />
         </AppDialog.Header>
         <CanopyHostOutdated hostName="this host" />
-      </AppDialog>
+      </CanopySurface>
     );
   }
 
-  // Until the user turns it on, nothing is read: the list is what Daintree
-  // observes, and the pitch waits behind the offer in the status bar.
-  if (activated === false && pitchOpen) {
+  // Until the user turns it on, nothing is read: the pitch is the one place
+  // that asks, so nothing in front of it asks first.
+  if (activated === false) {
     return (
-      <CanopyPitch
-        isOpen={isOpen}
-        onClose={close}
-        onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
-        onHide={hideCanopy}
-        restoreFocusTo={restoreOnReplace}
-        hostPicker={hostPicker}
-      />
+      <CanopySurface isOpen={isOpen}>
+        <CanopyPitch
+          isOpen={isOpen}
+          onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
+          onHide={hideCanopy}
+          hostPicker={hostPicker}
+        />
+      </CanopySurface>
     );
   }
-  return (
-    <CanopyInbox
-      restoreOpener={restoreOnReplace}
-      hostId={null}
-      hostRow={null}
-      hostRows={null}
-      hostPicker={hostPicker}
-      onOfferReading={activated === false ? () => setPitchOpen(true) : null}
-    />
-  );
+  return <CanopyInbox hostId={null} hostRow={null} hostRows={null} hostPicker={hostPicker} />;
 }
 
 interface ShortcutRow {
@@ -483,36 +371,57 @@ interface ShortcutRow {
 /** Sets the title bar's status apart from the title, as the status's own parts are. */
 function TitleDot() {
   return (
-    <span aria-hidden="true" className="mx-2 shrink-0 text-sm text-text-secondary">
-      ·
+    <span aria-hidden="true" className="mx-2 shrink-0 text-sm">
+      <FactSeparator />
     </span>
   );
 }
 
 function CanopyShortcuts() {
+  const frame = useCanopyFrame();
+  const canGoTo = frame.goToRun !== null;
+  // Canopy's key goes back to the project window the user was last in
+  // (#16578). A window left open all day stays where it was put until its
+  // own close.
   const step = isMac() ? "Cmd" : "Alt";
-  // How to get here again: the user's own binding, and double-Shift while on.
+  // The user's own binding, and double-Shift while on.
   const toggle = useEffectiveCombo("canopy.toggle");
-  // Close as the user has it bound, and only where it works: a chord can't
-  // reach the pane, and off the Mac the terminal keeps Ctrl+W for the shell.
-  const closeCombo = useEffectiveCombo("terminal.close");
-  const paneClose = closeCombo !== undefined && !closeCombo.includes(" ") ? closeCombo : undefined;
+  // Cmd+W closes the window from the list, as its menu's Close Window does,
+  // whatever the user's close binding. In the agent's pane the close binding
+  // trashes its terminal: a chord can't reach the pane, and a key the terminal
+  // owns (Ctrl+W off the Mac) stays the shell's there.
+  const boundClose = useEffectiveCombo("terminal.close");
+  const paneClose = boundClose !== undefined && !boundClose.includes(" ") ? boundClose : undefined;
   const doubleShift = usePreferencesStore((s) => s.doubleShiftOpensCanopy);
   const groups: Array<{ heading: string; rows: ShortcutRow[] }> = [
     {
       heading: "Anywhere",
       rows: [
-        ...(toggle ? [{ keys: [toggle], label: "Open or close Canopy" }] : []),
-        ...(doubleShift ? [{ keys: ["Shift"], label: "Twice quickly: open or close Canopy" }] : []),
+        ...(toggle
+          ? [
+              {
+                keys: [toggle],
+                label: "Back to the last project window",
+              },
+            ]
+          : []),
+        ...(doubleShift
+          ? [
+              {
+                keys: ["Shift"],
+                label: "Twice quickly: back to the last project window",
+              },
+            ]
+          : []),
       ],
     },
     {
       heading: "In the search",
       rows: [
         { keys: ["ArrowUp", "ArrowDown"], label: "Move" },
-        { keys: ["Enter"], label: "Go to terminal" },
+        ...(canGoTo ? [{ keys: ["Enter"], label: "Go to terminal" }] : []),
         { keys: ["Tab"], label: "Into the list, where the keys below act" },
-        { keys: ["Escape"], label: "Clear the search, then close" },
+        { keys: ["Escape"], label: "Clear the search" },
       ],
     },
     {
@@ -521,7 +430,7 @@ function CanopyShortcuts() {
         { keys: ["ArrowUp", "ArrowDown"], label: "Move" },
         { keys: ["J", "K"], label: "Move down or up" },
         { keys: ["Home", "End"], label: "First or last agent" },
-        { keys: ["Enter"], label: "Go to terminal" },
+        ...(canGoTo ? [{ keys: ["Enter"], label: "Go to terminal" }] : []),
         {
           keys: ["1", "9"],
           range: true,
@@ -537,8 +446,8 @@ function CanopyShortcuts() {
         { keys: ["Shift+F10"], label: "More actions" },
         { keys: ["/"], label: "Search" },
         { keys: ["Cmd+Backspace"], label: "Trash, pressed twice; Z takes it back" },
-        { keys: ["Escape"], label: "Close" },
-        ...(closeCombo ? [{ keys: [closeCombo], label: "Close Canopy" }] : []),
+        { keys: ["Cmd+A"], label: "With a search: review every result to trash" },
+        { keys: ["Cmd+W"], label: "Close Canopy" },
       ],
     },
     {
@@ -551,15 +460,15 @@ function CanopyShortcuts() {
           label: "In a reply: send, then go to the next agent below that needs you or is unread",
         },
         { keys: ["Shift+Enter"], label: "New line in a reply" },
-        { keys: [REPLY_GO_TO_TERMINAL], label: "In a reply: go to terminal" },
+        ...(canGoTo ? [{ keys: [REPLY_GO_TO_TERMINAL], label: "In a reply: go to terminal" }] : []),
         { keys: ["Escape"], label: "Back to the list from a reply" },
         ...(paneClose
           ? [
               {
                 keys: [paneClose],
-                label: isMac()
-                  ? "Trash the agent's terminal; Z takes it back"
-                  : "In a reply: trash the agent's terminal; Z takes it back",
+                label: isTerminalReservedCombo(paneClose)
+                  ? "In a reply: trash the agent's terminal; Z takes it back"
+                  : "Trash the agent's terminal; Z takes it back",
               },
             ]
           : []),
@@ -622,15 +531,11 @@ const DOCKED_GLOBAL_DICTATION: CanopyReplyDictation = {
 };
 
 function CanopyInbox({
-  restoreOpener,
   hostId,
   hostRow,
   hostRows,
   hostPicker,
-  onOfferReading = null,
 }: {
-  /** What had the keyboard when the panel opened, while it is still there. */
-  restoreOpener: () => HTMLElement | null;
   /** The other host the panel shows, or null for the window's own. */
   hostId: HostId | null;
   /** That host as the host menu draws it, while it is in the host list. */
@@ -638,12 +543,11 @@ function CanopyInbox({
   /** The hosts read together when `hostId` is All hosts. */
   hostRows: readonly HostMenuRow[] | null;
   hostPicker: React.ReactNode;
-  /** The window's own host with its reader off: opens the pitch. */
-  onOfferReading?: (() => void) | null;
 }) {
+  const frame = useCanopyFrame();
   const isOpen = useCanopyStore((s) => s.isOpen);
-  const close = useCanopyStore((s) => s.close);
   const setGlobalDocked = useCanopyStore((s) => s.setGlobalDocked);
+  const pluginViews = useCanopyPluginViews();
   const {
     otherHost,
     everyHost,
@@ -659,9 +563,6 @@ function CanopyInbox({
     canopy,
     fleet,
     projects,
-    storedScope,
-    setScope,
-    scope,
     recoveries,
     nowMs,
     baseItems,
@@ -688,14 +589,22 @@ function CanopyInbox({
     isOpen,
     hostId,
     otherHost,
-    scope,
     canopy,
     baseItems,
     nowMs,
     observedAt: readerOff ? (fleet?.changedAt ?? null) : null,
   });
-  const { query, setQuery, appliedQuery, terms, searching, searchKey, screenAsk, onScreen } =
-    useCanopyInboxSearch({ isOpen, hostId, items, api, refreshedAt });
+  const {
+    query,
+    setQuery,
+    appliedQuery,
+    alternatives,
+    searchNotes,
+    searching,
+    searchKey,
+    screenAsk,
+    onScreen,
+  } = useCanopyInboxSearch({ isOpen, hostId, items, api, refreshedAt });
   const {
     roleFilter,
     setRoleFilter,
@@ -741,9 +650,6 @@ function CanopyInbox({
     hasHostPicker: hostPicker !== null,
     participants,
     projects,
-    storedScope,
-    scope,
-    setScope,
     api,
     recoveries,
     fleet,
@@ -751,7 +657,7 @@ function CanopyInbox({
     band,
     query,
     appliedQuery,
-    terms,
+    alternatives,
     searching,
     searchKey,
     screenAsk,
@@ -797,12 +703,10 @@ function CanopyInbox({
     leavePane,
     showsHost,
     isSelected,
-    captureFocusAfterClose,
-    closeForTerminal,
-    focusAfterClose,
+    shownPluginViewId,
+    showPluginView,
   } = useCanopyInboxFocus({
     isOpen,
-    close,
     hostId,
     ownHostId,
     otherHost,
@@ -817,12 +721,13 @@ function CanopyInbox({
     firstAssistant,
     inWork,
     searching,
-    query,
     appliedQuery,
     setQuery,
     roleFilter,
     seeAssistantHandback,
+    pluginViewIds: pluginViews.map((view) => view.id),
   });
+  const shownPluginView = pluginViews.find((view) => view.id === shownPluginViewId) ?? null;
 
   useLayoutEffect(() => placeOrder(), [placeOrder, orderWake]);
   const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
@@ -849,9 +754,11 @@ function CanopyInbox({
     handlers,
     toggleRead,
     markAllRead,
+    trashMany,
     askRename,
     rowMenu,
     setAside,
+    answers,
     parkRunId,
     closePark,
     trashArm,
@@ -875,8 +782,6 @@ function CanopyInbox({
     leavePane,
     showsHost,
     isSelected,
-    captureFocusAfterClose,
-    closeForTerminal,
     reserveUndo,
     undoReads,
     menuOpenChanged,
@@ -932,6 +837,33 @@ function CanopyInbox({
   const needsYouAssistants = projection.needsYou.length - needsYouWorkers;
   const needsYou = projection.needsYou.length;
 
+  // A search's results, reviewed for the Trash: frozen as the review opened,
+  // so a run matching later is never in it.
+  const [bulkTrash, setBulkTrash] = useState<{
+    query: string;
+    entries: readonly BulkTrashEntry[];
+    more: number;
+  } | null>(null);
+  const bulkTrashable = searching && visible.length > 0;
+  const openBulkTrash = () => {
+    if (!bulkTrashable) return;
+    const drafts = useTerminalInputStore.getState().draftInputs;
+    const shown = visible.slice(0, CANOPY_TRASH_LIMIT);
+    setBulkTrash({
+      query: appliedQuery.trim(),
+      more: visible.length - shown.length,
+      entries: shown.map((item) => ({
+        item,
+        host: item.workspace.host || (otherHost ? hostName : null),
+        replyDraft: hasReplyDraft(drafts, item, hostId, ownHostId),
+      })),
+    });
+  };
+  // A review is of runs on the host it was opened on, while the panel is open.
+  useEffect(() => {
+    setBulkTrash(null);
+  }, [hostId, isOpen]);
+
   const unreadCount = inbox.inbox.filter((item) => item.unread).length;
   // The section bar speaks for what the search shows; the header keeps the whole inbox.
   const shownUnreadCount = shownInbox.inbox.filter((item) => item.unread).length;
@@ -968,19 +900,21 @@ function CanopyInbox({
   }, [hostId]);
   const hostOfferShown = hostOffer && hostOfferOpen;
   const hostHeld = hostOfferShown || hostOutdated;
-  const offerReading =
-    readerOff && !hostOutdated
-      ? (onOfferReading ?? (hostOffer ? () => setHostOfferOpen(true) : null))
-      : null;
+  // Another host's offer, one press from its list. The window's own host
+  // shows the pitch in place of its list, so it is never offered here.
+  const offerReading = readerOff && hostOffer ? () => setHostOfferOpen(true) : null;
   const readingOfferDismissed = useCanopyStore((s) => s.readingOfferDismissed);
   const dismissReadingOffer = useCanopyStore((s) => s.dismissReadingOffer);
 
   // Canopy's Trash: every agent run the host's trash holds, any project's.
   const trashRef = useRef<CanopyTrashSectionHandle>(null);
+  const archivedBarRef = useRef<HTMLButtonElement>(null);
   // A run put back from the Trash comes into the inbox selected, once it is
   // back in the fleet: the same run, or the pane resuming its session. Anything
   // the user selects from the press on, another host or the panel closing, wins.
-  const shownRunId = selectedAssistant?.id ?? focusedItem?.runId ?? null;
+  // What the pane shows: a plugin's view counts, so a restore settling after
+  // the person chose one doesn't take the pane from it.
+  const shownRunId = shownPluginView?.id ?? selectedAssistant?.id ?? focusedItem?.runId ?? null;
   const shownRunIdRef = useRef(shownRunId);
   useLayoutEffect(() => {
     shownRunIdRef.current = shownRunId;
@@ -1009,16 +943,11 @@ function CanopyInbox({
   }, [hostId, isOpen]);
   const onRestoreElsewhere = useCallback(
     (item: CanopyTrashItem) =>
-      restoreInItsProject(
+      frame.restoreElsewhere(
         item,
-        { hostId, ownHostId },
-        {
-          closeForTerminal,
-          // A panel since closed, or showing another host, is the user's newer choice.
-          stillShows: () => showsHost(hostId) && useCanopyStore.getState().isOpen,
-        }
+        placeOf({ runId: item.runId, workspaceId: item.row.run.workspaceId }, hostId, ownHostId)
       ),
-    [hostId, ownHostId, closeForTerminal, showsHost]
+    [frame, hostId, ownHostId]
   );
   useEffect(() => {
     if (restored === null) return;
@@ -1060,31 +989,38 @@ function CanopyInbox({
   }, [fleet]);
   const isBackInFleet = useCallback((runId: string) => fleetRunIdsRef.current.has(runId), []);
   const trashEntries = canopy?.trash ?? NO_TRASH;
-  // This view's own project's trash is in its dock too, which says its expiries itself.
-  const dockAnnounces = useCallback(
-    (workspaceId: string) => {
-      if (otherHost && !everyHost) return false;
-      const here = getViewWorkspaceId();
-      if (!everyHost) return workspaceId === here;
-      const place = parseAllHostsKey(workspaceId);
-      return place !== null && place.hostId === ownHostId && place.id === here;
-    },
-    [otherHost, everyHost, ownHostId]
-  );
   const trashActed = useTrashExpiryAnnouncer({
     active: isOpen,
     entries: trashEntries,
     workspaces,
     scopeKey: hostId ?? "",
-    dockAnnounces,
     isBackInFleet,
   });
-  // Up off the Trash bar: the inbox's last row, else the search.
+  const focusEntryOrSearch = (entry: CanopyInboxEntry | undefined) => {
+    if (!entry) searchRef.current?.focus();
+    else if (entry.role === "worker") focusCardNow(entry.item.runId);
+    else focusAssistantNow(entry.item.id);
+  };
+  // A shut Archived bar is a stop of its own between the inbox and the Trash. An
+  // open one is walked through as its rows, and a search shows no bar at all.
+  const focusArchivedBar = () => {
+    const bar = archivedBarRef.current;
+    if (!bar || archivedExpanded) return false;
+    bar.focus();
+    return true;
+  };
+  // Up off the Trash bar: the Archived bar when it is shut, else the inbox's last row, else the search.
   const leaveTrashUp = () => {
-    const last = projection.navigation[projection.navigation.length - 1];
-    if (!last) searchRef.current?.focus();
-    else if (last.role === "worker") focusCardNow(last.item.runId);
-    else focusAssistantNow(last.item.id);
+    if (focusArchivedBar()) return;
+    focusEntryOrSearch(projection.navigation[projection.navigation.length - 1]);
+  };
+  // Up off the Archived bar, shut or open: the row above it. Archived rows sit
+  // below the bar, so they are never that row.
+  const leaveArchivedUp = () => {
+    const above = projection.navigation.filter(
+      (entry) => entry.role === "assistant" || !itemArchived(entry.item)
+    );
+    focusEntryOrSearch(above[above.length - 1]);
   };
 
   const {
@@ -1114,7 +1050,8 @@ function CanopyInbox({
     askRename,
     toggleRead,
     markAllRead,
-    onPastEnd: () => trashRef.current?.focusHeader() ?? false,
+    onSelectAll: bulkTrashable ? openBulkTrash : undefined,
+    onPastEnd: () => focusArchivedBar() || (trashRef.current?.focusHeader() ?? false),
   });
   // The keys the open card names are the ones that act from where the keyboard is.
   const keyboardAt = useCanopyKeyboardPlace(isOpen);
@@ -1144,7 +1081,7 @@ function CanopyInbox({
       // can't be read at all, withheld while Daintree can't see its
       // agents, and held back while any run in the inbox has yet to
       // be read at all — readings owed, a retry waiting, however
-      // long they take, and after a scope switch too.
+      // long they take.
       (canopy?.lastError ?? null) !== null
       ? (unsorted ?? { words: "Nothing needs you that Canopy could read", allClear: false })
       : // Rows kept from a host that can't be reached are as last seen, as a
@@ -1173,9 +1110,7 @@ function CanopyInbox({
       : fleet.degraded && items.length === 0 && needsYou === 0
         ? "Can't tell who needs you right now"
         : items.length === 0 && needsYou === 0
-          ? scope === "project" && fleet.runs.length > 0
-            ? "No agents in this project"
-            : "No agents are running"
+          ? "No agents are running"
           : // What needs you leads; what is new follows. The list's own heading
             // counts the agents. A count the band is behind says so too.
             [
@@ -1268,26 +1203,23 @@ function CanopyInbox({
           },
         ];
       }
-      // Its own model, downloaded on that host: until it is there, nothing there is read.
+      // Its own model, on that host: until it is ready there, nothing there is read.
+      // A host from before the model shipped with Daintree may still be fetching it.
       const model = reading.canopy.model;
       if (model && model.status !== "ready") {
         const where = remoteHost ? ` on ${name}` : "";
-        const hostApi = remoteHost ? remoteCanopyApi(reading.hostId) : ownCanopyApi;
         return [
           model.status === "failed"
             ? {
                 hostId: reading.hostId,
-                text: `Couldn't download Canopy's model${where}`,
-                action: "Retry",
-                act: () => void hostApi.retryModel().catch(() => {}),
+                text: `Canopy's model isn't available${where}`,
+                action: null,
+                act: null,
                 trouble: true,
               }
             : {
                 hostId: reading.hostId,
-                text:
-                  model.status === "downloading"
-                    ? `Downloading Canopy's model${where}… ${formatModelBytes(model.received)} of ${formatModelBytes(model.total)}`
-                    : `Waiting for Canopy's model${where}…`,
+                text: `Waiting for Canopy's model${where}…`,
                 action: null,
                 act: null,
                 trouble: false,
@@ -1418,9 +1350,7 @@ function CanopyInbox({
           ? `No assistant matches “${appliedQuery.trim()}”`
           : !isFullAgentDirectory(directory)
             ? "Daintree couldn't list every assistant just now"
-            : scope === "project"
-              ? "No assistant is running in this project"
-              : "Start an assistant from the Assistant panel";
+            : "Start an assistant from the Assistant panel";
   // Shown in place of rows only when none is in the band either.
   const assistantsEmptyShown =
     listedAssistants.length === 0 && bandAssistants.length === 0 && assistantsEmpty !== null;
@@ -1473,18 +1403,6 @@ function CanopyInbox({
             : { value: filter.id, label: filter.label }
         )}
       />
-      {!otherHost && (
-        <SegmentedRadioGroup<"all" | "project">
-          aria-label="Agents to show"
-          className="mr-3"
-          value={scope}
-          onChange={setScope}
-          options={[
-            { value: "all", label: "All projects" },
-            { value: "project", label: "This project" },
-          ]}
-        />
-      )}
       {/* The global assistant beside the agents (#16214): off until turned on,
           and kept as it was left. */}
       <Tooltip>
@@ -1526,23 +1444,31 @@ function CanopyInbox({
           </Tooltip>
         )}
       </span>
-      <AppDialog.CloseButton />
     </>
   );
 
+  // Nothing to list but the plugins the window offers: the inbox's own words for
+  // having no agent, in the pane beside them rather than in place of the list.
+  const listsOnlyPlugins = items.length === 0 && !listsAssistants && !listsTrash && !globalDocked;
+  const listsNothing = listsOnlyPlugins && pluginViews.length === 0;
+  const noAgentsWords = everyHost ? (
+    <p className="text-sm text-text-secondary">
+      {hostIssues.length > 0
+        ? "No agents on the hosts that answered."
+        : "No agents are running on any host. Each one shows up here once it starts."}
+    </p>
+  ) : otherHost ? (
+    <p className="text-sm text-text-secondary">
+      No agents are running on {hostName}. Each one shows up here once it starts.
+    </p>
+  ) : (
+    <p className="text-sm text-text-secondary">
+      Launch an agent from the toolbar and it shows up here.
+    </p>
+  );
+
   return (
-    <AppDialog
-      isOpen={isOpen}
-      onClose={close}
-      placement="window"
-      // The panel lands on its first run itself, two frames in; the dialog's own
-      // first-control focus would race it. With no rows to land on, the first
-      // control takes focus instead of leaving it on whatever opened the panel.
-      initialFocus={items.length > 0 && !hostHeld ? "none" : "first"}
-      restoreFocusTo={() => focusAfterClose() ?? restoreOpener()}
-      preferRestoreFocusTo
-      data-testid="canopy-dialog"
-    >
+    <CanopySurface isOpen={isOpen}>
       <AppDialog.Header>
         {hostPicker ? (
           // Three parts, the outer two sharing what is left, so the picker
@@ -1597,7 +1523,22 @@ function CanopyInbox({
       <div
         ref={bodyRef}
         className="canopy-frame flex min-h-0 flex-1 flex-col"
-        onKeyDownCapture={onAgentStepKeyDownCapture}
+        onKeyDownCapture={(event) => {
+          // While a plugin's view is in the pane, ⌘↑/⌘↓ step the agents only
+          // from the search, the list and the docked global assistant:
+          // anywhere else they are the view's, its dialogs and menus too,
+          // which sit outside this box.
+          if (
+            shownPluginView !== null &&
+            !(
+              event.target instanceof Element &&
+              event.target.closest("[data-canopy-list], [data-canopy-search], [data-canopy-global]")
+            )
+          ) {
+            return;
+          }
+          onAgentStepKeyDownCapture(event);
+        }}
         onKeyDown={onNavigationKeyDown}
       >
         {hostTrouble && (
@@ -1701,10 +1642,10 @@ function CanopyInbox({
             )}
           </div>
         )}
-        {/* A listed inbox with the reader off reads as broken unless it says
-            why: the offer once, above it, until put away. An empty one has
-            the status bar's offer under its own message, and the assistants
-            alone aren't what reading reads. */}
+        {/* Another host's listed inbox with its reader off reads as broken
+            unless it says why: the offer once, above it, until put away. An
+            empty one has the status bar's offer under its own message, and
+            the assistants alone aren't what reading reads. */}
         {offerReading &&
           !readingOfferDismissed &&
           !hostHeld &&
@@ -1738,12 +1679,11 @@ function CanopyInbox({
                   />
                 }
               >
-                Get a short summary of what each agent did, from a small model on{" "}
-                {otherHost ? hostName : "this computer"}.
+                Get a short summary of what each agent did, from a small model on {hostName}.
               </Callout>
             </div>
           )}
-        {!hostHeld && (items.length > 0 || listsAssistants || listsTrash || globalDocked) && (
+        {!hostHeld && !listsNothing && (
           // An inbox: what needs you down a sidebar, most urgent first, the rest
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
@@ -1755,12 +1695,43 @@ function CanopyInbox({
                   focusedOnOpen
                   inputRef={searchRef}
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) => {
+                    // A search is for agents: the pane goes back to the inbox.
+                    showPluginView(null);
+                    setQuery(event.target.value);
+                  }}
+                  onPaste={(event) => {
+                    // A pasted column would lose its line breaks to the
+                    // single-line field and glue into one word: each line
+                    // comes in as an alternative of its own.
+                    const input = event.currentTarget;
+                    const start = input.selectionStart ?? input.value.length;
+                    const end = input.selectionEnd ?? start;
+                    const list = searchPasteText(
+                      event.clipboardData.getData("text"),
+                      input.value.slice(0, start),
+                      input.value.slice(end)
+                    );
+                    if (list === null) return;
+                    event.preventDefault();
+                    // Typed in as the user would, so the field's own undo takes it back.
+                    if (
+                      typeof document.execCommand === "function" &&
+                      document.execCommand("insertText", false, list)
+                    ) {
+                      return;
+                    }
+                    // Put in place with the caret after it, then said as an input so
+                    // React's own record of the value follows the field's.
+                    input.setRangeText(list, start, end, "end");
+                    input.dispatchEvent(new Event("input", { bubbles: true }));
+                  }}
                   onClear={() => setQuery("")}
                   onKeyDown={onSearchKeyDown}
                   data-canopy-search=""
                   placeholder="Search agents and their terminals"
                   aria-label="Search agents"
+                  aria-describedby={searchNotes.length > 0 ? "canopy-search-notes" : undefined}
                   role="combobox"
                   aria-expanded={visible.length > 0}
                   aria-controls={
@@ -1783,6 +1754,17 @@ function CanopyInbox({
                   autoComplete="off"
                   spellCheck={false}
                 />
+                {searchNotes.length > 0 && (
+                  <div
+                    id="canopy-search-notes"
+                    className="mt-1.5 space-y-0.5 text-xs text-text-secondary"
+                    data-testid="canopy-search-notes"
+                  >
+                    {searchNotes.map((note) => (
+                      <p key={note}>{note}</p>
+                    ))}
+                  </div>
+                )}
               </div>
               <div
                 className="canopy-inbox flex min-h-0 flex-1 flex-col overflow-y-auto select-none"
@@ -1804,7 +1786,7 @@ function CanopyInbox({
                       {workPartial && (
                         <span className="text-text-secondary">
                           {" "}
-                          · Some hosts couldn't be read, so this may be incomplete
+                          <FactSeparator /> Some hosts couldn't be read, so this may be incomplete
                         </span>
                       )}
                     </span>
@@ -1879,6 +1861,25 @@ function CanopyInbox({
                               <KbdChord shortcut="Alt+U" />
                             </TooltipContent>
                           </Tooltip>
+                          {bulkTrashable && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  aria-label="Trash results…"
+                                  aria-keyshortcuts={isMac() ? "Meta+A" : "Control+A"}
+                                  data-canopy-trash-results=""
+                                  onClick={openBulkTrash}
+                                >
+                                  <Trash2 aria-hidden="true" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom">
+                                Trash results… <KbdChord shortcut="Cmd+A" />
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
                         </span>
                       }
                     />
@@ -2068,6 +2069,9 @@ function CanopyInbox({
                               controls: "canopy-archived",
                               onToggle: () => setArchivedExpanded(!archivedExpanded),
                               onEnter: () => focusCardNow(shownInbox.archived[0]!.runId),
+                              onLeaveUp: leaveArchivedUp,
+                              onLeaveDown: () => trashRef.current?.focusHeader() ?? false,
+                              buttonRef: archivedBarRef,
                             }
                       }
                     />
@@ -2109,7 +2113,7 @@ function CanopyInbox({
                   ref={trashRef}
                   entries={trashEntries}
                   workspaces={workspaces}
-                  terms={terms}
+                  alternatives={alternatives}
                   api={api}
                   scopeKey={hostId ?? ""}
                   onLeaveUp={leaveTrashUp}
@@ -2122,6 +2126,13 @@ function CanopyInbox({
                   acted={trashActed}
                 />
               </div>
+              {pluginViews.length > 0 && (
+                <CanopyPluginSection
+                  views={pluginViews}
+                  shownId={shownPluginView?.id ?? null}
+                  onShow={showPluginView}
+                />
+              )}
               {undoLine && (
                 <div
                   data-canopy-undo-line=""
@@ -2143,7 +2154,6 @@ function CanopyInbox({
               )}
               <CanopyStatusBar
                 host={otherHost ? hostName : null}
-                onRetryModel={() => void api.retryModel().catch(() => {})}
                 reader={canopy?.reader}
                 model={canopy?.model}
                 waiting={canopy?.waiting}
@@ -2166,7 +2176,20 @@ function CanopyInbox({
                 ) : null
               }
             >
-              {selectedGlobal ? null : selectedAssistant !== null ? (
+              {shownPluginView !== null ? (
+                <Suspense fallback={null}>
+                  <LazyCanopyPluginView
+                    view={shownPluginView}
+                    onShowInbox={() => {
+                      showPluginView(null);
+                      searchRef.current?.focus({ preventScroll: true });
+                    }}
+                    onEscape={() =>
+                      document.getElementById(canopyPluginRowDomId(shownPluginView.id))?.focus()
+                    }
+                  />
+                </Suspense>
+              ) : selectedGlobal ? null : selectedAssistant !== null ? (
                 <CanopyAssistantPane
                   key={selectedAssistant.id}
                   item={selectedAssistant}
@@ -2209,6 +2232,8 @@ function CanopyInbox({
                       otherHostId={(everyHost ? focusedHostId : hostId) ?? undefined}
                       hostScope={hostId}
                       aside={setAside}
+                      answers={answers}
+                      hostLabel={focusedItem.workspace.host || hostName}
                       terminalApi={terminalApi}
                       workLabel={workLabelOf(focusedItem)}
                       moveOnTo={moveOnTo}
@@ -2255,6 +2280,11 @@ function CanopyInbox({
                             Turn off Unread to see every agent's terminal here.
                           </p>
                         </>
+                      ) : listsOnlyPlugins ? (
+                        // Said once the fleet has answered, as it is with no plugins.
+                        fleet !== null && !fleet.degraded ? (
+                          noAgentsWords
+                        ) : null
                       ) : (
                         <>
                           <p className="text-sm text-text-primary">Nothing in the inbox</p>
@@ -2270,61 +2300,42 @@ function CanopyInbox({
             </CanopyDetailSplit>
           </div>
         )}
-        {!hostHeld &&
-          fleet !== null &&
-          !fleet.degraded &&
-          items.length === 0 &&
-          !listsAssistants &&
-          !listsTrash &&
-          !globalDocked && (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3">
-              {scope === "project" && fleet.runs.length > 0 ? (
-                <>
-                  <p className="text-sm text-text-secondary">
-                    No agents in this project. Other projects have{" "}
-                    {pluralize(fleet.runs.length, "agent")}.
-                  </p>
-                  <Button variant="outline" size="sm" onClick={() => setScope("all")}>
-                    Show all projects
-                  </Button>
-                </>
-              ) : everyHost ? (
-                <p className="text-sm text-text-secondary">
-                  {hostIssues.length > 0
-                    ? "No agents on the hosts that answered."
-                    : "No agents are running on any host. Each one shows up here once it starts."}
-                </p>
-              ) : otherHost ? (
-                <p className="text-sm text-text-secondary">
-                  No agents are running on {hostName}. Each one shows up here once it starts.
-                </p>
-              ) : (
-                <p className="text-sm text-text-secondary">
-                  Launch an agent from the toolbar and it shows up here.
-                </p>
-              )}
-            </div>
-          )}
-        {offerReading &&
-          !hostHeld &&
-          items.length === 0 &&
-          !listsAssistants &&
-          !listsTrash &&
-          !globalDocked && (
-            <CanopyStatusBar
-              host={otherHost ? hostName : null}
-              model={undefined}
-              reader={undefined}
-              waiting={undefined}
-              offer={offerReading}
-            />
-          )}
+        {!hostHeld && fleet !== null && !fleet.degraded && listsNothing && (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3">
+            {noAgentsWords}
+          </div>
+        )}
+        {offerReading && !hostHeld && listsNothing && (
+          <CanopyStatusBar
+            host={otherHost ? hostName : null}
+            model={undefined}
+            reader={undefined}
+            waiting={undefined}
+            offer={offerReading}
+          />
+        )}
       </div>
       {parkRunId !== null && (
         <Suspense fallback={null}>
           <LazyParkRunDialog key={parkRunId} runId={parkRunId} onClose={closePark} />
         </Suspense>
       )}
-    </AppDialog>
+      <CanopyBulkTrashDialog
+        isOpen={bulkTrash !== null}
+        onClose={() => setBulkTrash(null)}
+        query={bulkTrash?.query ?? ""}
+        entries={bulkTrash?.entries ?? NO_BULK_TRASH}
+        more={bulkTrash?.more ?? 0}
+        readInputLines={api.readInputLines}
+        onTrash={trashMany}
+        // The selected row, where Z takes the trash back; once it leaves with
+        // the trash, the panel moves the keyboard on as for any row that goes.
+        // Never the search: Z there is a letter.
+        restoreFocusTo={() =>
+          (focusedItem ? document.getElementById(canopyCardDomId(focusedItem.runId)) : null) ??
+          refreshRef.current
+        }
+      />
+    </CanopySurface>
   );
 }

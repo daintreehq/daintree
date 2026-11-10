@@ -539,7 +539,11 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       const copying = flag![1]!;
       expect(menu![0]).toContain("const showCopyingSpinner = useDohertyGate(isCopyingTree);");
       expect(menu![0]).toMatch(
-        new RegExp(`\\{${copying} && showCopyingSpinner \\?\\s*\\(?\\s*<Spinner`)
+        // A toggle row gives its leading column to the menu's check, so the
+        // gate sits behind that branch; copy-tree is never a toggle.
+        new RegExp(
+          `\\{isToggle \\? null : ${copying} && showCopyingSpinner \\?\\s*\\(?\\s*<Spinner`
+        )
       );
       const label = menu![0].match(new RegExp(`\\{${copying} \\? "([^"]+)" : meta\\.label\\}`));
       expect(label).not.toBeNull();

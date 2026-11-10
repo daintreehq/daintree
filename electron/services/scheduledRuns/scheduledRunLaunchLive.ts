@@ -135,7 +135,7 @@ async function removeRunPane(run: ScheduledRun): Promise<void> {
 async function liveDeps(): Promise<ScheduledRunLauncherDeps<Electron.WebContents>> {
   const [
     { isProjectSleepInFlight },
-    { runScheduledAgentLaunchLive },
+    { runScheduledAgentLaunchLive, listProjectWorktreesLive, createScheduledRunWorktreeLive },
     { buildProjectCommandEnv, readProjectCommandEnvLayers },
   ] = await Promise.all([
     import("../projectSleep.js"),
@@ -161,6 +161,7 @@ async function liveDeps(): Promise<ScheduledRunLauncherDeps<Electron.WebContents
     launchInView: (view, request) => requestScheduledLaunchInView(view, request),
     launchWithoutView: (project, request) => runScheduledAgentLaunchLive(project, request),
     launchAssistant: launchScheduledAssistantLive,
+    worktreeHost: { list: listProjectWorktreesLive, create: createScheduledRunWorktreeLive },
     runPrecondition: async ({ projectId, command, cwd, signal }) => {
       // The variables the user set for terminals, as a project command gets them.
       const layers = await readProjectCommandEnvLayers(projectId).catch((error: unknown) => {

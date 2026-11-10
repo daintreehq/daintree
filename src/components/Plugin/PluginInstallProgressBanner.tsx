@@ -52,9 +52,9 @@ interface PluginInstallProgressBannerProps {
  * problem. `aria-live` is off on the banner itself — `InlineStatusBanner`
  * announces atomically, so a polite banner would re-read the whole thing every
  * time the archive entry changes (~150ms). Step changes and notes are announced
- * through a separate region that never carries the entry; the outcome of the
- * install is still surfaced by the error/notice region the Plugin Manager
- * already owns.
+ * through a separate region that never carries the entry. The outcome is the
+ * Plugin Manager's: a success selects the installed plugin and announces it,
+ * and a failure goes to its error region.
  */
 export function PluginInstallProgressBanner({
   isInstalling,

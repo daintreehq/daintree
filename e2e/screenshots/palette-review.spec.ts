@@ -6,7 +6,7 @@
  * pixels instead of token names. Sibling of `theme-review.spec.ts`, which covers
  * app chrome broadly; this one goes deep on one family across every theme.
  *
- * Nine steps, covering both hosts (modal + anchored popover) and the range of
+ * Eight steps, covering both hosts (modal + anchored popover) and the range of
  * body content (rows, groups, rich rows, empty states). Palettes that need a
  * seeded state to render anything — panel palette, fleet picker, send-to-agent,
  * prompt history — are not captured; they take the same shared chrome, and the
@@ -326,19 +326,6 @@ test("palette review — every surface in the family", async () => {
       const dialog = page.locator(SEL.themePalette.dialog);
       await dialog.waitFor({ state: "visible", timeout: 5000 });
       await snapSurface(page, "16-theme-palette", SEL.themePalette.dialog);
-      await closeOverlay(page);
-    });
-
-    // 6. New-terminal palette. Dispatched directly rather than driven through
-    // the command palette: the action's own row activates whatever the ranked
-    // list put first, which is not reliably this palette.
-    await step(page, "new-terminal", async () => {
-      await page.evaluate(() =>
-        window.dispatchEvent(new Event("daintree:open-new-terminal-palette"))
-      );
-      const dialog = page.locator(SEL.newTerminalPalette.dialog);
-      await dialog.waitFor({ state: "visible", timeout: 5000 });
-      await snapSurface(page, "19-new-terminal", SEL.newTerminalPalette.dialog);
       await closeOverlay(page);
     });
 

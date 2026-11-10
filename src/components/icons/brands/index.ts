@@ -2,6 +2,7 @@
 export { GitHubIcon } from "./GitHubIcon";
 export { GitLabIcon } from "./GitLabIcon";
 export { LinearIcon } from "./LinearIcon";
+export { JiraIcon } from "./JiraIcon";
 export { BeadsIcon } from "./BeadsIcon";
 
 // AI Agent icons

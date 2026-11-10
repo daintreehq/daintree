@@ -4,9 +4,11 @@ import {
   projectStateFileOwner,
   rendererStorageOwner,
   settingOwner,
+  userFolderOwner,
   type ProjectStateFile,
   type SettingOwner,
   type SettingPath,
+  type UserFolder,
 } from "@shared/config/settingOwnership";
 import { isMac, isWindows } from "@/lib/platform";
 import { currentHostId, isRemoteWindow, useHostPlatform } from "@/hooks/useHostPlatform";
@@ -114,13 +116,16 @@ type LocalStorageKey = keyof (typeof SETTING_CATALOG)["renderer-local-storage"][
 
 /**
  * A setting a surface edits: a path in the main settings file, a key this
- * machine's renderer keeps in local storage, written `storage:<key>`, or a file
- * main keeps in each project's local state directory, written `file:<name>`.
+ * machine's renderer keeps in local storage, written `storage:<key>`, a file
+ * main keeps in each project's local state directory, written `file:<name>`, or
+ * a folder of the person's own files, written `folder:<name>`.
  */
-export type SettingRef = SettingPath | `storage:${LocalStorageKey}` | `file:${ProjectStateFile}`;
+export type SettingRef =
+  SettingPath | `storage:${LocalStorageKey}` | `file:${ProjectStateFile}` | `folder:${UserFolder}`;
 
 const STORAGE_PREFIX = "storage:";
 const FILE_PREFIX = "file:";
+const FOLDER_PREFIX = "folder:";
 
 function isStorageRef(ref: SettingRef): ref is `storage:${LocalStorageKey}` {
   return ref.startsWith(STORAGE_PREFIX);
@@ -130,9 +135,14 @@ function isFileRef(ref: SettingRef): ref is `file:${ProjectStateFile}` {
   return ref.startsWith(FILE_PREFIX);
 }
 
+function isFolderRef(ref: SettingRef): ref is `folder:${UserFolder}` {
+  return ref.startsWith(FOLDER_PREFIX);
+}
+
 export function ownerOfSetting(ref: SettingRef): SettingOwner {
   if (isStorageRef(ref)) return rendererStorageOwner(ref.slice(STORAGE_PREFIX.length));
   if (isFileRef(ref)) return projectStateFileOwner(ref.slice(FILE_PREFIX.length));
+  if (isFolderRef(ref)) return userFolderOwner(ref.slice(FOLDER_PREFIX.length));
   return settingOwner(ref);
 }
 

@@ -5,7 +5,6 @@ import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/a
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { PanelKind, PanelTitleMode, ScheduledRunRef } from "../../../shared/types/panel.js";
-import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type {
   OwnedTypedInput,
   PtyHostSpawnOptions,
@@ -107,7 +106,7 @@ export interface TerminalPublicState {
    * field that drives chrome. Cleared when the detected agent exits.
    * Not persisted. See `docs/architecture/terminal-identity.md`.
    */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, python, etc.). Cleared when the process exits. */
   detectedProcessIconId?: string;
   /**
@@ -216,7 +215,6 @@ export interface TerminalRuntime {
   headlessTerminal?: HeadlessTerminal;
   serializeAddon?: SerializeAddon;
   processDetector?: ProcessDetector;
-  outputBuffer: string;
   semanticBuffer: string[];
 }
 
@@ -237,8 +235,6 @@ export interface TerminalInfo extends TerminalPublicState {
   serializeAddon?: SerializeAddon;
   /** @deprecated Internal to TerminalProcess */
   processDetector?: ProcessDetector;
-  /** @deprecated Use TerminalProcess.getOutputBuffer() */
-  outputBuffer: string;
   /** @deprecated Use TerminalProcess.getSemanticBuffer() */
   semanticBuffer: string[];
   /**
@@ -551,6 +547,18 @@ export const IPC_MAX_PAUSE_MS = 10000;
 // watermark) and stay bounded by the IPC_MAX_PAUSE_MS safety timeout.
 export const IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES = 16 * 1024 * 1024;
 export const IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES = 8 * 1024 * 1024;
+
+// Unacked IPC bytes a terminal may have in flight to views that are all cached
+// (its project is on screen in no window). These copies never pause the PTY: a
+// hidden renderer drains on throttled timers or not at all, so pausing would
+// hold the agent in back-to-back IPC_MAX_PAUSE_MS cycles (#16497). Past this
+// budget the host skips the copy and the pane repaints from the host snapshot
+// when its view returns. Tracked apart from the primary ledger and the
+// aggregate gate (IpcQueueManager.addHiddenBytes), and held at the low
+// watermark so a revealed view has at most ~1MB per terminal left to parse.
+export const IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES = Math.floor(
+  (IPC_MAX_QUEUE_BYTES * IPC_LOW_WATERMARK_PERCENT) / 100
+);
 
 // MessagePort adaptive batching configuration
 export const PORT_BATCH_THRESHOLD_BYTES = 64 * 1024; // 64KB — sync-flush when buffered data exceeds this

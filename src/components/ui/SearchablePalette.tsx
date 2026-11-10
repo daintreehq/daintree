@@ -17,6 +17,7 @@ import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { pluralize } from "@/lib/pluralize";
 import { isMac } from "@/lib/platform";
+import { keyBelongsToField } from "@/hooks/useListboxCursor";
 
 const noopHoverIndex = () => {};
 
@@ -437,14 +438,15 @@ export function SearchablePalette<T>({
           // the muscle memory consistent. No-op when there's nothing to jump
           // to so empty-state typing isn't intercepted, and when the consumer
           // gave us no way to move the cursor — preventing the default then
-          // made the key do nothing at all.
-          if (results.length === 0 || !jumpToIndex) break;
+          // made the key do nothing at all. A held modifier or a composing IME
+          // leaves the key to the field (Shift+Home selects the query).
+          if (results.length === 0 || !jumpToIndex || keyBelongsToField(e)) break;
           e.preventDefault();
           e.stopPropagation();
           jumpToIndex(0);
           break;
         case "End":
-          if (results.length === 0 || !jumpToIndex) break;
+          if (results.length === 0 || !jumpToIndex || keyBelongsToField(e)) break;
           e.preventDefault();
           e.stopPropagation();
           jumpToIndex(results.length - 1);
@@ -531,7 +533,7 @@ export function SearchablePalette<T>({
     // One chip, not three. `getActionLabel` names what Enter does for the
     // current selection, which is the only thing a footer is for now — the
     // `↑↓` and `Esc` chips this used to compose were restating conventions.
-    return <PaletteFooterHints primaryHint={{ keys: ["↵"], label: phrase }} />;
+    return <PaletteFooterHints primaryHint={{ keys: "Enter", label: phrase }} />;
   }, [rawActionLabel]);
 
   let footerContent: React.ReactNode;

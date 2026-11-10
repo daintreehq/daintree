@@ -81,6 +81,7 @@ export {
 } from "./plugin/providers.js";
 export {
   ViewContributionSchema,
+  CanopyViewContributionSchema,
   SurfaceViewSlotSchema,
   SurfaceContributionsSchema,
 } from "./plugin/views.js";
@@ -93,7 +94,9 @@ export {
   ProcessToolContributionSchema,
   AgentDetectionConfigSchema,
   AgentResumeConfigSchema,
+  AgentPackagesContributionSchema,
   AgentContributionSchema,
+  resolveAgentExecutableNames,
 } from "./plugin/agents.js";
 export {
   DATABASE_QUERY_MAX_PARAMS,

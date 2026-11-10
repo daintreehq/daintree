@@ -45,8 +45,8 @@ describe("buildDestructivePreview", () => {
       panel({ id: "b2", worktreeId: "b" }),
       panel({ id: "loose" }),
     ];
-    const groups = buildDestructivePreview(input, titles, "Other terminals");
-    expect(groups.map((g) => g.worktreeTitle)).toEqual(["wt:b", "wt:a", "Other terminals"]);
+    const groups = buildDestructivePreview(input, titles, "Other panels");
+    expect(groups.map((g) => g.worktreeTitle)).toEqual(["wt:b", "wt:a", "Other panels"]);
     const listed = groups.flatMap((g) => g.terminals.map((t) => t.terminalId)).sort();
     expect(listed).toEqual([...ids].sort());
   });

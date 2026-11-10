@@ -9,15 +9,15 @@ import type { PromptTemplateArgument } from "@shared/types/plugin";
 
 interface PromptTemplateFormProps {
   title: string;
-  /** The plugin the template comes from, named under the title. */
-  pluginName: string;
+  /** Whose template this is, under the title. */
+  attribution: string;
   args: readonly PromptTemplateArgument[];
   onSubmit: (values: Record<string, string>) => void;
   onCancel: () => void;
   restoreFocusTo?: () => HTMLElement | null;
 }
 
-// Argument names are plugin-authored, so `constructor` is a legal one: read
+// Argument names are written by a plugin or a person, so `constructor` is a legal one: read
 // only what was set on the object itself.
 function valueOf(values: Record<string, string>, name: string): string {
   return Object.hasOwn(values, name) ? values[name]! : "";
@@ -26,7 +26,7 @@ function valueOf(values: Record<string, string>, name: string): string {
 /** The arguments a prompt template asks for before it fills the composer. */
 export function PromptTemplateForm({
   title,
-  pluginName,
+  attribution,
   args,
   onSubmit,
   onCancel,
@@ -76,7 +76,7 @@ export function PromptTemplateForm({
         <AppDialog.CloseButton />
       </AppDialog.Header>
       <AppDialog.Body>
-        <p className="mb-4 text-xs text-text-secondary">From {pluginName}</p>
+        <p className="mb-4 text-xs text-text-secondary">{attribution}</p>
         <fieldset
           ref={formRef}
           onKeyDown={(event) => {

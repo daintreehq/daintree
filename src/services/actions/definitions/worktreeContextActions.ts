@@ -220,6 +220,9 @@ export function registerWorktreeContextActions(
   actions.set("worktree.copyContext", () =>
     defineAction({
       id: "worktree.copyContext",
+      // Kept for MCP callers; `worktree.copyTree` is the palette's version, so a
+      // second row with the same name would only be a duplicate there.
+      palette: { mode: "hidden" },
       title: "Copy worktree context (alias)",
       description:
         "Alias for generating a worktree context bundle. It accepts a subset of the copy-tree capability's arguments — path scoping is not available here, so use that capability directly for a scoped copy.",
@@ -330,7 +333,7 @@ export function registerWorktreeContextActions(
   actions.set("worktree.openReviewHub", () =>
     defineAction({
       id: "worktree.openReviewHub",
-      title: "Open review hub",
+      title: "Open Review Hub",
       description:
         "Open the Review Hub for a worktree to review uncommitted changes. With mode 'since-review' it opens the view of what changed since the worktree's review mark, without staging anything",
       category: "worktree",

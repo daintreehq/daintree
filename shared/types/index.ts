@@ -13,6 +13,8 @@ export type {
   StagingFileEntry,
   StagingStatus,
   RepoState,
+  GitStatusUnanswered,
+  GitStatusUnansweredReason,
   ConflictXYCode,
   ConflictedFileEntry,
   RebaseAction,
@@ -34,6 +36,7 @@ export type {
   WorktreeSetupStatus,
   WorktreeSetupState,
   WorktreeSetupStage,
+  WorktreeSetupClone,
   WslGitEligibility,
 } from "./worktree.js";
 
@@ -87,9 +90,15 @@ export type {
 export type { BrowserHistory } from "./browser.js";
 
 // Project types
-export { isGitBackedProject, isPluginRecipe, pickAgentVisibleProjectSettings } from "./project.js";
+export {
+  isAwaitingClone,
+  isGitBackedProject,
+  isPluginRecipe,
+  pickAgentVisibleProjectSettings,
+} from "./project.js";
 export type {
   ProjectStatus,
+  ProjectCloneState,
   Project,
   ProjectAddOptions,
   ProjectCreationIdentity,
@@ -173,8 +182,6 @@ export type {
   AgentCliBlockReason,
   AgentVersionInfo,
   AgentUpdateSettings,
-  StartAgentUpdatePayload,
-  StartAgentUpdateResult,
   PrerequisiteSpec,
   PrerequisiteSeverity,
   PrerequisiteCheckResult,
@@ -371,7 +378,6 @@ export type {
   AgentSettingsEntry,
   AgentSettings,
   DangerousMode,
-  InlineMode,
   ResumeOnRestart,
   GenerateAgentCommandOptions,
   GenerateAgentFlagsOptions,
@@ -381,6 +387,8 @@ export type {
 export {
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
+  getDefaultDangerousArgs,
+  getPluginBypassArgHistory,
   getAgentSettingsEntry,
   resolveEffectivePresetId,
   generateAgentFlags,
@@ -392,17 +400,18 @@ export {
   supportsSessionIdAssignment,
   supportsExactSessionCapture,
   mintAssignedSessionId,
+  assignmentReopensSession,
+  commandNamesSession,
   stripAssignedSessionIdArgs,
+  stripConversationSelectorArgs,
   stripConversationSelectorFlags,
   buildLaunchCommandFromFlags,
   isAgentBypassSupported,
+  isAgentTerminalBypassSupported,
   resolveEffectiveBypass,
   resolveDangerousMode,
   combineDangerousModes,
   reconcileBypassFlags,
-  resolveInlineMode,
-  combineInlineModes,
-  resolveEffectiveInlineMode,
   reconcileInlineModeFlag,
   resolveKeepDecorations,
   reconcileDecorationFlags,

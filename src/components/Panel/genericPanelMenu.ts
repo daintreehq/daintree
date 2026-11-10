@@ -74,13 +74,18 @@ export interface GenericPanelMenuCommand {
 }
 
 export interface GenericPanelMenuInput {
-  location: "grid" | "dock";
+  /**
+   * A backgrounded panel's way back is a restore, which the right-click menu
+   * draws above this list: moving it or parking it again would leave its
+   * background bookkeeping behind. The header never sees one, having no pane.
+   */
+  location: "grid" | "dock" | "background";
   isMaximized: boolean;
   isDockable: boolean;
   canMoveToWorktree: boolean;
   /** Whether the panel is a plugin's, whose view the host can remount. */
   canReload: boolean;
-  /** Label of the kind's Welcome Tour item; absent when it declares no tour. */
+  /** Label of the kind's welcome tour item; absent when it declares no tour. */
   tourLabel?: string;
   /**
    * The kind's plugin has settings, so the menu offers "Plugin settings…" as
@@ -152,7 +157,7 @@ export function readPanelKindMenuCapabilities(
     // A declared tour nothing has registered would open nothing, so it waits.
     tour:
       tourId && registeredTourIds.has(tourId)
-        ? { id: tourId, label: `${config.name} Welcome Tour` }
+        ? { id: tourId, label: `${config.name} welcome tour` }
         : null,
     pluginSettingsId:
       config?.hasPluginSettings === true && config.extensionId ? config.extensionId : null,
@@ -214,7 +219,7 @@ export function hasGenericPanelMenu(kind: PanelKind, hasPty: boolean): boolean {
 }
 
 /**
- * Whether a generic-menu kind offers Reload panel (#12611): only a plugin's
+ * Whether a generic-menu kind offers Reload (#12611): only a plugin's
  * view can be remounted, so the file, file browser and diff kinds that share
  * the menu do not. Callers have already ruled out PTY kinds.
  */
@@ -272,21 +277,23 @@ export function getGenericPanelMenuGroups({
       icon: isMaximized ? Minimize2 : Maximize2,
       shortcutActionId: "terminal.maximize",
     });
-  } else {
+  } else if (location === "dock") {
     layout.push({ id: "move-to-grid", label: "Move to grid", icon: PanelTopClose });
   }
 
   return [
-    layout,
+    ...(layout.length > 0 ? [layout] : []),
     [
-      { id: "rename", label: "Rename panel", icon: Pencil },
-      ...(canReload ? [{ id: "reload" as const, label: "Reload panel", icon: RotateCw }] : []),
+      { id: "rename", label: "Rename", icon: Pencil },
+      ...(canReload ? [{ id: "reload" as const, label: "Reload", icon: RotateCw }] : []),
     ],
     ...(pluginContributed.length > 0 ? [pluginContributed] : []),
     ...(pluginOwned.length > 0 ? [pluginOwned] : []),
     [
-      { id: "background", label: "Send to background", icon: ArrowDownFromLine },
-      { id: "trash", label: "Trash panel", icon: Trash2 },
+      ...(location === "background"
+        ? []
+        : [{ id: "background" as const, label: "Send to background", icon: ArrowDownFromLine }]),
+      { id: "trash", label: "Trash", icon: Trash2 },
       { id: "kill", label: "Remove panel", icon: OctagonX, destructive: true },
     ],
   ];

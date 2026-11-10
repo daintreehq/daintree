@@ -115,13 +115,13 @@ describe("WorktreeMenuItems — root hierarchy", () => {
     // The redesign put the two things a card menu is opened for most at the
     // root, ahead of the grouped long tail.
     expect(rootRowLabels(container)).toEqual([
-      "New session…",
+      "New panel…",
       "Review worktree",
       "Launch",
       "Open",
       "Review",
       "Git",
-      "Sessions",
+      "Panels",
       "Recipes",
       "Runtime",
       "Linked work",
@@ -148,13 +148,13 @@ describe("WorktreeMenuItems — root hierarchy", () => {
 
     // The hub alone leaves the Review submenu with nothing to hold, so only
     // the direct "Review worktree" row remains; with no panel palette there
-    // is no "New session…" row either.
+    // is no "New panel…" row either.
     expect(rootRowLabels(container)).toEqual([
       "Review worktree",
       "Launch",
       "Open",
       "Git",
-      "Sessions",
+      "Panels",
       "Copy",
       "Organize",
       "Delete worktree…",
@@ -168,7 +168,7 @@ describe("WorktreeMenuItems — root hierarchy", () => {
     const onOpenReviewHub = vi.fn();
     renderWorktreeMenu({ onOpenPanelPalette, onOpenReviewHub }, "context-menu");
 
-    fireEvent.click(screen.getByText("New session…"));
+    fireEvent.click(screen.getByText("New panel…"));
     fireEvent.click(screen.getByText("Review worktree"));
 
     expect(onOpenPanelPalette).toHaveBeenCalledWith("context-menu");
@@ -289,12 +289,12 @@ describe("WorktreeMenuItems — quiet git detail", () => {
     const { container } = renderWorktreeMenu({ ...fullyPopulated(), quietGit: true });
 
     expect(rootRowLabels(container)).toEqual([
-      "New session…",
+      "New panel…",
       "Review worktree",
       "Launch",
       "Open",
       "Git",
-      "Sessions",
+      "Panels",
       "Recipes",
       "Runtime",
       "Copy",
@@ -419,7 +419,7 @@ describe("WorktreeMenuItems — Sessions", () => {
     const { container } = renderWorktreeMenu(busy);
 
     const sessions = Array.from(container.querySelectorAll("[data-menu-sub]")).find(
-      (sub) => sub.firstElementChild?.textContent?.trim() === "Sessions"
+      (sub) => sub.firstElementChild?.textContent?.trim() === "Panels"
     );
     const labels = Array.from(sessions?.querySelectorAll("[data-menu-item]") ?? []).map(
       (el) => el.textContent?.replace(/\d+$/, "") ?? ""
@@ -433,8 +433,8 @@ describe("WorktreeMenuItems — Sessions", () => {
       "Select working agents",
       "Redraw all terminals",
       "Clear session history…",
-      "Trash all sessions…",
-      "End all sessions…",
+      "Trash all panels…",
+      "Remove all panels…",
     ]);
   });
 
@@ -1116,6 +1116,33 @@ describe("Git submenu — start rows", () => {
     expect(row.textContent).toContain("Checking status");
   });
 
+  it("says git status went unanswered rather than still checking", () => {
+    const { container } = renderWorktreeMenu({
+      worktree: makeWorktree({
+        baseBranchName: "develop",
+        baseBehindCount: 3,
+        gitStatusUnanswered: { reason: "timed-out", since: 1_700_000_000_000 },
+      }),
+    });
+    const row = gitRow(container, "Rebase onto");
+    expect(row.disabled).toBe(true);
+    expect(row.textContent).toContain("Git status not answered");
+    expect(row.textContent).not.toContain("Checking status");
+  });
+
+  it("says a row is waiting for the download when that's why status is unknown", () => {
+    const { container } = renderWorktreeMenu({
+      worktree: makeWorktree({
+        baseBranchName: "develop",
+        baseBehindCount: 3,
+        gitStatusWaitingForDownload: true,
+      }),
+    });
+    const row = gitRow(container, "Rebase onto");
+    expect(row.disabled).toBe(true);
+    expect(row.textContent).toContain("Waiting for files to download");
+  });
+
   it("dispatches nothing from a disabled row", () => {
     const { container } = renderWorktreeMenu({ worktree: integrable({ baseBehindCount: 0 }) });
     gitRow(container, "Rebase onto").click();
@@ -1235,15 +1262,15 @@ describe("WorktreeMenuItems Git submenu", () => {
     });
 
     expect(gitRowLabels(container)).toEqual([
-      "Pull and rebase",
-      "Push",
+      "Pull and rebase…",
+      "Push…",
       "Fetch",
       "Fetch and prune",
       expect.stringContaining("Rebase onto base branch"),
       expect.stringContaining("Merge base branch in"),
     ]);
     expect(isDisabled(gitRowMatching(/Pull and rebase/))).toBe(false);
-    expect(isDisabled(gitRowMatching(/^Push$/))).toBe(false);
+    expect(isDisabled(gitRowMatching(/^Push…$/))).toBe(false);
   });
 
   it("says why pull is unavailable rather than dropping the row", () => {
@@ -1314,7 +1341,7 @@ describe("WorktreeMenuItems Git submenu", () => {
       worktree: makeWorktree({ ...measured(null) }),
     });
 
-    expect(isDisabled(gitRowMatching(/^Push$/))).toBe(false);
+    expect(isDisabled(gitRowMatching(/^Push…$/))).toBe(false);
   });
 
   it("disables push when nothing is ahead", () => {
@@ -1353,8 +1380,8 @@ describe("WorktreeMenuItems Git submenu", () => {
     });
 
     expect(gitRowLabels(container)).toEqual([
-      "Pull and rebase",
-      "Push",
+      "Pull and rebase…",
+      "Push…",
       "Fetch",
       "Fetch and prune",
       expect.stringContaining("Rebase onto base branch"),
@@ -1370,7 +1397,7 @@ describe("WorktreeMenuItems Git submenu", () => {
     renderWorktreeMenu({ ...callbacks, worktree: makeWorktree({ aheadCount: 1 }) }, "context-menu");
 
     gitRowMatching(/Pull and rebase/).click();
-    gitRowMatching(/^Push$/).click();
+    gitRowMatching(/^Push…$/).click();
     expect(callbacks.onGitPullRebase).toHaveBeenCalledWith("context-menu");
     expect(callbacks.onGitPush).toHaveBeenCalledWith("context-menu");
   });
@@ -1413,8 +1440,8 @@ describe("WorktreeMenuItems Git submenu", () => {
     });
 
     expect(gitRowLabels(container)).toEqual([
-      "Pull and rebase",
-      "Push",
+      "Pull and rebase…",
+      "Push…",
       "Fetch",
       "Fetch and prune",
       expect.stringContaining("Rebase onto base branch"),
@@ -1757,7 +1784,7 @@ describe("WorktreeMenuItems — workspace root", () => {
       "Review",
       "Git",
       "Fetch",
-      "Sessions",
+      "Panels",
       "Runtime",
       "Linked work",
       "Organize",

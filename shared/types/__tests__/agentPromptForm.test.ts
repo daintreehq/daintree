@@ -1,0 +1,710 @@
+import { execFileSync } from "node:child_process";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { generateAgentCommand } from "../agentSettings.js";
+import {
+  AGENT_REGISTRY,
+  PROMPT_FORM_PLACEHOLDER,
+  getAgentPromptForm,
+  setUserRegistry,
+} from "../../config/agentRegistry.js";
+import type { AgentConfig, AgentPromptForm } from "../../config/agentRegistry.js";
+import {
+  registerPluginAgents,
+  clearPluginAgentRegistryForTests,
+} from "../../config/pluginAgentRegistry.js";
+import { BUILT_IN_AGENT_IDS } from "../../config/agentIds.js";
+import { setAgentCommandDialectResolver } from "../../utils/shellEscape.js";
+import type { GenerateAgentCommandOptions } from "../agentSettings.js";
+import type { PluginAgentContribution } from "../plugin.js";
+
+const originalPlatform = process.platform;
+
+beforeEach(() => {
+  Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+});
+
+afterEach(() => {
+  Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  setAgentCommandDialectResolver(null);
+});
+
+// An apostrophe, so the two dialects quote the prompt differently.
+const PROMPT = "Fix the bug's edge";
+
+const LAUNCH_EXTRAS: GenerateAgentCommandOptions = {
+  sessionId: "0b7c6c1e-8f0a-4c55-9d9e-3c1f4f7a2b10",
+  modelId: "test-model",
+  presetArgs: ["--preset-flag", "spaced preset value"],
+};
+
+function commandMatrix(agentId: string, dialect: "posix" | "windows"): Record<string, string> {
+  setAgentCommandDialectResolver(() => dialect);
+  const command = AGENT_REGISTRY[agentId as keyof typeof AGENT_REGISTRY].command;
+  const run = (options: GenerateAgentCommandOptions) =>
+    generateAgentCommand(command, {}, agentId, options);
+  const rows: Record<string, string> = {};
+  for (const interactive of [true, false]) {
+    const mode = interactive ? "interactive" : "headless";
+    rows[`${mode}`] = run({ interactive });
+    rows[`${mode} +extras`] = run({ interactive, ...LAUNCH_EXTRAS });
+    rows[`${mode} +prompt`] = run({ interactive, initialPrompt: PROMPT });
+    rows[`${mode} +prompt +extras`] = run({ interactive, initialPrompt: PROMPT, ...LAUNCH_EXTRAS });
+  }
+  return rows;
+}
+
+// Recorded from the per-agent `switch` that built the prompt part before the
+// forms moved into the registry (#16367); any drift here is a launch change.
+describe("built-in launch commands across prompt forms", () => {
+  it("keeps every built-in agent's POSIX command unchanged", () => {
+    const all = Object.fromEntries(
+      BUILT_IN_AGENT_IDS.map((id) => [id, commandMatrix(id, "posix")])
+    );
+    expect(all).toMatchInlineSnapshot(`
+      {
+        "aider": {
+          "headless": "aider --no-auto-commits",
+          "headless +extras": "aider --no-auto-commits --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "aider --no-auto-commits -m 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "aider --no-auto-commits --model test-model --preset-flag 'spaced preset value' -m 'Fix the bug'\\''s edge'",
+          "interactive": "aider --no-auto-commits",
+          "interactive +extras": "aider --no-auto-commits --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "aider --no-auto-commits -m 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "aider --no-auto-commits --model test-model --preset-flag 'spaced preset value' -m 'Fix the bug'\\''s edge'",
+        },
+        "amp": {
+          "headless": "amp",
+          "headless +extras": "amp --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "amp -x 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "amp --model test-model --preset-flag 'spaced preset value' -x 'Fix the bug'\\''s edge'",
+          "interactive": "amp",
+          "interactive +extras": "amp --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "amp 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "amp --model test-model --preset-flag 'spaced preset value' 'Fix the bug'\\''s edge'",
+        },
+        "antigravity": {
+          "headless": "agy",
+          "headless +extras": "agy --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "agy -p 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "agy --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug'\\''s edge'",
+          "interactive": "agy",
+          "interactive +extras": "agy --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "agy -i 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "agy --model test-model --preset-flag 'spaced preset value' -i 'Fix the bug'\\''s edge'",
+        },
+        "claude": {
+          "headless": "claude",
+          "headless +extras": "claude --session-id '0b7c6c1e-8f0a-4c55-9d9e-3c1f4f7a2b10' --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "claude -p 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "claude --session-id '0b7c6c1e-8f0a-4c55-9d9e-3c1f4f7a2b10' --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug'\\''s edge'",
+          "interactive": "claude",
+          "interactive +extras": "claude --session-id '0b7c6c1e-8f0a-4c55-9d9e-3c1f4f7a2b10' --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "claude 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "claude --session-id '0b7c6c1e-8f0a-4c55-9d9e-3c1f4f7a2b10' --model test-model --preset-flag 'spaced preset value' 'Fix the bug'\\''s edge'",
+        },
+        "codex": {
+          "headless": "codex -c 'tui.whimsy=false'",
+          "headless +extras": "codex --model test-model --preset-flag 'spaced preset value' -c 'tui.whimsy=false'",
+          "headless +prompt": "codex -c 'tui.whimsy=false' exec 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "codex --model test-model --preset-flag 'spaced preset value' -c 'tui.whimsy=false' exec 'Fix the bug'\\''s edge'",
+          "interactive": "codex --no-alt-screen -c 'tui.whimsy=false'",
+          "interactive +extras": "codex --no-alt-screen --model test-model --preset-flag 'spaced preset value' -c 'tui.whimsy=false'",
+          "interactive +prompt": "codex --no-alt-screen -c 'tui.whimsy=false' 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "codex --no-alt-screen --model test-model --preset-flag 'spaced preset value' -c 'tui.whimsy=false' 'Fix the bug'\\''s edge'",
+        },
+        "copilot": {
+          "headless": "copilot",
+          "headless +extras": "copilot --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "copilot -p 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "copilot --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug'\\''s edge'",
+          "interactive": "copilot",
+          "interactive +extras": "copilot --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "copilot -i 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "copilot --model test-model --preset-flag 'spaced preset value' -i 'Fix the bug'\\''s edge'",
+        },
+        "crush": {
+          "headless": "crush",
+          "headless +extras": "crush --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "crush run 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "crush --model test-model --preset-flag 'spaced preset value' run 'Fix the bug'\\''s edge'",
+          "interactive": "crush",
+          "interactive +extras": "crush --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "crush 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "crush --model test-model --preset-flag 'spaced preset value' 'Fix the bug'\\''s edge'",
+        },
+        "cursor": {
+          "headless": "cursor-agent",
+          "headless +extras": "cursor-agent --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "cursor-agent 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "cursor-agent --model test-model --preset-flag 'spaced preset value' 'Fix the bug'\\''s edge'",
+          "interactive": "cursor-agent",
+          "interactive +extras": "cursor-agent --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "cursor-agent 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "cursor-agent --model test-model --preset-flag 'spaced preset value' 'Fix the bug'\\''s edge'",
+        },
+        "gemini": {
+          "headless": "gemini",
+          "headless +extras": "gemini --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "gemini -p 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "gemini --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug'\\''s edge'",
+          "interactive": "gemini",
+          "interactive +extras": "gemini --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "gemini -i 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "gemini --model test-model --preset-flag 'spaced preset value' -i 'Fix the bug'\\''s edge'",
+        },
+        "goose": {
+          "headless": "goose 'session'",
+          "headless +extras": "goose 'session' --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "goose run -t 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "goose run --model test-model --preset-flag 'spaced preset value' -t 'Fix the bug'\\''s edge'",
+          "interactive": "goose 'session'",
+          "interactive +extras": "goose 'session' --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "goose run -t 'Fix the bug'\\''s edge' --interactive",
+          "interactive +prompt +extras": "goose run --model test-model --preset-flag 'spaced preset value' -t 'Fix the bug'\\''s edge' --interactive",
+        },
+        "grok": {
+          "headless": "grok",
+          "headless +extras": "grok --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "grok -p 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "grok --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug'\\''s edge'",
+          "interactive": "grok --no-alt-screen",
+          "interactive +extras": "grok --no-alt-screen --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "grok --no-alt-screen 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "grok --no-alt-screen --model test-model --preset-flag 'spaced preset value' 'Fix the bug'\\''s edge'",
+        },
+        "interpreter": {
+          "headless": "interpreter",
+          "headless +extras": "interpreter --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "interpreter 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "interpreter --model test-model --preset-flag 'spaced preset value' 'Fix the bug'\\''s edge'",
+          "interactive": "interpreter",
+          "interactive +extras": "interpreter --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "interpreter 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "interpreter --model test-model --preset-flag 'spaced preset value' 'Fix the bug'\\''s edge'",
+        },
+        "kimi": {
+          "headless": "kimi",
+          "headless +extras": "kimi --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "kimi -p 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "kimi --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug'\\''s edge'",
+          "interactive": "kimi",
+          "interactive +extras": "kimi --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "kimi -p 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "kimi --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug'\\''s edge'",
+        },
+        "kiro": {
+          "headless": "kiro-cli",
+          "headless +extras": "kiro-cli --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "kiro-cli chat --no-interactive 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "kiro-cli --model test-model --preset-flag 'spaced preset value' chat --no-interactive 'Fix the bug'\\''s edge'",
+          "interactive": "kiro-cli",
+          "interactive +extras": "kiro-cli --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "kiro-cli 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "kiro-cli --model test-model --preset-flag 'spaced preset value' 'Fix the bug'\\''s edge'",
+        },
+        "mistral": {
+          "headless": "vibe --trust",
+          "headless +extras": "vibe --trust --preset-flag 'spaced preset value'",
+          "headless +prompt": "vibe --trust --prompt 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "vibe --trust --model test-model --preset-flag 'spaced preset value' --prompt 'Fix the bug'\\''s edge'",
+          "interactive": "vibe --trust",
+          "interactive +extras": "vibe --trust --preset-flag 'spaced preset value'",
+          "interactive +prompt": "vibe --trust 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "vibe --trust --preset-flag 'spaced preset value' 'Fix the bug'\\''s edge'",
+        },
+        "opencode": {
+          "headless": "opencode",
+          "headless +extras": "opencode --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "opencode run 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "opencode --model test-model --preset-flag 'spaced preset value' run 'Fix the bug'\\''s edge'",
+          "interactive": "opencode --mini",
+          "interactive +extras": "opencode --mini --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "opencode --mini --prompt 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "opencode --mini --model test-model --preset-flag 'spaced preset value' --prompt 'Fix the bug'\\''s edge'",
+        },
+        "qwen": {
+          "headless": "qwen",
+          "headless +extras": "qwen --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "qwen -p 'Fix the bug'\\''s edge'",
+          "headless +prompt +extras": "qwen --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug'\\''s edge'",
+          "interactive": "qwen",
+          "interactive +extras": "qwen --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "qwen -i 'Fix the bug'\\''s edge'",
+          "interactive +prompt +extras": "qwen --model test-model --preset-flag 'spaced preset value' -i 'Fix the bug'\\''s edge'",
+        },
+      }
+    `);
+  });
+
+  it("keeps every built-in agent's PowerShell command unchanged", () => {
+    const all = Object.fromEntries(
+      BUILT_IN_AGENT_IDS.map((id) => [id, commandMatrix(id, "windows")])
+    );
+    expect(all).toMatchInlineSnapshot(`
+      {
+        "aider": {
+          "headless": "aider --no-auto-commits",
+          "headless +extras": "aider --no-auto-commits --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "aider --no-auto-commits -m 'Fix the bug''s edge'",
+          "headless +prompt +extras": "aider --no-auto-commits --model test-model --preset-flag 'spaced preset value' -m 'Fix the bug''s edge'",
+          "interactive": "aider --no-auto-commits",
+          "interactive +extras": "aider --no-auto-commits --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "aider --no-auto-commits -m 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "aider --no-auto-commits --model test-model --preset-flag 'spaced preset value' -m 'Fix the bug''s edge'",
+        },
+        "amp": {
+          "headless": "amp",
+          "headless +extras": "amp --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "amp -x 'Fix the bug''s edge'",
+          "headless +prompt +extras": "amp --model test-model --preset-flag 'spaced preset value' -x 'Fix the bug''s edge'",
+          "interactive": "amp",
+          "interactive +extras": "amp --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "amp 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "amp --model test-model --preset-flag 'spaced preset value' 'Fix the bug''s edge'",
+        },
+        "antigravity": {
+          "headless": "agy",
+          "headless +extras": "agy --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "agy -p 'Fix the bug''s edge'",
+          "headless +prompt +extras": "agy --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug''s edge'",
+          "interactive": "agy",
+          "interactive +extras": "agy --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "agy -i 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "agy --model test-model --preset-flag 'spaced preset value' -i 'Fix the bug''s edge'",
+        },
+        "claude": {
+          "headless": "claude",
+          "headless +extras": "claude --session-id '0b7c6c1e-8f0a-4c55-9d9e-3c1f4f7a2b10' --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "claude -p 'Fix the bug''s edge'",
+          "headless +prompt +extras": "claude --session-id '0b7c6c1e-8f0a-4c55-9d9e-3c1f4f7a2b10' --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug''s edge'",
+          "interactive": "claude",
+          "interactive +extras": "claude --session-id '0b7c6c1e-8f0a-4c55-9d9e-3c1f4f7a2b10' --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "claude 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "claude --session-id '0b7c6c1e-8f0a-4c55-9d9e-3c1f4f7a2b10' --model test-model --preset-flag 'spaced preset value' 'Fix the bug''s edge'",
+        },
+        "codex": {
+          "headless": "codex -c 'tui.whimsy=false'",
+          "headless +extras": "codex --model test-model --preset-flag 'spaced preset value' -c 'tui.whimsy=false'",
+          "headless +prompt": "codex -c 'tui.whimsy=false' exec 'Fix the bug''s edge'",
+          "headless +prompt +extras": "codex --model test-model --preset-flag 'spaced preset value' -c 'tui.whimsy=false' exec 'Fix the bug''s edge'",
+          "interactive": "codex --no-alt-screen -c 'tui.whimsy=false'",
+          "interactive +extras": "codex --no-alt-screen --model test-model --preset-flag 'spaced preset value' -c 'tui.whimsy=false'",
+          "interactive +prompt": "codex --no-alt-screen -c 'tui.whimsy=false' 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "codex --no-alt-screen --model test-model --preset-flag 'spaced preset value' -c 'tui.whimsy=false' 'Fix the bug''s edge'",
+        },
+        "copilot": {
+          "headless": "copilot",
+          "headless +extras": "copilot --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "copilot -p 'Fix the bug''s edge'",
+          "headless +prompt +extras": "copilot --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug''s edge'",
+          "interactive": "copilot",
+          "interactive +extras": "copilot --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "copilot -i 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "copilot --model test-model --preset-flag 'spaced preset value' -i 'Fix the bug''s edge'",
+        },
+        "crush": {
+          "headless": "crush",
+          "headless +extras": "crush --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "crush run 'Fix the bug''s edge'",
+          "headless +prompt +extras": "crush --model test-model --preset-flag 'spaced preset value' run 'Fix the bug''s edge'",
+          "interactive": "crush",
+          "interactive +extras": "crush --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "crush 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "crush --model test-model --preset-flag 'spaced preset value' 'Fix the bug''s edge'",
+        },
+        "cursor": {
+          "headless": "cursor-agent",
+          "headless +extras": "cursor-agent --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "cursor-agent 'Fix the bug''s edge'",
+          "headless +prompt +extras": "cursor-agent --model test-model --preset-flag 'spaced preset value' 'Fix the bug''s edge'",
+          "interactive": "cursor-agent",
+          "interactive +extras": "cursor-agent --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "cursor-agent 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "cursor-agent --model test-model --preset-flag 'spaced preset value' 'Fix the bug''s edge'",
+        },
+        "gemini": {
+          "headless": "gemini",
+          "headless +extras": "gemini --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "gemini -p 'Fix the bug''s edge'",
+          "headless +prompt +extras": "gemini --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug''s edge'",
+          "interactive": "gemini",
+          "interactive +extras": "gemini --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "gemini -i 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "gemini --model test-model --preset-flag 'spaced preset value' -i 'Fix the bug''s edge'",
+        },
+        "goose": {
+          "headless": "goose 'session'",
+          "headless +extras": "goose 'session' --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "goose run -t 'Fix the bug''s edge'",
+          "headless +prompt +extras": "goose run --model test-model --preset-flag 'spaced preset value' -t 'Fix the bug''s edge'",
+          "interactive": "goose 'session'",
+          "interactive +extras": "goose 'session' --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "goose run -t 'Fix the bug''s edge' --interactive",
+          "interactive +prompt +extras": "goose run --model test-model --preset-flag 'spaced preset value' -t 'Fix the bug''s edge' --interactive",
+        },
+        "grok": {
+          "headless": "grok",
+          "headless +extras": "grok --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "grok -p 'Fix the bug''s edge'",
+          "headless +prompt +extras": "grok --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug''s edge'",
+          "interactive": "grok --no-alt-screen",
+          "interactive +extras": "grok --no-alt-screen --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "grok --no-alt-screen 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "grok --no-alt-screen --model test-model --preset-flag 'spaced preset value' 'Fix the bug''s edge'",
+        },
+        "interpreter": {
+          "headless": "interpreter",
+          "headless +extras": "interpreter --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "interpreter 'Fix the bug''s edge'",
+          "headless +prompt +extras": "interpreter --model test-model --preset-flag 'spaced preset value' 'Fix the bug''s edge'",
+          "interactive": "interpreter",
+          "interactive +extras": "interpreter --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "interpreter 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "interpreter --model test-model --preset-flag 'spaced preset value' 'Fix the bug''s edge'",
+        },
+        "kimi": {
+          "headless": "kimi",
+          "headless +extras": "kimi --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "kimi -p 'Fix the bug''s edge'",
+          "headless +prompt +extras": "kimi --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug''s edge'",
+          "interactive": "kimi",
+          "interactive +extras": "kimi --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "kimi -p 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "kimi --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug''s edge'",
+        },
+        "kiro": {
+          "headless": "kiro-cli",
+          "headless +extras": "kiro-cli --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "kiro-cli chat --no-interactive 'Fix the bug''s edge'",
+          "headless +prompt +extras": "kiro-cli --model test-model --preset-flag 'spaced preset value' chat --no-interactive 'Fix the bug''s edge'",
+          "interactive": "kiro-cli",
+          "interactive +extras": "kiro-cli --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "kiro-cli 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "kiro-cli --model test-model --preset-flag 'spaced preset value' 'Fix the bug''s edge'",
+        },
+        "mistral": {
+          "headless": "vibe --trust",
+          "headless +extras": "vibe --trust --preset-flag 'spaced preset value'",
+          "headless +prompt": "vibe --trust --prompt 'Fix the bug''s edge'",
+          "headless +prompt +extras": "vibe --trust --model test-model --preset-flag 'spaced preset value' --prompt 'Fix the bug''s edge'",
+          "interactive": "vibe --trust",
+          "interactive +extras": "vibe --trust --preset-flag 'spaced preset value'",
+          "interactive +prompt": "vibe --trust 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "vibe --trust --preset-flag 'spaced preset value' 'Fix the bug''s edge'",
+        },
+        "opencode": {
+          "headless": "opencode",
+          "headless +extras": "opencode --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "opencode run 'Fix the bug''s edge'",
+          "headless +prompt +extras": "opencode --model test-model --preset-flag 'spaced preset value' run 'Fix the bug''s edge'",
+          "interactive": "opencode --mini",
+          "interactive +extras": "opencode --mini --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "opencode --mini --prompt 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "opencode --mini --model test-model --preset-flag 'spaced preset value' --prompt 'Fix the bug''s edge'",
+        },
+        "qwen": {
+          "headless": "qwen",
+          "headless +extras": "qwen --model test-model --preset-flag 'spaced preset value'",
+          "headless +prompt": "qwen -p 'Fix the bug''s edge'",
+          "headless +prompt +extras": "qwen --model test-model --preset-flag 'spaced preset value' -p 'Fix the bug''s edge'",
+          "interactive": "qwen",
+          "interactive +extras": "qwen --model test-model --preset-flag 'spaced preset value'",
+          "interactive +prompt": "qwen -i 'Fix the bug''s edge'",
+          "interactive +prompt +extras": "qwen --model test-model --preset-flag 'spaced preset value' -i 'Fix the bug''s edge'",
+        },
+      }
+    `);
+  });
+});
+
+describe("built-in prompt form declarations", () => {
+  it("carry the prompt as exactly one whole argument in every declared form", () => {
+    for (const config of Object.values(AGENT_REGISTRY)) {
+      const declared = config.initialPromptForm;
+      const forms: AgentPromptForm[] = declared ? [declared.interactive, declared.headless] : [];
+      for (const form of forms) {
+        const whole = form.args.filter((arg) => arg === PROMPT_FORM_PLACEHOLDER);
+        const embedded = form.args.filter(
+          (arg) => arg !== PROMPT_FORM_PLACEHOLDER && arg.includes(PROMPT_FORM_PLACEHOLDER)
+        );
+        expect({ agent: config.id, whole: whole.length, embedded }).toEqual({
+          agent: config.id,
+          whole: 1,
+          embedded: [],
+        });
+      }
+    }
+  });
+});
+
+const agentBase = {
+  name: "Agent",
+  color: "#3366ff",
+  iconId: "terminal",
+  supportsContextInjection: false,
+};
+
+describe("agents that declare no prompt form", () => {
+  afterEach(() => {
+    clearPluginAgentRegistryForTests();
+    setUserRegistry({});
+  });
+
+  it("hand a plugin agent the prompt positionally in both modes", () => {
+    registerPluginAgents("me.extra-agents", [
+      { ...agentBase, id: "pi", command: "pi", args: ["--profile", "work"] },
+    ]);
+    for (const interactive of [true, false]) {
+      expect(generateAgentCommand("pi", {}, "pi", { interactive, initialPrompt: "Fix it" })).toBe(
+        "pi --profile 'work' 'Fix it'"
+      );
+    }
+  });
+
+  it("hand a user agent its own args and the prompt positionally in both modes", () => {
+    setUserRegistry({ mine: { ...agentBase, id: "mine", command: "mine", args: ["--fast"] } });
+    for (const interactive of [true, false]) {
+      expect(
+        generateAgentCommand("mine", {}, "mine", { interactive, initialPrompt: "Fix it" })
+      ).toBe("mine --fast 'Fix it'");
+    }
+  });
+
+  it("hand an unknown agent and an unnamed one the prompt positionally in both modes", () => {
+    for (const interactive of [true, false]) {
+      expect(
+        generateAgentCommand("ghost", {}, "ghost", { interactive, initialPrompt: "Fix it" })
+      ).toBe("ghost 'Fix it'");
+      expect(
+        generateAgentCommand("tool", {}, undefined, { interactive, initialPrompt: "Fix it" })
+      ).toBe("tool 'Fix it'");
+    }
+  });
+});
+
+// Shapes from a survey of community CLIs (#16404), read from their source rather
+// than run, so these prove what the launch hands over, not each CLI's behaviour.
+describe("a plugin agent's declared prompt form", () => {
+  afterEach(() => clearPluginAgentRegistryForTests());
+
+  function declare(contribution: Partial<PluginAgentContribution> & { id: string }): void {
+    registerPluginAgents("me.extra-agents", [
+      { ...agentBase, command: contribution.id, ...contribution },
+    ]);
+  }
+
+  it("puts a task-only CLI's prompt after its flag, and the flag nowhere without a task", () => {
+    const form: AgentPromptForm = { args: ["--task", PROMPT_FORM_PLACEHOLDER] };
+    declare({ id: "mini", initialPromptForm: { interactive: form, headless: form } });
+    for (const interactive of [true, false]) {
+      expect(
+        generateAgentCommand("mini", {}, "mini", { interactive, initialPrompt: "Fix it" })
+      ).toBe("mini --task 'Fix it'");
+      for (const initialPrompt of [undefined, "", "   "]) {
+        expect(generateAgentCommand("mini", {}, "mini", { interactive, initialPrompt })).toBe(
+          "mini"
+        );
+      }
+    }
+  });
+
+  it("gives each mode its own form and keeps the selected profile in both", () => {
+    declare({
+      id: "hermes",
+      args: ["--profile", "work", "chat"],
+      initialPromptForm: {
+        interactive: { args: ["--query", PROMPT_FORM_PLACEHOLDER] },
+        headless: {
+          subcommand: { name: "run", replaces: "chat" },
+          args: [PROMPT_FORM_PLACEHOLDER],
+        },
+      },
+    });
+    const launch = { initialPrompt: "Fix it", presetArgs: ["--profile", "travel"] };
+    expect(generateAgentCommand("hermes", {}, "hermes", launch)).toBe(
+      "hermes --profile 'work' 'chat' --profile 'travel' --query 'Fix it'"
+    );
+    expect(generateAgentCommand("hermes", {}, "hermes", { ...launch, interactive: false })).toBe(
+      "hermes --profile 'work' run --profile 'travel' 'Fix it'"
+    );
+  });
+
+  it("leaves the registry's subcommand alone on a launch with no prompt", () => {
+    declare({
+      id: "hermes",
+      args: ["chat"],
+      initialPromptForm: {
+        interactive: { args: ["--query", PROMPT_FORM_PLACEHOLDER] },
+        headless: {
+          subcommand: { name: "run", replaces: "chat" },
+          args: [PROMPT_FORM_PLACEHOLDER],
+        },
+      },
+    });
+    expect(generateAgentCommand("hermes", {}, "hermes", { interactive: false })).toBe(
+      "hermes 'chat'"
+    );
+  });
+
+  it("uses the positional prompt interactively and the flag for a one-shot run", () => {
+    declare({
+      id: "pi",
+      initialPromptForm: {
+        interactive: { args: [PROMPT_FORM_PLACEHOLDER] },
+        headless: { args: ["--print", PROMPT_FORM_PLACEHOLDER] },
+      },
+    });
+    expect(generateAgentCommand("pi", {}, "pi", { initialPrompt: "Fix it" })).toBe("pi 'Fix it'");
+    expect(
+      generateAgentCommand("pi", {}, "pi", { interactive: false, initialPrompt: "Fix it" })
+    ).toBe("pi --print 'Fix it'");
+  });
+
+  it("quotes for the shell that runs the launch", () => {
+    declare({
+      id: "mini",
+      initialPromptForm: {
+        interactive: { args: ["--task", PROMPT_FORM_PLACEHOLDER] },
+        headless: { args: ["--task", PROMPT_FORM_PLACEHOLDER] },
+      },
+    });
+    setAgentCommandDialectResolver(() => "windows");
+    expect(generateAgentCommand("mini", {}, "mini", { initialPrompt: PROMPT })).toBe(
+      "mini --task 'Fix the bug''s edge'"
+    );
+  });
+
+  // A real shell, so the assertion is the argv a CLI would receive.
+  describe.skipIf(originalPlatform === "win32")("as the argv a CLI receives", () => {
+    const argvOf = (command: string) =>
+      execFileSync("/bin/sh", ["-c", command], { encoding: "utf8" }).split("\0").slice(0, -1);
+
+    const printfAgent = (initialPromptForm: PluginAgentContribution["initialPromptForm"]) => {
+      declare({ id: "printf", command: "printf", args: ["%s\\0"], initialPromptForm });
+      setAgentCommandDialectResolver(() => "posix");
+    };
+    const launch = (initialPrompt: string, interactive: boolean) =>
+      argvOf(generateAgentCommand("printf", {}, "printf", { interactive, initialPrompt }));
+
+    it.each([
+      ["spaces", "fix  the   bug"],
+      ["single quotes", "it's 'quoted'"],
+      ["double quotes", 'say "hi"'],
+      ["a leading hyphen", "-n do it"],
+      ["a leading double hyphen", "--version"],
+      ["shell syntax", "$(whoami) `id` $HOME ; rm -rf * | cat > x"],
+      ["line breaks", "one\n\n  two\tthree"],
+    ])("passes a prompt with %s as one literal argument in both forms", (_name, prompt) => {
+      printfAgent({
+        interactive: { args: [PROMPT_FORM_PLACEHOLDER] },
+        headless: { args: ["--print", PROMPT_FORM_PLACEHOLDER] },
+      });
+      expect(launch(prompt, true)).toEqual([prompt]);
+      expect(launch(prompt, false)).toEqual(["--print", prompt]);
+    });
+
+    it("keeps a leading-hyphen prompt whole after a flag and after a terminator", () => {
+      printfAgent({
+        interactive: { args: ["--task", PROMPT_FORM_PLACEHOLDER] },
+        headless: { args: ["--", PROMPT_FORM_PLACEHOLDER] },
+      });
+      expect(launch("--version -x", true)).toEqual(["--task", "--version -x"]);
+      expect(launch("--version -x", false)).toEqual(["--", "--version -x"]);
+    });
+  });
+});
+
+// Production user agents go through a schema that keeps no prompt form, so the
+// user registry here only stands in for an agent that declares one.
+describe("a declared prompt form", () => {
+  afterEach(() => setUserRegistry({}));
+
+  function declare(config: Partial<AgentConfig>): void {
+    setUserRegistry({ task: { ...agentBase, id: "task", command: "task", ...config } });
+  }
+
+  it("is read for the launch's own mode, with what it records about that mode", () => {
+    const interactive: AgentPromptForm = {
+      args: ["--seed", PROMPT_FORM_PLACEHOLDER],
+      caveat: "may-be-ignored",
+    };
+    const headless: AgentPromptForm = {
+      args: ["--once", PROMPT_FORM_PLACEHOLDER],
+      caveat: "exits-after-reply",
+    };
+    declare({ initialPromptForm: { interactive, headless } });
+    expect(getAgentPromptForm("task", "interactive")).toEqual(interactive);
+    expect(getAgentPromptForm("task", "headless")).toEqual(headless);
+    expect(getAgentPromptForm("ghost", "interactive")).toEqual({
+      args: [PROMPT_FORM_PLACEHOLDER],
+    });
+    expect(getAgentPromptForm(undefined, "headless")).toEqual({ args: [PROMPT_FORM_PLACEHOLDER] });
+  });
+
+  it("quotes a declared word the shell would split, keeping the prompt one argument", () => {
+    declare({
+      initialPromptForm: {
+        interactive: { args: ["--task", PROMPT_FORM_PLACEHOLDER, "--mode", "fast; rm -rf"] },
+        headless: { args: ["--print", PROMPT_FORM_PLACEHOLDER] },
+      },
+    });
+    expect(generateAgentCommand("task", {}, "task", { initialPrompt: "-n it's broken" })).toBe(
+      "task --task '-n it'\\''s broken' --mode 'fast; rm -rf'"
+    );
+    expect(
+      generateAgentCommand("task", {}, "task", { interactive: false, initialPrompt: "Fix it" })
+    ).toBe("task --print 'Fix it'");
+  });
+
+  it("swaps the registry's own subcommand wherever the registry carries it", () => {
+    const form: AgentPromptForm = {
+      subcommand: { name: "ask it", replaces: "chat" },
+      args: [PROMPT_FORM_PLACEHOLDER],
+    };
+    // The command shares the replaced word, which must stay the executable.
+    setUserRegistry({
+      chat: {
+        ...agentBase,
+        id: "chat",
+        command: "chat",
+        args: ["--verbose", "chat", "--color"],
+        initialPromptForm: { interactive: form, headless: form },
+      },
+    });
+    const launch = { initialPrompt: "Fix it", presetArgs: ["--topic", "chat"] };
+    expect(generateAgentCommand("chat", {}, "chat", launch)).toBe(
+      "chat --verbose 'ask it' --color --topic 'chat' 'Fix it'"
+    );
+    setAgentCommandDialectResolver(() => "windows");
+    expect(generateAgentCommand("chat", {}, "chat", launch)).toBe(
+      "chat --verbose 'ask it' --color --topic 'chat' 'Fix it'"
+    );
+  });
+
+  it("puts the subcommand right after the command when the registry lacks the word it replaces", () => {
+    const form: AgentPromptForm = {
+      subcommand: { name: "ask it", replaces: "chat" },
+      args: ["-t", PROMPT_FORM_PLACEHOLDER],
+    };
+    declare({ args: ["--verbose"], initialPromptForm: { interactive: form, headless: form } });
+    // The same word in a preset is that preset's value, not the subcommand.
+    const launch = { initialPrompt: "Fix it", presetArgs: ["--topic", "chat"] };
+    expect(generateAgentCommand("task", {}, "task", launch)).toBe(
+      "task 'ask it' --verbose --topic 'chat' -t 'Fix it'"
+    );
+    setAgentCommandDialectResolver(() => "windows");
+    expect(generateAgentCommand("task", {}, "task", launch)).toBe(
+      "task 'ask it' --verbose --topic 'chat' -t 'Fix it'"
+    );
+  });
+
+  it("applies nothing to a launch without a prompt", () => {
+    for (const interactive of [true, false]) {
+      for (const initialPrompt of [undefined, "", "   "]) {
+        expect(generateAgentCommand("goose", {}, "goose", { interactive, initialPrompt })).toBe(
+          "goose 'session'"
+        );
+      }
+    }
+  });
+});

@@ -105,6 +105,9 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
     // Fire-and-forget: serialization can take a while; we deliberately do not
     // await it so subsequent messages aren't blocked by the read.
     "get-serialized-state": (msg) => {
+      // The snapshot covers everything skipped for this terminal's cached
+      // views so far, so a skip from here on has to be reported afresh.
+      ctx.ipcQueueManager.clearHiddenSkip(msg.id);
       void (async () => {
         try {
           const serializedState = await ptyManager.getSerializedStateAsync(

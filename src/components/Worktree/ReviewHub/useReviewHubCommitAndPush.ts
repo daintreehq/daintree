@@ -310,10 +310,12 @@ export function useReviewHubCommitAndPush({
    * card force push through exactly one path.
    */
   const handleForcePush = useCallback(async () => {
+    // This pane re-banners a failed force push below, so the action's own
+    // toast would report the same failure twice (#16667).
     const result = await actionService.dispatch(
       "git.forcePushWithLease",
       { cwd: worktreePath },
-      { source: "user" }
+      { source: "user", callerReportsFailure: true }
     );
     if (result.ok) {
       // A declined confirm succeeds with `forced: false`. Clearing the banner

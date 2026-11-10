@@ -1,11 +1,11 @@
-import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
+import type { AgentId } from "../../../shared/types/agent.js";
 import type {
   CandidateMatchSource,
   CandidateProvenance,
   DetectedProcessCandidate,
 } from "./types.js";
 import { getProcessToolPriority } from "../../../shared/config/processToolRegistry.js";
-import { AGENT_CLI_NAMES, getProcessIconMap } from "./registries.js";
+import { getAgentCliNames, getProcessIconMap } from "./registries.js";
 import {
   executablePositionLimit,
   extractCommandNameCandidates,
@@ -21,7 +21,7 @@ export function normalizeProcessName(name: string): string {
  * Lower wins. Agents outrank everything; below them the registry tier decides,
  * so a package manager only survives when nothing more specific was found.
  */
-export function getDetectionPriority(agentType?: BuiltInAgentId, processIconId?: string): number {
+export function getDetectionPriority(agentType?: AgentId, processIconId?: string): number {
   if (agentType) {
     return 0;
   }
@@ -49,7 +49,8 @@ export function buildDetectedCandidate(
   // Captured once so every lookup in this candidate resolves against one
   // consistent map, even if a plugin loads mid-pass.
   const processIconMap = getProcessIconMap();
-  let agentType = AGENT_CLI_NAMES[lowerName];
+  const agentCliNames = getAgentCliNames();
+  let agentType = agentCliNames[lowerName];
   let processIconId = processIconMap[lowerName];
   let effectiveName = normalizedName;
   let matchSource: CandidateMatchSource = origin?.source ?? "comm";
@@ -78,7 +79,7 @@ export function buildDetectedCandidate(
       if (index > positionLimit) break;
 
       const lowerCandidate = candidate.toLowerCase();
-      const candidateAgent = AGENT_CLI_NAMES[lowerCandidate];
+      const candidateAgent = agentCliNames[lowerCandidate];
       if (candidateAgent) {
         agentType = candidateAgent;
         processIconId = processIconMap[lowerCandidate] ?? processIconId;

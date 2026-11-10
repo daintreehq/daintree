@@ -23,16 +23,18 @@ import {
   TOUCH_SENSOR_OPTIONS,
 } from "@/components/DragDrop/dragActivation";
 import { LayoutGroup, AnimatePresence, m } from "framer-motion";
-import { Check, ChevronDown, CopyPlus, PanelTopClose } from "lucide-react";
+import { ChevronDown, CopyPlus, PanelTopClose } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { logError } from "@/utils/logger";
 import { useTabOverflow } from "@/hooks";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
@@ -761,9 +763,14 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const isReinterpreted = shownAgentState !== displayAgentState;
   const stateLabel =
     isReinterpreted && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
-  const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
+  // A hidden tab in Needs you is the group's ask, and the question the chip
+  // answers first: it outranks the shown tab's own glyph, which a busy or plain
+  // shown tab would otherwise leave the chip wearing with no sign of the wait.
+  const hiddenTabAsks = blockedState === "waiting" && shownAgentState !== "waiting";
+  const chipGlyphState = hiddenTabAsks ? "waiting" : shownAgentState;
+  const StateIcon = chipGlyphState ? SESSION_ICONS[chipGlyphState] : null;
   // Only where no agent glyph is drawn, and never folded into the agent state.
-  const pluginActivity = displayAgentState ? null : reportedActivity;
+  const pluginActivity = displayAgentState || hiddenTabAsks ? null : reportedActivity;
   // An active plugin report on the active tab is not a resting chip.
   const chipDeprioritized =
     isDeprioritized && pluginActivity?.shown !== "working" && pluginActivity?.shown !== "waiting";
@@ -795,6 +802,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               onBlur={() => titleTip.onOpenChange(false)}
               {...dragPointerListeners}
               data-dock-item=""
+              data-dock-attention={
+                chipGlyphState === "waiting" || pluginActivity?.shown === "waiting" ? "" : undefined
+              }
               className={cn(
                 DOCK_CHIP_CLASS,
                 isOpen && DOCK_CHIP_OPEN_CLASS,
@@ -820,7 +830,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 e.stopPropagation();
                 moveGroupToGrid();
               }}
-              aria-label={`${fullTitle}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : groupPlainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
+              aria-label={`${fullTitle}${displayAgentState ? (stateLabel ? (shownAgentState ? ` — agent ${stateLabel}` : ` — observed: agent ${stateLabel}`) : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : groupPlainWorking ? " — command running" : ""}${hiddenTabAsks ? " — a tab needs attention" : ""}${dockChipBadgeLabelSuffix(badge)} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
             >
               <div className="flex items-center justify-center shrink-0">
                 <TerminalIcon
@@ -866,24 +876,25 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 <PluginPanelActivityDockCue activity={pluginActivity} />
               ) : (
                 !displayAgentState &&
+                !hiddenTabAsks &&
                 (groupPlainWorking || showFinishedCue) && (
                   <DockActivityCue state={groupPlainWorking ? "working" : "finished"} />
                 )
               )}
 
-              {shownAgentState && StateIcon && (
+              {chipGlyphState && StateIcon && (
                 <Tooltip open={stateTip.open} onOpenChange={stateTip.onOpenChange}>
                   <TooltipTrigger asChild onPointerEnter={stateTip.onPointerEnter}>
                     <div
                       className={cn(
                         "ml-1.5 flex items-center shrink-0 transition-[color] duration-150 ease-out",
-                        SESSION_COLORS[shownAgentState]
+                        SESSION_COLORS[chipGlyphState]
                       )}
                     >
                       <StateIcon
                         className={cn(
                           DOCK_STATE_GLYPH_CLASS,
-                          shownAgentState === "working" && "animate-spin-slow",
+                          chipGlyphState === "working" && "animate-spin-slow",
                           "motion-reduce:animate-none"
                         )}
                         aria-hidden="true"
@@ -891,13 +902,29 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                     </div>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {stateLabel
-                      ? isReinterpreted
-                        ? `Agent ${stateLabel} · Observed: ${observedStateLabel}`
-                        : `Agent ${stateLabel}`
-                      : "No agent state observed"}
+                    {hiddenTabAsks ? (
+                      "A tab in this group needs attention"
+                    ) : stateLabel ? (
+                      isReinterpreted ? (
+                        <>
+                          Agent {stateLabel} <FactSeparator /> Observed: {observedStateLabel}
+                        </>
+                      ) : (
+                        `Agent ${stateLabel}`
+                      )
+                    ) : (
+                      "No agent state observed"
+                    )}
                   </TooltipContent>
                 </Tooltip>
+              )}
+              {/* Holds the glyph's room while the band draws none, as the
+                  single chip does, so the rail never reflows on a state change. */}
+              {displayAgentState && !chipGlyphState && (
+                <span
+                  aria-hidden="true"
+                  className={cn("ml-1.5 shrink-0", DOCK_STATE_GLYPH_CLASS)}
+                />
               )}
             </button>
           </PopoverTrigger>
@@ -905,7 +932,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
         <PopoverContent
           aria-label={`Preview: ${fullTitle} (${pluralize(panels.length, "tab")})`}
-          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+          // A column, so the tab panel's flex-1 takes the height under the strip
+          // instead of collapsing to its content.
+          className="flex flex-col w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-surface-canvas/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
           style={{ height: popoverHeight }}
           side="top"
           align="start"
@@ -1068,7 +1097,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                               <ChevronDown aria-hidden="true" />
                               {activeTabIsHidden && (
                                 <span
-                                  className="status-mark absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-daintree-text/70"
+                                  className="status-mark absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-text-secondary"
                                   aria-hidden="true"
                                 />
                               )}
@@ -1081,53 +1110,44 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                         align="end"
                         className="min-w-[200px] max-w-[320px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
                       >
-                        {hiddenPanels.map((panel) => {
-                          const tabChrome = deriveTerminalChrome({
-                            kind: panel.kind,
-                            launchAgentId: panel.launchAgentId,
-                            runtimeIdentity: panel.runtimeIdentity,
-                            detectedAgentId: panel.detectedAgentId,
-                            detectedProcessId: panel.detectedProcessId,
-                            agentState: panel.agentState,
-                            runtimeStatus: panel.runtimeStatus,
-                            exitCode: panel.exitCode,
-                            presetColor: panelPresetColors.get(panel.id),
-                          });
-                          const isActive = panel.id === activeTabId;
-                          return (
-                            <DropdownMenuItem
-                              key={panel.id}
-                              onSelect={() => handleTabClick(panel.id)}
-                              aria-current={isActive ? "true" : undefined}
-                              // The tab on screen is a committed value, so it
-                              // takes the check every picker gives one — not a
-                              // rail, which would read as the highlighted row.
-                              className={cn(isActive && "font-medium")}
-                            >
-                              <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
-                                <TerminalIcon
-                                  kind={panel.kind ?? "terminal"}
-                                  chrome={tabChrome}
-                                  className="w-3.5 h-3.5"
-                                />
-                              </span>
-                              <span className="mr-3 truncate">
-                                {withDisplayEmoji(
-                                  getTerminalDisplayTitle(panel, "compact", {
-                                    showTask: showAgentTaskTitles,
-                                  }),
-                                  panel.displayEmoji
-                                )}
-                              </span>
-                              {isActive && (
-                                <Check
-                                  className="ml-auto h-3.5 w-3.5 shrink-0 text-text-secondary"
-                                  aria-hidden="true"
-                                />
-                              )}
-                            </DropdownMenuItem>
-                          );
-                        })}
+                        <DropdownMenuRadioGroup value={activeTabId}>
+                          {hiddenPanels.map((panel) => {
+                            const tabChrome = deriveTerminalChrome({
+                              kind: panel.kind,
+                              launchAgentId: panel.launchAgentId,
+                              runtimeIdentity: panel.runtimeIdentity,
+                              detectedAgentId: panel.detectedAgentId,
+                              detectedProcessId: panel.detectedProcessId,
+                              agentState: panel.agentState,
+                              runtimeStatus: panel.runtimeStatus,
+                              exitCode: panel.exitCode,
+                              presetColor: panelPresetColors.get(panel.id),
+                            });
+                            return (
+                              <DropdownMenuRadioItem
+                                key={panel.id}
+                                value={panel.id}
+                                onSelect={() => handleTabClick(panel.id)}
+                              >
+                                <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
+                                  <TerminalIcon
+                                    kind={panel.kind ?? "terminal"}
+                                    chrome={tabChrome}
+                                    className="w-3.5 h-3.5"
+                                  />
+                                </span>
+                                <span className="mr-3 truncate">
+                                  {withDisplayEmoji(
+                                    getTerminalDisplayTitle(panel, "compact", {
+                                      showTask: showAgentTaskTitles,
+                                    }),
+                                    panel.displayEmoji
+                                  )}
+                                </span>
+                              </DropdownMenuRadioItem>
+                            );
+                          })}
+                        </DropdownMenuRadioGroup>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   )}

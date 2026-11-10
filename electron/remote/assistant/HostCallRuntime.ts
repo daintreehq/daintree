@@ -51,6 +51,7 @@ import { runHostBringBack } from "./hostBringBack.js";
 import { runHostStatus } from "./hostStatus.js";
 import { STATUS_READ_TOOL } from "./projectStatusRead.js";
 import { ThrowawaySession } from "./throwawaySession.js";
+import { LaunchedAgents, launchedTerminalIds, launchesAgents } from "./launchedAgents.js";
 import {
   AGENT_DIRECTORY_BYTES_MAX,
   AGENT_DIRECTORY_ENTRIES_MAX,
@@ -60,6 +61,7 @@ import {
   type AgentDirectory,
 } from "../../../shared/types/agentDirectory.js";
 import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
+import type { HostFleetTargetList } from "../../../shared/types/ipc/hostMetrics.js";
 import {
   LOCAL_HOST_ID,
   type HostConnectionState,
@@ -295,6 +297,12 @@ export interface HostCallRuntimeDeps {
    * never dials, holds or wakes a host. Absent, no agent watch is armed.
    */
   watchAgents?(listener: AgentWaitingListener): () => void;
+  /**
+   * A host's agent terminals as it lists them, over a link already up; it
+   * never dials a host. What tells agents this Shell's assistants launched
+   * there from ones that ended (#16492). Absent, no launch holds a link.
+   */
+  listAgentTargets?(hostId: HostId): Promise<HostFleetTargetList>;
   now?: () => number;
   /** This machine's clocks, for how old a sample is; `now` and the monotonic clock by default. */
   clock?: () => ElapsedStamp;
@@ -324,6 +332,10 @@ const NOTICE_ROOM_RETRY_MS = 60_000;
 const NOTICE_PIN_TTL_MS = RELAY_NOTICE_WINDOW_MS;
 /** Notices already queued, remembered so a host's resend is typed once. */
 const MAX_SEEN_NOTICES = 1024;
+/** How often a host is asked which agents it lists while ones launched from here may run there. */
+const LAUNCHED_AGENTS_READ_MS = 30_000;
+/** How long that list may take; a read that doesn't answer lets nothing go. */
+const LAUNCHED_AGENTS_READ_TIMEOUT_MS = 10_000;
 /** Host terminals whose recent prompts from here are remembered, for superseding. */
 const MAX_PROMPTED_TERMINALS = 512;
 /** First sends whose time a resend reports under (#16169); the oldest go first. */
@@ -935,6 +947,13 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly callTimes = new Map<string, number>();
   /** Each help session's throwaway runs on hosts, to hold their links and release them when it ends. */
   private readonly throwawaySessions = new Map<string, ThrowawaySession>();
+  /** Agents this Shell's assistants launched on hosts, to hold their links while they may run (#16492). */
+  private readonly launchedAgents = new LaunchedAgents(
+    () => this.clock().mono,
+    RELAY_NOTICE_WINDOW_MS
+  );
+  /** Each host's latest read of the agents it lists, for those launches: when it started, and its end while out. */
+  private readonly launchedAgentReads = new Map<HostId, { at: number; end: (() => void) | null }>();
   /**
    * Hosts each help session asked to hold a message for a worker (#16187), so
    * its end reaches them: a held message is never typed after it.
@@ -1020,6 +1039,71 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       if (session.holds(hostId)) return true;
     }
     return false;
+  }
+
+  /**
+   * Whether agents one of this Shell's assistants launched on `hostId` may
+   * still be running there (#16492), so its link stays up and every window
+   * here shows the host's own counts of them with nobody opening it. Each is
+   * held until full lists of the host's agents stop naming it, or the notice
+   * window passes; asking reads that list now and then, only over a link
+   * already up. Holding the link never keeps the host awake.
+   */
+  holdsLaunchedAgents(hostId: HostId): boolean {
+    if (this.disposed || !this.launchedAgents.holds(hostId)) return false;
+    const host = this.deps.hosts().find((candidate) => candidate.hostId === hostId);
+    if (!host) {
+      this.launchedAgents.forgetHost(hostId);
+      this.launchedAgentReads.get(hostId)?.end?.();
+      this.launchedAgentReads.delete(hostId);
+      return false;
+    }
+    if (host.connection.status === "connected") this.readLaunchedAgents(hostId);
+    return true;
+  }
+
+  /** Whether a call's launches are followed: a host's own, never this machine's. */
+  private tracksLaunch(hostId: HostId, tool: string): boolean {
+    return (
+      hostId !== LOCAL_HOST_ID && this.deps.listAgentTargets !== undefined && launchesAgents(tool)
+    );
+  }
+
+  /**
+   * Asks a host which agents it lists, at most once an interval and one read
+   * at a time. Only a full list lets an agent go: a failed, late or partial
+   * one keeps every hold as it was.
+   */
+  private readLaunchedAgents(hostId: HostId): void {
+    const list = this.deps.listAgentTargets;
+    if (!list) return;
+    const at = this.clock().mono;
+    const last = this.launchedAgentReads.get(hostId);
+    if (last !== undefined && (last.end !== null || at - last.at < LAUNCHED_AGENTS_READ_MS)) return;
+    const read: { at: number; end: (() => void) | null } = { at, end: null };
+    this.launchedAgentReads.set(hostId, read);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Ended early by dispose or the host's removal, so no timer outlives either.
+    const late = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), LAUNCHED_AGENTS_READ_TIMEOUT_MS);
+      read.end = () => resolve(null);
+    });
+    void Promise.race([Promise.resolve().then(() => list(hostId)), late])
+      .then(
+        (listed) => {
+          if (this.disposed || listed === null || !listed.complete) return;
+          if (this.launchedAgentReads.get(hostId) !== read) return;
+          const terminalIds = new Set(listed.targets.map((target) => target.terminalId));
+          this.launchedAgents.listed(hostId, terminalIds, at);
+        },
+        (error: unknown) => {
+          logger.debug("Couldn't list a host's agents", { hostId, error });
+        }
+      )
+      .finally(() => {
+        clearTimeout(timer);
+        read.end = null;
+      });
   }
 
   /**
@@ -1423,6 +1507,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       };
       this.noticePins.set(callId, pin);
     }
+    const launch = this.tracksLaunch(hostId, tool);
+    if (launch) this.launchedAgents.launching(hostId, run.sessionId, callId);
     let settled = false;
     return {
       ran: (result) => {
@@ -1434,6 +1520,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       notRun: () => {
         if (settled) return;
         settled = true;
+        if (launch) this.launchedAgents.launchFailed(hostId, callId);
         if (pin !== undefined) {
           if (this.noticePins.get(callId) === pin) this.noticePins.delete(callId);
           if (this.settledPins.get(callId) === pin) this.settledPins.delete(callId);
@@ -1453,6 +1540,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     if (out !== undefined) return { hostId: out.hostId, helpSessionId: out.helpSessionId };
     const pin = this.pinOf(callId);
     if (pin !== undefined) return { hostId: pin.hostId, helpSessionId: pin.run.sessionId };
+    const launch = this.launchedAgents.launchOf(callId);
+    if (launch !== null) return launch;
     for (const [key, marks] of this.prompted) {
       const mark = marks.find((candidate) => candidate.callId === callId);
       if (mark !== undefined) {
@@ -1498,6 +1587,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     for (const end of [...this.sampleWaits]) end();
     this.hostWatches.dispose();
     this.throwawaySessions.clear();
+    this.launchedAgents.clear();
+    for (const read of this.launchedAgentReads.values()) read.end?.();
+    this.launchedAgentReads.clear();
     this.heldSendHosts.clear();
     this.callsOut.clear();
     this.callsInFlight.clear();
@@ -1646,6 +1738,16 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         // A tool error may still have run some of a batch before it failed.
         case "done": {
           noted.ran(answer.result);
+          // A resend's too: it may be the answer its first send lost. One with
+          // nothing readable (a tool that threw or ran out of time after it
+          // was dispatched) may still have launched, so it stays held as lost.
+          if (this.tracksLaunch(args.hostId, args.tool) && answer.result.structured !== null) {
+            this.launchedAgents.launched(
+              args.hostId,
+              callId,
+              launchedTerminalIds(answer.result.structured)
+            );
+          }
           try {
             this.deps.noteAnswered?.({
               helpSessionId,

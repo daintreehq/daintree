@@ -18,6 +18,7 @@ import {
 import { isMac } from "@/lib/platform";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { canReplyTo } from "./CanopyCard";
+import { useCanopyFrame } from "./canopyFrame";
 import { itemArchived, type CanopyItem } from "./canopyModel";
 
 /** Setting a run aside, on the window's own host: Pilot's park and snooze. */
@@ -32,7 +33,15 @@ export interface CanopyAsideActions {
   onWake: (item: CanopyItem) => void;
 }
 
-export interface CanopyRowMenuActions extends CanopyAsideActions {
+/** The Decisions answers a run holds that need a person: this computer's only. */
+export interface CanopyAnswerActions {
+  /** The run has answers needing attention, and they are this computer's to review. */
+  canReviewAnswers: (item: CanopyItem) => boolean;
+  /** Open the list of answers needing attention at this run's. */
+  onReviewAnswers: (item: CanopyItem) => void;
+}
+
+export interface CanopyRowMenuActions extends CanopyAsideActions, CanopyAnswerActions {
   /** `newWindow`: Cmd/Ctrl held, so another host's run opens in a new window. */
   onOpen: (item: CanopyItem, newWindow?: boolean) => void;
   onReply: (item: CanopyItem) => void;
@@ -58,6 +67,7 @@ export function CanopyRowMenu({
   children,
   ...actions
 }: CanopyRowMenuActions & { item: CanopyItem; children: ReactNode }) {
+  const canGoTo = useCanopyFrame().goToRun !== null;
   const archived = itemArchived(item);
   const canSetAside = actions.canSetAside(item);
   const parked = item.row.run.park !== undefined;
@@ -67,6 +77,10 @@ export function CanopyRowMenu({
   // field, or its composer: the menu closing must not hand it back to the row
   // it was opened from, which would end the rename and select that row again.
   const focusMovedRef = useRef(false);
+  // The list of answers opens once the menu has handed the keyboard back to
+  // the row, so the row is what the list's close returns to; opened any
+  // sooner, the menu's own close would take the keyboard back from it.
+  const reviewAfterCloseRef = useRef(false);
   return (
     <ContextMenu onOpenChange={actions.onOpenChange}>
       {/* Contents, so the trigger adds no box between the list and its rows. */}
@@ -75,20 +89,37 @@ export function CanopyRowMenu({
       </ContextMenuTrigger>
       <ContextMenuContent
         onCloseAutoFocus={(event) => {
+          if (reviewAfterCloseRef.current) {
+            reviewAfterCloseRef.current = false;
+            requestAnimationFrame(() => actions.onReviewAnswers(item));
+          }
           if (!focusMovedRef.current) return;
           focusMovedRef.current = false;
           event.preventDefault();
         }}
       >
+        {/* The reason the run sits with what needs the user, and what deals
+            with it, ahead of everything else the run offers. */}
+        {actions.canReviewAnswers(item) && (
+          <ContextMenuItem
+            onSelect={() => {
+              reviewAfterCloseRef.current = true;
+            }}
+          >
+            Review answers…
+          </ContextMenuItem>
+        )}
         {/* On click rather than select, so a Cmd/Ctrl-click keeps its modifier;
             a key select clicks too, with none held. */}
-        <ContextMenuItem
-          aria-keyshortcuts="Enter"
-          onClick={(event) => actions.onOpen(item, isNewWindowClick(event))}
-        >
-          Go to terminal
-          <ContextMenuShortcut shortcut="Enter" />
-        </ContextMenuItem>
+        {canGoTo && (
+          <ContextMenuItem
+            aria-keyshortcuts="Enter"
+            onClick={(event) => actions.onOpen(item, isNewWindowClick(event))}
+          >
+            Go to terminal
+            <ContextMenuShortcut shortcut="Enter" />
+          </ContextMenuItem>
+        )}
         {canReplyTo(item) && (
           <ContextMenuItem
             aria-keyshortcuts="R"

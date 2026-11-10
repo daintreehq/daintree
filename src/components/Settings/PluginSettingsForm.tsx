@@ -829,9 +829,10 @@ function SettingField({
                     variant="ghost"
                     size="icon-sm"
                     disabled={disabled || saving}
-                    // A toggle: one name, its state carried by `pressed`.
+                    // A glyph-only toggle: one name, its state on `aria-pressed` and
+                    // the Eye/EyeOff swap, no pressed fill.
                     aria-label={`Show ${label}`}
-                    pressed={revealed}
+                    aria-pressed={revealed}
                     // A click toggles reveal and leaves the caret in the field.
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {

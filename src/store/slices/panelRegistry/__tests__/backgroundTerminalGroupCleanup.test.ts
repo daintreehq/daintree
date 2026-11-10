@@ -43,8 +43,9 @@ vi.mock("@/services/TerminalInstanceService", () => {
 });
 
 const { usePanelStore } = await import("../../../panelStore");
+const { terminalClient } = await import("@/clients");
 
-type MockTerminal = Partial<PtyPanelData> & { id: string };
+type MockTerminal = Omit<Partial<PtyPanelData>, "kind"> & { id: string; kind?: string };
 
 function setTerminals(terminals: MockTerminal[]) {
   usePanelStore.setState({
@@ -671,5 +672,120 @@ describe("backgroundPanelGroup anchor-removal regression (#8944)", () => {
     expect(state.backgroundedTerminals.size).toBe(0);
     expect(state.tabGroups.size).toBe(0);
     expect(state.panelsById["t3"]!.location).toBe("grid");
+  });
+});
+
+describe.each([
+  ["file", true],
+  ["file-browser", true],
+  ["browser", true],
+  ["diff", false],
+  ["review", false],
+  ["acme.widget", false],
+] as const)("a backgrounded %s panel (dockable: %s)", (kind, dockable) => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    void usePanelStore.getState().reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.mocked(terminalClient.kill).mockClear();
+  });
+
+  function makePanel(id: string, location: "grid" | "dock"): MockTerminal {
+    return { id, kind, title: `Panel ${id}`, location, worktreeId: "wt-1" };
+  }
+
+  it("comes back to the grid it was sent from", () => {
+    setTerminals([makePanel("p1", "grid")]);
+
+    usePanelStore.getState().backgroundTerminal("p1");
+    expect(usePanelStore.getState().panelsById["p1"]!.location).toBe("background");
+
+    usePanelStore.getState().restoreBackgroundTerminal("p1");
+
+    const state = usePanelStore.getState();
+    expect(state.backgroundedTerminals.has("p1")).toBe(false);
+    expect(state.panelsById["p1"]!.location).toBe("grid");
+    expect(state.panelsById["p1"]!.title).toBe("Panel p1");
+  });
+
+  it("comes back to the dock it was sent from, if its kind can dock", () => {
+    setTerminals([makePanel("p1", "dock")]);
+
+    usePanelStore.getState().backgroundTerminal("p1");
+    usePanelStore.getState().restoreBackgroundTerminal("p1");
+
+    expect(usePanelStore.getState().panelsById["p1"]!.location).toBe(dockable ? "dock" : "grid");
+  });
+
+  function backgroundGroup() {
+    setTerminals([makePanel("p1", "grid"), makePanel("p2", "grid")]);
+    usePanelStore.setState({
+      tabGroups: new Map([
+        ["group-1", { id: "group-1", panelIds: ["p1", "p2"], activeTabId: "p2", location: "grid" }],
+      ]),
+    });
+    usePanelStore.getState().backgroundPanelGroup("p1");
+  }
+
+  function restoredGroup() {
+    const state = usePanelStore.getState();
+    expect(state.panelsById["p1"]!.location).toBe("grid");
+    expect(state.panelsById["p2"]!.location).toBe("grid");
+    const [group] = [...state.tabGroups.values()];
+    expect(group?.panelIds).toEqual(["p1", "p2"]);
+    return group;
+  }
+
+  it("comes back with its tabs and the one it was sent with, when the group is restored", () => {
+    backgroundGroup();
+    const { groupRestoreId } = usePanelStore.getState().backgroundedTerminals.get("p1")!;
+
+    usePanelStore.getState().restoreBackgroundGroup(groupRestoreId!);
+
+    expect(restoredGroup()?.activeTabId).toBe("p2");
+  });
+
+  it("comes back with its tabs and itself in front, when it's the member restored", () => {
+    backgroundGroup();
+
+    usePanelStore.getState().restoreBackgroundTerminal("p1");
+
+    expect(restoredGroup()?.activeTabId).toBe("p1");
+  });
+
+  it("goes to the trash with its background bookkeeping cleared", () => {
+    setTerminals([makePanel("p1", "grid")]);
+
+    usePanelStore.getState().backgroundTerminal("p1");
+    usePanelStore.getState().trashPanel("p1");
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["p1"]!.location).toBe("trash");
+    expect(state.backgroundedTerminals.has("p1")).toBe(false);
+    expect(state.trashedTerminals.get("p1")?.originalLocation).toBe("grid");
+  });
+
+  it("leaves nothing behind when removed, and kills no terminal", () => {
+    setTerminals([makePanel("p1", "grid")]);
+
+    usePanelStore.getState().backgroundTerminal("p1");
+    usePanelStore.getState().removePanel("p1");
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["p1"]).toBeUndefined();
+    expect(state.panelIds).not.toContain("p1");
+    expect(state.backgroundedTerminals.has("p1")).toBe(false);
+    expect(terminalClient.kill).not.toHaveBeenCalled();
   });
 });

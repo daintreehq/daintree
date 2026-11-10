@@ -7,6 +7,7 @@ import { Callout } from "@/components/ui/Callout";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatBytes } from "@/lib/formatBytes";
 import { pluralize } from "@/lib/pluralize";
@@ -69,7 +70,12 @@ function BudgetLine({ text, above }: { text: string; above: boolean }) {
   return (
     <div className="text-2xs text-text-secondary mt-0.5 tabular-nums">
       {text}
-      {above && <span className="text-text-primary font-medium"> · above</span>}
+      {above && (
+        <span className="text-text-primary font-medium">
+          {" "}
+          <FactSeparator /> above
+        </span>
+      )}
     </div>
   );
 }
@@ -268,11 +274,14 @@ export function PluginPerformanceSection({
                 {measured(longFrames.totalBlockingMs)} blocking in total
                 {longFrames.lastAt !== null && (
                   <>
-                    {" · last "}
+                    {" "}
+                    <FactSeparator />
+                    {" last "}
                     <TimeAgo timestamp={longFrames.lastAt} verbose />
                   </>
-                )}
-                {" · the plugin was active during these frames"}
+                )}{" "}
+                <FactSeparator />
+                {" the plugin was active during these frames"}
               </>
             ) : (
               "Slow frames during which this plugin's code ran, its view rendered or received input, or a message reached it"

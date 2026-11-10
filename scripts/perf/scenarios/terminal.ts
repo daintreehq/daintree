@@ -40,8 +40,8 @@ function isWorkerIngestPerfMode(): boolean {
 /**
  * PERF-030/031/032 drive the real `PtyDataPipeline` — the per-chunk fan-out in
  * the PTY host — through `handlePtyData`, with the real OSC colour responder,
- * the real forensics ring, the real semantic ring, the real agent output ring
- * and the real identity-watcher prompt scan attached. `lib/ptyOutputPipeline
+ * the real forensics ring, the real semantic ring and the real
+ * identity-watcher prompt scan attached. `lib/ptyOutputPipeline
  * Fixture.ts` states what is stubbed (the analysis backend and the session
  * snapshotter, both counted) and why.
  *
@@ -95,8 +95,8 @@ function plans(): NonNullable<typeof corpora> {
         seed: 300 + index,
       })
     ),
-    // Large retained history: long enough that every ring is trimming on
-    // essentially every chunk, which is the cost this scenario is named for.
+    // Large retained history: long enough that the forensics ring is trimming
+    // on essentially every chunk, which is the cost this scenario is named for.
     large: buildPipelinePlan({
       chunks: 1800,
       linesPerChunk: 4,
@@ -197,7 +197,6 @@ export const terminalScenarios: PerfScenario[] = [
       "oscStripMisses",
       "promptReturnMisses",
       "forensicRingMisses",
-      "outputRingMisses",
       "semanticRingMisses",
     ],
     run() {
@@ -214,11 +213,7 @@ export const terminalScenarios: PerfScenario[] = [
         metrics: {
           chunkCount: burstObserved.chunksFed + sustainedObserved.chunksFed,
           forwardedBytes: burstObserved.emittedChars + sustainedObserved.emittedChars,
-          retainedBytes:
-            burstObserved.forensicTail.length +
-            burstObserved.outputTail.length +
-            sustainedObserved.forensicTail.length +
-            sustainedObserved.outputTail.length,
+          retainedBytes: burstObserved.forensicTail.length + sustainedObserved.forensicTail.length,
           oscResponseCount: burstObserved.oscResponses + sustainedObserved.oscResponses,
           promptReturnCount: burstObserved.promptReturns + sustainedObserved.promptReturns,
           ...misses,
@@ -251,7 +246,6 @@ export const terminalScenarios: PerfScenario[] = [
       "oscStripMisses",
       "promptReturnMisses",
       "forensicRingMisses",
-      "outputRingMisses",
       "semanticRingMisses",
     ],
     run() {
@@ -267,7 +261,7 @@ export const terminalScenarios: PerfScenario[] = [
         addPipelineMisses(misses, pipelinePassMisses(multi[i]!, observed));
         chunkCount += observed.chunksFed;
         forwardedBytes += observed.emittedChars;
-        retainedBytes += observed.forensicTail.length + observed.outputTail.length;
+        retainedBytes += observed.forensicTail.length;
       }
 
       return {
@@ -286,10 +280,10 @@ export const terminalScenarios: PerfScenario[] = [
     id: "PERF-032",
     name: "Terminal Output Pipeline - Large Retained History",
     description:
-      "1,800 chunks through one real PtyDataPipeline: long enough that all " +
-      "three retention rings — the 4,000-char forensics ring, the 2,000-char " +
-      "agent output ring and the 50-line semantic ring — are trimming on " +
-      "essentially every chunk. That trimming is the cost this scenario is " +
+      "1,800 chunks through one real PtyDataPipeline: long enough that the " +
+      "4,000-char forensics ring trims on essentially every chunk and the " +
+      "50-line semantic ring is over its cap when it flushes at the end. " +
+      "That trimming is the cost this scenario is " +
       "named for, and it is the one term that grows with history length, so " +
       "each ring is graded against the stream tail independently rather than " +
       "through a single aggregate.",
@@ -308,7 +302,6 @@ export const terminalScenarios: PerfScenario[] = [
       "oscStripMisses",
       "promptReturnMisses",
       "forensicRingMisses",
-      "outputRingMisses",
       "semanticRingMisses",
     ],
     run() {
@@ -322,7 +315,7 @@ export const terminalScenarios: PerfScenario[] = [
           chunkCount: observed.chunksFed,
           streamBytes: large.totalChars,
           forwardedBytes: observed.emittedChars,
-          retainedBytes: observed.forensicTail.length + observed.outputTail.length,
+          retainedBytes: observed.forensicTail.length,
           semanticLineCount: observed.semanticLines.length,
           ...misses,
         },
@@ -728,7 +721,7 @@ export const terminalScenarios: PerfScenario[] = [
       "per cohort as messages, messages per MiB of PTY output and forwarded UTF-8 bytes per MiB; " +
       "the fleet figures are the issue's workload. Counts, not time: they compare across " +
       "machines. Graded on what must not change: every chunk still reaches the renderer with " +
-      "its answered colour queries stripped, the host-local output ring still holds the tail, an " +
+      "its answered colour queries stripped, the host-local forensics and semantic rings still hold the tail, an " +
       "Assistant terminal forwards exactly its raw PTY output in order before any teardown flush, " +
       "any other terminal forwards all of its output or none of it, and every payload names the " +
       "right terminal and agent.",
@@ -738,7 +731,8 @@ export const terminalScenarios: PerfScenario[] = [
     warmups: 1,
     correctness: [
       "rendererDeliveryMisses",
-      "outputRingMisses",
+      "forensicRingMisses",
+      "semanticRingMisses",
       "boundPayloadMisses",
       "unboundPayloadMisses",
       "attributionMisses",

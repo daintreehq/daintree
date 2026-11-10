@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { PanelSnapshot, Project } from "../../../shared/types/project.js";
+import type { AgentSessionPaneRefusal } from "../../../shared/types/agentSessionSchemas.js";
 import type { AgentSessionRecord } from "../../../shared/types/ipc/agentSessionHistory.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { buildResumeCommand, dropRetiredAgentModel } from "../../../shared/types/agentSettings.js";
@@ -42,22 +43,16 @@ export interface AgentSessionPaneRequest {
    * launch, signal and all.
    */
   signal?: AbortSignal;
+  /**
+   * Asked right before the spawn is sent, after every read, so a view that
+   * takes the project's lease during those reads still stops the launch
+   * (#16341). A message refuses. Only the call that launches is asked: one that
+   * joins it isn't, which is how a caller tells its pane from a pane it joined.
+   */
+  authorizeSpawn?: () => string | null;
 }
 
-export type AgentSessionPaneRefusal =
-  | "no-session-id"
-  | "unknown-agent"
-  | "no-resume-support"
-  | "unknown-project"
-  | "history-unavailable"
-  | "worktrees-unavailable"
-  | "worktree-gone"
-  | "other-worktree"
-  | "terminals-unavailable"
-  | "panel-limit"
-  | "missing-cli"
-  | "spawn-failed"
-  | "cancelled";
+export type { AgentSessionPaneRefusal };
 
 export type AgentSessionPaneResult =
   | {
@@ -158,13 +153,11 @@ export async function resumeAgentSessionAsPane(
   const pending = inFlight.get(key);
   if (pending) {
     const joined = await pending;
-    if (
-      !(joined.status === "refused" && joined.reason === "cancelled") ||
-      request.signal?.aborted
-    ) {
-      return joined;
-    }
-    // Abandoned by its own caller, not this one: launch again once it has gone.
+    const refusedOnlyItsCaller =
+      joined.status === "refused" &&
+      (joined.reason === "cancelled" || joined.reason === "not-authorized");
+    if (!refusedOnlyItsCaller || request.signal?.aborted) return joined;
+    // Abandoned by its own caller, or refused to it, not this one: launch again once it has gone.
     if (inFlight.get(key) === pending) inFlight.delete(key);
     return resumeAgentSessionAsPane(request, deps, runtime);
   }
@@ -293,6 +286,8 @@ async function launchResumedPane(
     return refused("missing-cli", `${agentConfig.name} can't be launched on this machine.`);
   }
   if (request.signal?.aborted) return refused("cancelled", "The resume was abandoned.");
+  const denied = request.authorizeSpawn?.();
+  if (denied) return refused("not-authorized", denied);
 
   const terminalId = `terminal-${randomUUID()}`;
   const title = agentConfig.name;

@@ -21,6 +21,10 @@ const quotaMock = vi.hoisted(() => ({
   refreshCodexQuotaProfiles: vi.fn(),
 }));
 vi.mock("../../../services/codex/CodexQuotaService.js", () => quotaMock);
+const contextUsageMock = vi.hoisted(() => ({
+  readCodexPaneContextUsageWithin: vi.fn(),
+}));
+vi.mock("../../../services/codex/CodexContextUsage.js", () => contextUsageMock);
 
 import { registerCodexHandlers } from "../codex.js";
 import { CHANNELS } from "../../channels.js";
@@ -215,6 +219,50 @@ describe("codex IPC handlers", () => {
 
       expect(await getHandler(CHANNELS.CODEX_REFRESH_QUOTA)(fakeEvent())).toBe(profiles);
       expect(quotaMock.readCodexQuotaProfiles).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("readContextUsage (#16408)", () => {
+    const channel = CHANNELS.CODEX_READ_CONTEXT_USAGE;
+
+    it("answers with the host's reading for the named terminal, window included", async () => {
+      const reading = {
+        status: "ok",
+        provider: "codex",
+        contextTokens: 192_480,
+        contextWindow: 475_000,
+        recordedAt: 1_793_888_831_051,
+      };
+      contextUsageMock.readCodexPaneContextUsageWithin.mockResolvedValue(reading);
+
+      expect(await getHandler(channel)(fakeEvent(), { terminalId: "t-1" })).toEqual(reading);
+      expect(contextUsageMock.readCodexPaneContextUsageWithin).toHaveBeenCalledWith("t-1");
+    });
+
+    it("answers store-unreadable for a failed read and logs nothing of it", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      contextUsageMock.readCodexPaneContextUsageWithin.mockRejectedValue(
+        new Error("EACCES: /Users/x/.codex/sessions/2026/11/05/rollout.jsonl")
+      );
+
+      expect(await getHandler(channel)(fakeEvent(), { terminalId: "t-1" })).toEqual({
+        status: "unavailable",
+        reason: "store-unreadable",
+      });
+      expect(error).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      error.mockRestore();
+      warn.mockRestore();
+    });
+
+    it.each([
+      ["an empty id", { terminalId: "" }],
+      ["an overlong id", { terminalId: "x".repeat(129) }],
+      ["no id", {}],
+    ])("rejects %s before reaching the service", async (_label, payload) => {
+      await expect(getHandler(channel)(fakeEvent(), payload)).rejects.toThrow();
+      expect(contextUsageMock.readCodexPaneContextUsageWithin).not.toHaveBeenCalled();
     });
   });
 });

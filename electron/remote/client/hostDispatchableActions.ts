@@ -39,7 +39,8 @@
  * `terminal.waitForExit` (the exits and closes it reads are the host's),
  * `assistant.list`, `assistant.start` and `agent.readQuota` (a Shell's
  * assistant reaches the host's own assistants through them while it drives
- * the project), `host.list` (a host can be a Shell to hosts of its own), the
+ * the project), `agent.resumeOwned` (the journal it reopens is the host's),
+ * `host.list` (a host can be a Shell to hosts of its own), the
  * reads and owned twins that act after a host-side check — and their
  * definitions here only throw, apart from `terminal.placeOwned`'s, which the
  * host's gate dispatches to its own view once ownership is checked.
@@ -73,6 +74,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "agent.updatePreset",
   "agent.deletePreset",
   "agent.readQuota",
+  "agent.resumeOwned",
   "assistant.list",
   "assistant.start",
   "browser.captureScreenshot",

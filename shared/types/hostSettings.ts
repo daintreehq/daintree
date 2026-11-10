@@ -27,7 +27,6 @@ export const HOST_SETTING_KEYS = [
   "idleTerminalNotify.enabled",
   "idleTerminalNotify.thresholdMinutes",
   "agentSettings.resumeOnRestart",
-  "agentSettings.globalUseAltScreen",
   "globalEnvironmentVariables",
   "terminalConfig.resourceMonitoringEnabled",
   "terminalConfig.memoryLeakDetectionEnabled",
@@ -81,7 +80,6 @@ export const HOST_SETTING_LABELS: Record<HostSettingKey, string> = {
   "idleTerminalNotify.enabled": "Alert about idle terminals",
   "idleTerminalNotify.thresholdMinutes": "Idle alert after (minutes)",
   "agentSettings.resumeOnRestart": "Resume agents after a restart",
-  "agentSettings.globalUseAltScreen": "Use alt-screen mode by default",
   globalEnvironmentVariables: "Global environment variables",
   "terminalConfig.resourceMonitoringEnabled": "Resource monitoring",
   "terminalConfig.memoryLeakDetectionEnabled": "Memory leak detection",
@@ -169,7 +167,6 @@ export function hostSettingRefusal(key: HostSettingKey, value: unknown): string 
         ? null
         : "Not an agent that can run the assistant.";
     case "idleTerminalNotify.enabled":
-    case "agentSettings.globalUseAltScreen":
     case "terminalConfig.resourceMonitoringEnabled":
     case "terminalConfig.memoryLeakDetectionEnabled":
     case "sessionRestore.enabled":
@@ -225,7 +222,6 @@ export const HostSettingsPatchFieldsSchema = z
     "idleTerminalNotify.enabled": z.boolean().optional(),
     "idleTerminalNotify.thresholdMinutes": idleMinutes.optional(),
     "agentSettings.resumeOnRestart": z.enum(RESUME_ON_RESTART_VALUES).optional(),
-    "agentSettings.globalUseAltScreen": z.boolean().optional(),
     globalEnvironmentVariables: envVariables.optional(),
     "terminalConfig.resourceMonitoringEnabled": z.boolean().optional(),
     "terminalConfig.memoryLeakDetectionEnabled": z.boolean().optional(),

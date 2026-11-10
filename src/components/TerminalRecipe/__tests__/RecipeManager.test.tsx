@@ -13,9 +13,11 @@ vi.mock("@/components/ui/AppDialog", () => {
   Dialog.Footer = ({
     children,
     secondaryAction,
+    primaryAction,
   }: {
     children?: ReactNode;
     secondaryAction?: { label: string; onClick: () => void };
+    primaryAction?: { label: string; onClick: () => void; disabled?: boolean };
   }) => (
     <div>
       {children}
@@ -24,11 +26,17 @@ vi.mock("@/components/ui/AppDialog", () => {
           {secondaryAction.label}
         </button>
       )}
+      {primaryAction && (
+        <button type="button" disabled={primaryAction.disabled} onClick={primaryAction.onClick}>
+          {primaryAction.label}
+        </button>
+      )}
     </div>
   );
   return { AppDialog: Dialog };
 });
 vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -41,6 +49,19 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuContent: ({ children }: { children: ReactNode }) => <div role="menu">{children}</div>,
   DropdownMenuItem: ({ children, onSelect }: { children: ReactNode; onSelect?: () => void }) => (
     <div role="menuitem" onClick={onSelect}>
+      {children}
+    </div>
+  ),
+  DropdownMenuCheckboxItem: ({
+    children,
+    checked,
+    onSelect,
+  }: {
+    children: ReactNode;
+    checked?: boolean;
+    onSelect?: () => void;
+  }) => (
+    <div role="menuitemcheckbox" aria-checked={checked} onClick={onSelect}>
       {children}
     </div>
   ),
@@ -444,17 +465,28 @@ describe("RecipeManager — a new recipe in a project is a team recipe, and says
   });
 });
 
-describe("RecipeManager — a file import that can't come across whole (#15044)", () => {
-  const json = JSON.stringify({
+describe("RecipeManager — importing a recipe file", () => {
+  const CLEAN = JSON.stringify({
+    name: "From file",
+    terminals: [{ type: "terminal", command: "ls" }],
+  });
+  const MIXED = JSON.stringify({
     name: "From file",
     terminals: [{ type: "terminal", command: "ls" }, { type: "acme-agent" }],
   });
 
+  const ready = () => ({
+    status: "ready",
+    fileName: "from-file.json",
+    json: CLEAN,
+    recipe: { name: "From file", terminals: [{ type: "terminal", command: "ls" }] },
+  });
   const refused = () => {
-    const { accepted, rejected } = inspectRecipeTerminals(JSON.parse(json).terminals);
+    const { accepted, rejected } = inspectRecipeTerminals(JSON.parse(MIXED).terminals);
     return {
       status: "refused",
-      json,
+      fileName: "from-file.json",
+      json: MIXED,
       error: new RecipeImportDropsTerminalsError(accepted.length, rejected),
     };
   };
@@ -466,47 +498,123 @@ describe("RecipeManager — a file import that can't come across whole (#15044)"
   };
 
   async function importFromFile(result: unknown, inventory: Parameters<typeof seed>[0] = {}) {
-    const importRecipeFromFile = vi.fn().mockResolvedValue(result);
-    useRecipeStore.setState({ importRecipeFromFile });
+    const readRecipeFile = vi.fn().mockResolvedValue(result);
+    const importRecipe = vi.fn(async (projectId: string | undefined, json: string) =>
+      recipe("recipe-new", JSON.parse(json).name, projectId ? { projectId } : {})
+    );
+    useRecipeStore.setState({ readRecipeFile, importRecipe });
     seed(inventory);
     renderManager();
     const entry =
       screen.queryByRole("button", { name: "Import from file" }) ??
       screen.getByRole("menuitem", { name: /Import from file/ });
     await activate(entry);
-    return importRecipeFromFile;
+    return { readRecipeFile, importRecipe };
   }
 
   const field = () => screen.queryByTestId<HTMLTextAreaElement>("recipe-import-textarea");
+  const importDialogOpen = () => screen.queryByRole("heading", { name: "Import recipe" }) !== null;
 
-  it.each([
-    ["the empty state", {}],
-    ["the inventory's import menu", { global: GLOBAL }],
-  ])(
-    "opens the import dialog from %s on the file's JSON and what would be dropped",
-    async (_, inventory) => {
-      const importRecipeFromFile = await importFromFile(refused(), inventory);
+  describe("with a project open", () => {
+    it.each([
+      ["the empty state", {}],
+      ["the inventory's import menu", { global: GLOBAL }],
+    ])(
+      "saves nothing from %s until a scope is confirmed, then imports to Team",
+      async (_, inventory) => {
+        const { importRecipe } = await importFromFile(ready(), inventory);
 
-      expect(importRecipeFromFile).toHaveBeenCalledWith("proj");
-      expect(field()?.value).toBe(json);
-      expect(document.body.textContent).toContain("1 terminal can't be imported");
-      expect(document.body.textContent).toContain('can\'t launch type "acme-agent"');
-    }
-  );
+        expect(importDialogOpen()).toBe(true);
+        expect(importRecipe).not.toHaveBeenCalled();
+        expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("project");
+        expect(document.body.textContent).toContain("from-file.json");
 
-  it("forgets the file once the dialog closes", async () => {
-    await importFromFile(refused(), { global: GLOBAL });
-    await activate(screen.getByRole("button", { name: "Cancel" }));
-    expect(field()).toBeNull();
+        await activate(screen.getByRole("button", { name: "Import recipe" }));
+        expect(importRecipe).toHaveBeenCalledWith("proj", CLEAN, undefined);
+        expect(importDialogOpen()).toBe(false);
+      }
+    );
 
-    await activate(screen.getByRole("menuitem", { name: /Import from clipboard/ }));
-    expect(field()?.value).toBe("");
-    expect(document.body.textContent).not.toContain("can't be imported");
+    it("imports the same file as Global when Global is chosen", async () => {
+      const { importRecipe } = await importFromFile(ready(), { global: GLOBAL });
+
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "global" } });
+      await activate(screen.getByRole("button", { name: "Import recipe" }));
+
+      expect(importRecipe).toHaveBeenCalledWith(undefined, CLEAN, undefined);
+    });
+
+    it("saves nothing when the dialog is cancelled", async () => {
+      const { importRecipe } = await importFromFile(ready(), { global: GLOBAL });
+      await activate(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(importDialogOpen()).toBe(false);
+      expect(importRecipe).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["the empty state", {}],
+      ["the inventory's import menu", { global: GLOBAL }],
+    ])(
+      "opens a file that would drop terminals from %s on its JSON and what would be dropped (#15044)",
+      async (_, inventory) => {
+        await importFromFile(refused(), inventory);
+
+        expect(field()?.value).toBe(MIXED);
+        expect(document.body.textContent).toContain("1 terminal can't be imported");
+        expect(document.body.textContent).toContain('can\'t launch type "acme-agent"');
+      }
+    );
+
+    it("forgets the file once the dialog closes", async () => {
+      await importFromFile(refused(), { global: GLOBAL });
+      await activate(screen.getByRole("button", { name: "Cancel" }));
+      expect(field()).toBeNull();
+
+      await activate(screen.getByRole("menuitem", { name: /Import from clipboard/ }));
+      expect(field()?.value).toBe("");
+      expect(document.body.textContent).not.toContain("can't be imported");
+      expect(document.body.textContent).not.toContain("from-file.json");
+    });
+
+    it("clears a filter that would hide the recipe it imported", async () => {
+      await importFromFile(ready(), { global: GLOBAL });
+      // The filter is typed after the dialog opened; the manager behind it keeps it.
+      const filterField = screen.getByRole("searchbox", { name: "Filter recipes" });
+      fireEvent.change(filterField, { target: { value: "Work" } });
+      expect((filterField as HTMLInputElement).value).toBe("Work");
+
+      await activate(screen.getByRole("button", { name: "Import recipe" }));
+
+      expect((filterField as HTMLInputElement).value).toBe("");
+    });
   });
 
-  it("leaves a clean file import at one click", async () => {
-    const importRecipeFromFile = await importFromFile({ status: "imported" });
-    expect(importRecipeFromFile).toHaveBeenCalledTimes(1);
-    expect(field()).toBeNull();
+  // Global is the only place a file can go, so there is nothing to confirm.
+  describe("with no project open", () => {
+    beforeEach(() => {
+      useProjectStore.setState({ currentProject: null });
+    });
+
+    it("imports a clean file as Global in one click", async () => {
+      const { importRecipe } = await importFromFile(ready(), { global: GLOBAL });
+
+      expect(importRecipe).toHaveBeenCalledWith(undefined, CLEAN);
+      expect(importDialogOpen()).toBe(false);
+    });
+
+    it("still opens a file that would drop terminals for review", async () => {
+      const { importRecipe } = await importFromFile(refused(), { global: GLOBAL });
+
+      expect(importRecipe).not.toHaveBeenCalled();
+      expect(field()?.value).toBe(MIXED);
+      expect(document.body.textContent).toContain("1 terminal can't be imported");
+    });
+  });
+
+  it("does nothing when the picker is cancelled", async () => {
+    const { importRecipe } = await importFromFile({ status: "cancelled" }, { global: GLOBAL });
+    expect(importRecipe).not.toHaveBeenCalled();
+    expect(importDialogOpen()).toBe(false);
   });
 });

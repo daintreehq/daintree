@@ -9,25 +9,19 @@ import type { SearchAddon } from "@xterm/addon-search";
 import type { CanopyTerminalData, CanopyTerminalView } from "@shared/types/ipc/canopy";
 import { LOCAL_HOST_ID, isLocalHostId, type HostId } from "@shared/types/remoteHosts";
 import { isPtyPanel } from "@shared/types/panel";
-import { resolveWorktreePathScope } from "@shared/utils/path";
 import { isSecretPrompt } from "@shared/utils/secretPrompt";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { isTerminalSubmission } from "@shared/utils/terminalSubmission";
-import { systemClient } from "@/clients/systemClient";
 import { getEffectiveScrollbarWidth, getXtermOptions } from "@/config/xtermConfig";
 import { keybindingService } from "@/services/KeybindingService";
 import { getXtermCellDimensions } from "@/services/terminal/TerminalResizeController";
-import {
-  peek as peekTerminalService,
-  subscribeWhenReady as subscribeTerminalServiceWhenReady,
-} from "@/services/terminal/terminalInstanceServiceAccessor";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import {
   activateUnicode11,
   createImageAddon,
   createSearchAddon,
 } from "@/services/terminal/TerminalAddonManager";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
-import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 import { cleanTerminalSelection } from "@/services/terminal/cleanTerminalCopy";
 import { copyCleanSelection } from "@/services/terminal/copyCleanSelection";
 import { TerminalLinkHandler } from "@/services/terminal/TerminalLinkHandler";
@@ -44,9 +38,9 @@ import { hideTerminalLinkTooltip } from "@/services/terminal/terminalLinkTooltip
 import type { TerminalLink } from "@/services/terminal/types";
 import { loadXtermCore } from "@/services/terminal/xtermCore";
 import { hasUsableRenderer } from "@/services/terminal/xtermRendererProbe";
-import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isCanopyEdgeDragging, useCanopyStore } from "@/store/canopyStore";
+import { useAppThemeStore } from "@/store/appThemeStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
 import {
@@ -57,6 +51,7 @@ import {
 import { streamRangeOf, stripCoveredOutput } from "@/services/terminal/streamFence";
 import {
   createSurrogatePairJoiner,
+  isMouseReport,
   isTerminalReply,
   isWindowCloseChord,
 } from "@/services/terminal/inputUtils";
@@ -72,6 +67,7 @@ import {
   type CanopyTerminalApi,
 } from "./canopyHostSource";
 import { CanopyTerminalMenu, type CanopyTerminalMenuHandle } from "./CanopyTerminalMenu";
+import { gridRise, lastKeptRow } from "./canopyGridRise";
 
 const SCROLLBACK = 2_000;
 /** The smallest grid worth handing an agent; a smaller measure is a pane mid-layout. */
@@ -154,6 +150,17 @@ interface CanopyTerminalProps {
   onSubmitted?: () => void;
   /** Go to the run's own pane: the way to see a screen this view couldn't show. */
   onGoTo?: (event: MouseEvent<HTMLButtonElement>) => void;
+  /**
+   * Showing the run takes no size: only the user working in it does, in a
+   * window left open all day (#16339). Main holds the window's own host's runs
+   * to this; a run on another host is held to it here.
+   */
+  sizesOnUse?: boolean;
+  /**
+   * Counts what the user sent the run from beside the terminal — a reply, a
+   * key, an answer — each a use of it, as a keystroke into it is.
+   */
+  uses?: number;
 }
 
 /**
@@ -170,9 +177,12 @@ interface CanopyTerminalProps {
  * PTY is held at the grid this pane fits, so the agent draws for the space it
  * is read in, and main hands it back to its own pane's size when the stream
  * ends. Until then — and if that pane resizes it meanwhile — the grid follows
- * the PTY's geometry: the bottom rows, where an agent asks, stay in view, and
- * a grid wider than the pane scrolls sideways. While the stream is open the
- * terminal's own pane in this view is frozen, so it doesn't take the PTY back.
+ * the PTY's geometry: one taller than the pane keeps the last rows the agent
+ * has drawn in view, and one wider than the pane scrolls sideways. While the
+ * stream is open the terminal's own pane in this view is frozen, so it doesn't
+ * take the PTY back.
+ * With `sizesOnUse` the pane draws the PTY's grid from the start, and takes the
+ * size only once the user clicks, types or replies in it.
  *
  * Only what the user does here reaches the terminal. xterm also answers the
  * program's own queries (cursor position, device attributes) through the same
@@ -191,6 +201,8 @@ export function CanopyTerminal({
   onStreamChange,
   onSubmitted,
   onGoTo,
+  sizesOnUse = false,
+  uses = 0,
 }: CanopyTerminalProps) {
   const frameRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -199,11 +211,13 @@ export function CanopyTerminal({
   const onSubmittedRef = useRef(onSubmitted);
   const cwdRef = useRef(cwd);
   const projectIdRef = useRef(projectId);
+  const sizesOnUseRef = useRef(sizesOnUse);
   useEffect(() => {
     onStreamChangeRef.current = onStreamChange;
     onSubmittedRef.current = onSubmitted;
     cwdRef.current = cwd;
     projectIdRef.current = projectId;
+    sizesOnUseRef.current = sizesOnUse;
   });
   const rootRef = useRef<HTMLDivElement>(null);
   // The current xterm's menu, for handlers that outlive one generation.
@@ -222,6 +236,8 @@ export function CanopyTerminal({
   const suspendRef = useRef<(() => void) | null>(null);
   const resumeRef = useRef<(() => void) | null>(null);
   const reopenRef = useRef<((next: "reconnecting" | "opening") => void) | null>(null);
+  // The current stream's way to hear of a use made from beside the terminal.
+  const usedRef = useRef<(() => void) | null>(null);
   /**
    * Each reopening starts the stream over on a new xterm: a reset one keeps
    * its parser mid-sequence and its queued writes, which would land the fresh
@@ -234,8 +250,6 @@ export function CanopyTerminal({
   // A full-screen TUI runs on the alternate buffer: like a grid pane, the view
   // then drops its inset and hides the scrollbar that buffer has no use for.
   const [altBuffer, setAltBuffer] = useState(false);
-  // The grid is taller than the pane.
-  const [overflowing, setOverflowing] = useState(false);
   // The terminal's own canvas colour, so the frame reads as the terminal itself.
   const background = useTerminalColorSchemeStore(selectWrapperBackground);
 
@@ -392,8 +406,21 @@ export function CanopyTerminal({
 
     // Another host's terminal is sized only once its watch answer says the host takes it.
     let holdsSize = localId !== null;
+    // Another surface has the size: this pane draws the PTY's grid, clipped,
+    // until the user's own click, keystroke or reply takes the size back, or the
+    // host says so once the agent's own pane stops showing it (#16737).
+    let following = false;
+    // The size is this pane's to take: main is asked even for a grid the PTY
+    // already has, as holding is what stops the terminal's other views fitting.
+    let mustHold = true;
+    // Another host's run, shown where only use takes the size: that host tells
+    // this pane to follow only while its own pane shows the run, so the pane
+    // holds itself back until used.
+    let awaitingUse = false;
 
     let inset = FRAME_PADDING_PX;
+    // A new xterm starts on the normal buffer, whatever the last one was on.
+    setAltBuffer(false);
     const bufferChange = terminal.buffer.onBufferChange((buffer) => {
       const alternate = buffer.type === "alternate";
       inset = alternate ? 0 : FRAME_PADDING_PX;
@@ -415,7 +442,16 @@ export function CanopyTerminal({
         const watchId = stream.watchId;
         const cell = getXtermCellDimensions(terminal);
         // A host that doesn't take the size keeps the one its own window gave it.
-        if (disposed || watchId === null || cell === null || !holdsSize) return;
+        if (
+          disposed ||
+          watchId === null ||
+          cell === null ||
+          !holdsSize ||
+          following ||
+          awaitingUse
+        ) {
+          return;
+        }
         // The list's or the dock's edge is still moving: the drag's end asks again.
         if (isCanopyEdgeDragging(useCanopyStore.getState())) return;
         // Fractional bounds, truncated, as the grid pane measures them: a
@@ -427,7 +463,8 @@ export function CanopyTerminal({
         if (cols < MIN_COLS || rows < MIN_ROWS) return;
         // Against what the PTY holds, not what xterm was last told: a hold the
         // terminal's own pane has since overridden is asked for again.
-        if (ptySize !== null && cols === ptySize.cols && rows === ptySize.rows) return;
+        if (!mustHold && ptySize !== null && cols === ptySize.cols && rows === ptySize.rows) return;
+        mustHold = false;
         // Ahead of the PTY's echo, so output drawn for the new size lands on it.
         // Another host's echo is awaited instead: it may let the hold go
         // unanswered (the view lost the drive), and the pane stays on the PTY's grid.
@@ -439,10 +476,42 @@ export function CanopyTerminal({
         });
       }, SIZE_SETTLE_MS);
     };
+
+    // A grid that fits sits at the top of the pane, the way it does in the
+    // terminal's own pane. One taller than the pane rises out of its top just
+    // far enough to keep the last rows the agent has drawn in view: a full
+    // screen's bottom rows, where an agent asks, or a fresh agent's top ones.
+    // The pane's height the grid can use, its content box; null until laid out.
+    let available: number | null = null;
+    // The last row to keep, as of xterm's last paint.
+    let keptRow = -1;
+    let rise = 0;
+    const place = () => {
+      const css = terminal.dimensions?.css;
+      const next =
+        css === undefined || available === null
+          ? 0
+          : gridRise(
+              { gridHeight: css.canvas.height, rowHeight: css.cell.height },
+              available,
+              keptRow
+            );
+      if (next === rise) return;
+      rise = next;
+      host.style.marginTop = next === 0 ? "" : `${-next}px`;
+    };
+    // Read as xterm paints, not as output is parsed: so it moves in the same
+    // frame as the rows it keeps, never ahead of a screen held back by
+    // synchronized output, and with every scroll through the history.
+    const render = terminal.onRender(() => {
+      keptRow = lastKeptRow(terminal.buffer.active, terminal.rows, terminal.modes.showCursor);
+      place();
+    });
     // The cell size moves with the renderer (WebGL arriving or lost, a display
     // change) and with the user's font; either changes the grid the pane fits.
     const dimensionsChange = terminal.onDimensionsChange(() => {
       ensureImageAddon();
+      place();
       requestPanelSize();
     });
     // The pane took its new width while the list's or the dock's edge moved;
@@ -456,20 +525,29 @@ export function CanopyTerminal({
       terminal.options.fontFamily = font.fontFamily;
       requestPanelSize();
     });
-
-    // A grid that fits sits at the top of the pane, the way it does in the
-    // terminal's own pane; one taller than the pane keeps its bottom rows,
-    // where an agent asks, in view.
-    const fit = () => {
-      requestPanelSize();
-      const screen = host.querySelector<HTMLElement>(".xterm-screen");
-      if (!screen || frame.clientHeight <= 0) return;
-      const { height } = screen.getBoundingClientRect();
-      if (height <= 0) return;
-      setOverflowing(height > frame.clientHeight - inset + 1);
+    // The panel's terminal can outlive a change of palette made in another
+    // window. The selector is cached, so a set with nothing new costs xterm nothing.
+    const applyTheme = () => {
+      terminal.options.theme = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
     };
-    const resizeObserver = new ResizeObserver(() => fit());
+    const unsubscribeColors = useTerminalColorSchemeStore.subscribe(applyTheme);
+    const unsubscribeAppTheme = useAppThemeStore.subscribe(applyTheme);
+
+    // The content box is what's left inside the padding the buffer has, and
+    // it is measured after layout: a rise set here still lands before the paint.
+    const resizeObserver = new ResizeObserver((entries) => {
+      const box = entries.at(-1)?.contentRect;
+      if (box) available = box.height;
+      place();
+      requestPanelSize();
+    });
     resizeObserver.observe(frame);
+    // The grid only rises, never scrolls: a focus or caret revealing a row
+    // below the pane would leave it scrolled out from under its rise.
+    const holdTop = () => {
+      if (frame.scrollTop !== 0) frame.scrollTop = 0;
+    };
+    frame.addEventListener("scroll", holdTop);
 
     // Whether the cursor line asks for a secret, so the composer — which keeps
     // history — is never offered for one.
@@ -484,17 +562,17 @@ export function CanopyTerminal({
     let view: CanopyTerminalView | null = null;
     // A stream that opened while the link still read as down: shown, not typed into.
     let heldWatchId: number | null = null;
-    let releasePane: (() => void) | null = null;
     let fence: number | undefined;
     const early: CanopyTerminalData[] = [];
     const apply = (chunk: CanopyTerminalData) => {
       if (view === null || chunk.watchId !== view.watchId) return;
       if (chunk.kind === "resize") {
+        const nowFollowing = chunk.following === true;
+        if (following && !nowFollowing) mustHold = true;
+        following = nowFollowing;
         ptySize = { cols: chunk.cols, rows: chunk.rows };
         terminal.resize(chunk.cols, chunk.rows);
-        requestAnimationFrame(() => {
-          if (!disposed) fit();
-        });
+        requestPanelSize();
         return;
       }
       if (chunk.kind === "ended") {
@@ -586,6 +664,33 @@ export function CanopyTerminal({
       frame.scrollLeft += event.deltaX;
     };
     frame.addEventListener("wheel", sideways, { capture: true, passive: false });
+    // A use made while the stream was still opening, such as an answer sent
+    // by the run: it counts once the stream opens.
+    let usedWhileOpening = false;
+    // The user's first use asks another host for the size this pane fits.
+    const markUsed = () => {
+      if (view === null) {
+        usedWhileOpening = true;
+        return;
+      }
+      if (!awaitingUse || stream.watchId === null) return;
+      awaitingUse = false;
+      mustHold = true;
+      requestPanelSize();
+    };
+    usedRef.current = markUsed;
+    const claimSize = () => {
+      markUsed();
+      const watchId = stream.watchId;
+      if (!following || watchId === null) return;
+      api
+        .terminalClaimSize(watchId)
+        .catch((error: unknown) => logWarn("[Canopy] couldn't take the size", { error }));
+    };
+    const claimOnPress = (event: globalThis.MouseEvent) => {
+      if (event.button === 0) claimSize();
+    };
+    frame.addEventListener("mousedown", claimOnPress, true);
     const joinSurrogatePairs = createSurrogatePairJoiner();
     const forwardInput = (data: string) => {
       const watchId = stream.watchId;
@@ -595,6 +700,7 @@ export function CanopyTerminal({
       if (!gesture || watchId === null || isTerminalReply(data) || reconnectingRef.current) {
         return;
       }
+      if (!isMouseReport(data)) claimSize();
       api.terminalInput(watchId, data).then(
         () => {
           if (isTerminalSubmission(data)) onSubmittedRef.current?.();
@@ -615,26 +721,10 @@ export function CanopyTerminal({
     const menu: CanopyTerminalMenuHandle = {
       read: () => {
         menuLink = hoveredLink;
-        const selection = terminal.getSelection();
-        const fileKind =
-          menuLink?.kind === "file" || menuLink?.kind === "directory" ? menuLink.kind : null;
-        const filePath = filesHere && fileKind !== null ? (menuLink?.absolutePath ?? null) : null;
-        const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
         return {
-          selection,
+          selection: terminal.getSelection(),
           hoveredUrl: menuLink?.text ?? null,
           hoveredUrlPluginName: hoveredUrlPluginName(links, menuLink),
-          hoveredFilePath: filePath,
-          hoveredFileKind: filePath !== null ? fileKind : null,
-          hoveredFileScope:
-            filePath !== null && worktrees
-              ? resolveWorktreePathScope(filePath, worktrees.values())
-              : null,
-          selectionFilePath:
-            filesHere && selection
-              ? (resolveSelectedFilePath(selection, links.getCwd(), systemClient.getCachedHomeDir())
-                  ?.absolutePath ?? null)
-              : null,
         };
       },
       openHoveredLink: () => {
@@ -667,6 +757,7 @@ export function CanopyTerminal({
             const data = formatForTerminalPaste(text, {
               bracketedPasteMode: terminal.modes.bracketedPasteMode,
             });
+            claimSize();
             return api.terminalInput(watchId, data);
           })
           .catch((error: unknown) => logWarn("[Canopy] paste refused", { error }));
@@ -676,7 +767,7 @@ export function CanopyTerminal({
         const active = document.activeElement;
         if (active !== null && frame.contains(active)) return;
         // A dialog the menu opened (the file viewer) keeps the keyboard.
-        const around = frame.closest('[role="dialog"]');
+        const around = frame.closest('[role="dialog"], [data-canopy-standalone]');
         if (active === null || active === document.body || around?.contains(active)) {
           terminal.focus();
         }
@@ -779,11 +870,11 @@ export function CanopyTerminal({
       }
       view = opened;
       holdsSize = localId !== null || opened.holdsSize === true;
-      // The pane in this view is frozen only for a terminal this view sizes;
-      // another host freezes its own.
-      if (localId !== null && releasePane === null) {
-        releasePane = subscribeTerminalServiceWhenReady((service) => service.holdGeometry(localId));
-      }
+      // A new stream is a new selection, which takes the size as a first one
+      // does, unless it is shown where only use does: main says so for its own runs.
+      following = opened.following === true;
+      awaitingUse = localId === null && sizesOnUseRef.current && !usedWhileOpening;
+      mustHold = true;
       const snapshot = opened.snapshot;
       ptySize = { cols: snapshot.cols, rows: snapshot.rows };
       terminal.resize(snapshot.cols, snapshot.rows);
@@ -796,9 +887,6 @@ export function CanopyTerminal({
         // A snapshot keeps no record of the widths its rows were laid out at.
         linkSlots.commandLinksDisposable?.markRowsStale();
         checkSecret();
-      });
-      requestAnimationFrame(() => {
-        if (!disposed) fit();
       });
       // Without a fence nothing says which early chunks the snapshot already
       // holds; painting them could draw output twice, so they are dropped and
@@ -816,6 +904,8 @@ export function CanopyTerminal({
       }
       publish({ watchId: opened.watchId });
       setStatus("live");
+      // Main may have opened the stream after that use reached it, and found nothing to claim.
+      if (usedWhileOpening) claimSize();
       requestPanelSize();
     };
     const onOpenFailed = (error: unknown) => {
@@ -836,6 +926,7 @@ export function CanopyTerminal({
       disposed = true;
       if (suspendRef.current === suspend) suspendRef.current = null;
       if (reopenRef.current === reopen) reopenRef.current = null;
+      if (usedRef.current === markUsed) usedRef.current = null;
       resumeRef.current = null;
       if (openTimer !== null) clearTimeout(openTimer);
       offResync();
@@ -847,35 +938,36 @@ export function CanopyTerminal({
       image?.dispose();
       searchAddon?.dispose();
       bufferChange.dispose();
+      render.dispose();
       dimensionsChange.dispose();
       unsubscribeFont();
+      unsubscribeColors();
+      unsubscribeAppTheme();
       unsubscribeListDrag();
       for (const type of GESTURE_EVENTS) frame.removeEventListener(type, markGesture, true);
       frame.removeEventListener("mousedown", startDrag, true);
+      frame.removeEventListener("mousedown", claimOnPress, true);
       frame.removeEventListener("mousemove", markHover, true);
       endDrag();
       frame.removeEventListener("wheel", sideways, true);
+      frame.removeEventListener("scroll", holdTop);
       if (gestureTimer !== null) clearTimeout(gestureTimer);
       resizeObserver.disconnect();
+      // The host outlives this xterm: the next one starts at the pane's top.
+      host.style.marginTop = "";
       if (sizeTimer !== null) clearTimeout(sizeTimer);
       webgl?.dispose();
       terminal.dispose();
       terminalRef.current = null;
       onStreamChangeRef.current?.({ watchId: null, ended: false, secretPrompt: false });
-      // The pane re-measures only once main has handed the PTY back, so a size
-      // it took meanwhile lands after the one main restores, not before it.
-      const release = releasePane;
       // Only its own stream, by id: another pane in this view may have opened
       // one since, which this cleanup must leave alone. A stream still opening
       // is let go when its answer arrives, below.
       const ownWatchId = view?.watchId ?? null;
       if (ownWatchId !== null) {
-        safeFireAndForget(
-          unlessHostDisconnected(api.unwatchTerminal(ownWatchId)).finally(() => release?.()),
-          { context: "Ending the canopy terminal stream" }
-        );
-      } else {
-        release?.();
+        safeFireAndForget(unlessHostDisconnected(api.unwatchTerminal(ownWatchId)), {
+          context: "Ending the canopy terminal stream",
+        });
       }
     };
   }, [runId, spawnedAt, api, generation]);
@@ -890,6 +982,14 @@ export function CanopyTerminal({
     if (reconnecting) suspendRef.current?.();
     else if (was) resumeRef.current?.();
   }, [reconnecting]);
+
+  // Counted from the value the pane mounted with, so a count from before it is no use of it.
+  const usesSeenRef = useRef(uses);
+  useEffect(() => {
+    if (usesSeenRef.current === uses) return;
+    usesSeenRef.current = uses;
+    usedRef.current?.();
+  }, [uses]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -930,10 +1030,10 @@ export function CanopyTerminal({
           // A grid pane's terminal body: the terminal's own background, inset p-3
           // on the normal buffer and flush on the alternate one.
           className={cn(
-            // Clipped at the top when too tall (the bottom is what matters), and
-            // scrollable sideways when too wide (a cut-off line would lose words).
+            // Clipped when too tall, the grid risen to keep what the agent drew
+            // in view, and scrollable sideways when too wide (a cut-off line
+            // would lose words).
             "relative flex min-h-0 flex-1 flex-col items-start overflow-x-auto overflow-y-hidden",
-            overflowing ? "justify-end" : "justify-start",
             altBuffer ? "terminal-alt-buffer" : "p-3"
           )}
         >

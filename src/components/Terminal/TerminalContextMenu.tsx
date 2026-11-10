@@ -90,6 +90,7 @@ import { useFleetRunMenuState } from "./contextMenu/useFleetRunMenuState";
 import {
   LayoutMenuItems,
   MoveToWorktreeSubmenu,
+  RestoreFromBackgroundItem,
   TerminalLayoutMenuItems,
 } from "./contextMenu/LayoutMenuItems";
 import {
@@ -394,7 +395,7 @@ function TerminalContextMenuBody({
   const whenDoneChoice = useTerminalWhenDoneStore((s) =>
     isMenuLive ? s.choices[terminalId] : undefined
   );
-  const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
+  const fleetSize = useFleetArmingStore((s) => (isMenuLive ? s.armedIds.size : 0));
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
   const hybridInputEnabled = useTerminalInputStore((s) => isMenuLive && s.hybridInputEnabled);
   const recentVoiceTargets = useVoiceRecordingStore((s) => s.recentTargets);
@@ -817,22 +818,36 @@ function TerminalContextMenuBody({
   // whose menu is the generic panel one. Without an early return here the PTY
   // menu below would narrow against DiffPanelData and lose `isInputLocked`.
   if (isFile || isFileBrowser || isDiff || hasGenericMenu) {
+    const genericLocation = isBackgrounded
+      ? "background"
+      : currentLocation === "grid"
+        ? "grid"
+        : "dock";
     return renderMenu(
-      <GenericPanelMenuItems
-        menuInput={{
-          location: currentLocation === "grid" ? "grid" : "dock",
-          isMaximized,
-          isDockable: structuralCapabilities.isDockable,
-          canMoveToWorktree,
-          canReload: canReloadPanelKind(kind),
-          tourLabel: kindCapabilities.tour?.label,
-          hasPluginSettings: kindCapabilities.pluginSettingsId !== null,
-          hasPluginDatabases: kindCapabilities.pluginBackupId !== null,
-          pluginMenuItems,
-        }}
-        renderMoveToWorktreeSubmenu={renderMoveToWorktreeSubmenu}
-        onAction={handleAction}
-      />
+      <>
+        {isBackgrounded && (
+          <>
+            <RestoreFromBackgroundItem onAction={handleAction} />
+            <ContextMenuSeparator />
+          </>
+        )}
+        <GenericPanelMenuItems
+          menuInput={{
+            location: genericLocation,
+            isMaximized,
+            isDockable: structuralCapabilities.isDockable,
+            canMoveToWorktree,
+            // A parked panel has no view mounted to reload.
+            canReload: canReloadPanelKind(kind) && !isBackgrounded,
+            tourLabel: kindCapabilities.tour?.label,
+            hasPluginSettings: kindCapabilities.pluginSettingsId !== null,
+            hasPluginDatabases: kindCapabilities.pluginBackupId !== null,
+            pluginMenuItems,
+          }}
+          renderMoveToWorktreeSubmenu={renderMoveToWorktreeSubmenu}
+          onAction={handleAction}
+        />
+      </>
     );
   }
 
@@ -873,6 +888,10 @@ function TerminalContextMenuBody({
           {hasPty && (
             <TerminalSelectionMenuItems
               hasSelection={hasSelection}
+              // A fleet-scope mount locks the managed terminal without the store.
+              pasteLocked={
+                !!terminal.isInputLocked || !!peekTerminalService()?.get(terminalId)?.isInputLocked
+              }
               hoveredUrl={hoveredUrl}
               hoveredUrlPluginName={hoveredUrlPluginName}
               hoveredFilePath={hoveredFilePath}

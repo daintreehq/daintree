@@ -5,6 +5,7 @@ import {
   decisionsServesPanes,
   decisionsWantedAtStartup,
   loadDecisionsModule,
+  peekDecisionsModule,
   sealDecisionsModule,
 } from "../serviceRefs.js";
 
@@ -60,6 +61,18 @@ describe("Decisions module loader", () => {
     const late = vi.fn(async () => fakeModule);
     expect(loadDecisionsModule(late)).toBeNull();
     expect(late).not.toHaveBeenCalled();
+  });
+
+  it("peeks at a load already made or under way, never starting one, and sees none once sealed", async () => {
+    expect(peekDecisionsModule()).toBeNull();
+
+    const loading = loadDecisionsModule(async () => fakeModule);
+    expect(peekDecisionsModule()).toBe(loading);
+    await loading;
+    expect(peekDecisionsModule()).toBe(loading);
+
+    sealDecisionsModule();
+    expect(peekDecisionsModule()).toBeNull();
   });
 });
 

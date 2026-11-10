@@ -64,7 +64,7 @@ describe("summarizeSessionStates", () => {
     const { label, visibleStates } = summarizeSessionStates({ ...ZERO, working: 2, idle: 3 }, 5);
     const segmentSum = visibleStates.reduce((a, v) => a + v.count, 0);
     expect(segmentSum).toBeLessThan(5);
-    expect(label.startsWith("5 sessions")).toBe(true);
+    expect(label.startsWith("5 terminals")).toBe(true);
   });
 
   it("never lists a state with nothing in it, nor idle", () => {

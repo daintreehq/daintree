@@ -46,7 +46,10 @@ import {
   type AccountSwitchNoticeState,
   type AccountSwitchRequest,
 } from "./AccountSwitchNotice";
+import { AccountChoiceText } from "@/components/Terminal/AccountHeadroomHint";
+import { useAgentAccountHeadroom } from "@/hooks/useAgentAccountHeadroom";
 import { useWorktrees } from "@/hooks/useWorktrees";
+import { presetNamesAccountFolder } from "@/utils/agentAccountHeadroom";
 import { actionService } from "@/services/ActionService";
 import {
   ContextMenu,
@@ -72,7 +75,11 @@ import {
   PanelBottom,
   Plug,
   Settings2,
+  Sprout,
 } from "lucide-react";
+import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { splitBranchType } from "@/components/Worktree/BranchLabel";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentExternalLink } from "@shared/config/agentRegistry";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
@@ -162,13 +169,23 @@ interface WorktreeMenuItemsProps {
 // Radix from treating the icon press as the row's primary selection event.
 function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
   const { worktrees } = useWorktrees();
+  const customTitles = useWorktreeFilterStore((state) => state.worktreeCustomTitles);
   const locationRef = useRef<"grid" | "dock">("grid");
   const source = useMenuActionSource();
   const focusRestore = useOverlayFocusRestore();
   return (
     <>
       {worktrees.map((wt) => {
-        const label = wt.isMainWorktree ? wt.name : wt.branch?.trim() || wt.name;
+        // Named and marked as the sidebar card names and marks it: the
+        // headline, the sprout for main, the branch's type mark otherwise.
+        const headline = getWorktreeHeadline(wt, customTitles[wt.id]);
+        const label = headline.label;
+        // A branch-named headline is an identifier and set in mono, as the
+        // palettes set it; main's folder, a custom title and issue/PR prose stay sans.
+        const isBranchTitled = headline.kind === "branch" && headline.customTitle === undefined;
+        const Glyph = wt.isMainWorktree
+          ? Sprout
+          : (splitBranchType(getWorktreeBranchLabel(wt)).Icon ?? FolderGit2);
         return (
           <ContextMenuItem
             key={wt.id}
@@ -196,8 +213,8 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
               e.currentTarget.click();
             }}
           >
-            <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span className="flex-1 truncate">{label}</span>
+            <Glyph data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className={cn("flex-1 truncate", isBranchTitled && "font-mono")}>{label}</span>
             <span className="sr-only">, press D to launch in dock</span>
             {/* Shown on :focus-visible only, so a hover never suggests D; always
                 laid out so moving focus never resizes the menu. */}
@@ -333,6 +350,13 @@ export function AgentButton({
     })
   );
 
+  // Quota is read only while the picker is open and the agent has accounts to
+  // choose between (#16407).
+  const hasSavedAccounts =
+    !!getAgentConfigFolderAccount(type) &&
+    sanitizeAgentAccounts(agentSettings?.agents?.[type]?.accounts).length > 0;
+  const accountHeadroom = useAgentAccountHeadroom(type, dropdownOpen && hasSavedAccounts);
+
   const config = getAgentConfig(type);
   if (!config) return null;
   // The agent's own mark, as the launcher's agent rows draw it.
@@ -376,6 +400,15 @@ export function AgentButton({
     : resolveEffectiveAccountId(entry, null);
   const savedAccount =
     savedAccountId === null ? undefined : accounts.find((account) => account.id === savedAccountId);
+  // A launch on the default login still runs the preset it settles on, whose
+  // own folder, if it names one, is the login's (#16407).
+  const defaultLoginHeadroom = accountHeadroom({
+    kind: "default",
+    presetNamesFolder: presetNamesAccountFolder(
+      type,
+      resolveSettledSavedPreset(presets, entry, activeWorktreeId)
+    ),
+  });
   // CCR presets carry the routing prefix in their stored name; strip it for
   // display so the tooltip and menu surfaces show the same human label.
   const presetDisplayName = (preset: { name: string; displayTitle?: string }) =>
@@ -1038,7 +1071,7 @@ export function AgentButton({
                         value={DEFAULT_LOGIN_VALUE}
                         onSelect={(event) => event.preventDefault()}
                       >
-                        Default login
+                        <AccountChoiceText name="Default login" headroom={defaultLoginHeadroom} />
                       </DropdownMenuRadioItem>
                       {accounts.map((account) => (
                         <DropdownMenuRadioItem
@@ -1046,7 +1079,10 @@ export function AgentButton({
                           value={account.id}
                           onSelect={(event) => event.preventDefault()}
                         >
-                          {account.name}
+                          <AccountChoiceText
+                            name={account.name}
+                            headroom={accountHeadroom({ kind: "account", accountId: account.id })}
+                          />
                         </DropdownMenuRadioItem>
                       ))}
                     </DropdownMenuRadioGroup>

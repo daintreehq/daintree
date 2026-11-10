@@ -6,16 +6,22 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { homedir } from "os";
 import { join } from "path";
 import { CliAvailabilityService, isFullyQualifiedPath } from "../CliAvailabilityService.js";
-import { getAgentConfig, getAgentIds } from "../../../shared/config/agentRegistry.js";
+import {
+  getAgentConfig,
+  getAgentIds,
+  getEffectiveAgentConfig,
+} from "../../../shared/config/agentRegistry.js";
+import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
 import { execFile, execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
-import { broadcastToRenderer } from "../../ipc/utils.js";
+import { broadcastToRenderer, hasBroadcastAudience } from "../../ipc/utils.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { logBuffer } from "../LogBuffer.js";
 import { getLogLevelOverrides, setLogLevelOverrides } from "../../utils/logger.js";
 import { findAllOnPath } from "../../utils/findOnPath.js";
 import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
 import { resetWindowsExecutableCache } from "../../utils/windowsExecutable.js";
+import { isAgentLaunchable } from "../../../shared/utils/agentAvailability.js";
 
 // Mock child_process. The service's subprocess probes (npm-global, WSL) run
 // through async `execFile` — mock it or the probes will call `undefined(...)`
@@ -61,6 +67,9 @@ const { defaultExecFileImpl, pathFixtureLookup } = vi.hoisted(() => ({
   },
 }));
 
+// Stands in for a lookup hung in the copy-listing slot: new tasks wait until aborted.
+const copySlotHeld = vi.hoisted(() => ({ current: false }));
+
 vi.mock("child_process", () => ({
   execFileSync: vi.fn(),
   execFile: vi.fn(defaultExecFileImpl),
@@ -68,6 +77,20 @@ vi.mock("child_process", () => ({
 
 vi.mock("../../utils/findOnPath.js", () => ({
   findAllOnPath: vi.fn(pathFixtureLookup),
+}));
+
+// Unlimited: a case that hangs a lookup must not hold the slot for the next case.
+vi.mock("../../utils/probeLimiter.js", () => ({
+  createProbeLimiter: () => ({
+    withSlot: (task: () => Promise<unknown>, signal?: AbortSignal) => {
+      if (signal?.aborted) return Promise.reject(signal.reason);
+      if (!copySlotHeld.current) return task();
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    },
+    queueDepth: () => 0,
+  }),
 }));
 
 // Windows-path files for the PATH search and the npm shim lookup, which read the disk.
@@ -98,6 +121,7 @@ vi.mock("../../setup/environment.js", () => ({
 // Mock fs/promises for auth checks
 vi.mock("fs/promises", () => ({
   access: vi.fn().mockRejectedValue(new Error("ENOENT")),
+  realpath: vi.fn(async (path: string) => path),
   constants: { R_OK: 4, X_OK: 1 },
 }));
 
@@ -124,6 +148,7 @@ vi.mock("../../store.js", () => ({
 // (no mock) — the duplicate-emit code uses CHANNELS.NOTIFICATION_SHOW_TOAST.
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: vi.fn(),
+  hasBroadcastAudience: vi.fn(() => true),
 }));
 
 /**
@@ -190,6 +215,7 @@ describe("CliAvailabilityService", () => {
     // clearAllMocks() clears call history but NOT implementations.
     const fs = await import("fs/promises");
     vi.mocked(fs.access).mockRejectedValue(new Error("ENOENT"));
+    vi.mocked(fs.realpath).mockImplementation((async (path: string) => path) as never);
     // Default async execFile (npm-global / WSL probes) to "not found" —
     // clearAllMocks wipes mock impls, so we reapply the factory default after each clear.
     mockedExecFile.mockImplementation(defaultExecFileImpl as never);
@@ -2210,6 +2236,51 @@ describe("CliAvailabilityService", () => {
       expect(payload.message).toContain("/Users/x/.local/bin/claude");
     });
 
+    it("keeps the warning for a later pass while nobody could be shown it", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        if (argv?.[1] === "claude") {
+          return Buffer.from("/opt/homebrew/bin/claude\n/Users/x/.local/bin/claude\n");
+        }
+        return Buffer.from("");
+      });
+      vi.mocked(hasBroadcastAudience).mockReturnValueOnce(false);
+
+      await service.checkAvailability();
+
+      const toasts = () =>
+        mockedBroadcast.mock.calls.filter((call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST);
+      expect(toasts()).toHaveLength(0);
+      expect(storeBackingMap.get("orchestrationMilestones")).toBeUndefined();
+
+      await service.refresh();
+
+      expect(toasts()).toHaveLength(1);
+      expect(storeBackingMap.get("orchestrationMilestones")).toMatchObject({
+        "duplicate-cli-warning:claude": true,
+      });
+    });
+
+    it("names the agent so the toast can open its copies, and reports without advising", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        if (argv?.[1] === "claude") {
+          return Buffer.from("/opt/homebrew/bin/claude\n/Users/x/.local/bin/claude\n");
+        }
+        return Buffer.from("");
+      });
+
+      await service.checkAvailability();
+
+      const payload = mockedBroadcast.mock.calls.find(
+        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+      )?.[1] as { message: string; agentCliCopies?: { agentId: string } };
+      expect(payload.agentCliCopies).toEqual({ agentId: "claude" });
+      expect(payload.message).toBe(
+        "Launches /opt/homebrew/bin/claude. Also found: /Users/x/.local/bin/claude."
+      );
+    });
+
     it("does not re-fire the toast on subsequent refresh() calls (milestone guard)", async () => {
       mockedExecFileSync.mockImplementation((_file, args) => {
         const argv = args as string[] | undefined;
@@ -2458,13 +2529,537 @@ describe("CliAvailabilityService", () => {
       );
       expect(toastCalls).toHaveLength(1);
       const message = (toastCalls[0][1] as { message: string }).message;
-      expect(message).toContain("Active: /a/bin/claude");
+      expect(message).toContain("Launches /a/bin/claude");
       expect(message).toContain("/b/bin/claude");
       expect(message).toContain("/c/bin/claude");
       // Tail entries should be summarized, not enumerated, to keep the toast short.
       expect(message).not.toContain("/d/bin/claude");
       expect(message).not.toContain("/e/bin/claude");
       expect(message).toContain("and 2 more");
+    });
+  });
+
+  describe("findCopies (#16409)", () => {
+    const claudeConfig = () => getAgentConfig("claude")!;
+    // Mocking process.platform does not change the host's path.join implementation.
+    const nativeCopy = join("/Users/test", ".local", "bin", "claude");
+    const npmCopy = join("/npm-prefix", "bin", "claude");
+
+    /** Claude on PATH at `onPath`, npm's global prefix at `npmPrefix`, and these files on disk. */
+    async function arrange(options: {
+      onPath?: string[];
+      files?: string[];
+      npmPrefix?: string;
+    }): Promise<void> {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "claude" && options.onPath) {
+          return Buffer.from(`${options.onPath.join("\n")}\n`);
+        }
+        throw new Error("not found");
+      });
+      const { access } = await import("fs/promises");
+      vi.mocked(access).mockImplementation(async (path) => {
+        if (options.files?.includes(String(path))) return;
+        throw new Error("ENOENT");
+      });
+      if (options.npmPrefix) {
+        mockedExecFile.mockImplementation(((...args: unknown[]) => {
+          const callback = args.find(
+            (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
+          );
+          queueMicrotask(() => callback?.(null, `${options.npmPrefix}\n`));
+          return {} as never;
+        }) as never);
+      }
+    }
+
+    it("goes through every layer, not just the first that answered, launching copy first", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: [nativeCopy, npmCopy],
+        npmPrefix: "/npm-prefix",
+      });
+      await service.checkAvailability();
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+        nativeCopy,
+        npmCopy,
+      ]);
+    });
+
+    it("finds a copy the check never reached, when the launching one came from a later layer", async () => {
+      // Nothing on PATH, so the native layer answered the check first.
+      await arrange({
+        files: [nativeCopy, npmCopy],
+        npmPrefix: "/npm-prefix",
+      });
+      await service.checkAvailability();
+      expect(service.getDetails()!.claude?.via).toBe("native");
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        nativeCopy,
+        npmCopy,
+      ]);
+    });
+
+    it("counts a symlink and its target as one copy across layers, keeping the launching spelling", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude"],
+        files: [nativeCopy, npmCopy, "/real/claude"],
+        npmPrefix: "/npm-prefix",
+      });
+      const { realpath } = await import("fs/promises");
+      const links: Record<string, string> = {
+        "/opt/homebrew/bin/claude": "/real/claude",
+        [npmCopy]: "/real/claude",
+      };
+      vi.mocked(realpath).mockImplementation(
+        (async (path: string) => links[path] ?? path) as never
+      );
+      await service.checkAvailability();
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "/opt/homebrew/bin/claude",
+        nativeCopy,
+      ]);
+    });
+
+    it("treats one Windows install directory as one copy, whatever its case", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      process.env.PATH = "C:\\Tools;C:\\Other";
+      virtualWindowsFiles.set({
+        "C:\\Tools\\claude.cmd": "",
+        "C:\\Other\\claude.cmd": "",
+      });
+      const details = service.getDetails()!;
+      details.claude = { ...details.claude!, resolvedPath: "c:\\TOOLS\\claude.cmd" };
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "c:\\TOOLS\\claude.cmd",
+        "C:\\Other\\claude.cmd",
+      ]);
+    });
+
+    it("keeps Windows links into one shared directory apart, as different files", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      process.env.PATH = "C:\\A;C:\\B";
+      virtualWindowsFiles.set({ "C:\\A\\claude.exe": "", "C:\\B\\claude.exe": "" });
+      const { realpath } = await import("fs/promises");
+      vi.mocked(realpath).mockImplementation((async (path: string) =>
+        path.startsWith("C:\\A")
+          ? "C:\\versions\\claude-1.exe"
+          : "C:\\versions\\claude-2.exe") as never);
+      const details = service.getDetails()!;
+      details.claude = { ...details.claude!, resolvedPath: "C:\\A\\claude.exe" };
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "C:\\A\\claude.exe",
+        "C:\\B\\claude.exe",
+      ]);
+    });
+
+    it("counts a Windows wrapper beside its executable as one install", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      process.env.PATH = "C:\\Tools";
+      virtualWindowsFiles.set({ "C:\\Tools\\claude.exe": "" });
+      const details = service.getDetails()!;
+      details.claude = { ...details.claude!, resolvedPath: "C:\\Tools\\claude.cmd" };
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "C:\\Tools\\claude.cmd",
+      ]);
+    });
+
+    it("runs a check first when none has published details yet", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "/opt/homebrew/bin/claude",
+      ]);
+    });
+
+    it("lists nothing for an agent with no launchable copy", async () => {
+      await arrange({});
+      await service.checkAvailability();
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([]);
+    });
+
+    it.each(["blocked", "installed", "missing"] as const)(
+      "lists nothing for a %s agent, even with a path on record",
+      async (state) => {
+        await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+        await service.checkAvailability();
+        const details = service.getDetails()!;
+        details.claude = { ...details.claude!, state, resolvedPath: "/opt/homebrew/bin/claude" };
+
+        await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([]);
+      }
+    );
+
+    it("keeps the launching copy when another location never answers", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      const { access } = await import("fs/promises");
+      vi.mocked(access).mockImplementation(() => new Promise<void>(() => {}));
+
+      vi.useFakeTimers();
+      try {
+        const copies = service.findCopies("claude", claudeConfig());
+        await vi.advanceTimersByTimeAsync(10_000);
+        await expect(copies).resolves.toEqual(["/opt/homebrew/bin/claude"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("starts no PATH scan for a listing that spent its deadline waiting for the slot", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      mockedFindAllOnPath.mockClear();
+      copySlotHeld.current = true;
+
+      vi.useFakeTimers();
+      try {
+        const copies = service.findCopies("claude", claudeConfig());
+        await vi.advanceTimersByTimeAsync(10_000);
+        await expect(copies).resolves.toEqual(["/opt/homebrew/bin/claude"]);
+        expect(mockedFindAllOnPath).not.toHaveBeenCalled();
+      } finally {
+        copySlotHeld.current = false;
+        vi.useRealTimers();
+      }
+    });
+
+    it("starts nothing new once the deadline has passed", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"], npmPrefix: "/npm-prefix" });
+      await service.checkAvailability();
+      const { access } = await import("fs/promises");
+      let release!: () => void;
+      const hung = new Promise<void>((_resolve, reject) => {
+        release = () => reject(new Error("ENOENT"));
+      });
+      vi.mocked(access).mockImplementation(() => hung);
+
+      vi.useFakeTimers();
+      try {
+        const copies = service.findCopies("claude", claudeConfig());
+        await vi.advanceTimersByTimeAsync(10_000);
+        await copies;
+        const probedByDeadline = vi.mocked(access).mock.calls.length;
+
+        // The native path finally answers; the npm shim behind it must stay unprobed.
+        release();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(vi.mocked(access).mock.calls).toHaveLength(probedByDeadline);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("asks npm for its prefix once per check, however often the page is opened", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"], npmPrefix: "/npm-prefix" });
+      await service.checkAvailability();
+
+      await service.findCopies("claude", claudeConfig());
+      await service.findCopies("claude", claudeConfig());
+
+      const npmCalls = () => mockedExecFile.mock.calls.filter((call) => call[0] === "npm");
+      expect(npmCalls()).toHaveLength(1);
+
+      // A Re-check asks again, and finds a copy under a prefix that has since moved.
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude"],
+        files: [join("/moved-prefix", "bin", "claude")],
+        npmPrefix: "/moved-prefix",
+      });
+      await service.refresh();
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "/opt/homebrew/bin/claude",
+        join("/moved-prefix", "bin", "claude"),
+      ]);
+      expect(npmCalls()).toHaveLength(2);
+    });
+  });
+
+  describe("chosen copy (#16399)", () => {
+    const claudeConfig = () => getAgentConfig("claude")!;
+
+    /** Claude on PATH at `onPath`, these files executable, and `chosen` chosen to launch. */
+    async function arrange(options: {
+      onPath?: string[];
+      files?: string[];
+      blocked?: string[];
+      hung?: string[];
+      chosen?: string;
+    }): Promise<void> {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "claude" && options.onPath) {
+          return Buffer.from(`${options.onPath.join("\n")}\n`);
+        }
+        throw new Error("not found");
+      });
+      const { access } = await import("fs/promises");
+      vi.mocked(access).mockImplementation(async (path) => {
+        if (options.hung?.includes(String(path))) return new Promise<void>(() => {});
+        if (options.files?.includes(String(path))) return;
+        if (options.blocked?.includes(String(path))) {
+          throw Object.assign(new Error("denied"), { code: "EPERM" });
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+      if (options.chosen !== undefined) {
+        storeBackingMap.set("agentCliChoices", { claude: options.chosen });
+      }
+    }
+
+    it("launches the chosen copy where it is, though another copy wins PATH", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/usr/local/bin/claude"],
+        chosen: "/usr/local/bin/claude",
+      });
+
+      const availability = await service.checkAvailability();
+
+      const detail = service.getDetails()!.claude!;
+      expect(isAgentLaunchable(availability.claude)).toBe(true);
+      expect(detail).toMatchObject({
+        resolvedPath: "/usr/local/bin/claude",
+        via: "chosen",
+        chosenPath: "/usr/local/bin/claude",
+      });
+      // Nothing was searched, so there are no PATH duplicates to warn about either.
+      expect(detail.allResolvedPaths).toBeUndefined();
+      expect(mockedFindAllOnPath).not.toHaveBeenCalledWith("claude", expect.anything());
+      expect(resolveAgentLaunchBaseCommandFor("claude", detail, "posix", undefined)).toBe(
+        "/usr/local/bin/claude"
+      );
+    });
+
+    it("reports a chosen copy that's gone as missing, never the PATH winner", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"], chosen: "/old/bin/claude" });
+
+      const availability = await service.checkAvailability();
+
+      const detail = service.getDetails()!.claude!;
+      expect(availability.claude).toBe("missing");
+      expect(detail).toMatchObject({
+        state: "missing",
+        resolvedPath: null,
+        chosenPath: "/old/bin/claude",
+      });
+      expect(detail.message).toMatch(/isn't there any more/);
+      expect(resolveAgentLaunchBaseCommandFor("claude", detail, "posix", undefined)).toBe(
+        "/old/bin/claude"
+      );
+    });
+
+    it("reports a chosen copy that can't run as blocked, keeping the choice", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude"],
+        blocked: ["/locked/claude"],
+        chosen: "/locked/claude",
+      });
+
+      const availability = await service.checkAvailability();
+
+      expect(availability.claude).toBe("blocked");
+      expect(service.getDetails()!.claude).toMatchObject({
+        state: "blocked",
+        resolvedPath: "/locked/claude",
+        via: "chosen",
+        chosenPath: "/locked/claude",
+        blockReason: "security",
+      });
+    });
+
+    it("keeps the choice on an agent whose check ran out of time", async () => {
+      // Published before the choice: PATH's copy launched then.
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      expect(service.getDetails()!.claude?.resolvedPath).toBe("/opt/homebrew/bin/claude");
+
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude"],
+        hung: ["/slow-mount/claude"],
+        chosen: "/slow-mount/claude",
+      });
+      vi.useFakeTimers();
+      try {
+        const checked = service.refresh();
+        await vi.advanceTimersByTimeAsync(60_000);
+        await checked;
+      } finally {
+        vi.useRealTimers();
+      }
+
+      // The earlier result named another copy, so it can't stand in for this one.
+      const detail = service.getDetails()!.claude!;
+      expect(detail).toMatchObject({
+        state: "missing",
+        resolvedPath: null,
+        chosenPath: "/slow-mount/claude",
+      });
+      expect(resolveAgentLaunchBaseCommandFor("claude", detail, "posix", undefined)).toBe(
+        "/slow-mount/claude"
+      );
+    });
+
+    it("lists the other copies to choose from while the chosen one can't launch", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        chosen: "/old/bin/claude",
+      });
+      await service.checkAvailability();
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+      ]);
+    });
+
+    it("lists the chosen copy first, then the others it found", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/usr/local/bin/claude"],
+        chosen: "/usr/local/bin/claude",
+      });
+      await service.checkAvailability();
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "/usr/local/bin/claude",
+        "/opt/homebrew/bin/claude",
+      ]);
+    });
+
+    it("goes back to the first copy found once the choice is cleared", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/usr/local/bin/claude"],
+        chosen: "/usr/local/bin/claude",
+      });
+      await service.checkAvailability();
+
+      service.setChosenCopy("claude", null);
+      await service.refresh();
+
+      expect(storeBackingMap.get("agentCliChoices")).toEqual({});
+      const detail = service.getDetails()!.claude!;
+      expect(detail.resolvedPath).toBe("/opt/homebrew/bin/claude");
+      expect(detail.chosenPath).toBeUndefined();
+    });
+
+    it("makes a read right after a choice wait for a check that has seen it", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/usr/local/bin/claude"],
+      });
+      await service.checkAvailability();
+
+      service.setChosenCopy("claude", "/usr/local/bin/claude");
+
+      // Published before the choice, so it still names the copy that launched then.
+      expect(service.getDetails()!.claude?.resolvedPath).toBe("/opt/homebrew/bin/claude");
+      const settled = await service.getSettledDetails();
+      expect(settled!.claude).toMatchObject({
+        resolvedPath: "/usr/local/bin/claude",
+        chosenPath: "/usr/local/bin/claude",
+      });
+    });
+
+    it("never lets a check begun before a choice publish the copy it replaced", async () => {
+      await arrange({ onPath: ["/a/claude"], files: ["/chosen/claude"] });
+      await service.checkAvailability();
+      // The next check would find a different copy on PATH, if it were allowed to say so.
+      await arrange({ onPath: ["/b/claude"], files: ["/chosen/claude"] });
+      let releasePath!: () => void;
+      const heldPath = new Promise<void>((resolve) => {
+        releasePath = resolve;
+      });
+      mockedFindAllOnPath.mockImplementation(async (command) => {
+        if (command === "claude") await heldPath;
+        return pathFixtureLookup(command);
+      });
+      const before = service.checkAvailability();
+
+      service.setChosenCopy("claude", "/chosen/claude");
+      releasePath();
+      await before;
+
+      expect(service.getDetails()!.claude?.resolvedPath).toBe("/a/claude");
+      expect((await service.getSettledDetails())!.claude).toMatchObject({
+        resolvedPath: "/chosen/claude",
+        chosenPath: "/chosen/claude",
+      });
+    });
+
+    it("never names the replaced copy when no check that saw the choice could publish", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/usr/local/bin/claude"],
+      });
+      await service.checkAvailability();
+      service.setChosenCopy("claude", "/usr/local/bin/claude");
+      // Every check is superseded before it publishes (a poller re-checking faster than checks finish).
+      const checks = vi.spyOn(service, "checkAvailability").mockResolvedValue({});
+
+      const settled = await service.getSettledDetails();
+
+      expect(checks).toHaveBeenCalledTimes(3);
+      expect(settled!.claude).toMatchObject({
+        state: "missing",
+        resolvedPath: null,
+        chosenPath: "/usr/local/bin/claude",
+      });
+      expect(resolveAgentLaunchBaseCommandFor("claude", settled!.claude, "posix", undefined)).toBe(
+        "/usr/local/bin/claude"
+      );
+      // Agents whose choice didn't change keep what was published.
+      expect(settled!.gemini).toEqual(service.getDetails()!.gemini);
+    });
+
+    it("settles at once when no choice is waiting on a check", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      mockedFindAllOnPath.mockClear();
+
+      await service.getSettledDetails();
+
+      expect(mockedFindAllOnPath).not.toHaveBeenCalled();
+    });
+
+    it("records a choice per agent, leaving the others alone", () => {
+      storeBackingMap.set("agentCliChoices", { codex: "/opt/codex" });
+
+      service.setChosenCopy("claude", "/usr/local/bin/claude");
+
+      expect(storeBackingMap.get("agentCliChoices")).toEqual({
+        codex: "/opt/codex",
+        claude: "/usr/local/bin/claude",
+      });
+    });
+
+    it("ignores a stored entry that names no path", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      storeBackingMap.set("agentCliChoices", { claude: 42 });
+
+      await service.checkAvailability();
+
+      expect(service.getDetails()!.claude).toMatchObject({
+        resolvedPath: "/opt/homebrew/bin/claude",
+        via: "which",
+      });
+      expect(service.getDetails()!.claude?.chosenPath).toBeUndefined();
     });
   });
 
@@ -2537,11 +3132,379 @@ describe("CliAvailabilityService", () => {
     });
   });
 
+  describe("discovery metadata a plugin declares (#16468)", () => {
+    const AGENT = { color: "#3366ff", iconId: "terminal" };
+    const PI = {
+      ...AGENT,
+      id: "pi",
+      name: "Pi",
+      command: "pi",
+      packages: { npm: "@earendil-works/pi-coding-agent" },
+    };
+    // The package and the command differ: the name finds the tool's directory,
+    // the command finds the launcher inside it.
+    const MINI = {
+      ...AGENT,
+      id: "mini-swe-agent",
+      name: "mini-swe-agent",
+      command: "mini",
+      packages: { pypi: "mini-swe-agent" },
+    };
+    const originalPlatform = process.platform;
+    const savedEnv: Record<string, string | undefined> = {};
+    const ENV_NAMES = ["USERPROFILE", "LOCALAPPDATA", "APPDATA", "PATH"];
+
+    // Through the manifest's own schema, so a field it drops can't pass here.
+    const contribute = async (...agents: Record<string, unknown>[]) => {
+      const { registerPluginAgents } =
+        await import("../../../shared/config/pluginAgentRegistry.js");
+      const { AgentContributionSchema } = await import("../../schemas/plugin.js");
+      registerPluginAgents(
+        "acme.plugin",
+        agents.map((agent) => AgentContributionSchema.parse(agent))
+      );
+    };
+
+    const onlyExisting = async (...existing: string[]) => {
+      const { access } = await import("fs/promises");
+      vi.mocked(access).mockImplementation(async (p) => {
+        if (existing.includes(String(p))) return undefined;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+    };
+
+    const answerNpmPrefix = (isNpm: (file: string, args: string[]) => boolean, prefix: string) => {
+      mockedExecFile.mockImplementation(((...args: unknown[]) => {
+        const [file, fileArgs] = args as [string, string[]];
+        const callback = args.find(
+          (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
+        );
+        if (isNpm(file, fileArgs)) {
+          queueMicrotask(() => callback?.(null, `${prefix}\n`));
+        } else {
+          const err = Object.assign(new Error("not found"), { code: "ENOENT" });
+          queueMicrotask(() => callback?.(err));
+        }
+        return {} as never;
+      }) as never);
+    };
+
+    const spawned = () =>
+      mockedExecFile.mock.calls.map(([file, args]) =>
+        [file, ...((args as unknown as string[]) ?? [])].join(" ")
+      );
+
+    beforeEach(() => {
+      for (const name of ENV_NAMES) savedEnv[name] = process.env[name];
+      // Off PATH: every agent misses the PATH layer.
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+    });
+
+    afterEach(async () => {
+      const { clearPluginAgentRegistryForTests } =
+        await import("../../../shared/config/pluginAgentRegistry.js");
+      clearPluginAgentRegistryForTests();
+      Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+      for (const name of ENV_NAMES) {
+        if (savedEnv[name] === undefined) delete process.env[name];
+        else process.env[name] = savedEnv[name];
+      }
+    });
+
+    it("finds an npm install under a prefix PATH doesn't reach", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      await contribute(PI);
+      answerNpmPrefix((file) => file === "npm", "/Users/test/.npm-custom");
+      const shim = join("/Users/test/.npm-custom", "bin", "pi");
+      await onlyExisting(shim);
+
+      const result = await service.checkAvailability();
+
+      expect(result.pi).toBe("ready");
+      expect(service.getDetails()!.pi?.via).toBe("npm-global");
+      expect(service.getDetails()!.pi?.resolvedPath).toBe(shim);
+    });
+
+    it("finds a Windows npm install through its .cmd shim", async () => {
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      const npmCmd = "C:\\Program Files\\nodejs\\npm.cmd";
+      process.env.PATH = "C:\\Program Files\\nodejs";
+      virtualWindowsFiles.set({
+        [npmCmd]:
+          '@ECHO OFF\r\nSETLOCAL\r\n"%~dp0\\node.exe" "%~dp0\\npm-cli.js" %*\r\nCALL :x\r\n',
+      });
+      await contribute(PI);
+      const prefix = "C:\\Users\\test\\AppData\\Roaming\\npm";
+      answerNpmPrefix(
+        (file, args) =>
+          /\\System32\\cmd\.exe$/i.test(file) &&
+          args.at(-1)?.toLowerCase().includes(npmCmd.toLowerCase()) === true,
+        prefix
+      );
+      const shim = join(prefix, "pi.cmd");
+      await onlyExisting(shim);
+
+      const result = await service.checkAvailability();
+
+      expect(result.pi).toBe("ready");
+      expect(service.getDetails()!.pi?.via).toBe("npm-global");
+      expect(service.getDetails()!.pi?.resolvedPath).toBe(shim);
+    });
+
+    it.each([
+      ["uv tool", ".local/share/uv/tools/mini-swe-agent/bin/mini"],
+      ["pipx", ".local/share/pipx/venvs/mini-swe-agent/bin/mini"],
+      ["legacy pipx", ".local/pipx/venvs/mini-swe-agent/bin/mini"],
+    ])("finds a %s install from the package and the command together", async (_name, relative) => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      await contribute(MINI);
+      const path = join(homedir(), relative);
+      await onlyExisting(path);
+
+      const result = await service.checkAvailability();
+
+      expect(result["mini-swe-agent"]).toBe("ready");
+      expect(service.getDetails()!["mini-swe-agent"]?.via).toBe("native");
+      expect(service.getDetails()!["mini-swe-agent"]?.resolvedPath).toBe(path);
+    });
+
+    it.each([
+      ["the shared launcher", "C:\\Users\\test\\.local\\bin\\mini.exe"],
+      ["pipx", "C:\\Users\\test\\.local\\pipx\\venvs\\mini-swe-agent\\Scripts\\mini.exe"],
+    ])("finds a Windows install through %s", async (_name, path) => {
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      process.env.USERPROFILE = "C:\\Users\\test";
+      await contribute(MINI);
+      await onlyExisting(path);
+
+      const result = await service.checkAvailability();
+
+      expect(result["mini-swe-agent"]).toBe("ready");
+      expect(service.getDetails()!["mini-swe-agent"]?.resolvedPath).toBe(path);
+    });
+
+    it("finds a declared native path, and a launch starts from it", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      await contribute({ ...PI, packages: undefined, nativePaths: ["~/.pi/agent/bin/pi"] });
+      const path = join(homedir(), ".pi/agent/bin/pi");
+      await onlyExisting(path);
+
+      const result = await service.checkAvailability();
+
+      expect(result.pi).toBe("ready");
+      const detail = service.getDetails()!.pi;
+      expect(detail?.via).toBe("native");
+      expect(detail?.resolvedPath).toBe(path);
+      expect(resolveAgentLaunchBaseCommandFor("pi", detail, "posix", "/Users/test")).toContain(
+        path
+      );
+    });
+
+    it("stops at the first hit: native paths, then PyPI's, then npm's", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      await contribute({
+        ...MINI,
+        packages: { npm: "mini-swe-agent", pypi: "mini-swe-agent" },
+        nativePaths: ["/opt/mini/bin/mini"],
+      });
+      answerNpmPrefix((file) => file === "npm", "/Users/test/.npm-custom");
+      const native = "/opt/mini/bin/mini";
+      const uv = join(homedir(), ".local/share/uv/tools/mini-swe-agent/bin/mini");
+      const shim = join("/Users/test/.npm-custom", "bin", "mini");
+
+      for (const [existing, via] of [
+        [[native, uv, shim], "native"],
+        [[uv, shim], "native"],
+        [[shim], "npm-global"],
+      ] as const) {
+        await onlyExisting(...existing);
+        await service.refresh();
+        const detail = service.getDetails()!["mini-swe-agent"];
+        expect(detail?.resolvedPath).toBe(existing[0]);
+        expect(detail?.via).toBe(via);
+      }
+    });
+
+    it("reports a declared file it can't execute as blocked", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      await contribute({ ...MINI, nativePaths: ["/opt/mini/bin/mini"] });
+      const { access } = await import("fs/promises");
+      vi.mocked(access).mockImplementation(async (p) => {
+        const code = String(p) === "/opt/mini/bin/mini" ? "EACCES" : "ENOENT";
+        throw Object.assign(new Error(code), { code });
+      });
+
+      const result = await service.checkAvailability();
+
+      expect(result["mini-swe-agent"]).toBe("blocked");
+      expect(service.getDetails()!["mini-swe-agent"]?.blockReason).toBe("permissions");
+      expect(service.getDetails()!["mini-swe-agent"]?.via).toBe("native");
+    });
+
+    it("reads missing when nothing declared exists, running nothing but npm's prefix read", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      await contribute(PI, { ...MINI, nativePaths: ["~/.mini/bin/mini"] });
+      answerNpmPrefix((file) => file === "npm", "/Users/test/.npm-custom");
+      await onlyExisting();
+
+      const result = await service.checkAvailability();
+
+      expect(result.pi).toBe("missing");
+      expect(result["mini-swe-agent"]).toBe("missing");
+      // A probe that ran the agent, npx or an install would show up here.
+      expect(new Set(spawned())).toEqual(new Set(["npm config get prefix"]));
+    });
+
+    it("probes a bundled command directly, never reaching the declared layers", async () => {
+      // The manifest refuses this pairing; the registry is handed it directly to
+      // show the probe holds the invariant by itself.
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      const { registerPluginAgents } =
+        await import("../../../shared/config/pluginAgentRegistry.js");
+      registerPluginAgents(
+        "acme.plugin",
+        [
+          {
+            ...AGENT,
+            id: "bundled",
+            name: "Bundled",
+            command: "./bin/bundled",
+            nativePaths: ["~/.bundled/bin/bundled"],
+            packages: { pypi: "bundled" },
+          },
+        ],
+        "/tmp/daintree-plugins/acme"
+      );
+      const bundled = "/tmp/daintree-plugins/acme/bin/bundled";
+      const declared = [
+        join(homedir(), ".bundled/bin/bundled"),
+        join(homedir(), ".local/share/uv/tools/bundled/bin/bundled"),
+      ];
+      await onlyExisting(bundled, ...declared);
+
+      const result = await service.checkAvailability();
+
+      expect(result.bundled).toBe("ready");
+      expect(service.getDetails()!.bundled?.resolvedPath).toBe(bundled);
+
+      const { access } = await import("fs/promises");
+      vi.mocked(access).mockClear();
+      await onlyExisting(...declared);
+
+      const refreshed = await service.refresh();
+
+      expect(refreshed.bundled).toBe("missing");
+      const probed = vi.mocked(access).mock.calls.map(([path]) => String(path));
+      expect(probed).toContain(bundled);
+      for (const path of declared) expect(probed).not.toContain(path);
+    });
+
+    describe("on Windows", () => {
+      beforeEach(() => {
+        Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      });
+
+      afterEach(() => {
+        vi.mocked(homedir).mockReturnValue("/Users/test");
+      });
+
+      it("expands a ~/ entry against a fully qualified home", async () => {
+        vi.mocked(homedir).mockReturnValue("C:\\Users\\test");
+        await contribute({ ...PI, packages: undefined, nativePaths: ["~/.pi/bin/pi"] });
+        const path = `${join("C:\\Users\\test", ".pi/bin/pi")}.cmd`;
+        await onlyExisting(path);
+
+        const result = await service.checkAvailability();
+
+        expect(result.pi).toBe("ready");
+        expect(service.getDetails()!.pi?.resolvedPath).toBe(path);
+      });
+
+      it("skips a ~/ entry when the home it expands to is relative", async () => {
+        vi.mocked(homedir).mockReturnValue("profiles");
+        await contribute({ ...PI, packages: undefined, nativePaths: ["~/.pi/bin/pi"] });
+        await onlyExisting(`${join("profiles", ".pi/bin/pi")}.cmd`);
+
+        const result = await service.checkAvailability();
+
+        expect(result.pi).toBe("missing");
+      });
+
+      it("leaves a /-rooted entry out of the copies it lists", async () => {
+        process.env.PATH = "C:\\tools";
+        process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
+        virtualWindowsFiles.set({ "C:\\tools\\pi.exe": "" });
+        const declared = "C:\\Users\\test\\AppData\\Local\\Programs\\pi\\pi.exe";
+        await contribute({
+          ...PI,
+          packages: undefined,
+          nativePaths: ["/opt/pi/bin/pi", "%LOCALAPPDATA%\\Programs\\pi\\pi.exe"],
+        });
+        await onlyExisting("/opt/pi/bin/pi.cmd", declared);
+        await service.checkAvailability();
+
+        const copies = await service.findCopies("pi", getEffectiveAgentConfig("pi")!);
+
+        expect(copies.map((copy) => copy.toLowerCase())).toEqual([
+          "c:\\tools\\pi.exe",
+          declared.toLowerCase(),
+        ]);
+      });
+
+      it("skips a /-rooted entry, which would land on whichever drive is current", async () => {
+        await contribute({ ...PI, packages: undefined, nativePaths: ["/opt/pi/bin/pi"] });
+        await onlyExisting("/opt/pi/bin/pi.cmd", "/opt/pi/bin/pi.exe");
+
+        const result = await service.checkAvailability();
+
+        expect(result.pi).toBe("missing");
+      });
+
+      it("expands a declared %VAR%\\ root", async () => {
+        process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
+        await contribute({
+          ...PI,
+          packages: undefined,
+          nativePaths: ["%LOCALAPPDATA%\\Programs\\pi\\pi.exe"],
+        });
+        const path = "C:\\Users\\test\\AppData\\Local\\Programs\\pi\\pi.exe";
+        await onlyExisting(path);
+
+        const result = await service.checkAvailability();
+
+        expect(result.pi).toBe("ready");
+        expect(service.getDetails()!.pi?.resolvedPath).toBe(path);
+      });
+
+      it.each([
+        ["is unset", undefined, "%LOCALAPPDATA%\\Programs\\pi\\pi.exe"],
+        ["is relative", "relative\\dir", "relative\\dir\\Programs\\pi\\pi.exe"],
+        ["is empty", "", "\\Programs\\pi\\pi.exe"],
+      ])("skips an environment root whose variable %s", async (_name, value, expanded) => {
+        if (value === undefined) delete process.env.LOCALAPPDATA;
+        else process.env.LOCALAPPDATA = value;
+        await contribute({
+          ...PI,
+          packages: undefined,
+          nativePaths: ["%LOCALAPPDATA%\\Programs\\pi\\pi.exe"],
+        });
+        await onlyExisting(expanded);
+
+        const result = await service.checkAvailability();
+
+        expect(result.pi).toBe("missing");
+      });
+    });
+  });
+
   describe("Windows native path probing (#12352)", () => {
     const savedWindowsEnv: Record<string, string | undefined> = {};
 
     beforeEach(() => {
       Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      vi.mocked(homedir).mockReturnValue("C:\\Users\\test");
       for (const name of ["USERPROFILE", "LOCALAPPDATA"]) {
         savedWindowsEnv[name] = process.env[name];
         delete process.env[name];
@@ -2552,6 +3515,7 @@ describe("CliAvailabilityService", () => {
     });
 
     afterEach(() => {
+      vi.mocked(homedir).mockReturnValue("/Users/test");
       for (const [name, value] of Object.entries(savedWindowsEnv)) {
         if (value === undefined) delete process.env[name];
         else process.env[name] = value;

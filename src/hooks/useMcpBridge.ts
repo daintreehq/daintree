@@ -5,6 +5,7 @@ import {
   MAIN_DISPATCH_DEADLINE_MS,
   requestMcpConfirmation,
   useMcpConfirmStore,
+  type McpConfirmPreviewPatch,
   type McpConfirmResolution,
   type McpConfirmSelectableTarget,
 } from "@/store/mcpConfirmStore";
@@ -15,12 +16,15 @@ import { runWithMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import {
   buildWorktreeDeletePreview,
   fetchWorktreeTeardownPreview,
+  formatSubmodulePreviewLines,
   formatTeardownPreviewLines,
   formatWorktreeDeletePreviewLines,
   settleWorktreeDeleteOutcome,
   worktreeDeleteBlockedBy,
   worktreeDeleteContentRisk,
+  worktreeDeleteRefusedBy,
   type WorktreeDeletePreviewOutcome,
+  type WorktreeSubmoduleDeleteBlock,
 } from "@/components/Worktree/worktreeDeletePreview";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
 import { isProtectedBranch as isProtectedBranchName } from "@shared/utils/gitConstants";
@@ -313,12 +317,12 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   recipe: "Recipe contents",
   // Unused: this kind renders a selectable checklist with its own heading
   // rather than the preview card. Present so the map stays exhaustive.
-  terminalKillBatch: "Terminals",
+  terminalKillBatch: "Panels",
   terminalClose: "Panels",
   forgeCreateIssue: "Issue to be filed",
   forgeAddIssueComment: "Comment to be posted",
   terminalLaunch: "Terminal to be opened",
-  terminalStartHeld: "Held pane to be started",
+  terminalStartHeld: "Held panel to be started",
   // Replaced per operation below. Present so the map stays exhaustive.
   agentPreset: "Launch preset",
 };
@@ -956,6 +960,11 @@ export interface McpConfirmPreviewResult {
   /** Present only when the fetch put a D3 typed-name gate up (#12115). */
   typedNameTarget?: string;
   /**
+   * Why the host will refuse this worktree delete outright (#16436), from the
+   * same fetch as the lines. Never present beside {@link typedNameTarget}.
+   */
+  worktreeDeleteBlock?: WorktreeSubmoduleDeleteBlock;
+  /**
    * What a spawning recipe dispatch's preview offered, for the approval to
    * carry into the run (#12263). Built from the same resolved recipe the lines
    * describe, so the count travelling with the approval is by construction the
@@ -980,7 +989,9 @@ export interface McpConfirmPreviewResult {
  * Never rejects: a fetch failure yields the kind's "couldn't verify" note
  * rather than an empty preview that would imply a clean tree / nothing to push.
  * That keeps approval available with the human explicitly warned — blocking it
- * instead would strand the dispatch until the modal's 28s timeout.
+ * on an unknown would strand the dispatch until the modal times out. The one
+ * thing that does block it is a refusal the fetch actually observed
+ * (`worktreeDeleteBlock`, #16436), which the host would throw on anyway.
  *
  * Exported for unit tests; the bridge is the only production caller.
  */
@@ -1019,6 +1030,18 @@ export async function buildMcpConfirmPreview(
       settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(target.worktreeId)),
       fetchWorktreeTeardownPreview(target.worktreeId),
     ]);
+    // A delete the host refuses whatever the approver says is unapprovable,
+    // not a tier: no gate goes up for it, plain or forced (#16436).
+    const worktreeDeleteBlock = worktreeDeleteRefusedBy(outcome);
+    // What survived a failed parent read is shown when it is a completed
+    // answer or the evidence behind a refusal. An unfinished inventory that
+    // refuses nothing stays out: its "cannot be deleted until that check
+    // completes" line would contradict a delete this surface still offers.
+    const surviving = outcome.state === "failed" ? outcome.submodules : null;
+    const survivingLines =
+      surviving !== null && (surviving.status === "verified" || worktreeDeleteBlock !== null)
+        ? formatSubmodulePreviewLines(surviving)
+        : [];
     // Deliberately the SAME formatter the local dialog's data comes from,
     // submodule half included: this surface is the one an agent-driven force
     // delete gates on, and a preview that listed only what the parent's status
@@ -1031,9 +1054,14 @@ export async function buildMcpConfirmPreview(
             ...formatTeardownPreviewLines(teardown),
           ]
         : outcome.state === "failed"
-          ? [...formatWorktreeDeletePreviewLines(null), ...formatTeardownPreviewLines(teardown)]
+          ? [
+              ...formatWorktreeDeletePreviewLines(null),
+              ...survivingLines,
+              ...formatTeardownPreviewLines(teardown),
+            ]
           : // Monitor gone / already removed → nothing meaningful to preview.
             [];
+    if (worktreeDeleteBlock !== null) return { lines, worktreeDeleteBlock };
     const gate = resolveWorktreeDeleteGate(target, outcome);
     return gate.state === "required" ? { lines, typedNameTarget: gate.typedNameTarget } : { lines };
   }
@@ -1540,33 +1568,54 @@ export function useMcpBridge(): void {
                 previewTarget.kind !== "terminalKillBatch" &&
                 previewTarget.kind !== "terminalClose";
               const previewPending = hasAsyncPreview;
-              if (hasAsyncPreview && previewTarget !== undefined) {
-                void buildMcpConfirmPreview(previewTarget)
+              // One runner for the open-time fetch and every Retry (#16436).
+              // Only the latest fetch may land, and nothing lands once the
+              // confirmation has settled: the evidence an approval is checked
+              // against must be the answer the approver was last shown.
+              let previewGeneration = 0;
+              let lastPreview: McpConfirmPreviewPatch | undefined;
+              const runPreview = (target: McpConfirmPreviewTarget) => {
+                const generation = ++previewGeneration;
+                void buildMcpConfirmPreview(target)
                   .then(
                     ({
                       lines,
                       typedNameTarget,
+                      worktreeDeleteBlock,
                       approvedRecipeRun: offered,
                       approvedPush: shown,
                     }) => {
-                      if (disposed) return;
+                      if (disposed || generation !== previewGeneration) return;
                       approvedTypedNameTarget = typedNameTarget;
                       approvedRecipeRun = offered;
                       approvedPush = shown;
-                      useMcpConfirmStore.getState().setPreview(requestId, lines, typedNameTarget);
+                      lastPreview = { lines, typedNameTarget, worktreeDeleteBlock };
+                      useMcpConfirmStore.getState().setPreview(requestId, lastPreview);
                     }
                   )
                   // The builder already fails soft, but a rejection escaping it
                   // would leave previewPending stuck true and the modal
                   // unapprovable — the exact stall class #11538 removes. Clear
-                  // it unconditionally.
+                  // it unconditionally. A failed Retry keeps the answer it was
+                  // retrying: falling back to "nothing to show" there would
+                  // lift a refusal the last fetch actually observed.
                   .catch(() => {
-                    if (disposed) return;
+                    if (disposed || generation !== previewGeneration) return;
+                    approvedTypedNameTarget = lastPreview?.typedNameTarget;
                     approvedRecipeRun = undefined;
                     approvedPush = undefined;
-                    useMcpConfirmStore.getState().setPreview(requestId, []);
+                    useMcpConfirmStore
+                      .getState()
+                      .setPreview(requestId, lastPreview ?? { lines: [] });
                   });
-              }
+              };
+              if (hasAsyncPreview && previewTarget !== undefined) runPreview(previewTarget);
+              // Retry is for a refusal the host would throw on, and those come
+              // only from a worktree delete's preview, built here.
+              const retryTarget =
+                hasAsyncPreview && previewTarget?.kind === "worktreeDelete"
+                  ? previewTarget
+                  : undefined;
               // Frozen HERE, once, before the modal exists — not rebuilt on
               // render and never appended to. The list the approver reads is
               // the list their approval covers.
@@ -1648,7 +1697,7 @@ export function useMcpBridge(): void {
                           selectionConfirmLabel:
                             previewTarget?.kind === "terminalClose"
                               ? { verb: "Close", one: "panel", many: "panels" }
-                              : { verb: "Kill", one: "terminal", many: "terminals" },
+                              : { verb: "Remove", one: "panel", many: "panels" },
                         }
                       : {}),
                   },
@@ -1658,10 +1707,12 @@ export function useMcpBridge(): void {
                   {
                     deadlineAt: dispatchDeadlineAt,
                     hold: (phase) => holdDispatch(requestId, phase),
-                  }
+                  },
+                  retryTarget ? { retryPreview: () => runPreview(retryTarget) } : undefined
                 );
               } finally {
                 inFlightConfirms.delete(requestId);
+                previewGeneration += 1;
               }
               if (disposed) return;
               const decision = resolution.decision;

@@ -36,6 +36,7 @@ import {
   siblingHeldSessionIds,
   type RestoreRecoveryLaunchResult,
 } from "@/services/terminal/restoreRecoveryLaunch";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 
 // Only the reasons `listCodexSessionsForCwd` can actually surface: it queries
 // the app-server directly rather than resolving a terminal, so the
@@ -412,6 +413,11 @@ export function FindCodexSessionAction({ panelId, onOpenSession }: FindCodexSess
 
   const openSession = async (session: CodexFolderSession) => {
     if (!cwd) return;
+    // Resolved before the check below, which has to stay the last thing before
+    // the spawn: nothing may yield between them.
+    const baseCommand = onOpenSession
+      ? undefined
+      : await resolveCurrentAgentLaunchBaseCommand("codex");
     // A sibling can claim this exact conversation in the gap between the list
     // loading and the user picking a row — the popover can sit open for a
     // while. Re-check right before opening rather than trusting the snapshot
@@ -434,7 +440,8 @@ export function FindCodexSessionAction({ panelId, onOpenSession }: FindCodexSess
     const command = buildResumeCommand(
       "codex",
       session.id,
-      reconcileResumeLaunchFlags({ agentId: "codex", agentLaunchFlags })
+      reconcileResumeLaunchFlags({ agentId: "codex", agentLaunchFlags }),
+      baseCommand
     );
     if (!command) return;
     setIsOpen(false);
@@ -544,7 +551,8 @@ export function FindCodexSessionAction({ panelId, onOpenSession }: FindCodexSess
             className="py-6"
             action={
               <Button
-                variant="link"
+                variant="outline"
+                size="sm"
                 // Retry goes away with the failure, so focus moves to the refresh
                 // button it stands in for rather than falling to the page; ringed
                 // only when the retry came from the keyboard.
@@ -555,7 +563,6 @@ export function FindCodexSessionAction({ panelId, onOpenSession }: FindCodexSess
                     focusVisible: event.detail === 0,
                   });
                 }}
-                className="text-xs"
               >
                 Retry
               </Button>

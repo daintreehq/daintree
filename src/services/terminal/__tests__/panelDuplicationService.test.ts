@@ -7,6 +7,15 @@ import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 import type { BrowserPanelOptions, DevPreviewPanelOptions } from "@shared/types/addPanelOptions";
 
+// The launch executable comes from this view's CLI detection, which these tests
+// don't load: stand it in directly.
+vi.mock("@/utils/agentLaunchCommand", () => ({
+  resolveCurrentAgentLaunchBaseCommand: vi.fn(async () => undefined),
+  getCurrentLaunchCliDetail: vi.fn(async () => undefined),
+  resolveAgentLaunchBaseCommand: vi.fn((registryCommand: string) => registryCommand),
+  rebaseToCurrentAgentLaunch: vi.fn(async (command: string) => command),
+}));
+
 vi.mock("@/clients", () => ({
   agentSettingsClient: {
     get: vi.fn(),
@@ -707,6 +716,39 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     return vi.mocked(mod.generateAgentCommand);
   }
 
+  it("starts the source's command with the copy a launch starts now when settings can't be read", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("IPC"));
+    const { rebaseToCurrentAgentLaunch } = await import("@/utils/agentLaunchCommand");
+    vi.mocked(rebaseToCurrentAgentLaunch).mockResolvedValueOnce("/chosen/claude --model opus");
+
+    const result = await buildPanelDuplicateOptions(
+      makePanel({ kind: "terminal", launchAgentId: "claude", command: "claude --model opus" }),
+      "grid"
+    );
+
+    expect(rebaseToCurrentAgentLaunch).toHaveBeenCalledWith("claude --model opus", "claude");
+    expect(result.command).toBe("/chosen/claude --model opus");
+  });
+
+  // A copy starts what a launch of its agent starts now, the chosen copy
+  // included, not the bare registry command (#16399).
+  it("starts the executable a launch of the agent starts now", async () => {
+    const spy = await getGenerateAgentCommandSpy();
+    const { resolveCurrentAgentLaunchBaseCommand } = await import("@/utils/agentLaunchCommand");
+    vi.mocked(resolveCurrentAgentLaunchBaseCommand).mockResolvedValueOnce("/chosen/claude");
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({ agents: {} });
+
+    await buildPanelDuplicateOptions(
+      makePanel({ kind: "terminal", launchAgentId: "claude" }),
+      "grid"
+    );
+
+    expect(resolveCurrentAgentLaunchBaseCommand).toHaveBeenCalledWith("claude");
+    expect(spy.mock.calls.at(-1)?.[0]).toBe("/chosen/claude");
+  });
+
   it("dangerousEnabled=true from preset overrides base false in effectiveEntry", async () => {
     const spy = await getGenerateAgentCommandSpy();
     const { agentSettingsClient } = await import("@/clients");
@@ -754,13 +796,18 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     expect(entry.customFlags).toBe("--extra-flag");
   });
 
-  it("inlineMode=false from preset overrides base true in effectiveEntry", async () => {
+  it("never layers a preset's stored alt-screen choice onto effectiveEntry (#16356)", async () => {
     const spy = await getGenerateAgentCommandSpy();
     const { agentSettingsClient } = await import("@/clients");
     (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({
       agents: { claude: { inlineMode: true } },
     });
-    getMergedPresetMock.mockReturnValue({ id: "user-abc", name: "NoInline", inlineMode: false });
+    getMergedPresetMock.mockReturnValue({
+      id: "user-abc",
+      name: "OldAltScreen",
+      inlineMode: false,
+      customFlags: "--kept",
+    });
 
     const panel = makePanel({
       kind: "terminal",
@@ -770,9 +817,11 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     await buildPanelDuplicateOptions(panel, "grid");
 
     const entry = spy.mock.calls[0]![1] as Record<string, unknown>;
-    // Baked as the tri-state "off" (alt-screen) now (#10876): the preset's
-    // alt-screen choice still vetoes the base's inline (true → "on").
-    expect(entry.inlineMode).toBe("off");
+    // The agent's own stored value rides along untouched and unread; the
+    // preset's is never baked over it.
+    expect(entry.inlineMode).toBe(true);
+    // Everything else the preset sets still applies.
+    expect(entry.customFlags).toBe("--kept");
   });
 
   it("preset.dangerousEnabled=undefined does NOT clobber base true (undefined guard)", async () => {

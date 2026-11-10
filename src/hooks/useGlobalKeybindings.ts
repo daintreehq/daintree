@@ -18,6 +18,7 @@ import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
 import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
 import { usePaletteStore, usePanelStore } from "../store";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
+import { resolveInteractiveActionId } from "@/services/actions/resolveInteractiveActionId";
 import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
 import { hasWaitingStopAndSend } from "@/services/voiceDraftSend";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -222,7 +223,8 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // A direct completion (Cmd+K then Cmd+P) of a command that can't run
       // right now keeps the HUD open and says why, the same as choosing that
       // row with Enter — rather than closing it on a dispatch that returns
-      // DISABLED with nothing on screen to explain it.
+      // DISABLED with nothing on screen to explain it. The command that runs is
+      // the redirect target, so that is whose state decides.
       if (hudPending && (e.metaKey || e.ctrlKey)) {
         const completion = keybindingService
           .getChordCompletions(COMMAND_HUD_PREFIX)
@@ -230,7 +232,13 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
             (entry) => entry.actionId !== "" && keybindingService.matchesEvent(e, entry.secondKey)
           );
         const action = completion
-          ? actionService.get(completion.actionId as Parameters<typeof actionService.get>[0])
+          ? actionService.get(
+              resolveInteractiveActionId(
+                completion.actionId as Parameters<typeof actionService.get>[0]
+              ),
+              undefined,
+              { includeSchemas: false }
+            )
           : null;
         if (action && !action.enabled) {
           e.preventDefault();
@@ -434,9 +442,12 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
             }
           }
 
-          // Dispatch through ActionService
+          // A shortcut carries no arguments, so an action whose palette pick
+          // redirects runs its interactive sibling here too (git.commit →
+          // Review Hub) instead of failing its own validation.
+          const dispatchId = resolveInteractiveActionId(result.match.actionId);
           void actionService
-            .dispatch(result.match.actionId, undefined, {
+            .dispatch(dispatchId, undefined, {
               source: "keybinding",
             })
             .then((dispatchResult) => {
@@ -446,11 +457,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
               // shortcut did exactly what it should — the dialog is up — so it
               // must not be logged as a failure.
               if (!dispatchResult.ok && !isStagedConfirmation(dispatchResult.error)) {
-                logError(
-                  `[GlobalKeybinding] Action "${result.match!.actionId}" failed`,
-                  undefined,
-                  { error: dispatchResult.error }
-                );
+                logError(`[GlobalKeybinding] Action "${dispatchId}" failed`, undefined, {
+                  error: dispatchResult.error,
+                });
               }
             });
         }

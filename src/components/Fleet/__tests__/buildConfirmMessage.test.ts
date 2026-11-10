@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildConfirmMessage } from "../buildConfirmMessage";
+import { buildConfirmLabels, buildConfirmMessage } from "../buildConfirmMessage";
 
 describe("buildConfirmMessage", () => {
   describe("trash", () => {
@@ -15,6 +15,25 @@ describe("buildConfirmMessage", () => {
   describe("kill (sibling regression guard)", () => {
     it("uses 'terminals' (plural) when count is 3", () => {
       expect(buildConfirmMessage("kill", 3, 0)).toBe("Kill 3 terminals?");
+    });
+  });
+
+  describe("buttons", () => {
+    it("name what the confirm does, verb first, in the singular or plural", () => {
+      expect(buildConfirmLabels("restart", 1).confirm).toBe("Restart agent");
+      expect(buildConfirmLabels("restart", 3).confirm).toBe("Restart agents");
+      expect(buildConfirmLabels("reject", 5).confirm).toBe("Reject prompts");
+      expect(buildConfirmLabels("kill", 1).confirm).toBe("Kill terminal");
+    });
+
+    it("name what the cancel calls off", () => {
+      expect(buildConfirmLabels("kill", 2).cancel).toBe("Cancel kill");
+      expect(buildConfirmLabels("reject", 5).cancel).toBe("Cancel rejection");
+    });
+
+    it("say which confirmation lapsed, starting a sentence", () => {
+      expect(buildConfirmLabels("trash", 5).expired).toBe("Trash confirmation expired");
+      expect(buildConfirmLabels("reject", 5).expired).toBe("Rejection confirmation expired");
     });
   });
 });

@@ -26,6 +26,7 @@ import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { describeExitStatus } from "./exitStatus";
 import { pluralize } from "@/lib/pluralize";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 const TRIGGER_LABELS: Record<AgentStateChangeTrigger, string> = {
   input: "Input",
@@ -224,7 +225,12 @@ export function TerminalAgentIndicator({
         <div className="flex flex-col gap-0.5">
           <span className="font-medium">
             {headline}
-            {startedAt != null && <> · {formatElapsedDuration(now - startedAt)}</>}
+            {startedAt != null && (
+              <>
+                {" "}
+                <FactSeparator /> {formatElapsedDuration(now - startedAt)}
+              </>
+            )}
           </span>
           {exitStatus && (
             <span
@@ -243,11 +249,16 @@ export function TerminalAgentIndicator({
             )}
             {showStateDuration && (
               <span className="animate-in fade-in [--tw-animation-duration:var(--duration-150)]">
-                {" · "}
-                {formatElapsedDuration(now - lastStateChange!)}
+                {" "}
+                <FactSeparator /> {formatElapsedDuration(now - lastStateChange!)}
               </span>
             )}
-            {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
+            {stateChangeTrigger && (
+              <>
+                {" "}
+                <FactSeparator /> {TRIGGER_LABELS[stateChangeTrigger]}
+              </>
+            )}
             {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
           </span>
           {isReinterpreted && (

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { load as loadTerminalService } from "../terminalInstanceServiceAccessor";
 import { INCREMENTAL_RESTORE_CONFIG } from "../types";
+import { TerminalRestoreController } from "../TerminalRestoreController";
 
 const terminalInstanceService = await loadTerminalService();
 
@@ -406,5 +407,23 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     expect(mockTerminal.scrollToLine).toHaveBeenCalledWith(0);
 
     terminalInstanceService.destroy(id);
+  });
+
+  it("passes host-resync options through to the restore controller", async () => {
+    // The stall watchdog reaches the controller only through this seam, so an
+    // option dropped here would silently disable the write barrier and the
+    // late-snapshot abort in production.
+    const spy = vi
+      .spyOn(TerminalRestoreController.prototype, "fetchAndRestore")
+      .mockResolvedValue(false);
+    const signal = new AbortController().signal;
+
+    await terminalInstanceService.fetchAndRestore("resync-forward", {
+      settlePendingWrites: true,
+      signal,
+    });
+
+    expect(spy).toHaveBeenCalledWith("resync-forward", { settlePendingWrites: true, signal });
+    spy.mockRestore();
   });
 });

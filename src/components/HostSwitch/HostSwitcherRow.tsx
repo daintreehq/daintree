@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import type { HostMetricsSummary } from "@shared/types/remoteHosts";
 import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
@@ -11,6 +11,8 @@ import { HostNameText } from "@/components/Hosts/HostNameText";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { LazyHostSparkline } from "@/components/Hosts/Overview/LazyHostOverviewParts";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { PaletteCurrentLabel } from "@/components/ui/PaletteCurrentLabel";
+import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 import {
   busyCores,
   cpuSeries,
@@ -207,12 +209,19 @@ function metaLine(row: HostMenuRow, summary: HostMetricsSummary | null, now: num
     if (row.lastSeenAt !== null) return `Last seen ${formatRelativeTime(row.lastSeenAt, now)}`;
     return null;
   }
-  if (warnings.length === 0) return facts.join(" · ") || null;
+  if (warnings.length === 0) return facts.length > 0 ? <FactRun facts={facts} /> : null;
   return (
     <>
       {/* Machine names keep their own case, so only the build phrase is capitalised. */}
-      <span className="text-status-warning">{warnings.join(" · ")}</span>
-      {facts.length > 0 && ` · ${facts.join(" · ")}`}
+      <span className="text-status-warning">
+        <FactRun facts={warnings} />
+      </span>
+      {facts.map((fact) => (
+        <Fragment key={fact}>
+          {" "}
+          <FactSeparator /> {fact}
+        </Fragment>
+      ))}
     </>
   );
 }
@@ -291,11 +300,9 @@ export function HostSwitcherRow({
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-2">
             <HostName name={row.name} dim={tone === "offline"} />
-            {row.isCurrent && (
-              <span className="shrink-0 rounded-sm border border-border-default px-1 text-2xs leading-4 text-text-secondary">
-                this window
-              </span>
-            )}
+            {/* In the name too: `aria-current` is often unannounced inside a listbox. */}
+            {row.isCurrent && <span className="sr-only">, current</span>}
+            {row.isCurrent && <PaletteCurrentLabel />}
           </span>
           {meta && (
             // A build warning shows its short form, so its full text is always on offer.

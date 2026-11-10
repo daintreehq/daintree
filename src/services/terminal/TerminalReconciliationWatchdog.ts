@@ -4,7 +4,7 @@ import { isSidebarMeasurementLocked } from "@/lib/layoutTransitionLock";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { logDebug, logWarn } from "@/utils/logger";
 import { normalizeTerminalGridDimension } from "@shared/types/terminal";
-import { hasStreamingWrites } from "./TerminalResizeController";
+import { altFrameInFlight, hasStreamingWrites } from "./TerminalResizeController";
 import {
   MAX_RENDERER_UNPAUSE_ATTEMPTS,
   attemptRendererUnpause,
@@ -263,6 +263,24 @@ export class TerminalReconciliationWatchdog {
   }
 
   /**
+   * Whether `reconcileGeometryFresh` would refuse this alt-screen pane right
+   * now: its grid has to move and its output is still reaching xterm. Issuing
+   * a repair then spends the heavy budget and the cooldown on a guaranteed
+   * refusal, and skips the cheaper layers below. With no proposal to compare,
+   * the reconcile measures from cell metrics and may still refuse, so a pane
+   * with output in flight defers then too.
+   */
+  private altGridChangeDeferred(id: string, managed: ManagedTerminal): boolean {
+    if (!altFrameInFlight(managed, this.deps.getQueuedBytes(id))) return false;
+    const proposal = managed.fitAddon.proposeDimensions?.();
+    if (!proposal || proposal.cols <= 1 || proposal.rows <= 1) return true;
+    return (
+      normalizeTerminalGridDimension(proposal.cols) !== managed.terminal.cols ||
+      normalizeTerminalGridDimension(proposal.rows) !== managed.terminal.rows
+    );
+  }
+
+  /**
    * Diagnostic for the project-switch garble bug: an on-screen, settled
    * terminal whose xterm grid (`terminal.cols/rows`) disagrees with the
    * dimensions the container can actually hold (`fitAddon.proposeDimensions()`)
@@ -470,10 +488,13 @@ export class TerminalReconciliationWatchdog {
     // the 6s repair cooldown and spend heavy budget on a guaranteed no-op, so
     // both geometry branches below skip the attempt and fall through to the
     // cheaper render-pause / WebGL layers, retrying once the stream pauses.
-    // Main-buffer only: the gate in reconcileGeometryFresh sits after the
-    // alt-buffer early-return, so an alt-buffer reconcile is never deferred
-    // by writes.
-    const streamingDeferred = !managed.isAltBuffer && hasStreamingWrites(managed, now);
+    // An alt-buffer pane is refused on a narrower condition — a grid change
+    // while its output is still reaching xterm (#16359) — so it defers only on
+    // that, and a repair that needs no resize (the reveal's paint half) still
+    // runs while the app keeps writing.
+    const streamingDeferred = managed.isAltBuffer
+      ? this.altGridChangeDeferred(id, managed)
+      : hasStreamingWrites(managed, now);
 
     // Reveal-pending guaranteed redraw (#10632). The project-switch suppression
     // window cleared while this host was still detached/occluded, so its one-shot
@@ -531,18 +552,12 @@ export class TerminalReconciliationWatchdog {
     // (== REVEAL_CONCURRENCY) so a grid that all diverges at once never lands as
     // a single long task.
     //
-    // Main buffer only (#11443). `reconcileGeometryFresh` returns early for an
-    // alt-screen pane by design (#10805 — never reflow a live TUI's frame out
-    // from under its own SIGWINCH redraw), so the repair issued here is a
-    // structural no-op for one: the divergence can never close, every tick
-    // burns a heavy-budget slot another pane could use, and after
-    // WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS the breaker latches
-    // `geometryRepairGaveUp` permanently — which then blocks the pane's
-    // legitimate main-buffer repairs once it leaves the alternate screen, since
-    // only genuine convergence or a re-attach re-arms it. An alt pane's geometry
-    // is owned by the ResizeObserver-driven applyResize path and the app's own
-    // redraw; the render-pause and WebGL layers below still cover it.
-    if (!managed.isAltBuffer && !inSynchronizedBlock && !resizeTransitioning) {
+    // Alt-screen panes included (#16359). `reconcileGeometryFresh` moves an alt
+    // pane's xterm and PTY together, outside any synchronized block, so the
+    // app's own SIGWINCH redraw repaints the frame at the new size — the repair
+    // converges in one tick, and the breaker below stays a guard against a
+    // genuine fight rather than a latch that structural no-ops always trip.
+    if (!inSynchronizedBlock && !resizeTransitioning) {
       const proposal = managed.fitAddon.proposeDimensions?.();
       if (proposal && proposal.cols > 1 && proposal.rows > 1) {
         // Normalize before comparing, exactly as the diagnostic does. Both

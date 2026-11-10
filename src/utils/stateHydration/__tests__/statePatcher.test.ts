@@ -1186,6 +1186,50 @@ describe("buildArgsForRespawn", () => {
     expect(result.agentLaunchFlags).toEqual(["--model", "opus"]);
   });
 
+  it("strips a plugin agent's recorded bypass flag before its catalog has loaded (#16374)", () => {
+    // Nothing registers "hermes" here: cold restore runs before the plugin
+    // catalog, so only the recorded history knows `--yolo` is its bypass.
+    const saved = {
+      id: "t1",
+      kind: "terminal" as const,
+      agentId: "hermes",
+      cwd: "/p",
+      location: "grid" as const,
+      agentLaunchFlags: ["--tui", "--yolo"],
+    };
+    const recorded = { pluginBypassArgHistory: { hermes: [["--yolo"]] } };
+
+    const off = buildArgsForRespawn(
+      saved,
+      "agent",
+      "/p",
+      { agents: {}, globalSkipPermissions: false, ...recorded },
+      false,
+      undefined
+    );
+    expect(off.agentLaunchFlags).toEqual(["--tui"]);
+
+    const vetoed = buildArgsForRespawn(
+      saved,
+      "agent",
+      "/p",
+      { agents: { hermes: { dangerousMode: "off" } }, globalSkipPermissions: true, ...recorded },
+      false,
+      undefined
+    );
+    expect(vetoed.agentLaunchFlags).toEqual(["--tui"]);
+
+    const unrecorded = buildArgsForRespawn(
+      saved,
+      "agent",
+      "/p",
+      { agents: {}, globalSkipPermissions: false },
+      false,
+      undefined
+    );
+    expect(unrecorded.agentLaunchFlags).toEqual(["--tui", "--yolo"]);
+  });
+
   it("re-adds the bypass flag for a supported agent when the global override is on (#10432)", () => {
     buildResumeCommandMock.mockClear();
     buildArgsForRespawn(
@@ -1211,7 +1255,7 @@ describe("buildArgsForRespawn", () => {
     ]);
   });
 
-  it("does not inject a bypass flag for an unsupported agent even when the global override is on (#10432)", () => {
+  it("re-adds the bypass flag for an agent with no assistant bypass when the global override is on (#16414)", () => {
     buildResumeCommandMock.mockClear();
     buildArgsForRespawn(
       {
@@ -1229,7 +1273,61 @@ describe("buildArgsForRespawn", () => {
       false,
       undefined
     );
-    expect(buildResumeCommandMock).toHaveBeenCalledWith("gemini", "sess-1", ["--model", "flash"]);
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("gemini", "sess-1", [
+      "--model",
+      "flash",
+      "--yolo",
+    ]);
+  });
+
+  it("does not inject a bypass flag for an agent that has none even when the global override is on (#10432)", () => {
+    // A written flag makes the bypass token observable: it would be appended
+    // if the global switch wrongly reached OpenCode.
+    const written = "--dangerously-skip-permissions";
+    buildResumeCommandMock.mockClear();
+    buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "opencode",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--model", "x"],
+      },
+      "agent",
+      "/p",
+      { agents: { opencode: { dangerousArgs: written } }, globalSkipPermissions: true },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenCalledTimes(1);
+    const flags = buildResumeCommandMock.mock.calls[0]?.[2] as string[];
+    expect(flags.slice(0, 2)).toEqual(["--model", "x"]);
+    expect(flags).not.toContain(written);
+
+    // ...while the agent's own On still carries it.
+    buildResumeCommandMock.mockClear();
+    buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "opencode",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--model", "x"],
+      },
+      "agent",
+      "/p",
+      {
+        agents: { opencode: { dangerousArgs: written, dangerousMode: "on" } },
+        globalSkipPermissions: true,
+      },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock.mock.calls[0]?.[2]).toContain(written);
   });
 
   it("injects the bypass flag into an empty snapshot at resume when the global override is on (#10432)", () => {
@@ -1259,12 +1357,16 @@ describe("buildArgsForRespawn", () => {
     expect(result.agentLaunchFlags).toEqual([]);
   });
 
-  it("injects the force-alt-screen flag into an empty snapshot at resume (#11423)", () => {
+  // Settings an older build saved while alt screen was a choice (#16356).
+  const legacyAltScreenSettings = {
+    agents: { grok: { inlineMode: "off" } },
+    globalUseAltScreen: true,
+  };
+
+  it("injects the inline flag into an empty snapshot at resume, whatever was saved (#16356)", () => {
     // The live crash-recovery boundary: this file runs the REAL reconciler, so
-    // it proves the chokepoint actually threads the resolved decision through
-    // rather than merely that the reconciler works in isolation. A session
-    // captured before #11423 has no screen-mode token at all, and alt-screen
-    // used to mean "inject nothing" — which left grok on its own inline default.
+    // it proves the chokepoint threads the inline flag through rather than
+    // merely that the reconciler works in isolation.
     buildResumeCommandMock.mockClear();
     const result = buildArgsForRespawn(
       {
@@ -1278,17 +1380,17 @@ describe("buildArgsForRespawn", () => {
       },
       "agent",
       "/p",
-      { agents: { grok: {} }, globalUseAltScreen: true },
+      legacyAltScreenSettings,
       false,
       undefined
     );
-    expect(buildResumeCommandMock).toHaveBeenCalledWith("grok", "sess-1", ["--fullscreen"]);
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("grok", "sess-1", ["--no-alt-screen"]);
     expect(result.agentLaunchFlags).toEqual([]);
   });
 
-  it("flips a stale inline token to force-alt-screen on resume (#11423)", () => {
+  it("rewrites a saved --fullscreen to the inline flag on restore and resume (#16356)", () => {
     buildResumeCommandMock.mockClear();
-    buildArgsForRespawn(
+    const result = buildArgsForRespawn(
       {
         id: "t1",
         kind: "terminal" as const,
@@ -1296,20 +1398,19 @@ describe("buildArgsForRespawn", () => {
         cwd: "/p",
         location: "grid",
         agentSessionId: "sess-1",
-        // Captured while the global switch said inline.
-        agentLaunchFlags: ["--no-alt-screen", "--model", "grok-build"],
+        // Captured while alt screen was chosen.
+        agentLaunchFlags: ["--fullscreen", "--model", "grok-build"],
       },
       "agent",
       "/p",
-      { agents: { grok: {} }, globalUseAltScreen: true },
+      legacyAltScreenSettings,
       false,
       undefined
     );
-    expect(buildResumeCommandMock).toHaveBeenCalledWith("grok", "sess-1", [
-      "--fullscreen",
-      "--model",
-      "grok-build",
-    ]);
+    const inline = ["--no-alt-screen", "--model", "grok-build"];
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("grok", "sess-1", inline);
+    // The snapshot stored for the next restart is inline too.
+    expect(result.agentLaunchFlags).toEqual(inline);
   });
 
   it("prefers primary buildResumeCommand over resume-latest when session ID is present", () => {
@@ -3158,7 +3259,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
 
 // ── adversarial: behavioral overrides must reach generateAgentCommand ─────────
 // These tests spy on generateAgentCommand arguments to prove that preset
-// dangerousEnabled / customFlags / inlineMode / args overrides are actually
+// dangerousEnabled / customFlags / args overrides are actually
 // merged into the effectiveEntry passed to the command builder.  Previously the
 // mock ignored the settings arg entirely, so a bug in the merge would be silent.
 
@@ -3213,20 +3314,18 @@ describe("adversarial: behavioral overrides flow through to generateAgentCommand
     expect(entry.customFlags).toBe("--my-flag");
   });
 
-  it("inlineMode=false from preset overrides base true in effectiveEntry", () => {
-    getMergedPresetMock.mockReturnValue({ id: "user-x", name: "NoInline", inlineMode: false });
-    buildArgsForRespawn(
-      BASE,
-      "agent",
-      "/p",
-      { agents: { claude: { inlineMode: true } } },
-      false,
-      undefined
-    );
+  it("never layers a preset's stored alt-screen choice onto effectiveEntry (#16356)", () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "user-x",
+      name: "OldAltScreen",
+      inlineMode: false,
+      customFlags: "--kept",
+    });
+    buildArgsForRespawn(BASE, "agent", "/p", { agents: { claude: {} } }, false, undefined);
     const entry = generateAgentCommandMock.mock.calls[0]![1] as Record<string, unknown>;
-    // Baked as the tri-state "off" (alt-screen) now (#10876): the preset's
-    // alt-screen choice still vetoes the base's inline (true → "on").
-    expect(entry.inlineMode).toBe("off");
+    expect(entry.inlineMode).toBeUndefined();
+    // Everything else the preset sets still applies.
+    expect(entry.customFlags).toBe("--kept");
   });
 
   it("preset.dangerousEnabled=undefined does NOT clobber base true (undefined guard)", () => {

@@ -15,6 +15,7 @@ import {
 } from "@/store/pluginTerminalStatusStore";
 import type { ActionId } from "@shared/types/actions";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import {
   HEADER_CHIP_CLASS,
   HEADER_CHIP_FOCUS_CLASS,
@@ -82,7 +83,9 @@ function PluginTerminalStatusChip({
       </TooltipTrigger>
       <TooltipContent side="bottom">
         <div className="flex flex-col gap-1">
-          <span>{`${name} · ${status.label}`}</span>
+          <span>
+            {name} <FactSeparator /> {status.label}
+          </span>
           {status.tooltip && (
             <span className="whitespace-pre-wrap break-words text-text-secondary">
               {status.tooltip}

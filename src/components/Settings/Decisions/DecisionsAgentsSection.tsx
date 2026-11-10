@@ -4,6 +4,7 @@ import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Setti
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Callout } from "@/components/ui/Callout";
+import { BrandMark } from "@/components/icons";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
@@ -66,10 +67,15 @@ function agentName(id: string): string {
 }
 
 function AgentLabel({ id }: { id: string }) {
-  const Icon = getAgentConfig(id)?.icon;
+  const config = getAgentConfig(id);
+  const Icon = config?.icon;
   return (
     <span className="inline-flex items-center gap-2">
-      {Icon && <Icon size={16} />}
+      {Icon && (
+        <BrandMark brandColor={config?.color} className="shrink-0">
+          <Icon size={16} />
+        </BrandMark>
+      )}
       {agentName(id)}
     </span>
   );

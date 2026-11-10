@@ -526,6 +526,35 @@ describe("registerForgeDataHandlers", () => {
       expect(result.checks[0]).toStrictEqual({ name: "pending-check", status: "queued" });
     });
 
+    it("passes the workflow and app that reported a check through", async () => {
+      useImpl(withChecks([{ ...fullCheck, workflow: "CI", app: "GitHub Actions" }]));
+      registerForgeDataHandlers();
+
+      const result = (await findHandler("forge:get-checks")(null, {
+        cwd: "/repo",
+        prNumber: 720,
+      })) as { checks: Array<Record<string, unknown>> };
+
+      expect(result.checks[0]).toMatchObject({ workflow: "CI", app: "GitHub Actions" });
+      expect(result.checks[0]).not.toHaveProperty("rawData");
+    });
+
+    it.each([
+      ["empty", ""],
+      ["whitespace-only", " \t "],
+    ])("omits an %s workflow or app name rather than forwarding it", async (label, blank) => {
+      useImpl(withChecks([{ ...fullCheck, workflow: blank, app: blank }]));
+      registerForgeDataHandlers();
+
+      const result = (await findHandler("forge:get-checks")(null, {
+        cwd: `/repo-${label}`,
+        prNumber: 721,
+      })) as { checks: Array<Record<string, unknown>> };
+
+      expect(result.checks[0]).not.toHaveProperty("workflow");
+      expect(result.checks[0]).not.toHaveProperty("app");
+    });
+
     it("distinguishes a missing PR from a PR with no checks", async () => {
       // null and [] lead a caller to opposite conclusions, so the handler must
       // never collapse one into the other.
@@ -570,6 +599,14 @@ describe("registerForgeDataHandlers", () => {
       [
         "a non-boolean required",
         { checks: [{ name: "a", status: "completed", required: "yes", rawData: null }] },
+      ],
+      [
+        "a non-string workflow name",
+        { checks: [{ name: "a", status: "completed", workflow: { name: "CI" }, rawData: null }] },
+      ],
+      [
+        "a null app name",
+        { checks: [{ name: "a", status: "completed", app: null, rawData: null }] },
       ],
       [
         "a blank name",
@@ -794,9 +831,10 @@ describe("registerForgeDataHandlers", () => {
       // an agent "nobody replied" when the truth is "nobody could look".
       registerForgeDataHandlers();
 
-      await expect(
-        findHandler("forge:list-issue-comments")(null, { cwd: "/repo", issueNumber: 7 })
-      ).rejects.toThrow(/does not support reading issue comments/i);
+      const read = findHandler("forge:list-issue-comments")(null, { cwd: "/repo", issueNumber: 7 });
+      await expect(read).rejects.toThrow(/does not support reading issue comments/i);
+      // Coded, so the renderer can tell a provider without comments from a failed read.
+      await expect(read).rejects.toMatchObject({ code: "UNSUPPORTED" });
     });
 
     it("strips option fields the read does not honor and drops malformed ones", async () => {

@@ -122,6 +122,7 @@ export const electronMock = {
   app: {
     isPackaged: false,
     on: () => undefined,
+    off: () => undefined,
     getVersion: () => "0.0.0-harness",
     getPath: (name: string) =>
       name === "userData" ? harnessState.userDataDir : path.join(harnessState.userDataDir, name),
@@ -143,6 +144,8 @@ export const electronMock = {
     },
   },
   clipboard: {},
+  // Remote Hosts compares the network while an ssh host is wanted.
+  net: { isOnline: () => true },
   ipcMain: ipcMainMock,
   session: { defaultSession: {}, fromPartition: () => ({}) },
   MessageChannelMain: FakeMessageChannelMain,

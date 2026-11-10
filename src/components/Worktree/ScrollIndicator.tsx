@@ -159,7 +159,19 @@ export function ScrollIndicator({
           transitionDuration: `${isVisible ? 0 : UI_EXIT_DURATION}ms`,
           transitionTimingFunction: UI_EXIT_EASING,
         }}
-      />
+      >
+        {/* A short fade on the list side, so a row the band cuts through
+            dissolves into it rather than ending in a hard line across its
+            glyphs, which read as a rendering fault rather than "more here".
+            It takes no presses: the row under it is still on screen. */}
+        <div
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none absolute inset-x-0 h-3 from-surface-sidebar to-transparent",
+            direction === "above" ? "top-full bg-linear-to-b" : "bottom-full bg-linear-to-t"
+          )}
+        />
+      </div>
       <Tooltip>
         <TooltipTrigger asChild>
           <ScrollPill

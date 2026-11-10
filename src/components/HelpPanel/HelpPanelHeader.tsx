@@ -1,11 +1,12 @@
 import { useState, type Ref } from "react";
-import { ChevronRight, CircleHelp, CircleStop, Ellipsis, History, RotateCw } from "lucide-react";
+import { ChevronRight, CircleHelp, CircleStop, Ellipsis, Eraser, History } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuMeta,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -18,7 +19,12 @@ import {
   type SegmentedRadioOption,
 } from "@/components/ui/SegmentedRadioGroup";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
-import { NewSessionWithAgentLabel } from "./NewSessionWithAgentLabel";
+import {
+  NewSessionWithAgentLabel,
+  SessionCeilingReason,
+  announceSessionCeiling,
+} from "./NewSessionWithAgentLabel";
+import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { TabStateIndicator } from "./HelpSessionTabs";
 import type { AgentState } from "@/types";
 import type { DisplayIdentity } from "@shared/types/displayIdentity";
@@ -190,6 +196,8 @@ interface HelpPanelHeaderProps {
   newSessionAgentIds?: readonly string[];
   /** False at the session ceiling, which parks the agent items rather than hiding them. */
   canStartNewSession?: boolean;
+  /** Lanes open in this project: what names the ceiling as the reason the items are parked. */
+  openSessionCount?: number;
   onNewSessionWithAgent?: (agentId: string) => void;
 }
 
@@ -214,6 +222,7 @@ export function HelpPanelHeader({
   isFocused = false,
   newSessionAgentIds = [],
   canStartNewSession = false,
+  openSessionCount = 0,
   onNewSessionWithAgent,
 }: HelpPanelHeaderProps) {
   // The panel closes on Escape through the escape stack, which the global
@@ -222,6 +231,14 @@ export function HelpPanelHeader({
   // first, not the whole assistant.
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   useEscapeStack(isMenuOpen, () => setIsMenuOpen(false));
+  const hasAgentItems = !!onNewSessionWithAgent && newSessionAgentIds.length > 1;
+  // The reason shows only when the ceiling is what parks the items. This menu has
+  // no plain "New session" row to carry it for its neighbours, so each row does.
+  const atSessionCeiling = !canStartNewSession && openSessionCount >= MAX_ASSISTANT_SLOTS;
+  const handleMenuOpenChange = (open: boolean) => {
+    setIsMenuOpen(open);
+    if (open && hasAgentItems && atSessionCeiling) announceSessionCeiling();
+  };
   return (
     <SurfaceHeader
       density="compact"
@@ -279,7 +296,7 @@ export function HelpPanelHeader({
         <div ref={globalControlsRef} className="contents" data-testid="assistant-global-controls" />
       )}
       {scope === "project" && (
-        <DropdownMenu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
+        <DropdownMenu open={isMenuOpen} onOpenChange={handleMenuOpenChange}>
           <Tooltip>
             <TooltipTrigger asChild>
               <DropdownMenuTrigger asChild>
@@ -307,21 +324,24 @@ export function HelpPanelHeader({
             {canRestartConversation && (
               <>
                 <DropdownMenuItem destructive onSelect={onRestartConversation}>
-                  <RotateCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                  Restart conversation
+                  <Eraser className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                  Clear conversation
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
               </>
             )}
-            {onNewSessionWithAgent &&
-              newSessionAgentIds.length > 1 &&
+            {hasAgentItems &&
               newSessionAgentIds.map((agentId) => (
                 <DropdownMenuItem
                   key={agentId}
                   disabled={!canStartNewSession}
-                  onSelect={() => onNewSessionWithAgent(agentId)}
+                  onSelect={() => onNewSessionWithAgent?.(agentId)}
+                  className={atSessionCeiling ? "data-[disabled]:opacity-100" : undefined}
                 >
-                  <NewSessionWithAgentLabel agentId={agentId} />
+                  <NewSessionWithAgentLabel agentId={agentId} parked={atSessionCeiling} />
+                  {atSessionCeiling && (
+                    <SessionCeilingReason open={openSessionCount} meta={DropdownMenuMeta} />
+                  )}
                 </DropdownMenuItem>
               ))}
             <DropdownMenuItem onSelect={onResumePastSession}>

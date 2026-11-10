@@ -152,7 +152,7 @@ function SidebarViewSwitcher({ model, title }: { model: SidebarViewSwitcherModel
           className={cn(
             // The heading's own type, so the title reads the same as the plain
             // heading it replaces; inset by its padding so the text stays put.
-            "-ml-1.5 h-6 min-w-0 max-w-full gap-1 px-1.5 text-sm font-semibold tracking-wide text-text-primary hover:text-text-primary",
+            "-ml-1.5 h-6 min-w-0 max-w-full gap-1 px-1.5 text-sm font-semibold text-text-primary hover:text-text-primary",
             "[&_svg]:size-3.5"
           )}
         >

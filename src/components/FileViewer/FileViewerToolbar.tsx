@@ -253,7 +253,7 @@ function Root({
       role="toolbar"
       aria-label={label}
       onKeyDown={onKeyDown}
-      className="flex shrink-0 items-center gap-1.5 border-b border-overlay bg-surface px-2 py-1.5"
+      className="flex shrink-0 items-center gap-1.5 border-b border-divider bg-surface px-2 py-1.5"
     >
       <CompactContext.Provider value={compact}>
         <WidthContext.Provider value={width}>{children}</WidthContext.Provider>

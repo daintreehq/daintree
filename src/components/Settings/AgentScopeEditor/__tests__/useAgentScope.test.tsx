@@ -1,30 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { DEFAULT_AGENT_SETTINGS, type AgentSettingsEntry } from "@shared/types";
-import { setUserRegistry, type AgentConfig } from "@shared/config/agentRegistry";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useAgentScope } from "../useAgentScope";
-
-// The alt-screen "Default (inherit)" hint attributes the resolved value to a
-// source. Its correctness depends on the three-tier precedence in
-// `resolveEffectiveInlineMode` (explicit → curated registry `defaultInlineMode`
-// → global switch). No shipped agent sets `defaultInlineMode` (they all default
-// inline via the global switch so it stays user-overridable), so the
-// registry-default tier is supplied here by a registered synthetic agent. #10894.
-const ALT_DEFAULT_AGENT: AgentConfig = {
-  id: "alt-default-agent",
-  name: "Alt Default Agent",
-  command: "alt-default-agent",
-  color: "#ffffff",
-  iconId: "custom",
-  supportsContextInjection: false,
-  capabilities: {
-    scrollback: 1000,
-    inlineModeFlag: "--no-alt-screen",
-    defaultInlineMode: false,
-  },
-};
 
 function makeProps(
   agentId: string,
@@ -47,104 +26,79 @@ function makeProps(
   };
 }
 
-function setGlobalAltScreen(globalUseAltScreen: boolean) {
-  useAgentSettingsStore.setState({
-    settings: { ...DEFAULT_AGENT_SETTINGS, globalUseAltScreen },
-  });
-}
-
-describe("useAgentScope — inline-mode inherit origin label (#10894)", () => {
-  beforeEach(() => {
-    useAgentSettingsStore.setState({ settings: DEFAULT_AGENT_SETTINGS });
-    setUserRegistry({ "alt-default-agent": ALT_DEFAULT_AGENT });
-  });
+describe("useAgentScope — skip-permissions Default follows the global switch (#16414)", () => {
+  function setGlobalSkip(globalSkipPermissions: boolean) {
+    useAgentSettingsStore.setState({
+      settings: { ...DEFAULT_AGENT_SETTINGS, globalSkipPermissions },
+    });
+  }
   afterEach(() => {
-    setUserRegistry({});
+    useAgentSettingsStore.setState({ settings: DEFAULT_AGENT_SETTINGS });
   });
 
-  it("attributes an agent with a curated registry default to its built-in default, not the global setting", () => {
-    setGlobalAltScreen(false);
-    const { result } = renderHook(() => useAgentScope(makeProps("alt-default-agent")));
-
-    expect(result.current.scopeKind).toBe("default");
-    expect(result.current.inlineInheritOriginLabel).toBe("the agent's built-in default");
-    // The synthetic agent's registry default is alt-screen (`defaultInlineMode: false`).
-    expect(result.current.inlineInheritResolvesToInline).toBe(false);
+  it("resolves Default to On for agents with a bypass flag and no assistant bypass", () => {
+    setGlobalSkip(true);
+    for (const agentId of ["antigravity", "gemini"]) {
+      const { result } = renderHook(() => useAgentScope(makeProps(agentId)));
+      expect(result.current.inheritResolvesToOn, agentId).toBe(true);
+      expect(result.current.effectiveSkipPerms, agentId).toBe(true);
+      expect(result.current.inheritHint, agentId).toBe("Inherited from global setting");
+    }
   });
 
-  it("keeps attributing to the built-in default even when the global alt-screen switch is on (the registry default shadows it)", () => {
-    setGlobalAltScreen(true);
-    const { result } = renderHook(() => useAgentScope(makeProps("alt-default-agent")));
+  it("tracks the global switch turning off", () => {
+    setGlobalSkip(true);
+    const { result, rerender } = renderHook(() => useAgentScope(makeProps("antigravity")));
+    expect(result.current.inheritResolvesToOn).toBe(true);
 
-    // Global toggle flipped, but the built-in default still decides —
-    // proving the label is not merely echoing the global switch.
-    expect(result.current.inlineInheritOriginLabel).toBe("the agent's built-in default");
-    expect(result.current.inlineInheritResolvesToInline).toBe(false);
-  });
-
-  it("attributes an agent without a registry default (Codex) to the global setting, and tracks the global switch", () => {
-    setGlobalAltScreen(false);
-    const { result, rerender } = renderHook(() => useAgentScope(makeProps("codex")));
-
-    expect(result.current.scopeKind).toBe("default");
-    expect(result.current.inlineInheritOriginLabel).toBe("global setting");
-    // No registry default → resolves to `!globalUseAltScreen`.
-    expect(result.current.inlineInheritResolvesToInline).toBe(true);
-
-    setGlobalAltScreen(true);
+    setGlobalSkip(false);
     rerender();
-    expect(result.current.inlineInheritOriginLabel).toBe("global setting");
-    expect(result.current.inlineInheritResolvesToInline).toBe(false);
+    expect(result.current.inheritResolvesToOn).toBe(false);
+    expect(result.current.effectiveSkipPerms).toBe(false);
+    expect(result.current.inheritHint).toBe("Inherited from global setting");
   });
 
-  it("labels a custom preset scope as the agent default regardless of the registry tier", () => {
-    setGlobalAltScreen(false);
+  it("keeps Default off and says the global doesn't apply for an agent with no bypass flag", () => {
+    setGlobalSkip(true);
+    const { result } = renderHook(() => useAgentScope(makeProps("opencode")));
+    expect(result.current.inheritResolvesToOn).toBe(false);
+    expect(result.current.effectiveSkipPerms).toBe(false);
+    expect(result.current.inheritHint).toBe("The global setting doesn't apply to this agent");
+  });
+
+  it("lets the agent's own Off veto the global switch", () => {
+    setGlobalSkip(true);
+    const { result } = renderHook(() =>
+      useAgentScope(makeProps("antigravity", { dangerousMode: "off" }))
+    );
+    expect(result.current.effectiveSkipPerms).toBe(false);
+    expect(result.current.inheritResolvesToOn).toBe(true);
+  });
+
+  it("attributes a custom preset's Default to the agent default", () => {
+    setGlobalSkip(true);
     const entry: AgentSettingsEntry = {
       customPresets: [{ id: "user-1", name: "My preset" }],
       presetId: "user-1",
     };
-    const { result } = renderHook(() => useAgentScope(makeProps("grok", entry)));
-
+    const { result } = renderHook(() => useAgentScope(makeProps("opencode", entry)));
     expect(result.current.scopeKind).toBe("custom");
-    expect(result.current.inlineInheritOriginLabel).toBe("agent default");
-  });
-});
-
-describe("useAgentScope — screen-mode control gating (#11423)", () => {
-  const withCapabilities = (
-    id: string,
-    capabilities: AgentConfig["capabilities"]
-  ): AgentConfig => ({
-    id,
-    name: id,
-    command: id,
-    color: "#ffffff",
-    iconId: "custom",
-    supportsContextInjection: false,
-    capabilities,
+    expect(result.current.inheritHint).toBe("Inherited from agent default");
   });
 
-  beforeEach(() => {
-    useAgentSettingsStore.setState({ settings: DEFAULT_AGENT_SETTINGS });
-    setUserRegistry({
-      "inline-only": withCapabilities("inline-only", { inlineModeFlag: "--sentinel-inline" }),
-      "alt-only": withCapabilities("alt-only", { altScreenFlag: "--sentinel-alt" }),
-      "neither-mode": withCapabilities("neither-mode", { scrollback: 1000 }),
+  it("layers a custom preset's mode over the agent's global-inherited On", () => {
+    setGlobalSkip(true);
+    const withPreset = (dangerousMode?: "off" | "on"): AgentSettingsEntry => ({
+      customPresets: [{ id: "user-1", name: "My preset", ...(dangerousMode && { dangerousMode }) }],
+      presetId: "user-1",
     });
-  });
-  afterEach(() => {
-    setUserRegistry({});
-  });
+    const inherit = renderHook(() => useAgentScope(makeProps("gemini", withPreset())));
+    expect(inherit.result.current.inheritResolvesToOn).toBe(true);
+    expect(inherit.result.current.effectiveSkipPerms).toBe(true);
 
-  it("shows the control for either polarity and hides it only when neither is declared", () => {
-    // An agent declaring only `altScreenFlag` can still force full-screen, so
-    // gating on `inlineModeFlag` alone would hide a control that works.
-    const supports = (agentId: string) =>
-      renderHook(() => useAgentScope(makeProps(agentId))).result.current.supportsInlineMode;
-
-    expect(supports("inline-only")).toBe(true);
-    expect(supports("alt-only")).toBe(true);
-    expect(supports("neither-mode")).toBe(false);
+    const vetoed = renderHook(() => useAgentScope(makeProps("gemini", withPreset("off"))));
+    expect(vetoed.result.current.dangerousMode).toBe("off");
+    expect(vetoed.result.current.effectiveSkipPerms).toBe(false);
   });
 });
 

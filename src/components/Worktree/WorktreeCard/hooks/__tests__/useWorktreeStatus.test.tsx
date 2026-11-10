@@ -263,6 +263,50 @@ describe("useWorktreeStatus — computedSubtitle", () => {
     });
   });
 
+  it("says git status went unanswered instead of still checking, ahead of a PR title", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: null,
+        gitStatusUnanswered: { reason: "timed-out", since: 1_700_000_000_000 },
+        prTitle: "feat: dark mode",
+        prState: "open",
+        ...prLinked({ prState: "open", prTitle: "feat: dark mode" }),
+      })
+    ).toEqual({ text: "Git status not answered", tone: "warning" });
+  });
+
+  it("says it is waiting for the download rather than checking", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: null,
+        gitStatusWaitingForDownload: true,
+        // A read that timed out before the walk answered is no longer the story.
+        gitStatusUnanswered: { reason: "timed-out", since: 1_700_000_000_000 },
+        prTitle: "feat: dark mode",
+        prState: "open",
+        ...prLinked({ prState: "open", prTitle: "feat: dark mode" }),
+      })
+    ).toEqual({ text: "Waiting for files to download", tone: "muted" });
+  });
+
+  it("keeps the last observed status while waiting for a download", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: makeChanges({ lastCommitMessage: "fix: earlier" }),
+        gitStatusWaitingForDownload: true,
+      })
+    ).toEqual({ text: "fix: earlier", tone: "muted" });
+  });
+
+  it("keeps reading the last observed status when a later read goes unanswered", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
+        gitStatusUnanswered: { reason: "previous-still-running", since: 1_700_000_000_000 },
+      })
+    ).toEqual({ text: "No recent activity", tone: "muted" });
+  });
+
   it("still prefers an open PR title while git status is unresolved", () => {
     expect(
       getSubtitle({

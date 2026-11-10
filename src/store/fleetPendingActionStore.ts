@@ -5,7 +5,9 @@ import { create } from "zustand";
  * that need confirmation (interrupt ≥3, restart/kill always, trash ≥5) set
  * this store instead of running immediately; FleetArmingRibbon subscribes
  * and renders inline confirmation UI that dispatches the action again with
- * `{ confirmed: true }` on Enter or clears the store on Escape.
+ * `{ confirmed: true }` on Enter or its confirm button, or clears the store on
+ * Escape or its cancel button. `useFleetPendingConfirm` owns those keys and
+ * lets the confirmation lapse once the user moves on.
  *
  * The store is not persisted — a pending confirmation dies with the
  * current session.

@@ -169,6 +169,9 @@ export function _pluginHostedViewRemovalSignalForTest(id: string): AbortSignal |
   return runtimes.get(id)?.removal.signal;
 }
 
+/** The workspace slot of the Canopy window's view state, which follows no project. */
+const CANOPY_VIEW_STATE_WORKSPACE = "canopy";
+
 /**
  * Where a hosted mount's durable state belongs (#14095), or `null` for a host
  * whose content keeps its own: a file editor's draft is the file document's.
@@ -177,7 +180,9 @@ export function _pluginHostedViewRemovalSignalForTest(id: string): AbortSignal |
  * projects keeps two bags, and keyed by the mount's own stable name, which
  * survives a plugin reload. A settings section belongs to its settings home
  * instead of the window: the user-scope section in the plugin manager follows
- * the user, the project-scope one its project.
+ * the user, the project-scope one its project. The Canopy window has no
+ * workspace and stands for none, so its views keep one bag each wherever it
+ * opens; the host kind in the key keeps it apart from every other mount's.
  */
 function stateIdentityFor(
   pluginId: string | undefined,
@@ -188,11 +193,13 @@ function stateIdentityFor(
 ): PluginViewStateIdentity | null {
   if (host === "fileEditor" || !pluginId) return null;
   const workspaceId =
-    host === "settings" && settingsScope !== undefined
-      ? settingsScope === "user"
-        ? "user"
-        : (settingsProjectId ?? getViewWorkspaceId())
-      : getViewWorkspaceId();
+    host === "canopy"
+      ? CANOPY_VIEW_STATE_WORKSPACE
+      : host === "settings" && settingsScope !== undefined
+        ? settingsScope === "user"
+          ? "user"
+          : (settingsProjectId ?? getViewWorkspaceId())
+        : getViewWorkspaceId();
   if (!workspaceId) return null;
   return { hostId: currentHostId(), workspaceId, pluginId, host, viewKey: mountId };
 }
@@ -254,7 +261,14 @@ export function PluginHostedView({
   testId?: string;
 }) {
   const { content: Content, removal, componentPath } = getRuntime(source);
-  const declaredVersion = source.from === "panel-kind" ? source.config.stateVersion : undefined;
+  // A view drawn from a panel kind is judged by that kind's version, as on
+  // the panel; a Canopy view is one of those, and carries it with it.
+  const declaredVersion =
+    source.from === "panel-kind"
+      ? source.config.stateVersion
+      : source.view.location === "canopy"
+        ? source.view.stateVersion
+        : undefined;
   const pluginId = source.from === "hosted" ? source.view.pluginId : source.config.extensionId;
   const displayName = source.from === "hosted" ? source.view.name : source.config.name;
   const settingsScope = settingsContext?.scope;

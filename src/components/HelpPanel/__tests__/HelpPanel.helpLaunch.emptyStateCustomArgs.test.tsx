@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { render, fireEvent, act, screen, cleanup } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const {
   mockDispatch,
@@ -486,6 +486,7 @@ import {
   acquireHelpSessionController,
 } from "@/controllers/helpSessionControllerRegistry";
 import { assistantSlotKey } from "@shared/config/assistantSlots";
+import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
 
 // The real `app:view-revealed` bridge fans out to every registered listener;
 // HelpPanel registers the switch-back recovery effect against it (#10739).
@@ -844,6 +845,162 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     // A second lane, never a fresh start over the conversation waiting to resume.
     expect(helpPanelState.openSlot).toHaveBeenCalled();
     expect(acquireHelpSessionController(0)["_queuedLaunch"]).toBeNull();
+  });
+
+  /** Main keeps a conversation (or a running assistant) for each of `lanes`, by slot. */
+  function keepLanes(
+    lanes: Record<number, { agentId: string; agentSessionId?: string; live?: boolean }>
+  ) {
+    const help = (window as unknown as { electron: { help: Record<string, unknown> } }).electron
+      .help;
+    help.listPendingHibernationSlots = vi.fn(async () => Object.keys(lanes).map(Number));
+    help.peekPendingHibernation = vi.fn(async (_projectId: string, slot: number) => {
+      const lane = lanes[slot];
+      return lane
+        ? {
+            agentId: lane.agentId,
+            agentSessionId: lane.agentSessionId ?? `conv-${slot}`,
+            cwd: "/help",
+            panelWasOpen: false,
+            ...(lane.live ? { live: true } : {}),
+          }
+        : null;
+    });
+  }
+
+  function setUpStripNewSession() {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.openSlot = vi.fn((preferred?: number) => preferred ?? 1);
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    bindFrontLane();
+    // The front lane is a tab, so a new session can't open in its slot.
+    helpPanelState.sessions = { 0: { terminalId: "term-1", agentId: "claude", sessionId: null } };
+    onTestFinished(() => {
+      helpPanelState.sessions = {};
+    });
+  }
+
+  it("opens a new session where nothing is kept, past the slots earlier runs used (#16495)", async () => {
+    setUpStripNewSession();
+    keepLanes({ 1: { agentId: "claude" }, 2: { agentId: "codex" } });
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(newSessionItem());
+    });
+
+    expect(helpPanelState.openSlot).toHaveBeenCalledWith(3);
+    expect(acquireHelpSessionController(3)["_queuedLaunch"]).toEqual({
+      agentId: "claude",
+      replaceExisting: true,
+    });
+    expect(acquireHelpSessionController(1)["_queuedLaunch"]).toBeNull();
+  });
+
+  it("starts a new conversation over one past sessions keeps when every free slot holds one (#16495)", async () => {
+    setUpStripNewSession();
+    keepLanes({
+      1: { agentId: "claude", live: true },
+      2: { agentId: "claude" },
+      3: { agentId: "codex" },
+      4: { agentId: "claude" },
+      5: { agentId: "claude" },
+    });
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(newSessionItem());
+    });
+
+    // Slot 1's assistant is still running, so the lowest it may start over is 2,
+    // and it starts there afresh rather than resuming what slot 2 held.
+    expect(helpPanelState.openSlot).toHaveBeenCalledWith(2);
+    expect(acquireHelpSessionController(2)["_queuedLaunch"]).toEqual({
+      agentId: "claude",
+      replaceExisting: true,
+      requestedId: expect.stringMatching(/^terminal-/),
+      checkVersion: true,
+      vacantOnly: true,
+    });
+  });
+
+  it("never starts over a conversation past sessions can't bring back (#16495)", async () => {
+    setUpStripNewSession();
+    keepLanes({
+      1: { agentId: "gemini" },
+      2: { agentId: "gemini" },
+      3: { agentId: "codex", agentSessionId: "" },
+      4: { agentId: "gemini" },
+      5: { agentId: "claude", live: true },
+    });
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(newSessionItem());
+    });
+
+    // The tab still opens, launching nothing over what its slot holds.
+    expect(helpPanelState.openSlot).toHaveBeenCalledWith(1);
+    expect(acquireHelpSessionController(1)["_queuedLaunch"]).toBeNull();
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+  });
+
+  it("never starts a default that can't resume over a kept conversation (#16495)", async () => {
+    setUpStripNewSession();
+    helpPanelState.preferredAgentId = "crush";
+    cliAvailabilityState.availability = { crush: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["crush"]);
+    keepLanes({
+      1: { agentId: "claude" },
+      2: { agentId: "claude" },
+      3: { agentId: "claude" },
+      4: { agentId: "claude" },
+      5: { agentId: "claude" },
+    });
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(newSessionItem());
+    });
+
+    expect(helpPanelState.openSlot).toHaveBeenCalledWith(1);
+    expect(acquireHelpSessionController(1)["_queuedLaunch"]).toBeNull();
+  });
+
+  it("opens nothing in a slot a launch in flight has claimed (#16495)", async () => {
+    setUpStripNewSession();
+    keepLanes({});
+    for (const slot of [1, 2, 3, 4, 5]) {
+      claimedHelpLaneKeys.add(assistantSlotKey("proj-default", slot));
+    }
+    onTestFinished(() => claimedHelpLaneKeys.clear());
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(newSessionItem());
+    });
+
+    expect(helpPanelState.openSlot).not.toHaveBeenCalled();
+  });
+
+  it("opens the tab but launches nothing when main's lanes can't be read (#16495)", async () => {
+    setUpStripNewSession();
+    keepLanes({});
+    const help = (window as unknown as { electron: { help: Record<string, unknown> } }).electron
+      .help;
+    help.listPendingHibernationSlots = vi.fn(async () => {
+      throw new Error("ipc down");
+    });
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(newSessionItem());
+    });
+
+    expect(helpPanelState.openSlot).toHaveBeenCalledWith(1);
+    expect(acquireHelpSessionController(1)["_queuedLaunch"]).toBeNull();
   });
 
   it("first-run starter-prompt chip launches without turning on auto-start (#10699, #14976)", async () => {

@@ -576,6 +576,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       ...(grant.launchAgentIdHint !== undefined
         ? { launchAgentIdHint: grant.launchAgentIdHint }
         : {}),
+      ...(grant.consumer !== undefined ? { consumer: grant.consumer } : {}),
     });
     const lifetime = new AbortController();
     const server = createPluginSessionServer({

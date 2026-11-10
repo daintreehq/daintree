@@ -824,7 +824,7 @@ function RetryButton({
   const showPending = useDeferredLoading(pending, UI_INLINE_LOADING_GATE_MS);
   return (
     <Button
-      variant="ghost"
+      variant="outline"
       size="xs"
       className="-my-0.5"
       loading={showPending}

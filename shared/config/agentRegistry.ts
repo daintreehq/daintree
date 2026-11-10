@@ -242,14 +242,6 @@ export interface AgentPreset {
   dangerousMode?: "inherit" | "on" | "off";
   /** Per-preset override: extra CLI flags merged on top of agent-level customFlags */
   customFlags?: string;
-  /**
-   * Per-preset tri-state alt-screen override (`InlineMode`), layered on top of
-   * the agent's resolved mode: `"off"` (alt-screen) vetoes an agent/global
-   * `"on"` (inline), `"inherit"`/absent defers to the agent's Default scope. A
-   * legacy boolean is read literally (`true → "on"`). Inlined union to avoid a
-   * config→types import cycle.
-   */
-  inlineMode?: boolean | "inherit" | "on" | "off";
   /** Optional brand color (CSS hex) this preset's mark inks are derived from */
   color?: string;
   /** Optional free-form panel/button title; falls back to `name` when unset */
@@ -284,8 +276,11 @@ export interface AgentPreset {
   accountId?: string;
 }
 
-/** Max fallback presets that can be chained after the primary. */
-export const FALLBACK_CHAIN_MAX = 3;
+/**
+ * Max fallback presets that can be chained after the primary. Sized for an
+ * account rotation on usage limits (#16587), not just a provider outage.
+ */
+export const FALLBACK_CHAIN_MAX = 8;
 
 export interface AgentProviderTemplate {
   id: string;
@@ -296,7 +291,6 @@ export interface AgentProviderTemplate {
   dangerousEnabled?: boolean;
   dangerousMode?: "inherit" | "on" | "off";
   customFlags?: string;
-  inlineMode?: boolean | "inherit" | "on" | "off";
 }
 
 /**
@@ -458,6 +452,11 @@ interface AgentSessionIdResumeBase {
    * resume by id forever after, and mint a DISTINCT id for a duplicated
    * pane (see `buildAssignedSessionIdArgs`).
    *
+   * A plugin's CLI can differ (#16470): Pi's `--session-id` opens the id's
+   * conversation or creates it, and declares the same args for both, which
+   * {@link assignmentReopensSession} reads. A copy still gets its own id: a
+   * flag that won't refuse a shared id only makes sharing one quieter.
+   *
    * Omit for CLIs that only hand out their own ids — those keep the
    * `sessionIdPattern` teardown scrape as their sole capture path.
    */
@@ -590,6 +589,8 @@ export type AgentResumeTemplate =
   | {
       kind: "session-id";
       args: string[];
+      /** Expands into {@link AgentResume} `assignSessionIdArgs` (#16470). */
+      assignSessionIdArgs?: string[];
       sessionIdPattern?: string;
       quitCommand?: string;
       resumeLatestArgs?: string[];
@@ -602,6 +603,12 @@ export type AgentResumeTemplate =
 
 const SESSION_ID_PLACEHOLDER = "{sessionId}";
 
+function fillSessionIdPlaceholder(args: readonly string[], sessionId: string): string[] {
+  // A replacer function, so `$&` or `$1` inside a captured id is inserted
+  // literally instead of being read as a replacement pattern.
+  return args.map((arg) => arg.replace(SESSION_ID_PLACEHOLDER, () => sessionId));
+}
+
 function expandResumeTemplate(template: AgentResumeTemplate): AgentResume {
   const args = [...template.args];
   if (template.kind === "project-scoped") {
@@ -612,11 +619,16 @@ function expandResumeTemplate(template: AgentResumeTemplate): AgentResume {
     };
   }
   const resumeLatestArgs = template.resumeLatestArgs ? [...template.resumeLatestArgs] : undefined;
+  const assignArgs = template.assignSessionIdArgs ? [...template.assignSessionIdArgs] : undefined;
   return {
     kind: "session-id",
-    // A replacer function, so `$&` or `$1` inside a captured id is inserted
-    // literally instead of being read as a replacement pattern.
-    args: (sessionId) => args.map((arg) => arg.replace(SESSION_ID_PLACEHOLDER, () => sessionId)),
+    args: (sessionId) => fillSessionIdPlaceholder(args, sessionId),
+    ...(assignArgs
+      ? {
+          assignSessionIdArgs: (sessionId: string) =>
+            fillSessionIdPlaceholder(assignArgs, sessionId),
+        }
+      : {}),
     ...(template.sessionIdPattern ? { sessionIdPattern: template.sessionIdPattern } : {}),
     ...(resumeLatestArgs ? { resumeLatestArgs } : {}),
     // The type wants a quit command on every non-escalating `session-id`
@@ -625,6 +637,63 @@ function expandResumeTemplate(template: AgentResumeTemplate): AgentResume {
     // teardown scrape and still resumes by a known id or `resumeLatestArgs`.
     quitCommand: template.quitCommand ?? "",
   };
+}
+
+/** The argv element of an {@link AgentPromptForm} that stands for the prompt itself. */
+export const PROMPT_FORM_PLACEHOLDER = "{prompt}";
+
+/**
+ * How a CLI takes the prompt a launch opens with, in one mode (#16367). Plain
+ * data, like {@link AgentResumeTemplate}, so a form survives the structured
+ * clone plugin agent configs go through.
+ */
+export interface AgentPromptForm {
+  /**
+   * The arguments that carry the prompt, appended after every other launch
+   * argument. The element `{prompt}` stands for the prompt, quoted as one
+   * argument, and appears exactly once.
+   */
+  args: readonly string[];
+  /**
+   * A subcommand the prompted launch runs instead of one among the registry's
+   * own `args`: `name` takes the place of `replaces` there, or goes straight
+   * after the command when the registry carries no `replaces`. Goose's
+   * `session` takes no prompt, so a prompted launch runs `run` instead.
+   */
+  subcommand?: { name: string; replaces: string };
+  /**
+   * Set when the CLI is known not to open this mode on the prompt, as the
+   * CLI itself was observed to behave:
+   * - `may-be-ignored`: the CLI can start without acting on it (a TUI that
+   *   drops positionals, or one with no flag to pre-seed its input).
+   * - `exits-after-reply`: the CLI answers the prompt and exits instead of
+   *   staying in the mode.
+   * Omitted means no limitation is recorded, not that the form was verified.
+   */
+  caveat?: "may-be-ignored" | "exits-after-reply";
+}
+
+/** An agent's {@link AgentPromptForm} for each launch mode. */
+export interface AgentInitialPromptForm {
+  interactive: AgentPromptForm;
+  headless: AgentPromptForm;
+}
+
+const POSITIONAL_PROMPT_FORM: AgentPromptForm = Object.freeze({
+  args: Object.freeze([PROMPT_FORM_PLACEHOLDER]),
+});
+
+/**
+ * How `agentId` takes a launch prompt in the given mode: its declared
+ * {@link AgentConfig.initialPromptForm}, or a bare positional argument for an
+ * agent that declares none.
+ */
+export function getAgentPromptForm(
+  agentId: string | undefined,
+  mode: "interactive" | "headless"
+): AgentPromptForm {
+  const declared = agentId ? getEffectiveAgentConfig(agentId)?.initialPromptForm : undefined;
+  return declared?.[mode] ?? POSITIONAL_PROMPT_FORM;
 }
 
 /**
@@ -821,6 +890,22 @@ export interface AgentConfig {
    */
   supports?: AssistantSupports | false;
   /**
+   * A plugin agent's flag for skipping its CLI's permission prompts (#16374),
+   * standing in for a built-in's `DEFAULT_DANGEROUS_ARGS` entry. It makes the
+   * agent eligible for the global skip switch and is the default bypass a
+   * launch adds when the resolved setting is on. Kept apart from
+   * {@link supports}, whose other fields admit an agent to the assistant.
+   */
+  permissionBypassArgs?: readonly string[];
+  /**
+   * A plugin agent's executable names (#16469): the process names that promote
+   * a plain terminal running them to this agent. Already resolved by main, so
+   * the names here are the ones this agent holds alone — a name two plugins
+   * claim is in neither's list. Built-in agents are matched through their
+   * command instead and never carry this.
+   */
+  executableNames?: readonly string[];
+  /**
    * Minimum installed CLI semver required for the Daintree Assistant launch
    * path. Compared against the live `AgentVersionService.getVersion()` probe
    * before `provisionHelpSession` runs — when the installed version is
@@ -843,30 +928,35 @@ export interface AgentConfig {
     blockMouseReporting?: boolean;
     /** Use `settled` for sticky cursor-relative TUIs that should receive one stable final grid. */
     resizeStrategy?: "default" | "settled";
-    /** CLI flag to disable alt-screen and use inline rendering (e.g., "--no-alt-screen") */
+    /**
+     * CLI flag that keeps the agent off the alternate screen (e.g.
+     * "--no-alt-screen"). Every launch, restart and resume of an agent that
+     * declares one carries it (#16356); there is no setting to turn it off.
+     */
     inlineModeFlag?: string;
     /**
-     * CLI flag that forces the full-screen alternate buffer (e.g. "--fullscreen"),
-     * the opposite polarity of {@link inlineModeFlag}. Declare it for a CLI that
-     * picks inline on its own — via its own config file or terminal
-     * auto-detection — so choosing "Alt screen" is more than the absence of the
-     * inline flag (#11423). Omit it when the CLI already defaults to alt-screen;
-     * dropping `inlineModeFlag` is then enough.
-     *
-     * Both are single tokens and mutually exclusive: exactly one is injected per
-     * launch, and the launch path strips the other. Never pair this with
-     * `blockAltScreen: true` — forcing a full-screen TUI while the terminal
-     * strips its alt-screen escape sequences leaves the agent unusable.
+     * The CLI's opposite-polarity full-screen flag (e.g. "--fullscreen"), for a
+     * build of Daintree that once launched the agent with it (#11423). Never
+     * injected: a saved launch snapshot carrying it is rewritten to
+     * {@link inlineModeFlag} on restart, restore and resume (#16356), so it is
+     * read only beside one.
      */
     altScreenFlag?: string;
     /**
-     * Default inline-mode state when the user hasn't chosen one. Agents with an
-     * `inlineModeFlag` otherwise default to inline (`true`); set this to `false`
-     * for a full-screen TUI that renders better on the alternate screen (clean
-     * scroll region, no garbled redraw history in scrollback) while still
-     * exposing the inline flag as an opt-in.
+     * Environment that keeps the CLI's renderer on the main screen whatever its
+     * own config picks, for a CLI whose full-screen mode is chosen in the user's
+     * settings rather than by a flag (#16355). Unlike {@link inlineModeFlag} no
+     * setting governs it: the spawn handler sets it on every launch of the agent,
+     * over any value the launch env already carries. Display-only, and never a
+     * write to the user's config.
      */
-    defaultInlineMode?: boolean;
+    inlineModeEnv?: Readonly<Record<string, string>>;
+    /**
+     * The command typed inside the CLI that switches its renderer back to the
+     * main screen, for a CLI that has one (#16357). Shown by the pane's
+     * full-screen notice; Daintree never sends it.
+     */
+    inlineModeCommand?: string;
     /**
      * Purely decorative TUI effects the CLI draws regardless of work progress,
      * and the launch arguments that switch them off. Injected on every spawn,
@@ -1021,6 +1111,12 @@ export interface AgentConfig {
    */
   resumeArgv?: AgentResumeArgv;
   /**
+   * How the CLI takes the prompt a launch opens with, interactive and headless
+   * (#16367). Unset, the prompt goes last as a bare positional argument. Read
+   * through {@link getAgentPromptForm}.
+   */
+  initialPromptForm?: AgentInitialPromptForm;
+  /**
    * How this agent's conversation history fares across a project-folder move
    * (#11282, phase 5). Read live by the relocation preview via
    * {@link resolveAgentContinuity}; unset ⇒ `unverified`, so an unclassified
@@ -1052,8 +1148,9 @@ export interface AgentConfig {
    * (see `expandWindowsEnvVars()` in electron/setup/environment.ts). On Windows
    * an entry without a launchable extension is probed with `.cmd`, `.exe`,
    * `.bat` and `.com` appended instead of as written, so a POSIX-style entry
-   * also covers a Windows install that shares its layout. Paths are tried in
-   * listed order; first accessible file wins.
+   * also covers a Windows install that shares its layout, while a `/` entry is
+   * skipped there because it names no drive. Paths are tried in listed order;
+   * first accessible file wins.
    */
   nativePaths?: string[];
   /**

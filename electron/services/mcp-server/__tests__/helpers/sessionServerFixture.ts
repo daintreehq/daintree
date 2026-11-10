@@ -123,6 +123,7 @@ export function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerD
     handleSkillsLoad: vi.fn(),
     handleProjectRunCheck: vi.fn(),
     handleProjectRunCommand: vi.fn(),
+    handleAgentResumeOwned: vi.fn(),
     handleTerminalGetStatusViewless: vi
       .fn()
       .mockResolvedValue({ terminals: [], source: "pty", unavailableFields: [] }),

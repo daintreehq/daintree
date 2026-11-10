@@ -1,15 +1,17 @@
 import { z } from "zod";
-import { defineIpcNamespace, opValidated } from "../define.js";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { CLAUDE_METHOD_CHANNELS } from "./claude.preload.js";
 import {
   REPLY_SPAN_HOST_TIMEOUT_MS,
   REPLY_SPAN_SELECTION_MAX_CHARS,
 } from "../../../shared/config/replySpanLimits.js";
+import type { AgentContextUsageResult } from "../../../shared/types/ipc/agentContextUsage.js";
 import type {
   AgentSubagentsResult,
   AgentSubagentTranscriptResult,
 } from "../../../shared/types/ipc/agentSubagents.js";
+import type { ClaudeUsageAccount } from "../../../shared/types/ipc/agentQuota.js";
 
 // The renderer names a terminal, never a folder or a bare session id. Main
 // resolves the cwd and the owning Claude session from the pty-host record and
@@ -22,6 +24,7 @@ const id = z.string().trim().min(1).max(ID_MAX);
 
 const listSchema = z.object({ terminalId: id });
 const readSchema = z.object({ terminalId: id, subagentId: id });
+const contextUsageSchema = z.object({ terminalId: id });
 const replySpanSchema = z.object({
   terminalId: id,
   selection: z.string().min(1).max(REPLY_SPAN_SELECTION_MAX_CHARS),
@@ -79,6 +82,27 @@ export const claudeNamespace = defineIpcNamespace({
         }
       },
       { withContext: true }
+    ),
+    // Argument-free: the readings are whatever this machine's panes showed
+    // (#16370), and the renderer can't name a folder to read.
+    readUsage: op(CLAUDE_METHOD_CHANNELS.readUsage, async (): Promise<ClaudeUsageAccount[]> => {
+      const { readClaudeUsageAccounts } =
+        await import("../../services/claude/ClaudeUsageService.js");
+      return readClaudeUsageAccounts();
+    }),
+    readContextUsage: opValidated(
+      CLAUDE_METHOD_CHANNELS.readContextUsage,
+      contextUsageSchema,
+      async ({ terminalId }): Promise<AgentContextUsageResult> => {
+        const { readClaudePaneContextUsageWithin } =
+          await import("../../services/claude/ClaudeContextUsage.js");
+        // Nothing is logged: a filesystem error names a path under the user's home.
+        try {
+          return await readClaudePaneContextUsageWithin(terminalId);
+        } catch {
+          return { status: "unavailable", reason: "store-unreadable" };
+        }
+      }
     ),
   },
 });

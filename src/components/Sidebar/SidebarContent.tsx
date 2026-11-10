@@ -15,7 +15,7 @@ import {
   type ScrollerProps,
   type VirtuosoHandle,
 } from "react-virtuoso";
-import { FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
+import { CloudDownload, FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { boundedErrorText } from "@/utils/errorText";
@@ -63,6 +63,9 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useWorktreeSelectionStore, useProjectStore } from "@/store";
+import { useOnlineOnlyFilesStore } from "@/store/onlineOnlyFilesStore";
+import { WAITING_FOR_DOWNLOAD_LABEL } from "@/utils/onlineOnlyFilesCopy";
+import { gitStatusWaitsForDownload } from "@shared/utils/onlineOnlyFiles";
 import type { PendingCreation } from "@/store/worktreeStore";
 import { DeletedWorktreeCard } from "@/components/Sidebar/DeletedWorktreeCard";
 import { DeletedWorktreeGroup } from "@/components/Sidebar/DeletedWorktreeGroup";
@@ -572,6 +575,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     mainVisible: mainVisible === true,
     mainInQuickState,
     displayQuery: deferredQuery,
+    deletedRowCount: deletedWorktrees.size,
   });
   const listEmptyTitle = listEmpty === null ? null : sidebarListEmptyTitle(listEmpty);
 
@@ -768,6 +772,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // loading: a stalled reconnect during the first hydration leaves `isLoading`
   // up for good, and the skeleton would hide the only recovery.
   const showSkeleton = (isLoading || sidebarFailure !== null) && !isFailureSettled;
+  const gitWaitsForDownload = useOnlineOnlyFilesStore((s) => gitStatusWaitsForDownload(s.files));
   const worktreeLoadErrorBanner =
     loadFailure !== null && error === null && isFailureSettled ? (
       <WorktreeLoadErrorBanner error={loadFailure} />
@@ -843,11 +848,36 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     );
   }
 
+  // A load that failed on `.git` placeholders retries itself once they're down,
+  // so neither its Retry nor the nudge to open a repository is the next step.
+  if (worktrees.length === 0 && gitWaitsForDownload) {
+    return (
+      <>
+        <div className="flex flex-col h-full">
+          <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
+            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm">
+              Worktrees
+            </SidebarViewHeading>
+          </div>
+          {errorBanner}
+          <EmptyState
+            variant="zero-data"
+            scale="sidebar"
+            icon={<CloudDownload />}
+            title={WAITING_FOR_DOWNLOAD_LABEL}
+            className="flex-1"
+          />
+        </div>
+        {restartConfirmDialog}
+      </>
+    );
+  }
+
   if (showSkeleton && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
         <div className={SIDEBAR_HEADER_ROW}>
-          <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
+          <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm">
             Worktrees
           </SidebarViewHeading>
         </div>
@@ -856,14 +886,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             the moment the list arrives. */}
         <div
           aria-hidden="true"
-          className="worktree-filter-bar flex shrink-0 gap-1.5 border-b border-divider px-3 pb-3"
+          className="worktree-filter-bar flex shrink-0 gap-1.5 border-b border-divider px-4 pb-3"
         >
           <SkeletonBone className="flex-1 rounded-[var(--radius-md)]" heightPx={28} />
           <SkeletonBone className="w-7 rounded-[var(--radius-md)]" heightPx={28} />
         </div>
         <div
           aria-hidden="true"
-          className="worktree-filter-bar flex h-[29px] shrink-0 items-center gap-3 border-b border-border-default px-3"
+          className="worktree-filter-bar flex h-[29px] shrink-0 items-center gap-3 border-b border-divider px-3"
         >
           {/* The bar's four segments, so its shape is there before its counts. */}
           {[0, 1, 2, 3].map((segment) => (
@@ -913,7 +943,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <>
         <div className="flex flex-col h-full">
           <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
-            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
+            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm">
               Worktrees
             </SidebarViewHeading>
           </div>
@@ -1041,7 +1071,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           {/* Heading navigation lands here, not on the tag, so the host rides in
               the heading's name, and stays there when the tag hides. */}
           <SidebarViewHeading
-            className="min-w-0 truncate text-text-primary font-semibold text-sm tracking-wide"
+            className="min-w-0 truncate text-text-primary font-semibold text-sm"
             aria-label={
               remoteHostName === null ? undefined : `Worktrees, on host ${remoteHostName}`
             }
@@ -1099,7 +1129,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         {/* The cluster also stays up while the refresh icon is turning, so a
             refresh the pointer has left, or one started from the palette, still
             shows — and it fades back only once SpinningIcon finishes its turn. */}
-        <div className="flex shrink-0 items-center gap-0.5">
+        {/* -mr-1.5, as on a popover header's actions: the last 24px button's
+            glyph, not its transparent box, lands on the column's right edge,
+            over the filter button's edge below it. */}
+        <div className="flex shrink-0 items-center gap-0.5 -mr-1.5">
           {/* Faded, not `invisible`: `visibility: hidden` took these out of the
               tab order, so focus-within could never reveal them and a keyboard
               user tabbing in never met them. Gone below 13rem, where their
@@ -1319,9 +1352,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           </div>
         )}
 
-        {/* Strong divider between pinned worktrees and scrollable list */}
+        {/* The pinned/scrolling boundary: the 2px card gutter plus one hairline
+            in the shell's divider token, so it reads as a seam without a second
+            line weight in the column. */}
         {(hasNonMainWorktrees || pendingCreationRows) && mainVisible && (
-          <div role="presentation" className="shrink-0 border-b border-border-default" />
+          <div role="presentation" className="shrink-0 border-b border-divider" />
         )}
 
         {/* A worktree being created sits at the head of the list it will join,

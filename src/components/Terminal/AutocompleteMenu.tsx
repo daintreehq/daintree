@@ -36,7 +36,7 @@ const CATEGORY_LABEL: Partial<Record<CompletionKind, string>> = {
 export type AutocompleteEnterAction = "insert" | "execute";
 
 /** Daintree resolvers that expand a token to content at send time; `context` is a plugin's provider. */
-export type CompletionResolverId = "diff" | "terminal" | "selection" | "context";
+export type CompletionResolverId = "diff" | "terminal" | "selection" | "notes" | "context";
 
 /**
  * How the inserted token behaves at send time. `literal` passes through the PTY
@@ -230,6 +230,12 @@ export interface AutocompleteMenuProps {
   title?: string;
   ariaLabel?: string;
   emptyMessage: string;
+  /**
+   * A line at the foot of the menu, outside the rows: the arrow keys and Enter
+   * never reach it, and it stays while the rows narrow or empty. Clicking it runs
+   * `onClick`; the status region speaks it for anyone not using a pointer.
+   */
+  note?: { text: string; onClick: () => void };
 }
 
 export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps>(
@@ -247,6 +253,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       title,
       ariaLabel,
       emptyMessage,
+      note,
     },
     ref
   ) => {
@@ -388,6 +395,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
             className={cn(hasRows ? "sr-only" : "px-2 py-1.5 text-xs text-text-secondary")}
           >
             {statusText}
+            {note && <span className="sr-only"> {note.text}</span>}
           </div>
 
           <div
@@ -482,6 +490,19 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
             })}
           </div>
         </ScrollShadow>
+        {note && (
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-hidden="true"
+            data-autocomplete-note=""
+            className="shrink-0 border-t border-tint/5 px-2 py-1 text-left text-3xs text-text-secondary transition-colors hover:text-text-primary"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={note.onClick}
+          >
+            {note.text}
+          </button>
+        )}
       </div>
     );
   }

@@ -16,6 +16,8 @@ interface BaseBranchComboboxProps {
   unavailableLabel?: string;
   /** Id of text that qualifies the base — e.g. that a pull request set it. */
   describedBy?: string;
+  /** Id of the label, where it isn't a `<label for="base-branch">` on the form's rail. */
+  labelledBy?: string;
 }
 
 /** Control only — "Base" and its help text live on the form's label rail. */
@@ -26,6 +28,7 @@ export function BaseBranchCombobox({
   disabled,
   unavailableLabel,
   describedBy,
+  labelledBy,
 }: BaseBranchComboboxProps) {
   const hasError = errorField === "base-branch";
   return (
@@ -39,14 +42,12 @@ export function BaseBranchCombobox({
           aria-haspopup="listbox"
           aria-controls={controller.open ? "branch-list" : undefined}
           aria-invalid={hasError ? true : undefined}
+          aria-labelledby={labelledBy}
           aria-describedby={
             [hasError ? "validation-error" : null, describedBy].filter(Boolean).join(" ") ||
             undefined
           }
-          className={cn(
-            FIELD_TRIGGER,
-            hasError && "border-status-error focus-visible:outline-status-error"
-          )}
+          className={cn(FIELD_TRIGGER, hasError && "border-status-error")}
           disabled={disabled}
           // Down/Up open the list, as on every other combobox in the form; the
           // search field inside then takes focus and the arrow keys.

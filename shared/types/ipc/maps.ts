@@ -77,8 +77,6 @@ import type {
   AgentCliDetails,
   AgentVersionInfo,
   AgentUpdateSettings,
-  StartAgentUpdatePayload,
-  StartAgentUpdateResult,
   SystemHealthCheckOptions,
   SystemHealthCheckResult,
   AppMetricsSummary,
@@ -156,6 +154,7 @@ import type {
   DiagnosticsBundleSavePayload,
 } from "./system.js";
 import type { CloneRepoProgressEvent } from "./gitClone.js";
+import type { ProjectCloneJobSnapshot } from "./projectClone.js";
 import type { AppAgentConfig } from "../appAgent.js";
 import type { GeneratedIpcInvokeMap } from "./generated.js";
 import type {
@@ -332,6 +331,13 @@ export interface MainProcessToastPayload {
     code: import("../appError.js").AppErrorCode | null;
   };
   /**
+   * Several copies of this agent's CLI were found, on the machine that raised
+   * the toast. The renderer turns it into a button opening that agent's settings,
+   * and a remote view takes it from its host instead of this machine, since those
+   * settings show the host's copies (#16409).
+   */
+  agentCliCopies?: { agentId: string };
+  /**
    * Threaded through to `notify({ context })`: what a plugin's toast or
    * notification is about and which plugin raised it (#13818). Main sets every
    * field from the plugin's own binding and its checked target, never from
@@ -476,10 +482,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "system:set-agent-update-settings": {
     args: [settings: AgentUpdateSettings];
     result: void;
-  };
-  "system:start-agent-update": {
-    args: [payload: StartAgentUpdatePayload];
-    result: StartAgentUpdateResult;
   };
   "setup:agent-install": {
     args: [payload: AgentInstallPayload];
@@ -759,6 +761,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
         focusIntent?: ProjectFocusOnActivateIntent;
         trace?: ProjectSwitchTrace;
         ignoreMemoryPressure?: boolean;
+        /** The person chose to go to the project in the window keeping it cached (#16724). */
+        showInOtherWindow?: boolean;
       },
     ];
     result: ProjectSwitchResult;
@@ -791,7 +795,12 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { trace?: ProjectSwitchTrace; ignoreMemoryPressure?: boolean },
+      options?: {
+        trace?: ProjectSwitchTrace;
+        ignoreMemoryPressure?: boolean;
+        /** The person chose to go to the project in the window keeping it cached (#16724). */
+        showInOtherWindow?: boolean;
+      },
     ];
     result: ProjectSwitchResult;
   };
@@ -842,14 +851,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "project:delete-recipe": {
     args: [payload: { projectId: string; recipeId: string }];
-    result: void;
-  };
-  "project:read-claude-md": {
-    args: [projectId: string];
-    result: string | null;
-  };
-  "project:write-claude-md": {
-    args: [payload: { projectId: string; content: string }];
     result: void;
   };
   "project:enable-in-repo-settings": {
@@ -1496,7 +1497,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "recipe:import-file": {
     args: [];
-    result: string | null;
+    /** `null` when the picker was cancelled; an empty file comes back as `json: ""`. */
+    result: { fileName: string; json: string } | null;
   };
 
   // Recovery channels
@@ -1699,6 +1701,7 @@ export interface IpcEventMap {
    * payload shape live in `shared/types/ipc/gitClone.ts`.
    */
   "project:clone-progress": CloneRepoProgressEvent;
+  "project-clone:job-updated": ProjectCloneJobSnapshot;
 
   // PR detection events
   "pr:detected": PRDetectedPayload;
@@ -1725,6 +1728,8 @@ export interface IpcEventMap {
   // Where projects are open may have changed — re-read with
   // `project-presence:get-snapshot`, which answers per window (#12597).
   "project-presence:changed": void;
+  // A watched project's online-only files changed (#16363); main sends it to the views watching.
+  "online-only-files:changed": import("../onlineOnlyFiles.js").ProjectOnlineOnlyFiles;
   "recent-dictations:changed": void;
   // The sender project's presentation profile changed (#13771); main sends it to every view of that project.
   "project-presentation:changed": import("./projectPresentation.js").ProjectPresentationSnapshot;
@@ -1757,6 +1762,8 @@ export interface IpcEventMap {
 
   // An agent terminal's When done choice changed (#16171); main sends it to every view of that project.
   "terminal-when-done:changed": import("./terminalWhenDone.js").TerminalWhenDoneChange;
+  // A pane's held composer send changed (#16379); this machine's views of its project.
+  "composer-hold:changed": import("./composerHold.js").ComposerHoldChange;
   // Main asks every local view of a project to move or remove an armed terminal's pane (#16171).
   "terminal-when-done:finish-request": import("./terminalWhenDone.js").TerminalWhenDoneFinishRequest;
   /**
@@ -2302,6 +2309,8 @@ export interface IpcEventMap {
 
   // This machine's toolbar agent pins changed (#14702)
   "agent-toolbar-pins:changed": AgentToolbarPinsSnapshot;
+  /** Which copy of an agent's CLI launches changed on the machine the agents run on. */
+  "agent-cli-copies:changed": { agentId: string };
   "help:global-assistant-changed": import("./help.js").GlobalAssistantView;
 
   // Plugin action registry events

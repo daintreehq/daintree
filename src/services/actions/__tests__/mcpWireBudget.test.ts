@@ -1026,7 +1026,23 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 188_300 → 188_800 for #16210, measured at 188_716 B (+439 over develop's
   // 188_277): the same submission `output` field as the external ceiling's
   // raise, carried in-app for the external⊆in-app subset invariant.
-  const MAX_COHORT_PAYLOAD_BYTES = 188_800;
+  // 188_800 → 190_300 for #16341, measured at 190_238 B: the global Assistant can
+  // reopen an exited agent after a restart instead of a person relaunching each
+  // one. `agent.resumeOwned` and its refusal reasons, plus `closedBy` and
+  // `terminal` on the session records, which is how it tells a session the person
+  // closed from one that died. Off the external surface, so that ceiling doesn't
+  // move.
+  // 190_300 → 190_450 for #16335, measured at 190_417 B (+179 over develop's
+  // 190_238): `canopy.openWindow`, so an assistant can open Canopy's own window.
+  // It takes no arguments, so nearly all of it is the description. Assistant-only,
+  // so the external ceiling does not move.
+  // 190_450 → 190_950 for #16410, measured at 190_937 B (+520 over develop's
+  // 190_417): `assistant.list` names this machine's global Assistant, so a
+  // project's assistant can raise something with it. Nearly all of it is the
+  // `global` entry on the listing's closed output schema: its terminal, run
+  // generation and observed state. Assistant-only, so the external ceiling does
+  // not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 190_950;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -433,7 +433,11 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     isOpen ? <div data-testid="preset-restart-confirm">{title}</div> : null,
 }));
 
-vi.mock("lucide-react", () => ({
+// The worktree submenu draws each row's branch-type glyph through BranchLabel,
+// which reaches for many more icons than this file queries; the real module
+// fills those in and the stubs below stay queryable.
+vi.mock("lucide-react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("lucide-react")>()),
   Settings2: () => <span data-testid="settings-icon" />,
   ChevronDown: (props: Record<string, unknown>) => <span data-testid="chevron-icon" {...props} />,
   ExternalLink: () => <span data-testid="external-link-icon" />,
@@ -442,6 +446,10 @@ vi.mock("lucide-react", () => ({
   PinOff: () => <span data-testid="pin-off-icon" />,
   Bookmark: () => <span data-testid="bookmark-icon" />,
   FolderGit2: () => <span data-testid="folder-git-icon" />,
+  // The worktree rows lead with the sidebar card's glyph: the sprout for main,
+  // the branch type's mark otherwise (feat/ is a feature).
+  Sprout: () => <span data-testid="sprout-icon" />,
+  Sparkle: () => <span data-testid="sparkle-icon" />,
   PanelTop: () => <span data-testid="panel-top-icon" />,
   Plug: () => <span data-testid="plug-icon" />,
   // Check / Circle render the preset-row gutter affordance (issue #10720):
@@ -459,6 +467,25 @@ vi.mock("lucide-react", () => ({
   XCircle: () => null,
   CheckIcon: () => null,
   MinusIcon: () => null,
+}));
+
+// The reading itself is covered with the hook; here only what the menu asks of it.
+const headroomHook = vi.hoisted(() => ({
+  calls: [] as Array<[string | undefined, boolean]>,
+  targets: [] as Array<{ kind: string; accountId?: string; presetNamesFolder?: boolean }>,
+  texts: new Map<string, string>(),
+}));
+vi.mock("@/hooks/useAgentAccountHeadroom", () => ({
+  useAgentAccountHeadroom: (agentId: string | undefined, open: boolean) => {
+    headroomHook.calls.push([agentId, open]);
+    return (target: { kind: string; accountId?: string; presetNamesFolder?: boolean }) => {
+      headroomHook.targets.push(target);
+      const text = headroomHook.texts.get(
+        target.accountId ?? `default:${!!target.presetNamesFolder}`
+      );
+      return text ? { text, stale: false } : undefined;
+    };
+  },
 }));
 
 import { AgentButton } from "../AgentButton";
@@ -500,6 +527,52 @@ describe("AgentButton preset UX", () => {
       });
       return render(<AgentButton type="codex" availability="ready" />);
     }
+
+    describe("quota headroom (#16407)", () => {
+      beforeEach(() => {
+        headroomHook.calls.length = 0;
+        headroomHook.targets.length = 0;
+        headroomHook.texts.clear();
+        headroomHook.texts.set("company", "Weekly limit 82% used");
+        headroomHook.texts.set("default:false", "5-hour limit 10% used");
+      });
+
+      afterEach(() => headroomHook.texts.clear());
+
+      it("asks for quota only while the picker is open", () => {
+        renderCodex();
+        expect(headroomHook.calls.every(([agent, open]) => agent === "codex" && !open)).toBe(true);
+
+        headroomHook.calls.length = 0;
+        act(() => dropdownOnOpenChange!(true));
+        expect(headroomHook.calls.at(-1)).toEqual(["codex", true]);
+      });
+
+      it("shows each account's tightest window beneath its name, and nothing for one with none", () => {
+        const { getAllByRole } = renderCodex();
+        act(() => dropdownOnOpenChange!(true));
+        const rows = getAllByRole("menuitemradio").map((row) => row.textContent);
+        expect(rows).toEqual([
+          "Default login5-hour limit 10% used",
+          "CompanyWeekly limit 82% used",
+          "Personal",
+        ]);
+      });
+
+      it("takes the default login's window from the preset a launch settles on", () => {
+        mockActiveWorktreeId = "wt1";
+        mockMergedPresetsFn = () => [
+          { id: "work", name: "Work", env: { CODEX_HOME: "/Users/me/.codex-legacy" } },
+        ];
+        mockSettings = settingsWith({
+          codex: { accounts: [COMPANY, PERSONAL], presetId: "work" },
+        });
+        const { queryByText } = render(<AgentButton type="codex" availability="ready" />);
+        act(() => dropdownOnOpenChange!(true));
+        expect(headroomHook.targets).toContainEqual({ kind: "default", presetNamesFolder: true });
+        expect(queryByText("5-hour limit 10% used")).toBeNull();
+      });
+    });
 
     it("marks the saved preset's pinned account for a worktree that hasn't picked one", () => {
       mockActiveWorktreeId = "wt1";
@@ -779,7 +852,7 @@ describe("AgentButton preset UX", () => {
       });
 
       // The fallback pane has its own indicator; the one already on Beta is fine.
-      expect(screen.getByRole("status").textContent).toBe("1 Claude pane still on Alpha");
+      expect(screen.getByRole("status").textContent).toBe("1 Claude terminal still on Alpha");
       expect(screen.getByText("Restart it on Beta…")).toBeTruthy();
     });
 
@@ -2594,7 +2667,9 @@ describe("account pick offers the panes stopped on a usage limit (#16136)", () =
 
     expect(updateWorktreeAccountMock).toHaveBeenCalledWith("claude", "wt-A", "company");
     expect(readUsageLimitedPaneIdsMock).toHaveBeenCalledWith("claude", "company");
-    expect(screen.getByRole("status").textContent).toBe("1 Claude pane stopped on a usage limit");
+    expect(screen.getByRole("status").textContent).toBe(
+      "1 Claude terminal stopped on a usage limit"
+    );
     expect(screen.getByText("Switch it to Company…")).toBeTruthy();
   });
 

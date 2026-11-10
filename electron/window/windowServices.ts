@@ -12,6 +12,7 @@ import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
 import { notificationService } from "../services/NotificationService.js";
 import { projectStore } from "../services/ProjectStore.js";
+import { isCheckoutPendingPath } from "../services/projectClone/checkoutGate.js";
 import { scratchStore } from "../services/ScratchStore.js";
 import { initializeAgentAvailabilityStore } from "../services/AgentAvailabilityStore.js";
 import { initializePowerSaveBlockerService } from "../services/PowerSaveBlockerService.js";
@@ -157,6 +158,10 @@ function createOpenDirDeps(
       getWindowRegistry()
         ?.getByWindowId(windowId)
         ?.services.projectViewManager?.releaseCachedView(projectId) === true,
+    cachedViewReleaseBlock: (projectId, windowId) =>
+      getWindowRegistry()
+        ?.getByWindowId(windowId)
+        ?.services.projectViewManager?.getCachedViewReleaseBlock(projectId) ?? null,
     admitColdOpen: ({ projectId, projectPath, initiatingWindowId }) =>
       confirmColdOpenAtMemoryPressure({
         projectId,
@@ -699,8 +704,14 @@ export async function setupWindowServices(
   // `WorktreeStoreContext` intentionally stays disarmed for one (#11958).
   const projectPathForWorktrees = resolveWorktreeLoadPath(opts.initialProjectPath, binding);
   // Skipped outright while the app is quitting: the captured client may already
-  // be disposed, and a banner on a window that is going away helps nobody.
-  if (projectPathForWorktrees && !isCleaningUp()) {
+  // be disposed, and a banner on a window that is going away helps nobody. A
+  // project still awaiting its clone has no checkout to load (#16352); its view
+  // knows to expect no port.
+  if (
+    projectPathForWorktrees &&
+    !isCleaningUp() &&
+    !isCheckoutPendingPath(projectPathForWorktrees)
+  ) {
     // Every outcome below that leaves the renderer without a brokered worktree
     // port has to reach PROJECT_WORKTREE_LOAD_STATUS (#8796, #11818). When one
     // does not, the per-view worktree store never leaves its initial

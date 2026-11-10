@@ -28,6 +28,13 @@ function agentStepOf(event: KeyboardEvent<HTMLElement>): -1 | 1 | null {
   return event.key === "ArrowUp" ? -1 : 1;
 }
 
+/** ⌘A on macOS, Ctrl+A elsewhere, and nothing more held. */
+function isSelectAll(event: KeyboardEvent<HTMLElement>): boolean {
+  if (event.key !== "a" && event.key !== "A") return false;
+  if (event.shiftKey || event.altKey) return false;
+  return isMac() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+}
+
 /** Where the keyboard is inside the pane: the reply composer, the live terminal, or neither. */
 export function paneFocusOf(element: Element | null): CanopyPaneFocus {
   if (!element) return null;
@@ -62,6 +69,7 @@ export function useCanopyInboxKeyboard({
   askRename,
   toggleRead,
   markAllRead,
+  onSelectAll,
   onPastEnd,
 }: {
   /** What the keyboard walks: the list, then the archived runs once shown. */
@@ -86,7 +94,9 @@ export function useCanopyInboxKeyboard({
   askRename: (item: CanopyItem) => void;
   toggleRead: (item: CanopyItem) => void;
   markAllRead: () => void;
-  /** Down off the inbox's last row, into the Trash below it: false when there is none. */
+  /** ⌘A in the list: every result of the search, to review for the Trash. Absent with no search. */
+  onSelectAll?: () => void;
+  /** Down off the inbox's last row, on to the section bar below it (Archived, else Trash): false when there is none. */
   onPastEnd?: () => boolean;
 }) {
   const focusEntryNow = (entry: CanopyInboxEntry) =>
@@ -104,7 +114,7 @@ export function useCanopyInboxKeyboard({
     selectedAssistant ??
     (listed.length === 0 && shownAssistants.length > 0 ? shownAssistants[0]! : null);
   const searchSelected = focusedIndex !== -1 ? visible[focusedIndex]! : (visible[0] ?? null);
-  // Down off the bottom of the inbox, from the row with that key: on to the Trash.
+  // Down off the bottom of the inbox, from the row with that key: on to the bar below it.
   const pastEnd = (key: string | null, event: KeyboardEvent<HTMLElement>): boolean => {
     if (key === null || navigation[navigation.length - 1]?.key !== key) return false;
     if (!onPastEnd?.()) return false;
@@ -232,6 +242,14 @@ export function useCanopyInboxKeyboard({
       if (!event.repeat) markAllRead();
       return;
     }
+    // ⌘A with a search: all of its results, reviewed before they're trashed.
+    // Only from a row: in the search, ⌘A selects the words typed.
+    if (onSelectAll && isSelectAll(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) onSelectAll();
+      return;
+    }
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     // Back to the search: "/" from any row, or up off the top of the list.
     const search = searchRef.current;
@@ -307,7 +325,7 @@ export function useCanopyInboxKeyboard({
       }
     }
     const selected = searchSelected;
-    // Nothing in the inbox: down from the search is down into the Trash.
+    // Nothing in the inbox: down from the search is down to the bar below it.
     if (plain && event.key === "ArrowDown" && navigation.length === 0 && onPastEnd?.()) {
       event.preventDefault();
       return;

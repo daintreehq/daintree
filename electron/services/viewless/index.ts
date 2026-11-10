@@ -59,7 +59,8 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
     getCliDetail: async (agentId) => {
       const service = getCliAvailabilityServiceRef();
       if (!service) return undefined;
-      const current = service.getDetails()?.[agentId];
+      // Settled, so a copy chosen a moment ago launches rather than the one before it.
+      const current = (await service.getSettledDetails())?.[agentId];
       if (
         (current?.state === "ready" || current?.state === "unauthenticated") &&
         current.resolvedPath?.trim()
@@ -71,7 +72,7 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
       } catch {
         // The registry command still launches; availability reports its own failure.
       }
-      return service.getDetails()?.[agentId];
+      return (await service.getSettledDetails())?.[agentId];
     },
     getAvailability: async () => {
       const service = getCliAvailabilityServiceRef();
@@ -205,6 +206,29 @@ export async function runScheduledAgentLaunchLive(
     deps,
     { scheduledRun: request.scheduledRun }
   );
+}
+
+/** The worktrees the project's workspace host lists, or null with no host. */
+export async function listProjectWorktreesLive(
+  project: Project
+): Promise<import("../../../shared/types/worktree.js").WorktreeState[] | null> {
+  const [{ readProjectWorktrees }, deps] = await Promise.all([
+    import("./viewlessWorktrees.js"),
+    loadLiveDeps(),
+  ]);
+  return readProjectWorktrees(project, deps);
+}
+
+/** Create a scheduled run's new worktree (#16369); see `createScheduledRunWorktree`. */
+export async function createScheduledRunWorktreeLive(
+  project: Project,
+  request: { branch: string; baseBranch: string; fromRemote: boolean }
+): Promise<string> {
+  const [{ createScheduledRunWorktree }, deps] = await Promise.all([
+    import("./viewlessWorktreeCreation.js"),
+    loadLiveDeps(),
+  ]);
+  return createScheduledRunWorktree(project, request, deps);
 }
 
 /** Restart a terminal of a project no frontend is attached to (#14703); see `restartTerminalWithoutView`. */

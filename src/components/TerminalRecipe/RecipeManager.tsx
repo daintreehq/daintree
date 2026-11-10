@@ -14,12 +14,12 @@ import {
   GitBranch,
   MoreHorizontal,
   Pin,
-  PinOff,
   Clipboard,
 } from "lucide-react";
 import { Plug, Workflow } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { SearchField } from "@/components/ui/SearchField";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -27,6 +27,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -47,6 +48,7 @@ import { getRecipeTerminalSummary } from "@/components/Terminal/utils/recipeUtil
 import { nextDuplicateName } from "@/components/Terminal/RecipeRunner/recipeRunnerUtils";
 import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
 import type { TerminalRecipe } from "@/types";
+import type { RecipeFileImport } from "@/utils/recipeImport";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { isPluginRecipe } from "@shared/types/project";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
@@ -110,7 +112,8 @@ export function RecipeManager({
   const saveToRepo = useRecipeStore((s) => s.saveToRepo);
   const exportRecipe = useRecipeStore((s) => s.exportRecipe);
   const exportRecipeToFile = useRecipeStore((s) => s.exportRecipeToFile);
-  const importRecipeFromFile = useRecipeStore((s) => s.importRecipeFromFile);
+  const readRecipeFile = useRecipeStore((s) => s.readRecipeFile);
+  const importRecipe = useRecipeStore((s) => s.importRecipe);
   const updateRecipe = useRecipeStore((s) => s.updateRecipe);
   const createRecipe = useRecipeStore((s) => s.createRecipe);
   const currentProject = useProjectStore((s) => s.currentProject);
@@ -143,10 +146,10 @@ export function RecipeManager({
   const [recipeToDeleteAfterSave, setRecipeToDeleteAfterSave] = useState<string | null>(null);
   const [deleteAfterSaveError, setDeleteAfterSaveError] = useState<string | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
-  const [refusedFileImport, setRefusedFileImport] = useState<{
-    json: string;
-    error: unknown;
-  } | null>(null);
+  const [fileImport, setFileImport] = useState<RecipeFileImport | null>(null);
+  // The recipe an import just saved. The manager clears any filter hiding it,
+  // and the import dialog hands focus to its row on close.
+  const [importedRecipeId, setImportedRecipeId] = useState<string | null>(null);
   // The row a delete removes takes its trigger with it, so focus goes to the
   // row that slides into its place, or the one above when it was the last.
   const deleteSuccessorRef = useRef<string | null>(null);
@@ -219,19 +222,62 @@ export function RecipeManager({
     [exportRecipe]
   );
 
-  // A clean file imports in one click. One that would lose terminals, or that
-  // the store refuses outright, opens in the paste dialog with its JSON, so the
-  // user sees why and can fix it or import what can be (#15044).
-  const handleImportFromFile = async () => {
-    try {
-      const result = await importRecipeFromFile(currentProject?.id);
-      if (result.status !== "refused") return;
-      setRefusedFileImport({ json: result.json, error: result.error });
-      setShowImportDialog(true);
-    } catch (err) {
-      logError("Failed to import recipe from file", err);
-    }
+  const openImportDialog = (file: RecipeFileImport | null) => {
+    setImportedRecipeId(null);
+    setFileImport(file);
+    setShowImportDialog(true);
   };
+
+  const handleImported = (recipe: TerminalRecipe) => {
+    setImportedRecipeId(recipe.id);
+    handleFilterChange("");
+    useAnnouncerStore
+      .getState()
+      .announce(
+        `“${recipe.name}” imported to ${recipe.projectId === undefined ? "Global" : "Team"} recipes`
+      );
+  };
+
+  // With a project open a file can go to the repository or stay on this
+  // machine, so nothing is saved until the import dialog has shown where it
+  // goes (#16658). Without one, Global is the only place it can go, so a clean
+  // file imports in one click. One that would lose terminals, or that isn't a
+  // recipe, opens in the dialog with its JSON so the user sees why and can fix
+  // it or import what can be (#15044).
+  const handleImportFromFile = async () => {
+    const file = await readRecipeFile().catch((err: unknown) => {
+      logError("Failed to read recipe file", err);
+      // Nothing else in the manager changes, so without this the pick just
+      // looks ignored.
+      notify({
+        type: "error",
+        title: "Import failed",
+        message: `Couldn't read the recipe file: ${formatErrorMessage(err, "unknown error")}`,
+        action: { label: "Choose another file", onClick: () => void handleImportFromFile() },
+        context: { eventKind: "uiFeedback" },
+      });
+      return null;
+    });
+    if (!file || file.status === "cancelled") return;
+    if (file.status === "ready" && !hasProject) {
+      try {
+        handleImported(await importRecipe(undefined, file.json));
+      } catch (error) {
+        openImportDialog({ status: "refused", fileName: file.fileName, json: file.json, error });
+      }
+      return;
+    }
+    openImportDialog(file);
+  };
+
+  // A one-click import closes nothing, so nothing hands focus to its row; it is
+  // brought into view instead.
+  useEffect(() => {
+    if (!importedRecipeId || showImportDialog) return;
+    inventoryRef.current
+      ?.querySelector(`[data-recipe-id="${CSS.escape(importedRecipeId)}"]`)
+      ?.scrollIntoView?.({ block: "nearest" });
+  }, [importedRecipeId, showImportDialog]);
 
   // Same naming rule as the canvas band's Duplicate, so a copy made in either
   // place never collides with an existing recipe's name or on-disk filename.
@@ -397,20 +443,20 @@ export function RecipeManager({
                 <TruncatedTooltip content={pluginLabel}>
                   <span className="max-w-[40%] truncate">From {pluginLabel}</span>
                 </TruncatedTooltip>
-                <span aria-hidden>·</span>
+                <FactSeparator />
               </>
             )}
             {worktreeLabel && (
               <>
                 <span className="shrink-0">{worktreeLabel}</span>
-                <span aria-hidden>·</span>
+                <FactSeparator />
               </>
             )}
             <span className="min-w-0 truncate">
               {pluralize(recipe.terminals.length, "terminal")}
               {summary && summary !== recipe.name ? `: ${summary}` : ""}
             </span>
-            <span aria-hidden>·</span>
+            <FactSeparator />
             <span className="shrink-0">
               {recipe.lastUsedAt ? (
                 <>
@@ -456,20 +502,16 @@ export function RecipeManager({
               <TooltipContent side="bottom">More actions</TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end" sideOffset={4} className="min-w-[200px]">
-              <DropdownMenuItem
+              <DropdownMenuCheckboxItem
+                checked={isPinned}
                 onSelect={() =>
                   void updateRecipe(recipe.id, { showInEmptyState: !isPinned }).catch((err) =>
                     logError("Failed to update recipe pin", err)
                   )
                 }
               >
-                {isPinned ? (
-                  <PinOff data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                ) : (
-                  <Pin data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                )}
-                {isPinned ? "Unpin from canvas" : "Pin to canvas"}
-              </DropdownMenuItem>
+                Pin to canvas
+              </DropdownMenuCheckboxItem>
               <DropdownMenuItem onSelect={() => void handleDuplicateRecipe(recipe)}>
                 <CopyPlus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Duplicate recipe
@@ -659,7 +701,7 @@ export function RecipeManager({
                         New global recipe
                       </Button>
                     )}
-                    <Button variant="ghost" size="sm" onClick={() => setShowImportDialog(true)}>
+                    <Button variant="ghost" size="sm" onClick={() => openImportDialog(null)}>
                       Import from clipboard
                     </Button>
                     <Button variant="ghost" size="sm" onClick={() => void handleImportFromFile()}>
@@ -700,13 +742,17 @@ export function RecipeManager({
                 />
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="sm" className="shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0 aria-expanded:bg-overlay-raised aria-expanded:text-text-primary"
+                    >
                       <FileDown />
                       Import
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" sideOffset={4}>
-                    <DropdownMenuItem onSelect={() => setShowImportDialog(true)}>
+                    <DropdownMenuItem onSelect={() => openImportDialog(null)}>
                       <Clipboard data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Import from clipboard…
                     </DropdownMenuItem>
@@ -810,13 +856,23 @@ export function RecipeManager({
         isOpen={showImportDialog}
         onClose={() => {
           setShowImportDialog(false);
-          setRefusedFileImport(null);
+          setFileImport(null);
         }}
         projectId={currentProject?.id}
-        refusedImport={refusedFileImport}
+        fileImport={fileImport}
+        onImported={handleImported}
+        // After an import, focus goes to the row it added rather than back to
+        // the Import button: that row is what the user came for. A cancel goes
+        // back to the button as usual.
+        preferRestoreFocusTo={importedRecipeId !== null}
         // Importing the first recipe swaps the empty state, and the button that
         // opened this dialog with it, for the inventory and its filter.
         restoreFocusTo={() =>
+          (importedRecipeId
+            ? inventoryRef.current?.querySelector<HTMLElement>(
+                `[data-recipe-id="${CSS.escape(importedRecipeId)}"] button`
+              )
+            : null) ??
           inventoryFocusFallbackRef.current?.querySelector<HTMLElement>("input") ??
           emptyStateActionRef.current
         }

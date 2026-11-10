@@ -4,6 +4,12 @@ export const config: AgentConfig = {
   id: "grok",
   name: "Grok",
   command: "grok",
+  // A bare positional seeds the TUI (`grok "fix the bug"`, per
+  // `grok --help`); headless one-shot uses -p/--single.
+  initialPromptForm: {
+    interactive: { args: ["{prompt}"] },
+    headless: { args: ["-p", "{prompt}"] },
+  },
   // xAI's installer (`curl -fsSL https://x.ai/cli/install.sh | bash`) places the
   // launcher at ~/.local/bin/grok on macOS/Linux. Probe it directly so users
   // who installed via the script aren't mis-reported as "missing" when
@@ -37,9 +43,7 @@ export const config: AgentConfig = {
     args: ["--version"],
   },
   // No `update` entry: Grok Build is a self-updating managed binary (`grok
-  // update`, with stable/alpha channels), so Daintree doesn't drive its
-  // upgrade. The AgentUpdateHandler priority list has no self-update key, so a
-  // declared command wouldn't be selectable by the default path anyway.
+  // update`, with stable/alpha channels), so Daintree doesn't drive its upgrade.
   install: {
     docsUrl: "https://docs.x.ai/build/overview",
     byOs: {
@@ -82,26 +86,14 @@ export const config: AgentConfig = {
   capabilities: {
     scrollback: 10000,
     resizeStrategy: "default",
-    // Rust TUI that would otherwise take over the alternate screen. Default it
+    // Rust TUI that would otherwise take over the alternate screen. Launched
     // inline (`--no-alt-screen`) so output flows into Daintree's own WebGL
     // scrollback and stays selectable with the native text-selection layer
-    // instead of grok's mouse-grabbing full-screen TUI. No `defaultInlineMode`
-    // override: inline follows the global "Use alt-screen mode by default"
-    // switch (off ⇒ inline), so users can still flip back globally or per-agent.
+    // instead of grok's mouse-grabbing full-screen TUI.
     //
-    // Two axes: `--no-alt-screen` / `[terminal] alt_screen` pick the buffer,
-    // `--minimal` / `[ui] screen_mode` trim the chrome. Both polarities need an
-    // explicit flag here because grok also goes inline on its own whenever
-    // `~/.grok/config.toml` or terminal auto-detection says so, which made "Alt
-    // screen" a no-op when it merely omitted the inline flag (#11423).
-    //
-    // `--fullscreen` is the chrome-axis opposite of `--minimal`. Per `grok --help`
-    // (0.2.111) it is session-scoped — never writes config — but it overrides only
-    // `[ui] screen_mode = "minimal"`; the buffer still follows `[terminal]
-    // alt_screen` and auto-detection, so someone who set `alt_screen = false`
-    // stays inline even on "Alt screen". Collapsing both axes onto one flag pair
-    // is a deliberate simplification; older builds may not accept `--fullscreen`,
-    // and only users who actively pick "Alt screen" are exposed.
+    // `--fullscreen` is what a Daintree that still offered "Alt screen" launched
+    // grok with (#11423); declared so a pane saved then is rewritten to
+    // `--no-alt-screen` when it restarts or resumes (#16356).
     inlineModeFlag: "--no-alt-screen",
     altScreenFlag: "--fullscreen",
     supportsBracketedPaste: true,

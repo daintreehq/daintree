@@ -101,6 +101,7 @@ vi.mock("../../services/PullRequestService.js", () => ({
     start: vi.fn(),
     stop: vi.fn(),
     cleanup: vi.fn(),
+    reset: vi.fn(),
     refresh: vi.fn(),
     getStatus: vi.fn().mockReturnValue({
       state: "idle",
@@ -188,8 +189,15 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
   });
 
   afterEach(() => {
+    // Monitors installed through syncMonitors arm real poll timers.
+    service.dispose();
     vi.restoreAllMocks();
   });
+
+  /** The tracker's in-memory opt-in for `id`, read without changing it. */
+  function storedOptIn(id: string): { enabled: boolean; dismissed: boolean } | undefined {
+    return service["wslGit"]["optIns"][id];
+  }
 
   function createAndRegisterMonitor(overrides: Partial<Worktree> = {}): WorktreeMonitor {
     const wt = createTestWorktree(overrides);
@@ -212,12 +220,11 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
   describe("removeMonitor chokepoint", () => {
     it("emits clear-wsl-git-opt-in before worktree-removed when wsl entry exists", () => {
       createAndRegisterMonitor();
-      service["wslGitByWorktree"][TEST_WORKTREE_PATH] = { enabled: true, dismissed: false };
+      service.setWslOptIn(TEST_WORKTREE_PATH, true, false);
 
       service["removeMonitor"](TEST_WORKTREE_PATH);
 
       expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(false);
-      expect(service["wslGitByWorktree"][TEST_WORKTREE_PATH]).toBeUndefined();
 
       const clearCall = mockSendEvent.mock.calls.find(
         ([arg]) => (arg as { type: string }).type === "clear-wsl-git-opt-in"
@@ -236,6 +243,7 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
       const clearIdx = mockSendEvent.mock.calls.indexOf(clearCall!);
       const removedIdx = mockSendEvent.mock.calls.indexOf(removedCall!);
       expect(clearIdx).toBeLessThan(removedIdx);
+      expect(storedOptIn(TEST_WORKTREE_PATH)).toBeUndefined();
     });
 
     it("does not emit clear-wsl-git-opt-in when no wsl entry exists", () => {
@@ -256,26 +264,23 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
 
     it("refuses to remove the main worktree monitor", () => {
       createAndRegisterMonitor({ isMainWorktree: true });
-      service["wslGitByWorktree"][TEST_WORKTREE_PATH] = { enabled: true, dismissed: false };
+      service.setWslOptIn(TEST_WORKTREE_PATH, true, false);
 
       service["removeMonitor"](TEST_WORKTREE_PATH);
 
-      // Monitor and wsl entry both untouched.
-      expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(true);
-      expect(service["wslGitByWorktree"][TEST_WORKTREE_PATH]).toEqual({
-        enabled: true,
-        dismissed: false,
-      });
       // Neither clear nor removed fires.
       const clearOrRemoved = mockSendEvent.mock.calls.filter(([arg]) =>
         ["clear-wsl-git-opt-in", "worktree-removed"].includes((arg as { type: string }).type)
       );
       expect(clearOrRemoved).toHaveLength(0);
+      // Monitor and wsl entry both untouched.
+      expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(true);
+      expect(storedOptIn(TEST_WORKTREE_PATH)).toEqual({ enabled: true, dismissed: false });
     });
 
     it("is idempotent — calling twice on the same id is a no-op the second time", () => {
       createAndRegisterMonitor();
-      service["wslGitByWorktree"][TEST_WORKTREE_PATH] = { enabled: true, dismissed: false };
+      service.setWslOptIn(TEST_WORKTREE_PATH, true, false);
 
       service["removeMonitor"](TEST_WORKTREE_PATH);
       mockSendEvent.mockClear();
@@ -291,120 +296,39 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
   describe("syncMonitors stale-loop routes through removeMonitor", () => {
     it("prunes wsl entry + emits clear for monitors missing from the live list", async () => {
       createAndRegisterMonitor();
-      service["wslGitByWorktree"][TEST_WORKTREE_PATH] = { enabled: true, dismissed: false };
+      service.setWslOptIn(TEST_WORKTREE_PATH, true, false);
 
       // Live list is empty — every existing monitor is stale.
       await service["syncMonitors"]([], null, "main", undefined, true);
 
       expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(false);
-      expect(service["wslGitByWorktree"][TEST_WORKTREE_PATH]).toBeUndefined();
 
       const clearCall = mockSendEvent.mock.calls.find(
         ([arg]) => (arg as { type: string }).type === "clear-wsl-git-opt-in"
       );
       expect(clearCall).toBeDefined();
       expect((clearCall![0] as { worktreeId: string }).worktreeId).toBe(TEST_WORKTREE_PATH);
-    });
-  });
-
-  describe("pruneStaleWslGitEntries bulk self-heal (review #1)", () => {
-    // The persisted `wslGitByWorktree` is a single global electron-store
-    // record. Loading project A would otherwise prune project B's valid
-    // opt-ins on every load/prewarm/restart. The bulk self-heal restricts
-    // the walk to keys whose path is rooted at this project's parent dir.
-    // Test the helper directly — going through full `loadProject` is too
-    // tied to mocked git/topology side effects.
-
-    it("does not emit clear-wsl-git-opt-in for keys belonging to other projects", () => {
-      // Current project is /test/root. The persisted map carries one live
-      // in-project entry and one foreign-project entry that would be
-      // silently erased by an un-scoped self-heal.
-      service["projectRootPath"] = "/test/root";
-      service["wslGitByWorktree"] = {
-        [TEST_WORKTREE_PATH]: { enabled: true, dismissed: false },
-        "/other-projects/repo/wt": { enabled: true, dismissed: false },
-      };
-
-      const liveWorktree = createTestWorktree({ id: TEST_WORKTREE_PATH });
-      service["pruneStaleWslGitEntries"]([liveWorktree]);
-
-      // Foreign key is left untouched in the in-memory mirror (and therefore
-      // no clear event is sent for it).
-      expect(service["wslGitByWorktree"]["/other-projects/repo/wt"]).toEqual({
-        enabled: true,
-        dismissed: false,
-      });
-      const clearCalls = mockSendEvent.mock.calls.filter(
-        ([arg]) => (arg as { type: string }).type === "clear-wsl-git-opt-in"
-      );
-      const clearWorktreeIds = clearCalls.map(
-        ([arg]) => (arg as { worktreeId: string }).worktreeId
-      );
-      expect(clearWorktreeIds).not.toContain("/other-projects/repo/wt");
+      expect(storedOptIn(TEST_WORKTREE_PATH)).toBeUndefined();
     });
 
-    it("does emit clear-wsl-git-opt-in for stale keys inside the current project", () => {
-      // The current project's parent dir is /test (parent of /test/root). A
-      // stale key under /test/root/.worktrees (a former worktree) must
-      // still be pruned.
-      const staleProjectKey = "/test/root/.worktrees/old-feature";
-      service["projectRootPath"] = "/test/root";
-      service["wslGitByWorktree"] = {
-        [TEST_WORKTREE_PATH]: { enabled: true, dismissed: false },
-        [staleProjectKey]: { enabled: true, dismissed: false },
-      };
-
-      const liveWorktree = createTestWorktree({ id: TEST_WORKTREE_PATH });
-      service["pruneStaleWslGitEntries"]([liveWorktree]);
-
-      // The stale in-project key is pruned; the live key stays.
-      expect(service["wslGitByWorktree"][staleProjectKey]).toBeUndefined();
-      expect(service["wslGitByWorktree"][TEST_WORKTREE_PATH]).toEqual({
-        enabled: true,
-        dismissed: false,
+    it("installs new monitors from the tracker's WSL enrichment", async () => {
+      const wt = createTestWorktree();
+      const enrich = vi.spyOn(service["wslGit"], "enrichWorktree").mockResolvedValue({
+        ...wt,
+        isWslPath: true,
+        wslDistro: "Ubuntu",
+        wslPosixPath: "/home/me/repo",
+        wslGitEligible: "eligible",
+        wslGitOptIn: true,
+        wslGitDismissed: false,
       });
 
-      const clearCalls = mockSendEvent.mock.calls.filter(
-        ([arg]) => (arg as { type: string }).type === "clear-wsl-git-opt-in"
-      );
-      const clearWorktreeIds = clearCalls.map(
-        ([arg]) => (arg as { worktreeId: string }).worktreeId
-      );
-      expect(clearWorktreeIds).toContain(staleProjectKey);
-    });
+      await service["syncMonitors"]([wt], null, "main", undefined, true);
 
-    it("handles Windows-style stale keys without relying on the host OS separator", () => {
-      const liveKey = "C:\\test\\root";
-      const staleProjectKey = "C:\\test\\root\\.worktrees\\old-feature";
-      const foreignProjectKey = "D:\\other-projects\\repo\\wt";
-      service["projectRootPath"] = liveKey;
-      service["wslGitByWorktree"] = {
-        [liveKey]: { enabled: true, dismissed: false },
-        [staleProjectKey]: { enabled: true, dismissed: false },
-        [foreignProjectKey]: { enabled: true, dismissed: false },
-      };
-
-      const liveWorktree = createTestWorktree({ id: liveKey });
-      service["pruneStaleWslGitEntries"]([liveWorktree]);
-
-      expect(service["wslGitByWorktree"][staleProjectKey]).toBeUndefined();
-      expect(service["wslGitByWorktree"][liveKey]).toEqual({
-        enabled: true,
-        dismissed: false,
-      });
-      expect(service["wslGitByWorktree"][foreignProjectKey]).toEqual({
-        enabled: true,
-        dismissed: false,
-      });
-
-      const clearCalls = mockSendEvent.mock.calls.filter(
-        ([arg]) => (arg as { type: string }).type === "clear-wsl-git-opt-in"
-      );
-      const clearWorktreeIds = clearCalls.map(
-        ([arg]) => (arg as { worktreeId: string }).worktreeId
-      );
-      expect(clearWorktreeIds).toContain(staleProjectKey);
-      expect(clearWorktreeIds).not.toContain(foreignProjectKey);
+      expect(enrich).toHaveBeenCalledWith(expect.objectContaining({ id: wt.id }));
+      const monitor = service["monitors"].get(wt.id);
+      expect(monitor?.isWslPath).toBe(true);
+      expect(monitor?.wslDistro).toBe("Ubuntu");
     });
   });
 });

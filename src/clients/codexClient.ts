@@ -1,3 +1,4 @@
+import type { AgentContextUsageResult } from "@shared/types/ipc/agentContextUsage";
 import type {
   AgentSubagentsResult,
   AgentSubagentTranscriptResult,
@@ -68,5 +69,10 @@ export const codexClient = {
   /** The same read past main's cache, for an explicit Retry. */
   refreshQuota: (): Promise<CodexQuotaProfile[]> => {
     return window.electron.codex.refreshQuota();
+  },
+
+  /** The context the pane's newest token count records, read on the host from the rollout its Codex holds open. */
+  readContextUsage: (payload: { terminalId: string }): Promise<AgentContextUsageResult> => {
+    return window.electron.codex.readContextUsage(payload);
   },
 } as const;

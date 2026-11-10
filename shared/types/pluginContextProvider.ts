@@ -11,7 +11,7 @@ export interface ContextProviderContribution {
   id: string;
   /**
    * The word typed after `@`, e.g. `rec` for `@rec:`. One to sixteen lowercase
-   * letters, never `diff`, `terminal` or `selection`. A prefix another visible
+   * letters, never `diff`, `terminal`, `selection` or `notes`. A prefix another visible
    * plugin already holds is refused for the later one.
    */
   prefix: string;

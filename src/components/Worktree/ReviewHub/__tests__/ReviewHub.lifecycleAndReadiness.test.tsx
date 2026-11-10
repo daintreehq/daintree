@@ -113,8 +113,10 @@ vi.mock("@/clients/systemClient", () => ({
   systemClient: { openExternal: openExternalMock },
 }));
 
+const getNewPRLinkMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@/clients/forgeClient", () => ({
-  forgeClient: { classifyPushError: classifyPushErrorMock },
+  forgeClient: { classifyPushError: classifyPushErrorMock, getNewPRLink: getNewPRLinkMock },
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -356,6 +358,8 @@ describe("ReviewHub", () => {
   const mockUnsubscribe = vi.fn();
 
   beforeEach(() => {
+    getNewPRLinkMock.mockReset();
+    getNewPRLinkMock.mockResolvedValue({ state: "unavailable", term: "pull-request" });
     capturedUpdateCallback = null;
     debounceCancelSpy.mockReset();
 
@@ -1377,6 +1381,25 @@ describe("ReviewHub", () => {
       await waitFor(() =>
         expect(pushMock).toHaveBeenCalledWith(WORKTREE_PATH, undefined, undefined, PUSH_REVIEW)
       );
+    });
+
+    it("swaps 'not pushed' for the new pull request link once a push from here lands", async () => {
+      getNewPRLinkMock.mockResolvedValue({ state: "unpushed", term: "pull-request" });
+      renderCleanHub({ aheadCount: 2, behindCount: 0 });
+      await screen.findByText("not pushed");
+
+      const url = "https://github.com/test/repo/compare/develop...feature?expand=1";
+      getNewPRLinkMock.mockResolvedValue({ state: "ready", term: "pull-request", url });
+      await screen.findByTestId("review-hub-clean-unpushed");
+      act(() => void fireEvent.click(screen.getByTestId("review-hub-clean-push")));
+      await act(async () => {
+        useGitPushConfirmStore.getState().resolveConfirmation(PUSH_REVIEW);
+      });
+
+      // Nothing in the worktree fixture moves, so only the push itself can ask.
+      await screen.findByRole("button", { name: /^No PR\s*open new pull request$/ });
+      expect(pushMock).toHaveBeenCalled();
+      expect(screen.queryByText("not pushed")).toBeNull();
     });
 
     it("names the push as an operation in a remote-bound view", async () => {

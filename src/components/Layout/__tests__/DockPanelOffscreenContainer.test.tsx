@@ -70,6 +70,9 @@ vi.mock("@/services/terminal/panelDuplicationService", () => ({
   canDuplicatePanelKind: vi.fn(() => true),
 }));
 
+const noteVisiblePanesChanged = vi.hoisted(() => vi.fn());
+vi.mock("@/services/terminal/visiblePaneTerminals", () => ({ noteVisiblePanesChanged }));
+
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
 }));
@@ -220,6 +223,19 @@ describe("DockPanelOffscreenContainer stable-wrapper relocation (#9927)", () => 
 
     // Despite the throw, the wrapper still lands in the destination.
     expect(wrapper.parentElement).toBe(target);
+  });
+
+  it("says its pane started or stopped showing on each reveal and park (#16737)", () => {
+    renderContainer();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    noteVisiblePanesChanged.mockClear();
+
+    act(() => captured!("panel-1", target));
+    expect(noteVisiblePanesChanged).toHaveBeenCalledTimes(1);
+    act(() => captured!("panel-1", null));
+    expect(noteVisiblePanesChanged).toHaveBeenCalledTimes(2);
+    target.remove();
   });
 
   it("is idempotent — re-moving to the current parent does nothing", () => {

@@ -18,6 +18,15 @@ interface MockPanelState {
 }
 let mockState: MockPanelState;
 
+// The launch executable comes from this view's CLI detection, which these tests
+// don't load: stand it in directly.
+vi.mock("@/utils/agentLaunchCommand", () => ({
+  resolveCurrentAgentLaunchBaseCommand: vi.fn(async () => undefined),
+  getCurrentLaunchCliDetail: vi.fn(async () => undefined),
+  resolveAgentLaunchBaseCommand: vi.fn((registryCommand: string) => registryCommand),
+  rebaseToCurrentAgentLaunch: vi.fn(async (command: string) => command),
+}));
+
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: () => mockState },
 }));
@@ -40,6 +49,10 @@ import {
   restoreClosedTerminals,
   getLiveTerminalIdsForWorktree,
 } from "@/components/Worktree/worktreeDeleteHelper";
+import {
+  rebaseToCurrentAgentLaunch,
+  resolveCurrentAgentLaunchBaseCommand,
+} from "@/utils/agentLaunchCommand";
 
 const getInfoMock = vi.fn<(id: string) => Promise<{ hasPty: boolean }>>();
 // `waitForTerminalsToClose` reads `window.electron.terminal.getInfo`; stub just
@@ -61,6 +74,8 @@ beforeEach(() => {
   removePanelMock.mockReset();
   addPanelMock.mockReset().mockResolvedValue("ok");
   buildResumeCommandMock.mockReset();
+  vi.mocked(rebaseToCurrentAgentLaunch).mockClear();
+  vi.mocked(resolveCurrentAgentLaunchBaseCommand).mockClear();
   // `waitForTerminalsToClose` treats a terminal as closed only once `getInfo`
   // rejects (the backend has fully forgotten it) — `hasPty: false` alone is
   // deliberately insufficient (the Windows cwd-lock window). Reject to simulate
@@ -148,6 +163,7 @@ describe("closeTerminalsForWorktree", () => {
 describe("restoreClosedTerminals", () => {
   it("relaunches with a resume command for a resume-capable agent session", async () => {
     buildResumeCommandMock.mockReturnValue("claude --resume sess-1");
+    vi.mocked(resolveCurrentAgentLaunchBaseCommand).mockResolvedValueOnce("/chosen/claude");
 
     await restoreClosedTerminals([
       {
@@ -162,7 +178,14 @@ describe("restoreClosedTerminals", () => {
       },
     ]);
 
-    expect(buildResumeCommandMock).toHaveBeenCalledWith("claude", "sess-1", ["--flag"]);
+    // The executable a launch starts now, the chosen copy included (#16399).
+    expect(resolveCurrentAgentLaunchBaseCommand).toHaveBeenCalledWith("claude");
+    expect(buildResumeCommandMock).toHaveBeenCalledWith(
+      "claude",
+      "sess-1",
+      ["--flag"],
+      "/chosen/claude"
+    );
     expect(addPanelMock).toHaveBeenCalledTimes(1);
     expect(addPanelMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -176,6 +199,25 @@ describe("restoreClosedTerminals", () => {
         focusPolicy: "preserve",
       })
     );
+  });
+
+  // Starting over keeps the stored arguments but starts the copy a launch starts
+  // now, which may have been chosen since the pane launched (#16399).
+  it("starts the stored launch command with the copy a launch starts now", async () => {
+    vi.mocked(rebaseToCurrentAgentLaunch).mockResolvedValueOnce("/chosen/claude --model opus");
+    await restoreClosedTerminals([
+      { id: "agent", location: "grid", command: "claude --model opus", launchAgentId: "claude" },
+    ]);
+    expect(rebaseToCurrentAgentLaunch).toHaveBeenCalledWith("claude --model opus", "claude");
+    expect(addPanelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "/chosen/claude --model opus" })
+    );
+  });
+
+  it("replays a plain terminal's command untouched", async () => {
+    await restoreClosedTerminals([{ id: "shell", location: "grid", command: "npm run dev" }]);
+    expect(rebaseToCurrentAgentLaunch).not.toHaveBeenCalled();
+    expect(addPanelMock).toHaveBeenCalledWith(expect.objectContaining({ command: "npm run dev" }));
   });
 
   it("falls back to the stored launch command when there is no session id", async () => {
@@ -203,7 +245,8 @@ describe("restoreClosedTerminals", () => {
       "sess-9",
       // Reconciled from an empty snapshot: codex gains its screen-mode and
       // decorations tokens rather than replaying `undefined` verbatim.
-      expect.arrayContaining(["-c", "tui.whimsy=false"])
+      expect.arrayContaining(["-c", "tui.whimsy=false"]),
+      undefined
     );
     expect(addPanelMock).toHaveBeenCalledWith(expect.objectContaining({ command: "codex" }));
   });

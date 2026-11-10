@@ -2523,12 +2523,14 @@ export class HelpSessionService {
       { liveGlobalWorkerSteer },
       { extractReply },
       { getPtyClient },
+      { projectStore },
     ] = await Promise.all([
       this.loadMcpServerModule(),
       import("./assistants/AssistantTerminalControl.js"),
       import("./assistants/GlobalWorkerSteer.js"),
       import("./mcp-server/terminalNotify.js"),
       import("../window/serviceRefs.js"),
+      import("./ProjectStore.js"),
     ]);
     if (this.assistantControlWired) return;
     mcpServerService.setAssistantControl({
@@ -2536,6 +2538,8 @@ export class HelpSessionService {
         help: this,
         pty: () => getPtyClient(),
         extractReply,
+        projectName: (projectId) => projectStore.getProjectById(projectId)?.name ?? null,
+        queue: () => mcpServerService.getWorkerSteerQueue(),
       }),
       steer: liveGlobalWorkerSteer({
         pty: () => getPtyClient(),

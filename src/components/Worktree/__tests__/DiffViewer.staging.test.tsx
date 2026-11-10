@@ -179,6 +179,39 @@ function renderViewer(ui: React.ReactElement) {
 }
 
 describe("DiffViewer staged rows", () => {
+  it("keeps one line number tab stop as batches mount, and walks only rows that have", async () => {
+    const { container } = renderViewer(
+      <DiffViewer diff={addedDiff(ROWS)} annotations={{ worktreePath: "/repo" }} />
+    );
+    const stops = () =>
+      Array.from(container.querySelectorAll<HTMLElement>('[data-note-line][tabindex="0"]')).map(
+        (element) => element.dataset.noteLine
+      );
+    expect(stops()).toEqual(["1"]);
+
+    const last = container.querySelector<HTMLElement>(`[data-note-line="${DIFF_ROW_BATCH}"]`);
+    if (!last) throw new Error("no last mounted row");
+    expect(container.querySelector(`[data-note-line="${DIFF_ROW_BATCH + 1}"]`)).toBeNull();
+    last.focus();
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(last);
+
+    const mounted = new Set<number>();
+    await runUntil(() => {
+      mounted.add(rowCount(container));
+      expect(stops()).toEqual([String(DIFF_ROW_BATCH)]);
+      expect(document.activeElement).toBe(last);
+      return rowCount(container) === ROWS;
+    });
+    // Checked between batches, not just at either end of them.
+    expect(mounted.size).toBeGreaterThan(2);
+
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(
+      container.querySelector(`[data-note-line="${DIFF_ROW_BATCH + 1}"]`)
+    );
+  });
+
   it("renders a small diff whole on its first commit", () => {
     const { container } = renderViewer(<DiffViewer diff={addedDiff(20)} />);
     expect(rowCount(container)).toBe(20);

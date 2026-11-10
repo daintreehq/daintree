@@ -22,6 +22,9 @@ import {
 } from "./workspace-client/index.js";
 import type { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
 import { getWebContentsForProject } from "../window/webContentsRegistry.js";
+import { hasPendingScheduledLaunch } from "./scheduledRuns/scheduledRunAdmission.js";
+import { isCheckoutPendingPath } from "./projectClone/checkoutGate.js";
+import { AppError } from "../utils/errorTypes.js";
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
 import type {
   WorkspaceClientConfig,
@@ -157,6 +160,10 @@ export class WorkspaceClient extends EventEmitter {
       // same id the pool resolves from the host's path; a scratch workspace
       // never has a pool entry, so it can't be mistaken for one.
       hasLiveProjectView: (projectId) => getWebContentsForProject(projectId).length > 0,
+      // A run's new worktree sets up in the host while its launch waits to spawn
+      // (#16369), with no window at all when an OS job started Daintree, and
+      // setup status goes with the host.
+      isHostBusy: hasPendingScheduledLaunch,
     });
 
     this.copyTree = new WorkspaceCopyTreeClient({
@@ -207,11 +214,24 @@ export class WorkspaceClient extends EventEmitter {
     if (this.isDisposed) {
       throw new Error("WorkspaceClient disposed");
     }
+    // A clone still writing the folder, or one that ended without a checkout,
+    // has no repository a host could enumerate (#16352). The window still lets
+    // go of the workspace it was attached to, so another project's worktree
+    // events stop reaching the view now showing this one.
+    if (isCheckoutPendingPath(rootPath)) {
+      this.pool.unregisterWindow(windowId);
+      throw new AppError({
+        code: "PROJECT_NOT_READY",
+        message: "This project is still being cloned",
+        context: { projectPath: rootPath },
+      });
+    }
     return this.pool.loadProject(rootPath, windowId);
   }
 
   prewarmProject(rootPath: string): void {
     if (this.isDisposed) return;
+    if (isCheckoutPendingPath(rootPath)) return;
     this.pool.prewarmProject(rootPath);
   }
 

@@ -115,7 +115,7 @@ function RateLimitChip({
   // A pane on an account keeps it across a preset switch, so a preset's own
   // home says nothing about the quota it would run on: no hints then.
   const choices = useRestartPresetChoices(agentId, presetId, menuOpen && live && !accountId);
-  const accountChoices = useRestartAccountChoices(agentId, accountId);
+  const accountChoices = useRestartAccountChoices(agentId, accountId, menuOpen && live, presetId);
 
   if (!live) return null;
 

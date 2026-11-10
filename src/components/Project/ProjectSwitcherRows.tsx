@@ -16,8 +16,6 @@ import {
 import { AlarmClockOff, Moon } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
-import { isMac } from "@/lib/platform";
-import { formatChordText } from "@/lib/kbdShortcut";
 import { PALETTE_ROW_CLASS, ROW_MENU_TARGET_CLASS } from "@/components/ui/paletteRowStyles";
 import {
   HighlightedText,
@@ -60,6 +58,8 @@ import { CommandTile, ProjectTile } from "./paletteTiles";
 import { PaletteCurrentLabel as CurrentLabel } from "@/components/ui/PaletteCurrentLabel";
 import { type OtherHostOption } from "@/components/Hosts/OtherHostsSection";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
+import { FactSeparator } from "@/components/ui/FactSeparator";
+import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 
 export interface ProjectListItemProps {
   project: ProjectSwitcherProjectRow;
@@ -155,8 +155,10 @@ export function StatusDot({
   // reaches here on a status that already agreed to yield, and an auto-parked
   // row is the case where both would otherwise have drawn (#11822).
   const dot = showResumeDot ? (
+    // A size smaller than the state marks: a promise about what opening brings
+    // back, not a state, and it must never pass for the 8px unread disc.
     <div
-      className="workspace-mark w-2 h-2 rounded-full bg-text-secondary"
+      className="workspace-mark w-1.5 h-1.5 rounded-full bg-text-secondary"
       data-testid="workspace-resume-dot"
       aria-hidden="true"
     />
@@ -206,10 +208,11 @@ function wedgePath(share: number): string {
  * genuinely has something to divide.
  *
  * The cost of dropping the notch is that two hues sitting close together make a
- * split mark read as one disc. Every built-in keeps `review` and `working` apart
- * for that reason (#15866); a custom palette that doesn't gets a legible mark
- * stating one of its two facts, where the notch was an illegible mark stating
- * both, and the row's line carries the counts in words either way.
+ * split mark read as one disc. `review` is the primary ink, so against the
+ * working green it splits by lightness on every theme; a custom palette whose
+ * demand hue sits near its green gets a legible mark stating one of its two
+ * facts, where the notch was an illegible mark stating both, and the row's line
+ * carries the counts in words either way.
  *
  * `aria-hidden`, like every mark in this list: the row's own line states both
  * counts in words, and a mark that also announced itself would have a reader
@@ -350,9 +353,7 @@ export function RowStatusLine({ status }: { status: ProjectRowStatus }) {
           {index > 0 && (
             <>
               <span className="sr-only">, </span>
-              <span className="shrink-0 text-text-muted" aria-hidden="true">
-                ·
-              </span>
+              <FactSeparator />
             </>
           )}
           {part}
@@ -444,13 +445,14 @@ function ProjectFilingLabel({
       <span className="sr-only">, {spoken}</span>
       {groupName && (
         <span aria-hidden="true" className="min-w-0 truncate">
-          · {groupName}
+          <FactSeparator /> {groupName}
         </span>
       )}
       {isArchived && (
         <span aria-hidden="true" className={cn("shrink-0", groupName && "ml-1")}>
           {/* A real space for copy and text extraction; the margin draws it. */}
-          {groupName && " "}· Archived
+          {groupName && " "}
+          <FactSeparator /> Archived
         </span>
       )}
     </span>
@@ -569,6 +571,13 @@ export function modEnterOpensWindow(
 }
 
 /**
+ * The footer's new-window chord. The keydown takes Meta or Control, and
+ * `KbdChord` draws `Cmd` as whichever this platform calls primary, so Windows
+ * and Linux are never told to press a ⌘ they don't have.
+ */
+const MOD_ENTER = "Cmd+Enter";
+
+/**
  * The footer's Enter hint for the highlighted row (#12597). A row another
  * window shows or is activating goes there on either key, so both say where it
  * goes rather than "Switch" or "New window". A row this window shows or is
@@ -581,31 +590,37 @@ export function getProjectSwitcherEnterHint(
   row: ProjectSwitcherRow | undefined,
   modifierHeld: boolean,
   canOpenWindow: boolean,
-  mac: boolean = isMac()
+  /** Agents the highlighted row's resume mark promises; 0 when it draws none. */
+  resumableAgentCount = 0
 ): { keys: string; label: string } | null {
   if (!row) return null;
   // A missing project's Enter opens the relocation dialog, not a switch.
-  if (row.kind === "project" && row.isMissing) return { keys: "↵", label: "to locate" };
+  if (row.kind === "project" && row.isMissing) return { keys: "Enter", label: "to locate" };
   // Enter on the workspace you're in is a "never mind": the palette closes and
   // nothing switches, so the hint says that rather than promising a switch.
-  if (row.isActive) return { keys: "↵", label: "to close" };
+  if (row.isActive) return { keys: "Enter", label: "to close" };
   const opensWindow = modifierHeld && modEnterOpensWindow(row, canOpenWindow);
-  // The keydown takes Meta or Control, so the modifier is whichever this
-  // platform calls primary — a literal ⌘ tells Windows and Linux to press a key
-  // they don't have. The Enter glyph stays the footer family's ↵.
-  const modEnter = `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`;
   if (opensWindow && row.kind === "project" && movesCachedView(row)) {
-    return { keys: modEnter, label: "to open in new window" };
+    return { keys: MOD_ENTER, label: "to open in new window" };
   }
   // A row this window is already bringing in front switches here, whatever
   // another window still caches.
   if (row.kind === "project" && isOpenElsewhere(row) && !row.isOpenInThisWindow) {
-    return { keys: opensWindow ? modEnter : "↵", label: "to go to window" };
+    return { keys: opensWindow ? MOD_ENTER : "Enter", label: "to go to window" };
   }
   if (opensWindow && !row.isOpenInThisWindow) {
-    return { keys: modEnter, label: "to open in new window" };
+    return { keys: MOD_ENTER, label: "to open in new window" };
   }
-  return { keys: "↵", label: "to switch" };
+  // The resume mark's meaning, said where Enter's consequence already is: the
+  // mark is a 6px dot, and nothing else on screen explains it. The caller
+  // counts it with the test that draws the mark (`showResumableAgentMark`), so
+  // the two can never disagree about a row. "Resume" alone, since every Enter
+  // here switches; with "switch and" it no longer fits the dropdown's footer
+  // beside the section keys.
+  if (resumableAgentCount > 0) {
+    return { keys: "Enter", label: `to resume ${pluralize(resumableAgentCount, "agent")}` };
+  }
+  return { keys: "Enter", label: "to switch" };
 }
 
 /**
@@ -617,21 +632,17 @@ export function getProjectSwitcherEnterHint(
  */
 export function getOtherHostEnterHint(
   option: OtherHostOption,
-  modifierHeld: boolean,
-  mac: boolean = isMac()
+  modifierHeld: boolean
 ): { keys: string; label: string; host?: string } | null {
-  if (option.kind === "retry") return option.busy ? null : { keys: "↵", label: "to retry" };
+  if (option.kind === "retry") return option.busy ? null : { keys: "Enter", label: "to retry" };
   if (modifierHeld) {
-    return {
-      keys: `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`,
-      label: "to open in new window",
-    };
+    return { keys: MOD_ENTER, label: "to open in new window" };
   }
-  if (option.kind === "connect") return { keys: "↵", label: "to connect" };
-  if (option.kind === "host") return { keys: "↵", label: "to switch" };
+  if (option.kind === "connect") return { keys: "Enter", label: "to connect" };
+  if (option.kind === "host") return { keys: "Enter", label: "to switch" };
   // The host apart from the words, so the footer can clip a long name the way
   // the band does — keeping the part that tells two machines apart.
-  return { keys: "↵", label: "to open on", host: option.hostName };
+  return { keys: "Enter", label: "to open on", host: option.hostName };
 }
 
 export function ProjectListItem({
@@ -670,6 +681,10 @@ export function ProjectListItem({
   const showResumeDot = showResumableAgentMark(status, project);
   const showOpenElsewhere = isOpenElsewhere(project);
   const newWindowLabel = getNewWindowMenuLabel(project);
+  // The control does what the context menu's "Go to window" does, so it is
+  // offered exactly where that item is.
+  const showGoToWindow =
+    showOpenElsewhere && onSelectNewWindow !== undefined && newWindowLabel === "Go to window";
 
   const row = (
     <div
@@ -737,8 +752,7 @@ export function ProjectListItem({
           {hostName && (
             <span className="ml-1.5 shrink-0 text-xs text-text-secondary">
               <span className="sr-only">, on </span>
-              <span aria-hidden="true">· </span>
-              {hostName}
+              <FactSeparator /> {hostName}
             </span>
           )}
           <ProjectFilingLabel
@@ -763,22 +777,12 @@ export function ProjectListItem({
           {project.isActive && <span className="sr-only">, current</span>}
           {/* Same shape as `, current` above — see `ResumableAgentsLabel`. */}
           {showResumeDot && <ResumableAgentsLabel count={project.resumableAgentCount ?? 0} />}
-          {showOpenElsewhere && (
-            <>
-              {/*
-               * Quiet, like the bell beside it: the glyph VS Code puts on a
-               * workspace open in another window. The footer names the action
-               * once the row is highlighted, so the row only has to say where
-               * the project lives.
-               */}
-              <span className="sr-only">, </span>
-              <AppWindow
-                className="w-3.5 h-3.5 text-text-secondary shrink-0 ml-1"
-                aria-label="Open in another window"
-                data-testid="project-open-elsewhere-marker"
-              />
-            </>
-          )}
+          {/*
+           * Spoken here, in the name, on every such row: the glyph at the row's
+           * end is hidden from assistive tech, as a control inside
+           * `role="option"` has to be.
+           */}
+          {showOpenElsewhere && <span className="sr-only">, Open in another window</span>}
           {project.neverAutoSleep && (
             <>
               <span className="sr-only">, </span>
@@ -815,6 +819,44 @@ export function ProjectListItem({
          */}
         <RowStatusLine status={status} />
       </div>
+      {showOpenElsewhere && (
+        // Always shown, not only on the lit row: it is the mark that the project
+        // is open in another window. Where the row's menu offers "Go to window"
+        // it is also that action; elsewhere it is the mark alone. Presentational,
+        // like the action palette's pin, so Enter and ⌘↵ stay its keyboard route
+        // and the name above its speech.
+        <div className="shrink-0 flex items-center" aria-hidden="true">
+          {showGoToWindow ? (
+            <RowControlTooltip label="Go to window">
+              <span
+                role="presentation"
+                data-testid="project-open-elsewhere-marker"
+                // A mouse press would otherwise take focus from the search input.
+                // Touch and pen are left alone: the row's context menu arms its
+                // long-press from that same pointerdown.
+                onPointerDown={(e) => {
+                  if (e.pointerType === "mouse") e.preventDefault();
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onSelectNewWindow?.(project);
+                }}
+                className={ROW_CONTROL_CLASS}
+              >
+                <AppWindow className="w-3.5 h-3.5" aria-hidden />
+              </span>
+            </RowControlTooltip>
+          ) : (
+            <span
+              data-testid="project-open-elsewhere-mark"
+              className="inline-flex size-6 items-center justify-center text-text-secondary"
+            >
+              <AppWindow className="w-3.5 h-3.5" aria-hidden />
+            </span>
+          )}
+        </div>
+      )}
       {/* Not under the "Current project" band header: it already names this
           row, and a label beside it would say it twice. */}
       {project.isActive && showCurrentLabel && <CurrentLabel />}
@@ -853,6 +895,9 @@ export function ProjectListItem({
             {newWindowLabel}
           </ContextMenuItem>
         )}
+        {/* With the other ways to open it, so the menu still ends on its
+            destructive items rather than a submenu beside Remove. */}
+        {!project.isMissing && <OpenOnHostSubmenu projectId={project.id} />}
         {onTogglePinProject && (
           <ContextMenuItem onSelect={() => onTogglePinProject(project.id)}>
             {project.isPinned ? (
@@ -951,7 +996,6 @@ export function ProjectListItem({
             </ContextMenuItem>
           </>
         )}
-        {!project.isMissing && <OpenOnHostSubmenu projectId={project.id} />}
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -1043,8 +1087,10 @@ export function ScratchListItem({
               text={scratch.name}
               indices={queryMatchIndices(scratch.name, highlightQuery)}
             />
+          </span>{" "}
+          <span className="text-2xs leading-tight text-text-secondary shrink-0">
+            <FactSeparator /> Scratch
           </span>
-          <span className="text-2xs leading-tight text-text-secondary shrink-0">· Scratch</span>
           {scratch.isActive && <span className="sr-only">, current</span>}
           {showResumeDot && <ResumableAgentsLabel count={scratch.resumableAgentCount ?? 0} />}
         </div>

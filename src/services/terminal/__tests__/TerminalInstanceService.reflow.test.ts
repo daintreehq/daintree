@@ -662,10 +662,10 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(managed.lastReflowAt).toBe(0);
   });
 
-  it("forced resetRenderer never reflows a live alt-screen pane or re-arms its breaker", () => {
+  it("forced resetRenderer gives a stale alt-screen pane its size and re-arms its breaker (#16359)", () => {
     const managed = makeManaged();
-    const { resize } = makeDivergedPane(managed, { cols: 120, rows: 40 });
-    managed.pendingWrites = 2;
+    const { resize, scrollToBottom } = makeDivergedPane(managed, { cols: 120, rows: 40 });
+    managed.lastWriteAt = Date.now();
     managed.isAltBuffer = true;
     managed.geometryRepairAttempts = 5;
     managed.geometryRepairGaveUp = true;
@@ -675,14 +675,36 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
     service.resetRenderer("t1", { force: true });
 
-    // End-to-end through the action's entry point: a full-screen TUI's frame is
-    // never mangled out from under its own SIGWINCH redraw (#10805), and the
-    // alt-buffer "success" (measurable, but no geometry touched) is not
-    // evidence of convergence, so the breaker stays latched.
-    expect(resize).not.toHaveBeenCalled();
+    // End-to-end through the action's entry point: a full-screen TUI that
+    // never stops writing still gets both grids moved together, and the
+    // demonstrated convergence clears a latch that would otherwise bar the
+    // watchdog from this pane.
+    expect(resize).toHaveBeenCalledWith(120, 40);
+    expect(terminalClient.resize).toHaveBeenCalledWith("t1", 120, 40);
     expect(fit).not.toHaveBeenCalled();
-    expect(managed.geometryRepairGaveUp).toBe(true);
-    expect(managed.geometryRepairAttempts).toBe(5);
+    expect(scrollToBottom).not.toHaveBeenCalled();
+    expect(managed.geometryRepairGaveUp).toBe(false);
+    expect(managed.geometryRepairAttempts).toBe(0);
+  });
+
+  it("forced resetRenderer leaves an alt-screen frame alone mid synchronized block and hands it on", () => {
+    const managed = makeManaged();
+    const { resize } = makeDivergedPane(managed, { cols: 120, rows: 40 });
+    managed.isAltBuffer = true;
+    (managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }).modes = {
+      synchronizedOutputMode: true,
+    };
+    service.instances.set("t1", managed);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+
+    service.resetRenderer("t1", { force: true });
+
+    // The app is mid-paint at the old grid; resizing now would crop a frame it
+    // has not finished. The watchdog takes the repair once the block closes.
+    expect(resize).not.toHaveBeenCalled();
+    expect(terminalClient.resize).not.toHaveBeenCalled();
+    expect(managed.revealPendingRepair).toBe(true);
+    expect(managed.revealPendingGeneration).toBe(managed.attachGeneration);
   });
 
   it("forced resetRenderer preserves a reveal obligation it did not discharge", () => {

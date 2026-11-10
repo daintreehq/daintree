@@ -205,7 +205,7 @@ export function CodeForgeTab({
                 <SettingsInlineError
                   action={
                     <Button
-                      variant="ghost"
+                      variant="outline"
                       size="xs"
                       onClick={() => setRemotesAttempt((n) => n + 1)}
                       className="-my-1 shrink-0"
@@ -245,7 +245,7 @@ export function CodeForgeTab({
                 <SettingsInlineError
                   action={
                     <Button
-                      variant="ghost"
+                      variant="outline"
                       size="xs"
                       onClick={() => setProvidersAttempt((n) => n + 1)}
                       className="-my-1 shrink-0"

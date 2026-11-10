@@ -774,7 +774,10 @@ describe("FileBrowserPane collapsible sidebar (#11328)", () => {
 
     const vPad = (el: Element) => classToken(el, (c) => /^py-/.test(c));
     const borderColor = (el: Element) =>
-      classToken(el, (c) => c === "border-overlay" || c === "border-border-default");
+      classToken(
+        el,
+        (c) => c === "border-divider" || c === "border-overlay" || c === "border-border-default"
+      );
     const iconSize = (el: Element) => classToken(el.querySelector("svg")!, (c) => /^h-/.test(c));
 
     // Guard against a vacuous undefined === undefined pass.

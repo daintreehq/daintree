@@ -4,7 +4,7 @@
       "target_name": "mac_phys_footprint",
       "conditions": [
         ["OS==\"mac\"", {
-          "sources": [ "src/mac_phys_footprint.cc" ],
+          "sources": [ "src/mac_phys_footprint.cc", "src/dataless_policy.cc" ],
           "include_dirs": [
             "<!@(node -p \"require('node-addon-api').include\")"
           ],

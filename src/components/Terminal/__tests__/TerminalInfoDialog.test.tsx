@@ -68,7 +68,6 @@ function makePayload(overrides?: Partial<TerminalInfoPayload>): TerminalInfoPayl
     lastInputTime: Date.now() - 5000,
     lastOutputTime: Date.now() - 3000,
     activityTier: "focused",
-    outputBufferSize: 100,
     semanticBufferLines: 10,
     restartCount: 0,
     hasPty: true,
@@ -320,7 +319,24 @@ describe("TerminalInfoDialog", () => {
       expect(text).toContain("Shell PID: 12345");
       expect(text).toContain("TTY device: /dev/ttys004");
       expect(text).toContain("Dimensions: 80 × 24");
-      expect(text).toContain("Output buffer: 100 lines");
+    });
+
+    // #16426: the old figure was a character count capped at 2,000, labelled as lines.
+    it("reports nothing about an output buffer, on screen or in the copy", async () => {
+      // A host on an older build still answers with the field.
+      dispatchMock.mockResolvedValue({
+        ok: true,
+        result: { ...makePayload(), outputBufferSize: 2000 },
+      });
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
+      for (const toggle of screen.getAllByRole("button", { expanded: false })) {
+        fireEvent.click(toggle);
+      }
+
+      expect(await screen.findByText("Semantic buffer")).toBeTruthy();
+      expect(screen.queryByText("Output buffer")).toBeNull();
+      expect(await copyPayload()).not.toContain("Output buffer");
     });
 
     it("carries the panel-store facts when the live read failed", async () => {

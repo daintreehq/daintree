@@ -2331,7 +2331,9 @@ describe("CanopyService", () => {
   it("says a failed read in the user's words, never a stage or an internal message", () => {
     const said = (message: string, transient = false) =>
       failureMessage(new CanopyProviderError("classifier", message, transient));
-    expect(said("model not downloaded", true)).toBe("Canopy's model isn't downloaded yet.");
+    expect(said("model not available")).toBe(
+      "Canopy's model is missing or damaged. Reinstalling Daintree puts it back."
+    );
     expect(said("the model stopped", true)).toBe(
       "Canopy's model stopped running. Turn Canopy off and on to try again."
     );

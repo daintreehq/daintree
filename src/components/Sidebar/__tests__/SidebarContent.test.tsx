@@ -426,7 +426,7 @@ describe("Worktrees sidebar control zone — issue #11991", () => {
     // contents jump as a project resolves or the workspace kind changes. One
     // shared row with a fixed height — not padding around whatever sits in it —
     // is what holds them together.
-    expect(headerRow).toMatch(/(?:^|\s)h-\d+(?:\s|$)/);
+    expect(headerRow).toMatch(/(?:^|\s)h-\d+(?:\.5)?(?:\s|$)/);
     expect(headerRow).not.toMatch(/\bpy-/);
 
     // The loading branch takes the bare row (its shells below own the rule),
@@ -526,6 +526,12 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       expect(emptyIdx).toBeGreaterThan(0);
       expect(emptyIdx).toBeLessThan(listIdx);
       expect(source.match(/<SidebarListEmptyState\b/g) ?? []).toHaveLength(1);
+    });
+
+    it("tells the resolver how many deleted-worktree rows the list will show", () => {
+      expect(source).toMatch(
+        /resolveSidebarListEmpty\(\{[\s\S]*?deletedRowCount: deletedWorktrees\.size,/
+      );
     });
 
     it("hands focus to the search field before each recovery action unmounts its button", () => {
@@ -857,6 +863,20 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     expect(source).toContain(
       "const isProjectDisconnected = currentProject !== null && !isInitialized;"
     );
+  });
+
+  it("says it's waiting, without Retry or the nudge, when .git hasn't downloaded", () => {
+    const start = source.indexOf("if (worktrees.length === 0 && gitWaitsForDownload) {");
+    // Ahead of the skeleton too, which would otherwise hide what's already known.
+    const end = source.indexOf("if (showSkeleton && worktrees.length === 0)");
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const branch = source.slice(start, end);
+
+    expect(branch).toContain("title={WAITING_FOR_DOWNLOAD_LABEL}");
+    expect(branch).toContain("{errorBanner}");
+    expect(branch).not.toContain("{worktreeLoadErrorBanner}");
+    expect(branch).not.toContain("Open a Git repository");
   });
 
   it("never offers the Open a Git repository nudge to a disconnected project", () => {

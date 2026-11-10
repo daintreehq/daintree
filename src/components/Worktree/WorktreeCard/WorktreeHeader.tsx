@@ -370,14 +370,12 @@ export function WorktreeHeader({
                       ? [worktree.name]
                       : []
               }
-              isActive={isActive}
               isMuted={isMuted}
             />
           ) : quietHeadlineTitle ? (
             <CustomTitleHeadline
               title={quietHeadlineTitle}
               displaced={quietDisplaced}
-              isActive={isActive}
               isMuted={isMuted}
             />
           ) : hasDisplayTitle ? (
@@ -391,7 +389,6 @@ export function WorktreeHeader({
             <CustomTitleHeadline
               title={headlineTitleText}
               displaced={[]}
-              isActive={isActive}
               isMuted={isMuted}
               testId="worktree-headline-title"
             />
@@ -399,7 +396,6 @@ export function WorktreeHeader({
             <CustomTitleHeadline
               title={worktree.name}
               displaced={[branchLabel]}
-              isActive={isActive}
               isMuted={isMuted}
             />
           ) : isMainStandardLayout ? (
@@ -407,16 +403,19 @@ export function WorktreeHeader({
               <span
                 className={cn(
                   "truncate text-sm leading-[inherit] transition-colors duration-150",
-                  isActive
-                    ? "text-text-primary font-medium"
-                    : isMuted
-                      ? // Muted, not unreadable. This is the card's headline —
-                        // the only thing naming which worktree it is — and
-                        // `text-text-muted` has no dark contrast floor in this
-                        // cohort (2.22:1 on namib). The de-emphasis comes off
-                        // the weight instead, which costs nothing legible.
-                        "text-text-secondary font-normal"
-                      : "text-text-secondary font-medium"
+                  isMuted
+                    ? // Muted, not unreadable. This is the card's headline —
+                      // the only thing naming which worktree it is — and
+                      // `text-text-muted` has no dark contrast floor in this
+                      // cohort (2.22:1 on namib). The de-emphasis comes off
+                      // the weight instead, which costs nothing legible.
+                      "text-text-secondary font-normal"
+                    : // A live card's name leads its card in primary ink,
+                      // selected or not: in secondary it was dimmer than the
+                      // host names under the list and the summary lines in its
+                      // own card. The selected card is told apart by its fill
+                      // and its edge.
+                      "text-text-primary font-medium"
                 )}
                 data-testid="primary-worktree-project-name"
               >
@@ -424,7 +423,7 @@ export function WorktreeHeader({
               </span>
             </TruncatedTooltip>
           ) : (
-            <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
+            <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} headline />
           )}
           {/* A collapsed card has no stack for the PR reference to sit in, and
               the collapsed alarm pill has no word for a head that moved under
@@ -763,13 +762,11 @@ export function WorktreeHeader({
 function CustomTitleHeadline({
   title,
   displaced,
-  isActive,
   isMuted,
   testId = "worktree-custom-title",
 }: {
   title: string;
   displaced: string[];
-  isActive: boolean;
   isMuted?: boolean;
   testId?: string;
 }) {
@@ -777,11 +774,7 @@ function CustomTitleHeadline({
     <span
       className={cn(
         "truncate text-sm leading-[inherit] transition-colors duration-150",
-        isActive
-          ? "text-text-primary font-medium"
-          : isMuted
-            ? "text-text-secondary font-normal"
-            : "text-text-secondary font-medium"
+        isMuted ? "text-text-secondary font-normal" : "text-text-primary font-medium"
       )}
       data-testid={testId}
     >

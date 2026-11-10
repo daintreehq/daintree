@@ -7,6 +7,7 @@ import {
   classifySessionMeta,
   findPaneCodexProcess,
   isCodexExecutable,
+  observeCodexRollout,
   parseCensus,
   parseLsofFields,
   probeCodexSessionFile,
@@ -15,6 +16,7 @@ import {
   type ListingResult,
   type ListingRunner,
 } from "../CodexSessionFileProbe.js";
+import { readCodexContextUsage } from "../CodexRolloutReader.js";
 
 const ROOT_ID = "01a19a09-d462-7101-a841-24b57d849008";
 const CHILD_ID = "02b29b19-e573-7212-b952-35c68e95a119";
@@ -98,7 +100,7 @@ async function lsofFor(files: OpenFile[]): Promise<string> {
   for (const [pid, held] of byPid) {
     lines.push(`p${pid}`);
     for (const file of held) {
-      const stats = await stat(file.name).catch(() => null);
+      const stats = await stat(file.name, { bigint: true }).catch(() => null);
       const device = file.device ?? `0x${(stats?.dev ?? 0).toString(16)}`;
       const inode = file.inode ?? String(stats?.ino ?? 0);
       lines.push(`f${file.fd}`, `a${file.access}`, `t${file.type ?? "REG"}`, `D${device}`);
@@ -255,6 +257,57 @@ describe("classifySessionMeta", () => {
     expect(classifySessionMeta(sessionMeta(OTHER_ROOT_ID), ROOT_ID)).toBe("invalid");
     expect(classifySessionMeta(JSON.stringify({ type: "response_item" }), ROOT_ID)).toBe("invalid");
     expect(classifySessionMeta("{not json", ROOT_ID)).toBe("invalid");
+  });
+});
+
+describe("observeCodexRollout (#16408)", () => {
+  it("hands over the identity lsof listed, which opens the same rollout for reading", async () => {
+    const count = JSON.stringify({
+      timestamp: "2026-11-02T04:20:00.000Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: {
+            input_tokens: 9_000,
+            cached_input_tokens: 8_000,
+            cache_write_input_tokens: 0,
+            output_tokens: 40,
+            reasoning_output_tokens: 0,
+            total_tokens: 9_040,
+          },
+          model_context_window: 475_000,
+        },
+      },
+    });
+    const file = await writeRollout(ROOT_ID, sessionMeta(ROOT_ID), { rest: `${count}\n` });
+    const stats = await stat(file, { bigint: true });
+    const run = runner(await lsofFor([{ fd: "37", access: "w", name: file }]));
+
+    const observed = await observeCodexRollout(100, { platform: "darwin", run });
+
+    expect(observed).toEqual({
+      status: "observed",
+      sessionId: ROOT_ID,
+      path: file,
+      device: `0x${stats.dev.toString(16)}`,
+      inode: stats.ino.toString(),
+    });
+    if (observed.status !== "observed") return;
+    expect(await readCodexContextUsage(observed)).toMatchObject({
+      status: "ok",
+      contextTokens: 9_040,
+      contextWindow: 475_000,
+    });
+  });
+
+  it("answers unknown with the same reasons the session-file probe gives", async () => {
+    const run = runner(await lsofFor([]));
+
+    expect(await observeCodexRollout(100, { platform: "darwin", run })).toEqual({
+      status: "unknown",
+      reason: "not-observed",
+    });
   });
 });
 

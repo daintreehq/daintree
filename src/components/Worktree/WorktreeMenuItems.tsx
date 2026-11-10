@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import type * as React from "react";
 import type { WorktreeState } from "../../types";
 import type { WorktreeAttachment } from "@shared/types/worktree";
+import { WAITING_FOR_DOWNLOAD_LABEL } from "@/utils/onlineOnlyFilesCopy";
 import {
   ContextMenuItem,
   ContextMenuLabel,
@@ -526,7 +527,9 @@ export function WorktreeMenuItems({
   const reviewSub = reviewRows.length > 0 && (
     <C.Sub key="review">
       <C.SubTrigger>
-        <GitCommitHorizontal className={ICON} />
+        {/* The commit glyph belongs to the direct "Review worktree" row a few
+            rows up; this submenu holds the diff views, so it wears theirs. */}
+        <FileDiff className={ICON} />
         Review
       </C.SubTrigger>
       <C.SubContent>{reviewRows}</C.SubContent>
@@ -599,7 +602,11 @@ export function WorktreeMenuItems({
     : worktree?.isDetached
       ? "No branch checked out"
       : isStatusUnknown
-        ? "Checking status…"
+        ? worktree?.gitStatusWaitingForDownload
+          ? WAITING_FOR_DOWNLOAD_LABEL
+          : worktree?.gitStatusUnanswered
+            ? "Git status not answered"
+            : "Checking status…"
         : hasUncommittedChanges
           ? "Commit or stash first"
           : baseBehind === 0
@@ -631,7 +638,7 @@ export function WorktreeMenuItems({
             aria-label={canPullRebase ? "Pull and rebase" : "Pull and rebase, no upstream"}
           >
             <ArrowDown className={ICON} />
-            Pull and rebase
+            Pull and rebase…
             {!canPullRebase && <C.Meta>No upstream</C.Meta>}
           </C.Item>
         ),
@@ -643,7 +650,7 @@ export function WorktreeMenuItems({
             aria-label={nothingToPush ? "Push, nothing to push" : "Push"}
           >
             <ArrowUp className={ICON} />
-            Push
+            Push…
             {nothingToPush && <C.Meta>Nothing to push</C.Meta>}
           </C.Item>
         ),
@@ -745,13 +752,13 @@ export function WorktreeMenuItems({
 
   // -------------------------------------------------------------- Sessions
   // The `worktree.sessions.*` actions and fleet selection resolve a worktree id
-  // and silently no-op without one, so a workspace root gets no Sessions group
+  // and silently no-op without one, so a workspace root gets no Panels group
   // rather than a submenu of rows that report doing something and don't.
   const sessionsSub = worktree && counts && (
     <C.Sub key="sessions">
       <C.SubTrigger>
         <Layers className={ICON} />
-        Sessions
+        Panels
       </C.SubTrigger>
       <C.SubContent>
         {counts.active > 0 && (
@@ -848,7 +855,7 @@ export function WorktreeMenuItems({
         {(counts.active > 0 || counts.all > 0) && <C.Separator />}
 
         {/* Deletion, not repair: clearing history destroys journal records
-            permanently, so it sits with the destructive End all rather than
+            permanently, so it sits with the destructive Remove all rather than
             beside renderer maintenance. No count — availability isn't cached, and
             opening a menu must not go and read the journal to find out. */}
         <C.Item destructive onSelect={onClearHistory}>
@@ -858,20 +865,20 @@ export function WorktreeMenuItems({
         <C.Item
           onSelect={onCloseAll}
           disabled={counts.active === 0}
-          {...counted("Trash all sessions", counts.active)}
+          {...counted("Trash all panels", counts.active)}
         >
           <Trash2 className={ICON} />
-          Trash all sessions…
+          Trash all panels…
           <C.Meta>{counts.active}</C.Meta>
         </C.Item>
         <C.Item
           destructive
           onSelect={onTerminateAll}
           disabled={counts.active === 0}
-          {...counted("End all sessions", counts.active)}
+          {...counted("Remove all panels", counts.active)}
         >
           <OctagonX className={ICON} />
-          End all sessions…
+          Remove all panels…
           <C.Meta>{counts.active}</C.Meta>
         </C.Item>
       </C.SubContent>
@@ -1386,7 +1393,7 @@ export function WorktreeMenuItems({
     onOpenPanelPalette && (
       <C.Item key="new-session" onSelect={() => onOpenPanelPalette(source)}>
         <Plus className={ICON} />
-        New session…
+        New panel…
       </C.Item>
     ),
     worktree && onOpenReviewHub && (

@@ -2,8 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Project } from "@shared/types";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import { isLocalHostId, type HostId } from "@shared/types/remoteHosts";
-import { ALL_HOSTS_ID, useCanopyStore, type CanopyScope } from "@/store/canopyStore";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { ALL_HOSTS_ID, useCanopyStore } from "@/store/canopyStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { pluralize } from "@/lib/pluralize";
@@ -11,7 +10,8 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useAgentDirectory } from "@/hooks/useAgentDirectory";
 import { useAssistantWork } from "@/hooks/useAssistantWork";
 import type { HostMenuRow } from "@/components/Hosts/hostModel";
-import { unmatchedTerms, type CanopyInbox, type CanopyItem } from "./canopyModel";
+import type { CanopyInbox, CanopyItem } from "./canopyModel";
+import { unmatchedAlternatives, type CanopySearchAlternatives } from "./canopySearch";
 import {
   assistantMatches,
   buildAssistantItems,
@@ -52,9 +52,6 @@ export function useCanopyInboxFilters({
   hasHostPicker,
   participants,
   projects,
-  storedScope,
-  scope,
-  setScope,
   api,
   recoveries,
   fleet,
@@ -62,7 +59,7 @@ export function useCanopyInboxFilters({
   band,
   query,
   appliedQuery,
-  terms,
+  alternatives,
   searching,
   searchKey,
   screenAsk,
@@ -81,9 +78,6 @@ export function useCanopyInboxFilters({
   hasHostPicker: boolean;
   participants: readonly HostId[];
   projects: Project[];
-  storedScope: CanopyScope;
-  scope: CanopyScope;
-  setScope: (scope: CanopyScope) => void;
   api: CanopyApi;
   recoveries: number;
   fleet: FleetSnapshot | null;
@@ -92,7 +86,7 @@ export function useCanopyInboxFilters({
   band: ReadonlySet<string>;
   query: string;
   appliedQuery: string;
-  terms: string[];
+  alternatives: CanopySearchAlternatives;
   searching: boolean;
   searchKey: string;
   screenAsk: string | null;
@@ -125,11 +119,10 @@ export function useCanopyInboxFilters({
       projectEmoji: (id) => byId.get(id)?.emoji || null,
       hostName: ownHostName,
       seen: handbacksSeen,
-      projectId: scope === "project" ? getViewWorkspaceId() : null,
     });
-  }, [assistantsReadable, directory, projects, ownHostName, handbacksSeen, scope]);
+  }, [assistantsReadable, directory, projects, ownHostName, handbacksSeen]);
   const assistantAsks = assistantItems.filter((item) => item.ask !== null).length;
-  // Its row, whatever the list shows: no filter, scope or host hides the dock.
+  // Its row, whatever the list shows: no filter or host hides the dock.
   const globalItem = useMemo(() => {
     if (!assistantsReadable) {
       return (
@@ -180,9 +173,9 @@ export function useCanopyInboxFilters({
         : workOf !== null
           ? assistantItems.filter((item) => item.id === workOf.assistantId)
           : searching
-            ? assistantItems.filter((item) => assistantMatches(item, terms))
+            ? assistantItems.filter((item) => assistantMatches(item, alternatives))
             : assistantItems,
-    [assistantsShown, workOf, searching, assistantItems, terms]
+    [assistantsShown, workOf, searching, assistantItems, alternatives]
   );
   const showWork = (item: CanopyAssistantItem) => {
     if (workOf?.assistantId === item.id) {
@@ -195,7 +188,6 @@ export function useCanopyInboxFilters({
     useAnnouncerStore.getState().announce(`Showing the work of ${name}`, "polite");
     // Its workers can be anywhere it reaches: every project, and every host when there are others.
     if (roleFilter === "assistants") setRoleFilter("all");
-    if (storedScope === "project") setScope("all");
     if (!everyHost && hasHostPicker) useCanopyStore.getState().setHostId(ALL_HOSTS_ID);
   };
   const inWork = useCallback(
@@ -210,19 +202,19 @@ export function useCanopyInboxFilters({
       inWork(item) &&
       (!searching ||
         onScreen?.has(item.runId) === true ||
-        unmatchedTerms(item, terms).length === 0);
+        unmatchedAlternatives(item, alternatives) === null);
     return { inbox: inbox.inbox.filter(matches), archived: inbox.archived.filter(matches) };
-  }, [inbox, workersShown, searching, onScreen, terms, workOf, inWork]);
+  }, [inbox, workersShown, searching, onScreen, alternatives, workOf, inWork]);
   const unreadOnly = useCanopyStore((s) => s.unreadOnly);
   const setUnreadOnly = useCanopyStore((s) => s.setUnreadOnly);
   // A run read while the Unread filter is on stays listed until the filter is
-  // turned off — or the panel closes, or shows another scope: reading the row
+  // turned off — or the panel closes, or shows another host: reading the row
   // in front of you must not pull it out from under you, nor shift every row
   // beneath it, but a fresh look starts from what is unread now.
   const [keptUnread, setKeptUnread] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => {
     setKeptUnread((kept) => (kept.size === 0 ? kept : new Set()));
-  }, [isOpen, scope, hostId]);
+  }, [isOpen, hostId]);
   useEffect(() => {
     setKeptUnread((kept) => {
       if (!unreadOnly) return kept.size === 0 ? kept : new Set();

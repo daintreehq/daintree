@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { CloudSyncService } from "@/utils/cloudSyncDetection";
+import type { CloudSyncService } from "@shared/utils/cloudSyncDetection";
 
 interface CloudSyncBannerState {
   service: CloudSyncService | null;

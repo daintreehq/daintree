@@ -4,6 +4,7 @@ import type { DraggableSyntheticListeners } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { cn } from "@/lib/utils";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
 import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -50,11 +51,7 @@ import {
 } from "./dockChipStyles";
 import { useDockPopoverResize } from "./useDockPopoverResize";
 import { DockPopoverResizeHandle } from "./DockPopoverResizeHandle";
-import {
-  getDockDisplayAgentState,
-  isDockAgentStateDeprioritized,
-  useDockBlockedState,
-} from "./useDockBlockedState";
+import { getDockDisplayAgentState, useDockBlockedState } from "./useDockBlockedState";
 import { getDockDisplayActivityState, useTransientDockFinishedCue } from "./useDockActivityState";
 import {
   handleDockInteractOutside,
@@ -398,7 +395,16 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
     isReinterpreted && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
   const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
   const pluginActive = pluginActivity?.shown === "working" || pluginActivity?.shown === "waiting";
-  const isDeprioritized = !isOpen && !pluginActive && isDockAgentStateDeprioritized(agentState);
+  // An agent rests by what its chip draws: a wait the band chose not to draw is
+  // no more live on the rail than an idle one.
+  const drawnState = displayAgentState ? shownAgentState : agentState;
+  const isDeprioritized =
+    !isOpen &&
+    !pluginActive &&
+    (drawnState === undefined ||
+      drawnState === "idle" ||
+      drawnState === "completed" ||
+      drawnState === "exited");
 
   // Re-fit the terminal once a resize gesture settles on a new popover height.
   const {
@@ -433,6 +439,10 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
                 onBlur={() => titleTip.onOpenChange(false)}
                 {...dragPointerListeners}
                 data-dock-item=""
+                // Read by the rail to say which edge a scrolled-off ask is past.
+                data-dock-attention={
+                  isWaiting || pluginActivity?.shown === "waiting" ? "" : undefined
+                }
                 className={cn(
                   DOCK_CHIP_CLASS,
                   isOpen && DOCK_CHIP_OPEN_CLASS,
@@ -458,7 +468,7 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${fullTitle}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : plainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${fullTitle}${displayAgentState ? (stateLabel ? (shownAgentState ? ` — agent ${stateLabel}` : ` — observed: agent ${stateLabel}`) : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : plainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
@@ -526,13 +536,27 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
                       </div>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
-                      {stateLabel
-                        ? isReinterpreted
-                          ? `Agent ${stateLabel} · Observed: ${observedStateLabel}`
-                          : `Agent ${stateLabel}`
-                        : "No agent state observed"}
+                      {stateLabel ? (
+                        isReinterpreted ? (
+                          <>
+                            Agent {stateLabel} <FactSeparator /> Observed: {observedStateLabel}
+                          </>
+                        ) : (
+                          `Agent ${stateLabel}`
+                        )
+                      ) : (
+                        "No agent state observed"
+                      )}
                     </TooltipContent>
                   </Tooltip>
+                )}
+                {/* An agent the band draws no glyph for keeps the glyph's room,
+                    so the chips after it don't shift as its state comes and goes. */}
+                {displayAgentState && !shownAgentState && (
+                  <span
+                    aria-hidden="true"
+                    className={cn("ml-1.5 shrink-0", DOCK_STATE_GLYPH_CLASS)}
+                  />
                 )}
               </button>
             </PopoverTrigger>
@@ -541,7 +565,7 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
 
         <PopoverContent
           aria-label={`Preview: ${fullTitle}`}
-          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-surface-canvas/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
           style={{ height: popoverHeight }}
           side="top"
           align="start"

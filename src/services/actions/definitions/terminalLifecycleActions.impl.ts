@@ -107,7 +107,7 @@ function startHeldRefusal(terminalId: string, start: "resume" | "fresh"): string
   const panel = usePanelStore.getState().panelsById[terminalId];
   if (!panel || !isPtyPanel(panel)) return `No terminal '${terminalId}' in this project.`;
   if (panel.location !== "grid" && panel.location !== "dock") {
-    return `Terminal '${terminalId}' is in the ${panel.location}; only a held pane in the grid or dock can start.`;
+    return `Terminal '${terminalId}' is in the ${panel.location}; only a held panel in the grid or dock can start.`;
   }
   // Ahead of the hold checks: a launch clears the hold before it finishes, and
   // a pane mid-start must not be sent to terminal.restart.
@@ -119,10 +119,10 @@ function startHeldRefusal(terminalId: string, start: "resume" | "fresh"): string
     return `Terminal '${terminalId}' isn't held for recovery; use terminal.restart for a running one.`;
   }
   if (recovery.awaitingDestination) {
-    return `Terminal '${terminalId}' is waiting for a worktree to run in. Move it onto one, or keep its original folder from the pane.`;
+    return `Terminal '${terminalId}' is waiting for a worktree to run in. Move it onto one, or keep its original folder from the panel.`;
   }
   if (start === "resume" && recovery.sessionId === undefined) {
-    return `Terminal '${terminalId}' was held (${recovery.reason}) with no recorded conversation to resume. Start it fresh, or leave the pane for the user to pick one.`;
+    return `Terminal '${terminalId}' was held (${recovery.reason}) with no recorded conversation to resume. Start it fresh, or leave the panel for the user to pick one.`;
   }
   return undefined;
 }
@@ -342,7 +342,7 @@ export const terminalLifecycleActionRuns = {
     );
     if (outcome === "held-elsewhere") {
       throw new UnactionableTargetError(
-        `Another pane already has conversation '${sessionId}' open, or is opening it.`
+        `Another panel already has conversation '${sessionId}' open, or is opening it.`
       );
     }
     if (outcome === "unavailable") {
@@ -633,7 +633,7 @@ export const terminalLifecycleActionRuns = {
           runningAgentCount: runningAgents.length,
           preview: buildDestructivePreview(targets),
         },
-        "Killing every terminal"
+        "Removing every panel"
       );
     }
     clearPendingIf("killAll");
@@ -649,7 +649,7 @@ export const terminalLifecycleActionRuns = {
       .map((id) => state.panelsById[id])
       .filter(
         (t): t is NonNullable<typeof t> =>
-          t != null && t.location !== "trash" && t.location !== "dialog"
+          t != null && isPtyPanel(t) && t.location !== "trash" && t.location !== "dialog"
       );
     if (targets.length === 0) return;
     const runningAgents = collectRunningAgentTerminals(targets);

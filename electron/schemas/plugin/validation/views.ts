@@ -77,6 +77,57 @@ export function validateSurfaceViews(
 
 // `surfaces.defaultLayout` → a declared layout. A dangling id would leave
 // the project's first open blank with nothing to say why.
+// `canopyViews[].viewId` → a panel view Canopy can mount, the toolbar
+// popover's dead ends: Canopy draws the view's module with no panel record,
+// so it must be one a panel draws, with no PTY behind it.
+export function validateCanopyViews(
+  manifest: ParsedPluginManifest,
+  ctx: z.RefinementCtx,
+  context: ManifestValidationContext
+): void {
+  const { viewIds, settingsViewIds, fileEditorViewIds, sidebarViewIds, ptyPanelIds } = context;
+  const seen = new Set<string>();
+  manifest.contributes.canopyViews.forEach(({ viewId }, index) => {
+    const path = ["contributes", "canopyViews", index, "viewId"];
+    if (seen.has(viewId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path,
+        message: `canopyViews names view "${viewId}" twice — Canopy lists each view once.`,
+        params: { errorCode: "canopy_view_duplicate" },
+      });
+      return;
+    }
+    seen.add(viewId);
+    if (!viewIds.has(viewId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path,
+        message: `canopyViews viewId "${viewId}" matches no contributes.views[].id.`,
+        params: { errorCode: "canopy_view_unknown" },
+      });
+    } else if (
+      settingsViewIds.has(viewId) ||
+      sidebarViewIds.has(viewId) ||
+      fileEditorViewIds.has(viewId)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path,
+        message: `canopyViews viewId "${viewId}" names a view that isn't location: "panel" — Canopy draws one of the plugin's panel views, and a settings, sidebar or file editor view renders only in its own home.`,
+        params: { errorCode: "canopy_view_not_panel" },
+      });
+    } else if (ptyPanelIds.has(viewId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path,
+        message: `canopyViews viewId "${viewId}" names a panel with hasPty: true — PTY panels are rendered by the terminal host and never load the view module, so Canopy would show nothing.`,
+        params: { errorCode: "canopy_view_pty" },
+      });
+    }
+  });
+}
+
 export function validateDefaultLayout(manifest: ParsedPluginManifest, ctx: z.RefinementCtx): void {
   const defaultLayout = manifest.contributes.surfaces.defaultLayout;
   if (

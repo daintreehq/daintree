@@ -43,6 +43,7 @@ import {
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { PathTail } from "@/components/ui/PathTail";
 import { usePreferencesStore, type DiffViewType } from "@/store/preferencesStore";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
@@ -168,13 +169,7 @@ function CrossWorktreeFileRow({
         <span className={cn("w-4 shrink-0 font-bold", status.color)} aria-hidden="true">
           {status.label}
         </span>
-        <span
-          ref={ref}
-          className={cn(
-            "min-w-0 truncate text-text-primary",
-            isSelected ? "font-semibold" : "font-medium"
-          )}
-        >
+        <span ref={ref} className="min-w-0 truncate font-medium text-text-primary">
           {basename(file.path)}
         </span>
         <DiffStat
@@ -205,9 +200,18 @@ function FileGroupSection({
     <div className="mb-1.5">
       <div className="flex items-center gap-1.5 px-1.5 py-1 text-2xs text-text-secondary">
         <Folder className="h-3 w-3 shrink-0" aria-hidden="true" />
-        <span ref={ref} className="truncate font-mono">
-          {label}
-        </span>
+        {/* Cut from its start like the file paths, so the folder the files sit
+            in survives; the whole path is disclosed whenever any of it is hidden. */}
+        <TruncatedTooltip
+          content={group.dir}
+          contentClassName="font-mono [overflow-wrap:anywhere]"
+          isTruncated={directoryHidden}
+          focusable={false}
+        >
+          <PathTail ref={ref} className="min-w-0 font-mono">
+            {label}
+          </PathTail>
+        </TruncatedTooltip>
       </div>
       <div className="flex flex-col gap-px">
         {group.files.map((file) => (
@@ -781,7 +785,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         title="Couldn't compare these worktrees"
         description={error}
         action={
-          <Button variant="subtle" size="sm" onClick={() => void fetchComparison()}>
+          <Button variant="outline" size="sm" onClick={() => void fetchComparison()}>
             <RefreshCw />
             Retry
           </Button>
@@ -813,7 +817,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         title="Couldn't load this diff"
         description={selectedFile.path}
         action={
-          <Button variant="subtle" size="sm" onClick={() => void fetchFileDiff(selectedFile)}>
+          <Button variant="outline" size="sm" onClick={() => void fetchFileDiff(selectedFile)}>
             <RefreshCw />
             Retry
           </Button>

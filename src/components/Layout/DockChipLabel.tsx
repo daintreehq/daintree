@@ -43,12 +43,12 @@ export function DockChipLabel({
 }: { title: string } & Omit<ComponentPropsWithRef<"span">, "title" | "children">) {
   const [head, tail] = splitDockChipLabel(title);
   // Spreads the rest so a TooltipTrigger (asChild) can attach its ref and
-  // pointer handlers to the label.
+  // pointer handlers to the label. No width floor: a floor pads a short title
+  // ("Codex") into a gap before the glyph. Under a long session tag or badge the
+  // head truncates first, down to the tail, so the state glyph never leaves the
+  // chip.
   return (
-    <span
-      {...rest}
-      className={cn("flex min-w-[48px] max-w-[160px] font-sans font-medium", className)}
-    >
+    <span {...rest} className={cn("flex max-w-[160px] font-sans font-medium", className)}>
       <span className="min-w-0 truncate whitespace-pre">{head}</span>
       {tail && <span className="shrink-0 whitespace-pre">{tail}</span>}
     </span>

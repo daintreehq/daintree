@@ -5,6 +5,8 @@ import { Callout } from "@/components/ui/Callout";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { GlobalAssistantTerminal } from "@/components/HelpPanel/GlobalAssistantTerminal";
+import { HelpLaunchingState } from "@/components/HelpPanel/HelpLaunchingState";
+import { refocusStartAfterCancel } from "@/components/HelpPanel/refocusStartAfterCancel";
 import { useAssistantSendFailure } from "@/components/HelpPanel/useAssistantSendFailure";
 import { useGlobalAssistant } from "@/components/HelpPanel/useGlobalAssistant";
 import { useGlobalAssistantIdentity } from "@/store/assistantIdentityStore";
@@ -52,13 +54,18 @@ export function CanopyGlobalAssistant({
   // A window bound to another host reaches that host's assistants, not this one's.
   const boundElsewhere = getViewHostId() !== null;
   const identity = useGlobalAssistantIdentity();
-  const { view, attachmentId, error, start, claimInput } = useGlobalAssistant(
+  const { view, attachmentId, error, start, claimInput, cancelLaunch } = useGlobalAssistant(
     !viewCached && !boundElsewhere,
     undefined,
     true
   );
-  const [starting, setStarting] = useState(false);
+  // The generation a Start was pressed at. A Cancel moves the generation on,
+  // so Start is offered again at once, before the stopped launch has wound down.
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const generation = view?.generation ?? 0;
+  const starting = startedAt === generation;
   const rootRef = useRef<HTMLDivElement>(null);
+  const startRef = useRef<HTMLButtonElement>(null);
 
   const subject = view?.phase === "running" ? (view.subject ?? null) : null;
   const holdsInput = attachmentId !== null && view?.inputOwner === attachmentId;
@@ -98,12 +105,20 @@ export function CanopyGlobalAssistant({
 
   const handleStart = async () => {
     if (starting) return;
-    setStarting(true);
+    const at = generation;
+    setStartedAt(at);
     try {
       await start();
     } finally {
-      setStarting(false);
+      setStartedAt((current) => (current === at ? null : current));
     }
+  };
+
+  const handleCancelLaunch = () => {
+    refocusStartAfterCancel(
+      () => cancelLaunch(generation),
+      () => startRef.current
+    );
   };
 
   const terminal =
@@ -179,6 +194,7 @@ export function CanopyGlobalAssistant({
               there is one.
             </p>
             <Button
+              ref={startRef}
               type="button"
               variant="outline"
               onClick={() => void handleStart()}
@@ -190,17 +206,18 @@ export function CanopyGlobalAssistant({
             </Button>
           </div>
         ) : view.phase === "launching" ? (
-          <p
-            role="status"
-            className="animate-pulse-delayed px-6 py-8 text-center text-xs text-text-secondary"
-          >
-            Starting the global assistant…
-          </p>
+          // Keyed by the launch, so a new one counts its wait afresh.
+          <HelpLaunchingState
+            key={view.generation}
+            phase="launching"
+            isLoading
+            onCancel={handleCancelLaunch}
+          />
         ) : terminal === null ? (
           // Running with no terminal to watch: its PTY is being brought back, or couldn't be.
           <p role="status" className="px-6 py-8 text-center text-xs text-text-secondary">
-            The global assistant's terminal isn't available. Restart it from the Assistant panel if
-            it doesn't come back.
+            The global assistant's terminal isn't available. Clear the conversation from the
+            Assistant panel if it doesn't come back.
           </p>
         ) : (
           terminal

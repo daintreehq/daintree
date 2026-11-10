@@ -4,7 +4,7 @@
 //
 // Two files because the manifest schema is origin-keyed and the two origins
 // genuinely disagree: a project plugin must declare `scope` and is refused
-// seven contribution types an installed plugin may use. One merged file would
+// eight contribution types an installed plugin may use. One merged file would
 // have to accept the union, which is the one thing neither origin does.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -37,7 +37,7 @@ const TARGETS: Target[] = [
     origin: "project",
     title: "Daintree project plugin manifest",
     intro:
-      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and seven contribution types available to installed plugins are refused here.',
+      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and eight contribution types available to installed plugins are refused here.',
   },
 ];
 
@@ -50,18 +50,24 @@ const TARGETS: Target[] = [
 const UNENCODED_RULES = [
   'A panel view\'s id must equal the id of a declared panel. A location: "settings" view is the exception: at most one per plugin, with an id no panel uses; so is a location: "fileEditor" view, with an id no panel uses. A surface\'s viewId must name a declared panel view whose panel is not a PTY panel.',
   "A toolbar button declares exactly one of actionId or popover. A popover's viewId must name a declared panel view whose panel is not a PTY panel.",
+  "A canopyViews entry's viewId must name a declared panel view whose panel is not a PTY panel, and no view may be named twice.",
   "A panel's menu may name only this plugin's own actions (written \"<plugin name>.<id>\", matching a declared command when the plugin declares commands), each at most once, and a hasPty panel may not have menu entries.",
   'A "project" database needs "scope": "project" and the "fs:project-write" capability; path applies only to a "project" database.',
   'A database query\'s sql must be one statement: for a "read" query, one SELECT, WITH or VALUES statement with no INSERT, UPDATE, DELETE or REPLACE; for a "write" query, one INSERT, REPLACE, UPDATE or DELETE statement, optionally after WITH. Its named placeholders must match its params exactly, and positional (?) placeholders are refused. Query names must be unique across all of a plugin\'s databases, may not be database_schema or database_query, and number at most 16 in all; with any tools the plugin registers, at most 16 together.',
   'A secret setting (type "secret" or secret: true) may not declare a default, since it would ship in plugin.json.',
-  'Under project scope, menuItems, agents, processTools, themes, forgeProviders and projectTemplates are refused, mcpServers are refused unless every one is named by a contributes.agentMcp[].source, and "scope": "project" is required.',
+  'Under project scope (and for an "instanceMode": "project" package), canopyViews is refused. Under project scope, menuItems, agents, processTools, themes, forgeProviders and projectTemplates are refused, mcpServers are refused unless every one is named by a contributes.agentMcp[].source, and "scope": "project" is required.',
   "An agentMcp source must name a declared mcpServers id; its tools may not repeat a name or a serverTool, may not use database_schema, database_query or a declared query name, and count toward the 16-tool budget with declared queries; on an endpoint with groups every tool names a declared group, and on one without, none does.",
   'A fileEditors entry names exactly one of slot or view. A slot is accepted only for built-in plugins and takes no mode or paths; a view must name one of the plugin\'s location: "fileEditor" views and needs a mode. Every entry declares extensions, paths or both, and paths are accepted only under "scope": "project". default is accepted only under "scope": "project", on a view-backed "mode": "edit" entry with paths, and a pattern may be the default for one entry of a plugin.',
   'A contextMenus entry may declare kind, extensions or paths only at location "file", and extensions may not be combined with kind "folder". Paths are globs relative to the worktree root.',
   'A terminalLinks entry sets exactly one of pattern or url, and its actionId must be one of this plugin\'s own actions (written "<plugin name>.<id>", matching a declared command when the plugin declares commands). A pattern must compile as a JavaScript regular expression with the u flag, match no empty text, have at most 16 capture groups, and use no backreference, lookaround or named group; a repeated group may not itself repeat or alternate, and the product of every quantifier\'s maximum (512 for an unbounded one) and every alternation\'s branch count may not exceed 1,000,000. ignoreCase applies only to a pattern. A url host must be a lowercase public domain with at least two labels: no IP address, port, path or wildcard, and nothing loopback, private or local-only. A pathPrefix starts with "/" and has no query, fragment or dot segments.',
   "The reserved daintree.* publisher namespace is accepted only for built-in plugins.",
   "A command id may not collide with a built-in action id, and some built-in ids refuse plugin dispatch outright.",
-  "An agent's session-id resume must use {sessionId} exactly once across its args, and nowhere else; a project-scoped resume's args may not contain it. A sessionIdPattern must compile as a JavaScript regular expression with exactly one capture group.",
+  "An agent's session-id resume must use {sessionId} exactly once across its args, and exactly once across its assignSessionIdArgs when it declares them, and nowhere else; a project-scoped resume's args may not contain it. A sessionIdPattern must compile as a JavaScript regular expression with exactly one capture group.",
+  "An agent's assignSessionIdArgs start with an option, and each entry is an option, --option={sessionId}, or {sessionId} on its own.",
+  "An agent's permissionBypassArgs are options, each followed by at most one value, with no whitespace, {sessionId} or ${…} template in any token; none of those options (taken with its value) may appear in that agent's args, resume args, assignSessionIdArgs, resumeLatestArgs or initialPromptForm args.",
+  "An agent's nativePaths each start at ~/, /, %USERPROFILE%\\, %APPDATA%\\, %LOCALAPPDATA%\\, %ProgramFiles%\\, %ProgramFiles(x86)%\\ or %ProgramData%\\, keep to one kind of separator and to letters, digits, spaces and . _ + @ ( ) - with no . or .. segment and no name ending in a dot or a space, and end in the agent's own command, optionally with .cmd, .exe, .bat or .com unless the command already ends in one of those or .ps1. Its packages name npm, pypi or both. nativePaths and packages are refused beside a ./ command, and packages beside a command ending in one of those suffixes or .ps1.",
+  "Each initialPromptForm mode's args must contain {prompt} exactly once as a whole arg and nowhere else, and may not carry control characters, {sessionId} or a ${…} template. A subcommand's name and replaces are single words starting with a letter or digit. Beside a launchMcp format that adds flags, neither mode's args may contain --.",
+  "An agent's executableNames may not repeat a name, carry an executable or script extension, or name a launcher (a shell, a prefix runner such as env or sudo, a version-manager shim such as mise or direnv, a runtime or package manager such as node, npx or uvx, or exec, dlx or x); none may belong to a built-in agent or tool, and no two agents in one manifest may claim the same name.",
   "assistantKnowledge needs contributes.agentMcp or contributes.databases, must declare instructions, skills or references, and its skill and reference ids must each be unique.",
   "A tour's panelKind must name a declared panel; its chapter ids must be unique; every cue and caption must fall inside its chapter's duration; and a remote chapter audioUrl must be https on a host listed in that tour's audioHosts.",
   "A command's resultSchema must compile as JSON Schema 2020-12 (or draft-07, when its $schema says so) with every reference resolving inside it and no $async; the command is refused when it registers otherwise.",

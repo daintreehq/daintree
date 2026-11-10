@@ -7,12 +7,18 @@ import type {
   ProjectSleepResult,
   ProjectCreationIdentity,
 } from "@shared/types";
+import { isAwaitingClone } from "@shared/types/project";
+import { reloadView } from "@/utils/reloadView";
 import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
+import type { ProjectCloneStartRequest } from "@shared/types/ipc/projectClone";
 import { projectClient, worktreeClient } from "@/clients";
 import type { NonGitFolderStep } from "@/components/Project/NonGitFolderDialog";
 import { notify } from "@/lib/notify";
 import { notifyPluginWorkStopped } from "@/lib/pluginWorkStoppedNotice";
-import { setProjectPathIndexAccessor } from "@/store/storeAccessors";
+import {
+  setCurrentProjectAwaitingCloneAccessor,
+  setProjectPathIndexAccessor,
+} from "@/store/storeAccessors";
 import { actionService } from "@/services/ActionService";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
@@ -31,9 +37,12 @@ import { clientErrorCode, isClientAppError } from "@/utils/clientAppError";
 import { cancelMemoryPressureHold, PROJECT_OPEN_HOLD_KEY } from "@/store/memoryPressureWaitStore";
 import { holdProjectOpenForMemoryPressure } from "@/services/projectOpenMemoryHold";
 import {
+  getProjectHeldRecovery,
   getProjectOpenFailure,
   PROJECT_OPEN_RECOVERY_LABELS,
+  SHOW_IN_OTHER_WINDOW_LABEL,
 } from "@shared/utils/projectOpenErrors";
+import type { NotificationAction } from "./notificationStore";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
 import {
   clearPanelStoreForSwitchThroughAccessor,
@@ -349,6 +358,8 @@ interface ProjectState {
       entryPoint?: ProjectSwitchEntryPoint;
       /** Open even at critical memory pressure — the user's "Open anyway" (#13530). */
       ignoreMemoryPressure?: boolean;
+      /** Go to the project in the window keeping it cached, as the person chose (#16724). */
+      showInOtherWindow?: boolean;
     }
   ) => Promise<void>;
   setWorktreeLoadError: (error: string | null) => void;
@@ -377,7 +388,11 @@ interface ProjectState {
   dropToNoProject: () => void;
   reopenProject: (
     projectId: string,
-    options?: { entryPoint?: ProjectSwitchEntryPoint; ignoreMemoryPressure?: boolean }
+    options?: {
+      entryPoint?: ProjectSwitchEntryPoint;
+      ignoreMemoryPressure?: boolean;
+      showInOtherWindow?: boolean;
+    }
   ) => Promise<void>;
   checkMissingProjects: () => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
@@ -408,6 +423,15 @@ interface ProjectState {
     clonedPath: string,
     identity?: ProjectCreationIdentity,
     options?: { disposition?: ProjectOpenDisposition; groupId?: string }
+  ) => Promise<void>;
+  /**
+   * Register the project and clone it in the background (#16352), then close
+   * the dialog and open the project, which shows the clone in progress. Throws
+   * only when the clone couldn't start, so the dialog can show why.
+   */
+  startBackgroundClone: (
+    request: ProjectCloneStartRequest,
+    options?: { disposition?: ProjectOpenDisposition }
   ) => Promise<void>;
 }
 
@@ -704,6 +728,12 @@ export function getProjectOpenErrorMessage(error: unknown, directoryPath?: strin
     if (error.code === "NOT_A_GIT_REPO") {
       return "The selected directory is not a Git repository.";
     }
+    // The folder table's copy for this code is the fallback for a folder that
+    // didn't respond; an error main worded itself is about something else, and
+    // says so (#16724).
+    if (error.code === "PROJECT_OPEN_FAILED" && error.userMessage?.trim()) {
+      return error.userMessage;
+    }
     const failure = getProjectOpenFailure(error.code, directoryPath);
     if (failure) return failure.message;
     // Main-authored copy, e.g. a switch the paint gate cancelled (#13035) —
@@ -803,11 +833,40 @@ function holdTransitionForMemoryPressure(
 }
 
 /**
+ * The one recovery a failed switch or reopen offers. Another window keeping
+ * the project with a hold that lasts (#16724) can't be waited out, so the
+ * person is offered that window instead, never a retry; where this machine
+ * can't bring that window to the project, the copy says where it is and
+ * nothing is offered.
+ */
+function transitionRecoveryActions(
+  error: unknown,
+  retry: () => void,
+  showInOtherWindow: () => void
+): NotificationAction[] {
+  const held = isClientAppError(error) && error.code === "PROJECT_HELD_ELSEWHERE";
+  const details =
+    held && error.details?.code === "PROJECT_HELD_ELSEWHERE" ? error.details : undefined;
+  switch (held ? getProjectHeldRecovery(details) : "retry") {
+    case "show-in-other-window":
+      return [
+        { label: SHOW_IN_OTHER_WINDOW_LABEL, variant: "primary", onClick: showInOtherWindow },
+      ];
+    case "none":
+      return [];
+    case "retry":
+      return [{ label: "Try again", variant: "primary", onClick: retry }];
+  }
+}
+
+/**
  * Hand a registered project to main to open in a new window (#12594). Main
  * picks the window: an empty one other than this is reused before another is
  * made, and a window already showing the project is brought forward instead.
+ * `showInOtherWindow` is the way there when another window keeps the project
+ * with a hold that lasts (#16724).
  */
-async function openInNewWindow(projectPath: string): Promise<void> {
+async function openInNewWindow(projectPath: string, showInOtherWindow: () => void): Promise<void> {
   const result = await actionService.dispatch("app.newWindow", { projectPath }, { source: "user" });
   if (result.ok) return;
   logErrorWithContext(result.error, {
@@ -815,6 +874,22 @@ async function openInNewWindow(projectPath: string): Promise<void> {
     component: "projectStore",
     details: { path: projectPath },
   });
+  const cause = result.error.details;
+  if (isClientAppError(cause) && cause.code === "PROJECT_HELD_ELSEWHERE") {
+    notify({
+      type: "error",
+      title: "Couldn't open a new window",
+      message: getProjectOpenErrorMessage(cause),
+      priority: "high",
+      context: { eventKind: "uiFeedback" },
+      actions: transitionRecoveryActions(
+        cause,
+        () => void openInNewWindow(projectPath, showInOtherWindow),
+        showInOtherWindow
+      ),
+    });
+    return;
+  }
   notify({
     type: "error",
     title: "Couldn't open a new window",
@@ -829,7 +904,7 @@ async function openInNewWindow(projectPath: string): Promise<void> {
         // Serializable too, so the retry survives into the inbox entry.
         actionId: "app.newWindow",
         actionArgs: { projectPath },
-        onClick: () => void openInNewWindow(projectPath),
+        onClick: () => void openInNewWindow(projectPath, showInOtherWindow),
       },
     ],
   });
@@ -893,7 +968,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       if (options?.disposition === "new") {
         // Registered here so identity and the git prompts stay with the dialog
         // that asked, then handed to main to route: this window never switches.
-        await openInNewWindow(newProject.path);
+        await openInNewWindow(newProject.path, () => {
+          void get().switchProject(newProject.id, { showInOtherWindow: true });
+        });
         return;
       }
       await get().switchProject(newProject.id);
@@ -1191,21 +1268,19 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           type: "error",
           title: "Couldn't switch project",
           message,
-          actions: [
-            {
-              label: "Try again",
-              variant: "primary",
-              onClick: () => {
-                // `options` rides the retry. Without it the retry is a different
-                // request from the one that failed: a switch launched to open a
-                // specific agent (`pilot.openRun` sends the run as a
-                // `focusIntent`) succeeded on the second press and landed in the
-                // project with nothing opened, which reads as the retry half
-                // working.
-                void get().switchProject(projectId, options);
-              },
+          actions: transitionRecoveryActions(
+            error,
+            () => {
+              // `options` rides the retry. Without it the retry is a different
+              // request from the one that failed: a switch launched to open a
+              // specific agent (`pilot.openRun` sends the run as a
+              // `focusIntent`) succeeded on the second press and landed in the
+              // project with nothing opened, which reads as the retry half
+              // working.
+              void get().switchProject(projectId, options);
             },
-          ],
+            () => void get().switchProject(projectId, { ...options, showInOtherWindow: true })
+          ),
         });
         // The switch failed before the view swap, so this outgoing renderer stays
         // visible — clear the busy flag here (a real switch never reaches this
@@ -1511,7 +1586,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     });
     markSwitch(PERF_MARKS.PROJECT_SWITCH_IPC_SENT, traceMeta);
     flushPendingPerfMarks();
-    const reopenOptions = { trace, ignoreMemoryPressure: options?.ignoreMemoryPressure };
+    const reopenOptions = {
+      trace,
+      ignoreMemoryPressure: options?.ignoreMemoryPressure,
+      showInOtherWindow: options?.showInOtherWindow,
+    };
     projectClient.reopen(projectId, outgoingState, reopenOptions).then(
       (result) => {
         if (requestId !== projectTransitionRequestId) return;
@@ -1541,15 +1620,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           type: "error",
           title: "Couldn't reopen project",
           message,
-          actions: [
-            {
-              label: "Try again",
-              variant: "primary",
-              onClick: () => {
-                void get().reopenProject(projectId);
-              },
-            },
-          ],
+          actions: transitionRecoveryActions(
+            error,
+            () => void get().reopenProject(projectId),
+            () => void get().reopenProject(projectId, { ...options, showInOtherWindow: true })
+          ),
         });
         // The reopen failed before the view swap, so this outgoing renderer stays
         // visible — clear the busy flag (mirrors switchProject). Guarded by the
@@ -1713,6 +1788,29 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       disposition: options?.disposition,
     });
   },
+
+  startBackgroundClone: async (request, options) => {
+    const { project } = await projectClient.startBackgroundClone(request);
+    get().closeCloneRepoDialog();
+    // The clone is running whatever happens next: an open that fails leaves it
+    // in the switcher, still cloning.
+    try {
+      await get().loadProjects();
+      if (options?.disposition === "new") {
+        await openInNewWindow(project.path, () => {
+          void get().switchProject(project.id, { showInOtherWindow: true });
+        });
+        return;
+      }
+      await get().switchProject(project.id);
+    } catch (error) {
+      logErrorWithContext(error, {
+        operation: "open_cloning_project",
+        component: "projectStore",
+        details: { projectId: project.id },
+      });
+    }
+  },
 });
 
 export const useProjectStore = create<ProjectState>()(
@@ -1767,6 +1865,10 @@ setProjectPathIndexAccessor(() => {
   return index;
 });
 
+setCurrentProjectAwaitingCloneAccessor(() =>
+  isAwaitingClone(useProjectStore.getState().currentProject)
+);
+
 // Break circular dependency by injecting project ID getter. Falls back to the
 // view's own workspace id so a scratch view — which has no Project row, and so
 // no `currentProject` — still persists its panel grid instead of silently
@@ -1799,10 +1901,13 @@ if (typeof window !== "undefined" && window.electron?.project) {
   listenerState.applyUpdated = (updated) => {
     let priorPath: string | undefined;
     let isCurrentView = false;
+    let cloneLanded = false;
     useProjectStore.setState((state) => {
       const prior = state.projects.find((p) => p.id === updated.id);
       priorPath = prior?.path;
       isCurrentView = state.currentProject?.id === updated.id;
+      cloneLanded =
+        isCurrentView && isAwaitingClone(state.currentProject) && !isAwaitingClone(updated);
       const projects = prior
         ? state.projects.map((p) => (p.id === updated.id ? updated : p))
         : [...state.projects, updated];
@@ -1810,6 +1915,14 @@ if (typeof window !== "undefined" && window.electron?.project) {
         state.currentProject?.id === updated.id ? updated : state.currentProject;
       return { projects, currentProject };
     });
+    // The clone this view was showing has its checkout now (#16352). Everything
+    // a project view loads at start (worktrees, recipes, presets, plugins) was
+    // skipped for want of a folder, so the view starts over as a normal project.
+    // Main loaded the window's workspace before saying so.
+    if (cloneLanded) {
+      reloadView();
+      return;
+    }
     // A folder move/reattach keeps the id but changes the path (#11282); repoint
     // the hibernated Assistant cwd so a later resume lands in the new folder.
     if (priorPath && priorPath !== updated.path) {

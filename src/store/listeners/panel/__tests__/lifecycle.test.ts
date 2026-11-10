@@ -5,6 +5,9 @@ import { usePanelStore } from "@/store/panelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import type { TerminalStatusPayload } from "@shared/types";
+import { HIDDEN_VIEW_SKIP_REASON } from "@shared/types/pty-host";
+import { FALLBACK_CHAIN_MAX } from "@shared/config/agentRegistry";
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 vi.mock("@/services/ActionService", () => ({
@@ -44,6 +47,7 @@ const reliabilityMetricHandlers = vi.hoisted(
 const reduceScrollbackHandlers = vi.hoisted(
   () => [] as Array<(data: { targetLines: number }) => void>
 );
+const statusHandlers = vi.hoisted(() => [] as Array<(data: TerminalStatusPayload) => void>);
 vi.mock("@/controllers", () => {
   const noopSub = () => () => {};
   return {
@@ -61,7 +65,10 @@ vi.mock("@/controllers", () => {
         exitHandlers.push(handler);
         return () => {};
       }),
-      onStatus: vi.fn(noopSub),
+      onStatus: vi.fn((handler: (data: TerminalStatusPayload) => void) => {
+        statusHandlers.push(handler);
+        return () => {};
+      }),
       onReliabilityMetric: vi.fn(
         (
           handler: (payload: {
@@ -482,6 +489,93 @@ describe("handleFallbackTriggered — rate limits (#14370)", () => {
       { fallbackOnRateLimit: true },
       { agentPresetId: "preset-3", fallbackChainIndex: 2 }
     );
+
+    await trigger("preset-3");
+
+    expect(activate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  describe("an account rotation as long as the cap (#16587)", () => {
+    const rotation = Array.from({ length: FALLBACK_CHAIN_MAX }, (_, i) => `account-${i}`);
+    const last = rotation[rotation.length - 1]!;
+
+    function setupRotation(panel: Record<string, unknown>) {
+      useAgentSettingsStore.setState({
+        settings: {
+          agents: {
+            testAgent: {
+              customPresets: [
+                {
+                  id: "preset-1",
+                  name: "Primary",
+                  fallbacks: rotation,
+                  fallbackOnRateLimit: true,
+                },
+                ...rotation.map((id) => ({ id, name: id })),
+              ],
+            },
+          },
+        },
+      });
+      setupPanel(panel);
+      const activate = vi.fn().mockResolvedValue({ success: true });
+      usePanelStore.setState({ activateFallbackPreset: activate });
+      return activate;
+    }
+
+    it("reaches the last fallback", async () => {
+      const from = rotation[rotation.length - 2]!;
+      const activate = setupRotation({
+        agentPresetId: from,
+        fallbackChainIndex: rotation.length - 1,
+      });
+
+      await trigger(from);
+
+      expect(activate).toHaveBeenCalledWith("term-1", last, "preset-1");
+    });
+
+    it("stops after the last one", async () => {
+      const activate = setupRotation({ agentPresetId: last, fallbackChainIndex: rotation.length });
+
+      await trigger(last);
+
+      expect(activate).not.toHaveBeenCalled();
+    });
+  });
+
+  it("never walks into a fallback preset's own chain", async () => {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: {
+            customPresets: [
+              {
+                id: "preset-1",
+                name: "Primary",
+                fallbacks: ["preset-2", "preset-3"],
+                fallbackOnRateLimit: true,
+              },
+              { id: "preset-2", name: "Second account" },
+              // Its own chain is long enough that reading it at this index would hop.
+              {
+                id: "preset-3",
+                name: "Third account",
+                fallbacks: ["decoy-1", "decoy-2", "decoy-3"],
+                fallbackOnRateLimit: true,
+              },
+              { id: "decoy-1", name: "Decoy 1" },
+              { id: "decoy-2", name: "Decoy 2" },
+              { id: "decoy-3", name: "Decoy 3" },
+            ],
+          },
+        },
+      },
+    });
+    setupPanel({ agentPresetId: "preset-3", fallbackChainIndex: 2 });
+    const activate = vi.fn().mockResolvedValue({ success: true });
+    usePanelStore.setState({ activateFallbackPreset: activate });
 
     await trigger("preset-3");
 
@@ -1604,6 +1698,57 @@ describe("memory-pressure scrollback reduce (#14215)", () => {
       expect(reduceHidden).toHaveBeenCalledWith(500);
     } finally {
       reduceHidden.mockRestore();
+    }
+  });
+});
+
+describe("onStatus — data-loss routing (#16497)", () => {
+  function getStatusHandler(): (data: TerminalStatusPayload) => void {
+    statusHandlers.length = 0;
+    setupLifecycleListeners();
+    const handler = statusHandlers.at(-1);
+    if (!handler) throw new Error("onStatus handler was not registered");
+    return handler;
+  }
+
+  it("repaints a pane skipped while no window showed its project, with no marker", () => {
+    const repaint = vi
+      .spyOn(terminalInstanceService, "noteHiddenOutputSkipped")
+      .mockImplementation(() => {});
+    const marker = vi
+      .spyOn(terminalInstanceService, "injectDataLossMarker")
+      .mockImplementation(() => {});
+    try {
+      getStatusHandler()({
+        id: "term-1",
+        status: "data-loss",
+        reason: HIDDEN_VIEW_SKIP_REASON,
+        timestamp: 1,
+      });
+
+      expect(repaint).toHaveBeenCalledWith("term-1");
+      expect(marker).not.toHaveBeenCalled();
+    } finally {
+      repaint.mockRestore();
+      marker.mockRestore();
+    }
+  });
+
+  it("still marks a real drop on the pane", () => {
+    const repaint = vi
+      .spyOn(terminalInstanceService, "noteHiddenOutputSkipped")
+      .mockImplementation(() => {});
+    const marker = vi
+      .spyOn(terminalInstanceService, "injectDataLossMarker")
+      .mockImplementation(() => {});
+    try {
+      getStatusHandler()({ id: "term-1", status: "data-loss", droppedBytes: 64, timestamp: 1 });
+
+      expect(marker).toHaveBeenCalledWith("term-1", 64);
+      expect(repaint).not.toHaveBeenCalled();
+    } finally {
+      repaint.mockRestore();
+      marker.mockRestore();
     }
   });
 });

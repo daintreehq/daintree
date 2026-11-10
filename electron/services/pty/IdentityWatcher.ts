@@ -5,10 +5,21 @@ import {
   type DetectionResult,
   type ProcessDetector,
 } from "../ProcessDetector.js";
-import { stripAnsi } from "./AgentPatternDetector.js";
+import { getTrailingNonBlankLines } from "./trailingOutputLines.js";
 import { detectPrompt, type PromptDetectorConfig } from "./PromptDetector.js";
 import { INITIAL_FOREGROUND_SENTINEL } from "./ForegroundProcessGroupProbe.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../../utils/lifecycle.js";
+import {
+  AGENT_ONLY_SINGLE_CHAR_PROMPT_PATTERN,
+  CMD_PROMPT_PATTERN,
+  DECORATED_SHELL_PROMPT_PATTERN,
+  DECORATED_SHELL_PROMPT_PATTERN_NO_AGENT_GLYPHS,
+  MAC_BASH_PROMPT_PATTERN,
+  POSIX_USER_HOST_PROMPT_PATTERN,
+  POWERSHELL_PROMPT_PATTERN,
+  SHELL_ONLY_SINGLE_CHAR_PROMPT_PATTERN,
+  SHELL_PROMPT_PATTERNS,
+} from "../../../shared/utils/shellPrompt.js";
 
 export const SHELL_IDENTITY_FALLBACK_COMMIT_MS = 1200;
 export const SHELL_IDENTITY_FALLBACK_POLL_MS = 200;
@@ -30,43 +41,6 @@ export const SHELL_INPUT_BUFFER_MAX = 4096;
 // How long an agent command is presumed to own the terminal's input before
 // detection or a live child confirms it is running.
 export const AGENT_INPUT_GRACE_MS = 10_000;
-
-const SINGLE_CHAR_SHELL_PROMPT_PATTERN = /^\s*[>›❯⟩$#%]\s*$/;
-const SHELL_ONLY_SINGLE_CHAR_PROMPT_PATTERN = /^\s*[$#%]\s*$/;
-const AGENT_ONLY_SINGLE_CHAR_PROMPT_PATTERN = /^\s*[>❯›]\s*$/;
-const POSIX_USER_HOST_PROMPT_PATTERN = /^\s*[A-Za-z0-9_.-]+@\S+(?:\s+[^\r\n]*)?\s*[#$%>]\s*$/;
-const DECORATED_SHELL_PROMPT_PATTERN = /^\s*[➜➤➟➔❯›]\s+.*$/;
-// Same as above but without the `❯`/`›` glyphs. While an agent owns the
-// terminal those glyphs are the agent's own composer/input prompt (Codex uses
-// `›`, Claude uses `❯`), not a returned shell prompt — matching them there let
-// agent echo lines masquerade as a prompt return and demote a live agent
-// (#10911). Real oh-my-zsh prompts (`➜` etc.) still count. The process-group
-// probe and process-tree evidence are the authoritative demotion signals while
-// an agent is committed.
-const DECORATED_SHELL_PROMPT_PATTERN_NO_AGENT_GLYPHS = /^\s*[➜➤➟➔]\s+.*$/;
-const MAC_BASH_PROMPT_PATTERN = /^\s*\S+:\S+\s+\S+\s*[#$%>]\s*$/;
-const POWERSHELL_PROMPT_PATTERN = /^\s*PS\s+\S.*>\s*$/i;
-// cmd.exe default (`$P$G`) — `C:\repo>`. Only cmd's own `^C` echo may follow
-// the `>` (a Ctrl+C that lands after a TUI agent quit), and the path excludes
-// the characters Windows forbids in one (control characters and a second `:`
-// included), so an echoed batch line (`C:\repo>npm test`) or a redirect in
-// output can't pass for a prompt.
-const CMD_PROMPT_PATTERN = /^\s*[A-Za-z]:\\[^<>:|"*?\p{Cc}]*>(?:\^C)*\s*$/u;
-
-const SHELL_PROMPT_PATTERNS = [
-  SINGLE_CHAR_SHELL_PROMPT_PATTERN,
-  // `user@host:/path $` style — bash default with hostname. Path token may
-  // contain `/`, `:`, `~`, etc., so use \S+ rather than \w/.- only.
-  POSIX_USER_HOST_PROMPT_PATTERN,
-  DECORATED_SHELL_PROMPT_PATTERN,
-  // macOS bash default — `host:cwd user$` (no `@`, `:` separator). Two
-  // whitespace-separated tokens followed by a single trailing prompt char so
-  // command output like `cat <foo>` or `foo > bar.txt` doesn't false-positive.
-  MAC_BASH_PROMPT_PATTERN,
-  // PowerShell default — `PS C:\repo>` or `PS /home/user>`.
-  POWERSHELL_PROMPT_PATTERN,
-  CMD_PROMPT_PATTERN,
-] as const;
 
 // Same as SHELL_PROMPT_PATTERNS but with the decorated pattern swapped for the
 // variant that ignores the `❯`/`›` agent-composer glyphs. Used by the poll's
@@ -98,6 +72,12 @@ const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
   POWERSHELL_PROMPT_PATTERN,
   CMD_PROMPT_PATTERN,
 ] as const;
+
+// Every unambiguous prompt shape, agent glyphs excluded, needs one of these
+// on its line, and stripping only removes characters, so a chunk without one
+// cannot carry a prompt. Cursor-addressed TUIs repaint with no line break to
+// window on, and this spares stripping the whole repaint.
+const PROMPT_CHARACTER_PATTERN = /[#$%>➜➤➟➔]/;
 
 const ACTIVE_AGENT_PROMPT_PATTERN =
   /(?:welcome to claude code|claude code v\d|openai codex|tips for getting started|\?\s+for\s+shortcuts|welcome\s+back!)/i;
@@ -564,14 +544,16 @@ export class IdentityWatcher {
   }
 
   observeOutput(data: string): void {
+    let chunkHasPrompt: boolean | undefined;
     if (
       !this.stopped &&
+      !this.sawPromptAfterSubmit &&
       this.submittedAt !== null &&
       this.identity?.processIconId &&
-      !this.identity.agentType &&
-      this.hasUnambiguousShellPromptInText(data, true)
+      !this.identity.agentType
     ) {
-      this.sawPromptAfterSubmit = true;
+      chunkHasPrompt = this.hasUnambiguousShellPromptInText(data);
+      if (chunkHasPrompt) this.sawPromptAfterSubmit = true;
     }
     if (
       this.stopped ||
@@ -582,8 +564,11 @@ export class IdentityWatcher {
       return;
     }
 
-    const hasRecentCommandFailureOutput = this.hasRecentCommandFailureOutput();
-    const hasReturnedShellPromptOutput = this.hasUnambiguousShellPromptInText(data, true);
+    const hasReturnedShellPromptOutput =
+      chunkHasPrompt ?? this.hasUnambiguousShellPromptInText(data);
+    // Failure output only vetoes a returned prompt, which agent output rarely carries.
+    const hasRecentCommandFailureOutput =
+      hasReturnedShellPromptOutput && this.hasRecentCommandFailureOutput();
     if (
       !hasRecentCommandFailureOutput &&
       hasReturnedShellPromptOutput &&
@@ -714,18 +699,13 @@ export class IdentityWatcher {
     );
   }
 
-  private hasUnambiguousShellPromptInText(text: string, agentCommitted = false): boolean {
-    return this.getOutputTailLines(text).some((line) =>
-      isUnambiguousShellPromptLine(line, agentCommitted)
-    );
-  }
-
-  private getOutputTailLines(text: string): string[] {
-    return stripAnsi(text)
-      .split(/\r\n|\r|\n/)
-      .map((line) => line.trimEnd())
-      .filter((line) => line.trim().length > 0)
-      .slice(-SHELL_IDENTITY_FALLBACK_SCAN_LINES);
+  // Both readers exclude the agent composer glyphs. #10911
+  private hasUnambiguousShellPromptInText(text: string): boolean {
+    return getTrailingNonBlankLines(
+      text,
+      SHELL_IDENTITY_FALLBACK_SCAN_LINES,
+      PROMPT_CHARACTER_PATTERN
+    ).some((line) => isUnambiguousShellPromptLine(line, true));
   }
 
   private clearShellCommandEvidenceAfterPromptReturn(): void {

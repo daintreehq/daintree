@@ -71,6 +71,7 @@ export function assistantTerminalApi(
       unwatchTerminal: (...args) => canopy.unwatchTerminal(...args),
       terminalInput: (...args) => canopy.terminalInput(...args),
       terminalResize: (...args) => canopy.terminalResize(...args),
+      terminalClaimSize: (...args) => canopy.terminalClaimSize(...args),
       terminalSubmit: (...args) => canopy.terminalSubmit(...args),
       terminalSendKey: (...args) => canopy.terminalSendKey(...args),
       submitReply: () => Promise.reject(new Error("An assistant has no card replies.")),
@@ -91,6 +92,7 @@ export function assistantTerminalApi(
     terminalInput: (...args) => host.assistantInvoke(consumer, "canopy:terminal-input", ...args),
     // The window showing it on its own host sizes it; this pane reads at that size.
     terminalResize: () => Promise.resolve(),
+    terminalClaimSize: () => Promise.resolve(),
     terminalSubmit: (...args) => host.assistantInvoke(consumer, "canopy:terminal-submit", ...args),
     terminalSendKey: (...args) =>
       host.assistantInvoke(consumer, "canopy:terminal-send-key", ...args),

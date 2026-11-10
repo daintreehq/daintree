@@ -22,6 +22,7 @@ import {
   type TerminalNotifyWhenIdleResult,
 } from "../../../shared/types/terminalNotify.js";
 import { readTailSnapshot } from "../../../shared/utils/artifactParser.js";
+import { COMPOSER_PROMPT_OWNER } from "../../../shared/utils/terminalInputProvenance.js";
 import { evaluateWakeGate, wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
 import { createLogger } from "../../utils/logger.js";
 import {
@@ -356,9 +357,11 @@ export interface LaneWake {
    * tool from the panel (#14995), in {@link LaneWake.approval}; `decision`
    * carries a Decisions answer for the pane that asked (#16015), in
    * {@link LaneWake.decision}; `steer` carries a global Assistant's prompt
-   * held for this pane's next prompt (#16187), in {@link LaneWake.steer}.
+   * held for this pane's next prompt (#16187), in {@link LaneWake.steer};
+   * `composer` carries what the pane's own composer sent while its agent
+   * worked (#16379), in {@link LaneWake.composer}.
    */
-  kind: "notice" | "retired" | "lost" | "watch" | "approval" | "decision" | "steer";
+  kind: "notice" | "retired" | "lost" | "watch" | "approval" | "decision" | "steer" | "composer";
   /**
    * A `notice`'s observation. Only the host's name as this Shell knows it and
    * the host's observations: the line is still Daintree's own wording.
@@ -391,6 +394,12 @@ export interface LaneWake {
     /** The assistant whose prompt it is: the host files the line as its input once written. */
     principal: string;
   };
+  /**
+   * A `composer` send, exactly as the composer sent it, with its image chips.
+   * Typed only past `settled-prompt-exact`, on a line of its own, and filed
+   * as the person's prompt.
+   */
+  composer?: { text: string; imagePaths?: readonly string[] };
   /**
    * How long it may wait for its pane, from admission, up to
    * {@link LANE_WAKE_LONGEST_PENDING_MS}; {@link LANE_WAKE_MAX_PENDING_MS}
@@ -2423,7 +2432,7 @@ export class TerminalNotifyService {
     const gate = wakeGateOptionsFor(info.detectedAgentId);
     const verdict = evaluateWakeGate(
       info,
-      holdsSteer(owner) ? { ...gate, acceptWorking: false } : gate
+      holdsPrompt(owner) ? { ...gate, acceptWorking: false } : gate
     );
     const settledFor = info.lastStateChange === undefined ? 0 : this.now() - info.lastStateChange;
     if (!followsLine && verdict.kind === "ready" && settledFor >= NOTIFY_SETTLE_GRACE_MS) {
@@ -2468,9 +2477,14 @@ export class TerminalNotifyService {
     // taking it back returns its notices to this line.
     this.withdraw(owner);
     // The last word on each wake: nothing is awaited between this and the submit.
+    const ready = this.sweepWakes(owner, info).filter(onLine);
+    // A held composer send takes the line alone (#16379): the person's words
+    // as they sent them, before anything else waiting for this prompt.
+    const composer = decisionsOnly
+      ? undefined
+      : ready.find((entry) => entry.wake.kind === "composer");
     let steerTaken = false;
-    const reserved = this.sweepWakes(owner, info).filter((entry) => {
-      if (!onLine(entry)) return false;
+    const reserved = (composer !== undefined ? [composer] : ready).filter((entry) => {
       if (owner.wakes.get(entry.key) !== entry) return false;
       // One held prompt to a line: another waits for the turn after this one's.
       const steer = entry.wake.kind === "steer";
@@ -2484,7 +2498,7 @@ export class TerminalNotifyService {
     const wakes = reserved.filter((entry) => owner.wakes.get(entry.key) === entry);
     // With the server off only a scope's wakes may go; notices wait for nothing.
     const entries =
-      !decisionsOnly && this.deps.isEnabled()
+      !decisionsOnly && composer === undefined && this.deps.isEnabled()
         ? owner.fired.filter((entry) => isDeliverable(entry))
         : [];
     if (entries.length === 0 && wakes.length === 0) {
@@ -2544,8 +2558,12 @@ export class TerminalNotifyService {
       ...wakes.flatMap(({ wake }) =>
         wake.kind === "steer" && wake.steer !== undefined ? [wake.steer.text] : []
       ),
+      ...wakes.flatMap(({ wake }) =>
+        wake.kind === "composer" && wake.composer !== undefined ? [wake.composer.text] : []
+      ),
     ];
     const steer = wakes.find(({ wake }) => wake.kind === "steer")?.wake.steer;
+    const composerSend = wakes.find(({ wake }) => wake.kind === "composer")?.wake.composer;
     const deliveredAt = this.now();
     owner.inHost = { token };
     remember(this.lastDeliveryAt, owner.terminalId, deliveredAt);
@@ -2554,16 +2572,16 @@ export class TerminalNotifyService {
     // queues mid-turn input, and a decision answer only into one that queues
     // it (#16282), taking a question in prose only on a line of its own; both
     // only into the run just checked. The host holds the whole line to that.
-    const steerOnLine = wakes.some(({ wake }) => wake.kind === "steer");
+    const promptOnLine = wakes.some(({ wake }) => isHeldPrompt(wake));
     const guard: TerminalSubmitGuard =
-      steerOnLine || wakes.some(({ wake }) => wake.kind === "decision")
+      promptOnLine || wakes.some(({ wake }) => wake.kind === "decision")
         ? {
             kind: "settled-prompt-exact",
             ...(info.agentIncarnation !== undefined
               ? { agentIncarnation: info.agentIncarnation }
               : {}),
             ...(info.agentSessionId !== undefined ? { agentSessionId: info.agentSessionId } : {}),
-            ...(steerOnLine || (!decisionsOnly && holdsSteer(owner))
+            ...(promptOnLine || (!decisionsOnly && holdsPrompt(owner))
               ? {}
               : { acceptWorking: true as const }),
             ...(decisionsOnly ? { acceptQuestion: true as const } : {}),
@@ -2573,17 +2591,18 @@ export class TerminalNotifyService {
     // its Enter if anyone types before it lands.
     try {
       // A notice is nobody's prompt, so it never becomes the run's first one;
-      // a held prompt is the Assistant's, as it wrote it (#15521).
+      // a held prompt is the Assistant's, as it wrote it (#15521), and a held
+      // composer send the person's (#16379).
       client.submit(
         owner.terminalId,
         lines.join("\n\n"),
         token,
         steer?.handbackCode,
         guard,
+        composerSend?.imagePaths,
+        composerSend?.text ?? steer?.promptAsWritten ?? null,
         undefined,
-        steer?.promptAsWritten ?? null,
-        undefined,
-        steer?.principal
+        composerSend !== undefined ? COMPOSER_PROMPT_OWNER : steer?.principal
       );
     } catch (err) {
       // Whether any of it reached the host is unknown, so this is a failed
@@ -2800,7 +2819,7 @@ export class TerminalNotifyService {
     return {
       terminalId: owner.terminalId,
       pendingCount: owner.notices.size + owner.pendingLaunches + held,
-      readyCount: owner.fired.length - held + owner.wakes.size,
+      readyCount: owner.fired.length - held + chipWakeCount(owner),
       delivery: publicDelivery(owner.delivery),
       revision: this.revision,
     };
@@ -2861,12 +2880,24 @@ function pendingMsOf(wake: LaneWake): number {
   return Math.min(asked, LANE_WAKE_LONGEST_PENDING_MS);
 }
 
-/** A held prompt is still waiting on the pane's line (#16187). */
-function holdsSteer(owner: PaneOwner): boolean {
+/** A prompt someone wrote, held for the pane's own prompt: an Assistant's (#16187) or the composer's (#16379). */
+function isHeldPrompt(wake: LaneWake): boolean {
+  return wake.kind === "steer" || wake.kind === "composer";
+}
+
+/** A held prompt is still waiting on the pane's line. */
+function holdsPrompt(owner: PaneOwner): boolean {
   for (const entry of owner.wakes.values()) {
-    if (entry.wake.kind === "steer" && entry.token === undefined) return true;
+    if (isHeldPrompt(entry.wake) && entry.token === undefined) return true;
   }
   return false;
+}
+
+/** Wakes the pane's notice chip counts: a held composer send shows in its composer instead. */
+function chipWakeCount(owner: PaneOwner): number {
+  let count = 0;
+  for (const entry of owner.wakes.values()) if (entry.wake.kind !== "composer") count++;
+  return count;
 }
 
 function isLiveScoped(entry: WakeEntry): boolean {

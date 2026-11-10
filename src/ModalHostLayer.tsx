@@ -2,10 +2,10 @@ import { Suspense } from "react";
 import { TourHost } from "@/components/Tour/TourHost";
 import type { WorktreeState, Project, ProjectCreationIdentity } from "@shared/types";
 import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
+import type { ProjectCloneStartRequest } from "@shared/types/ipc/projectClone";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import type { UseQuickSwitcherReturn } from "./hooks/useQuickSwitcher";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
-import type { UseNewTerminalPaletteReturn } from "./hooks/useNewTerminalPalette";
 import { MORE_AGENTS_PANEL_ID, type UsePanelPaletteReturn } from "./hooks/usePanelPalette";
 import type { UseProjectSwitcherPaletteReturn } from "./hooks/useProjectSwitcherPalette";
 import type { UseActionPaletteReturn } from "./hooks/useActionPalette";
@@ -30,7 +30,7 @@ import {
   useScheduleRunConfirmStore,
 } from "@/store/scheduleRunConfirmStore";
 import { usePilotStore } from "@/store/pilotStore";
-import { useCanopyStore } from "@/store/canopyStore";
+import { useCanopyOfferShown } from "@/hooks/app/useCanopyOfferShown";
 import { useScratchStore } from "@/store/scratchStore";
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
@@ -46,7 +46,6 @@ import { actionService } from "./services/ActionService";
 import {
   LazyQuickSwitcher,
   LazySendToAgentPalette,
-  LazyNewTerminalPalette,
   LazyWorktreePalette,
   LazyQuickCreatePalette,
   LazyPanelPalette,
@@ -58,7 +57,7 @@ import {
   LazyActionPalette,
   LazyWorktreeOverviewModal,
   LazyPilotView,
-  LazyCanopyView,
+  LazyCanopyOffer,
   LazyCrossWorktreeDiff,
   LazySettingsDialog,
   LazyShortcutReferenceDialog,
@@ -100,8 +99,6 @@ interface ModalHostLayerProps {
   shouldMountQuickSwitcher: boolean;
   sendToAgentPalette: ReturnType<typeof useSendToAgentPalette>;
   shouldMountSendToAgentPalette: boolean;
-  newTerminalPalette: UseNewTerminalPaletteReturn;
-  shouldMountNewTerminalPalette: boolean;
   worktreePalette: UseWorktreePaletteReturn;
   shouldMountWorktreePalette: boolean;
   quickCreatePalette: UseQuickCreatePaletteReturn;
@@ -190,6 +187,10 @@ interface ModalHostLayerProps {
     identity?: ProjectCreationIdentity,
     options?: { disposition?: ProjectOpenDisposition; groupId?: string }
   ) => Promise<void>;
+  startBackgroundClone: (
+    request: ProjectCloneStartRequest,
+    options?: { disposition?: ProjectOpenDisposition }
+  ) => Promise<void>;
   closeCloneRepoDialog: () => void;
   reEntrySummary: ReEntrySummaryState;
   gettingStarted: GettingStartedChecklistState;
@@ -206,8 +207,6 @@ export function ModalHostLayer({
   shouldMountQuickSwitcher,
   sendToAgentPalette,
   shouldMountSendToAgentPalette,
-  newTerminalPalette,
-  shouldMountNewTerminalPalette,
   worktreePalette,
   shouldMountWorktreePalette,
   quickCreatePalette,
@@ -288,6 +287,7 @@ export function ModalHostLayer({
   cloneRepoDialogOpen,
   shouldMountCloneRepoDialog,
   handleCloneSuccess,
+  startBackgroundClone,
   closeCloneRepoDialog,
   reEntrySummary,
   gettingStarted,
@@ -297,7 +297,7 @@ export function ModalHostLayer({
   // path into this layer.
   const isPilotOpen = usePilotStore((s) => s.isOpen);
   const hasProjectGroupDialog = useProjectGroupsStore((s) => s.dialog !== null);
-  const isCanopyOpen = useCanopyStore((s) => s.isOpen);
+  const isCanopyOfferShown = useCanopyOfferShown();
   const hasScratch = useScratchStore((s) => s.currentScratch !== null);
   // Each Run now question retries a dialog that failed, so none waits on a fallback.
   const scheduleRunConfirmKey = useScheduleRunConfirmStore((s) => s.current?.requestId ?? "");
@@ -390,29 +390,6 @@ export function ModalHostLayer({
               selectItem={sendToAgentPalette.selectItem}
               confirmSelection={sendToAgentPalette.confirmSelection}
               setSelectedIndex={sendToAgentPalette.setSelectedIndex}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-      <ErrorBoundary
-        variant="component"
-        componentName="NewTerminalPalette"
-        resetKeys={[Number(newTerminalPalette.isOpen)]}
-      >
-        {shouldMountNewTerminalPalette && (
-          <Suspense fallback={null}>
-            <LazyNewTerminalPalette
-              isOpen={newTerminalPalette.isOpen}
-              query={newTerminalPalette.query}
-              results={newTerminalPalette.results}
-              selectedIndex={newTerminalPalette.selectedIndex}
-              onQueryChange={newTerminalPalette.setQuery}
-              onSelectPrevious={newTerminalPalette.selectPrevious}
-              onSelectNext={newTerminalPalette.selectNext}
-              onSelect={newTerminalPalette.handleSelect}
-              onConfirm={newTerminalPalette.confirmSelection}
-              onClose={newTerminalPalette.close}
-              onHoverIndex={newTerminalPalette.setSelectedIndex}
             />
           </Suspense>
         )}
@@ -680,6 +657,7 @@ export function ModalHostLayer({
               hideAction={actionPalette.hideAction}
               argPrompt={actionPalette.argPrompt}
               argBack={actionPalette.argBack}
+              onSearchProjects={(query) => projectSwitcherPalette.open("modal", { query })}
             />
           </Suspense>
         )}
@@ -957,6 +935,7 @@ export function ModalHostLayer({
             <LazyCloneRepoDialog
               isOpen={cloneRepoDialogOpen}
               onSuccess={handleCloneSuccess}
+              onStartBackground={startBackgroundClone}
               onCancel={closeCloneRepoDialog}
             />
           </Suspense>
@@ -1133,12 +1112,12 @@ export function ModalHostLayer({
       </ErrorBoundary>
       <ErrorBoundary
         variant="component"
-        componentName="CanopyView"
-        resetKeys={[Number(isCanopyOpen)]}
+        componentName="CanopyOffer"
+        resetKeys={[Number(isCanopyOfferShown)]}
       >
-        {isCanopyOpen && (
+        {isCanopyOfferShown && (
           <Suspense fallback={null}>
-            <LazyCanopyView />
+            <LazyCanopyOffer />
           </Suspense>
         )}
       </ErrorBoundary>

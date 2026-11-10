@@ -92,7 +92,6 @@ vi.mock("../../services/AgentVersionService.js", () => ({ AgentVersionService: v
 vi.mock("../../services/AgentModelCatalogService.js", () => ({
   AgentModelCatalogService: vi.fn(),
 }));
-vi.mock("../../services/AgentUpdateHandler.js", () => ({ AgentUpdateHandler: vi.fn() }));
 vi.mock("../../services/PortalManager.js", () => ({
   PortalManager: vi.fn(function PortalManager() {}),
 }));

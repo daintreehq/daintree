@@ -34,9 +34,11 @@ vi.mock("electron", () => ({
 const {
   CLOSE_WINDOW_MENU_ITEM_ID,
   PROJECT_MENU_ITEM_IDS,
+  hasOpenApplicationWindow,
   refreshProjectMenuState,
   resolveProjectIdForApplicationMenu,
 } = await import("../projectMenuState.js");
+const { markProjectlessView } = await import("../window/projectlessViews.js");
 
 const [SETTINGS_ID, CLOSE_ID] = PROJECT_MENU_ITEM_IDS;
 
@@ -264,5 +266,19 @@ describe("refreshProjectMenuState", () => {
     expect(consoleError).toHaveBeenCalled();
 
     consoleError.mockRestore();
+  });
+});
+
+describe("Close Window with only a window that holds no project up", () => {
+  it("stays on: that window is still there to close", () => {
+    windowRefMock.getWindowRegistry.mockReturnValue({ getPrimary: () => undefined });
+    expect(hasOpenApplicationWindow()).toBe(false);
+
+    const view = { id: 601, once: vi.fn() };
+    markProjectlessView(view as never, { isDestroyed: () => false } as never);
+    expect(hasOpenApplicationWindow()).toBe(true);
+
+    view.once.mock.calls.find(([event]) => event === "destroyed")?.[1]();
+    expect(hasOpenApplicationWindow()).toBe(false);
   });
 });

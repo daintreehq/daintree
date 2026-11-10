@@ -2,6 +2,7 @@ const path = require("path");
 const fs = require("fs");
 const { spawnSync } = require("child_process");
 const { getRawHeader } = require("@electron/asar");
+const canopyReaderModel = require("./lib/canopyReaderModel.cjs");
 
 // electron-builder passes `context.arch` as an integer from the `Arch` enum
 // in builder-util (ia32=0, x64=1, armv7l=2, arm64=3, universal=4).
@@ -649,6 +650,27 @@ exports.pruneOnnxRuntime = pruneOnnxRuntime;
 /**
  * Get the path to unpacked resources for the platform
  */
+/**
+ * Canopy's reader model (#16415) is an extra resource, and electron-builder
+ * only warns when an extra resource's source folder is missing: a package
+ * built without the model's fetch would ship a Canopy that reads nothing. So
+ * every pinned file is hashed where the package holds it, on every pack a
+ * macOS universal build makes too.
+ */
+function validateCanopyReaderModel(resourcesDir) {
+  const dir = path.join(resourcesDir, canopyReaderModel.RESOURCES_NAME);
+  const bad = canopyReaderModel.invalidFiles(dir);
+  if (bad.length > 0) {
+    throw new Error(
+      `[afterPack] CRITICAL: Canopy's reader model at ${dir} is missing or doesn't match its ` +
+        `pinned hashes (${bad.map((file) => file.name).join(", ")}). Canopy would read nothing. ` +
+        "Run `npm run fetch:canopy-model` before packaging (#16415)."
+    );
+  }
+  console.log(`[afterPack] Canopy reader model verified: ${dir}`);
+}
+exports.validateCanopyReaderModel = validateCanopyReaderModel;
+
 function getUnpackedResourcesPath(appOutDir, electronPlatformName, appName) {
   if (electronPlatformName === "darwin") {
     return path.join(appOutDir, `${appName}.app`, "Contents/Resources/app.asar.unpacked");
@@ -698,7 +720,9 @@ exports.default = async function afterPack(context) {
   // a mac universal build fires afterPack three times (x64 and arm64
   // intermediates, then the merged output) and the invariant holds for all of
   // them.
-  validateAppAsar(getAppAsarPath(appOutDir, electronPlatformName, appName));
+  const appAsarPath = getAppAsarPath(appOutDir, electronPlatformName, appName);
+  validateAppAsar(appAsarPath);
+  validateCanopyReaderModel(path.dirname(appAsarPath));
 
   const unpackedPath = getUnpackedResourcesPath(appOutDir, electronPlatformName, appName);
   const nodePtyPath = path.join(unpackedPath, "node_modules/node-pty");

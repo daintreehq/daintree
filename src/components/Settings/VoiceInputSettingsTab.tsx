@@ -4,6 +4,7 @@ import { Eye, EyeOff, XCircle, ExternalLink, ChevronRight, CheckCircle2 } from "
 import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
 import { Input } from "@/components/ui/input";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
@@ -101,9 +102,13 @@ const CLEANUP_PROVIDER_NOTE: Record<VoiceCorrectionProvider, string> = {
 };
 
 // From the cleanup benchmark (#14793), all four on the same passages.
-const CLEANUP_MODEL_COPY: Record<VoiceCorrectionModel, { label: string; description: string }> = {
+const CLEANUP_MODEL_COPY: Record<
+  VoiceCorrectionModel,
+  { label: string; description: string; isDefault?: boolean }
+> = {
   "gpt-6.1-terra": {
-    label: "GPT-6.1 Terra (default)",
+    label: "GPT-6.1 Terra",
+    isDefault: true,
     description: "Careful, and catches most misheard names. Under a tenth of a cent a cleanup.",
   },
   "gpt-6-luna": {
@@ -111,7 +116,8 @@ const CLEANUP_MODEL_COPY: Record<VoiceCorrectionModel, { label: string; descript
     description: "Cheapest, but misses more misheard words.",
   },
   "claude-haiku-5-5": {
-    label: "Claude Haiku 5.5 (default)",
+    label: "Claude Haiku 5.5",
+    isDefault: true,
     description: "Fastest, usually about a second. Close to Terra at a fifth of the price.",
   },
   "claude-sonnet-5-5": {
@@ -756,8 +762,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
               label="Input device"
               description={
                 <>
-                  {micDescription}
-                  {" · "}
+                  {micDescription} <FactSeparator />{" "}
                   <Button variant="link" onClick={refreshDevices}>
                     Refresh list
                   </Button>
@@ -1196,7 +1201,7 @@ function ApiKeyRow({
               id={savedId}
               className="rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-1.5 py-0.5 font-mono text-2xs text-text-secondary"
             >
-              Saved · {maskApiKey(value)}
+              Saved <FactSeparator /> {maskApiKey(value)}
             </span>
           ) : (
             <span id={savedId} className="text-xs text-text-secondary">
@@ -1238,7 +1243,7 @@ function ApiKeyRow({
                   onClick={() => setShowKey((v) => !v)}
                   className="absolute right-1 top-1/2 -translate-y-1/2 [&_svg]:size-3.5"
                   aria-label="Show API key"
-                  pressed={showKey}
+                  aria-pressed={showKey}
                 >
                   {showKey ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
                 </Button>

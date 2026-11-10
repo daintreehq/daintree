@@ -3,6 +3,7 @@ import os from "node:os";
 import { type WebContents } from "electron";
 import path from "path";
 import { WorkspaceHostProcess, type WorkspaceHostDisposeReason } from "../WorkspaceHostProcess.js";
+import { gateGitStatusOnDownload } from "./statusDownloadGate.js";
 import { store } from "../../store.js";
 import { computeDefaultWarmWorkspaceHosts } from "../../utils/warmWorkspaceHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -89,6 +90,11 @@ export interface WorkspaceHostPoolDeps {
    * project. A dormant host backed by one outlives the idle grace (#12519).
    */
   hasLiveProjectView?: (projectId: string) => boolean;
+  /**
+   * Whether main is using the project's host for something it can't get back
+   * if the host goes: no reclaim of a dormant host touches it meanwhile.
+   */
+  isHostBusy?: (projectId: string) => boolean;
 }
 
 export class WorkspaceHostPool {
@@ -135,6 +141,7 @@ export class WorkspaceHostPool {
   private emit: EmitFn;
   private onProjectSwitch?: (windowId: number) => void;
   private hasLiveProjectView: (projectId: string) => boolean;
+  private isHostBusy: (projectId: string) => boolean;
   private routeHostEventFn: RouteHostEventFn | null = null;
 
   constructor(deps: WorkspaceHostPoolDeps) {
@@ -151,6 +158,7 @@ export class WorkspaceHostPool {
     this.emit = deps.emit;
     this.onProjectSwitch = deps.onProjectSwitch;
     this.hasLiveProjectView = deps.hasLiveProjectView ?? (() => false);
+    this.isHostBusy = deps.isHostBusy ?? (() => false);
   }
 
   setRouteHostEvent(fn: RouteHostEventFn): void {
@@ -251,8 +259,14 @@ export class WorkspaceHostPool {
     })();
   }
 
-  private createHost(normalizedPath: string): WorkspaceHostProcess {
+  private createHost(normalizedPath: string, projectId: string): WorkspaceHostProcess {
     const host = new WorkspaceHostProcess(normalizedPath, this.config);
+    // Here so a prewarm, a replacement and a retry all start with it closed: a
+    // load's first status pass can't wait for a view to come and ask.
+    const stopGate = gateGitStatusOnDownload(normalizedPath, projectId, (gate) =>
+      host.setStatusDownloadGate(gate)
+    );
+    if (stopGate) host.onDispose(stopGate);
     host.setLogLevelOverrides(this.logLevelOverridesCache);
     host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
     if (this.forgeProviderMatchersCache !== null) {
@@ -335,9 +349,8 @@ export class WorkspaceHostPool {
       }
     }
 
-    const host = this.createHost(normalizedPath);
-
     const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
+    const host = this.createHost(normalizedPath, projectId);
     const initPromise = this.makeInitPromise(host, normalizedPath, projectId);
 
     const newEntry: ProcessEntry = {
@@ -401,9 +414,8 @@ export class WorkspaceHostPool {
 
     if (this.entries.has(normalizedPath)) return;
 
-    const host = this.createHost(normalizedPath);
-
     const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
+    const host = this.createHost(normalizedPath, projectId);
     const initPromise = this.makeInitPromise(host, normalizedPath, projectId);
 
     const entry: ProcessEntry = {
@@ -489,7 +501,10 @@ export class WorkspaceHostPool {
   releaseWindow(windowId: number): void {
     // Invalidate any in-flight loadProject for this window so a late
     // completion can't resurrect the mapping after the window released it.
-    this.windowLoadSeq.delete(windowId);
+    // Advanced rather than deleted: a reset counter would hand the window's
+    // next load the same number as one still in flight, which would then
+    // pass as current and overwrite the newer mapping.
+    this.windowLoadSeq.set(windowId, (this.windowLoadSeq.get(windowId) ?? 0) + 1);
 
     const projectPath = this.windowToProject.get(windowId);
     if (!projectPath) return;
@@ -636,10 +651,18 @@ export class WorkspaceHostPool {
     }
   }
 
+  private isBusy(entry: ProcessEntry): boolean {
+    try {
+      return this.isHostBusy(entry.projectId);
+    } catch {
+      return false;
+    }
+  }
+
   private enforceDormantCap(): void {
     const dormant: Array<[string, ProcessEntry]> = [];
     for (const [path, entry] of this.entries) {
-      if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
+      if (entry.refCount <= 0 && entry.cleanupTimeout !== null && !this.isBusy(entry)) {
         dormant.push([path, entry]);
       }
     }
@@ -682,12 +705,18 @@ export class WorkspaceHostPool {
     entry.cleanupTimeout = setTimeout(() => {
       entry.cleanupTimeout = null;
       if (this.entries.get(projectPath) !== entry || entry.refCount > 0) return;
+      if (this.isBusy(entry)) {
+        this.armDormantTimer(projectPath, entry);
+        return;
+      }
       if (this.isViewBacked(entry)) {
         // Re-asserted each period rather than trusted: a prewarm nobody
         // attached to was never paused, and neither is a process that
         // restarted after its last pause.
         this.backgroundIfDormant(projectPath, entry);
         this.armDormantTimer(projectPath, entry);
+        // A host a busy hold kept out of the cap's count comes back into it here.
+        this.enforceDormantCap();
         return;
       }
       entry.host.dispose("idle-grace");
@@ -705,7 +734,7 @@ export class WorkspaceHostPool {
   reclaimDormantHosts(): number {
     let reclaimed = 0;
     for (const [path, entry] of [...this.entries]) {
-      if (entry.refCount > 0) continue;
+      if (entry.refCount > 0 || this.isBusy(entry)) continue;
       this.evictEntry(path, entry, "memory-pressure");
       reclaimed++;
     }
@@ -768,7 +797,7 @@ export class WorkspaceHostPool {
    */
   replaceHost(entry: ProcessEntry, reason: WorkspaceHostDisposeReason): Promise<void> {
     const oldHost = entry.host;
-    const host = this.createHost(entry.projectPath);
+    const host = this.createHost(entry.projectPath, entry.projectId);
     const initPromise = this.makeInitPromise(host, entry.projectPath, entry.projectId);
     entry.host = host;
     entry.initPromise = initPromise;

@@ -155,6 +155,7 @@ import {
 import {
   clearPluginAgentRegistryForTests,
   getPluginAgentRegistry,
+  getPluginIdForAgent,
 } from "../../../shared/config/pluginAgentRegistry.js";
 import {
   clearPluginProcessToolRegistryForTests,
@@ -717,6 +718,8 @@ describe("PluginService integration — agent contributions (issue #9560)", () =
     const config = getEffectiveAgentConfig("acme-agent");
     expect(config?.name).toBe("Acme Agent");
     expect(config?.command).toBe("acme");
+    // Its bare command is the name it claims in a plain terminal (#16469).
+    expect(config?.executableNames).toEqual(["acme"]);
 
     expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith("events:push", {
       name: "plugin:agents-changed",
@@ -739,6 +742,69 @@ describe("PluginService integration — agent contributions (issue #9560)", () =
         payload: expect.objectContaining({ complete: true }),
       })
     );
+  });
+
+  it("records the bypass args of an agent promoted when the plugin shadowing it unloads (#16374)", async () => {
+    const agent = {
+      id: "hermes",
+      name: "Hermes",
+      command: "hermes",
+      color: "#3366ff",
+      iconId: "claude",
+    };
+    const declared: Record<string, string[]> = {
+      "acme.alpha": ["--yolo"],
+      "acme.beta": ["--trust-all"],
+    };
+    for (const [name, permissionBypassArgs] of Object.entries(declared)) {
+      await writePlugin(name, {
+        name,
+        version: "1.0.0",
+        capabilities: ["agent:register"],
+        contributes: { agents: [{ ...agent, permissionBypassArgs }] },
+      });
+    }
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    const winner = getPluginIdForAgent("hermes") as string;
+    const shadowed = winner === "acme.alpha" ? "acme.beta" : "acme.alpha";
+    const recorded = () =>
+      (storeState.get("agentSettings.pluginBypassArgHistory") as Record<string, string[][]>)
+        ?.hermes ?? [];
+    expect(recorded()).toContainEqual(declared[winner]);
+    expect(recorded()).not.toContainEqual(declared[shadowed]);
+
+    service.unloadPlugin(winner);
+
+    expect(getPluginIdForAgent("hermes")).toBe(shadowed);
+    expect(recorded()).toContainEqual(declared[shadowed]);
+  });
+
+  it("registers no executable name for an agent that declares none (#16469)", async () => {
+    await writePlugin("acme.quiet-agent", {
+      name: "acme.quiet-agent",
+      version: "1.0.0",
+      capabilities: ["agent:register"],
+      contributes: {
+        agents: [
+          {
+            id: "quiet-agent",
+            name: "Quiet",
+            command: "quiet",
+            color: "#3366ff",
+            iconId: "terminal",
+            executableNames: [],
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    expect(getPluginAgentRegistry()["quiet-agent"]).toBeDefined();
+    expect(getPluginAgentRegistry()["quiet-agent"]).not.toHaveProperty("executableNames");
   });
 
   it("does not register agents when the manifest omits the agent:register capability", async () => {
@@ -832,6 +898,44 @@ describe("PluginService integration — custom SVG icons (#13143)", () => {
   afterEach(() => {
     clearPluginProcessToolRegistryForTests();
     clearPluginCustomIconsForTests();
+  });
+
+  it("rewrites an agent's icon path to its runtime key, without a panel in the plugin", async () => {
+    const dir = await writePlugin("acme.agent-icons", {
+      name: "acme.agent-icons",
+      version: "1.0.0",
+      capabilities: ["agent:register"],
+      contributes: {
+        agents: [
+          { id: "pi", name: "Pi", command: "pi", color: "#3366ff", iconId: "./icons/pi.svg" },
+          {
+            id: "broken",
+            name: "Broken",
+            command: "broken",
+            color: "#3366ff",
+            iconId: "./icons/missing.svg",
+          },
+          { id: "brand", name: "Brand", command: "brand", color: "#3366ff", iconId: "codex" },
+        ],
+      },
+    });
+    await fs.mkdir(path.join(dir, "icons"));
+    await fs.writeFile(path.join(dir, "icons", "pi.svg"), SVG);
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const key = "plugin-icon:acme.agent-icons:./icons/pi.svg";
+    expect(getPluginCustomIcons().map((icon) => icon.key)).toEqual([key]);
+    expect(getPluginAgentRegistry()["pi"]?.iconId).toBe(key);
+    // A broken file keeps its authored value, which renders the neutral glyph.
+    expect(getPluginAgentRegistry()["broken"]?.iconId).toBe("./icons/missing.svg");
+    expect(getPluginAgentRegistry()["brand"]?.iconId).toBe("codex");
+
+    service.unloadPlugin("acme.agent-icons");
+
+    expect(getPluginCustomIcons()).toEqual([]);
+    expect(getPluginAgentRegistry()["pi"]).toBeUndefined();
   });
 
   it("rewrites loaded icon paths to runtime keys everywhere and drops them on unload", async () => {

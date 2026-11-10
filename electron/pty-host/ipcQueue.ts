@@ -33,6 +33,14 @@ export class IpcQueueManager {
   private readonly queuedBytes = new Map<string, number>();
   private readonly pausedTerminals = new Map<string, ReturnType<typeof setInterval>>();
   private readonly pauseStartTimes = new Map<string, number>();
+  // Bytes in flight to views that are all cached (#16497). Kept apart from
+  // queuedBytes and out of totalQueuedBytes: these copies never pause the PTY
+  // and a frozen view may never ack them, so counting them toward the
+  // aggregate gate would hold unrelated primary consumers.
+  private readonly hiddenQueuedBytes = new Map<string, number>();
+  // Terminals whose cached views were already told they missed output, so a
+  // sustained skip sends one notice rather than one per chunk.
+  private readonly hiddenSkipNotified = new Set<string>();
   private totalQueuedBytes = 0;
 
   constructor(private readonly deps: IpcQueueDeps) {}
@@ -50,7 +58,43 @@ export class IpcQueueManager {
     return next;
   }
 
+  addHiddenBytes(id: string, bytes: number): void {
+    // A terminal whose project was just hidden can still owe acks for primary
+    // copies its view took while shown. They come back from that same view,
+    // ahead of the hidden ones, so they move to the hidden balance: every ack
+    // then settles the balance it belongs to, and none of them keeps holding
+    // the aggregate gate. A held pause keeps its own debt; its safety timer
+    // clears it.
+    const primary = this.queuedBytes.get(id) ?? 0;
+    let carried = 0;
+    if (primary > 0 && !this.pausedTerminals.has(id)) {
+      this.queuedBytes.delete(id);
+      const previousTotal = this.totalQueuedBytes;
+      this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - primary);
+      this.sweepAggregateResume(previousTotal);
+      carried = primary;
+    }
+    this.hiddenQueuedBytes.set(id, (this.hiddenQueuedBytes.get(id) ?? 0) + carried + bytes);
+  }
+
+  getHiddenQueuedBytes(id: string): number {
+    return this.hiddenQueuedBytes.get(id) ?? 0;
+  }
+
   removeBytes(id: string, bytes: number): void {
+    // Acks carry no transport. Primary debt older than the hidden copies was
+    // carried over by addHiddenBytes, so what is left of it here is a paused
+    // terminal's or one charged after the hidden copies: settle the hidden
+    // balance first so a cached view that keeps up keeps its budget. Showing
+    // the project clears whatever is left behind.
+    const hidden = this.hiddenQueuedBytes.get(id) ?? 0;
+    if (hidden > 0) {
+      const settled = Math.min(bytes, hidden);
+      if (settled === hidden) this.hiddenQueuedBytes.delete(id);
+      else this.hiddenQueuedBytes.set(id, hidden - settled);
+      bytes -= settled;
+      if (bytes === 0) return;
+    }
     const current = this.queuedBytes.get(id) ?? 0;
     // Clamp the aggregate delta to the per-terminal balance to prevent
     // underflow when callers over-remove (the per-terminal value is
@@ -101,9 +145,17 @@ export class IpcQueueManager {
   } {
     const perTerminal: Array<{ terminalId: string; pendingBytes: number }> = [];
     for (const [terminalId, pendingBytes] of this.queuedBytes) {
-      perTerminal.push({ terminalId, pendingBytes });
+      perTerminal.push({
+        terminalId,
+        pendingBytes: pendingBytes + (this.hiddenQueuedBytes.get(terminalId) ?? 0),
+      });
     }
-    return { totalPendingBytes: this.totalQueuedBytes, perTerminal };
+    let totalPendingBytes = this.totalQueuedBytes;
+    for (const [terminalId, pendingBytes] of this.hiddenQueuedBytes) {
+      totalPendingBytes += pendingBytes;
+      if (!this.queuedBytes.has(terminalId)) perTerminal.push({ terminalId, pendingBytes });
+    }
+    return { totalPendingBytes, perTerminal };
   }
 
   isAtCapacity(id: string, additionalBytes: number): boolean {
@@ -113,6 +165,25 @@ export class IpcQueueManager {
 
   isPaused(id: string): boolean {
     return this.pausedTerminals.has(id);
+  }
+
+  /**
+   * Records that a chunk for `id` was skipped for its cached views. True only
+   * for the first skip since the last {@link clearHiddenSkip}, which is when
+   * those views need telling.
+   */
+  noteHiddenSkip(id: string): boolean {
+    if (this.hiddenSkipNotified.has(id)) return false;
+    this.hiddenSkipNotified.add(id);
+    return true;
+  }
+
+  /**
+   * A snapshot of `id` is being taken, and a view repainting from it has
+   * everything skipped so far. Any later skip is news to that view again.
+   */
+  clearHiddenSkip(id: string): void {
+    this.hiddenSkipNotified.delete(id);
   }
 
   applyBackpressure(id: string, utilization: number): boolean {
@@ -272,6 +343,8 @@ export class IpcQueueManager {
     this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - removed);
     this.pausedTerminals.delete(id);
     this.pauseStartTimes.delete(id);
+    this.hiddenQueuedBytes.delete(id);
+    this.hiddenSkipNotified.delete(id);
     // A cleared terminal (exit, force-resume) can be the one holding most of
     // the aggregate — sweep so aggregate-paused siblings resume now instead of
     // waiting out their safety timeouts.
@@ -289,6 +362,8 @@ export class IpcQueueManager {
     this.pausedTerminals.clear();
     this.pauseStartTimes.clear();
     this.queuedBytes.clear();
+    this.hiddenQueuedBytes.clear();
+    this.hiddenSkipNotified.clear();
     this.totalQueuedBytes = 0;
   }
 }

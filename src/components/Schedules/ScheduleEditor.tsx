@@ -45,7 +45,10 @@ import { logError } from "@/utils/logger";
 import { useFirstAgentOptions } from "@/components/Worktree/hooks/useFirstAgentOptions";
 import { useScheduleLaunchOptions } from "./useScheduleLaunchOptions";
 import { CadencePicker } from "./CadencePicker";
+import { ScheduleBaseBranch } from "./ScheduleBaseBranch";
 import { scheduleOsJobKindHere } from "./scheduleOsJobKind";
+import { SCHEDULES_ON_LABEL, START_WHEN_CLOSED_LABEL } from "./ScheduleSwitches";
+import type { ScheduleStarter } from "./scheduleStarters";
 import { choiceFromCron, choiceIssue, type CadenceChoice } from "./cadenceChoice";
 import {
   DONE_CONSEQUENCE,
@@ -78,6 +81,10 @@ interface Draft {
   presetId: string | null;
   prompt: string;
   worktreeId: string | null;
+  /** Each run starts in a new worktree; the base is kept while the choice moves away and back. */
+  newWorktree: boolean;
+  baseBranch: string;
+  fromRemote: boolean;
   cadence: CadenceChoice;
   missedRuns: ScheduleMissedRunPolicy;
   overlap: ScheduleOverlapPolicy;
@@ -94,6 +101,9 @@ function draftFrom(schedule: Schedule): Draft {
     presetId: schedule.launch.presetId,
     prompt: schedule.launch.prompt,
     worktreeId: schedule.launch.worktreeId,
+    newWorktree: schedule.launch.newWorktree !== null,
+    baseBranch: schedule.launch.newWorktree?.baseBranch ?? "",
+    fromRemote: schedule.launch.newWorktree?.fromRemote ?? false,
     cadence: choiceFromCron(schedule.cadence.cron),
     missedRuns: schedule.policies.missedRuns,
     overlap: schedule.policies.overlap,
@@ -105,10 +115,18 @@ function draftFrom(schedule: Schedule): Draft {
 }
 
 /** A new schedule's draft carries #15974's defaults, read from the one place they live. */
-function blankDraft(agentId: string): Draft {
-  return draftFrom(
+function blankDraft(agentId: string, starter: ScheduleStarter | null): Draft {
+  const blank = draftFrom(
     createSchedule({ id: "", projectId: "", name: "", launch: { agentId, prompt: "" } })
   );
+  if (!starter) return blank;
+  // The agent stays the user's to pick; everything else a starter names is filled in.
+  return {
+    ...blank,
+    name: starter.name,
+    prompt: starter.prompt,
+    cadence: choiceFromCron(starter.cron),
+  };
 }
 
 const DRAFT_KEYS: readonly (keyof Draft)[] = [
@@ -117,6 +135,9 @@ const DRAFT_KEYS: readonly (keyof Draft)[] = [
   "presetId",
   "prompt",
   "worktreeId",
+  "newWorktree",
+  "baseBranch",
+  "fromRemote",
   "cadence",
   "missedRuns",
   "overlap",
@@ -133,12 +154,14 @@ function sameDraft(a: Draft, b: Draft): boolean {
   );
 }
 
-type FieldKey = "name" | "agentId" | "prompt" | "cron" | "runWhenClosed" | "checkCommand";
+type FieldKey =
+  "name" | "agentId" | "baseBranch" | "prompt" | "cron" | "runWhenClosed" | "checkCommand";
 
 /** Form order, so a failed save lands on the first problem a reader would reach. */
 const FIELD_ORDER: readonly FieldKey[] = [
   "name",
   "agentId",
+  "baseBranch",
   "prompt",
   "cron",
   "runWhenClosed",
@@ -148,6 +171,7 @@ const FIELD_ORDER: readonly FieldKey[] = [
 const FIELD_ROW: Record<FieldKey, string> = {
   name: "schedule-field-name",
   agentId: "schedule-field-agent",
+  baseBranch: "schedule-field-base-branch",
   prompt: "schedule-field-prompt",
   cron: "schedule-field-cadence",
   runWhenClosed: "schedule-field-run-when-closed",
@@ -158,6 +182,8 @@ const ISSUE_FIELD: Record<string, FieldKey> = {
   name: "name",
   "launch.prompt": "prompt",
   "launch.agentId": "agentId",
+  "launch.newWorktree": "baseBranch",
+  "launch.newWorktree.baseBranch": "baseBranch",
   "cadence.cron": "cron",
   "policies.precondition.command": "checkCommand",
   [RUN_WHEN_CLOSED_PATH]: "runWhenClosed",
@@ -187,14 +213,12 @@ function runWhenClosedReason(
 function runWhenClosedGateReason(switches: ProjectScheduleSwitches | null): string | null {
   if (!switches) return null;
   const { schedulesOn, startWhenClosed } = switches;
-  if (!schedulesOn && !startWhenClosed) {
-    return "Turn on Schedules on and Start Daintree for due schedules for this project to use this";
-  }
-  if (!schedulesOn) return "Turn on Schedules on for this project to use this";
-  if (!startWhenClosed) {
-    return "Turn on Start Daintree for due schedules for this project to use this";
-  }
-  return null;
+  const off = [
+    ...(schedulesOn ? [] : [SCHEDULES_ON_LABEL]),
+    ...(startWhenClosed ? [] : [START_WHEN_CLOSED_LABEL]),
+  ].map((label) => `"${label}"`);
+  if (off.length === 0) return null;
+  return `Turn on the ${off.join(" and ")} ${off.length > 1 ? "switches" : "switch"} in the Schedules tab for this project to use this`;
 }
 
 /** The same reasons main gives, checked here so a field says what's wrong before Save. */
@@ -205,6 +229,9 @@ function localIssues(
   const issues: Partial<Record<FieldKey, string>> = {};
   if (draft.name.trim() === "") issues.name = "Name the schedule";
   if (draft.agentId === "") issues.agentId = "Choose an agent";
+  if (draft.newWorktree && draft.baseBranch.trim() === "") {
+    issues.baseBranch = "Choose a base branch";
+  }
   if (draft.prompt.trim() === "") issues.prompt = "Enter a prompt for the agent";
   const incomplete = choiceIssue(draft.cadence);
   const cron = validateCadence({ cron: draft.cadence.cron, timeZone: "UTC" });
@@ -232,6 +259,8 @@ interface ScheduleEditorProps {
   /** Null for a new schedule. */
   schedule: Schedule | null;
   defaultAgentId: string;
+  /** A new schedule opened from a starter: its name, cadence and prompt fill the draft. */
+  starter?: ScheduleStarter | null;
   worktrees: readonly WorktreeChoice[];
   now: number;
   /** What main judges "Run when Daintree isn't running" by; null until it has answered. */
@@ -252,6 +281,7 @@ interface ScheduleEditorProps {
 }
 
 const MAIN_CHECKOUT_VALUE = "__main__";
+const NEW_WORKTREE_VALUE = "__new_worktree__";
 const RUN_WHEN_CLOSED_DESCRIPTION: Record<ScheduleOsJobKind, string> = {
   "launch-agent":
     "macOS starts Daintree without a window when a run is due. One due while the Mac sleeps follows Missed runs when it wakes",
@@ -279,6 +309,7 @@ const ASSISTANT_DONE_CONSEQUENCE: Record<ScheduleDonePolicy, string> = {
 export function ScheduleEditor({
   schedule,
   defaultAgentId,
+  starter = null,
   worktrees,
   now,
   osJobContext,
@@ -293,8 +324,8 @@ export function ScheduleEditor({
 }: ScheduleEditorProps) {
   const [base, setBase] = useState<Schedule | null>(schedule);
   const initial = useMemo(
-    () => (base ? draftFrom(base) : blankDraft(defaultAgentId)),
-    [base, defaultAgentId]
+    () => (base ? draftFrom(base) : blankDraft(defaultAgentId, starter)),
+    [base, defaultAgentId, starter]
   );
   const [draft, setDraft] = useState<Draft>(initial);
   const [attempted, setAttempted] = useState(false);
@@ -413,10 +444,13 @@ export function ScheduleEditor({
     presetOptions.push({ value: draft.presetId!, label: "Missing preset" });
   }
 
-  const worktreeOptions: SettingsSelectOption[] = worktrees.map((choice) => ({
-    value: choice.id ?? MAIN_CHECKOUT_VALUE,
-    label: choice.label,
-  }));
+  const worktreeOptions: SettingsSelectOption[] = [
+    ...worktrees.map((choice) => ({
+      value: choice.id ?? MAIN_CHECKOUT_VALUE,
+      label: choice.label,
+    })),
+    { value: NEW_WORKTREE_VALUE, label: "New worktree for each run" },
+  ];
   if (draft.worktreeId !== null && !worktrees.some((choice) => choice.id === draft.worktreeId)) {
     worktreeOptions.push({ value: draft.worktreeId, label: "Missing worktree" });
   }
@@ -457,7 +491,10 @@ export function ScheduleEditor({
       agentId: draft.agentId,
       presetId: draft.presetId,
       prompt: draft.prompt,
-      worktreeId: draft.worktreeId,
+      worktreeId: draft.newWorktree ? null : draft.worktreeId,
+      newWorktree: draft.newWorktree
+        ? { baseBranch: draft.baseBranch, fromRemote: draft.fromRemote }
+        : null,
     };
     const refused = (found: ScheduleIssue[]) => {
       setServerIssues(found);
@@ -604,6 +641,7 @@ export function ScheduleEditor({
                   // The Assistant has no worktree and no background to move to.
                   if (isScheduleAssistantAgentId(value)) {
                     update("worktreeId", null);
+                    update("newWorktree", false);
                     if (draft.onDone === "background") update("onDone", "keep");
                   }
                 }}
@@ -646,14 +684,39 @@ export function ScheduleEditor({
               {!assistant && (
                 <SettingsSelect
                   label="Worktree"
-                  description="Where the agent works. The main checkout is the project folder itself"
-                  controlWidth="wide"
-                  value={draft.worktreeId ?? MAIN_CHECKOUT_VALUE}
-                  onValueChange={(value) =>
-                    update("worktreeId", value === MAIN_CHECKOUT_VALUE ? null : value)
+                  description={
+                    draft.newWorktree
+                      ? "Each run gets its own worktree and branch, and they stay until you delete them"
+                      : "Where the agent works. The main checkout is the project folder itself"
                   }
+                  controlWidth="wide"
+                  value={
+                    draft.newWorktree
+                      ? NEW_WORKTREE_VALUE
+                      : (draft.worktreeId ?? MAIN_CHECKOUT_VALUE)
+                  }
+                  onValueChange={(value) => {
+                    update("newWorktree", value === NEW_WORKTREE_VALUE);
+                    update(
+                      "worktreeId",
+                      value === MAIN_CHECKOUT_VALUE || value === NEW_WORKTREE_VALUE ? null : value
+                    );
+                  }}
                   options={worktreeOptions}
                 />
+              )}
+              {!assistant && draft.newWorktree && (
+                <SettingsDependents>
+                  <ScheduleBaseBranch
+                    id={FIELD_ROW.baseBranch}
+                    baseBranch={draft.baseBranch}
+                    error={errorFor("baseBranch")}
+                    onChange={(base) => {
+                      update("baseBranch", base.baseBranch);
+                      update("fromRemote", base.fromRemote);
+                    }}
+                  />
+                </SettingsDependents>
               )}
               <SettingsTextarea
                 rowId={FIELD_ROW.prompt}
@@ -755,7 +818,9 @@ export function ScheduleEditor({
                     description={
                       assistant
                         ? "Runs in a shell in the project folder"
-                        : "Runs in a shell in the schedule's worktree"
+                        : draft.newWorktree
+                          ? "Runs in a shell in the project folder, before a worktree is made, so a skipped run leaves none behind"
+                          : "Runs in a shell in the schedule's worktree"
                     }
                     className="font-mono"
                     spellCheck={false}

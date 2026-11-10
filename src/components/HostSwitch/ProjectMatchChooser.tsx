@@ -2,6 +2,7 @@ import type { ProjectMatchCandidate } from "@shared/types/ipc/projectMatch";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { Callout } from "@/components/ui/Callout";
 import { PathSegments } from "@/components/ui/PathSegments";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { candidateRelation } from "./hostSwitchModel";
@@ -103,7 +104,12 @@ function CandidateDetails({
       {(relation || age !== null) && (
         <span className="mt-1 block">
           {relation}
-          {relation && age !== null && " · "}
+          {relation && age !== null && (
+            <>
+              {" "}
+              <FactSeparator />{" "}
+            </>
+          )}
           {age !== null && (
             <TimeAgo
               timestamp={age}

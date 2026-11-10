@@ -26,6 +26,7 @@ import { keyBelongsToField } from "@/hooks/useListboxCursor";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { pluralize } from "@/lib/pluralize";
+import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 
 let closedAtFormatter: Intl.DateTimeFormat | undefined;
 let closedAtSecondsFormatter: Intl.DateTimeFormat | undefined;
@@ -119,7 +120,6 @@ function ResumeSessionRow({
   // scheduled run's schedule follows it, behind the schedule mark.
   const scheduleLabel = item.schedule?.label;
   const lead = item.location ?? "";
-  const rest = [item.modelName, closedAt].filter(Boolean).join(" · ");
   const meta = [item.location, scheduleLabel, item.modelName, closedAt].filter(Boolean).join(" · ");
   const optionId = `resume-session-option-${item.id}`;
   return (
@@ -195,10 +195,14 @@ function ResumeSessionRow({
           <TruncatedTooltip content={meta} focusable={false}>
             <div id={`${optionId}-meta`} className="text-xs text-text-secondary truncate">
               {scheduleLabel === undefined ? (
-                meta
+                <FactRun facts={[item.location, item.modelName, closedAt].filter(Boolean)} />
               ) : (
                 <>
-                  {lead && `${lead} · `}
+                  {lead && (
+                    <>
+                      {lead} <FactSeparator />{" "}
+                    </>
+                  )}
                   <CalendarClock
                     className="mr-1 inline-block h-3 w-3 align-[-0.125em]"
                     aria-hidden="true"
@@ -207,7 +211,18 @@ function ResumeSessionRow({
                     <span className="sr-only">Scheduled run of </span>
                   )}
                   {scheduleLabel}
-                  {rest && ` · ${rest}`}
+                  {item.modelName && (
+                    <>
+                      {" "}
+                      <FactSeparator /> {item.modelName}
+                    </>
+                  )}
+                  {closedAt && (
+                    <>
+                      {" "}
+                      <FactSeparator /> {closedAt}
+                    </>
+                  )}
                 </>
               )}
             </div>
@@ -270,7 +285,7 @@ function RemovedHeading({
           aria-hidden="true"
         />
         <span>Worktree removed</span>
-        <span aria-hidden="true">·</span>
+        <FactSeparator />
         <span className="tabular-nums">{count}</span>
       </button>
     </div>
@@ -634,12 +649,12 @@ export function ResumeSessionsPalette() {
             screen — empty, no match, every worktree gone — the band would be
             promising an action, and the footer primitive drops itself. */}
         {!selected && loadFailed && !isLoading && results.length === 0 && (
-          <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to retry" }} />
+          <PaletteFooterHints primaryHint={{ keys: "Enter", label: "to retry" }} />
         )}
         {selected && (
           <PaletteFooterHints
             primaryHint={{
-              keys: ["↵"],
+              keys: "Enter",
               // The title keeps its own case: these are sentences with names in
               // them, not the noun a sibling palette lowercases.
               label: `to resume ${selected.title}`,

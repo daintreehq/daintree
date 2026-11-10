@@ -7,7 +7,8 @@ import {
   sanitizeAgentEnv,
   sanitizeDisplayTitle,
 } from "@/config/agents";
-import type { AgentPreset } from "@shared/config/agentRegistry";
+import { FALLBACK_CHAIN_MAX, type AgentPreset } from "@shared/config/agentRegistry";
+import { validFallbackIds } from "@shared/utils/agentPresets";
 
 // Adversarial unit tests for preset merging logic
 describe("Adversarial: Preset Merging", () => {
@@ -398,19 +399,36 @@ describe("Preset fallback chain sanitization", () => {
     expect(p?.fallbacks).toEqual(["a", "b"]);
   });
 
-  it("caps fallbacks array at FALLBACK_CHAIN_MAX (3)", () => {
+  it("caps fallbacks array at FALLBACK_CHAIN_MAX, counting only valid distinct entries", () => {
+    const ids = Array.from({ length: FALLBACK_CHAIN_MAX + 2 }, (_, i) => `f${i}`);
     const long = [
-      { id: "p", name: "P", fallbacks: ["a", "b", "c", "d", "e"] },
-      { id: "a", name: "A" },
-      { id: "b", name: "B" },
-      { id: "c", name: "C" },
-      { id: "d", name: "D" },
-      { id: "e", name: "E" },
+      // Rejected entries ahead of the valid ones must not use up slots.
+      { id: "p", name: "P", fallbacks: ["p", "bad id", ids[0]!, ids[0]!, ...ids] },
+      ...ids.map((id) => ({ id, name: id.toUpperCase() })),
     ];
     const result = getMergedPresets("claude", long);
     const p = result.find((x) => x.id === "p");
-    expect(p?.fallbacks?.length).toBe(3);
-    expect(p?.fallbacks).toEqual(["a", "b", "c"]);
+    expect(p?.fallbacks).toEqual(ids.slice(0, FALLBACK_CHAIN_MAX));
+  });
+
+  it("keeps the six-account rotation from #16587 whole", () => {
+    const accounts = ["acct-a", "acct-b", "acct-c", "acct-d", "acct-e", "endpoint"];
+    const result = getMergedPresets("claude", [
+      { id: "p", name: "P", fallbacks: accounts },
+      ...accounts.map((id) => ({ id, name: id })),
+    ]);
+    expect(result.find((x) => x.id === "p")?.fallbacks).toEqual(accounts);
+  });
+
+  it("reports the uncapped chain, trimmed, deduped and in saved order", () => {
+    expect(validFallbackIds([" z ", "b", "z", 7, "p", "bad id", "a"], "p")).toEqual([
+      "z",
+      "b",
+      "a",
+    ]);
+    const ids = Array.from({ length: FALLBACK_CHAIN_MAX + 2 }, (_, i) => `f${i}`);
+    expect(validFallbackIds(ids)).toEqual(ids);
+    expect(validFallbackIds("f0")).toEqual([]);
   });
 
   it("filters out references to unknown preset IDs", () => {

@@ -27,6 +27,7 @@ import { useUnseenOutput } from "@/hooks/useUnseenOutput";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import type { Artifact } from "@shared/types";
 import { pluralize } from "@/lib/pluralize";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 
 type ApplyPatchOutcome =
   | { success: true; modifiedFiles: string[] }
@@ -967,7 +968,12 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
               {pluralize(artifacts.length, "artifact", "artifacts")}
             </span>
             {patchCount > 0 && (
-              <span className="tabular-nums">· {pluralize(patchCount, "patch", "patches")}</span>
+              <>
+                {" "}
+                <span className="tabular-nums">
+                  <FactSeparator /> {pluralize(patchCount, "patch", "patches")}
+                </span>
+              </>
             )}
           </Button>
         </div>

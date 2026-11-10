@@ -1,5 +1,4 @@
 import type { AgentStateChangePayload } from "@shared/types";
-import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { isPtyPanel } from "@shared/types/panel";
 import { terminalRegistryController } from "@/controllers";
 import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -13,6 +12,9 @@ import { reduceAgentDetected, reduceAgentExited } from "./identityReducer";
 import { logIdentityDebugDev, recordIdentityEventDev } from "./identityDiagnostics";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { hostObservedAt } from "@shared/utils/restoreProvenance";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
+import { subscribeToPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
+import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 
 // Per-terminal baseline of `changedFileCount` captured the first time an
 // agent enters "working" in a session. Compared against the count at
@@ -44,8 +46,36 @@ function readChangedFileCount(worktreeId: string | undefined): number | null {
   return snapshot?.worktreeChanges?.changedFileCount ?? 0;
 }
 
+/**
+ * Re-derive the default title of every pane a plugin agent runs in (#16469).
+ * The agent's name reaches this view with the plugin registry, which can land
+ * after the detection that named the pane, and changes when the plugin
+ * reloads. Built-in names never change, so their panes are left alone.
+ */
+function syncPluginAgentDefaultTitles(): void {
+  usePanelStore.setState((state) => {
+    let panelsById: typeof state.panelsById | null = null;
+    for (const [id, panel] of Object.entries(state.panelsById)) {
+      if (!panel || !isPtyPanel(panel) || (panel.titleMode ?? "default") !== "default") continue;
+      const agentId = panel.detectedAgentId;
+      if (agentId === undefined || isBuiltInAgentId(agentId)) continue;
+      const title = getDefaultTitle(panel.kind, {
+        detectedAgentId: agentId,
+        launchAgentId: panel.launchAgentId,
+        everDetectedAgent: panel.everDetectedAgent,
+      });
+      if (title.length === 0 || title === panel.title) continue;
+      panelsById ??= { ...state.panelsById };
+      panelsById[id] = { ...panel, title };
+    }
+    return panelsById ? { panelsById } : state;
+  });
+}
+
 export function setupIdentityListeners(): DisposableStore {
   const d = new DisposableStore();
+
+  d.add(toDisposable(subscribeToPluginAgentRegistry(syncPluginAgentDefaultTitles)));
 
   d.add(
     toDisposable(
@@ -198,7 +228,7 @@ export function setupIdentityListeners(): DisposableStore {
                 type: "info",
                 priority: "low",
                 title: "Agent finished with changes",
-                message: "Open the review hub to see what changed.",
+                message: "Open Review Hub to see what changed.",
                 // panelId enables the notification center's "Go to source"
                 // affordance; the supersede key retires the previous
                 // completion row for this worktree so repeated runs don't
@@ -206,7 +236,7 @@ export function setupIdentityListeners(): DisposableStore {
                 context: { worktreeId, panelId: terminalId, eventKind: "completed" },
                 supersedeKey: `agent-completed:${worktreeId}`,
                 action: {
-                  label: "Open review hub",
+                  label: "Open Review Hub",
                   actionId: "worktree.openReviewHub",
                   actionArgs: { worktreeId },
                   onClick: () => {
@@ -276,7 +306,11 @@ export function setupIdentityListeners(): DisposableStore {
         recordIdentityEventDev("detected", terminalId, { agentType, processIconId });
 
         const nextEverDetectedAgent = agentType ? true : undefined;
-        const nextDetectedAgentId = isBuiltInAgentId(agentType) ? agentType : undefined;
+        // The host only sends an agent it recognises — a built-in, or a plugin
+        // agent holding an executable name (#16469) — and this view's copy of
+        // the plugin registry may not have arrived yet, so it isn't re-checked.
+        const nextDetectedAgentId =
+          typeof agentType === "string" && agentType.length > 0 ? agentType : undefined;
         const nextDetectedProcessId = processIconId ?? nextDetectedAgentId;
         if (!nextDetectedProcessId && !nextEverDetectedAgent && !nextDetectedAgentId) {
           logIdentityDebugDev(

@@ -20,6 +20,10 @@ const { dispatchMock } = vi.hoisted(() => ({
   ),
 }));
 
+// No grid to open a terminal in: install commands stay copy-only here.
+vi.mock("@/hooks/terminal/useInstallCommandRunner", () => ({
+  useInstallCommandRunner: () => null,
+}));
 vi.mock("@/lib/notify", () => ({
   notify: notifyMock,
 }));

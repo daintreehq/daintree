@@ -10,7 +10,7 @@ import type { WorktreeState } from "@shared/types";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { CodexRestoreMatchRequest } from "@shared/types/ipc/agentSubagents";
 import { createHash } from "crypto";
-import { launchPromptArgText } from "@shared/types/agentSettings";
+import { launchPromptMatchText } from "@shared/utils/launchPromptArg";
 
 vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
@@ -567,7 +567,7 @@ describe("held same-folder Codex panes named by their launch prompts (#15269)", 
   /** Main has a thread in /repo whose first message is `prompt`. */
   function threadFor(prompt: string, sessionId: string): void {
     threadsByPromptHash.set(
-      createHash("sha256").update(launchPromptArgText(prompt), "utf8").digest("hex"),
+      createHash("sha256").update(launchPromptMatchText(prompt), "utf8").digest("hex"),
       sessionId
     );
   }

@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { TriangleAlert } from "lucide-react";
+import { InlineError } from "@/components/ui/field";
 
 type CreationChoice = "blank" | "clone" | "template";
 
@@ -105,7 +105,6 @@ export function AddPresetDialog({
           dangerousEnabled: selectedTemplate.dangerousEnabled,
           dangerousMode: selectedTemplate.dangerousMode,
           customFlags: selectedTemplate.customFlags,
-          inlineMode: selectedTemplate.inlineMode,
         });
         break;
     }
@@ -216,13 +215,9 @@ export function AddPresetDialog({
           </p>
         )}
         {createFailed && (
-          <p role="alert" className="mt-3 flex items-start gap-1.5 text-xs text-text-secondary">
-            <TriangleAlert
-              className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
-              aria-hidden="true"
-            />
-            <span>Couldn&apos;t save the preset. Try again.</span>
-          </p>
+          <InlineError role="alert" className="mt-3">
+            Couldn&apos;t save the preset. Try again.
+          </InlineError>
         )}
       </AppDialog.Body>
 

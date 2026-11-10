@@ -1,7 +1,10 @@
 import { Fragment, type ComponentPropsWithRef } from "react";
 import { ChevronsUpDown, FileText, GitBranch, GitCommitHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Sprout } from "@/components/icons";
+import { splitBranchType } from "@/components/Worktree/BranchLabel";
 import { SkeletonBone } from "@/components/ui/Skeleton";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { shortSha } from "@/utils/textParsing";
 import type { ActiveWorkspaceIdentity, BranchChipState } from "@/lib/workspaceIdentity";
 
@@ -16,6 +19,8 @@ export interface ToolbarProjectPillProps extends Omit<ComponentPropsWithRef<"but
   branchName: string | undefined;
   /** HEAD's commit, shown when the chip is `detached`. */
   headSha: string | undefined;
+  /** The active worktree is the main one, which the sidebar marks with the sprout. */
+  isMainWorktree?: boolean;
   isDropdownOpen: boolean;
 }
 
@@ -30,6 +35,7 @@ export function ToolbarProjectPill({
   chipState,
   branchName,
   headSha,
+  isMainWorktree,
   isDropdownOpen,
   ...rest
 }: ToolbarProjectPillProps) {
@@ -42,6 +48,11 @@ export function ToolbarProjectPill({
   // Only a label long enough to cut takes the cut's floor and yields first; a
   // short one (main, a short SHA) is its own width and never pads.
   const chipTruncates = chipState === "visible" && chipText.length > BRANCH_TAIL + 4;
+  // The sidebar card's glyph for the same branch: the sprout for main, the
+  // branch's type mark otherwise, the plain branch only for an untyped one.
+  const BranchGlyph = isMainWorktree
+    ? Sprout
+    : ((branchName ? splitBranchType(branchName).Icon : null) ?? GitBranch);
   // The button's own label wins over anything inside it, so the branch the
   // chip shows has to be said here.
   const chipSpoken =
@@ -98,7 +109,7 @@ export function ToolbarProjectPill({
           {chipState === "detached" ? (
             <GitCommitHorizontal className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
           ) : (
-            <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
+            <BranchGlyph className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
           )}
           {chipState === "reserved" ? (
             // An invisible short-branch-width run of mono text gives the placeholder
@@ -151,7 +162,12 @@ export function ToolbarProjectPillTooltipBody({
     <div className="flex flex-col gap-0.5">
       <div className="text-xs font-medium break-words">
         {name}
-        {branchLabel ? ` · ${branchLabel}` : ""}
+        {branchLabel && (
+          <>
+            {" "}
+            <FactSeparator /> {branchLabel}
+          </>
+        )}
       </div>
       {path ? (
         // Breaks after a separator where it can, inside a segment only where it must.

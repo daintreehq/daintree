@@ -10,30 +10,36 @@ import {
   resolveDangerousMode,
   combineDangerousModes,
   reconcileBypassFlags,
-  resolveInlineMode,
-  combineInlineModes,
-  resolveEffectiveInlineMode,
   reconcileInlineModeFlag,
   reconcileDecorationFlags,
   isAgentBypassSupported,
+  isAgentTerminalBypassSupported,
   buildAssignedSessionIdArgs,
   supportsSessionIdAssignment,
   mintAssignedSessionId,
+  assignmentReopensSession,
+  commandNamesSession,
   stripAssignedSessionIdArgs,
+  stripConversationSelectorArgs,
   stripConversationSelectorFlags,
   relaunchResumeAsAssignedSession,
   supportsExactSessionCapture,
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
+  getDefaultDangerousArgs,
+  getPluginBypassArgHistory,
   agentClipboardDirectory,
 } from "../agentSettings.js";
-import { setUserRegistry } from "../../config/agentRegistry.js";
+import { getEffectiveAgentConfig, setUserRegistry } from "../../config/agentRegistry.js";
+import { BUILT_IN_AGENT_IDS } from "../../config/agentIds.js";
+import { quoteLaunchPrompt } from "../../utils/launchPromptArg.js";
 import {
   registerPluginAgents,
   clearPluginAgentRegistryForTests,
 } from "../../config/pluginAgentRegistry.js";
 import { setAgentCommandDialectResolver } from "../../utils/shellEscape.js";
 import type { AgentConfig } from "../../config/agentRegistry.js";
+import type { AgentSettingsEntry } from "../agentSettings.js";
 
 // Force POSIX shell-escape semantics so the hardcoded single-quote assertions
 // below hold on Windows CI. The Windows double-quote branch is exercised via
@@ -321,33 +327,24 @@ describe("buildAgentLaunchFlags", () => {
     expect(flags).toContain("--debug");
   });
 
-  it("includes inline mode flag for codex by default (inlineMode not explicitly false)", () => {
-    const flags = buildAgentLaunchFlags({}, "codex");
-    expect(flags).toContain("--no-alt-screen");
+  it("includes the inline flag for codex and grok", () => {
+    expect(buildAgentLaunchFlags({}, "codex")).toContain("--no-alt-screen");
+    expect(buildAgentLaunchFlags({}, "grok")).toContain("--no-alt-screen");
   });
 
-  it("excludes inline mode flag when inlineMode is false", () => {
-    const flags = buildAgentLaunchFlags({ inlineMode: false }, "codex");
-    expect(flags).not.toContain("--no-alt-screen");
+  it("keeps the inline flag when an older build stored an alt-screen choice (#16356)", () => {
+    for (const inlineMode of [false, "off"]) {
+      expect(buildAgentLaunchFlags({ inlineMode }, "codex")).toContain("--no-alt-screen");
+      const grok = buildAgentLaunchFlags({ inlineMode }, "grok");
+      expect(grok).toContain("--no-alt-screen");
+      expect(grok).not.toContain("--fullscreen");
+    }
   });
 
-  it("defaults grok to inline like codex (no curated default → global switch, off ⇒ inline)", () => {
-    // Neither grok nor codex pins a curated default now, so an unset inlineMode
-    // follows the global switch (default off ⇒ inline) and both get --no-alt-screen.
-    const grok = buildAgentLaunchFlags({}, "grok");
-    const codex = buildAgentLaunchFlags({}, "codex");
-    expect(grok).toContain("--no-alt-screen");
-    expect(codex).toContain("--no-alt-screen");
-  });
-
-  it("injects opencode's --mini on the interactive spawn and drops it when alt-screen is forced", () => {
+  it("injects opencode's --mini on the interactive spawn", () => {
     // buildAgentLaunchFlags is the persistent interactive-terminal spawn path,
-    // so opencode's inline flag rides every spawn/restart unless the global
-    // switch (or a per-agent choice) forces alt-screen.
+    // so opencode's inline flag rides every spawn/restart.
     expect(buildAgentLaunchFlags({}, "opencode")).toContain("--mini");
-    expect(buildAgentLaunchFlags({}, "opencode", { globalUseAltScreen: true })).not.toContain(
-      "--mini"
-    );
   });
 
   it("does not include clipboard directory", () => {
@@ -361,7 +358,6 @@ describe("buildAgentLaunchFlags", () => {
         dangerousEnabled: true,
         dangerousArgs: "--dangerously-bypass-approvals-and-sandbox",
         customFlags: "--verbose",
-        inlineMode: true,
       },
       "codex"
     );
@@ -424,6 +420,59 @@ describe("generateAgentCommand copilot prompt injection", () => {
   });
 });
 
+describe("generateAgentCommand with a multi-line prompt (#16378)", () => {
+  forcePosixPlatform();
+  afterEach(() => setAgentCommandDialectResolver(null));
+
+  const prompt = '# Plan\n\n- it\'s one\n\t- "two"';
+  const shapes = BUILT_IN_AGENT_IDS.flatMap((id) => [
+    [id, true],
+    [id, false],
+  ]) as ReadonlyArray<readonly [string, boolean]>;
+  const command = (id: string, interactive: boolean, initialPrompt: string) =>
+    generateAgentCommand(id, {}, id, { initialPrompt, interactive });
+
+  // Everything but the prompt's own word stays as a single-line launch has it.
+  it.each(shapes)("%s (interactive %s) carries it as one built word", (id, interactive) => {
+    const word = `"$(printf '%b' '# Plan\\n\\n- it\\0047s one\\n\\t- \\0042two\\0042')"`;
+    const built = command(id, interactive, prompt);
+
+    const baseline = command(id, interactive, "PLACEHOLDER");
+    expect(baseline).toContain("'PLACEHOLDER'");
+    expect(built).toContain(word);
+    expect(built).toBe(baseline.replace("'PLACEHOLDER'", word));
+    // eslint-disable-next-line no-control-regex
+    expect(built).not.toMatch(/[\x00-\x1F\x7F]/);
+  });
+
+  it.each(shapes)("%s (interactive %s) carries it under PowerShell too", (id, interactive) => {
+    setAgentCommandDialectResolver(() => "windows");
+    const word = `"# Plan\`n\`n- it's one\`n\`t- ""two"""`;
+    const built = command(id, interactive, prompt);
+
+    const baseline = command(id, interactive, "PLACEHOLDER");
+    expect(baseline).toContain("'PLACEHOLDER'");
+    expect(built).toContain(word);
+    expect(built).toBe(baseline.replace("'PLACEHOLDER'", word));
+    // eslint-disable-next-line no-control-regex
+    expect(built).not.toMatch(/[\x00-\x1F\x7F]/);
+  });
+
+  it("stays one word for a command rewrite, whatever the prompt holds", () => {
+    const relaunch = relaunchResumeAsAssignedSession(
+      `claude --resume 11111111-1111-4111-8111-111111111111 ${quoteLaunchPrompt(
+        `say "x --resume 22222222-2222-4222-8222-222222222222  y"\nnext`
+      )}`,
+      "claude"
+    );
+
+    expect(relaunch?.sessionId).toBe("11111111-1111-4111-8111-111111111111");
+    expect(relaunch?.command).toContain(
+      `"$(printf '%b' 'say \\0042x --resume 22222222-2222-4222-8222-222222222222  y\\0042\\nnext')"`
+    );
+  });
+});
+
 describe("generateAgentCommand per-agent prompt injection", () => {
   forcePosixPlatform();
 
@@ -475,10 +524,9 @@ describe("generateAgentCommand per-agent prompt injection", () => {
     expect(oneShotCmd).toMatch(/-p\s+'Fix the bug'/);
   });
 
-  it("grok's and codex's first-spawn commands default to inline (--no-alt-screen)", () => {
+  it("grok's and codex's first-spawn commands launch inline (--no-alt-screen)", () => {
     // Covers the generateAgentCommand inline-flag path (separate from
-    // buildAgentLaunchFlags): an unset inlineMode follows the global switch
-    // (default off ⇒ inline), so both agents get --no-alt-screen.
+    // buildAgentLaunchFlags).
     const grok = generateAgentCommand("grok", {}, "grok");
     const codex = generateAgentCommand("codex", {}, "codex");
     expect(grok).toContain("--no-alt-screen");
@@ -1042,8 +1090,9 @@ describe("buildLaunchCommandFromFlags", () => {
 });
 
 // #10432 — global skip-permissions override. claude/codex declare
-// supports.permissionBypass === true; gemini declares false but still has a
-// per-agent dangerous flag (--yolo) in DEFAULT_DANGEROUS_ARGS.
+// supports.permissionBypass === true for the assistant; gemini declares false
+// there but still has a terminal bypass flag (--yolo) in DEFAULT_DANGEROUS_ARGS,
+// which is what the global switch follows (#16414).
 describe("isAgentBypassSupported", () => {
   it("is true only for agents declaring supports.permissionBypass", () => {
     expect(isAgentBypassSupported("claude")).toBe(true);
@@ -1059,8 +1108,8 @@ describe("resolveEffectiveBypass", () => {
     expect(resolveEffectiveBypass({ dangerousEnabled: false }, "codex", true)).toBe(true);
   });
 
-  it("does not force bypass for an unsupported agent when the global is on", () => {
-    expect(resolveEffectiveBypass({ dangerousEnabled: false }, "gemini", true)).toBe(false);
+  it("does not force bypass for an agent with no terminal bypass flag when the global is on", () => {
+    expect(resolveEffectiveBypass({ dangerousEnabled: false }, "opencode", true)).toBe(false);
   });
 
   it("keeps the per-agent toggle working regardless of bypass support (unguarded)", () => {
@@ -1086,11 +1135,11 @@ describe("resolveEffectiveBypass", () => {
     expect(resolveEffectiveBypass({ dangerousMode: "on" }, "claude", false)).toBe(true);
   });
 
-  it("'inherit' defers to the global override, gated by bypass support", () => {
+  it("'inherit' defers to the global override, gated by a terminal bypass flag", () => {
     expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "claude", true)).toBe(true);
     expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "claude", false)).toBe(false);
-    // Unsupported agent never inherits the global flag.
-    expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "gemini", true)).toBe(false);
+    // An agent with no bypass flag never inherits the global switch.
+    expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "opencode", true)).toBe(false);
   });
 
   it("prefers the tri-state field over the legacy boolean when both are present", () => {
@@ -1098,6 +1147,98 @@ describe("resolveEffectiveBypass", () => {
     expect(
       resolveEffectiveBypass({ dangerousMode: "off", dangerousEnabled: true }, "claude", true)
     ).toBe(false);
+  });
+});
+
+// #16414 — the global switch reaches every agent with a terminal bypass flag,
+// not just the ones whose Daintree Assistant wiring declares bypass support.
+describe("global skip-permissions reaches every agent with a terminal bypass flag", () => {
+  afterEach(() => {
+    setUserRegistry({});
+  });
+
+  it("injects the registry bypass flag for an agent with no assistant wiring", () => {
+    expect(isAgentBypassSupported("antigravity")).toBe(false);
+    expect(resolveEffectiveBypass({}, "antigravity", true)).toBe(true);
+    expect(generateAgentFlags({}, "antigravity", { globalSkipPermissions: true })).toContain(
+      DEFAULT_DANGEROUS_ARGS.antigravity
+    );
+  });
+
+  it("injects every registered bypass flag for an agent left on Default", () => {
+    for (const [agentId, flag] of Object.entries(DEFAULT_DANGEROUS_ARGS)) {
+      const off = generateAgentFlags({}, agentId);
+      const on = generateAgentFlags({}, agentId, { globalSkipPermissions: true });
+      expect(isAgentTerminalBypassSupported(agentId), agentId).toBe(true);
+      expect(on.join(" "), agentId).toContain(flag);
+      expect(off.join(" "), agentId).not.toContain(flag);
+    }
+  });
+
+  it("gives Gemini --yolo: its assistant permissionBypass opt-out doesn't reach terminals", () => {
+    expect(isAgentBypassSupported("gemini")).toBe(false);
+    expect(isAgentTerminalBypassSupported("gemini")).toBe(true);
+    expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "gemini", true)).toBe(true);
+    expect(generateAgentFlags({}, "gemini", { globalSkipPermissions: true })).toContain(
+      DEFAULT_DANGEROUS_ARGS.gemini
+    );
+  });
+
+  it("never reaches an agent with no registered bypass flag, even with written dangerousArgs", () => {
+    for (const agentId of ["opencode", "copilot", "goose", "mistral", "toString", "unknown"]) {
+      expect(isAgentTerminalBypassSupported(agentId), agentId).toBe(false);
+      expect(resolveEffectiveBypass({}, agentId, true), agentId).toBe(false);
+    }
+    const entry = { dangerousArgs: "--dangerously-skip-permissions" };
+    expect(resolveEffectiveBypass(entry, "opencode", true)).toBe(false);
+    expect(generateAgentFlags(entry, "opencode", { globalSkipPermissions: true })).not.toContain(
+      "--dangerously-skip-permissions"
+    );
+    expect(isAgentTerminalBypassSupported(undefined)).toBe(false);
+  });
+
+  it("keeps a user-defined agent that opts in through supports.permissionBypass", () => {
+    setUserRegistry({
+      "my-agent": {
+        id: "my-agent",
+        name: "My Agent",
+        command: "my-agent",
+        color: "#123456",
+        iconId: "terminal",
+        supportsContextInjection: false,
+        supports: {
+          mcpInjection: "project-config",
+          settingsOverlay: false,
+          permissionBypass: true,
+          trustDialog: false,
+          versionProbe: false,
+          tier: "experimental",
+        },
+      },
+    });
+    expect(isAgentTerminalBypassSupported("my-agent")).toBe(true);
+    expect(
+      generateAgentFlags({ dangerousArgs: "--auto" }, "my-agent", { globalSkipPermissions: true })
+    ).toContain("--auto");
+  });
+
+  it("still lets an explicit agent or preset Off veto the global switch", () => {
+    expect(resolveEffectiveBypass({ dangerousMode: "off" }, "antigravity", true)).toBe(false);
+    const merged = combineDangerousModes("inherit", "off");
+    expect(resolveEffectiveBypass({ dangerousMode: merged }, "gemini", true)).toBe(false);
+  });
+
+  it("reconciles a resumed snapshot to carry the flag while the global is on", () => {
+    const flag = DEFAULT_DANGEROUS_ARGS.antigravity as string;
+    const bypass = resolveEffectiveBypass({}, "antigravity", true);
+    expect(reconcileBypassFlags(["--model", "x"], "antigravity", bypass)).toEqual([
+      "--model",
+      "x",
+      flag,
+    ]);
+    expect(
+      reconcileBypassFlags([flag], "antigravity", resolveEffectiveBypass({}, "antigravity", false))
+    ).toEqual([]);
   });
 });
 
@@ -1336,11 +1477,11 @@ describe("generateAgentFlags with globalSkipPermissions", () => {
     expect(flags).toContain(DEFAULT_DANGEROUS_ARGS.claude);
   });
 
-  it("does not inject the dangerous flag for an unsupported agent when the global is on", () => {
-    const flags = generateAgentFlags({ dangerousEnabled: false }, "gemini", {
+  it("injects no bypass flag for an agent that has none when the global is on", () => {
+    const flags = generateAgentFlags({ dangerousEnabled: false }, "opencode", {
       globalSkipPermissions: true,
     });
-    expect(flags).not.toContain(DEFAULT_DANGEROUS_ARGS.gemini);
+    expect(flags).toEqual(generateAgentFlags({ dangerousEnabled: false }, "opencode"));
   });
 
   it("still honours the per-agent toggle for an unsupported agent when the global is off", () => {
@@ -1366,144 +1507,118 @@ describe("buildAgentLaunchFlags with globalSkipPermissions", () => {
     expect(flags).toContain(DEFAULT_DANGEROUS_ARGS.claude);
   });
 
-  it("does not capture the dangerous flag for an unsupported agent when the global is on", () => {
+  it("captures Gemini's flag when the global is on, despite its assistant opt-out (#16414)", () => {
     const flags = buildAgentLaunchFlags({ dangerousEnabled: false }, "gemini", {
       globalSkipPermissions: true,
     });
-    expect(flags).not.toContain(DEFAULT_DANGEROUS_ARGS.gemini);
+    expect(flags).toContain(DEFAULT_DANGEROUS_ARGS.gemini);
   });
 });
 
-describe("resolveInlineMode (tri-state, #10876)", () => {
-  it("maps a genuinely-absent value to inherit", () => {
-    expect(resolveInlineMode({})).toBe("inherit");
-    expect(resolveInlineMode({ inlineMode: undefined })).toBe("inherit");
+describe("inline-only launches (#16356)", () => {
+  const inlineAgents = Object.keys(DEFAULT_AGENT_SETTINGS.agents).filter(
+    (id) => getEffectiveAgentConfig(id)?.capabilities?.inlineModeFlag
+  );
+  // What an older build stored when someone chose alt screen: the entry keeps
+  // it through its index signature, and nothing reads it any more.
+  const storedChoices: AgentSettingsEntry[] = [
+    {},
+    { inlineMode: "off" },
+    { inlineMode: false },
+    { inlineMode: "inherit" },
+    { inlineMode: "on" },
+  ];
+
+  it("launches every agent with an inline flag inline, whatever choice was stored", () => {
+    expect(inlineAgents).toEqual(expect.arrayContaining(["codex", "grok", "opencode"]));
+    for (const agentId of inlineAgents) {
+      const capabilities = getEffectiveAgentConfig(agentId)!.capabilities!;
+      for (const entry of storedChoices) {
+        const label = `${agentId} ${JSON.stringify(entry)}`;
+        const flags = buildAgentLaunchFlags(entry, agentId);
+        expect(
+          flags.filter((f) => f === capabilities.inlineModeFlag),
+          label
+        ).toHaveLength(1);
+        const command = generateAgentCommand(agentId, entry, agentId);
+        expect(command.split(" "), label).toContain(capabilities.inlineModeFlag);
+        if (capabilities.altScreenFlag) {
+          expect(flags, label).not.toContain(capabilities.altScreenFlag);
+          expect(command.split(" "), label).not.toContain(capabilities.altScreenFlag);
+        }
+      }
+    }
   });
 
-  it("maps a legacy boolean literally, NOT like resolveDangerousMode", () => {
-    // The literal mapping (false → "off") is the deliberate difference from
-    // resolveDangerousMode (false → "inherit"): inlineMode was seeded with a
-    // concrete per-agent boolean, so false must stay an explicit alt-screen veto.
-    expect(resolveInlineMode({ inlineMode: true })).toBe("on");
-    expect(resolveInlineMode({ inlineMode: false })).toBe("off");
-    // Contrast: the bypass resolver collapses false to inherit.
-    expect(resolveDangerousMode({ dangerousEnabled: false })).toBe("inherit");
+  it("carries no screen-mode flag on a headless one-shot", () => {
+    for (const agentId of inlineAgents) {
+      const capabilities = getEffectiveAgentConfig(agentId)!.capabilities!;
+      const tokens = generateAgentCommand(agentId, {}, agentId, {
+        initialPrompt: "Fix the bug",
+        interactive: false,
+      }).split(" ");
+      expect(tokens, agentId).not.toContain(capabilities.inlineModeFlag);
+      if (capabilities.altScreenFlag)
+        expect(tokens, agentId).not.toContain(capabilities.altScreenFlag);
+    }
   });
 
-  it("passes an explicit tri-state string through unchanged", () => {
-    expect(resolveInlineMode({ inlineMode: "inherit" })).toBe("inherit");
-    expect(resolveInlineMode({ inlineMode: "on" })).toBe("on");
-    expect(resolveInlineMode({ inlineMode: "off" })).toBe("off");
-  });
-});
-
-describe("combineInlineModes (#10876)", () => {
-  it("lets an explicit preset mode win over the agent mode", () => {
-    expect(combineInlineModes("on", "off")).toBe("off");
-    expect(combineInlineModes("off", "on")).toBe("on");
-  });
-
-  it("defers to the agent mode when the preset inherits", () => {
-    expect(combineInlineModes("on", "inherit")).toBe("on");
-    expect(combineInlineModes("off", undefined)).toBe("off");
-  });
-});
-
-describe("resolveEffectiveInlineMode (#10876)", () => {
-  // Synthetic agent exercising the curated registry-default tier. No shipped
-  // agent sets `defaultInlineMode` anymore — they all default inline via the
-  // global switch so it stays user-overridable — so the tier is covered here
-  // with a registered test agent instead of coupling to a real one.
-  const ALT_DEFAULT_AGENT: AgentConfig = {
-    id: "alt-default-agent",
-    name: "Alt Default Agent",
-    command: "alt-default-agent",
-    color: "#ffffff",
-    iconId: "custom",
-    supportsContextInjection: false,
-    capabilities: {
-      scrollback: 1000,
-      inlineModeFlag: "--no-alt-screen",
-      defaultInlineMode: false,
-    },
-  };
-  beforeEach(() => setUserRegistry({ "alt-default-agent": ALT_DEFAULT_AGENT }));
-  afterEach(() => setUserRegistry({}));
-
-  it("honours an explicit on/off regardless of the global switch", () => {
-    expect(resolveEffectiveInlineMode({ inlineMode: "on" }, "codex", true)).toBe(true);
-    expect(resolveEffectiveInlineMode({ inlineMode: "off" }, "codex", false)).toBe(false);
-    // Explicit off is a veto that beats a global "use alt-screen" of false too.
-    expect(resolveEffectiveInlineMode({ inlineMode: "off" }, "codex", true)).toBe(false);
-  });
-
-  it("keeps a curated registry default winning over the global switch on inherit", () => {
-    // The agent declares defaultInlineMode: false (alt-screen) — it must stay
-    // alt-screen even when the global "use alt-screen by default" is OFF.
-    expect(resolveEffectiveInlineMode({}, "alt-default-agent", false)).toBe(false);
-    expect(resolveEffectiveInlineMode({}, "alt-default-agent", true)).toBe(false);
-    expect(resolveEffectiveInlineMode({ inlineMode: "inherit" }, "alt-default-agent", false)).toBe(
-      false
-    );
-  });
-
-  it("falls back to the global switch on inherit when no registry default is declared", () => {
-    // Codex and Grok declare no defaultInlineMode → the global switch decides,
-    // so both now default inline (global off ⇒ inline).
-    expect(resolveEffectiveInlineMode({}, "codex", false)).toBe(true); // global off → inline
-    expect(resolveEffectiveInlineMode({}, "codex", true)).toBe(false); // global on → alt-screen
-    expect(resolveEffectiveInlineMode({}, "grok", false)).toBe(true); // grok follows global now
-    expect(resolveEffectiveInlineMode({}, "grok", true)).toBe(false);
-  });
-
-  it("still lets an agent override its curated registry default explicitly", () => {
-    expect(resolveEffectiveInlineMode({ inlineMode: "on" }, "alt-default-agent", false)).toBe(true);
+  it("leaves agents with no inline mode on their own full-screen default", () => {
+    // Crush must run full-screen and Goose declares no inline flag: no screen
+    // token is added to their launch, and a saved one is never stripped.
+    for (const agentId of ["crush", "goose"]) {
+      expect(getEffectiveAgentConfig(agentId)?.capabilities?.inlineModeFlag).toBeUndefined();
+      expect(buildAgentLaunchFlags({ inlineMode: "on" }, agentId)).toEqual(
+        buildAgentLaunchFlags({ inlineMode: "off" }, agentId)
+      );
+      const saved = ["--fullscreen", "--x", "--no-alt-screen"];
+      expect(reconcileInlineModeFlag(saved, agentId)).toEqual(saved);
+    }
   });
 });
 
-describe("reconcileInlineModeFlag (resume trap, #10876)", () => {
-  it("strips a stale --no-alt-screen when the resolved decision is alt-screen", () => {
-    const flags = ["--model", "gpt", "--no-alt-screen"];
-    expect(reconcileInlineModeFlag(flags, "codex", false)).toEqual(["--model", "gpt"]);
+describe("reconcileInlineModeFlag (#10876, #16356)", () => {
+  it("rewrites a saved --fullscreen to the inline flag in place", () => {
+    expect(reconcileInlineModeFlag(["--model", "x", "--fullscreen", "--y"], "grok")).toEqual([
+      "--model",
+      "x",
+      "--no-alt-screen",
+      "--y",
+    ]);
   });
 
-  it("re-appends the flag when inline is wanted but the snapshot lacks it", () => {
-    expect(reconcileInlineModeFlag(["--model", "gpt"], "codex", true)).toEqual([
+  it("appends the inline flag when the snapshot lacks it", () => {
+    expect(reconcileInlineModeFlag(["--model", "gpt"], "codex")).toEqual([
       "--model",
       "gpt",
       "--no-alt-screen",
     ]);
+    expect(reconcileInlineModeFlag([], "opencode")).toEqual(["--mini"]);
   });
 
-  it("is idempotent when the snapshot already matches the decision", () => {
+  it("is idempotent when the snapshot is already inline", () => {
     const inline = ["--no-alt-screen", "--model", "gpt"];
-    expect(reconcileInlineModeFlag(inline, "codex", true)).toEqual(inline);
-    const alt = ["--model", "gpt"];
-    expect(reconcileInlineModeFlag(alt, "codex", false)).toEqual(alt);
+    expect(reconcileInlineModeFlag(inline, "codex")).toEqual(inline);
   });
 
-  it("dedupes duplicate flags, keeping the first in place, when inline is wanted", () => {
+  it("dedupes duplicate flags, keeping the first in place", () => {
     const flags = ["--no-alt-screen", "--model", "gpt", "--no-alt-screen"];
-    expect(reconcileInlineModeFlag(flags, "codex", true)).toEqual([
-      "--no-alt-screen",
-      "--model",
-      "gpt",
-    ]);
+    expect(reconcileInlineModeFlag(flags, "codex")).toEqual(["--no-alt-screen", "--model", "gpt"]);
   });
 
   it("leaves flags untouched for an agent with no inlineModeFlag", () => {
     const flags = ["--foo", "--no-alt-screen"];
-    expect(reconcileInlineModeFlag(flags, "claude", false)).toEqual(flags);
-    expect(reconcileInlineModeFlag(flags, "claude", true)).toEqual(flags);
+    expect(reconcileInlineModeFlag(flags, "claude")).toEqual(flags);
   });
 });
 
-describe("paired screen-mode polarities (#11423)", () => {
+describe("paired screen-mode tokens (#11423, #16356)", () => {
   // Sentinel tokens, not the real `--no-alt-screen`/`--fullscreen`: these cases
-  // pin the selection *mechanism* across the capability matrix, so they stay
-  // green if a shipped agent's flag spelling ever changes.
+  // pin the mechanism across the capability matrix, so they stay green if a
+  // shipped agent's flag spelling ever changes.
   const INLINE = "--sentinel-inline";
   const ALT = "--sentinel-alt";
+  const AGENT_IDS = ["inline-only", "alt-only", "both-modes", "neither-mode"];
 
   const agent = (id: string, capabilities: AgentConfig["capabilities"]): AgentConfig => ({
     id,
@@ -1525,133 +1640,95 @@ describe("paired screen-mode polarities (#11423)", () => {
   );
   afterEach(() => setUserRegistry({}));
 
-  it("selects at most one token per direction across the capability matrix", () => {
-    // The gap #11423 closes: an agent declaring only `inlineModeFlag` still has
-    // NO way to force alt-screen (undefined row), which is why grok needed the
-    // opposite polarity added rather than a change to the resolver.
-    const cases: Array<[string, boolean, string | undefined]> = [
-      ["inline-only", true, INLINE],
-      ["inline-only", false, undefined],
-      ["alt-only", true, undefined],
-      ["alt-only", false, ALT],
-      ["both-modes", true, INLINE],
-      ["both-modes", false, ALT],
-      ["neither-mode", true, undefined],
-      ["neither-mode", false, undefined],
+  it("injects only the inline token, whatever choice was stored", () => {
+    const cases: Array<[string, string | undefined]> = [
+      ["inline-only", INLINE],
+      ["alt-only", undefined],
+      ["both-modes", INLINE],
+      ["neither-mode", undefined],
     ];
-    for (const [agentId, effectiveInline, expected] of cases) {
-      const flags = buildAgentLaunchFlags({ inlineMode: effectiveInline ? "on" : "off" }, agentId);
-      const screenTokens = flags.filter((f) => f === INLINE || f === ALT);
-      expect(screenTokens).toEqual(expected ? [expected] : []);
+    for (const [agentId, expected] of cases) {
+      for (const entry of [{}, { inlineMode: "off" }, { inlineMode: false }]) {
+        const flags = buildAgentLaunchFlags(entry, agentId);
+        const screenTokens = flags.filter((f) => f === INLINE || f === ALT);
+        expect(screenTokens, `${agentId} ${JSON.stringify(entry)}`).toEqual(
+          expected ? [expected] : []
+        );
+        const commandTokens = generateAgentCommand(agentId, entry, agentId)
+          .split(" ")
+          .filter((f) => f === INLINE || f === ALT);
+        expect(commandTokens, `${agentId} command`).toEqual(expected ? [expected] : []);
+      }
     }
   });
 
-  it("never lets both polarities coexist after reconciliation", () => {
-    for (const effectiveInline of [true, false]) {
-      const reconciled = reconcileInlineModeFlag(
-        [INLINE, "--model", ALT],
-        "both-modes",
-        effectiveInline
-      );
-      expect(reconciled).toEqual([effectiveInline ? INLINE : ALT, "--model"]);
-    }
-  });
-
-  it("flips a stale token in place rather than relocating it", () => {
-    // Position stability keeps an already-persisted snapshot's ordering intact
-    // so a flip rewrites one slot instead of churning the whole array.
-    expect(reconcileInlineModeFlag(["--a", INLINE, "--b"], "both-modes", false)).toEqual([
-      "--a",
-      ALT,
-      "--b",
+  it("never lets both polarities survive reconciliation", () => {
+    expect(reconcileInlineModeFlag([INLINE, "--model", ALT], "both-modes")).toEqual([
+      INLINE,
+      "--model",
     ]);
-    expect(reconcileInlineModeFlag(["--a", ALT, "--b"], "both-modes", true)).toEqual([
+    expect(reconcileInlineModeFlag([ALT, "--model", INLINE], "both-modes")).toEqual([
+      INLINE,
+      "--model",
+    ]);
+  });
+
+  it("rewrites a stale alt token in place rather than relocating it", () => {
+    // Position stability keeps an already-persisted snapshot's ordering intact
+    // so the rewrite touches one slot instead of churning the whole array.
+    expect(reconcileInlineModeFlag(["--a", ALT, "--b"], "both-modes")).toEqual([
       "--a",
       INLINE,
       "--b",
     ]);
   });
 
-  it("upgrades a pre-#11423 snapshot that carried no screen-mode token", () => {
-    // The migration path: snapshots captured before `altScreenFlag` existed hold
-    // only the absence of the inline flag, which used to mean "alt screen" but
-    // actually left the CLI on its own default.
-    const legacy = ["--model", "grok-build"];
-    const upgraded = reconcileInlineModeFlag(legacy, "both-modes", false);
-    expect(upgraded).toEqual(["--model", "grok-build", ALT]);
-    // Reconciling the upgraded snapshot again must be a no-op.
-    expect(reconcileInlineModeFlag(upgraded, "both-modes", false)).toEqual(upgraded);
-  });
-
-  it("dedupes repeated managed tokens down to the wanted one", () => {
-    expect(reconcileInlineModeFlag([INLINE, "--keep", INLINE, ALT], "both-modes", true)).toEqual([
+  it("dedupes repeated managed tokens down to the inline one", () => {
+    expect(reconcileInlineModeFlag([INLINE, "--keep", INLINE, ALT], "both-modes")).toEqual([
       INLINE,
       "--keep",
     ]);
   });
 
-  it("strips the only declared token when the other direction has none", () => {
-    // An inline-only agent asked for alt-screen loses its inline flag and gains
-    // nothing — it falls back to the CLI's own default, unchanged from #10876.
-    expect(reconcileInlineModeFlag(["--a", INLINE], "inline-only", false)).toEqual(["--a"]);
-    expect(reconcileInlineModeFlag(["--a", ALT], "alt-only", true)).toEqual(["--a"]);
-  });
-
-  it("leaves an agent declaring neither polarity untouched", () => {
-    const flags = ["--a", INLINE, ALT];
-    expect(reconcileInlineModeFlag(flags, "neither-mode", true)).toEqual(flags);
-    expect(reconcileInlineModeFlag(flags, "neither-mode", false)).toEqual(flags);
+  it("leaves an agent with no inline flag untouched, an alt-only one included", () => {
+    for (const agentId of ["alt-only", "neither-mode"]) {
+      const flags = ["--a", INLINE, ALT];
+      expect(reconcileInlineModeFlag(flags, agentId)).toEqual(flags);
+      expect(reconcileInlineModeFlag([], agentId)).toEqual([]);
+    }
   });
 
   it("injects into an empty snapshot, the shape the relaunch chokepoints pass", () => {
     // restart.ts calls the reconciler with [] and uses the result only when it
-    // comes back non-empty, so a session launched before either polarity
-    // existed still picks up the current decision.
-    expect(reconcileInlineModeFlag([], "both-modes", false)).toEqual([ALT]);
-    expect(reconcileInlineModeFlag([], "both-modes", true)).toEqual([INLINE]);
-    expect(reconcileInlineModeFlag([], "alt-only", true)).toEqual([]);
-    expect(reconcileInlineModeFlag([], "neither-mode", false)).toEqual([]);
+    // comes back non-empty, so a session launched before the inline flag
+    // existed still picks it up.
+    expect(reconcileInlineModeFlag([], "both-modes")).toEqual([INLINE]);
+    expect(reconcileInlineModeFlag([], "inline-only")).toEqual([INLINE]);
   });
 
   it("never mutates the input array", () => {
-    for (const agentId of ["inline-only", "alt-only", "both-modes", "neither-mode"]) {
-      for (const effectiveInline of [true, false]) {
-        const input = ["--keep", INLINE, ALT];
-        const snapshot = [...input];
-        reconcileInlineModeFlag(input, agentId, effectiveInline);
-        expect(input, `${agentId} mutated its input`).toEqual(snapshot);
-      }
+    for (const agentId of AGENT_IDS) {
+      const input = ["--keep", INLINE, ALT];
+      const snapshot = [...input];
+      reconcileInlineModeFlag(input, agentId);
+      expect(input, `${agentId} mutated its input`).toEqual(snapshot);
     }
   });
 
-  it("is idempotent for every capability and direction combination", () => {
+  it("is idempotent for every capability combination", () => {
     const inputs = [[], ["--keep"], [INLINE], [ALT], ["--keep", INLINE, ALT, INLINE]];
-    for (const agentId of ["inline-only", "alt-only", "both-modes", "neither-mode"]) {
-      for (const effectiveInline of [true, false]) {
-        for (const input of inputs) {
-          const once = reconcileInlineModeFlag(input, agentId, effectiveInline);
-          expect(
-            reconcileInlineModeFlag(once, agentId, effectiveInline),
-            `${agentId} inline=${effectiveInline} input=${JSON.stringify(input)}`
-          ).toEqual(once);
-        }
+    for (const agentId of AGENT_IDS) {
+      for (const input of inputs) {
+        const once = reconcileInlineModeFlag(input, agentId);
+        expect(
+          reconcileInlineModeFlag(once, agentId),
+          `${agentId} input=${JSON.stringify(input)}`
+        ).toEqual(once);
       }
     }
-  });
-
-  it("injects an alt-only agent's token through the generated command too", () => {
-    // The command builder must select from the same pair — a guard accidentally
-    // keyed on `inlineModeFlag` would silently skip an alt-only agent here.
-    const altScreen = generateAgentCommand("alt-only", { inlineMode: "off" }, "alt-only");
-    expect(altScreen).toContain(ALT);
-
-    const inline = generateAgentCommand("alt-only", { inlineMode: "on" }, "alt-only");
-    expect(inline).not.toContain(ALT);
   });
 
   it("keeps an alt-only agent's token out of a headless one-shot", () => {
-    // The interactive gate must cover the alt polarity independently: grok
-    // declares both, so it can't prove the gate isn't keyed on the inline flag.
     const headless = generateAgentCommand("alt-only", { inlineMode: "off" }, "alt-only", {
       interactive: false,
     });
@@ -1664,17 +1741,8 @@ describe("screen-mode reconciliation composed with bypass reconciliation (#11423
   // stateHydration/statePatcher) compose the two reconcilers in this exact
   // order. They own disjoint tokens, so neither may disturb the other's — this
   // is the interaction the composition would hide if it regressed.
-  const reconcileBoth = (
-    flags: readonly string[],
-    agentId: string,
-    effectiveBypass: boolean,
-    effectiveInline: boolean
-  ) =>
-    reconcileInlineModeFlag(
-      reconcileBypassFlags(flags, agentId, effectiveBypass),
-      agentId,
-      effectiveInline
-    );
+  const reconcileBoth = (flags: readonly string[], agentId: string, effectiveBypass: boolean) =>
+    reconcileInlineModeFlag(reconcileBypassFlags(flags, agentId, effectiveBypass), agentId);
 
   // Grok's real bypass token, so the composition is exercised with a token the
   // bypass reconciler actually owns rather than one it ignores.
@@ -1682,102 +1750,25 @@ describe("screen-mode reconciliation composed with bypass reconciliation (#11423
   const screenTokens = (flags: readonly string[]) =>
     flags.filter((f) => f === "--no-alt-screen" || f === "--fullscreen");
 
-  it("flips the screen-mode token while the bypass reconciler keeps its own", () => {
-    const altScreen = reconcileBoth(["--no-alt-screen"], "grok", true, false);
-    expect(screenTokens(altScreen)).toEqual(["--fullscreen"]);
-    // The bypass reconciler injected its token into the same array.
-    expect(altScreen).toContain(bypassToken);
-
-    // Flipping screen mode back leaves exactly one screen token and does not
-    // disturb the bypass token the other reconciler owns.
-    const backToInline = reconcileBoth(altScreen, "grok", true, true);
-    expect(screenTokens(backToInline)).toEqual(["--no-alt-screen"]);
-    expect(backToInline.filter((f) => f === bypassToken)).toEqual([bypassToken]);
+  it("rewrites a saved --fullscreen while the bypass reconciler keeps its own token", () => {
+    const reconciled = reconcileBoth(["--fullscreen"], "grok", true);
+    expect(screenTokens(reconciled)).toEqual(["--no-alt-screen"]);
+    expect(reconciled.filter((f) => f === bypassToken)).toEqual([bypassToken]);
   });
 
   it("drops the bypass token without disturbing the screen-mode token", () => {
-    // The inverse direction: bypass off, screen mode unchanged. Proves neither
-    // reconciler claims the other's token.
-    const both = reconcileBoth([], "grok", true, false);
+    const both = reconcileBoth([], "grok", true);
     expect(both).toContain(bypassToken);
 
-    const bypassOff = reconcileBoth(both, "grok", false, false);
+    const bypassOff = reconcileBoth(both, "grok", false);
     expect(bypassOff).not.toContain(bypassToken);
-    expect(screenTokens(bypassOff)).toEqual(["--fullscreen"]);
+    expect(screenTokens(bypassOff)).toEqual(["--no-alt-screen"]);
   });
 
   it("is idempotent under repeated composed reconciliation", () => {
-    const once = reconcileBoth(["--model", "grok-build"], "grok", false, false);
-    expect(reconcileBoth(once, "grok", false, false)).toEqual(once);
-    expect(screenTokens(once)).toEqual(["--fullscreen"]);
-  });
-});
-
-describe("global alt-screen threading through command generation (#10876)", () => {
-  it("drops --no-alt-screen for an inherit agent when globalUseAltScreen is on", () => {
-    // Codex inherits (no explicit choice, no registry default) → follows global.
-    expect(buildAgentLaunchFlags({}, "codex", { globalUseAltScreen: true })).not.toContain(
-      "--no-alt-screen"
-    );
-    expect(generateAgentCommand("codex", {}, "codex", { globalUseAltScreen: true })).not.toContain(
-      "--no-alt-screen"
-    );
-  });
-
-  it("keeps --no-alt-screen for an inherit agent when globalUseAltScreen is off", () => {
-    expect(buildAgentLaunchFlags({}, "codex", { globalUseAltScreen: false })).toContain(
-      "--no-alt-screen"
-    );
-  });
-
-  it("makes grok follow the global switch now that it has no curated default", () => {
-    // Grok no longer pins a curated default, so it threads the global switch
-    // like any other inherit agent: inline when off, alt-screen when on. Grok
-    // declares BOTH polarities (#11423), so each direction is asserted
-    // positively — "alt screen" must inject the force-fullscreen token, not
-    // merely omit the inline one, or the setting is a no-op against grok's own
-    // config/auto-detected default.
-    const inline = buildAgentLaunchFlags({}, "grok", { globalUseAltScreen: false });
-    expect(inline).toContain("--no-alt-screen");
-    expect(inline).not.toContain("--fullscreen");
-
-    const altScreen = buildAgentLaunchFlags({}, "grok", { globalUseAltScreen: true });
-    expect(altScreen).toContain("--fullscreen");
-    expect(altScreen).not.toContain("--no-alt-screen");
-  });
-
-  it("threads both grok polarities through the generated command too", () => {
-    // generateAgentCommand and buildAgentLaunchFlags are dual representations
-    // (#9654) — a fix applied to only one silently drops the flag on restart.
-    const inline = generateAgentCommand("grok", {}, "grok", { globalUseAltScreen: false });
-    expect(inline).toContain("--no-alt-screen");
-    expect(inline).not.toContain("--fullscreen");
-
-    const altScreen = generateAgentCommand("grok", {}, "grok", { globalUseAltScreen: true });
-    expect(altScreen).toContain("--fullscreen");
-    expect(altScreen).not.toContain("--no-alt-screen");
-  });
-
-  it("omits both screen-mode polarities for a headless one-shot", () => {
-    // Screen mode configures the interactive TUI only, so neither token may
-    // reach a non-interactive invocation in either direction.
-    for (const globalUseAltScreen of [true, false]) {
-      const command = generateAgentCommand("grok", {}, "grok", {
-        globalUseAltScreen,
-        interactive: false,
-      });
-      expect(command).not.toContain("--fullscreen");
-      expect(command).not.toContain("--no-alt-screen");
-    }
-  });
-
-  it("lets an explicit per-agent choice veto the global switch", () => {
-    expect(
-      buildAgentLaunchFlags({ inlineMode: "on" }, "codex", { globalUseAltScreen: true })
-    ).toContain("--no-alt-screen");
-    expect(
-      buildAgentLaunchFlags({ inlineMode: "off" }, "codex", { globalUseAltScreen: false })
-    ).not.toContain("--no-alt-screen");
+    const once = reconcileBoth(["--model", "grok-build", "--fullscreen"], "grok", false);
+    expect(reconcileBoth(once, "grok", false)).toEqual(once);
+    expect(screenTokens(once)).toEqual(["--no-alt-screen"]);
   });
 });
 
@@ -2044,18 +2035,6 @@ describe("launch-time session id assignment (#11782)", () => {
   });
 });
 
-describe("DEFAULT_AGENT_SETTINGS inline seeding (#10876)", () => {
-  it("no longer seeds a concrete per-agent inlineMode so untouched agents inherit", () => {
-    for (const entry of Object.values(DEFAULT_AGENT_SETTINGS.agents)) {
-      expect(entry.inlineMode).toBeUndefined();
-    }
-  });
-
-  it("defaults globalUseAltScreen off", () => {
-    expect(DEFAULT_AGENT_SETTINGS.globalUseAltScreen).toBe(false);
-  });
-});
-
 describe("Windows launch command quoting", () => {
   const originalPlatform = process.platform;
   beforeEach(() => {
@@ -2264,6 +2243,138 @@ describe("plugin-declared resume (#13687)", () => {
   });
 });
 
+describe("plugin-declared permission bypass (#16374)", () => {
+  forcePosixPlatform();
+  afterEach(() => clearPluginAgentRegistryForTests());
+
+  const plugin = {
+    name: "Plugin",
+    color: "#3366ff",
+    iconId: "terminal",
+  };
+
+  function registerHermes(permissionBypassArgs?: string[]) {
+    registerPluginAgents("me.extra-agents", [
+      {
+        ...plugin,
+        id: "hermes",
+        command: "hermes",
+        args: ["--tui"],
+        ...(permissionBypassArgs ? { permissionBypassArgs } : {}),
+      },
+    ]);
+  }
+
+  it("makes a declaring plugin agent eligible for the global switch", () => {
+    registerHermes(["--yes-to-all"]);
+    expect(isAgentTerminalBypassSupported("hermes")).toBe(true);
+    expect(getDefaultDangerousArgs("hermes")).toBe("--yes-to-all");
+  });
+
+  it("launches with the declared args only when the global switch is on", () => {
+    registerHermes(["--yes-to-all"]);
+    expect(generateAgentCommand("hermes", {}, "hermes", { globalSkipPermissions: true })).toBe(
+      "hermes --tui --yes-to-all"
+    );
+    expect(generateAgentCommand("hermes", {}, "hermes", { globalSkipPermissions: false })).toBe(
+      "hermes --tui"
+    );
+    expect(generateAgentCommand("hermes", {}, "hermes")).toBe("hermes --tui");
+  });
+
+  it("lets an agent or preset 'off' veto the global switch", () => {
+    registerHermes(["--yes-to-all"]);
+    expect(
+      generateAgentFlags({ dangerousMode: "off" }, "hermes", { globalSkipPermissions: true })
+    ).toEqual([]);
+    const presetVeto = combineDangerousModes("on", "off");
+    expect(
+      generateAgentFlags({ dangerousMode: presetVeto }, "hermes", { globalSkipPermissions: true })
+    ).toEqual([]);
+  });
+
+  it("adds the declared args for an agent setting of 'on' with the global switch off", () => {
+    registerHermes(["--yes-to-all"]);
+    expect(
+      generateAgentFlags({ dangerousMode: "on" }, "hermes", { globalSkipPermissions: false })
+    ).toEqual(["--yes-to-all"]);
+  });
+
+  it("keeps a declared option and its value together", () => {
+    registerHermes(["--approval", "never"]);
+    expect(generateAgentFlags({}, "hermes", { globalSkipPermissions: true })).toEqual([
+      "--approval",
+      "never",
+    ]);
+    expect(reconcileBypassFlags(["--approval", "never", "--fast"], "hermes", false)).toEqual([
+      "--fast",
+    ]);
+  });
+
+  it("leaves a plugin agent that declares nothing ineligible and its flags untouched", () => {
+    registerHermes();
+    expect(isAgentTerminalBypassSupported("hermes")).toBe(false);
+    expect(getDefaultDangerousArgs("hermes")).toBe("");
+    expect(generateAgentFlags({}, "hermes", { globalSkipPermissions: true })).toEqual([]);
+    expect(reconcileBypassFlags(["--yes-to-all"], "hermes", true)).toEqual(["--yes-to-all"]);
+  });
+
+  it("strips a recorded declaration while the plugin's own is missing, and never adds it", () => {
+    // Cold restore runs before the plugin catalog loads, so the registry is empty.
+    const recorded = [["--yolo"], ["--approval", "never"]];
+    expect(
+      reconcileBypassFlags(
+        ["--tui", "--yolo", "--approval", "never"],
+        "hermes",
+        false,
+        undefined,
+        recorded
+      )
+    ).toEqual(["--tui"]);
+    expect(reconcileBypassFlags(["--tui"], "hermes", true, undefined, recorded)).toEqual(["--tui"]);
+    expect(
+      reconcileBypassFlags(["--approval", "ask"], "hermes", false, undefined, recorded)
+    ).toEqual(["--approval", "ask"]);
+  });
+
+  it("replaces a recorded older declaration with the current one when bypass is on", () => {
+    registerHermes(["--trust-all"]);
+    expect(
+      reconcileBypassFlags(["--yolo", "--fast"], "hermes", true, undefined, [["--yolo"]])
+    ).toEqual(["--trust-all", "--fast"]);
+  });
+
+  it("reads the recorded history defensively", () => {
+    const settings = {
+      pluginBypassArgHistory: {
+        hermes: [["--yolo"], [], ["--ok", 7], "--bad", ["--approval", "never"]],
+        broken: "nope",
+      },
+    };
+    expect(getPluginBypassArgHistory(settings, "hermes")).toEqual([
+      ["--yolo"],
+      ["--approval", "never"],
+    ]);
+    expect(getPluginBypassArgHistory(settings, "broken")).toEqual([]);
+    expect(getPluginBypassArgHistory(settings, "toString")).toEqual([]);
+    expect(getPluginBypassArgHistory(settings, "missing")).toEqual([]);
+    expect(getPluginBypassArgHistory({ pluginBypassArgHistory: null }, "hermes")).toEqual([]);
+    const inherited = Object.create({ hermes: [["--yolo"]] }) as Record<string, string[][]>;
+    expect(getPluginBypassArgHistory({ pluginBypassArgHistory: inherited }, "hermes")).toEqual([]);
+    expect(getPluginBypassArgHistory(undefined, "hermes")).toEqual([]);
+  });
+
+  it("reconciles a resumed launch's flags against the declared args", () => {
+    registerHermes(["--yes-to-all"]);
+    expect(reconcileBypassFlags(["--yes-to-all", "--fast"], "hermes", false)).toEqual(["--fast"]);
+    expect(reconcileBypassFlags(["--fast"], "hermes", true)).toEqual(["--fast", "--yes-to-all"]);
+    // A custom bypass the user wrote still strips the plugin's own flag.
+    expect(
+      reconcileBypassFlags(["--yes-to-all", "--fast"], "hermes", true, "--trust-everything")
+    ).toEqual(["--trust-everything", "--fast"]);
+  });
+});
+
 describe("stripConversationSelectorFlags (#13746)", () => {
   it("drops Claude's resume, assign and continue selectors and keeps everything else", () => {
     expect(
@@ -2282,5 +2393,181 @@ describe("stripConversationSelectorFlags (#13746)", () => {
 
   it("leaves an agent without a session-id resume untouched", () => {
     expect(stripConversationSelectorFlags(["--continue"], "no-such-agent")).toEqual(["--continue"]);
+  });
+
+  it("ignores a resume of nothing but the id, which would match every word (#16470)", () => {
+    registerPluginAgents("me.extra-agents", [
+      {
+        id: "bare",
+        name: "Bare",
+        command: "bare",
+        color: "#3366ff",
+        iconId: "terminal",
+        resume: { kind: "session-id", args: ["{sessionId}"], resumeLatestArgs: ["--continue"] },
+      },
+    ]);
+    try {
+      expect(stripConversationSelectorFlags(["--model", "x", "--continue"], "bare")).toEqual([
+        "--model",
+        "x",
+      ]);
+    } finally {
+      clearPluginAgentRegistryForTests();
+    }
+  });
+});
+
+describe("a plugin agent's assigned session id (#16470)", () => {
+  const SESSION = "11111111-1111-4111-8111-111111111111";
+  const pi = (resume: NonNullable<AgentConfig["resumeTemplate"]>) =>
+    registerPluginAgents("digitalfrontier.agents", [
+      {
+        id: "pi",
+        name: "Pi",
+        command: "pi",
+        args: ["--no-banner"],
+        color: "#3366ff",
+        iconId: "terminal",
+        resume,
+      },
+    ]);
+  const SAME_FLAG: NonNullable<AgentConfig["resumeTemplate"]> = {
+    kind: "session-id",
+    args: ["--session-id", "{sessionId}"],
+    assignSessionIdArgs: ["--session-id", "{sessionId}"],
+    resumeLatestArgs: ["--continue"],
+  };
+  const OWN_RESUME_FLAG: NonNullable<AgentConfig["resumeTemplate"]> = {
+    kind: "session-id",
+    args: ["--session", "{sessionId}"],
+    assignSessionIdArgs: ["--session-id", "{sessionId}"],
+    quitCommand: "/quit",
+    resumeLatestArgs: ["--continue"],
+  };
+
+  afterEach(() => {
+    clearPluginAgentRegistryForTests();
+    setAgentCommandDialectResolver(null);
+  });
+
+  it("assigns through the same lifecycle a built-in uses", () => {
+    pi(OWN_RESUME_FLAG);
+
+    expect(supportsSessionIdAssignment("pi")).toBe(true);
+    expect(supportsExactSessionCapture("pi")).toBe(true);
+    const first = mintAssignedSessionId("pi");
+    const second = mintAssignedSessionId("pi");
+    expect(first).toMatch(/^[0-9a-f-]{36}$/);
+    expect(first).not.toBe(second);
+    expect(buildAssignedSessionIdArgs("pi", SESSION)).toEqual(["--session-id", SESSION]);
+    expect(buildResumeCommand("pi", SESSION)).toBe(`pi --session ${SESSION}`);
+  });
+
+  it("leaves a plugin agent that declares no assignment as it was", () => {
+    pi({ kind: "session-id", args: ["--session", "{sessionId}"], quitCommand: "/quit" });
+
+    expect(supportsSessionIdAssignment("pi")).toBe(false);
+    expect(mintAssignedSessionId("pi")).toBeUndefined();
+    expect(generateAgentCommand("pi", {}, "pi", { sessionId: SESSION })).toBe("pi --no-banner");
+  });
+
+  it.each([
+    ["a separate id", ["--session-id", "{sessionId}"]],
+    ["a fused id", ["--session-id={sessionId}"]],
+    ["two options before the id", ["--new", "--id", "{sessionId}"]],
+  ])("strips %s back off the command a launch built, on every shell", (_label, assignArgs) => {
+    pi({ kind: "session-id", args: ["--session", "{sessionId}"], assignSessionIdArgs: assignArgs });
+    for (const dialect of ["posix", "windows"] as const) {
+      setAgentCommandDialectResolver(() => dialect);
+      const command = generateAgentCommand("pi", {}, "pi", {
+        sessionId: SESSION,
+        initialPrompt: "fix the bug",
+      });
+      expect(command).toContain(SESSION);
+      const stripped = stripAssignedSessionIdArgs(command, "pi");
+      expect(stripped).not.toContain(SESSION);
+      expect(stripped).toMatch(/^pi --no-banner /);
+      expect(stripped).toContain("fix the bug");
+    }
+  });
+
+  it("tells a flag that also resumes from one with its own resume flag", () => {
+    pi(SAME_FLAG);
+    expect(assignmentReopensSession("pi")).toBe(true);
+
+    pi(OWN_RESUME_FLAG);
+    expect(assignmentReopensSession("pi")).toBe(false);
+
+    expect(assignmentReopensSession("claude")).toBe(false);
+    expect(assignmentReopensSession("no-such-agent")).toBe(false);
+    expect(assignmentReopensSession(undefined)).toBe(false);
+  });
+
+  describe("commandNamesSession", () => {
+    it.each([
+      ["a word of its own", `pi --session ${SESSION}`],
+      ["a quoted word", `pi --session '${SESSION}'`],
+      ["a fused option", `pi --session=${SESSION}`],
+      ["a quoted fused option", `pi '--session=${SESSION}'`],
+      ["a bare positional", `pi ${SESSION}`],
+      ["a prefix with no equals sign", `pi 'session:${SESSION}'`],
+      ["a suffix after the id", `pi --session=${SESSION}.json`],
+    ])("finds %s", (_label, command) => {
+      expect(commandNamesSession(command, SESSION)).toBe(true);
+    });
+
+    it("doesn't find a short id inside a longer word, or in the binary", () => {
+      expect(commandNamesSession("pi --no-banner", "a")).toBe(false);
+      expect(commandNamesSession("a --no-banner", "a")).toBe(false);
+      expect(commandNamesSession("pi aa", "a")).toBe(false);
+    });
+
+    it("finds a token of its own past an occurrence that isn't one", () => {
+      expect(commandNamesSession("pi a:a", "a")).toBe(true);
+      expect(commandNamesSession("pi xa:a", "a")).toBe(true);
+    });
+
+    it("doesn't take a prompt that mentions the id for a selector", () => {
+      expect(commandNamesSession(`pi 'look at ${SESSION} please'`, SESSION)).toBe(false);
+    });
+
+    it("finds nothing with no id", () => {
+      expect(commandNamesSession("pi --session=undefined", undefined)).toBe(false);
+      expect(commandNamesSession("pi ''", "")).toBe(false);
+    });
+  });
+
+  describe("stripConversationSelectorArgs", () => {
+    it.each([
+      ["an assignment", `pi --no-banner --session-id '${SESSION}'`],
+      ["a resume by id", `pi --no-banner --session '${SESSION}'`],
+      ["a resume of the latest", "pi --no-banner --continue"],
+    ])("takes %s off a stored command", (_label, command) => {
+      pi(OWN_RESUME_FLAG);
+      expect(stripConversationSelectorArgs(command, "pi")).toBe("pi --no-banner");
+    });
+
+    it("leaves a prompt that only mentions a selector", () => {
+      pi(OWN_RESUME_FLAG);
+      const command = "pi --no-banner '--continue'";
+      expect(stripConversationSelectorArgs(command, "pi")).toBe(command);
+    });
+
+    it("never takes the binary, even when a selector starts with its name", () => {
+      pi({
+        kind: "session-id",
+        args: ["--session", "{sessionId}"],
+        resumeLatestArgs: ["pi", "last"],
+      });
+      const command = "pi last --no-banner";
+      expect(stripConversationSelectorArgs(command, "pi")).toBe(command);
+    });
+
+    it("returns a command with nothing to strip untouched, spacing and all", () => {
+      pi(OWN_RESUME_FLAG);
+      const command = "pi  --no-banner";
+      expect(stripConversationSelectorArgs(command, "pi")).toBe(command);
+      expect(stripConversationSelectorArgs("", "pi")).toBe("");
+    });
   });
 });

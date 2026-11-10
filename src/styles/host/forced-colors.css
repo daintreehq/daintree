@@ -59,6 +59,21 @@
     color: CanvasText !important;
   }
 
+  /* The quick-launch chips mirror the toolbar's agent buttons, so their brand
+     marks take button ink here as the toolbar's do; left alone the dark
+     theme's pastels sat on a light Canvas under 3:1. Same for the resume row's
+     agent mark, the other button that leads with one. */
+  [data-canvas-home] :is(button, [role="button"]) .brand-mark {
+    color: ButtonText;
+  }
+
+  /* Every other control on the canvas home is a 1px ButtonText frame here, so
+     the launch anchor takes the 2px the `contrast` variant takes elsewhere:
+     with backgrounds discarded, weight is the only thing left to lead with. */
+  [data-canvas-home] [data-launcher-anchor] {
+    border-width: 2px;
+  }
+
   /* A separator is a 1px background, which forced colours paint as Canvas, so
      a menu's sections ran together. Drawn as a border it survives. */
   [role="menu"] [role="separator"] {
@@ -172,8 +187,11 @@
      near-Canvas value in forced-colors — measured at roughly 1.06:1 on white,
      i.e. invisible. These states are often icon-plus-one-line, so losing the
      icon removes half the state. Repaint with CanvasText and drop the opacity
-     mixing that caused it. */
-  [data-empty-state-icon] {
+     mixing that caused it. A glyph tinted by its own class keeps that colour
+     (Chromium forces only an inherited currentColor), so the stopped-load Info
+     mark stayed secondary grey at ~2.6:1; the svg is repainted too. */
+  [data-empty-state-icon],
+  [data-empty-state-icon] svg {
     color: CanvasText !important;
     opacity: 1 !important;
   }
@@ -630,13 +648,6 @@
      row can be both unread and focused. */
   [data-notification-unread="true"] {
     background-color: CanvasText !important;
-    /* The dot badges the status icon now instead of sitting off in the row's
-       left gutter, and this block paints the icon CanvasText too — so the two
-       fuse into one malformed glyph without a cut-out between them. The ring
-       that separates them in the normal cascade is a box-shadow, and box
-       shadows are not painted here, so the cut-out has to be an outline.
-       Outlines follow border-radius, so it stays round. */
-    outline: 1.5px solid Canvas;
   }
 
   /* Inbox thread-count chip. The tint fill is forced to Canvas, which strips the
@@ -645,15 +656,6 @@
      survive the override, so give it one. */
   [data-notification-count="true"] {
     border: 1px solid CanvasText;
-  }
-
-  /* Inbox thread rail. This used to be a `border-l-2`, which survived the
-     override on its own but pushed every threaded row 2px right of every solo
-     one. It is now an absolutely positioned background, and a background is
-     forced to Canvas here — so repaint it, or threaded rows lose their only
-     at-rest marker in the one mode that has no other way to show it. */
-  [data-notification-thread-rail="true"] {
-    background-color: CanvasText !important;
   }
 
   /* Filter chips and pressed toggle buttons. Selection is carried by a fill and

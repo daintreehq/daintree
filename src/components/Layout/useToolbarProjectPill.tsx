@@ -249,6 +249,7 @@ export function useToolbarProjectPill({
           emoji={currentProject?.emoji}
           chipState={branchChipDemoted ? "hidden" : chipState}
           branchName={branchName}
+          isMainWorktree={activeWorktree?.isMainWorktree}
           headSha={headSha}
           isDropdownOpen={isDropdownOpen}
           onClick={() => projectSwitcher.open("dropdown")}

@@ -337,14 +337,18 @@ test.describe.serial("Core: Error surfaces", () => {
     // routes errors through humanizeAppError, which maps `type: "network"` to
     // a friendly title — the raw IPC message ("ECONNREFUSED: ...") is
     // intentionally never piped to UI copy (see shared/utils/errorMessage.ts).
-    // The notification center splits into "Needs attention" + "Chronological"
-    // sections, so the title appears in both — assert against the chronological
-    // history section, which is the surface this test is named after.
+    // Severe unread entries appear once in the Needs attention rail, rather
+    // than being repeated in chronological history.
     const dropdownContent = ctx.window.locator(".surface-overlay");
     await expect(dropdownContent).toBeVisible({ timeout: T_SHORT });
-    await expect(
-      dropdownContent.getByTestId("chrono-section").getByText("Network problem")
-    ).toBeVisible({ timeout: T_SHORT });
+    const networkEntry = dropdownContent
+      .locator(SEL.notifications.centerList)
+      .locator(SEL.notifications.centerRow)
+      .filter({ hasText: "Network problem" });
+    await expect(networkEntry).toHaveCount(1, { timeout: T_SHORT });
+    await expect(networkEntry.getByText("Network problem", { exact: true })).toBeVisible({
+      timeout: T_SHORT,
+    });
 
     // Close notification center by clicking the bell again
     await bell.click();

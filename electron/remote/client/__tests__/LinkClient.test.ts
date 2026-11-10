@@ -1,7 +1,7 @@
 import net from "node:net";
 import path from "node:path";
 import { Duplex } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LinkClient, type LinkClientState } from "../LinkClient.js";
 import { logBuffer } from "../../../services/LogBuffer.js";
 import {
@@ -10,6 +10,7 @@ import {
   UnusableConnectionError,
   TransportError,
   createDirectTransport,
+  type LinkOpenOptions,
   type LinkTransport,
 } from "../transport.js";
 import { FrameDecoder, Lane, encodeFrame, type LinkFrame } from "../../link/frames.js";
@@ -1768,5 +1769,356 @@ describe("LinkClient connections opened from what earlier links learned (#15895)
     client.retryNow();
     await waitFor(() => fresh.length === 3 && client!.getState().status === "unreachable");
     expect(fresh).toEqual([undefined, true, undefined]);
+  });
+});
+
+describe("LinkClient network change and focus (#16386)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A link on a clock the test moves, timers included; only pure-promise transports run under it. */
+  function onTestClock(transport: LinkTransport, backoff = { initialMs: 60_000, maxMs: 60_000 }) {
+    let t = 0;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { ...backoff, jitter: 0 },
+      now: () => t,
+    });
+    return {
+      get t() {
+        return t;
+      },
+      async advance(ms: number) {
+        t += ms;
+        await vi.advanceTimersByTimeAsync(ms);
+      },
+      /** The wall clock jumps; timers don't move. */
+      jump(ms: number) {
+        t += ms;
+      },
+      retryAt(): number | null | undefined {
+        const state = client!.getState();
+        return state.status === "unreachable" ? state.retryAt : undefined;
+      },
+    };
+  }
+
+  /** Welcomes every HELLO as session "s1" (resumed after the first); answers pings only if asked. */
+  async function welcomingHost(options: { answerPings: boolean; protocolVersion?: number }) {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "n.sock");
+    const hellos: Array<{ resumeSessionId: string | null }> = [];
+    const kinds: number[] = [];
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          kinds.push(frame.kind);
+          if (frame.lane !== Lane.CONTROL) continue;
+          if (frame.kind === ControlKind.PING && options.answerPings) {
+            const ping = frameToMessage(frame) as Extract<
+              LinkMessage,
+              { lane: typeof Lane.CONTROL; kind: typeof ControlKind.PING }
+            >;
+            const pong: LinkMessage = {
+              lane: Lane.CONTROL,
+              kind: ControlKind.PONG,
+              body: ping.body,
+            };
+            socket.write(Buffer.from(encodeFrame(messageToFrame(pong))));
+            continue;
+          }
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const hello = frameToMessage(frame) as Extract<
+            LinkMessage,
+            { lane: typeof Lane.CONTROL; kind: typeof ControlKind.HELLO }
+          >;
+          hellos.push({ resumeSessionId: hello.body.resumeSessionId });
+          const welcome: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.WELCOME,
+            body: {
+              handshake: {
+                ...TEST_HANDSHAKE,
+                protocolVersion: options.protocolVersion ?? TEST_HANDSHAKE.protocolVersion,
+              },
+              hostName: "h",
+              sessionId: "s1",
+              resumed: hellos.length > 1,
+            },
+          };
+          socket.write(Buffer.from(encodeFrame(messageToFrame(welcome))));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const direct = createDirectTransport({ socketPath, token: "t" });
+    const opened: Array<LinkOpenOptions | undefined> = [];
+    const transport: LinkTransport = {
+      open(signal, openOptions) {
+        opened.push(openOptions);
+        return direct.open(signal, openOptions);
+      },
+    };
+    return {
+      transport,
+      hellos,
+      kinds,
+      opened,
+      async close() {
+        server.close();
+        await removeTempDir(dir);
+      },
+    };
+  }
+
+  function linkTo(
+    transport: LinkTransport,
+    options: { networkProbeMs?: number; wakeProbeMs?: number; now?: () => number }
+  ) {
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+      backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+      quietAfterMs: 0,
+      ...options,
+    });
+    return client;
+  }
+
+  it("dials a host waiting on its backoff at once when the network changes or its window is focused", async () => {
+    const transport = failingTransport("Network is unreachable");
+    const clock = onTestClock(transport);
+    client!.start();
+    await clock.advance(0);
+    expect(transport.opens).toBe(1);
+
+    await clock.advance(5_000);
+    client!.noteNetworkChanged();
+    await clock.advance(0);
+    expect(transport.opens).toBe(2);
+
+    await clock.advance(5_000);
+    client!.noteForegrounded();
+    await clock.advance(0);
+    expect(transport.opens).toBe(3);
+  });
+
+  it("pulls a retry forward no more often than a dial gap, however often the signals repeat", async () => {
+    const transport = failingTransport("Network is unreachable");
+    const clock = onTestClock(transport, { initialMs: 10_000, maxMs: 60_000 });
+    const dialledAt: number[] = [];
+    client!.onStateChange((state) => {
+      if (state.status === "connecting") dialledAt.push(clock.t);
+    });
+    client!.start();
+    await clock.advance(0);
+    const backedOff = clock.retryAt()!;
+    const firstWait = backedOff - clock.t;
+
+    // The last dial has only just started: the early one waits for the gap, not the backoff.
+    client!.noteNetworkChanged();
+    await clock.advance(0);
+    const pulled = clock.retryAt()!;
+    expect(transport.opens).toBe(1);
+    expect(pulled).toBeGreaterThan(clock.t);
+    expect(pulled).toBeLessThan(backedOff);
+
+    // Neither repeats nor a focus postpone it or add a dial before it.
+    for (let i = 0; i < 10; i++) {
+      client!.noteNetworkChanged();
+      client!.noteForegrounded();
+      await clock.advance(Math.floor((pulled - clock.t) / 20));
+    }
+    expect(transport.opens).toBe(1);
+    expect(clock.retryAt()).toBe(pulled);
+    await clock.advance(pulled - clock.t);
+    expect(transport.opens).toBe(2);
+    // The early dial counted as a failure like any other: the backoff kept growing.
+    expect(clock.retryAt()! - clock.t).toBeGreaterThan(firstWait);
+
+    // An address flapping for a while: dials stay apart, though far more often than the backoff.
+    for (let i = 0; i < 100; i++) {
+      client!.noteNetworkChanged();
+      await clock.advance(100);
+    }
+    const gaps = dialledAt.slice(1).map((at, i) => at - dialledAt[i]!);
+    expect(transport.opens).toBeGreaterThan(3);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(1_000);
+  });
+
+  it("dials at once when the clock moved back since the last dial", async () => {
+    const transport = failingTransport("Network is unreachable");
+    const clock = onTestClock(transport);
+    client!.start();
+    await clock.advance(10_000);
+    expect(transport.opens).toBe(1);
+    // An hour back: the last dial reads as still to come, which is no reason to wait.
+    clock.jump(-3_600_000);
+    client!.noteForegrounded();
+    await clock.advance(0);
+    expect(transport.opens).toBe(2);
+  });
+
+  it("retries soon after an attempt that the network changed under fails", async () => {
+    let failOpen: (() => void) | null = null;
+    const transport = {
+      opens: 0,
+      open() {
+        transport.opens++;
+        return new Promise<never>((_resolve, reject) => {
+          failOpen = () => reject(new TransportError("unreachable", "Network is unreachable"));
+        });
+      },
+    };
+    const clock = onTestClock(transport);
+    client!.start();
+    await clock.advance(5_000);
+    // Under way: left to finish.
+    client!.noteNetworkChanged();
+    await clock.advance(0);
+    expect(transport.opens).toBe(1);
+
+    failOpen!();
+    await clock.advance(1);
+    expect(transport.opens).toBe(2);
+
+    // No change during this one: the backoff stands.
+    failOpen!();
+    await clock.advance(1);
+    expect(clock.retryAt()).toBe(clock.t + 60_000);
+  });
+
+  it("leaves alone a host that stopped retrying, refused this build, or was let go", async () => {
+    const parked = failingTransport("Permission denied (publickey).");
+    parked.kind = "access";
+    const clock = onTestClock(parked);
+    client!.start();
+    await clock.advance(5_000);
+    expect(clock.retryAt()).toBeNull();
+    client!.noteNetworkChanged();
+    client!.noteForegrounded();
+    await clock.advance(5_000);
+    expect(parked.opens).toBe(1);
+
+    await client!.stop();
+    client!.noteNetworkChanged();
+    client!.noteForegrounded();
+    await clock.advance(5_000);
+    expect(parked.opens).toBe(1);
+    expect(client!.getState()).toEqual({ status: "disconnected" });
+    vi.useRealTimers();
+
+    const host = await welcomingHost({
+      answerPings: true,
+      protocolVersion: TEST_HANDSHAKE.protocolVersion + 1,
+    });
+    try {
+      let t = 0;
+      const link = linkTo(host.transport, { networkProbeMs: 10, now: () => t });
+      link.start();
+      await waitFor(() => link.getState().status === "version-mismatch");
+      // Long past any dial gap: a dial these let through would go at once.
+      t += 60_000;
+      link.noteNetworkChanged();
+      link.noteForegrounded();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(host.hellos).toHaveLength(1);
+      expect(link.getState().status).toBe("version-mismatch");
+    } finally {
+      await client?.stop();
+      client = null;
+      await host.close();
+    }
+  });
+
+  it("keeps a connected link that answers, and a focused window leaves it be", async () => {
+    const host = await welcomingHost({ answerPings: true });
+    try {
+      const networkProbeMs = 500;
+      const link = linkTo(host.transport, { networkProbeMs });
+      const states: string[] = [];
+      link.onStateChange((state) => states.push(state.status));
+      link.start();
+      await waitFor(() => link.getState().status === "connected");
+      states.length = 0;
+      link.noteNetworkChanged();
+      link.noteForegrounded();
+      // Probed and answered, then kept past the probe's deadline.
+      await waitFor(() => {
+        const state = link.getState();
+        return state.status === "connected" && state.rttMs !== null;
+      });
+      expect(host.kinds).toContain(ControlKind.PING);
+      await new Promise((resolve) => setTimeout(resolve, networkProbeMs + 200));
+      expect(link.getState().status).toBe("connected");
+      expect(states.every((status) => status === "connected")).toBe(true);
+      expect(host.hellos).toHaveLength(1);
+    } finally {
+      await client?.stop();
+      client = null;
+      await host.close();
+    }
+  });
+
+  it("gives up a session the network change killed and resumes it without reusing the route it rode", async () => {
+    const host = await welcomingHost({ answerPings: false });
+    try {
+      const link = linkTo(host.transport, { networkProbeMs: 30 });
+      link.start();
+      await waitFor(() => link.getState().status === "connected");
+      link.noteNetworkChanged();
+      await waitFor(() => host.hellos.length === 2);
+      expect(host.hellos[1]).toEqual({ resumeSessionId: "s1" });
+      expect(host.kinds).not.toContain(ControlKind.GOODBYE);
+      expect(host.opened[0]?.routeSuspect).toBeUndefined();
+      expect(host.opened[1]?.routeSuspect).toBe(true);
+    } finally {
+      await client?.stop();
+      client = null;
+      await host.close();
+    }
+  });
+
+  it("doesn't reuse the route a session rode when it fails the wake probe either", async () => {
+    const host = await welcomingHost({ answerPings: false });
+    try {
+      const link = linkTo(host.transport, { wakeProbeMs: 30 });
+      link.start();
+      await waitFor(() => link.getState().status === "connected");
+      link.noteSystemResumed();
+      await waitFor(() => host.hellos.length === 2);
+      expect(host.opened[1]?.routeSuspect).toBe(true);
+    } finally {
+      await client?.stop();
+      client = null;
+      await host.close();
+    }
+  });
+
+  it("doesn't let a network that keeps changing postpone giving up a dead session", async () => {
+    const host = await welcomingHost({ answerPings: false });
+    try {
+      const link = linkTo(host.transport, { networkProbeMs: 60 });
+      link.start();
+      await waitFor(() => link.getState().status === "connected");
+      // Each change well inside the probe's window, until the session is given up.
+      const deadline = Date.now() + 2_000;
+      while (host.hellos.length < 2 && Date.now() < deadline) {
+        link.noteNetworkChanged();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(host.hellos).toHaveLength(2);
+    } finally {
+      await client?.stop();
+      client = null;
+      await host.close();
+    }
   });
 });

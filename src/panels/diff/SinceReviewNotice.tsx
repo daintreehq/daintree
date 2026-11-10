@@ -85,7 +85,7 @@ export function describeSinceReviewNotice(
         banner: {
           severity: "info",
           title: "No review mark",
-          description: "Mark this worktree reviewed in Review & commit to compare with it later.",
+          description: "Mark this worktree reviewed in Review Hub to compare with it later.",
         },
         replacesBody: true,
       };
