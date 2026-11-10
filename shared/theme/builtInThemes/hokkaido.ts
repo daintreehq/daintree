@@ -175,6 +175,13 @@ export const theme: BuiltInThemeSource = {
     // fallback (lift-to-white law).
     "panel-focus-border": "rgba(110,87,219,0.70)",
     "panel-focus-shadow": "0 0 0 1px rgba(110,87,219,0.25), 0 1px 2px rgba(44,48,78,0.10)",
+    // The snow chrome (surface-toolbar), not surfaces.grid: the same element is
+    // the empty workbench, where resting ChoiceCards draw only their
+    // border-default edge, and on #D5D3F2 that edge measured 1.05:1. The sidebar
+    // would stop it at 1.25:1; the chrome step reaches 1.29:1 with panes still
+    // 1.11:1 above the gutter. Flat, because `#panel-grid` paints this as
+    // background-color.
+    "panel-grid-bg": "#ECEBF4",
     // Panel title bars join the snow chrome; the focused pane's cap brightens.
     "panel-header-bg": "#DFDDF2",
     "panel-header-focus-bg": "#F4F4F9",
