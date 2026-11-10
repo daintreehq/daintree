@@ -178,19 +178,26 @@ export async function resilientAtomicWriteFile(
  * Synchronous atomic writeFile: writes to a temp file with flush, then
  * renames to the target path. Keeps retry budget short to limit
  * event-loop blocking.
+ *
+ * `durable: false` skips the temp-file flush and the parent-directory sync and
+ * nothing else; the rename stays atomic, so an app or host crash still never
+ * leaves a torn file. Those two syncs only protect against power loss or a
+ * kernel panic, and on macOS each one is a full drive-cache flush. Opt out only
+ * for a file that is worthless after a reboot anyway.
  */
 export function resilientAtomicWriteFileSync(
   filePath: string,
   data: string,
   encoding: BufferEncoding = "utf-8",
-  options?: { mode?: number }
+  options?: { mode?: number; durable?: boolean }
 ): void {
   const tempPath = generateTempPath(filePath);
   const applyMode = options?.mode !== undefined && process.platform !== "win32";
+  const durable = options?.durable !== false;
   try {
     writeFileSync(tempPath, data, {
       encoding,
-      flush: true,
+      flush: durable,
       ...(applyMode ? { mode: options!.mode } : {}),
     } as Parameters<typeof writeFileSync>[2]);
     // Re-assert after write: writeFileSync's mode only applies on creation and
@@ -199,7 +206,7 @@ export function resilientAtomicWriteFileSync(
       chmodSync(tempPath, options!.mode!);
     }
     resilientRenameSync(tempPath, filePath);
-    syncParentDirectorySync(filePath);
+    if (durable) syncParentDirectorySync(filePath);
   } catch (error) {
     try {
       unlinkSync(tempPath);

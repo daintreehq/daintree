@@ -7,11 +7,27 @@ import path from "node:path";
 // resolves as `{stdout, stderr}` only because Node's real execFile carries a
 // hidden `customPromisifyArgs` symbol, so the mock has to install a
 // `promisify.custom` implementation rather than a plain callback stub.
-const { mockExecFileAsync, mockSpawnSync, mockTreeKill } = vi.hoisted(() => ({
+const { mockExecFileAsync, mockSpawnSync, mockTreeKill, atomicWriteTap } = vi.hoisted(() => ({
   mockExecFileAsync: vi.fn(),
   mockSpawnSync: vi.fn(),
   mockTreeKill: vi.fn(),
+  atomicWriteTap: vi.fn(),
 }));
+
+// Records how each ledger write was asked for, then writes for real so the
+// file assertions below still read what landed on disk.
+vi.mock("../../utils/fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/fs.js")>();
+  return {
+    ...actual,
+    resilientAtomicWriteFileSync: (
+      ...args: Parameters<typeof actual.resilientAtomicWriteFileSync>
+    ) => {
+      atomicWriteTap(...args);
+      return actual.resilientAtomicWriteFileSync(...args);
+    },
+  };
+});
 
 // The Windows tree kill reaps a crashed host's verified entries; it runs its
 // own census, so it is stubbed whole rather than through child_process.
@@ -755,6 +771,49 @@ describe("TerminalLineageLedger", () => {
       ]);
     });
 
+    it("writes without the durability syncs, since a reboot discards the file anyway", async () => {
+      const ledger = new TerminalLineageLedger(filePath);
+      const census = new FakeCensus([
+        { pid: 10, ppid: 1 },
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+
+      expect(atomicWriteTap).toHaveBeenCalledTimes(1);
+      expect(atomicWriteTap).toHaveBeenCalledWith(filePath, expect.any(String), "utf-8", {
+        durable: false,
+      });
+      expect(readPersisted()?.entries.map((e) => e.pid)).toEqual([200]);
+    });
+
+    it("records a job identified right after a write without waiting", async () => {
+      const ledger = new TerminalLineageLedger(filePath);
+      const census = new FakeCensus([
+        { pid: 10, ppid: 1 },
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+      expect(readPersisted()?.entries.map((e) => e.pid)).toEqual([200]);
+
+      census.set([
+        { pid: 10, ppid: 1 },
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+        { pid: 400, ppid: 100 },
+      ]);
+      ledger.reconcile(census);
+      await flush();
+
+      expect(readPersisted()?.entries.map((e) => e.pid)).toEqual([200, 400]);
+      expect(atomicWriteTap).toHaveBeenCalledTimes(2);
+    });
+
     it("does not rewrite the file for an unchanged tree", async () => {
       const ledger = new TerminalLineageLedger(filePath);
       const census = new FakeCensus([
@@ -1427,6 +1486,21 @@ describe("TerminalLineageLedger", () => {
       const retained = readRetained();
       expect(retained?.attempts).toBe(1);
       expect(retained?.entries.map((e) => e.pid)).toEqual([ORPHAN_PID]);
+    });
+
+    it("keeps the retained survivor list durable", async () => {
+      // Unlike the live ledger, this rewrite runs once per launch in Main and
+      // is the only record of processes a reap could not settle.
+      mockExecFileAsync.mockRejectedValue(
+        Object.assign(new Error("spawn ps EPERM"), { code: "EPERM" })
+      );
+      writeLedger([{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 }]);
+
+      await reapPersistedLineages(tmpDir);
+
+      expect(readRetained()?.attempts).toBe(1);
+      expect(atomicWriteTap).toHaveBeenCalledTimes(1);
+      expect(atomicWriteTap.mock.calls[0]?.[3]?.durable).not.toBe(false);
     });
 
     it("keeps a retained survivor list off the path a new host will write", async () => {

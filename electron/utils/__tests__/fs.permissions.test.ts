@@ -267,6 +267,19 @@ describe("resilientAtomicWriteFileSync", () => {
     const target = path.join(tmpDir, "nonexistent", "test.json");
     expect(() => resilientAtomicWriteFileSync(target, "data")).toThrow();
   });
+
+  posixIt("applies the mode the same way whether or not the write is durable", () => {
+    const durableTarget = path.join(tmpDir, "durable.json");
+    const fastTarget = path.join(tmpDir, "fast.json");
+
+    resilientAtomicWriteFileSync(durableTarget, "a", "utf-8", { mode: 0o600 });
+    resilientAtomicWriteFileSync(fastTarget, "b", "utf-8", { mode: 0o600, durable: false });
+
+    expect(mode(durableTarget)).toBe(0o600);
+    expect(mode(fastTarget)).toBe(0o600);
+    expect(readFileSync(fastTarget, "utf-8")).toBe("b");
+    expect(readdirSync(tmpDir).sort()).toEqual(["durable.json", "fast.json"]);
+  });
 });
 
 describe("resilientDirectWriteFile", () => {
