@@ -2,14 +2,14 @@
 /**
  * Regression guard for #16622. The scrollback-restore banner says the terminal
  * still works, then offers a restart; with an agent mid-turn that button used to
- * kill the process at once. These tests click the real banner's button through
- * the hook `TerminalPane` wires to it, against the real panel store, and assert
- * on which path the click takes.
+ * kill the process at once. These tests click the real banner's button against
+ * the real panel store and assert on which path the click takes. The banner owns
+ * the gate, so no caller's wiring can route around it.
  */
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import type { TerminalScrollbackRestoreError } from "@/types";
 
 const dispatch = vi.hoisted(() => vi.fn());
@@ -48,28 +48,8 @@ vi.mock("@/clients", () => ({
   systemClient: { getAppMetrics: vi.fn().mockResolvedValue({ totalMemoryMB: 512 }) },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => {
-  const terminalInstanceService = {
-    cleanup: vi.fn(),
-    applyRendererPolicy: vi.fn(),
-    onPanelBackgrounded: vi.fn(),
-    destroy: vi.fn(),
-  };
-  return {
-    createTerminalPaintPlane: () => terminalInstanceService,
-  };
-});
-
-vi.mock("../../../store/slices/panelRegistry/persistence", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../../store/slices/panelRegistry/persistence")
-  >("../../../store/slices/panelRegistry/persistence");
-  return { ...actual, saveNormalized: vi.fn() };
-});
-
 const { usePanelStore } = await import("@/store/panelStore");
 const { ScrollbackRestoreErrorBanner } = await import("../ScrollbackRestoreErrorBanner");
-const { useScrollbackRestoreRestart } = await import("../useScrollbackRestoreRestart");
 
 const RESTORE_ERROR: TerminalScrollbackRestoreError = {
   type: "timeout",
@@ -95,27 +75,21 @@ function seed(...panels: PanelInstance[]) {
   usePanelStore.setState({
     panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
     panelIds: panels.map((p) => p.id),
+    focusedId: null,
   });
 }
 
 function patch(id: string, overrides: Partial<PtyPanelData>) {
   act(() => {
-    usePanelStore.setState((state) => ({
-      panelsById: { ...state.panelsById, [id]: { ...state.panelsById[id]!, ...overrides } },
-    }));
+    usePanelStore.setState((state) => {
+      const current = state.panelsById[id];
+      if (!current || !isPtyPanel(current)) throw new Error(`no PTY panel '${id}' to patch`);
+      return { panelsById: { ...state.panelsById, [id]: { ...current, ...overrides } } };
+    });
   });
 }
 
-// What TerminalPane does: the banner's button goes through the hook, whose
-// immediate branch is the pane's own `handleRestart`.
-function BannerHarness({
-  panelId,
-  restartImmediately,
-}: {
-  panelId: string;
-  restartImmediately: () => void;
-}) {
-  const onRestart = useScrollbackRestoreRestart(panelId, restartImmediately);
+function banner(panelId: string, onRestart: (id: string) => void) {
   return (
     <ScrollbackRestoreErrorBanner
       terminalId={panelId}
@@ -129,6 +103,8 @@ function BannerHarness({
 function clickRestart() {
   fireEvent.click(screen.getByRole("button", { name: "Restart terminal" }));
 }
+
+const restartTerminal = vi.fn();
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -149,14 +125,15 @@ beforeAll(() => {
 beforeEach(() => {
   dispatch.mockReset();
   dispatch.mockResolvedValue({ ok: false });
-  usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  restartTerminal.mockReset();
+  usePanelStore.setState({ panelsById: {}, panelIds: [], focusedId: null, restartTerminal });
 });
 
-describe("scrollback-restore banner restart", () => {
-  it("routes a working agent through terminal.restart and leaves the process alone", () => {
+describe("scrollback-restore banner restart gate", () => {
+  it("routes a working agent through terminal.restart and does not restart it itself", () => {
     seed(panel("t-1", { detectedAgentId: "claude", agentState: "working" }));
-    const restartImmediately = vi.fn();
-    render(<BannerHarness panelId="t-1" restartImmediately={restartImmediately} />);
+    const onRestart = vi.fn();
+    render(banner("t-1", onRestart));
 
     clickRestart();
 
@@ -166,76 +143,88 @@ describe("scrollback-restore banner restart", () => {
       { terminalId: "t-1" },
       { source: "user" }
     );
-    expect(restartImmediately).not.toHaveBeenCalled();
+    expect(onRestart).not.toHaveBeenCalled();
   });
 
-  it("keeps the banner's error in place while the confirm is pending", () => {
+  it("touches neither the process nor the restore error before the confirm is answered", () => {
     seed(panel("t-1", { detectedAgentId: "claude", agentState: "working" }));
-    render(<BannerHarness panelId="t-1" restartImmediately={vi.fn()} />);
+    render(banner("t-1", vi.fn()));
 
     clickRestart();
 
-    const stored = usePanelStore.getState().panelsById["t-1"] as PtyPanelData;
-    expect(stored.scrollbackRestoreError).toEqual(RESTORE_ERROR);
-    expect(screen.getByRole("button", { name: "Restart terminal" })).toBeTruthy();
+    expect(restartTerminal).not.toHaveBeenCalled();
+    const stored = usePanelStore.getState().panelsById["t-1"];
+    expect(stored && isPtyPanel(stored) ? stored.scrollbackRestoreError : undefined).toEqual(
+      RESTORE_ERROR
+    );
   });
 
   it("restarts an idle shell at once, with no confirm", () => {
     seed(panel("t-1"));
-    const restartImmediately = vi.fn();
-    render(<BannerHarness panelId="t-1" restartImmediately={restartImmediately} />);
+    const onRestart = vi.fn();
+    render(banner("t-1", onRestart));
 
     clickRestart();
 
-    expect(restartImmediately).toHaveBeenCalledTimes(1);
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(onRestart).toHaveBeenCalledWith("t-1");
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it.each(["waiting", "idle", "completed", "exited"] as const)(
+  it.each(["idle", "waiting", "directing", "completed", "exited"] as const)(
     "restarts an agent that is %s at once, the same split the header menu makes",
     (agentState) => {
       seed(panel("t-1", { detectedAgentId: "claude", agentState }));
-      const restartImmediately = vi.fn();
-      render(<BannerHarness panelId="t-1" restartImmediately={restartImmediately} />);
+      const onRestart = vi.fn();
+      render(banner("t-1", onRestart));
 
       clickRestart();
 
-      expect(restartImmediately).toHaveBeenCalledTimes(1);
+      expect(onRestart).toHaveBeenCalledTimes(1);
       expect(dispatch).not.toHaveBeenCalled();
     }
   );
 
-  it("restarts at once for a pane the store no longer has", () => {
-    seed();
-    const restartImmediately = vi.fn();
-    render(<BannerHarness panelId="gone" restartImmediately={restartImmediately} />);
+  it("gates on a working agent, not on a working state alone", () => {
+    seed(panel("t-1", { agentState: "working" }));
+    const onRestart = vi.fn();
+    render(banner("t-1", onRestart));
 
     clickRestart();
 
-    expect(restartImmediately).toHaveBeenCalledTimes(1);
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("restarts at once for a pane the store no longer has", () => {
+    seed();
+    const onRestart = vi.fn();
+    render(banner("gone", onRestart));
+
+    clickRestart();
+
+    expect(onRestart).toHaveBeenCalledTimes(1);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("reads the agent's state at the click, not at render", () => {
     seed(panel("t-1", { detectedAgentId: "claude", agentState: "waiting" }));
-    const restartImmediately = vi.fn();
-    render(<BannerHarness panelId="t-1" restartImmediately={restartImmediately} />);
+    const onRestart = vi.fn();
+    render(banner("t-1", onRestart));
 
     patch("t-1", { agentState: "working" });
     clickRestart();
 
     expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(restartImmediately).not.toHaveBeenCalled();
+    expect(onRestart).not.toHaveBeenCalled();
   });
 
-  it("follows the pane when the same component is reused for another terminal", () => {
+  it("follows the pane when the same banner is reused for another terminal", () => {
     seed(panel("t-1"), panel("t-2", { detectedAgentId: "claude", agentState: "working" }));
-    const restartImmediately = vi.fn();
-    const { rerender } = render(
-      <BannerHarness panelId="t-1" restartImmediately={restartImmediately} />
-    );
+    const onRestart = vi.fn();
+    const { rerender } = render(banner("t-1", onRestart));
 
-    rerender(<BannerHarness panelId="t-2" restartImmediately={restartImmediately} />);
+    rerender(banner("t-2", onRestart));
     clickRestart();
 
     expect(dispatch).toHaveBeenCalledWith(
@@ -243,6 +232,33 @@ describe("scrollback-restore banner restart", () => {
       { terminalId: "t-2" },
       { source: "user" }
     );
-    expect(restartImmediately).not.toHaveBeenCalled();
+    expect(onRestart).not.toHaveBeenCalled();
+  });
+
+  it("judges the banner's own pane, not whichever pane has focus", () => {
+    seed(
+      panel("t-1", { detectedAgentId: "claude", agentState: "working" }),
+      panel("t-2", { detectedAgentId: "claude", agentState: "idle" })
+    );
+    usePanelStore.setState({ focusedId: "t-2" });
+    const onRestart = vi.fn();
+    const { unmount } = render(banner("t-1", onRestart));
+
+    clickRestart();
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.restart",
+      { terminalId: "t-1" },
+      { source: "user" }
+    );
+    expect(onRestart).not.toHaveBeenCalled();
+    unmount();
+
+    dispatch.mockClear();
+    usePanelStore.setState({ focusedId: "t-1" });
+    render(banner("t-2", onRestart));
+
+    clickRestart();
+    expect(onRestart).toHaveBeenCalledWith("t-2");
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });

@@ -1,12 +1,17 @@
 import { RotateCw } from "lucide-react";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { sanitizeErrorText } from "@/utils/errorText";
+import { useScrollbackRestoreRestart } from "./useScrollbackRestoreRestart";
 import type { TerminalScrollbackRestoreError } from "@/types";
 
 export interface ScrollbackRestoreErrorBannerProps {
   terminalId: string;
   error: TerminalScrollbackRestoreError;
   onDismiss: (id: string) => void;
+  /**
+   * Restarts at once. The banner asks first while an agent is working in the
+   * terminal (#16622), so a caller never has to gate this itself.
+   */
   onRestart: (id: string) => void;
   isRestarting?: boolean;
   className?: string;
@@ -41,6 +46,7 @@ export function ScrollbackRestoreErrorBanner({
   className,
 }: ScrollbackRestoreErrorBannerProps) {
   const config = SCROLLBACK_BANNER_CONFIG[error.type];
+  const restart = useScrollbackRestoreRestart(terminalId, () => onRestart(terminalId));
   return (
     <InlineStatusBanner
       title={config.title}
@@ -61,7 +67,7 @@ export function ScrollbackRestoreErrorBanner({
           label: "Restart terminal",
           icon: RotateCw,
           variant: "primary",
-          onClick: () => onRestart(terminalId),
+          onClick: restart,
           title: "Restart terminal",
           ariaLabel: "Restart terminal",
           loading: isRestarting,
