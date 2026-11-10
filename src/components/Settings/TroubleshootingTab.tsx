@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AlertTriangle } from "lucide-react";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { ErrorRetryRow, InlineErrorRow } from "./auditLogParts";
@@ -268,6 +269,10 @@ function HardwareAccelerationSection() {
   const [angleFallback, setAngleFallback] = useState<boolean>(false);
   const [readFailed, setReadFailed] = useState(false);
   const [readNonce, setReadNonce] = useState(0);
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  // The dialog's confirm button stays mounted through its exit animation, so a
+  // second press (or one after Escape) must find the ask already consumed.
+  const confirmPendingRef = useRef(false);
 
   useEffect(() => {
     setReadFailed(false);
@@ -283,7 +288,23 @@ function HardwareAccelerationSection() {
       });
   }, [readNonce]);
 
+  // The restart keeps the session but closes every terminal and interrupts any
+  // agent mid-turn, and main relaunches without asking, so the confirm lives here.
   const handleToggle = () => {
+    if (disabled === null) return;
+    confirmPendingRef.current = true;
+    setIsConfirmOpen(true);
+  };
+
+  const cancelToggle = () => {
+    confirmPendingRef.current = false;
+    setIsConfirmOpen(false);
+  };
+
+  const confirmToggle = () => {
+    if (!confirmPendingRef.current) return;
+    confirmPendingRef.current = false;
+    setIsConfirmOpen(false);
     if (disabled === null) return;
     const newEnabled = disabled; // if currently disabled, we're enabling
     safeFireAndForget(window.electron.gpu.setHardwareAcceleration(newEnabled), {
@@ -330,6 +351,17 @@ function HardwareAccelerationSection() {
         onChange={handleToggle}
       />
       {warning && <RowNote>{warning}</RowNote>}
+      <ConfirmDialog
+        isOpen={isConfirmOpen}
+        onClose={cancelToggle}
+        title={`Restart Daintree to turn hardware acceleration ${disabled ? "on" : "off"}?`}
+        description="Terminals close and agents resume after the restart. Work an agent is in the middle of is interrupted."
+        confirmLabel="Restart Daintree"
+        cancelLabel="Not now"
+        variant="destructive"
+        onConfirm={confirmToggle}
+        zIndex="nested"
+      />
     </>
   );
 }
