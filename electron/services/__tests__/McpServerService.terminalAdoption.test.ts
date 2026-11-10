@@ -46,6 +46,7 @@ import type { OrchestratorPaneIdentity } from "../McpPaneConfigService.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "../pty/PtyEventRouter.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 import type { McpHttpSession } from "../mcp-server/shared.js";
+import { helpNotifyKey } from "../mcp-server/terminalNotify.js";
 
 const ORCHESTRATOR: OrchestratorPaneIdentity = {
   principalId: "principal-orch",
@@ -695,6 +696,20 @@ describe("McpServerService terminal hand-over to the global assistant (#14161)",
       { fence: true }
     );
     revoke.mockRestore();
+  });
+
+  it("holds a prompt for an assistant on its own notice line, a worker's on the worker's (#16620)", () => {
+    service.setSessionIdResolver((id) => (id === "terminal-headless" ? "help-headless" : null));
+    try {
+      // The key the assistant's own notices and incoming wakes ride.
+      expect(service.workerNoticePane("terminal-headless")).toEqual({
+        key: helpNotifyKey("help-headless"),
+        terminalId: "terminal-headless",
+      });
+      expect(service.workerNoticePane("terminal-1").key).not.toBe(helpNotifyKey("help-headless"));
+    } finally {
+      service.setSessionIdResolver(() => null);
+    }
   });
 
   it("a replacement run is a new principal, handed nothing the old one held", () => {

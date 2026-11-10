@@ -16,6 +16,7 @@ import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
 import type { RunningLane, RunningLaneSession } from "../../HelpSessionService.js";
 import { helpOwnershipPrincipal, principalOwnerKey } from "../../mcp-server/resourceOwnership.js";
+import { HoldRefusedError, type WorkerSteerQueue } from "../WorkerSteerQueue.js";
 
 const PROJECT = "proj-1";
 const LOCAL: AssistantCaller = {
@@ -288,6 +289,156 @@ describe("AssistantTerminalControl (#13496)", () => {
       await expect(
         control.submit(LOCAL, target, { command: "x", generation: 3, handback: true })
       ).rejects.toThrow(/state: working/);
+    });
+  });
+
+  describe("a send held for an assistant mid-turn (#16620)", () => {
+    type HoldRequest = Parameters<WorkerSteerQueue["hold"]>[0];
+    let hold: Mock<(request: HoldRequest) => ReturnType<WorkerSteerQueue["hold"]>>;
+    const authorize = vi.fn(() => null as { code: string; message: string } | null);
+    const whenBusy = { queue: { ttlSeconds: 600 }, authorize };
+    const busyRun = (extra: Partial<AssistantTerminalRecord> = {}) =>
+      atPrompt({
+        agentState: "working",
+        agentIncarnation: 2,
+        agentSessionId: "agent-session",
+        lastForeignPromptInputAt: 500,
+        ...extra,
+      });
+
+    beforeEach(() => {
+      hold = vi.fn(() => ({ queuedSendToken: "held-1", expiresAt: 9_000 }));
+      authorize.mockClear();
+      control = new AssistantTerminalControl({ ...deps, queue: () => ({ hold }) });
+      addLane(1, "t-one", { record: busyRun() });
+    });
+    const send = (caller: AssistantCaller = LOCAL, terminalId = "t-one") =>
+      control.submit(caller, control.require(caller, terminalId), {
+        command: "Rebase onto develop when you're done.",
+        generation: 3,
+        handback: true,
+        whenBusy,
+      });
+
+    it("holds it for the run it named, under the sender, stamped as an immediate send is", async () => {
+      const receipt = await send();
+      expect(mocks.submit).not.toHaveBeenCalled();
+      expect(receipt).toMatchObject({
+        sent: false,
+        queued: true,
+        terminalId: "t-one",
+        queuedSendToken: "held-1",
+        expiresAt: 9_000,
+      });
+      const request = hold.mock.calls[0]![0];
+      expect(request).toMatchObject({
+        principal: LOCAL_OWNER,
+        projectId: PROJECT,
+        terminalId: "t-one",
+        generation: 3,
+        ttlSeconds: 600,
+        promptAsWritten: "Rebase onto develop when you're done.",
+        run: {
+          agentIncarnation: 2,
+          agentSessionId: "agent-session",
+          lastForeignPromptInputAt: 500,
+        },
+      });
+      expect(request.text.split("\n")[0]).toMatch(/^From the Daintree Assistant on /);
+      expect(request.text.endsWith(buildHandbackInstruction(request.handbackCode!, "run"))).toBe(
+        true
+      );
+    });
+
+    it("still refuses one sent without `whenBusy`, holding nothing", async () => {
+      await expect(
+        control.submit(LOCAL, control.require(LOCAL, "t-one"), {
+          command: "x",
+          generation: 3,
+          handback: false,
+        })
+      ).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      expect(hold).not.toHaveBeenCalled();
+    });
+
+    it("refuses rather than holds over a draft typed mid-turn, or the sender's own keys", async () => {
+      byTerminal("t-one")!.record = busyRun({ lastTypedInputAt: 1_500 });
+      await expect(send()).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      const own = busyRun();
+      stampTypedInput(own, 1_500, LOCAL_OWNER);
+      byTerminal("t-one")!.record = own;
+      await expect(send()).rejects.toThrow(/keys you sent/);
+      byTerminal("t-one")!.record = busyRun({ hasPendingSubmission: true });
+      await expect(send()).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      expect(hold).not.toHaveBeenCalled();
+    });
+
+    it("holds nothing at a question or for a replaced run", async () => {
+      byTerminal("t-one")!.record = atPrompt({ waitingReason: "approval" });
+      await expect(send()).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      byTerminal("t-one")!.record = busyRun();
+      byTerminal("t-one")!.generation = 4;
+      await expect(send()).rejects.toMatchObject({ code: "ASSISTANT_RESTARTED" });
+      expect(hold).not.toHaveBeenCalled();
+    });
+
+    it("refuses as busy when the queue can't take it", async () => {
+      hold.mockImplementation(() => {
+        throw new HoldRefusedError("this host is shutting down");
+      });
+      await expect(send()).rejects.toThrow(/shutting down/);
+      control = new AssistantTerminalControl(deps);
+      await expect(send()).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+    });
+
+    it("is written only while the session it named still runs there and the drive rule allows", async () => {
+      await send();
+      const request = hold.mock.calls[0]![0];
+      expect(request.authorize()).toBeNull();
+      authorize.mockReturnValueOnce({ code: "DRIVEN_ELSEWHERE", message: "no" });
+      expect(request.authorize()).toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+      byTerminal("t-one")!.running.sessionId = "replacement";
+      expect(request.authorize()).toMatchObject({ code: "ASSISTANT_NOT_FOUND" });
+    });
+
+    it("waits while keys are going into the assistant", async () => {
+      await send();
+      const { isWriting } = hold.mock.calls[0]![0];
+      expect(isWriting()).toBe(false);
+      byTerminal("t-one")!.record = atPrompt({ waitingReason: "approval" });
+      let seen: boolean | undefined;
+      mocks.write.mockImplementation(() => {
+        seen = isWriting();
+      });
+      await control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+        keys: ["enter"],
+        choose: undefined,
+        generation: 3,
+      });
+      expect(seen).toBe(true);
+      expect(isWriting()).toBe(false);
+    });
+
+    it("holds one up to the global Assistant under its upward stamp", async () => {
+      addLane(GLOBAL_ASSISTANT_SLOT, "t-global", {
+        projectId: GLOBAL_ASSISTANT_ID,
+        sessionId: "global-session",
+        attached: false,
+        record: busyRun(),
+      });
+      await send(LOCAL, "t-global");
+      const request = hold.mock.calls[0]![0];
+      expect(request.projectId).toBe(GLOBAL_ASSISTANT_ID);
+      expect(request.text.split("\n")[0]).toMatch(
+        /^From the Daintree Assistant of the project "Web App" on /
+      );
+    });
+
+    it("files an immediate send as the sender's prompt input", async () => {
+      byTerminal("t-one")!.record = atPrompt();
+      await send();
+      expect(mocks.submit.mock.calls[0]![5]).toBe(LOCAL_OWNER);
+      expect(hold).not.toHaveBeenCalled();
     });
   });
 
@@ -1025,7 +1176,7 @@ describe("AssistantTerminalControl (#13496)", () => {
 });
 
 describe("liveAssistantTerminalControl (#15521)", () => {
-  it("submits under the strict guard and offers the brief alone as the run's first prompt", async () => {
+  it("submits under the strict guard, offers the brief alone as the run's first prompt, and files it as the sender's", async () => {
     const pty = {
       getTerminalAsync: async () => atPrompt(),
       getLiveGeneration: () => 3,
@@ -1059,7 +1210,9 @@ describe("liveAssistantTerminalControl (#15521)", () => {
       undefined,
       "settled-prompt-strict",
       undefined,
-      "Hello"
+      "Hello",
+      undefined,
+      LOCAL_OWNER
     );
   });
 

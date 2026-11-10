@@ -1032,6 +1032,7 @@ export function liveAssistantTerminalControl(deps: {
   pty: () => PtyClient | null;
   extractReply: AssistantTerminalControlDeps["extractReply"];
   projectName: AssistantTerminalControlDeps["projectName"];
+  queue?: AssistantTerminalControlDeps["queue"];
 }): AssistantTerminalControl {
   return new AssistantTerminalControl({
     listRunningLanes: () => deps.help.listRunningLanes(),
@@ -1040,7 +1041,7 @@ export function liveAssistantTerminalControl(deps: {
     getLiveGeneration: (terminalId) => deps.pty()?.getLiveGeneration(terminalId) ?? null,
     serializedState: (terminalId, options) =>
       deps.pty()?.getSerializedStateAsync(terminalId, options) ?? Promise.resolve(null),
-    submit: (terminalId, text, submissionToken, handbackCode, promptAsWritten) =>
+    submit: (terminalId, text, submissionToken, handbackCode, promptAsWritten, promptOwner) =>
       deps
         .pty()
         ?.submit(
@@ -1050,7 +1051,9 @@ export function liveAssistantTerminalControl(deps: {
           handbackCode,
           "settled-prompt-strict",
           undefined,
-          promptAsWritten
+          promptAsWritten,
+          undefined,
+          promptOwner
         ),
     doubleEscape: (terminalId, inputOwner) =>
       deps.pty()?.batchDoubleEscape([terminalId], inputOwner),
@@ -1064,5 +1067,6 @@ export function liveAssistantTerminalControl(deps: {
     revoke: (sessionId) => deps.help.revokeSession(sessionId),
     extractReply: deps.extractReply,
     projectName: deps.projectName,
+    ...(deps.queue !== undefined ? { queue: deps.queue } : {}),
   });
 }

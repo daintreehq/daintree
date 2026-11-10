@@ -1007,9 +1007,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         return control.readReply(target, read.options.maxBytes ?? LAST_MESSAGE_TEXT_MAX_BYTES);
       }
       // A send up to the global answers to the drive rule of the caller's own project.
-      const refusal = assistantWriteRefusal(
-        target.scope === "global" ? caller.projectId : target.projectId
-      );
+      const driveProjectId = target.scope === "global" ? caller.projectId : target.projectId;
+      const refusal = assistantWriteRefusal(driveProjectId);
       if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
       if (ASSISTANT_SEND_TOOLS.has(actionId)) {
         const command = typeof record.command === "string" ? record.command : "";
@@ -1020,10 +1019,33 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           typeof record.generation === "number" && Number.isInteger(record.generation)
             ? record.generation
             : undefined;
+        // Only the owned send takes `whenBusy` (#16620), as it does for a worker.
+        const ttlSeconds =
+          actionId === "terminal.sendCommandOwned" ? readQueueTtlSeconds(record) : undefined;
         return control.submit(caller, target, {
           command,
           generation,
           handback: record.handback === true,
+          ...(ttlSeconds !== undefined && record.whenBusy === "queue"
+            ? {
+                whenBusy: {
+                  queue: { ttlSeconds },
+                  // The notice armed for this call follows the held send.
+                  takeNotice: () => {
+                    const notice = pendingNotify;
+                    pendingNotify = undefined;
+                    return notice;
+                  },
+                  onWritten: () => {
+                    const pane = tier === "external" ? null : ownPane();
+                    if (pane !== null) terminalNotify?.supersede(pane, target.terminalId);
+                  },
+                  // A held send answers to the session that queued it through
+                  // its principal, whose end drops it, not this MCP session.
+                  authorize: () => assistantWriteRefusal(driveProjectId),
+                },
+              }
+            : {}),
         });
       }
       if (ASSISTANT_KEYS_TOOLS.has(actionId)) {
@@ -2286,7 +2308,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // its notice, or a status read, says what became of it.
         if (
           waitForReply &&
-          globalSteerTerminalId !== undefined &&
+          (globalSteerTerminalId !== undefined || assistantTarget !== undefined) &&
           actionId === "terminal.sendCommandOwned" &&
           callArgs.whenBusy === "queue"
         ) {
