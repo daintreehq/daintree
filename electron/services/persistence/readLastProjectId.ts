@@ -23,6 +23,7 @@ import { getSharedSqlite } from "./db.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import {
   OPEN_WINDOWS_KEY,
+  dropPickerWindows,
   filterRestorableWindows,
   isReadableOpenWindowsManifest,
   parseCanopyWindowOpen,
@@ -216,7 +217,8 @@ function readProjectRowSync<T>(
  * Workspace existence is validated here, in batched `IN (...)` queries rather
  * than a query per record, so a deleted workspace is dropped before any window
  * is constructed around it. Records for the project picker (`projectId: null`)
- * always survive.
+ * are dropped too, after that check so their background projects can move to a
+ * window that survived it (`dropPickerWindows`, #16740).
  *
  * A record's id names a project OR a scratch — the two are disjoint id spaces
  * and each lives in its own table, so the shape routes the id to the one table
@@ -233,10 +235,14 @@ function readProjectRowSync<T>(
  *
  * Both fields report nothing on first launch, corrupt DB, corrupt manifest, a
  * manifest that named zero windows, or any error, so the caller opens a single
- * window seeded the old way.
+ * window seeded the old way. A manifest whose every window was on the picker
+ * reports no manifest too: it named nothing to restore.
  */
 export interface OpenWindowsManifestRead {
-  /** A manifest naming at least one window was stored, whatever survived filtering. */
+  /**
+   * A manifest naming at least one window with a workspace was stored, whatever
+   * survived filtering. Windows on the picker don't count.
+   */
   hadManifest: boolean;
   /** Windows still restorable, most-recently-focused first. */
   records: OpenWindowRecord[];
@@ -270,8 +276,8 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
       // Windows/Linux quit gesture: closing the last window fires its `closed`
       // save before `window-all-closed` reaches `app.quit()`, so the stored
       // manifest names zero windows even though the user never asked for a
-      // picker. `hadManifest: true` below therefore means exactly one thing —
-      // the manifest named windows, and project deletion emptied it.
+      // picker. `hadManifest: true` with no records therefore means exactly
+      // one thing — the manifest named workspaces, and deletion emptied it.
       if (!isReadableOpenWindowsManifest(row?.value ?? null)) return NO_MANIFEST;
 
       const canopy = parseCanopyWindowOpen(row?.value ?? null)
@@ -279,6 +285,10 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
         : {};
       const records = parseOpenWindowsManifest(row?.value ?? null);
       if (records.length === 0) return { ...NO_MANIFEST, ...canopy };
+      // Whether the manifest named a workspace, read before existence filtering:
+      // pickers alone launch like no manifest, but a window whose project was
+      // deleted still opens a picker rather than an unrelated project.
+      const hadManifest = records.some((record) => record.projectId !== null);
 
       // Background workspaces are validated alongside foreground ones, in the
       // same two queries: an id that reaches the restore loop unvalidated is an
@@ -287,7 +297,7 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
       const workspaceIds = [
         ...new Set(records.flatMap((r) => [r.projectId, ...(r.backgroundProjectIds ?? [])])),
       ].filter((id): id is string => id !== null);
-      if (workspaceIds.length === 0) return { hadManifest: true, records, ...canopy };
+      if (workspaceIds.length === 0) return { ...NO_MANIFEST, ...canopy };
 
       // Positively shaped on both sides, so an id that is neither reaches no
       // query at all. Sending it to `projects` would find nothing today, but it
@@ -306,8 +316,8 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
       }
 
       return {
-        hadManifest: true,
-        records: filterRestorableWindows(records, existingWorkspaceIds),
+        hadManifest,
+        records: dropPickerWindows(filterRestorableWindows(records, existingWorkspaceIds)),
         ...canopy,
       };
     } finally {

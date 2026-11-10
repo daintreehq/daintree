@@ -29,6 +29,7 @@ import { getActiveShutdown } from "../lifecycle/shutdownCoordinator.js";
 import {
   MAX_RESTORED_WINDOWS,
   capBackgroundProjectIds,
+  dropPickerWindows,
   type OpenWindowRecord,
 } from "../services/persistence/windowManifest.js";
 import { writeOpenWindowsManifest } from "../services/persistence/windowManifestStore.js";
@@ -69,6 +70,7 @@ const pendingBackgroundRestores = new Map<number, string[]>();
  * which point the restored projects are represented by their own views.
  */
 export function setPendingBackgroundRestores(windowId: number, ids: readonly string[]): void {
+  handOffHeldBackgrounds(windowId, ids);
   if (ids.length === 0) {
     pendingBackgroundRestores.delete(windowId);
     return;
@@ -160,6 +162,7 @@ export function addPendingRemoteBackgroundRestores(
   windowId: number,
   keys: readonly string[]
 ): void {
+  handOffHeldBackgrounds(windowId, keys);
   const current = pendingRemoteBackgroundRestores.get(windowId) ?? [];
   const merged = [...current, ...keys.filter((key) => !current.includes(key))];
   if (merged.length > 0) pendingRemoteBackgroundRestores.set(windowId, merged);
@@ -218,6 +221,64 @@ export function clearPendingWindowRecreation(windowId: number): void {
 }
 
 /**
+ * The background restore took these projects from a held record: from here
+ * they are its to track, settling, slept or let go, and the record stops
+ * naming them. Otherwise a window whose setup stalls on after queuing them
+ * would keep saving a project the person has since put to sleep.
+ */
+function handOffHeldBackgrounds(windowId: number, taken: readonly string[]): void {
+  const held = pendingWindowRecreations.get(windowId);
+  const ids = held?.record.backgroundProjectIds;
+  if (!held || !ids || taken.length === 0) return;
+  const remaining = ids.filter((id) => !taken.includes(id));
+  if (remaining.length === ids.length) return;
+  held.record =
+    remaining.length > 0
+      ? { projectId: held.record.projectId, backgroundProjectIds: remaining }
+      : { projectId: held.record.projectId };
+}
+
+/**
+ * Create a window that is coming back as `record`, holding the record for it
+ * until `create` settles. An OOM rebuild needs this (#15564), and so does a
+ * window the launch restores: it binds its workspace only once setup reaches
+ * `registerInitialView`, and one that stalls past its turn in the restore
+ * queue lets saves resume while it still shows nothing. Read then, it would be
+ * saved as a picker, which no longer comes back at all (#16740).
+ *
+ * Cleared once `create` resolves, when setup has bound the workspace (or found
+ * it gone) and queued the background restores. After a throw the record stays
+ * until the window shows a workspace or closes.
+ */
+export async function createWindowHoldingRecord<T>(
+  record: OpenWindowRecord,
+  create: (onRegistered: (windowId: number) => void) => Promise<T>
+): Promise<T> {
+  let windowId: number | undefined;
+  try {
+    const result = await create((id) => {
+      windowId = id;
+      setPendingWindowRecreation(id, record);
+    });
+    if (windowId !== undefined) clearPendingWindowRecreation(windowId);
+    return result;
+  } catch (error) {
+    if (windowId !== undefined) markWindowRecreationSetupFailed(windowId);
+    throw error;
+  }
+}
+
+/**
+ * The workspace each window's manager last said it was showing, keyed by window
+ * id: the answer for a manager that throws while it is disposed. That window
+ * still had a workspace, and with picker windows no longer kept (#16740) a
+ * window recorded as one would not come back at all. Only a manager's own
+ * answer goes in, never an intent standing in for one, so a window that
+ * reported the picker is never given back a workspace it has left.
+ */
+const lastShownWorkspaces = new Map<number, string>();
+
+/**
  * Whether the Canopy window is open (#16336). It is never in the registry, so
  * it says so itself. Held apart from whether a save may run: a change while
  * saves are held lands with the next save that may.
@@ -264,6 +325,9 @@ export function initOpenWindowsTracker(opts: {
  * switch and would persist the project the window *opened* with rather than the
  * one it is showing.
  *
+ * Windows on the project picker are left out ({@link dropPickerWindows}): a
+ * picker holds nothing to restore (#16740).
+ *
  * @param excludeWindowId A window whose teardown is already committed. The
  *   `closed` listener fires after WindowRegistry unregisters, so this is belt
  *   and braces — but a save triggered from anywhere else during teardown must
@@ -279,10 +343,14 @@ export function buildOpenWindowRecords(
     excludeWindowId,
     MAX_RESTORED_WINDOWS
   );
-  return attachOrphanedLiveWorkspaces(
-    entries.map((entry) => entry.record),
-    claimed,
-    liveWorkspaceIds
+  // Pickers go last, after the orphan sweep, so live workspaces it gave a
+  // picker move with that picker's own background projects (#16740).
+  return dropPickerWindows(
+    attachOrphanedLiveWorkspaces(
+      entries.map((entry) => entry.record),
+      claimed,
+      liveWorkspaceIds
+    )
   );
 }
 
@@ -315,23 +383,39 @@ function collectWindowRecords(
   const windows: Array<{ windowId: number; projectId: string | null; pvm?: ProjectViewManager }> =
     [];
   const claimed = new Set<string>();
+  // Pickers are dropped from the manifest, so only windows with a workspace
+  // take one of its slots.
+  let workspaceWindows = 0;
 
-  for (const ctx of registry.focusOrder()) {
+  // Every registered window, focused or not, so a closed one is the only kind
+  // whose last-seen workspace is let go.
+  const ordered = registry.focusOrder();
+  const registered = new Set(ordered.map((ctx) => ctx.windowId));
+  for (const windowId of lastShownWorkspaces.keys()) {
+    if (!registered.has(windowId)) lastShownWorkspaces.delete(windowId);
+  }
+
+  for (const ctx of ordered) {
     if (ctx.windowId === excludeWindowId) continue;
     if (ctx.browserWindow.isDestroyed()) continue;
 
     let projectId: string | null;
     let pvm: ProjectViewManager | undefined;
+    let lastShown: string | undefined;
     try {
       pvm = ctx.services.projectViewManager;
       projectId = pvm?.getActiveProjectId() ?? null;
+      if (projectId !== null) lastShownWorkspaces.set(ctx.windowId, projectId);
+      else lastShownWorkspaces.delete(ctx.windowId);
     } catch {
-      // A disposing manager can throw. Persist the window as a picker window
-      // rather than dropping it — losing the window is worse than losing which
-      // project it was on. Its background list goes with it: a manager that
-      // cannot answer for its active view cannot be trusted for its cached ones.
+      // A disposing manager can throw. The window keeps the workspace it was
+      // last seen showing, once the intents below have had their say, and is
+      // a picker only when it was never seen showing one. Its background list
+      // goes: a manager that cannot answer for its active view cannot be
+      // trusted for its cached ones.
       projectId = null;
       pvm = undefined;
+      lastShown = lastShownWorkspaces.get(ctx.windowId);
     }
     const showing = projectId !== null;
 
@@ -354,9 +438,14 @@ function collectWindowRecords(
       else if (recreation.setupFailed) pendingWindowRecreations.delete(ctx.windowId);
     }
 
-    if (projectId !== null) claimed.add(projectId);
+    projectId ??= lastShown ?? null;
+
+    if (projectId !== null) {
+      claimed.add(projectId);
+      workspaceWindows += 1;
+    }
     windows.push({ windowId: ctx.windowId, projectId, pvm });
-    if (windows.length >= maxWindows) break;
+    if (workspaceWindows >= maxWindows) break;
   }
 
   // Every window's views are claimed before any window's pending restores, so
@@ -474,16 +563,22 @@ function persist(excludeWindowId?: number): void {
     }
     const records = buildOpenWindowRecords(state.registry, excludeWindowId, liveWorkspaceIds);
     // On Windows and Linux the last window closing IS the quit: its `closed`
-    // listener runs before `window-all-closed` reaches `app.quit()`, so an
-    // empty record set here never describes a session the user chose to keep
-    // — it describes the one they are leaving. Writing it would replace the
-    // fleet the previous save captured with nothing, and the next launch would
-    // fall back to a single project (#12320). macOS survives windowless, so an
+    // listener runs before `window-all-closed` reaches `app.quit()`, so no
+    // window left here never describes a session the user chose to keep — it
+    // describes the one they are leaving. Writing it would replace the fleet
+    // the previous save captured with nothing, and the next launch would fall
+    // back to a single project (#12320). macOS survives windowless, so an
     // empty set there is a real state and still lands. An open Canopy window
     // keeps the process up too, so no project windows beside it is a real
     // state; and when it is the last window to close, that close is the quit,
     // and it comes back next launch as a last project window would.
-    if (records.length === 0 && !canopyWindowOpen && process.platform !== "darwin") return;
+    // Asked of the windows, not the records: windows on the picker leave no
+    // record (#16740), and refusing to save them would keep restoring a
+    // project window the user has since closed.
+    const windowsLeft = state.registry
+      .focusOrder()
+      .some((ctx) => ctx.windowId !== excludeWindowId && !ctx.browserWindow.isDestroyed());
+    if (!windowsLeft && !canopyWindowOpen && process.platform !== "darwin") return;
     writeOpenWindowsManifest(records, { canopyWindowOpen });
   } catch (error) {
     // Losing the manifest costs the user a manual window next launch. It must
@@ -598,4 +693,5 @@ export function resetOpenWindowsTrackerForTests(): void {
   pendingRemoteRestores.clear();
   pendingRemoteBackgroundRestores.clear();
   pendingWindowRecreations.clear();
+  lastShownWorkspaces.clear();
 }

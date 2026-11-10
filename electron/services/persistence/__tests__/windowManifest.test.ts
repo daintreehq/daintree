@@ -4,6 +4,7 @@ import {
   MAX_BACKGROUND_PROJECTS_PER_WINDOW,
   MAX_RESTORED_WINDOWS,
   OPEN_WINDOWS_MANIFEST_VERSION,
+  dropPickerWindows,
   filterRestorableWindows,
   isReadableOpenWindowsManifest,
   isRemoteWorkspaceKey,
@@ -198,6 +199,54 @@ describe("filterRestorableWindows", () => {
 
   it("keeps both windows when a duplicated project still exists", () => {
     expect(filterRestorableWindows([record("a"), record("a")], new Set(["a"]))).toHaveLength(2);
+  });
+});
+
+// A picker holds nothing to restore (#16740).
+describe("dropPickerWindows", () => {
+  it("returns the windows with a workspace as they were when no picker carries anything", () => {
+    const kept = { projectId: "a", backgroundProjectIds: ["x"] };
+    expect(dropPickerWindows([record(null), kept, record(null), record("b")])).toEqual([
+      kept,
+      record("b"),
+    ]);
+  });
+
+  it("keeps the staying window's own background projects ahead of a picker's under the cap", () => {
+    const own = Array.from({ length: MAX_BACKGROUND_PROJECTS_PER_WINDOW - 1 }, (_, i) => `own${i}`);
+    expect(
+      dropPickerWindows([
+        { projectId: null, backgroundProjectIds: ["a", "b", "late1", "late2"] },
+        { projectId: "a", backgroundProjectIds: own },
+        record("b"),
+      ])
+    ).toEqual([{ projectId: "a", backgroundProjectIds: [...own, "late1"] }, record("b")]);
+  });
+
+  it("never lets another window's project hold a background slot a carried project needs", () => {
+    // An older manifest can list B in A's background while B has its own window.
+    const xs = Array.from({ length: MAX_BACKGROUND_PROJECTS_PER_WINDOW - 1 }, (_, i) => `x${i}`);
+    expect(
+      dropPickerWindows([
+        { projectId: null, backgroundProjectIds: ["z"] },
+        { projectId: "a", backgroundProjectIds: ["b", ...xs] },
+        record("b"),
+      ])
+    ).toEqual([{ projectId: "a", backgroundProjectIds: [...xs, "z"] }, record("b")]);
+  });
+
+  it("carries every picker's background projects on one picker when no window has a workspace", () => {
+    expect(
+      dropPickerWindows([
+        record(null),
+        { projectId: null, backgroundProjectIds: ["x", "y"] },
+        { projectId: null, backgroundProjectIds: ["y", "z"] },
+      ])
+    ).toEqual([{ projectId: null, backgroundProjectIds: ["x", "y", "z"] }]);
+  });
+
+  it("leaves nothing when every window was an empty picker", () => {
+    expect(dropPickerWindows([record(null), record(null)])).toEqual([]);
   });
 });
 

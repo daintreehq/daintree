@@ -9,6 +9,7 @@
 
 import { parseHostScopedKey } from "../../shared/types/remoteHosts.js";
 import {
+  dropPickerWindows,
   isRemoteWorkspaceKey,
   type OpenWindowRecord,
 } from "../services/persistence/windowManifest.js";
@@ -114,14 +115,17 @@ export interface RestoreWindowFleetDeps {
  *
  * `hadManifest` is false both when nothing was stored and when what was stored
  * named zero windows, so closing every window still relaunches into the
- * last-active project rather than a picker.
+ * last-active project rather than a picker. A manifest of picker windows names
+ * no workspace either (#16740): when one of them carried background projects,
+ * the window opens on the last-active project with them behind it.
  */
 export function resolvePrimaryRestoreProjectId(
   records: OpenWindowRecord[],
   hadManifest: boolean,
   fallbackProjectId: string | undefined
 ): string | undefined {
-  if (records.length > 0) return localSeedOf(records[0]);
+  const [first] = records;
+  if (first && (hadManifest || first.projectId !== null)) return localSeedOf(first);
   if (hadManifest) return undefined;
   return fallbackProjectId;
 }
@@ -176,6 +180,22 @@ export function windowRestoreArgs(record: OpenWindowRecord): {
 }
 
 /**
+ * The record a restored window stands for, read back from what `createWindow`
+ * was given: the inverse of {@link windowRestoreArgs}. A window still coming up
+ * is saved as this until its setup settles (`createWindowHoldingRecord`).
+ */
+export function restoredWindowRecord(
+  projectId: string | undefined,
+  options?: { remoteWorkspaceKey?: string; backgroundProjectIds?: readonly string[] }
+): OpenWindowRecord {
+  const foreground = options?.remoteWorkspaceKey ?? projectId ?? null;
+  const background = options?.backgroundProjectIds ?? [];
+  return background.length > 0
+    ? { projectId: foreground, backgroundProjectIds: [...background] }
+    : { projectId: foreground };
+}
+
+/**
  * Collapse the manifest to one live view per workspace across the whole fleet
  * (#12596). A manifest saved before that rule existed can name one project in
  * two windows, and restoring it verbatim would rebuild the duplicate: two views
@@ -186,14 +206,19 @@ export function windowRestoreArgs(record: OpenWindowRecord): {
  * whose own project an earlier window already claimed is dropped rather than
  * reopened on a picker, and its background list folds into the window that kept
  * the project — those can be projects whose agents are still running, and
- * dropping them would skip their restore. Picker windows (`null`) never collide.
+ * dropping them would skip their restore.
+ *
+ * Picker windows go first, by the manifest reader's own rule
+ * ({@link dropPickerWindows}, #16740), so a caller that strips background
+ * lists before restoring never brings back the picker that was only carrying
+ * them.
  */
 export function normalizeWindowRecords(records: readonly OpenWindowRecord[]): OpenWindowRecord[] {
   const kept: OpenWindowRecord[] = [];
   const keeperByProject = new Map<string, number>();
   const folded = new Map<number, string[]>();
 
-  for (const record of records) {
+  for (const record of dropPickerWindows(records)) {
     const { projectId } = record;
     if (projectId !== null) {
       const keeper = keeperByProject.get(projectId);
@@ -258,9 +283,14 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
     // I was in paints first, the rest fill in behind it" hold across windows.
     const background = deps.primaryAlreadyOpen ? records : records.slice(1);
     if (!deps.primaryAlreadyOpen) {
+      // Filtered for a picker's background list carried onto the last-active
+      // project, which may be one of them.
+      const primaryBackground = records[0]?.backgroundProjectIds?.filter(
+        (id) => id !== primaryProjectId
+      );
       const primaryResult = await deps.createWindow(primaryProjectId, {
         ...remoteRestoreOpts(records[0]),
-        backgroundProjectIds: records[0]?.backgroundProjectIds,
+        backgroundProjectIds: primaryBackground?.length ? primaryBackground : undefined,
         ...(background.length > 0 ? { awaitHydrationMs: RESTORE_HYDRATION_WAIT_MS } : {}),
       });
       if (primaryResult !== "ok") return;

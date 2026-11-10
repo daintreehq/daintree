@@ -62,7 +62,9 @@ import {
   RESTORE_HYDRATION_WAIT_MS,
   resolvePrimaryRestoreProjectId,
   restoreWindowFleet,
+  restoredWindowRecord,
   type CreateWindowResult,
+  type RestoreWindowFleetDeps,
 } from "./lifecycle/windowRestore.js";
 import { restoreFleetAfterCrash, setCrashFleetRestorer } from "./lifecycle/crashWindowRestore.js";
 import { initializeDatabaseForBoot } from "./lifecycle/databaseBoot.js";
@@ -167,6 +169,7 @@ import {
 } from "./services/persistence/readLastProjectId.js";
 import {
   clearPendingWindowRecreation,
+  createWindowHoldingRecord,
   enableOpenWindowsSaves,
   initOpenWindowsTracker,
   resumeOpenWindowsSaves,
@@ -1184,6 +1187,12 @@ if (!gotTheLock) {
     const onBackgroundWindowFailed = (reason: unknown): void => {
       console.error("[MAIN] Restoring a background window failed:", reason);
     };
+    // A restored window is saved as its record until its setup settles, so one
+    // still coming up when saves resume isn't saved as a picker (#16740).
+    const createRestoredWindow: RestoreWindowFleetDeps["createWindow"] = (projectId, opts) =>
+      createWindowHoldingRecord(restoredWindowRecord(projectId, opts), (onRegistered) =>
+        createWindow(undefined, projectId, { ...opts, onRegistered })
+      );
     const isProjectOwned = (projectId: string): boolean =>
       findOtherProjectOwner(windowRegistry, projectId, {}) !== null;
     const isShuttingDown = (): boolean => getActiveShutdown() !== null;
@@ -1202,7 +1211,7 @@ if (!gotTheLock) {
       records: fleetRecords,
       hadManifest,
       fallbackProjectId,
-      createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
+      createWindow: createRestoredWindow,
       suppressSaves: suppressOpenWindowsSaves,
       resumeSaves: (persistNow) => {
         // A launch that held the manifest until now keeps it from a clean
@@ -1264,7 +1273,7 @@ if (!gotTheLock) {
           readManifest: readOpenWindowsManifestSync,
           restoreCanopyWindow: reopenCanopyWindow,
           restoreLiveProjects: store.get("sessionRestore")?.enabled !== false,
-          createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
+          createWindow: createRestoredWindow,
           suppressSaves: suppressOpenWindowsSaves,
           resumeSaves: resumeOpenWindowsSaves,
           enableSaves: enableOpenWindowsSaves,

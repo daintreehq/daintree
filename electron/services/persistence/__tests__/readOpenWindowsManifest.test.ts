@@ -165,7 +165,7 @@ describe("readOpenWindowsManifestSync", () => {
     expect(readOpenWindowsManifestSync()).toEqual({ hadManifest: false, records: [] });
   });
 
-  it("restores surviving windows and drops the deleted one, preserving order", () => {
+  it("restores surviving windows and drops the deleted one and the picker, preserving order", () => {
     withDb({
       manifest: manifestJson([
         { projectId: PROJECT_A },
@@ -177,7 +177,7 @@ describe("readOpenWindowsManifestSync", () => {
     });
     const result = readOpenWindowsManifestSync();
     expect(result.hadManifest).toBe(true);
-    expect(ids(result.records)).toEqual([PROJECT_A, null, PROJECT_B]);
+    expect(ids(result.records)).toEqual([PROJECT_A, PROJECT_B]);
   });
 
   it("keeps both windows when the same project appears twice", () => {
@@ -189,7 +189,7 @@ describe("readOpenWindowsManifestSync", () => {
       ]),
       existingProjectIds: [PROJECT_A],
     });
-    expect(ids(readOpenWindowsManifestSync().records)).toEqual([PROJECT_A, null, PROJECT_A]);
+    expect(ids(readOpenWindowsManifestSync().records)).toEqual([PROJECT_A, PROJECT_A]);
   });
 
   it("still reports a manifest existed when every project was deleted", () => {
@@ -223,8 +223,8 @@ describe("readOpenWindowsManifestSync", () => {
     it("reports it beside windows named only on the picker, without a workspace query", () => {
       withDb({ manifest: withCanopy([{ projectId: null }]) });
       expect(readOpenWindowsManifestSync()).toEqual({
-        hadManifest: true,
-        records: [{ projectId: null }],
+        hadManifest: false,
+        records: [],
         canopyWindow: true,
       });
       expect(prepare.mock.calls.some(([sql]) => sql.includes("FROM projects"))).toBe(false);
@@ -265,7 +265,7 @@ describe("readOpenWindowsManifestSync", () => {
     withDb({ manifest: manifestJson([{ projectId: null }, { projectId: null }]), onProjectQuery });
     const result = readOpenWindowsManifestSync();
     expect(onProjectQuery).not.toHaveBeenCalled();
-    expect(ids(result.records)).toEqual([null, null]);
+    expect(result).toEqual({ hadManifest: false, records: [] });
   });
 
   it("sends an id of neither shape to no table at all", () => {
@@ -284,7 +284,9 @@ describe("readOpenWindowsManifestSync", () => {
 
     expect(onProjectQuery).not.toHaveBeenCalled();
     expect(onScratchQuery).not.toHaveBeenCalled();
-    expect(ids(result.records)).toEqual([null]);
+    // It named a window that nothing vouched for, which opens a picker, never
+    // the last-active project.
+    expect(result).toEqual({ hadManifest: true, records: [] });
   });
 
   it("binds one placeholder per deduplicated project id", () => {
@@ -319,7 +321,7 @@ describe("readOpenWindowsManifestSync", () => {
     expect(ids(result.records)).toEqual([SCRATCH_A]);
   });
 
-  it("restores projects, scratches and pickers together, preserving order", () => {
+  it("restores projects and scratches together, preserving order, without the picker", () => {
     withDb({
       manifest: manifestJson([
         { projectId: SCRATCH_A },
@@ -330,12 +332,7 @@ describe("readOpenWindowsManifestSync", () => {
       existingProjectIds: [PROJECT_A],
       liveScratchIds: [SCRATCH_A, SCRATCH_B],
     });
-    expect(ids(readOpenWindowsManifestSync().records)).toEqual([
-      SCRATCH_A,
-      PROJECT_A,
-      null,
-      SCRATCH_B,
-    ]);
+    expect(ids(readOpenWindowsManifestSync().records)).toEqual([SCRATCH_A, PROJECT_A, SCRATCH_B]);
   });
 
   it("drops a scratch that no longer exists, keeping the surviving windows", () => {
@@ -517,6 +514,100 @@ describe("the launch a stored manifest produces", () => {
     withDb({ manifest: manifestJson([{ projectId: SCRATCH_A }]), liveScratchIds: [SCRATCH_A] });
     const { hadManifest, records } = readOpenWindowsManifestSync();
     expect(resolvePrimaryRestoreProjectId(records, hadManifest, "last-active")).toBe(SCRATCH_A);
+  });
+});
+
+// A window on the project picker holds nothing to restore, so a relaunch brings
+// back the windows that had a workspace and none of the pickers (#16740).
+describe("picker windows in a stored manifest (#16740)", () => {
+  const HOST_PROJECT = `studio-01:${"d".repeat(64)}`;
+
+  it("restores the project window and none of the pickers beside it", () => {
+    withDb({
+      manifest: manifestJson([
+        { projectId: null },
+        { projectId: PROJECT_A },
+        { projectId: null },
+        { projectId: null },
+      ]),
+      existingProjectIds: [PROJECT_A],
+    });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect(hadManifest).toBe(true);
+    expect(ids(records)).toEqual([PROJECT_A]);
+    expect(resolvePrimaryRestoreProjectId(records, hadManifest, "last-active")).toBe(PROJECT_A);
+  });
+
+  it("opens one window on the last-active project when every saved window was a picker", () => {
+    withDb({ manifest: manifestJson([{ projectId: null }, { projectId: null }]) });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect({ hadManifest, records }).toEqual({ hadManifest: false, records: [] });
+    expect(resolvePrimaryRestoreProjectId(records, hadManifest, "last-active")).toBe("last-active");
+  });
+
+  it("keeps a window that was on a host's project while it waited on its picker", () => {
+    withDb({
+      manifest: manifestJson([{ projectId: null }, { projectId: HOST_PROJECT }]),
+    });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect(hadManifest).toBe(true);
+    expect(ids(records)).toEqual([HOST_PROJECT]);
+  });
+
+  it("hands a dropped picker's background projects to the first window that stays", () => {
+    // The first window named was deleted: the picker's projects go to the
+    // first one the existence check kept, and the others stay as they were.
+    withDb({
+      manifest: manifestJson([
+        { projectId: null, backgroundProjectIds: [PROJECT_B, SCRATCH_A] },
+        { projectId: PROJECT_GONE, backgroundProjectIds: [SCRATCH_GONE] },
+        { projectId: PROJECT_A, backgroundProjectIds: [SCRATCH_B] },
+        { projectId: SCRATCH_GONE },
+        { projectId: SCRATCH_B },
+      ]),
+      existingProjectIds: [PROJECT_A, PROJECT_B],
+      liveScratchIds: [SCRATCH_A, SCRATCH_B],
+    });
+    expect(readOpenWindowsManifestSync().records).toEqual([
+      { projectId: PROJECT_A, backgroundProjectIds: [PROJECT_B, SCRATCH_A] },
+      { projectId: SCRATCH_B },
+    ]);
+  });
+
+  it("opens the last-active project with a picker's background projects behind it", () => {
+    withDb({
+      manifest: manifestJson([
+        { projectId: null },
+        { projectId: null, backgroundProjectIds: [PROJECT_B, PROJECT_GONE] },
+      ]),
+      existingProjectIds: [PROJECT_A, PROJECT_B],
+    });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect({ hadManifest, records }).toEqual({
+      hadManifest: false,
+      records: [{ projectId: null, backgroundProjectIds: [PROJECT_B] }],
+    });
+    expect(resolvePrimaryRestoreProjectId(records, hadManifest, "last-active")).toBe("last-active");
+  });
+
+  it("opens the last-active project when a picker's background projects were all deleted", () => {
+    withDb({
+      manifest: manifestJson([{ projectId: null, backgroundProjectIds: [PROJECT_GONE] }]),
+      existingProjectIds: [PROJECT_A],
+    });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect({ hadManifest, records }).toEqual({ hadManifest: false, records: [] });
+    expect(resolvePrimaryRestoreProjectId(records, hadManifest, "last-active")).toBe("last-active");
+  });
+
+  it("opens a picker, not the last-active project, when the pickers sat beside deleted projects", () => {
+    withDb({
+      manifest: manifestJson([{ projectId: null }, { projectId: PROJECT_GONE }]),
+      existingProjectIds: [PROJECT_A],
+    });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect({ hadManifest, records }).toEqual({ hadManifest: true, records: [] });
+    expect(resolvePrimaryRestoreProjectId(records, hadManifest, "last-active")).toBeUndefined();
   });
 });
 
