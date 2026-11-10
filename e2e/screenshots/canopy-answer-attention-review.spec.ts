@@ -49,7 +49,9 @@ import type { DecisionsAttentionItem } from "../../shared/types/decisionsAttenti
 const ENABLED = !!process.env.DAINTREE_SHOT_CANOPY_ANSWER;
 const OUT = process.env.DESIGN_CAPTURE_DIR ? path.resolve(process.env.DESIGN_CAPTURE_DIR) : "";
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
-const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib,redwoods,hokkaido,svalbard")
+const THEMES = (
+  process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib,redwoods,hokkaido,svalbard"
+)
   .split(",")
   .map((t) => t.trim())
   .filter(Boolean);
@@ -251,9 +253,12 @@ async function answerDecisions(app: ElectronApplication): Promise<void> {
     const g = globalThis as unknown as { __canopyAnswer?: { items: unknown[] } };
     g.__canopyAnswer = { items: [] };
     const t = () => g.__canopyAnswer!;
-    const handle = (channel: string, fn: (...args: any[]) => unknown) => {
+    // Any handler's own parameters, called with what the renderer sent.
+    const handle = (channel: string, fn: (...args: never[]) => unknown) => {
       ipcMain.removeHandler(channel);
-      ipcMain.handle(channel, async (_e, ...args) => fn(...args));
+      ipcMain.handle(channel, async (_e, ...args: unknown[]) =>
+        (fn as (...sent: unknown[]) => unknown)(...args)
+      );
     };
     handle("decisions:get-status", () => ({
       state: "connected",
@@ -263,7 +268,10 @@ async function answerDecisions(app: ElectronApplication): Promise<void> {
     handle("decisions:get-pane-state", () => null);
     handle("decisions:list-attention", () => ({ result: "listed", items: t().items }));
     handle("decisions:list-answer-destinations", () => ({ result: "listed", destinations: [] }));
-    handle("decisions:copy-answer", () => "[DAINTREE DECISION ANSWER]\n[END DAINTREE DECISION ANSWER]");
+    handle(
+      "decisions:copy-answer",
+      () => "[DAINTREE DECISION ANSWER]\n[END DAINTREE DECISION ANSWER]"
+    );
     handle("decisions:mark-answer-handled", (payload: { questionId: string }) => {
       t().items = t().items.filter(
         (i) => (i as { questionId: string }).questionId !== payload.questionId
@@ -799,7 +807,9 @@ test("canopy answer attention review", async () => {
     await settle(page, 300);
 
     // 05 — replied to in Canopy: the run leaves Needs you, the answer still needs attention.
-    const replied = [{ runId: real.asker, spawnedAt: spawned[real.asker], kind: "replied", at: now }];
+    const replied = [
+      { runId: real.asker, spawnedAt: spawned[real.asker], kind: "replied", at: now },
+    ];
     await inject(page, specs, replied);
     await selectRow(page, real.asker);
     await parkPointer(page);
@@ -823,7 +833,11 @@ test("canopy answer attention review", async () => {
 
     // 07 — the keyboard on the route, reached from the run's row with Tab.
     await rowOf(real.asker).focus();
-    for (let i = 0; i < 12 && !(await review.evaluate((el) => el === document.activeElement)); i++) {
+    for (
+      let i = 0;
+      i < 12 && !(await review.evaluate((el) => el === document.activeElement));
+      i++
+    ) {
       await page.keyboard.press("Tab");
     }
     await expect(review).toBeFocused();

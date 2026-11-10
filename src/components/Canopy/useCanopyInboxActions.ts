@@ -8,12 +8,7 @@ import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { AgentSnoozeDurationOption } from "@shared/utils/agentSnoozeDurations";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
-import {
-  itemAnswerAttention,
-  itemArchived,
-  itemSubject,
-  type CanopyItem,
-} from "./canopyModel";
+import { itemAnswerAttention, itemArchived, itemSubject, type CanopyItem } from "./canopyModel";
 import {
   canopyCardDomId,
   type CanopyCardHandle,
