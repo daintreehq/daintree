@@ -61,16 +61,20 @@ function buildLayerItems(): CommandHudItem[] {
   // a silent no-op. An id with no registered action is left enabled: dispatch
   // is still the authority, and the row must not claim a reason it doesn't have.
   // A row whose action redirects runs the target, so the target's state is the
-  // row's.
+  // row's. `list()` drops actions hidden by `isVisible`, which dispatch and the
+  // direct-completion check still reach through `get()`, so a miss falls back
+  // to it and the row agrees with what a pick does.
   const manifest = new Map(
     actionService.list(undefined, { includeSchemas: false }).map((entry) => [entry.id, entry])
   );
+  const entryFor = (id: Parameters<typeof actionService.get>[0]) =>
+    manifest.get(id) ?? actionService.get(id, undefined, { includeSchemas: false });
   return keybindingService
     .getChordCompletions(COMMAND_HUD_PREFIX)
     .filter((entry) => entry.actionId !== "")
     .map((entry) => {
-      const bound = manifest.get(entry.actionId as Parameters<typeof actionService.get>[0]);
-      const action = bound?.paletteRedirectTo ? manifest.get(bound.paletteRedirectTo) : bound;
+      const bound = entryFor(entry.actionId as Parameters<typeof actionService.get>[0]);
+      const action = bound?.paletteRedirectTo ? entryFor(bound.paletteRedirectTo) : bound;
       const enabled = action?.enabled ?? true;
       return {
         actionId: entry.actionId,

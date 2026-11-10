@@ -13,6 +13,7 @@ vi.mock("@/services/ActionService", () => ({
   actionService: {
     get: (id: string) => manifest.find((entry) => entry.id === id) ?? null,
     list: () => manifest,
+    selfNotifiesOnExecutionError: () => false,
     dispatch: (...args: unknown[]) => dispatchMock(...args),
   },
 }));

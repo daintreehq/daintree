@@ -17,7 +17,7 @@ vi.mock("@/services/KeybindingService", () => ({
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 import { actionService } from "@/services/ActionService";
-import type { ActionDefinition, ActionId } from "@shared/types/actions";
+import type { ActionId } from "@shared/types/actions";
 import { resolveInteractiveActionId } from "../resolveInteractiveActionId";
 
 const base = {
@@ -42,20 +42,20 @@ beforeAll(() => {
     palette: { mode: "redirect", to: TARGET },
     argsSchema: z.object({ message: z.string().min(1) }),
     run: vi.fn(async () => undefined),
-  } as ActionDefinition);
+  });
   actionService.register({
     ...base,
     id: TARGET,
     title: "Open Review Hub",
     argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
     run: openTarget,
-  } as ActionDefinition);
+  });
   actionService.register({
     ...base,
     id: PLAIN,
     title: "Push",
     run: vi.fn(async () => undefined),
-  } as ActionDefinition);
+  });
 });
 
 describe("resolveInteractiveActionId", () => {

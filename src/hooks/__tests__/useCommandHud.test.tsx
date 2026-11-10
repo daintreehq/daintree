@@ -7,6 +7,21 @@ const m = vi.hoisted(() => ({
   get: vi.fn(),
   selfNotifies: vi.fn(),
   notify: vi.fn(),
+  // The open layer, for the tests that build HUD rows.
+  pendingChord: null as string | null,
+  completions: [] as Array<{
+    actionId: string;
+    secondKey: string;
+    displayKey: string;
+    description: string;
+    category: string;
+  }>,
+  manifest: [] as Array<{
+    id: string;
+    enabled: boolean;
+    disabledReason?: string;
+    paletteRedirectTo?: string;
+  }>,
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -14,7 +29,7 @@ vi.mock("@/services/ActionService", () => ({
     dispatch: m.dispatch,
     get: m.get,
     selfNotifiesOnExecutionError: m.selfNotifies,
-    list: () => [],
+    list: () => m.manifest,
   },
 }));
 
@@ -22,14 +37,14 @@ vi.mock("@/services/KeybindingService", () => ({
   combosFieldsEqual: (a: string, b: string) => a === b,
   keybindingService: {
     clearPendingChord: vi.fn(),
-    getChordCompletions: () => [],
+    getChordCompletions: () => m.completions,
   },
 }));
 
 vi.mock("../useGlobalKeybindings", () => ({
   COMMAND_HUD_PREFIX: "Cmd+K",
   COMMAND_HUD_BLOCKED_EVENT: "daintree:command-hud-blocked",
-  usePendingChord: () => null,
+  usePendingChord: () => m.pendingChord,
 }));
 
 vi.mock("@/lib/notify", () => ({ notify: m.notify }));
@@ -63,6 +78,9 @@ beforeEach(() => {
   m.get.mockReset().mockReturnValue(undefined);
   m.selfNotifies.mockReset().mockReturnValue(false);
   m.notify.mockReset();
+  m.pendingChord = null;
+  m.completions = [];
+  m.manifest = [];
 });
 
 describe("useCommandHud failure toast (#16667)", () => {
@@ -108,5 +126,39 @@ describe("useCommandHud failure toast (#16667)", () => {
 
     expect(m.dispatch.mock.calls[0]![0]).toBe("worktree.openReviewHub");
     expect(m.notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("useCommandHud rows for a command whose pick redirects", () => {
+  beforeEach(() => {
+    m.pendingChord = "Cmd+K";
+    m.completions = [
+      {
+        actionId: "git.commit",
+        secondKey: "Cmd+C",
+        displayKey: "⌘+C",
+        description: "Commit staged changes",
+        category: "Git",
+      },
+    ];
+  });
+
+  it("reads a target the listing hides from the action service, as a pick reaches it", async () => {
+    // `list()` drops an action hidden by `isVisible`; `get()` and dispatch don't.
+    m.manifest = [{ id: "git.commit", enabled: true, paletteRedirectTo: "worktree.openReviewHub" }];
+    m.get.mockImplementation((id: string) =>
+      id === "worktree.openReviewHub"
+        ? { enabled: false, disabledReason: "No worktree is active" }
+        : undefined
+    );
+
+    const { result } = renderHook(() => useCommandHud());
+    await waitFor(() => expect(result.current.results).toHaveLength(1));
+
+    expect(result.current.results[0]).toMatchObject({
+      actionId: "git.commit",
+      enabled: false,
+      disabledReason: "No worktree is active",
+    });
   });
 });

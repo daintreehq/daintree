@@ -2242,8 +2242,7 @@ describe("useGlobalKeybindings — a binding on an action whose palette pick red
     });
   }
 
-  it("dispatches the redirect target instead of the arg-requiring action", async () => {
-    const { logError } = await import("@/utils/logger");
+  function bindRedirectingAction() {
     mocks.actionService.get.mockImplementation((actionId: string) =>
       actionId === "worktree.createWithRecipe"
         ? { enabled: true, paletteRedirectTo: "worktree.createDialog.open" }
@@ -2254,6 +2253,17 @@ describe("useGlobalKeybindings — a binding on an action whose palette pick red
       chordPrefix: false,
       shouldConsume: true,
     });
+  }
+
+  it("dispatches the redirect target instead of the arg-requiring action", async () => {
+    const { logError } = await import("@/utils/logger");
+    bindRedirectingAction();
+    // The source refuses an argument-free call, as the real one does.
+    mocks.actionService.dispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.createWithRecipe"
+        ? { ok: false, error: { code: "VALIDATION_ERROR", message: "Invalid arguments" } }
+        : { ok: true, result: undefined }
+    );
     render(<Host />);
 
     pressBinding();
@@ -2266,6 +2276,22 @@ describe("useGlobalKeybindings — a binding on an action whose palette pick red
       expect.objectContaining({ source: "keybinding" })
     );
     expect(logError).not.toHaveBeenCalled();
+  });
+
+  it("logs a failure under the id that ran", async () => {
+    const { logError } = await import("@/utils/logger");
+    bindRedirectingAction();
+    mocks.actionService.dispatch.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "boom" },
+    });
+    render(<Host />);
+
+    pressBinding();
+    await act(async () => {});
+
+    expect(logError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(logError).mock.calls[0]![0]).toContain('"worktree.createDialog.open"');
   });
 
   it("dispatches an action with no redirect as bound", () => {
