@@ -437,13 +437,83 @@ describe("GitFileWatcher", () => {
       ((eventType: string, filename: string | Buffer | null) => void) | undefined;
     expect(originCallback).toBeDefined();
 
-    // A fetch writing origin/main; the arm is filename-agnostic (any event here
-    // means upstream may have moved), and a burst coalesces into one refresh.
+    // A fetch writing origin/main; any ref name here means upstream may have
+    // moved, and a burst coalesces into one refresh.
     originCallback?.("rename", "main");
     originCallback?.("rename", "main.lock");
     originCallback?.("change", null);
     await vi.advanceTimersByTimeAsync(150);
     expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  async function armOriginWatch() {
+    const originDir = pathJoin("/repo", ".git", "refs", "remotes", "origin");
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 150,
+      onChange,
+    });
+    await expect(gitWatcher.start()).resolves.toBe(true);
+    const originCall = vi.mocked(watch).mock.calls.find(([path]) => path === originDir) as
+      [unknown, unknown, unknown] | undefined;
+    const fire = originCall?.[2] as (eventType: string, filename: string | Buffer | null) => void;
+    expect(fire).toBeDefined();
+    return { fire, onChange };
+  }
+
+  // git 2.48+ takes HEAD.lock on every `git fetch <remote>`, moved ref or not,
+  // and every watched worktree shares this directory (#16677).
+  it("ignores a lock-only burst under refs/remotes/origin", async () => {
+    const { fire, onChange } = await armOriginWatch();
+
+    fire("rename", "HEAD.lock");
+    fire("change", "HEAD.lock");
+    fire("rename", "HEAD.lock");
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("refreshes once when a ref lock is renamed onto the ref", async () => {
+    const { fire, onChange } = await armOriginWatch();
+
+    fire("rename", "main.lock");
+    fire("rename", "main");
+    fire("rename", "HEAD.lock");
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("still refreshes for an event the platform could not name", async () => {
+    const { fire, onChange } = await armOriginWatch();
+
+    fire("rename", null);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    fire("rename", "");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads Buffer and Windows-separated names the same way", async () => {
+    const { fire, onChange } = await armOriginWatch();
+
+    fire("rename", Buffer.from("HEAD.lock"));
+    fire("rename", "feature\\x.lock");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(onChange).not.toHaveBeenCalled();
+
+    fire("rename", Buffer.from("main"));
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    fire("rename", "feature\\x");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(2);
   });
 
   it("degrades silently when refs/remotes/origin cannot be watched", async () => {

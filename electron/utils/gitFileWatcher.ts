@@ -244,6 +244,13 @@ function isWatchableRef(ref: string): boolean {
   return ref.startsWith("refs/") && !ref.split("/").some((part) => part === "" || part === "..");
 }
 
+// git refuses ref names ending in `.lock`, so the suffix never hides a real
+// ref. An unnamed event stays a signal: the platform couldn't say what changed.
+function isLockFileName(changedFileName: string | Buffer | null): boolean {
+  if (!changedFileName) return false;
+  return changedFileName.toString().endsWith(".lock");
+}
+
 export class GitFileWatcher {
   private watchers: FSWatcher[] = [];
   private readonly watchedFilesByDirectory = new Map<string, Set<string>>();
@@ -830,17 +837,20 @@ export class GitFileWatcher {
   }
 
   /**
-   * Watch a git-internal directory for *any* change and route it through the
-   * fast debounce. Used for refs/remotes/origin, where the relevant events are
-   * loose-ref writes (and their `.lock` churn) from a fetch rather than a fixed
-   * set of tracked filenames — so unlike `watchFile`, every event in the
-   * directory is a conservative "refs may have moved" signal.
+   * Watch refs/remotes/origin for loose-ref writes from a fetch and route them
+   * through the fast debounce. Unlike `watchFile`, any ref name in the
+   * directory is a conservative "refs may have moved" signal, but lock files
+   * are not: git 2.48+ takes `HEAD.lock` on every `git fetch <remote>` to
+   * follow the remote HEAD, even when no ref moves, and every watched worktree
+   * shares this directory (#16677). A real update renames its lock onto the
+   * ref's final name, and that event is the signal.
    */
   private watchRemoteRefsDir(dirPath: string): void {
     try {
       // A fetch moves remote-tracking refs and nothing in the working tree, so
       // this is the one git-internal signal that never reports membership.
-      const watcher = fsWatch(dirPath, { persistent: false }, () => {
+      const watcher = fsWatch(dirPath, { persistent: false }, (_eventType, changedFileName) => {
+        if (isLockFileName(changedFileName)) return;
         this.handleGitFileChange({ pathMembership: false });
       });
 
