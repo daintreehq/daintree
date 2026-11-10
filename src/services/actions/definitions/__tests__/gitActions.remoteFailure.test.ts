@@ -111,7 +111,11 @@ async function answerForcePushConfirm(ok: boolean): Promise<void> {
 }
 
 /** The error shape the preload reconstructs from a `GitOperationError`. */
-function gitError(reason: string, message: string, fields: { lease?: string; branch?: string } = {}) {
+function gitError(
+  reason: string,
+  message: string,
+  fields: { lease?: string; branch?: string } = {}
+) {
   const lease = fields.lease ? encodeURIComponent(fields.lease) : "";
   const branch = fields.branch ? encodeURIComponent(fields.branch) : "";
   return new Error(`[GitError|${reason}|${lease}|${branch}] ${message}`);
@@ -428,9 +432,14 @@ describe("git.forcePushWithLease failure (#16667)", () => {
       gitError("push-rejected-outdated", "! [rejected] feature/x (stale info)")
     );
 
-    const dispatched = dispatch(service, "git.forcePushWithLease", { cwd: WT_PATH }, {
-      source: "menu",
-    });
+    const dispatched = dispatch(
+      service,
+      "git.forcePushWithLease",
+      { cwd: WT_PATH },
+      {
+        source: "menu",
+      }
+    );
     await answerForcePushConfirm(true);
     const result = await dispatched;
 
@@ -444,9 +453,14 @@ describe("git.forcePushWithLease failure (#16667)", () => {
   it("reports a force push with no lease to spend", async () => {
     const { service, git } = setup();
 
-    const result = await dispatch(service, "git.forcePushWithLease", { cwd: WT_PATH }, {
-      source: "menu",
-    });
+    const result = await dispatch(
+      service,
+      "git.forcePushWithLease",
+      { cwd: WT_PATH },
+      {
+        source: "menu",
+      }
+    );
 
     expect(result.ok).toBe(false);
     expect(git.forcePushWithLease).not.toHaveBeenCalled();
@@ -459,9 +473,14 @@ describe("git.forcePushWithLease failure (#16667)", () => {
     const { service, git } = setup();
     seedLease();
 
-    const dispatched = dispatch(service, "git.forcePushWithLease", { cwd: WT_PATH }, {
-      source: "menu",
-    });
+    const dispatched = dispatch(
+      service,
+      "git.forcePushWithLease",
+      { cwd: WT_PATH },
+      {
+        source: "menu",
+      }
+    );
     await vi.waitFor(() => {
       expect(useGitForcePushStore.getState().pendingConfirm).not.toBeNull();
     });
@@ -477,9 +496,14 @@ describe("git.forcePushWithLease failure (#16667)", () => {
     const { service, git } = setup();
     seedLease();
 
-    const dispatched = dispatch(service, "git.forcePushWithLease", { cwd: WT_PATH }, {
-      source: "menu",
-    });
+    const dispatched = dispatch(
+      service,
+      "git.forcePushWithLease",
+      { cwd: WT_PATH },
+      {
+        source: "menu",
+      }
+    );
     await answerForcePushConfirm(false);
     const result = await dispatched;
 
@@ -493,10 +517,15 @@ describe("git.forcePushWithLease failure (#16667)", () => {
     seedLease();
     git.forcePushWithLease.mockRejectedValueOnce(gitError("network-unavailable", "offline"));
 
-    const dispatched = dispatch(service, "git.forcePushWithLease", { cwd: WT_PATH }, {
-      source: "user",
-      callerReportsFailure: true,
-    });
+    const dispatched = dispatch(
+      service,
+      "git.forcePushWithLease",
+      { cwd: WT_PATH },
+      {
+        source: "user",
+        callerReportsFailure: true,
+      }
+    );
     await answerForcePushConfirm(true);
     const result = await dispatched;
 
