@@ -1829,8 +1829,10 @@ describe("WorkspaceService.createWorktree", () => {
         () => new Promise<void>((resolve) => (releaseCopy = resolve))
       );
       const resultsSeenByRefresh: SentEvent[][] = [];
-      mockRefreshWorktreeIndex.mockImplementation(async () => {
-        resultsSeenByRefresh.push(resultsFor("req-index-refresh"));
+      mockRefreshWorktreeIndex.mockImplementation(async (calledPath: string) => {
+        if (calledPath === path.resolve("/test/worktree-index-refresh")) {
+          resultsSeenByRefresh.push(resultsFor("req-index-refresh"));
+        }
       });
 
       const worktreePath = await create("index-refresh");

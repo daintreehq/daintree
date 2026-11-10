@@ -145,12 +145,13 @@ describe("refreshWorktreeIndex against real git", () => {
 
   it("starts no git when it is no longer wanted by the time the factory is ready", async () => {
     const { worktree } = makeLinkedWorktree();
-    const { index } = makeRacyIndex(worktree);
+    const { index, stamp } = makeRacyIndex(worktree);
     const racyIndex = fs.readFileSync(index);
 
     await refreshWorktreeIndex(worktree, undefined, () => false);
 
     expect(fs.readFileSync(index).equals(racyIndex)).toBe(true);
+    expect(Math.floor(fs.statSync(index).mtimeMs / 1000)).toBe(stamp);
   });
 
   it("rejects when another git holds index.lock, and leaves the lock and the index alone", async () => {
