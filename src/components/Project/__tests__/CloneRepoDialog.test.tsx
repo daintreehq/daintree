@@ -1160,7 +1160,7 @@ describe("CloneRepoDialog", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
     const urlInput = screen.getByLabelText(/^url$/i);
-    // No parent path picked yet — canClone is false.
+    // No location yet: nothing was picked and the home dir default hasn't arrived.
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     await act(async () => {
