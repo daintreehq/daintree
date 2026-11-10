@@ -575,6 +575,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     mainVisible: mainVisible === true,
     mainInQuickState,
     displayQuery: deferredQuery,
+    deletedRowCount: deletedWorktrees.size,
   });
   const listEmptyTitle = listEmpty === null ? null : sidebarListEmptyTitle(listEmpty);
 

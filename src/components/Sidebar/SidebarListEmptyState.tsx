@@ -60,6 +60,7 @@ export function resolveSidebarListEmpty({
   mainVisible,
   mainInQuickState,
   displayQuery,
+  deletedRowCount,
 }: {
   filteredCount: number;
   hasNonMainWorktrees: boolean;
@@ -70,8 +71,14 @@ export function resolveSidebarListEmpty({
   mainVisible: boolean;
   mainInQuickState: boolean;
   displayQuery: string;
+  /** Deleted-worktree rows the list still shows whatever the filters say. */
+  deletedRowCount: number;
 }): SidebarListEmpty | null {
   if (filteredCount > 0) return null;
+  // A deleted-worktree row is the rescue surface for its kept terminals and is
+  // listed regardless of the filters, so an empty state standing in for the
+  // list would hide it while its countdown runs out.
+  if (deletedRowCount > 0) return null;
   const isNarrowed = hasQuery || hasFacets;
   // No feature worktrees: nothing to say unless a filter is what hid main, in
   // which case the user needs the way back.

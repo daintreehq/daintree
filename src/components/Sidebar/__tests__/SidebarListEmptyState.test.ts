@@ -18,6 +18,7 @@ function resolve(overrides: Partial<ResolveInput>): SidebarListEmpty | null {
     mainVisible: false,
     mainInQuickState: false,
     displayQuery: "",
+    deletedRowCount: 0,
     ...overrides,
   });
 }
@@ -29,6 +30,18 @@ describe("resolveSidebarListEmpty", () => {
       resolve({ hasNonMainWorktrees: false, quickStateFilter: "working", mainVisible: true })
     ).toBeNull();
     expect(resolve({ hasNonMainWorktrees: false })).toBeNull();
+  });
+
+  it("stays null while a deleted-worktree row is listed, under every kind of empty list", () => {
+    expect(resolve({ quickStateFilter: "waiting", deletedRowCount: 1 })).toBeNull();
+    expect(
+      resolve({ quickStateFilter: "waiting", resultsWithoutQuickStateCount: 3, deletedRowCount: 1 })
+    ).toBeNull();
+    expect(resolve({ hasQuery: true, displayQuery: "zzz", deletedRowCount: 2 })).toBeNull();
+    expect(resolve({ hasFacets: true, deletedRowCount: 1 })).toBeNull();
+    expect(resolve({ hasQuery: true, displayQuery: "zzz", deletedRowCount: 0 })).toEqual(
+      expect.objectContaining({ kind: "no-match" })
+    );
   });
 
   it("explains an empty sidebar when a filter hid the only worktree, main", () => {
