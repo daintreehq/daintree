@@ -15,6 +15,8 @@ import { PluginGlyphTile } from "@/components/Plugin/pluginIcons";
 import { PluginDatabasesSection } from "@/components/Plugin/PluginDatabasesSection";
 import { PluginWorksWith, type WorksWithPeer } from "@/components/Plugin/PluginWorksWith";
 import { PluginGrantSwitch } from "@/components/Plugin/PluginGrantSwitch";
+import { useProjectPluginUnsavedGuard } from "@/components/Plugin/useProjectPluginUnsavedGuard";
+import { ProjectPluginUnsavedDialog } from "@/components/Plugin/ProjectPluginUnsavedDialog";
 import {
   getPanelKindRegistrySnapshot,
   subscribeToPanelKindRegistry,
@@ -228,6 +230,9 @@ export function ProjectPluginDetailPane({
   const decide = useProjectPluginStore((s) => s.decide);
   const activateStaged = useProjectPluginStore((s) => s.activateStaged);
   const reload = useProjectPluginStore((s) => s.reload);
+  // Turning the folder off unloads every plugin it ships, not just this one, so
+  // the unsaved-work check covers all of them (#16656).
+  const guard = useProjectPluginUnsavedGuard();
   const projectPlugins = useProjectPluginStore((s) => s.plugins);
   const refusals = useProjectSurfaceRefusals(plugin.instanceId);
   const nameOf = (pluginId: string) =>
@@ -450,7 +455,7 @@ export function ProjectPluginDetailPane({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => void decide("disabled")}
+                  onClick={() => void guard.decide("disabled")}
                   loading={deciding === "disabled"}
                 >
                   Turn off project plugins
@@ -486,6 +491,7 @@ export function ProjectPluginDetailPane({
         )}
         {error && <InlineError className="text-2xs">{error}</InlineError>}
       </div>
+      <ProjectPluginUnsavedDialog guard={guard} />
     </div>
   );
 }

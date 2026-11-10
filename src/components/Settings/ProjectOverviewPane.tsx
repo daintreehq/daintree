@@ -22,6 +22,8 @@ import {
   type SettingsGaps,
 } from "@/components/Settings/usePluginSettingsGaps";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
+import { useProjectPluginUnsavedGuard } from "@/components/Plugin/useProjectPluginUnsavedGuard";
+import { ProjectPluginUnsavedDialog } from "@/components/Plugin/ProjectPluginUnsavedDialog";
 import { actionService } from "@/services/ActionService";
 import { pluralize } from "@/lib/pluralize";
 import type { ProjectPluginInfo } from "@shared/types/plugin";
@@ -60,7 +62,10 @@ export function ProjectOverviewPane({
 }) {
   const trust = useProjectPluginStore((s) => s.trust);
   const deciding = useProjectPluginStore((s) => s.deciding);
-  const decide = useProjectPluginStore((s) => s.decide);
+  // Asks before turning the plugins off when a panel of theirs holds unsaved
+  // work (#16656); every other decision goes straight to the store.
+  const guard = useProjectPluginUnsavedGuard();
+  const decide = guard.decide;
   const reload = useProjectPluginStore((s) => s.reload);
   const reloading = useProjectPluginStore((s) => s.reloading);
   const decideFailure = useStoreFailure("decide");
@@ -237,6 +242,7 @@ export function ProjectOverviewPane({
       <ContextProvidersSection />
 
       <ProjectAgentToolsSection />
+      <ProjectPluginUnsavedDialog guard={guard} />
     </div>
   );
 }

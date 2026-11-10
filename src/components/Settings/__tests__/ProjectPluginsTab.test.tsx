@@ -30,6 +30,7 @@ import type {
   ProjectSurfaceSlotState,
   ProjectSurfacesSnapshot,
 } from "@shared/types/plugin";
+import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
 
 const PROJECT_ID = "a".repeat(64);
 
@@ -81,9 +82,42 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatch(...args) },
 }));
 
-// The generated form's secret-clear confirm pulls the app dialog stack (and the panel
-// store behind it) into this suite; nothing here opens it.
-vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
+// The real confirm pulls the app dialog stack (and the panel store behind it) into this
+// suite. This stand-in renders what a confirm says and its two answers.
+vi.mock("@/components/ui/ConfirmDialog", () => ({
+  ConfirmDialog: ({
+    isOpen,
+    title,
+    description,
+    children,
+    confirmLabel,
+    cancelLabel,
+    onConfirm,
+    onClose,
+  }: {
+    isOpen: boolean;
+    title: ReactNode;
+    description?: ReactNode;
+    children?: ReactNode;
+    confirmLabel: string;
+    cancelLabel?: string;
+    onConfirm: () => void;
+    onClose?: () => void;
+  }) =>
+    isOpen ? (
+      <div role="alertdialog">
+        <h2>{title}</h2>
+        <p>{description}</p>
+        {children}
+        <button type="button" onClick={onClose}>
+          {cancelLabel ?? "Cancel"}
+        </button>
+        <button type="button" onClick={onConfirm}>
+          {confirmLabel}
+        </button>
+      </div>
+    ) : null,
+}));
 
 vi.mock("@/clients", () => ({
   systemClient: { showItemInFolder: (p: string) => showItemInFolder(p) },
@@ -172,6 +206,7 @@ const pluginApi = {
   activateStagedProjectPlugin: vi.fn().mockResolvedValue(undefined),
   setLaunchGroupHidden: vi.fn().mockResolvedValue([]),
   reloadProjectPlugins: vi.fn().mockResolvedValue(undefined),
+  getUnsavedPanels: vi.fn<(pluginId: string) => Promise<PluginUnsavedPanel[]>>(),
   getSettingValues: vi.fn().mockResolvedValue({
     values: {},
     secretsSet: [],
@@ -210,6 +245,7 @@ async function select(label: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   pluginApi.list.mockResolvedValue([]);
+  pluginApi.getUnsavedPanels.mockResolvedValue([]);
   pluginApi.onProvenanceChanged.mockReturnValue(vi.fn());
   Object.defineProperty(window, "electron", {
     configurable: true,
@@ -1625,5 +1661,115 @@ describe("ProjectPluginsTab per-project packages", () => {
     expect(screen.getByTestId("project-plugin-selector-status").textContent).toBe("Off");
     expect(screen.getByText("Turned off everywhere")).toBeTruthy();
     expect(screen.queryByTestId("installed-plugin-instance-switch")).toBeNull();
+  });
+});
+
+describe("ProjectPluginsTab unsaved panels (#16656)", () => {
+  const INSTANCE = `project__${PROJECT_ID}__acme.dashboard`;
+  const draft: PluginUnsavedPanel = {
+    panelId: "d1",
+    title: "Dashboard draft",
+    projectId: PROJECT_ID,
+    projectName: "Proj",
+  };
+
+  function turnOffButton() {
+    const match = screen
+      .getAllByRole("button")
+      .find((b) => b.textContent === "Turn off project plugins");
+    if (!match) throw new Error("no Turn off project plugins button");
+    return match;
+  }
+
+  it("asks before the overview turns the plugins off, and Cancel changes nothing", async () => {
+    pluginApi.getUnsavedPanels.mockImplementation(async (id) => (id === INSTANCE ? [draft] : []));
+    seed([projectPlugin()]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    fireEvent.click(turnOffButton());
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("Turn off this project's plugins?");
+    expect(dialog.textContent).toContain("Dashboard draft");
+    expect(pluginApi.setProjectPluginTrust).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(pluginApi.setProjectPluginTrust).not.toHaveBeenCalled();
+
+    fireEvent.click(turnOffButton());
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Discard changes",
+      })
+    );
+    await waitFor(() => expect(pluginApi.setProjectPluginTrust).toHaveBeenCalledWith("disabled"));
+  });
+
+  it("asks before the overview's retry of a failed turn-off", async () => {
+    pluginApi.setProjectPluginTrust.mockRejectedValueOnce(new Error("EACCES"));
+    seed([projectPlugin()]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    fireEvent.click(turnOffButton());
+    const alert = await screen.findByRole("alert");
+    pluginApi.getUnsavedPanels.mockResolvedValue([draft]);
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    expect((await screen.findByRole("alertdialog")).textContent).toContain("Dashboard draft");
+    expect(pluginApi.setProjectPluginTrust).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks before the plugin's own switch turns it off, and Cancel leaves it running", async () => {
+    pluginApi.getUnsavedPanels.mockResolvedValue([draft]);
+    seed([projectPlugin()]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Dashboard");
+
+    const toggle = await screen.findByTestId("project-plugin-mute-switch");
+    fireEvent.click(toggle);
+    const dialog = await screen.findByRole("alertdialog");
+    expect(pluginApi.getUnsavedPanels).toHaveBeenCalledWith(INSTANCE);
+    expect(dialog.textContent).toContain("Turn off 'Acme Dashboard'?");
+    expect(dialog.textContent).toContain("Dashboard draft");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(pluginApi.setProjectPluginMuted).not.toHaveBeenCalled();
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(toggle);
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Discard changes",
+      })
+    );
+    await waitFor(() =>
+      expect(pluginApi.setProjectPluginMuted).toHaveBeenCalledWith("acme.dashboard", true)
+    );
+  });
+
+  it("stops the switch on its row when the check fails, and its Retry checks again", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    pluginApi.getUnsavedPanels.mockRejectedValueOnce(new Error("main unavailable"));
+    seed([projectPlugin()]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Dashboard");
+
+    fireEvent.click(await screen.findByTestId("project-plugin-mute-switch"));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't turn off Acme Dashboard");
+    expect(alert.textContent).toContain("Couldn't check this plugin's panels");
+    expect(pluginApi.setProjectPluginMuted).not.toHaveBeenCalled();
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(pluginApi.setProjectPluginMuted).toHaveBeenCalledWith("acme.dashboard", true)
+    );
+    expect(pluginApi.getUnsavedPanels).toHaveBeenCalledTimes(2);
+    logged.mockRestore();
   });
 });

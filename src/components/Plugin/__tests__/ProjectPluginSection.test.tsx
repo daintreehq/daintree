@@ -13,6 +13,7 @@ import {
   useProjectPluginStore,
 } from "@/store/projectPluginStore";
 import type { ProjectPluginInfo, ProjectPluginState } from "@shared/types/plugin";
+import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -28,6 +29,7 @@ function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
 const activateStagedProjectPlugin = vi.fn<(pluginId: string) => Promise<void>>();
 const setProjectPluginTrust = vi.fn<(decision: string) => Promise<void>>();
 const reloadProjectPlugins = vi.fn<() => Promise<void>>();
+const getUnsavedPanels = vi.fn<(pluginId: string) => Promise<PluginUnsavedPanel[]>>();
 const getWorktreeDeleteNotes = vi.fn<(input: { pluginId: string }) => Promise<boolean>>();
 const setWorktreeDeleteNotes =
   vi.fn<(input: { pluginId: string; enabled: boolean }) => Promise<boolean>>();
@@ -56,12 +58,18 @@ beforeEach(() => {
   activateStagedProjectPlugin.mockReset().mockResolvedValue(undefined);
   setProjectPluginTrust.mockReset().mockResolvedValue(undefined);
   reloadProjectPlugins.mockReset().mockResolvedValue(undefined);
+  getUnsavedPanels.mockReset().mockResolvedValue([]);
   getWorktreeDeleteNotes.mockReset().mockResolvedValue(true);
   setWorktreeDeleteNotes.mockReset().mockImplementation(async ({ enabled }) => enabled);
   Object.defineProperty(window, "electron", {
     configurable: true,
     value: {
-      plugin: { activateStagedProjectPlugin, setProjectPluginTrust, reloadProjectPlugins },
+      plugin: {
+        activateStagedProjectPlugin,
+        setProjectPluginTrust,
+        reloadProjectPlugins,
+        getUnsavedPanels,
+      },
       pluginCapability: { getWorktreeDeleteNotes, setWorktreeDeleteNotes },
     },
   });
@@ -366,6 +374,52 @@ describe("ProjectPluginDetailPane", () => {
     expect(document.body.textContent).toContain("not just this one");
     await act(async () => {
       button("Turn off project plugins").click();
+    });
+    expect(setProjectPluginTrust).toHaveBeenCalledWith("disabled");
+  });
+
+  it("asks before a revoke that would lose another plugin's unsaved panel (#16656)", async () => {
+    const selected = plugin({ state: "active", instanceId: "project__proj-a__acme.dashboard" });
+    const other = plugin({
+      state: "active",
+      id: "acme.notes",
+      displayName: "Acme Notes",
+      dirName: "notes",
+      instanceId: "project__proj-a__acme.notes",
+    });
+    getUnsavedPanels.mockImplementation(async (id) =>
+      id === other.instanceId
+        ? [{ panelId: "n1", title: "Meeting notes", projectId: "proj-a", projectName: "Proj A" }]
+        : []
+    );
+    act(() => {
+      useProjectPluginStore.getState().applySnapshot({
+        projectId: "proj-a",
+        plugins: [selected, other],
+        trust: { projectId: "proj-a", decision: "enabled", enabled: true, persisted: true },
+      });
+    });
+    render(<ProjectPluginDetailPane plugin={selected} />);
+
+    await act(async () => {
+      button("Turn off project plugins").click();
+    });
+
+    expect(setProjectPluginTrust).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.textContent).toContain("Meeting notes");
+    expect(dialog.textContent).toContain("Proj A");
+
+    await act(async () => {
+      button("Cancel").click();
+    });
+    expect(setProjectPluginTrust).not.toHaveBeenCalled();
+
+    await act(async () => {
+      button("Turn off project plugins").click();
+    });
+    await act(async () => {
+      button("Discard changes").click();
     });
     expect(setProjectPluginTrust).toHaveBeenCalledWith("disabled");
   });
