@@ -427,3 +427,76 @@ describe("OS-level exclusion of hot directories", () => {
     expect(edit.fileSignals).toBeGreaterThan(0);
   });
 });
+
+describe("recursive ignore pattern against the real watcher (#16676)", () => {
+  it("drops nested ignored writes and still hears a root that sits under a `build` directory", async () => {
+    // The pattern is matched against the path below the watch root, so an
+    // ancestor named like an ignored directory must not silence the worktree.
+    const parent = mkdtempSync(join(tmpdir(), "daintree-ignore-"));
+    roots.push(parent);
+    const root = join(parent, "build", "repo");
+    mkdirSync(root, { recursive: true });
+    execFileSync("git", ["init", "-b", "main", "."], {
+      cwd: root,
+      stdio: ["ignore", "ignore", "pipe"],
+      env: GIT_ENV,
+    });
+    mkdirSync(join(root, "packages", "app", "dist"), { recursive: true });
+    mkdirSync(join(root, "packages", "app", "__pycache__"), { recursive: true });
+    mkdirSync(join(root, "packages", "lib"), { recursive: true });
+    mkdirSync(join(root, "sentinel"));
+
+    const reported: Array<readonly string[] | null> = [];
+    let failed = false;
+    let ready!: () => void;
+    const subscribed = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    const watcher = new GitFileWatcher({
+      worktreePath: root,
+      branch: "main",
+      debounceMs: 300,
+      watchWorktree: true,
+      worktreeMinDebounceMs: 150,
+      worktreeMaxDebounceMs: 400,
+      onChange: () => {},
+      onWorktreeFilesChanged: (dirs) => {
+        reported.push(dirs);
+      },
+      onWorktreeWatcherReady: () => ready(),
+      onWatcherFailed: () => {
+        failed = true;
+      },
+    });
+    watchers.push(watcher);
+    expect(await watcher.start()).toBe(true);
+    await subscribed;
+
+    // Created after subscribe, so no OS-level exclusion can cover it.
+    mkdirSync(join(root, "packages", "lib", "node_modules", "pkg"), { recursive: true });
+    for (let i = 0; i < 15; i++) {
+      writeFileSync(join(root, "packages", "app", "dist", `chunk-${i}.js`), `${i}\n`);
+      writeFileSync(join(root, "packages", "app", "__pycache__", `m${i}.pyc`), `${i}\n`);
+      writeFileSync(join(root, "packages", "lib", "node_modules", "pkg", `f${i}.js`), `${i}\n`);
+    }
+    // Written last: the stream delivers in order, so once the sentinel's
+    // directory is reported every churn event that got through has been too.
+    writeFileSync(join(root, "sentinel", "written-last.txt"), "visible\n");
+    await vi.waitFor(() => expect(reported.flat()).toContain("sentinel"), {
+      timeout: 10_000,
+      interval: 50,
+    });
+
+    expect(failed).toBe(false);
+    // A null entry is a burst that could not be described: lost events.
+    expect(reported).not.toContain(null);
+    const churnDirs = [
+      "packages/app/dist",
+      "packages/app/__pycache__",
+      "packages/lib",
+      "packages/lib/node_modules",
+      "packages/lib/node_modules/pkg",
+    ];
+    expect(reported.flat().filter((dir) => dir !== null && churnDirs.includes(dir))).toEqual([]);
+  });
+});
