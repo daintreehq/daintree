@@ -14,7 +14,6 @@ import { actionService } from "@/services/ActionService";
  */
 export function resolveInteractiveActionId(actionId: ActionId): ActionId {
   return (
-    actionService.get(actionId, undefined, { includeSchemas: false })?.paletteRedirectTo ??
-    actionId
+    actionService.get(actionId, undefined, { includeSchemas: false })?.paletteRedirectTo ?? actionId
   );
 }
