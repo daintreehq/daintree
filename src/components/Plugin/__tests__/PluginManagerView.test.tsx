@@ -778,7 +778,7 @@ describe("PluginManagerView", () => {
     // user what they are about to grant.
     expect(screen.getByText(CAPABILITY_META["network:fetch"].label)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
     // Bound to the reviewed archive (#12612) so main refuses a different one.
     await waitFor(() =>
       expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
@@ -830,7 +830,7 @@ describe("PluginManagerView", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
     await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
 
     await waitFor(() =>
       expect(screen.getByText(/no longer matches what you reviewed/)).toBeTruthy()
@@ -1102,7 +1102,7 @@ describe("PluginManagerView", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
     await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
     // The HTTP gate must intercept the reinstall — installFromUrl stays unfired.
     await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
     expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
@@ -1139,7 +1139,7 @@ describe("PluginManagerView", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
     await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
     await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
 
     // Another window uninstalls it; the refreshed list no longer has it.
@@ -1168,7 +1168,7 @@ describe("PluginManagerView", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
     await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
     await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
     fireEvent.click(
       within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" })
@@ -1936,7 +1936,7 @@ describe("PluginManagerView", () => {
       expect(checkedIds).toContain("acme.b");
       expect(checkedIds).not.toContain("acme.demo");
 
-      fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+      fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
       await waitFor(() =>
         expect(installMock()).toHaveBeenCalledWith(
           "https://example.com/acme.a.dntr",
@@ -1960,10 +1960,10 @@ describe("PluginManagerView", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
 
       await waitFor(() => expect(screen.getByText("Update 'Plugin A'?")).toBeTruthy());
-      fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+      fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
 
       await waitFor(() => expect(screen.getByText("Update 'Plugin B'?")).toBeTruthy());
-      fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+      fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
 
       await waitFor(() => expect(installMock()).toHaveBeenCalledTimes(2));
       await waitFor(() => expect(screen.queryByText(/^Update '/)).toBeNull());
@@ -2021,7 +2021,7 @@ describe("PluginManagerView", () => {
         fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
 
         fireEvent.click(
-          within(await confirmFor("Plugin A")).getByRole("button", { name: "Reinstall plugin" })
+          within(await confirmFor("Plugin A")).getByRole("button", { name: "Update plugin" })
         );
         const second = await confirmFor("Plugin B");
         fireEvent.click(within(second).getByRole("button", { name: "Stop updates" }));
@@ -2135,7 +2135,7 @@ describe("PluginManagerView", () => {
             within(first).getByRole("button", { name: "Skip update" })
           )
         );
-        within(first).getByRole("button", { name: "Reinstall plugin" }).focus();
+        within(first).getByRole("button", { name: "Update plugin" }).focus();
         fireEvent.keyDown(document, { key: "Escape" });
 
         const second = await confirmFor("Plugin B");
@@ -2153,7 +2153,7 @@ describe("PluginManagerView", () => {
         renderDialog();
         fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
         fireEvent.click(
-          within(await confirmFor("Plugin A")).getByRole("button", { name: "Reinstall plugin" })
+          within(await confirmFor("Plugin A")).getByRole("button", { name: "Update plugin" })
         );
         await waitFor(() => expect(installMock()).toHaveBeenCalledTimes(1));
 
@@ -2214,7 +2214,7 @@ describe("PluginManagerView", () => {
           renderDialog();
           fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
           fireEvent.click(
-            within(await confirmFor("Plugin A")).getByRole("button", { name: "Reinstall plugin" })
+            within(await confirmFor("Plugin A")).getByRole("button", { name: "Update plugin" })
           );
 
           const warning = await httpWarning();
@@ -2231,7 +2231,7 @@ describe("PluginManagerView", () => {
           renderDialog();
           fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
           fireEvent.click(
-            within(await confirmFor("Plugin A")).getByRole("button", { name: "Reinstall plugin" })
+            within(await confirmFor("Plugin A")).getByRole("button", { name: "Update plugin" })
           );
 
           fireEvent.click(
@@ -2248,7 +2248,7 @@ describe("PluginManagerView", () => {
           renderDialog();
           fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
           fireEvent.click(
-            within(await confirmFor("Plugin A")).getByRole("button", { name: "Reinstall plugin" })
+            within(await confirmFor("Plugin A")).getByRole("button", { name: "Update plugin" })
           );
           fireEvent.click(
             within(await httpWarning()).getByRole("button", { name: "Stop updates" })
@@ -2845,13 +2845,13 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
       expect(screen.getByText("Updating discards unsaved work in 1 panel")).toBeTruthy()
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
     await waitFor(() =>
       expect(screen.getByText("Updating discards unsaved work in 2 panels")).toBeTruthy()
     );
     expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
     await waitFor(() =>
       expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
         "https://example.com/p.dntr",
@@ -2872,7 +2872,7 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     await waitFor(() =>
       expect(screen.getByText("Updating discards unsaved work in 1 panel")).toBeTruthy()
     );
-    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
     fireEvent.click(await screen.findByRole("button", { name: "Install over HTTP" }));
 
     await waitFor(() =>
@@ -2897,7 +2897,7 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
     await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
     await waitFor(() => expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
     fireEvent.click(await screen.findByRole("button", { name: "Install over HTTP" }));
 
     await waitFor(() =>

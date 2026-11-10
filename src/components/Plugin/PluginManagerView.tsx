@@ -1181,8 +1181,8 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         isOpen={pm.pendingUpdate !== null}
         onClose={() => pm.dismissPendingUpdate()}
         title={pm.pendingUpdate ? `Update '${pluginLabel(pm.pendingUpdate.plugin)}'?` : ""}
-        description="Reinstalls the version shown here over the current one. If the download no longer matches it, nothing is installed. Your settings are kept."
-        confirmLabel="Reinstall plugin"
+        description="Installs the version shown here over the current one. If the download no longer matches it, nothing is installed. Your settings are kept."
+        confirmLabel="Update plugin"
         cancelLabel="Cancel"
         onConfirm={() => void pm.confirmReinstall()}
         isConfirmLoading={pm.isReinstalling}
