@@ -288,8 +288,8 @@ async function openFilePanel(page: Page, filePath: string): Promise<Locator> {
   const opened = await dispatchAction<{ panelId?: string }>(page, "file.openPanel", {
     path: filePath.replace(/\\/g, "/"),
   });
-  const panelId = opened.result?.panelId;
-  if (!opened.ok || !panelId) throw new Error(`file.openPanel failed: ${JSON.stringify(opened)}`);
+  const panelId = opened.ok ? opened.result?.panelId : undefined;
+  if (!panelId) throw new Error(`file.openPanel failed: ${JSON.stringify(opened)}`);
   const panel = page.locator(`[data-panel-id="${panelId}"]`);
   await panel.waitFor({ state: "visible", timeout: T_LONG });
   await panel.locator(".cm-content").first().waitFor({ state: "visible", timeout: T_LONG });
