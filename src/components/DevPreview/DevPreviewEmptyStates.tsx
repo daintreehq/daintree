@@ -34,7 +34,7 @@ interface DevPreviewEmptyStatesProps {
   error: DevServerError | null;
   /** Starts the dev server; also the error state's Retry. */
   handleRetry: () => void;
-  setDevPreviewConsoleOpen: (id: string, open: boolean) => void;
+  showDevPreviewOutput: (id: string) => void;
   id: string;
   currentUrl: string;
   handleOpenExternal: () => void;
@@ -152,7 +152,7 @@ export function DevPreviewEmptyStates({
   phaseLabel,
   error,
   handleRetry,
-  setDevPreviewConsoleOpen,
+  showDevPreviewOutput,
   id,
   currentUrl,
   handleOpenExternal,
@@ -222,7 +222,7 @@ export function DevPreviewEmptyStates({
             {error.type === "missing-dependencies" ? "Retry install" : "Retry"}
           </Button>
           {viewTerminal ? (
-            <Button onClick={() => setDevPreviewConsoleOpen(id, true)} variant="ghost" size="sm">
+            <Button onClick={() => showDevPreviewOutput(id)} variant="ghost" size="sm">
               <SquareTerminal />
               View terminal
             </Button>
@@ -466,7 +466,7 @@ export function DevPreviewEmptyStates({
         title="Waiting for the dev server's address"
         description="It's running, but hasn't printed a local URL yet."
       >
-        <Button onClick={() => setDevPreviewConsoleOpen(id, true)} variant="ghost" size="sm">
+        <Button onClick={() => showDevPreviewOutput(id)} variant="ghost" size="sm">
           <SquareTerminal />
           View terminal
         </Button>
