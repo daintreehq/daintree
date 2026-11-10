@@ -1,7 +1,17 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import type { ReaderMeta } from "../canopyReader.js";
 import { CANOPY_READER_WEIGHTS } from "../canopyModels.js";
 import type { ReaderWorkerInbound, ReaderWorkerOutbound } from "../canopyReaderWorkerProtocol.js";
@@ -93,7 +103,7 @@ function outputs(feeds: Feeds) {
 }
 
 let dir: string;
-let exitSpy: ReturnType<typeof vi.spyOn>;
+let exitSpy: MockInstance<typeof process.exit>;
 
 function send(message: ReaderWorkerInbound) {
   mocks.on.mock.calls.find(([event]) => event === "message")![1]({ data: message });
@@ -179,11 +189,13 @@ describe("Canopy reader process", () => {
     expect(posted().flatMap((m) => (m.type === "reading" ? [m.id] : []))).toEqual([1, 2, 3]);
 
     const feeds = mocks.run.mock.calls.map(([f]) => f as Feeds);
+    const lineFeeds = ["line_pos", "line_mask", "q_mask", "s_mask"];
     for (const f of feeds) {
       expect(f.input_ids.dims).toEqual([1, f.input_ids.data.length]);
       expect(f.attention_mask.dims).toEqual(f.input_ids.dims);
-      for (const name of ["line_pos", "line_mask", "q_mask", "s_mask"]) {
-        expect(f[name].dims).toEqual(f.line_mask.dims);
+      for (const name of lineFeeds) expect(f[name].dims).toEqual(f.line_mask.dims);
+      for (const tensor of Object.values(f)) {
+        expect(tensor.data).toHaveLength(tensor.dims.reduce((a, b) => a * b, 1));
       }
     }
     // The blank line is never encoded, so the second screen reads three lines.
@@ -194,6 +206,6 @@ describe("Canopy reader process", () => {
     ]);
     expect(feeds[1].input_ids.dims[1]).toBeGreaterThan(feeds[0].input_ids.dims[1]);
     // A screen with no text still feeds one line slot, masked off.
-    expect([...feeds[2].line_mask.data]).toEqual([0]);
+    for (const name of lineFeeds) expect([...feeds[2][name].data].map(Number)).toEqual([0]);
   });
 });
