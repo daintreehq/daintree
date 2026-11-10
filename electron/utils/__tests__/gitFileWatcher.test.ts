@@ -3651,6 +3651,10 @@ describe("GitFileWatcher", () => {
           name.toUpperCase(),
           `${name.toUpperCase()}/x`,
           `${capitalized}/x`,
+          // An unescaped leading dot would match any character here.
+          ...(name.startsWith(".")
+            ? [`x${name.slice(1)}`, `x${name.slice(1)}/f`, `src/x${name.slice(1)}/f`]
+            : []),
         ]) {
           corpus.add(path);
         }

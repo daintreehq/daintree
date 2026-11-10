@@ -277,6 +277,10 @@ describe("subscribeParcelWatcher", () => {
     listener("change", ".git");
     listener("change", "src\\index.ts");
     listener("change", ".gitignore");
+    // Case-sensitive like the native matcher, even on a case-insensitive
+    // filesystem: only the exact spelling is ignored.
+    listener("change", "Build\\out.js");
+    listener("change", ".GIT");
     // A null filename is the root-level dirty signal; the pattern's `^`
     // alternative must not swallow it.
     listener("change", null);
@@ -284,6 +288,8 @@ describe("subscribeParcelWatcher", () => {
     expect(callback.mock.calls).toEqual([
       [null, [{ path: resolve(root, "src\\index.ts"), type: "update" }]],
       [null, [{ path: resolve(root, ".gitignore"), type: "update" }]],
+      [null, [{ path: resolve(root, "Build\\out.js"), type: "update" }]],
+      [null, [{ path: resolve(root, ".GIT"), type: "update" }]],
       [null, [{ path: root, type: "update" }]],
     ]);
     await subscription.unsubscribe();
