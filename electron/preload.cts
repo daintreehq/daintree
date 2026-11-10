@@ -1806,7 +1806,7 @@ function buildElectronApi(): ElectronAPI {
       exportRecipeToFile: (name: string, json: string): Promise<boolean> =>
         _unwrappingInvoke(CHANNELS.RECIPE_EXPORT_FILE, { name, json }),
 
-      importRecipeFromFile: (): Promise<string | null> =>
+      importRecipeFromFile: (): Promise<{ fileName: string; json: string } | null> =>
         _unwrappingInvoke(CHANNELS.RECIPE_IMPORT_FILE),
 
       getInRepoRecipes: (

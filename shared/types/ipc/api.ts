@@ -876,7 +876,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): Promise<void>;
     deleteRecipe(projectId: string, recipeId: string): Promise<void>;
     exportRecipeToFile(name: string, json: string): Promise<boolean>;
-    importRecipeFromFile(): Promise<string | null>;
+    importRecipeFromFile(): Promise<{ fileName: string; json: string } | null>;
     getInRepoRecipes(projectId: string): Promise<TerminalRecipe[]>;
     syncInRepoRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void>;
     updateInRepoRecipe(

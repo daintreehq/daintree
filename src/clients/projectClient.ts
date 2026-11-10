@@ -430,7 +430,7 @@ export const projectClient = {
     return window.electron.project.exportRecipeToFile(name, json);
   },
 
-  importRecipeFromFile: (): Promise<string | null> => {
+  importRecipeFromFile: (): Promise<{ fileName: string; json: string } | null> => {
     return window.electron.project.importRecipeFromFile();
   },
 

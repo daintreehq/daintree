@@ -1490,7 +1490,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "recipe:import-file": {
     args: [];
-    result: string | null;
+    /** `null` when the picker was cancelled; an empty file comes back as `json: ""`. */
+    result: { fileName: string; json: string } | null;
   };
 
   // Recovery channels

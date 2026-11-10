@@ -56,13 +56,16 @@ import { resolveRecipeAgentStep } from "@/utils/recipeAgentStep";
 import { getPanelKindConfig, panelKindIsProjectScoped } from "@shared/config/panelKindRegistry";
 import { pluginAgentToolsProblem, recipeRunNeedsAgentTools } from "@/utils/pluginRecipeAgentTools";
 import {
-  importedRecipeUsesPluginOnlyFeatures,
   pluginOnlyCopyRefusal,
   recipeTerminalsUsePluginOnlyFeatures,
   recipeUsesPluginOnlyFeatures,
 } from "@/utils/pluginRecipeCopy";
-import { inspectRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
-import { RecipeImportDropsTerminalsError, type RecipeFileImportResult } from "@/utils/recipeImport";
+import { MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
+import {
+  prepareRecipeImport,
+  RecipeImportInvalidError,
+  type RecipeFileRead,
+} from "@/utils/recipeImport";
 import type { ActionSource, HostApprovedRecipeRun } from "@shared/types/actions";
 import type { AgentCliDetail } from "@shared/types/ipc";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
@@ -333,7 +336,11 @@ interface RecipeState {
   /** Replace the plugin tier wholesale from main's authoritative snapshot. */
   setPluginRecipes: (recipes: TerminalRecipe[]) => void;
   exportRecipeToFile: (id: string) => Promise<boolean>;
-  importRecipeFromFile: (projectId: string | undefined) => Promise<RecipeFileImportResult>;
+  /**
+   * Opens the file picker and checks the file the way an import would, without
+   * saving anything: where it goes is still the user's choice.
+   */
+  readRecipeFile: () => Promise<RecipeFileRead>;
   createRecipe: (
     projectId: string | undefined,
     name: string,
@@ -371,15 +378,16 @@ interface RecipeState {
 
   exportRecipe: (id: string) => string | null;
   /**
-   * Throws {@link RecipeImportDropsTerminalsError} when any terminal fails
-   * validation, unless `allowDroppedTerminals` says the user has seen which
-   * ones and chose to import the rest (#15044).
+   * Throws `RecipeImportInvalidError` when the JSON can't be a recipe, and
+   * `RecipeImportDropsTerminalsError` when any terminal fails validation,
+   * unless `allowDroppedTerminals` says the user has seen which ones and chose to
+   * import the rest (#15044). Resolves to the recipe it saved.
    */
   importRecipe: (
     projectId: string | undefined,
     json: string,
     options?: { allowDroppedTerminals?: boolean }
-  ) => Promise<void>;
+  ) => Promise<TerminalRecipe>;
 
   captureRecipeFromLayout: (worktreeId: string) => RecipeLayoutCapture;
   generateRecipeFromActiveTerminals: (worktreeId: string) => RecipeTerminal[];
@@ -1740,60 +1748,33 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     return projectClient.exportRecipeToFile(recipe.name, json);
   },
 
-  importRecipeFromFile: async (projectId) => {
-    const json = await projectClient.importRecipeFromFile();
-    if (!json) return { status: "cancelled" };
-    try {
-      await get().importRecipe(projectId, json);
-    } catch (error) {
-      return { status: "refused", json, error };
+  readRecipeFile: async () => {
+    const file = await projectClient.importRecipeFromFile();
+    if (file === null) return { status: "cancelled" };
+    const { fileName, json } = file;
+    if (!json.trim()) {
+      return {
+        status: "refused",
+        fileName,
+        json,
+        error: new RecipeImportInvalidError(
+          "This file is empty",
+          "There's no recipe in it to import."
+        ),
+      };
     }
-    return { status: "imported" };
+    try {
+      return { status: "ready", fileName, json, recipe: prepareRecipeImport(json).preview };
+    } catch (error) {
+      return { status: "refused", fileName, json, error };
+    }
   },
 
   importRecipe: async (projectId, json, options) => {
-    let recipe: Partial<TerminalRecipe>;
-    try {
-      recipe = JSON.parse(json);
-    } catch (_error) {
-      throw new Error("Invalid JSON format");
-    }
-
-    if (!recipe.name || !recipe.terminals || !Array.isArray(recipe.terminals)) {
-      throw new Error("Invalid recipe format: missing required fields");
-    }
-
-    if (recipe.terminals.length === 0) {
-      throw new Error("Recipe must contain at least one terminal");
-    }
-    if (recipe.terminals.length > MAX_TERMINALS_PER_RECIPE) {
-      throw new Error(`Recipe cannot exceed ${MAX_TERMINALS_PER_RECIPE} terminals`);
-    }
-    // An exported plugin recipe would import as a copy that quietly does less:
-    // the sanitizer below drops its panel steps and system prompts (#13797).
-    if (importedRecipeUsesPluginOnlyFeatures(recipe)) {
-      throw new Error(
-        `"${String(recipe.name)}" opens a plugin's panels, uses its variables or needs its agent tools, which only work in the plugin's own recipe, so it can't be imported.`
-      );
-    }
-
-    // Content-validate at the import trust boundary. Shared with the in-repo
-    // load path (ProjectIdentityFiles.readInRepoRecipesWithHashes) so both
-    // entry points apply the same type allowlist, control-char filtering, and
-    // explicit field mapping before a terminal can reach the spawn path. A
-    // recipe that would lose a terminal is a weaker copy, so it is saved only
-    // once the user has seen what goes (#15044).
-    const { accepted: sanitizedTerminals, rejected } = inspectRecipeTerminals(recipe.terminals);
-
-    if (
-      sanitizedTerminals.length === 0 ||
-      (rejected.length > 0 && options?.allowDroppedTerminals !== true)
-    ) {
-      throw new RecipeImportDropsTerminalsError(sanitizedTerminals.length, rejected);
-    }
+    const { recipe, preview } = prepareRecipeImport(json, options);
 
     const isGlobal = projectId === undefined;
-    const recipeName = String(recipe.name);
+    const recipeName = preview.name;
     const importedRecipe: TerminalRecipe = {
       id: `recipe-${crypto.randomUUID()}`,
       name: recipeName,
@@ -1803,7 +1784,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         : typeof recipe.worktreeId === "string"
           ? recipe.worktreeId
           : undefined,
-      terminals: sanitizedTerminals,
+      terminals: preview.terminals,
       createdAt: Date.now(),
       showInEmptyState:
         typeof recipe.showInEmptyState === "boolean" ? recipe.showInEmptyState : false,
@@ -1838,6 +1819,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       });
       throw _error;
     }
+    return importedRecipe;
   },
 
   captureRecipeFromLayout: (worktreeId) => {
