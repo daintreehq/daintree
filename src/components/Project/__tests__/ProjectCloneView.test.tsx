@@ -24,6 +24,7 @@ const m = vi.hoisted(() => ({
   reloadView: vi.fn(),
   closeActiveProject: vi.fn(),
   currentProjectId: "p1" as string | null,
+  getProviders: vi.fn(),
 }));
 
 vi.mock("@/utils/reloadView", () => ({ reloadView: m.reloadView }));
@@ -152,6 +153,15 @@ describe("ProjectCloneView", () => {
     m.closeActiveProject.mockResolvedValue({ processesKilled: 0, terminalsKilled: 0 });
     m.dispatch.mockResolvedValue({ ok: true });
     m.currentProjectId = "p1";
+    m.getProviders.mockResolvedValue([
+      {
+        pluginId: "daintree.github",
+        contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+      },
+    ]);
+    (globalThis as { window?: { electron?: unknown } }).window!.electron = {
+      forge: { getProviders: m.getProviders },
+    } as unknown as typeof window.electron;
   });
 
   it("shows the live phase, its percentage, the phases done and git's output", async () => {
@@ -344,5 +354,131 @@ describe("ProjectCloneView", () => {
     });
     expect(await screen.findByText("Couldn't retry the clone")).toBeTruthy();
     expect(screen.getByText(/already exists in this location/)).toBeTruthy();
+  });
+
+  describe("sign-in action on an auth failure", () => {
+    const authFailure = (overrides: Partial<ProjectCloneJobSnapshot> = {}) =>
+      snapshot({
+        status: "failed",
+        error: "Authentication failed for 'https://github.com/acme/widgets.git/'",
+        gitReason: "auth-failed",
+        canRetry: true,
+        ...overrides,
+      });
+
+    it("offers Sign in to the provider that owns the URL, opening its Code forge subtab", async () => {
+      m.getCloneJob.mockResolvedValue(authFailure());
+      render(<ProjectCloneView project={project} />);
+
+      const signIn = await screen.findByRole("button", { name: "Sign in to GitHub" });
+      await act(async () => {
+        fireEvent.click(signIn);
+      });
+
+      expect(m.dispatch).toHaveBeenCalledWith(
+        "app.settings.openTab",
+        { tab: "code-forge", subtab: "daintree.github.github" },
+        { source: "user" }
+      );
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Remove project" })).toBeTruthy();
+    });
+
+    it("offers it again for a failed project reopened from its persisted job", async () => {
+      m.getCloneJob.mockResolvedValue(authFailure({ sequence: 0 }));
+      render(<ProjectCloneView project={{ ...project, cloneState: "failed" }} />);
+
+      expect(await screen.findByText("Sign in to GitHub")).toBeTruthy();
+    });
+
+    it("uses the provider that matches the URL when several are registered", async () => {
+      m.getProviders.mockResolvedValue([
+        {
+          pluginId: "daintree.github",
+          contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+        },
+        {
+          pluginId: "acme.forge",
+          contribution: { id: "gitea", name: "Acme Gitea", matches: ["git.acme.test"] },
+        },
+      ]);
+      m.getCloneJob.mockResolvedValue(authFailure({ source: "https://git.acme.test/acme/w.git" }));
+      render(<ProjectCloneView project={project} />);
+
+      const signIn = await screen.findByRole("button", { name: "Sign in to Acme Gitea" });
+      await act(async () => {
+        fireEvent.click(signIn);
+      });
+
+      expect(screen.queryByText("Sign in to GitHub")).toBeNull();
+      expect(m.dispatch).toHaveBeenCalledWith(
+        "app.settings.openTab",
+        { tab: "code-forge", subtab: "acme.forge.gitea" },
+        { source: "user" }
+      );
+    });
+
+    it("drops the action when a retry fails for another reason, and restores it on auth again", async () => {
+      m.getCloneJob.mockResolvedValue(authFailure({ sequence: 1 }));
+      render(<ProjectCloneView project={project} />);
+      await screen.findByText("Sign in to GitHub");
+
+      act(() => push?.(snapshot({ sequence: 2, status: "running" })));
+      act(() =>
+        push?.(
+          snapshot({
+            sequence: 3,
+            status: "failed",
+            error: "Could not resolve host",
+            gitReason: "network-unavailable",
+            canRetry: true,
+          })
+        )
+      );
+      await screen.findByText("Could not resolve host");
+      expect(screen.queryByText("Sign in to GitHub")).toBeNull();
+
+      act(() => push?.(authFailure({ sequence: 4 })));
+      expect(await screen.findByText("Sign in to GitHub")).toBeTruthy();
+    });
+
+    it("shows no action for a failure with another git reason", async () => {
+      m.getCloneJob.mockResolvedValue(authFailure({ gitReason: "network-unavailable" }));
+      render(<ProjectCloneView project={project} />);
+
+      await screen.findByText("Clone failed");
+      expect(screen.queryByText("Sign in to GitHub")).toBeNull();
+      expect(m.getProviders).not.toHaveBeenCalled();
+    });
+
+    it("shows no action when no registered provider owns the URL", async () => {
+      m.getCloneJob.mockResolvedValue(
+        authFailure({ source: "https://gitlab.com/acme/widgets.git" })
+      );
+      render(<ProjectCloneView project={project} />);
+
+      await waitFor(() => expect(m.getProviders).toHaveBeenCalled());
+      await screen.findByText("Clone failed");
+      expect(screen.queryByText(/^Sign in to/)).toBeNull();
+    });
+
+    it("keeps the plain banner when the providers can't be read", async () => {
+      m.getProviders.mockRejectedValue(new Error("no registry"));
+      m.getCloneJob.mockResolvedValue(authFailure());
+      render(<ProjectCloneView project={project} />);
+
+      await waitFor(() => expect(m.getProviders).toHaveBeenCalled());
+      await screen.findByText("Clone failed");
+      expect(screen.queryByText(/^Sign in to/)).toBeNull();
+    });
+
+    it("shows no action for a failed project with no job details", async () => {
+      m.getCloneJob.mockResolvedValue(null);
+      render(<ProjectCloneView project={{ ...project, cloneState: "failed" }} />);
+
+      await screen.findByText("Clone failed");
+      expect(screen.queryByText(/^Sign in to/)).toBeNull();
+      expect(m.getProviders).not.toHaveBeenCalled();
+    });
   });
 });
