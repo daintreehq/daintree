@@ -347,6 +347,16 @@ describe("HelpPanel — its pane, as Canopy's sizing sees it (#16737)", () => {
     helpPanelState.isOpen = false;
     rerender(<HelpPanel width={380} />);
     expect(hidePaneTerminal.mock.calls).toEqual([["t-1"], ["t-1"]]);
+
+    // Another lane's session while hidden: the old one let go, the new one hidden.
+    helpPanelState.terminalId = "t-2";
+    panelStoreState.panelIds = ["t-2"];
+    panelStoreState.panelsById = {
+      "t-2": { agentState: "idle", cwd: "/repo", spawnStatus: "ready" },
+    };
+    rerender(<HelpPanel width={380} />);
+    expect(showPane).toHaveBeenCalledTimes(2);
+    expect(hidePaneTerminal.mock.calls.at(-1)).toEqual(["t-2"]);
   });
 });
 

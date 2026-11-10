@@ -235,6 +235,7 @@ describe("DockPanelOffscreenContainer stable-wrapper relocation (#9927)", () => 
     expect(noteVisiblePanesChanged).toHaveBeenCalledTimes(1);
     act(() => captured!("panel-1", null));
     expect(noteVisiblePanesChanged).toHaveBeenCalledTimes(2);
+    target.remove();
   });
 
   it("is idempotent — re-moving to the current parent does nothing", () => {
