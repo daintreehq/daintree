@@ -9,6 +9,7 @@ import {
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 const MAX_HISTORY_SIZE = 50;
+const TERMINAL_SEARCH_STORAGE_KEY = "daintree-terminal-search-history";
 
 interface TerminalSearchHistoryState {
   searches: string[];
@@ -138,7 +139,7 @@ export const useTerminalSearchHistoryStore = create<TerminalSearchHistoryState>(
       setToggles: (toggles) => set(toggles),
     }),
     {
-      name: "daintree-terminal-search-history",
+      name: TERMINAL_SEARCH_STORAGE_KEY,
       storage: createSafeJSONStorage<TerminalSearchPersistedState>({
         mergeOnWrite: mergeTerminalSearchPersistedWrite,
       }),
@@ -161,6 +162,17 @@ export const useTerminalSearchHistoryStore = create<TerminalSearchHistoryState>(
     }
   )
 );
+
+// A persist store hydrates once per view, so a cached view would open its find
+// bar with the toggles and last query it had before a sibling view changed
+// them. Views share the storage partition; the sibling's write arrives as a
+// `storage` event.
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== TERMINAL_SEARCH_STORAGE_KEY) return;
+    void useTerminalSearchHistoryStore.persist.rehydrate();
+  });
+}
 
 registerPersistedStore({
   storeId: "terminalSearchHistoryStore",

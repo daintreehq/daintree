@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 
 vi.mock("@/services/TerminalInstanceService", () => {
@@ -782,6 +783,63 @@ describe("TerminalSearchBar", () => {
         "recent",
         expect.objectContaining({ wholeWord: true })
       );
+    });
+
+    it("opens a bar over a given terminal with the whole-word toggle another pane set", async () => {
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+      const { unmount } = renderSearchBar();
+      await act(() => {
+        fireEvent.click(screen.getByLabelText("Match whole word"));
+      });
+      unmount();
+
+      const own = createMockManaged(true);
+      render(
+        <TerminalSearchBar
+          search={{
+            ensureSearchAddon: async () => own.searchAddon as never,
+            getSearchAddon: () => own.searchAddon as never,
+          }}
+          onClose={vi.fn()}
+        />
+      );
+      const toggle = screen.getByLabelText("Match whole word");
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("runs one search and one store write per toggle click under StrictMode", async () => {
+      useTerminalSearchHistoryStore.setState({ searches: ["recent"] });
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+      render(
+        <StrictMode>
+          <TerminalSearchBar terminalId="test-terminal" onClose={vi.fn()} />
+        </StrictMode>
+      );
+      await act(async () => Promise.resolve());
+      mock.searchAddon.findNext.mockClear();
+      const writes = vi.fn();
+      const unsubscribe = useTerminalSearchHistoryStore.subscribe(writes);
+
+      for (const label of ["Match case", "Use regular expression", "Match whole word"]) {
+        await act(() => {
+          fireEvent.click(screen.getByLabelText(label));
+        });
+      }
+      unsubscribe();
+
+      expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(3);
+      expect(writes).toHaveBeenCalledTimes(3);
+      expect(mock.searchAddon.findNext.mock.calls.at(-1)?.[1]).toMatchObject({
+        caseSensitive: true,
+        regex: true,
+        wholeWord: true,
+      });
     });
 
     it("typing exits history-navigation mode (subsequent ArrowDown does not restore draft)", async () => {

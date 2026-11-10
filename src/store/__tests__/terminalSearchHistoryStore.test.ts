@@ -250,4 +250,29 @@ describe("terminalSearchHistoryStore cross-view write merge (#11351)", () => {
     expect(written.state.regexEnabled).toBe(true);
     expect(written.state.wholeWord).toBe(true);
   });
+
+  it("picks up a sibling view's toggles and searches from a storage event", async () => {
+    const backing = installLocalStorage({});
+    const { useTerminalSearchHistoryStore: store } = await import("../terminalSearchHistoryStore");
+    expect(store.getState().wholeWord).toBe(false);
+
+    backing.set(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 0,
+        state: { searches: ["sibling"], caseSensitive: true, regexEnabled: false, wholeWord: true },
+      })
+    );
+    window.dispatchEvent(new StorageEvent("storage", { key: "unrelated-key" }));
+    await Promise.resolve();
+    expect(store.getState().wholeWord).toBe(false);
+
+    window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEY }));
+    await Promise.resolve();
+
+    const state = store.getState();
+    expect(state.wholeWord).toBe(true);
+    expect(state.caseSensitive).toBe(true);
+    expect(state.searches).toEqual(["sibling"]);
+  });
 });
