@@ -216,6 +216,9 @@ function FoldedRollup({
         aria-hidden="true"
       />
       <span className="truncate">
+        {/* The folded label's ", 2 projects" ends without a break, so the
+            option's name ran on into "2 projects1 agent running". */}
+        <span className="sr-only">, </span>
         {formatFoldedLiveness(activeAgentCount, workingAssistantCount)}
       </span>
     </span>
@@ -516,8 +519,9 @@ function SortableBandHeader({
                     }
                     aria-label={`Sort ${sortLabel}, currently ${active.label}`}
                     // 24px tall for the pointer target floor, pulled into the
-                    // header's line so it doesn't grow it.
-                    className="-my-1 flex min-h-6 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-text-secondary hover:text-text-primary transition-colors"
+                    // header's line so it doesn't grow it; `-mr-1` puts the
+                    // label's end on the edge a folded header's count ends on.
+                    className="-my-1 -mr-1 flex min-h-6 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-text-secondary hover:text-text-primary transition-colors"
                   >
                     <ActiveIcon className="w-3 h-3" aria-hidden="true" />
                     {active.label}

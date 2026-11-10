@@ -36,10 +36,12 @@ export type ProjectRowTone =
 export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   blocked: "text-status-danger-text",
   waiting: "text-activity-waiting-text",
-  // Finished-awaiting-review: the completed-state hue, distinct from both the
-  // warning of a wait and the success-green of a healthy process. Never danger
-  // — completion is the desired outcome, not a fault.
-  review: "text-activity-completed-text",
+  // Finished work handed back and not yet seen: the primary ink, the app's
+  // unread colour (the unread disc is the one filled neutral mark). It was the
+  // completed hue, which derives from success-green and sat beside the running
+  // count as a second green, so "1 agent running · 1 agent unread" read as one
+  // busy fact. Never danger: completion is the desired outcome, not a fault.
+  review: "text-text-primary",
   // No demand sentence ever takes this tone: `working` is what a row's mark
   // draws when liveness has claimed a slot demand had no use for. The row's
   // running count ("2 running") is drawn in it instead, so a run reads in the
@@ -83,11 +85,10 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
  * - no mark at all — the project is merely open, which its presence in the
  *   list already says (#11692).
  *
- * One standing exception: `review` keeps the completed hue, which derives from
- * `status-success` and so reads green in most palettes even though nothing is
- * executing. Every built-in keeps it apart from the working green, so the pie
- * still splits when both are present (#15866). It predates this legend and the row's line always names the count
- * ("2 agents unread"), so it is recorded here rather than quietly reconciled.
+ * - white (the primary ink), filled — finished work handed back and not yet
+ *   seen, the unread disc every other surface draws. Neutral rather than the
+ *   completed hue, which derives from success-green and made a running/unread
+ *   pie two greens.
  *
  * A hollow ring must never land on a row with something running. It used to:
  * an assistant waiting beside a working agent took the mark and drew it grey,
@@ -96,7 +97,7 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
 export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
   blocked: "bg-status-danger",
   waiting: "bg-status-warning",
-  review: "bg-activity-completed",
+  review: "bg-text-primary",
   // Filled and pulsing, the way every other surface draws a run in flight. This
   // tone is only ever reached as the liveness fallback now — a row with real
   // demand keeps its demand hue — so the pulse lands on the rows whose only
@@ -159,7 +160,7 @@ export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
 export const ROW_MARK_COLOR: Record<ProjectRowTone, string> = {
   blocked: "var(--color-status-danger)",
   waiting: "var(--color-status-warning)",
-  review: "var(--color-activity-completed)",
+  review: "var(--color-text-primary)",
   working: "var(--color-activity-working)",
   running: "var(--color-activity-working)",
   snoozed: "var(--color-text-secondary)",
@@ -849,7 +850,9 @@ export function formatFleetLiveness(counts: {
 }): string | null {
   const parts: string[] = [];
   if (counts.runningAgentCount > 0) {
-    parts.push(`${counts.runningAgentCount.toLocaleString()} running`);
+    // The rows' and folded headers' own words, so the headline reads as the
+    // same fact they report rather than "5 [projects] running".
+    parts.push(`${pluralize(counts.runningAgentCount, "agent")} running`);
   }
   if (counts.workingAssistantCount > 0) {
     parts.push(pluralize(counts.workingAssistantCount, "assistant working", "assistants working"));

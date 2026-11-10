@@ -3,7 +3,6 @@ import type { HostProjectPresence } from "@shared/types/ipc/hostSwitch";
 import {
   ContextMenuItem,
   ContextMenuMeta,
-  ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
@@ -108,9 +107,9 @@ export function OpenOnHostSubmenu({ projectId }: { projectId: string }) {
   );
   if (!supported || targets.length === 0) return null;
 
+  // No separator of its own: it sits among the row's other "open" items.
   return (
     <>
-      <ContextMenuSeparator />
       <ContextMenuSub>
         <ContextMenuSubTrigger>
           <Server className="w-3.5 h-3.5 mr-2" aria-hidden="true" />

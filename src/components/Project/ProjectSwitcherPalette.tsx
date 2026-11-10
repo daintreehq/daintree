@@ -4,10 +4,10 @@ import { FolderOpen, FolderPlus, Settings } from "lucide-react";
 import { FolderDown } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
-import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { KbdChord } from "@/components/ui/Kbd";
+import { Kbd, KbdChord } from "@/components/ui/Kbd";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { formatFleetLiveness } from "@/lib/projectRowStatus";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
@@ -234,6 +234,9 @@ function ProjectSwitcherFooter({
     : hostOption
       ? getOtherHostEnterHint(hostOption, modifiers.meta)
       : getProjectSwitcherEnterHint(selectedRow, modifiers.meta, canOpenWindow);
+  // "to go to window" (15) still fits beside the keys in the dropdown; "to
+  // resume 2 agents" and a host's name do not.
+  const longHint = hint !== null && (hint.host !== undefined || hint.label.length > 15);
 
   return (
     // Container-queried rather than fixed: the same footer serves the anchored
@@ -271,17 +274,29 @@ function ProjectSwitcherFooter({
       <div className="flex shrink-0 items-center gap-3">
         {inBrowse && (
           <span
-            className="hidden shrink-0 items-center @min-[400px]/switcher-footer:inline-flex"
+            className={cn(
+              "hidden shrink-0 items-center",
+              // The section keys are teaching, the Enter hint is the row's own
+              // consequence: when that runs long ("to resume 2 agents", "to
+              // open on studio-01") the keys give it their room in the
+              // dropdown, and come back on the next plain row.
+              longHint
+                ? "@min-[560px]/switcher-footer:inline-flex"
+                : "@min-[400px]/switcher-footer:inline-flex"
+            )}
             data-testid="project-switcher-band-keys-hint"
           >
             <span className="sr-only">
               {isMac() ? "Option" : "Alt"} plus up or down arrow to jump between sections
             </span>
-            <kbd aria-hidden="true" className={KBD_CLASS}>
-              {isMac() ? "⌥↑↓" : "Alt ↑↓"}
-            </kbd>
+            {/* Keys as chips the way `KbdChord` draws a chord: the modifier, then
+                the arrow pair as one key cap, since either arrow does it. */}
+            <span aria-hidden="true" className="inline-flex items-center gap-0.5">
+              <Kbd>{isMac() ? "⌥" : "Alt"}</Kbd>
+              <Kbd>↑↓</Kbd>
+            </span>
             <span aria-hidden="true" className="ml-1.5">
-              Sections
+              to jump sections
             </span>
           </span>
         )}
@@ -294,7 +309,9 @@ function ProjectSwitcherFooter({
         <button
           type="button"
           onClick={onOpenPilot}
-          className="inline-flex items-center shrink-0 text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
+          // `py-1 -my-1`: a 24px pointer target (WCAG 2.5.8) that keeps the
+          // footer at the keycaps' height.
+          className="-my-1 inline-flex items-center shrink-0 py-1 text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
           data-testid="project-switcher-open-pilot"
           {...(pilotShortcut ? { "aria-keyshortcuts": pilotShortcut } : {})}
         >
@@ -1191,7 +1208,17 @@ function ProjectPaletteInner({
         // would make the reader parse a number to learn nothing.
         trailing={
           fleetSummary ? (
-            <span data-testid="fleet-liveness-summary">{fleetSummary}</span>
+            // Led by the run's own mark, as a folded band's rollup is: plain
+            // secondary text lost to the bordered keycaps beside it.
+            <span className="inline-flex items-center gap-1.5">
+              {(fleetLiveness?.runningAgentCount ?? 0) > 0 && (
+                <span
+                  className="workspace-mark h-1.5 w-1.5 shrink-0 rounded-full bg-activity-working"
+                  aria-hidden="true"
+                />
+              )}
+              <span data-testid="fleet-liveness-summary">{fleetSummary}</span>
+            </span>
           ) : undefined
         }
       >
@@ -1310,9 +1337,16 @@ function ProjectPaletteInner({
         />
         {showScratchSection && (
           <>
-            {/* Nothing above it to separate from once Scratch is the first content. */}
+            {/* Nothing above it to separate from once Scratch is the first
+                content — standing alone, or below a project list that drew
+                nothing because another host's projects answer instead, where it
+                doubled the search field's rule. */}
             <AppPaletteDialog.Divider
-              hidden={isRankedSearch || (scratchesStandAlone && viewResults.length === 0)}
+              hidden={
+                isRankedSearch ||
+                (viewResults.length === 0 &&
+                  (scratchesStandAlone || (bandAnswersSearch && (viewBands?.length ?? 0) === 0)))
+              }
             />
             <ScratchSection
               scratches={pinnedScratches}
