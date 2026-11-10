@@ -107,4 +107,21 @@ describe("GitLabSettingsTab — Enter in the token field", () => {
     await waitFor(() => expect(setCredential).toHaveBeenCalledTimes(1));
     expect(setCredential).toHaveBeenCalledWith("daintree.gitlab.gitlab", { token: "glpat-new" });
   });
+
+  it("does nothing on Enter before the saved state has loaded", async () => {
+    let release: (value: { values: Record<string, unknown> }) => void = () => {};
+    getSettingValues.mockImplementationOnce(
+      () => new Promise<{ values: Record<string, unknown> }>((resolve) => (release = resolve))
+    );
+    render(<GitLabSettingsTab />);
+    const token = screen.getByLabelText("GitLab personal access token");
+    fireEvent.change(token, { target: { value: "glpat-early" } });
+    fireEvent.keyDown(token, { key: "Enter" });
+    // A started save re-reads the stored instance URL first, so a second read means it ran.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(getSettingValues).toHaveBeenCalledTimes(1);
+    expect(setCredential).not.toHaveBeenCalled();
+    release({ values: { ...stored } });
+    await screen.findByText("Token saved for gitlab.com");
+  });
 });

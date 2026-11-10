@@ -108,20 +108,26 @@ describe("JiraSettingsTab", () => {
     });
   });
 
-  it("saves once on Enter in any field, and does nothing while the token is empty", async () => {
+  it("does nothing on Enter while the token is empty", async () => {
     await renderLoaded("No credentials saved");
     fill({ site: "acme.atlassian.net", email: "ada@example.com" });
     fireEvent.keyDown(field("Jira account email"), { key: "Enter" });
     expect(setCredential).not.toHaveBeenCalled();
-
-    fill({ token: "ATATT3x" });
-    fireEvent.keyDown(field("Jira site URL"), { key: "Enter" });
-    fireEvent.keyDown(field("Jira API token"), { key: "Enter" });
-
-    await screen.findByText(/Signed in as Ada Lovelace/);
-    expect(setCredential).toHaveBeenCalledTimes(1);
-    expect(setCredential).toHaveBeenCalledWith(PROVIDER_ID, { [PRIMARY_FIELD]: "ATATT3x" });
   });
+
+  it.each(["Jira site URL", "Jira account email", "Jira API token"])(
+    "saves once on Enter in the %s field",
+    async (name) => {
+      await renderLoaded("No credentials saved");
+      fill({ site: "acme.atlassian.net", email: "ada@example.com", token: "ATATT3x" });
+      fireEvent.keyDown(field(name), { key: "Enter" });
+      fireEvent.keyDown(field(name), { key: "Enter" });
+
+      await screen.findByText(/Signed in as Ada Lovelace/);
+      expect(setCredential).toHaveBeenCalledTimes(1);
+      expect(setCredential).toHaveBeenCalledWith(PROVIDER_ID, { [PRIMARY_FIELD]: "ATATT3x" });
+    }
+  );
 
   it("lands the site and email before the token is checked against them", async () => {
     await renderLoaded("No credentials saved");
