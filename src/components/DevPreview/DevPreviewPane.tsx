@@ -126,6 +126,7 @@ export function DevPreviewPane({
   const setBrowserZoom = usePanelStore((state) => state.setBrowserZoom);
   const setDevPreviewConsoleOpen = usePanelStore((state) => state.setDevPreviewConsoleOpen);
   const setDevPreviewConsoleTab = usePanelStore((state) => state.setDevPreviewConsoleTab);
+  const showDevPreviewOutput = usePanelStore((state) => state.showDevPreviewOutput);
   const setViewportPreset = usePanelStore((state) => state.setViewportPreset);
   const setViewportRotated = usePanelStore((state) => state.setViewportRotated);
   const setViewportDpr = usePanelStore((state) => state.setViewportDpr);
@@ -419,12 +420,12 @@ export function DevPreviewPane({
   useEffect(() => {
     if (status === "error" && error && consoleAutoOpenedErrorRef.current !== error.message) {
       consoleAutoOpenedErrorRef.current = error.message;
-      setDevPreviewConsoleOpen(id, true);
+      showDevPreviewOutput(id);
     }
     if (status !== "error") {
       consoleAutoOpenedErrorRef.current = null;
     }
-  }, [status, error, id, setDevPreviewConsoleOpen]);
+  }, [status, error, id, showDevPreviewOutput]);
 
   useEffect(() => {
     if (status !== "starting" && status !== "installing") {
@@ -442,12 +443,12 @@ export function DevPreviewPane({
     const timer = setTimeout(() => {
       if ((status === "starting" || status === "installing") && !url && !phaseLabel) {
         consoleAutoOpenedStallRef.current = true;
-        setDevPreviewConsoleOpen(id, true);
+        showDevPreviewOutput(id);
       }
     }, 15_000);
 
     return () => clearTimeout(timer);
-  }, [status, url, phaseLabel, id, setDevPreviewConsoleOpen]);
+  }, [status, url, phaseLabel, id, showDevPreviewOutput]);
 
   const {
     crashState,
@@ -1088,7 +1089,7 @@ export function DevPreviewPane({
                 phaseLabel={phaseLabel}
                 error={error}
                 handleRetry={handleRetry}
-                setDevPreviewConsoleOpen={setDevPreviewConsoleOpen}
+                showDevPreviewOutput={showDevPreviewOutput}
                 id={id}
                 currentUrl={currentUrl}
                 handleOpenExternal={handleOpenExternal}

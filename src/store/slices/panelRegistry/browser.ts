@@ -24,6 +24,7 @@ export const createBrowserActions = (
   | "setBrowserConsoleOpen"
   | "setDevPreviewConsoleOpen"
   | "setDevPreviewConsoleTab"
+  | "showDevPreviewOutput"
   | "setViewportPreset"
   | "setViewportRotated"
   | "setViewportDpr"
@@ -121,6 +122,26 @@ export const createBrowserActions = (
       const newById = {
         ...state.panelsById,
         [id]: { ...terminal, devPreviewConsoleTab: tab },
+      };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
+  },
+
+  // Open and tab switch share one commit: an already-open drawer on another tab
+  // would otherwise ignore the open and never reach the terminal.
+  showDevPreviewOutput: (id) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      if (terminal.kind !== "dev-preview") return state;
+      if (terminal.devPreviewConsoleOpen === true && terminal.devPreviewConsoleTab === "output") {
+        return state;
+      }
+
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, devPreviewConsoleOpen: true, devPreviewConsoleTab: "output" as const },
       };
       saveNormalized(newById, state.panelIds);
       return { panelsById: newById };

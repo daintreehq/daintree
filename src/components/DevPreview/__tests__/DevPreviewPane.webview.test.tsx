@@ -139,6 +139,7 @@ const {
     setBrowserZoom: vi.fn(),
     setDevPreviewConsoleOpen: vi.fn(),
     setDevPreviewConsoleTab: vi.fn(),
+    showDevPreviewOutput: vi.fn(),
     setViewportPreset: vi.fn(),
     setDevPreviewCommand: vi.fn(),
     setDevPreviewScrollPosition: vi.fn(
@@ -1933,6 +1934,37 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       render(<DevPreviewPane {...baseProps} />);
       expect(latestToolbarProps().canOpenExternal).toBe(false);
       expect(latestToolbarProps().canToggleConsole).toBe(true);
+    });
+
+    it("reveals the Output tab when the server errors", () => {
+      seedHistory("");
+      terminalStoreState.showDevPreviewOutput.mockClear();
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "error",
+        url: null,
+        terminalId: "dev-terminal-1",
+        error: { type: "compile-error", message: "Build failed" },
+      };
+      render(<DevPreviewPane {...baseProps} />);
+      expect(terminalStoreState.showDevPreviewOutput).toHaveBeenCalledWith("dev-preview-panel-1");
+    });
+
+    it("reveals the Output tab when a start stalls without an address", () => {
+      seedHistory("");
+      terminalStoreState.showDevPreviewOutput.mockClear();
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "starting",
+        url: null,
+        terminalId: "dev-terminal-1",
+      };
+      render(<DevPreviewPane {...baseProps} />);
+      expect(terminalStoreState.showDevPreviewOutput).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+      expect(terminalStoreState.showDevPreviewOutput).toHaveBeenCalledWith("dev-preview-panel-1");
     });
 
     it("keeps Open in browser available for a retained URL while the webview is not ready", () => {

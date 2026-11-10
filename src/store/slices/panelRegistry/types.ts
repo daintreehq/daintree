@@ -373,6 +373,7 @@ export interface PanelRegistrySlice {
   setBrowserConsoleOpen: (id: string, isOpen: boolean) => void;
   setDevPreviewConsoleOpen: (id: string, isOpen: boolean) => void;
   setDevPreviewConsoleTab: (id: string, tab: "output" | "console" | "diagnostics") => void;
+  showDevPreviewOutput: (id: string) => void;
   setViewportPreset: (
     id: string,
     preset: import("@shared/types/panel.js").ViewportPresetId | undefined
