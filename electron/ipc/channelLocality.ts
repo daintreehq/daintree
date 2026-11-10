@@ -221,6 +221,7 @@ export const CHANNEL_LOCALITY = {
   "composer-hold:changed": "shell",
   "composer-hold:hold": "shell",
   "composer-hold:list": "shell",
+  "composer-hold:send-now": "shell",
   "composer-hold:withdraw": "shell",
   "config-bundle:apply-import": "hybrid",
   "config-bundle:export": "hybrid",

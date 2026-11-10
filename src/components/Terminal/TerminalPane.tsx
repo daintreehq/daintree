@@ -2067,6 +2067,12 @@ function TerminalPaneComponent({
                 terminalId={id}
                 agentId={effectiveAgentId}
                 canEdit={showHybridInputBar && !isHybridInputDisabled}
+                inputBlocked={
+                  isBackendDisconnected ||
+                  isBackendRecovering ||
+                  isInputLocked ||
+                  inputBlock !== null
+                }
               />
               {showHybridInputBar && (
                 <Suspense fallback={null}>

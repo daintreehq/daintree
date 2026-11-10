@@ -11,6 +11,7 @@ import {
 } from "../../../shared/utils/imageAttachmentInput.js";
 import type {
   ComposerHoldResult,
+  ComposerHoldSendNowResult,
   ComposerHoldWithdrawResult,
   HeldComposerSend,
 } from "../../../shared/types/ipc/composerHold.js";
@@ -27,6 +28,13 @@ function requireTerminalId(terminalId: unknown): string {
     throw new AppError({ code: "VALIDATION", message: "terminalId must be a non-empty string" });
   }
   return terminalId;
+}
+
+function requireToken(token: unknown): string {
+  if (typeof token !== "string" || token.length === 0 || token.length > 128) {
+    throw new AppError({ code: "VALIDATION", message: "token must be a non-empty string" });
+  }
+  return token;
 }
 
 /**
@@ -114,9 +122,7 @@ async function handleWithdraw(
   token: string
 ): Promise<ComposerHoldWithdrawResult> {
   const id = requireTerminalId(terminalId);
-  if (typeof token !== "string" || token.length === 0 || token.length > 128) {
-    throw new AppError({ code: "VALIDATION", message: "token must be a non-empty string" });
-  }
+  requireToken(token);
   const projectId = ctx.projectId;
   if (!projectId) return { withdrawn: false };
   const { peekComposerSendHold } =
@@ -124,6 +130,39 @@ async function handleWithdraw(
   // Only the screen driving the project takes back what is waiting for its prompt.
   if (!drivesProject(ctx, projectId)) return { withdrawn: false };
   return { withdrawn: peekComposerSendHold()?.withdraw(id, token, projectId) ?? false };
+}
+
+/**
+ * Type a held send now, whatever its pane was last seen doing (#16745).
+ * `inputBlocked` is the asking view's own word that its panel can't take
+ * input: it can only stop the send, never start one.
+ */
+export async function handleSendNow(
+  ctx: IpcContext,
+  terminalId: string,
+  token: string,
+  inputBlocked?: boolean
+): Promise<ComposerHoldSendNowResult> {
+  const id = requireTerminalId(terminalId);
+  const held = requireToken(token);
+  if (inputBlocked !== undefined && typeof inputBlocked !== "boolean") {
+    throw new AppError({ code: "VALIDATION", message: "inputBlocked must be a boolean" });
+  }
+  const notHeld: ComposerHoldSendNowResult = { outcome: "not-held" };
+  const projectId = ctx.projectId;
+  // A remote view never holds a send: its own sends go as before.
+  if (!projectId || ctx.endpoint?.kind === "remote-view") return notHeld;
+  const { peekComposerSendHold } =
+    await import("../../services/composerHold/composerSendHoldLive.js");
+  const hold = peekComposerSendHold();
+  if (hold === null) return notHeld;
+  return hold.sendNow({
+    terminalId: id,
+    token: held,
+    projectId,
+    inputBlocked: inputBlocked === true,
+    authorize: () => drivesProject(ctx, projectId),
+  });
 }
 
 async function handleList(ctx: IpcContext): Promise<HeldComposerSend[]> {
@@ -138,6 +177,7 @@ export const composerHoldNamespace = defineIpcNamespace({
   ops: {
     hold: op(COMPOSER_HOLD_METHOD_CHANNELS.hold, handleHold, { withContext: true }),
     withdraw: op(COMPOSER_HOLD_METHOD_CHANNELS.withdraw, handleWithdraw, { withContext: true }),
+    sendNow: op(COMPOSER_HOLD_METHOD_CHANNELS.sendNow, handleSendNow, { withContext: true }),
     list: op(COMPOSER_HOLD_METHOD_CHANNELS.list, handleList, { withContext: true }),
   },
 });

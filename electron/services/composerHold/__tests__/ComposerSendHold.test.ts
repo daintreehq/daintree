@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposerSendHold } from "../ComposerSendHold.js";
 import type { LaneWake, NotifyTerminalInfo } from "../../mcp-server/terminalNotify.js";
 import {
   COMPOSER_HOLD_TTL_MS,
   type ComposerHoldChange,
 } from "../../../../shared/types/ipc/composerHold.js";
+import type { TerminalSubmissionPhase } from "../../../../shared/types/terminalSubmission.js";
 
 const PROJECT = "project-1";
 const T = "term-1";
@@ -52,13 +53,26 @@ function setup() {
   ]);
   const driving = { value: true };
   const terminals = new Map<string, NotifyTerminalInfo | null>([[T, working()]]);
+  /** What the host recorded of each submission token, read with its terminal. */
+  const submissions = new Map<string, TerminalSubmissionPhase>();
+  const readTerminal = vi.fn(async (terminalId: string, submissionToken?: string) => {
+    const info = terminals.get(terminalId) ?? null;
+    const phase = submissionToken === undefined ? undefined : submissions.get(submissionToken);
+    if (info === null || phase === undefined) return info;
+    return { ...info, submission: { token: submissionToken!, phase } };
+  });
+  const submit =
+    vi.fn<
+      (terminalId: string, text: string, token: string, imagePaths: readonly string[]) => void
+    >();
   const published: ComposerHoldChange[] = [];
   const hold = new ComposerSendHold({
     openWakes,
     paneFor: (terminalId) => ({ key: `worker\u0000${terminalId}`, terminalId }),
     getLiveGeneration: (terminalId) => generations.get(terminalId) ?? null,
     getTerminalProjectId: (terminalId) => projects.get(terminalId) ?? null,
-    readTerminal: async (terminalId) => terminals.get(terminalId) ?? null,
+    readTerminal,
+    submit,
     publish: (_projectId, change) => published.push(change),
     now: () => now,
     newToken: () => `token-${++token}`,
@@ -74,6 +88,14 @@ function setup() {
       authorize: () => driving.value,
     });
   const ended = () => published.flatMap((change) => (change.ended ? [change.ended.outcome] : []));
+  const sendNow = (token: string, overrides: { inputBlocked?: boolean; drives?: boolean } = {}) =>
+    hold.sendNow({
+      terminalId: T,
+      token,
+      projectId: PROJECT,
+      inputBlocked: overrides.inputBlocked ?? false,
+      authorize: () => overrides.drives ?? true,
+    });
   return {
     hold,
     wakes,
@@ -84,6 +106,10 @@ function setup() {
     terminals,
     published,
     request,
+    sendNow,
+    submit,
+    submissions,
+    readTerminal,
     ended,
     driving,
     advance: (ms: number) => {
@@ -311,5 +337,181 @@ describe("ComposerSendHold", () => {
     h.request();
     expect(h.hold.list(PROJECT).map((send) => send.text)).toEqual(["fix the tests"]);
     expect(h.hold.list("other-project")).toEqual([]);
+  });
+
+  describe("sendNow", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function held(h: ReturnType<typeof setup>, info = working()) {
+      const admission = h.request("held text", info);
+      if (!admission.ok) throw new Error("not held");
+      return admission.send.token;
+    }
+
+    it("types it at once, whatever the pane is doing, and once only", async () => {
+      vi.useFakeTimers();
+      const h = setup();
+      h.terminals.set(T, atPrompt({ waitingReason: "question" }));
+      const token = held(h);
+      const [wake] = h.wakes;
+
+      await expect(h.sendNow(token)).resolves.toEqual({ outcome: "sending" });
+      expect(h.submit).toHaveBeenCalledTimes(1);
+      const [terminalId, text, submissionToken, imagePaths] = h.submit.mock.calls[0]!;
+      expect([terminalId, text, imagePaths]).toEqual([T, "held text", ["/tmp/shot.png"]]);
+      expect(submissionToken).not.toBe(token);
+      expect(h.published.at(-1)?.held?.status).toBe("sending");
+
+      // The pane's own prompt coming back finds nothing left to type.
+      expect(wake!.recheck(atPrompt())).toEqual({ kind: "unavailable", reason: "sent-now" });
+      expect(wake!.beforeType()).toBe(false);
+      wake!.report({ kind: "unavailable", reason: "sent-now" });
+      await expect(h.sendNow(token)).resolves.toEqual({ outcome: "already-sending" });
+      expect(h.hold.withdraw(T, token, PROJECT)).toBe(false);
+      expect(h.ended()).toEqual([]);
+
+      h.submissions.set(submissionToken, "pty_written");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(h.ended()).toEqual([{ kind: "delivered" }]);
+      expect(h.submit).toHaveBeenCalledTimes(1);
+      expect(h.request("next").ok).toBe(true);
+    });
+
+    it("leaves it to the pane's prompt that took it first", async () => {
+      const h = setup();
+      const token = held(h);
+      expect(h.wakes[0]!.beforeType()).toBe(true);
+      await expect(h.sendNow(token)).resolves.toEqual({ outcome: "already-sending" });
+      expect(h.submit).not.toHaveBeenCalled();
+
+      // …even when the prompt takes it while Send now reads the terminal.
+      const raced = setup();
+      const racedToken = held(raced);
+      let release!: (info: NotifyTerminalInfo) => void;
+      raced.readTerminal.mockImplementationOnce(
+        () => new Promise<NotifyTerminalInfo>((resolve) => (release = resolve))
+      );
+      const answer = raced.sendNow(racedToken);
+      expect(raced.wakes[0]!.beforeType()).toBe(true);
+      release(working());
+      await expect(answer).resolves.toEqual({ outcome: "already-sending" });
+      expect(raced.submit).not.toHaveBeenCalled();
+      expect(raced.published.at(-1)?.held?.status).toBe("sending");
+    });
+
+    it("drops it, saying why, when it can't go", async () => {
+      const blocked = setup();
+      await expect(blocked.sendNow(held(blocked), { inputBlocked: true })).resolves.toEqual({
+        outcome: "dropped",
+      });
+      expect(blocked.ended()).toEqual([{ kind: "dropped", reason: "input-blocked" }]);
+      expect(blocked.published.at(-1)?.ended).toMatchObject({ text: "held text" });
+
+      const driven = setup();
+      await driven.sendNow(held(driven), { drives: false });
+      expect(driven.ended()).toEqual([{ kind: "dropped", reason: "driven-elsewhere" }]);
+
+      const holderLeft = setup();
+      const holderToken = held(holderLeft);
+      holderLeft.driving.value = false;
+      await holderLeft.sendNow(holderToken);
+      expect(holderLeft.ended()).toEqual([{ kind: "dropped", reason: "driven-elsewhere" }]);
+
+      const gone = setup();
+      const goneToken = held(gone);
+      gone.terminals.set(T, null);
+      await gone.sendNow(goneToken);
+      expect(gone.ended()).toEqual([{ kind: "dropped", reason: "ended" }]);
+
+      const restarted = setup();
+      const restartedToken = held(restarted);
+      restarted.terminals.set(T, working({ agentIncarnation: 2 }));
+      await restarted.sendNow(restartedToken);
+      expect(restarted.ended()).toEqual([{ kind: "dropped", reason: "restarted" }]);
+
+      const typed = setup();
+      const typedToken = held(typed, working({ lastForeignPromptInputAt: 900 }));
+      typed.terminals.set(T, working({ lastForeignPromptInputAt: 6_000 }));
+      await typed.sendNow(typedToken);
+      expect(typed.ended()).toEqual([{ kind: "dropped", reason: "typed" }]);
+
+      for (const h of [blocked, driven, holderLeft, gone, restarted, typed]) {
+        expect(h.submit).not.toHaveBeenCalled();
+      }
+    });
+
+    it("says why the terminal refused it, and never types again what it can't confirm", async () => {
+      vi.useFakeTimers();
+      const refused = setup();
+      await refused.sendNow(held(refused));
+      refused.submissions.set(refused.submit.mock.calls[0]![2], "cancelled");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(refused.ended()).toEqual([{ kind: "dropped", reason: "input-blocked" }]);
+
+      const exited = setup();
+      await exited.sendNow(held(exited));
+      exited.terminals.set(T, working({ isExited: true }));
+      exited.submissions.set(exited.submit.mock.calls[0]![2], "cancelled");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(exited.ended()).toEqual([{ kind: "dropped", reason: "ended" }]);
+
+      const failed = setup();
+      await failed.sendNow(held(failed));
+      failed.submissions.set(failed.submit.mock.calls[0]![2], "failed");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(failed.ended()).toEqual([{ kind: "dropped", reason: "unconfirmed" }]);
+
+      const silent = setup();
+      await silent.sendNow(held(silent));
+      silent.submissions.set(silent.submit.mock.calls[0]![2], "writing");
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(silent.ended()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(silent.ended()).toEqual([{ kind: "dropped", reason: "unconfirmed" }]);
+
+      const threw = setup();
+      threw.submit.mockImplementationOnce(() => {
+        throw new Error("host gone");
+      });
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(threw.sendNow(held(threw))).resolves.toEqual({ outcome: "dropped" });
+      expect(threw.ended()).toEqual([{ kind: "dropped", reason: "unconfirmed" }]);
+    });
+
+    it("touches nothing for another project's send, another token, or one that ended", async () => {
+      const h = setup();
+      const token = held(h);
+      await expect(
+        h.hold.sendNow({
+          terminalId: T,
+          token,
+          projectId: "other-project",
+          inputBlocked: true,
+          authorize: () => true,
+        })
+      ).resolves.toEqual({ outcome: "not-held" });
+      await expect(h.sendNow("token-other", { inputBlocked: true })).resolves.toEqual({
+        outcome: "not-held",
+      });
+      expect(h.ended()).toEqual([]);
+
+      h.hold.withdraw(T, token, PROJECT);
+      await expect(h.sendNow(token)).resolves.toEqual({ outcome: "not-held" });
+      expect(h.submit).not.toHaveBeenCalled();
+    });
+
+    it("stops following a send typed now once disposed", async () => {
+      vi.useFakeTimers();
+      const h = setup();
+      await h.sendNow(held(h));
+      h.hold.dispose();
+      expect(h.ended()).toEqual([{ kind: "dropped", reason: "stopped" }]);
+      const reads = h.readTerminal.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.readTerminal.mock.calls.length).toBe(reads);
+      expect(h.ended()).toHaveLength(1);
+    });
   });
 });

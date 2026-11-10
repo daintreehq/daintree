@@ -1217,7 +1217,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     sendInUseReply(reply: import("./terminalWhenDone.js").TerminalWhenDoneInUseReply): void;
   };
-  // hold / withdraw / list come from GeneratedElectronAPI (#16379).
+  // hold / withdraw / sendNow / list come from GeneratedElectronAPI (#16379).
   composerHold: GeneratedElectronAPI["composerHold"] & {
     onChanged(
       callback: (change: import("./composerHold.js").ComposerHoldChange) => void

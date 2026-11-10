@@ -11,7 +11,7 @@ const pty = vi.hoisted(() => ({
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => pty.client }));
 
-const queue = vi.hoisted(() => ({ hold: vi.fn() }));
+const queue = vi.hoisted(() => ({ hold: vi.fn(), sendNow: vi.fn() }));
 vi.mock("../../../services/composerHold/composerSendHoldLive.js", () => ({
   getComposerSendHold: async () => queue,
   peekComposerSendHold: () => queue,
@@ -31,7 +31,7 @@ vi.mock("../../../../shared/config/agentRegistry.js", async (importOriginal) => 
   };
 });
 
-import { handleHold, holdsComposerSend } from "../composerHold.js";
+import { handleHold, handleSendNow, holdsComposerSend } from "../composerHold.js";
 import type { IpcContext } from "../../types.js";
 import type { NotifyTerminalInfo } from "../../../services/mcp-server/terminalNotify.js";
 
@@ -122,5 +122,55 @@ describe("handleHold", () => {
       held: false,
       reason: "already-held",
     });
+  });
+});
+
+describe("handleSendNow", () => {
+  const ctx = { projectId: "project-1", endpoint: undefined } as unknown as IpcContext;
+
+  beforeEach(() => {
+    queue.sendNow.mockReset().mockResolvedValue({ outcome: "sending" });
+  });
+
+  it("sends this view's own project's held send, with the view's word on its input", async () => {
+    await expect(handleSendNow(ctx, "term-1", "token-1", true)).resolves.toEqual({
+      outcome: "sending",
+    });
+    const [request] = queue.sendNow.mock.calls[0]!;
+    expect(request).toMatchObject({
+      terminalId: "term-1",
+      token: "token-1",
+      projectId: "project-1",
+      inputBlocked: true,
+    });
+    // With no drive lease in play, the asking screen drives.
+    expect(request.authorize()).toBe(true);
+
+    await handleSendNow(ctx, "term-1", "token-1");
+    expect(queue.sendNow.mock.calls[1]![0]).toMatchObject({ inputBlocked: false });
+  });
+
+  it("touches nothing for a view with no project or a remote view", async () => {
+    const noProject = { projectId: undefined, endpoint: undefined } as unknown as IpcContext;
+    const remote = {
+      projectId: "project-1",
+      endpoint: { kind: "remote-view", projectId: "project-1" },
+    } as unknown as IpcContext;
+    await expect(handleSendNow(noProject, "term-1", "token-1")).resolves.toEqual({
+      outcome: "not-held",
+    });
+    await expect(handleSendNow(remote, "term-1", "token-1")).resolves.toEqual({
+      outcome: "not-held",
+    });
+    expect(queue.sendNow).not.toHaveBeenCalled();
+  });
+
+  it("refuses a malformed request", async () => {
+    await expect(handleSendNow(ctx, "", "token-1")).rejects.toThrow();
+    await expect(handleSendNow(ctx, "term-1", "")).rejects.toThrow();
+    await expect(
+      handleSendNow(ctx, "term-1", "token-1", "yes" as unknown as boolean)
+    ).rejects.toThrow();
+    expect(queue.sendNow).not.toHaveBeenCalled();
   });
 });
