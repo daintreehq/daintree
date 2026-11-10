@@ -58,7 +58,7 @@ interface ActionDefinition<S extends z.ZodTypeAny | undefined, Result> {
   isEnabled?: (ctx) => boolean; // Dynamic enable/disable (fails CLOSED)
   isVisible?: (ctx) => boolean; // Discovery-layer visibility (fails OPEN)
   disabledReason?: (ctx) => string | undefined;
-  palette?: PaletteBehavior; // "hidden" | "redirect" | "requireContext" — palette-only
+  palette?: PaletteBehavior; // "hidden" | "redirect" | "requireContext" — palette (redirect: also keys and HUD)
   dangerRationale?: string; // Required when danger !== "safe"; surfaced in MCP consent
   selfNotifiesOnExecutionError?: boolean; // Suppress the palette's generic failure toast
   run: (args: InferActionArgs<S>, ctx: ActionContext) => Promise<Result>;
@@ -71,7 +71,7 @@ Three of these are easy to get wrong:
 
 - **`resultSchema` is enforcement, not documentation.** `dispatch()` parses every result through it before returning, so unknown keys are stripped and the delivered payload matches the published projection. A result that fails to parse yields `RESULT_VALIDATION_ERROR` — distinct from `EXECUTION_ERROR`, because the side effects _did_ happen and only the payload is unusable. Enforcement keys off the field's presence, not off `mcpOutputSchema`.
 - **`isEnabled` fails closed; `isVisible` fails open.** Hiding a command silently on a thrown predicate is more surprising than briefly showing one. Visibility is a discovery-layer concern — `get(id)` and `dispatch(id)` deliberately ignore it, so keybindings and direct lookups keep working.
-- **`palette` is palette-only.** `list()` projects it onto the manifest, but `dispatch()`/`get()` ignore it. It exists because the palette dispatches with empty args `{}`, so an action whose real requirements live in `run()` rather than in `argsSchema` would otherwise leak into the palette and fail when picked. `palette: { mode: "hidden" }` is also how a call-site-gated confirm action is stopped from being bypassed by a `source: "user"` palette pick — see [destructive-action-safeguards.md](./destructive-action-safeguards.md).
+- **`palette` shapes what a person's pick runs, never `dispatch()`.** `list()` and `get()` project it onto the manifest, and `dispatch()` ignores it, so MCP and context-menu calls are unaffected. It exists because the palette dispatches with empty args `{}`, so an action whose real requirements live in `run()` rather than in `argsSchema` would otherwise leak into the palette and fail when picked. A `redirect` is followed by keybindings and the command HUD too, through `resolveInteractiveActionId`, since a shortcut also carries no args: the default `Cmd+K Cmd+C` on `git.commit` opens Review Hub. `palette: { mode: "hidden" }` is also how a call-site-gated confirm action is stopped from being bypassed by a `source: "user"` palette pick — see [destructive-action-safeguards.md](./destructive-action-safeguards.md).
 
 ### The `danger` Field
 

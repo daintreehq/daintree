@@ -50,9 +50,11 @@ const mocks = vi.hoisted(() => ({
     }),
   },
   actionService: {
-    get: vi.fn<(actionId: string) => { enabled: boolean; disabledReason?: string } | null>(
-      () => null
-    ),
+    get: vi.fn<
+      (
+        actionId: string
+      ) => { enabled: boolean; disabledReason?: string; paletteRedirectTo?: string } | null
+    >(() => null),
     // Typed signature so mock.calls is a labeled tuple (not the empty tuple),
     // letting tests destructure the dispatched actionId without TS2493.
     dispatch: vi.fn<
@@ -112,6 +114,7 @@ vi.mock("@/services/keybindingWhenContext", () => ({
 
 const { useGlobalKeybindings } = await import("../useGlobalKeybindings");
 const { usePaletteStore } = await import("../../store");
+const { useAnnouncerStore } = await import("@/store/accessibilityAnnouncerStore");
 
 function makePaletteState(activePaletteId: PaletteId | null) {
   return {
@@ -2153,6 +2156,159 @@ describe("command HUD direct completion", () => {
       "git.push",
       undefined,
       expect.anything()
+    );
+  });
+
+  describe("on a command whose palette pick redirects", () => {
+    beforeEach(() => {
+      mocks.keybindingService.getChordCompletions.mockReturnValue([
+        { actionId: "git.commit", secondKey: "Cmd+C", description: "Commit staged changes" },
+      ]);
+    });
+
+    function pressCmdC(): KeyboardEvent {
+      const event = new KeyboardEvent("keydown", {
+        key: "c",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        document.body.dispatchEvent(event);
+      });
+      return event;
+    }
+
+    // The bound action's own state is the opposite of the target's in each
+    // test: it never runs, so it must never decide anything.
+    function redirectTo(target: { enabled: boolean; disabledReason?: string }) {
+      mocks.actionService.get.mockImplementation((actionId: string) => {
+        if (actionId === "git.commit") {
+          return { enabled: !target.enabled, paletteRedirectTo: "worktree.openReviewHub" };
+        }
+        if (actionId === "worktree.openReviewHub") return target;
+        return null;
+      });
+    }
+
+    it("blocks on the redirect target's state and names the bound row", () => {
+      redirectTo({ enabled: false, disabledReason: "No worktree is active" });
+      const blocked = vi.fn();
+      window.addEventListener("daintree:command-hud-blocked", blocked);
+      render(<Host />);
+
+      const event = pressCmdC();
+      window.removeEventListener("daintree:command-hud-blocked", blocked);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(blocked).toHaveBeenCalledTimes(1);
+      expect((blocked.mock.calls[0]![0] as CustomEvent).detail).toBe("git.commit");
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("No worktree is active");
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    });
+
+    it("opens the redirect target when it can run", () => {
+      redirectTo({ enabled: true });
+      mocks.keybindingService.resolveKeybinding.mockReturnValue({
+        match: { actionId: "git.commit" },
+        chordPrefix: false,
+        shouldConsume: true,
+      });
+      render(<Host />);
+
+      pressCmdC();
+
+      expect(mocks.actionService.dispatch).toHaveBeenCalledTimes(1);
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        "worktree.openReviewHub",
+        undefined,
+        expect.objectContaining({ source: "keybinding" })
+      );
+    });
+  });
+});
+
+describe("useGlobalKeybindings — a binding on an action whose palette pick redirects", () => {
+  afterEach(() => {
+    mocks.actionService.get.mockReset().mockReturnValue(null);
+    mocks.keybindingService.resolveKeybinding.mockReset();
+  });
+
+  function pressBinding() {
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "F8", bubbles: true, cancelable: true })
+      );
+    });
+  }
+
+  function bindRedirectingAction() {
+    mocks.actionService.get.mockImplementation((actionId: string) =>
+      actionId === "worktree.createWithRecipe"
+        ? { enabled: true, paletteRedirectTo: "worktree.createDialog.open" }
+        : { enabled: true }
+    );
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "worktree.createWithRecipe" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+  }
+
+  it("dispatches the redirect target instead of the arg-requiring action", async () => {
+    const { logError } = await import("@/utils/logger");
+    bindRedirectingAction();
+    // The source refuses an argument-free call, as the real one does.
+    mocks.actionService.dispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.createWithRecipe"
+        ? { ok: false, error: { code: "VALIDATION_ERROR", message: "Invalid arguments" } }
+        : { ok: true, result: undefined }
+    );
+    render(<Host />);
+
+    pressBinding();
+    await act(async () => {});
+
+    expect(mocks.actionService.dispatch).toHaveBeenCalledTimes(1);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+      "worktree.createDialog.open",
+      undefined,
+      expect.objectContaining({ source: "keybinding" })
+    );
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it("logs a failure under the id that ran", async () => {
+    const { logError } = await import("@/utils/logger");
+    bindRedirectingAction();
+    mocks.actionService.dispatch.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "boom" },
+    });
+    render(<Host />);
+
+    pressBinding();
+    await act(async () => {});
+
+    expect(logError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(logError).mock.calls[0]![0]).toContain('"worktree.createDialog.open"');
+  });
+
+  it("dispatches an action with no redirect as bound", () => {
+    mocks.actionService.get.mockReturnValue({ enabled: true });
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "git.push" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+
+    pressBinding();
+
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      undefined,
+      expect.objectContaining({ source: "keybinding" })
     );
   });
 });
