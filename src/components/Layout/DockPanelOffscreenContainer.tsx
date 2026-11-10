@@ -18,6 +18,7 @@ import {
 import { isDockPanel, isPtyPanel, type DockPanelData } from "@shared/types/panel";
 import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { DockedPanel } from "@/components/Terminal/DockedPanel";
+import { noteVisiblePanesChanged } from "@/services/terminal/visiblePaneTerminals";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { logError } from "@/utils/logger";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
@@ -287,6 +288,8 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
     } else {
       dest.appendChild(wrapper);
     }
+    // Parked or revealed, its terminal's pane stopped or started showing (#16737).
+    noteVisiblePanesChanged();
 
     if (isParking) return;
 

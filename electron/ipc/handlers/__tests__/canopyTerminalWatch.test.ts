@@ -1628,9 +1628,54 @@ describe("a main-view pane showing the terminal (#16737)", () => {
     expect(pty.resize).not.toHaveBeenCalled();
   });
 
-  it("forgets every pane when Canopy stops", async () => {
+  it("keeps a delayed echo of the panel's last hold from passing as the pane's size", async () => {
+    const { pty, emitter, watchId } = await held();
+    resizeWatchedTerminal(pty, 1, watchId, 110, 32);
+    show(["run-1"]);
+
+    // The pane's fit, then the echo of the hold that was still on its way.
+    echo(emitter, 140, 40);
+    echo(emitter, 110, 32);
+
+    show([]);
+    resizeWatchedTerminal(pty, 1, watchId, 100, 30);
+    echo(emitter, 100, 30);
+    vi.mocked(pty.resize).mockClear();
+    stopTerminalWatch(1);
+    expect(resizes(pty)).toEqual([[140, 40]]);
+  });
+
+  it("leaves one holder when two panels here may take the size back after the pane goes", async () => {
+    const { pty, sent, watchId } = await held();
+    const other = fakeSender(2);
+    const second = await open(pty, other.sender, "run-1");
+    // The first panel holds, so the second follows it.
+    resizeWatchedTerminal(pty, 2, second.watchId!, 90, 28);
+    show(["run-1"]);
+
+    // Used while the pane shows: nothing passes across, and nothing is held.
+    claimWatchedSize(2, second.watchId!);
+    expect(sizeHolds()).toEqual([]);
+    expect(other.sent.at(-1)).toMatchObject({ following: true });
+
+    show([]);
+    resizeWatchedTerminal(pty, 2, second.watchId!, 90, 28);
+    resizeWatchedTerminal(pty, 1, watchId, 100, 30);
+
+    expect(resizes(pty)).toEqual([[90, 28]]);
+    expect(sizeHolds()).toEqual(["run-1"]);
+    expect(sent.at(-1)).toMatchObject({ kind: "resize", following: true });
+  });
+
+  it("forgets every pane when Canopy stops, and no later reconcile brings one back", async () => {
     show(["run-1"]);
     stopAllTerminalWatches();
+    followDriveLeaseChange();
     expect(paneOwnedTerminals()).toEqual([]);
+
+    const { pty } = fakePty();
+    const opened = await open(pty, fakeSender(1).sender, "run-1");
+    resizeWatchedTerminal(pty, 1, opened.watchId!, 100, 30);
+    expect(resizes(pty)).toEqual([[100, 30]]);
   });
 });

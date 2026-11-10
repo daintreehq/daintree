@@ -1300,10 +1300,18 @@ class TerminalInstanceService {
     this.unsubCanopySizeHolds = subscribeCanopySizeHolds(() => this.syncWatchMode());
   }
 
-  /** The terminals this service shows in a pane: what main lets size their PTY ahead of Canopy. */
+  /**
+   * The terminals this service shows in a pane: what main lets size their PTY
+   * ahead of Canopy. A pane the dock parked stays mounted and can keep its last
+   * visible reading, so the engine is asked whether it renders at all.
+   */
   private *visiblePaneIds(): Iterable<string> {
     for (const [id, managed] of this.instances) {
-      if (managed.isVisible && !managed.isDetached) yield id;
+      if (!managed.isVisible || managed.isDetached) continue;
+      const host = managed.hostElement;
+      if (!host.isConnected) continue;
+      if (typeof host.checkVisibility === "function" && !host.checkVisibility()) continue;
+      yield id;
     }
   }
 

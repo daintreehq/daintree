@@ -12,6 +12,9 @@ import { logWarn } from "@/utils/logger";
 type Source = () => Iterable<string>;
 
 const sources = new Set<Source>();
+// Terminals whose owner keeps them mounted and attached while it hides them,
+// which nothing the terminal service sees reports: the Assistant sliding off-canvas.
+const hiddenByOwner = new Map<string, number>();
 let offLifecycle: (() => void) | null = null;
 let offResync: (() => void) | null = null;
 let queued = false;
@@ -24,7 +27,9 @@ let warned = false;
 function shownTerminals(): string[] {
   if (isProjectViewCached()) return [];
   const ids = new Set<string>();
-  for (const source of sources) for (const id of source()) ids.add(id);
+  for (const source of sources) {
+    for (const id of source()) if (!hiddenByOwner.has(id)) ids.add(id);
+  }
   return [...ids].sort();
 }
 
@@ -80,6 +85,24 @@ function stop(): void {
   queued = false;
   sent = null;
   attempt += 1;
+}
+
+/**
+ * The terminal's owner hides it without detaching it; it is shown again once
+ * the returned function runs.
+ */
+export function hidePaneTerminal(terminalId: string): () => void {
+  hiddenByOwner.set(terminalId, (hiddenByOwner.get(terminalId) ?? 0) + 1);
+  noteVisiblePanesChanged();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const count = (hiddenByOwner.get(terminalId) ?? 1) - 1;
+    if (count > 0) hiddenByOwner.set(terminalId, count);
+    else hiddenByOwner.delete(terminalId);
+    noteVisiblePanesChanged();
+  };
 }
 
 /**

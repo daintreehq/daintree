@@ -3527,6 +3527,25 @@ describe("canopy IPC", () => {
         expect(await holds(pane)).toEqual(["run-1"]);
       });
 
+      it("counts a pane only while its view drives the project, and again once the drive moves to it", async () => {
+        lease.holder = "self";
+        const { sender, watchId } = await openHeld();
+        lease.holder = "other";
+        await show(fakeSender(5), ["run-1"]);
+        lease.holder = "self";
+
+        // Reported by a view that didn't drive: the panel still sizes the PTY.
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 90, 28);
+        expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 90, 28);
+        ptyClient.resize.mockClear();
+
+        // The drive moving makes the same report count, with nothing sent again.
+        for (const listener of lease.listeners) listener();
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 80, 26);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+        expect(await holds(sender)).toEqual([]);
+      });
+
       it("lets go of the pane once its view goes, unasked", async () => {
         const { sender, watchId } = await openHeld();
         const pane = fakeSender(5);

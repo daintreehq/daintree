@@ -138,6 +138,35 @@ describe("visiblePaneTerminals (#16737)", () => {
     expect(reports()).toHaveLength(2);
   });
 
+  it("reports again when one of several services goes", async () => {
+    register(new Set(["t1"]));
+    const off = register(new Set(["t2"]));
+    await settle();
+
+    off();
+    await settle();
+
+    expect(reports()).toEqual([["t1", "t2"], ["t1"]]);
+    expect(view.lifecycle.size).toBe(1);
+  });
+
+  it("leaves out a terminal its owner hides while it stays attached, until every owner shows it", async () => {
+    register(new Set(["t1", "t2"]));
+    await settle();
+
+    const hide = reporter.hidePaneTerminal("t1");
+    const hideAgain = reporter.hidePaneTerminal("t1");
+    await settle();
+    hide();
+    hide();
+    await settle();
+    expect(reports()).toEqual([["t1", "t2"], ["t2"]]);
+
+    hideAgain();
+    await settle();
+    expect(reports()).toEqual([["t1", "t2"], ["t2"], ["t1", "t2"]]);
+  });
+
   it("does nothing where the preload has no such call", async () => {
     Object.defineProperty(window, "electron", {
       configurable: true,

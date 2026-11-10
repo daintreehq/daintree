@@ -1979,7 +1979,8 @@ export const canopyNamespace = defineIpcNamespace({
     setVisiblePaneTerminals: op(
       CANOPY_METHOD_CHANNELS.setVisiblePaneTerminals,
       async (ctx, terminalIds: string[]): Promise<void> => {
-        checkRateLimit(CANOPY_METHOD_CHANNELS.setVisiblePaneTerminals, 300, 10_000);
+        // Not rate-limited, as `setShown` isn't: a dropped report would leave the
+        // view's last one standing, and the renderer sends one per change at most.
         if (!Array.isArray(terminalIds) || terminalIds.length > MAX_VISIBLE_PANES) {
           throw new Error("Invalid terminals");
         }
