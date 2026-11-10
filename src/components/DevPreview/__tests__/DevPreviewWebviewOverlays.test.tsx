@@ -161,12 +161,16 @@ describe("DevPreviewWebviewOverlays — crash banners", () => {
     fireEvent.keyDown(screen.getByRole("button", { name: "More preview recovery options" }), {
       key: "Enter",
     });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart dev server" }));
+    const item = await screen.findByRole("menuitem", { name: "Restart dev server" });
+    expect(item.textContent).toBe("Restart dev server");
+    fireEvent.click(item);
     expect(onRestartDevServer).toHaveBeenCalledTimes(1);
     unmount();
 
     render(<DevPreviewWebviewOverlays {...baseProps({ ...props, crashState: "unresponsive" })} />);
-    screen.getByRole("button", { name: "Restart dev server" }).click();
+    const button = screen.getByRole("button", { name: "Restart dev server" });
+    expect(button.textContent).toBe("Restart dev server");
+    button.click();
     expect(onRestartDevServer).toHaveBeenCalledTimes(2);
   });
 
@@ -176,7 +180,9 @@ describe("DevPreviewWebviewOverlays — crash banners", () => {
         {...baseProps({ crashState: "unresponsive", onRequestRestartAndClearCache: undefined })}
       />
     );
-    screen.getByRole("button", { name: "Pause and resume resource environment" });
+    expect(
+      screen.getByRole("button", { name: "Pause and resume resource environment" }).textContent
+    ).toBe("Pause and resume resource environment");
     unmount();
     render(
       <DevPreviewWebviewOverlays
@@ -186,7 +192,10 @@ describe("DevPreviewWebviewOverlays — crash banners", () => {
     fireEvent.keyDown(screen.getByRole("button", { name: "More preview recovery options" }), {
       key: "Enter",
     });
-    await screen.findByRole("menuitem", { name: "Pause and resume resource environment" });
+    const endpointItem = await screen.findByRole("menuitem", {
+      name: "Pause and resume resource environment",
+    });
+    expect(endpointItem.textContent).toBe("Pause and resume resource environment");
   });
 
   it("renders the unresponsive banner distinctly and wires its own close handler", () => {
