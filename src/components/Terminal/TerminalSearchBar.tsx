@@ -78,7 +78,9 @@ export function TerminalSearchBar({
   const [regexEnabled, setRegexEnabled] = useState(
     () => useTerminalSearchHistoryStore.getState().regexEnabled
   );
-  const [wholeWord, setWholeWord] = useState(false);
+  const [wholeWord, setWholeWord] = useState(
+    () => useTerminalSearchHistoryStore.getState().wholeWord
+  );
   const [searchStatus, setSearchStatus] = useState<SearchStatus>("idle");
   const [matchResults, setMatchResults] = useState<MatchResults | null>(null);
   const [regexError, setRegexError] = useState<string | null>(null);
@@ -311,42 +313,37 @@ export function TerminalSearchBar({
   }, [searchTerm, addSearch, clearSearch, onClose]);
 
   const handleCaseSensitiveToggle = useCallback(() => {
-    setCaseSensitive((prev) => {
-      const nextCaseSensitive = !prev;
-      setToggles(nextCaseSensitive, regexEnabled);
-      if (searchTerm) {
-        cancelPendingSearch();
-        performSearch(searchTerm, "next", { caseSensitive: nextCaseSensitive });
-      }
-      return nextCaseSensitive;
-    });
-  }, [searchTerm, performSearch, cancelPendingSearch, setToggles, regexEnabled]);
+    const nextCaseSensitive = !caseSensitive;
+    setCaseSensitive(nextCaseSensitive);
+    setToggles({ caseSensitive: nextCaseSensitive });
+    if (searchTerm) {
+      cancelPendingSearch();
+      performSearch(searchTerm, "next", { caseSensitive: nextCaseSensitive });
+    }
+  }, [caseSensitive, searchTerm, performSearch, cancelPendingSearch, setToggles]);
 
   const handleRegexToggle = useCallback(() => {
-    setRegexEnabled((prev) => {
-      const nextRegexEnabled = !prev;
-      if (!nextRegexEnabled) {
-        setRegexError(null);
-      }
-      setToggles(caseSensitive, nextRegexEnabled);
-      if (searchTerm) {
-        cancelPendingSearch();
-        performSearch(searchTerm, "next", { regexEnabled: nextRegexEnabled });
-      }
-      return nextRegexEnabled;
-    });
-  }, [searchTerm, performSearch, cancelPendingSearch, setToggles, caseSensitive]);
+    const nextRegexEnabled = !regexEnabled;
+    setRegexEnabled(nextRegexEnabled);
+    if (!nextRegexEnabled) {
+      setRegexError(null);
+    }
+    setToggles({ regexEnabled: nextRegexEnabled });
+    if (searchTerm) {
+      cancelPendingSearch();
+      performSearch(searchTerm, "next", { regexEnabled: nextRegexEnabled });
+    }
+  }, [regexEnabled, searchTerm, performSearch, cancelPendingSearch, setToggles]);
 
   const handleWholeWordToggle = useCallback(() => {
-    setWholeWord((prev) => {
-      const nextWholeWord = !prev;
-      if (searchTerm) {
-        cancelPendingSearch();
-        performSearch(searchTerm, "next", { wholeWord: nextWholeWord });
-      }
-      return nextWholeWord;
-    });
-  }, [searchTerm, performSearch, cancelPendingSearch]);
+    const nextWholeWord = !wholeWord;
+    setWholeWord(nextWholeWord);
+    setToggles({ wholeWord: nextWholeWord });
+    if (searchTerm) {
+      cancelPendingSearch();
+      performSearch(searchTerm, "next", { wholeWord: nextWholeWord });
+    }
+  }, [wholeWord, searchTerm, performSearch, cancelPendingSearch, setToggles]);
 
   useEffect(() => {
     // Run once on mount with the pre-populated history term. The ref guard

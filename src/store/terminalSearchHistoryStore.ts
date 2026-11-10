@@ -9,24 +9,30 @@ import {
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 const MAX_HISTORY_SIZE = 50;
+const TERMINAL_SEARCH_STORAGE_KEY = "daintree-terminal-search-history";
 
 interface TerminalSearchHistoryState {
   searches: string[];
   caseSensitive: boolean;
   regexEnabled: boolean;
+  wholeWord: boolean;
   addSearch: (term: string) => void;
-  setToggles: (caseSensitive: boolean, regexEnabled: boolean) => void;
+  setToggles: (toggles: Partial<TerminalSearchToggles>) => void;
 }
 
-type TerminalSearchPersistedState = Pick<
+type TerminalSearchToggles = Pick<
   TerminalSearchHistoryState,
-  "searches" | "caseSensitive" | "regexEnabled"
+  "caseSensitive" | "regexEnabled" | "wholeWord"
 >;
+
+type TerminalSearchPersistedState = Pick<TerminalSearchHistoryState, "searches"> &
+  TerminalSearchToggles;
 
 const TERMINAL_SEARCH_PERSISTED_DEFAULTS: TerminalSearchPersistedState = {
   searches: [],
   caseSensitive: false,
   regexEnabled: false,
+  wholeWord: false,
 };
 
 /**
@@ -44,6 +50,7 @@ function toTerminalSearchPersisted(
       : [],
     caseSensitive: typeof raw.caseSensitive === "boolean" ? raw.caseSensitive : false,
     regexEnabled: typeof raw.regexEnabled === "boolean" ? raw.regexEnabled : false,
+    wholeWord: typeof raw.wholeWord === "boolean" ? raw.wholeWord : false,
   };
 }
 
@@ -57,7 +64,7 @@ function sameStringList(left: string[], right: string[]): boolean {
 
 /**
  * Baseline-aware three-way merge for terminal-search writes across project views
- * (issue #11351). The two toggles defer to a sibling's on-disk value unless this
+ * (issue #11351). The toggles defer to a sibling's on-disk value unless this
  * writer changed them. `searches` is one shared MRU list mutated a single entry
  * at a time (`addSearch` unshifts one trimmed term), so a stale whole-snapshot
  * write would rewind a sibling's concurrent search. We replay this writer's one
@@ -107,6 +114,7 @@ function mergeTerminalSearchPersistedWrite({
         disk.caseSensitive
       ),
       regexEnabled: pickFieldByWriterDelta(base.regexEnabled, inc.regexEnabled, disk.regexEnabled),
+      wholeWord: pickFieldByWriterDelta(base.wholeWord, inc.wholeWord, disk.wholeWord),
     },
   };
 }
@@ -117,6 +125,7 @@ export const useTerminalSearchHistoryStore = create<TerminalSearchHistoryState>(
       searches: [],
       caseSensitive: false,
       regexEnabled: false,
+      wholeWord: false,
 
       addSearch: (term) =>
         set((state) => {
@@ -127,10 +136,10 @@ export const useTerminalSearchHistoryStore = create<TerminalSearchHistoryState>(
           return { searches: updated };
         }),
 
-      setToggles: (caseSensitive, regexEnabled) => set({ caseSensitive, regexEnabled }),
+      setToggles: (toggles) => set(toggles),
     }),
     {
-      name: "daintree-terminal-search-history",
+      name: TERMINAL_SEARCH_STORAGE_KEY,
       storage: createSafeJSONStorage<TerminalSearchPersistedState>({
         mergeOnWrite: mergeTerminalSearchPersistedWrite,
       }),
@@ -141,19 +150,33 @@ export const useTerminalSearchHistoryStore = create<TerminalSearchHistoryState>(
           searches: Array.isArray(state.searches) ? state.searches : [],
           caseSensitive: typeof state.caseSensitive === "boolean" ? state.caseSensitive : false,
           regexEnabled: typeof state.regexEnabled === "boolean" ? state.regexEnabled : false,
+          wholeWord: typeof state.wholeWord === "boolean" ? state.wholeWord : false,
         };
       },
       partialize: (state) => ({
         searches: state.searches,
         caseSensitive: state.caseSensitive,
         regexEnabled: state.regexEnabled,
+        wholeWord: state.wholeWord,
       }),
     }
   )
 );
 
+// A persist store hydrates once per view, so a cached view would open its find
+// bar with the toggles and last query it had before a sibling view changed
+// them. Views share the storage partition; the sibling's write arrives as a
+// `storage` event.
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== TERMINAL_SEARCH_STORAGE_KEY) return;
+    void useTerminalSearchHistoryStore.persist.rehydrate();
+  });
+}
+
 registerPersistedStore({
   storeId: "terminalSearchHistoryStore",
   store: useTerminalSearchHistoryStore,
-  persistedStateType: "{ searches: string[]; caseSensitive: boolean; regexEnabled: boolean }",
+  persistedStateType:
+    "{ searches: string[]; caseSensitive: boolean; regexEnabled: boolean; wholeWord: boolean }",
 });
