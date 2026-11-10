@@ -8,6 +8,7 @@ describe("terminalSearchHistoryStore", () => {
       searches: [],
       caseSensitive: false,
       regexEnabled: false,
+      wholeWord: false,
     });
   });
 
@@ -39,6 +40,18 @@ describe("terminalSearchHistoryStore", () => {
     expect(searches[0]).toBe("term-59");
     expect(searches[49]).toBe("term-10");
   });
+
+  it("setToggles writes only the toggles it is given", () => {
+    const { setToggles } = useTerminalSearchHistoryStore.getState();
+    setToggles({ caseSensitive: true, regexEnabled: true });
+    setToggles({ wholeWord: true });
+    setToggles({ regexEnabled: false });
+
+    const state = useTerminalSearchHistoryStore.getState();
+    expect(state.caseSensitive).toBe(true);
+    expect(state.regexEnabled).toBe(false);
+    expect(state.wholeWord).toBe(true);
+  });
 });
 
 /**
@@ -54,7 +67,12 @@ describe("terminalSearchHistoryStore cross-view write merge (#11351)", () => {
 
   type PersistedBlob = {
     version: number;
-    state: { searches: string[]; caseSensitive: boolean; regexEnabled: boolean };
+    state: {
+      searches: string[];
+      caseSensitive: boolean;
+      regexEnabled: boolean;
+      wholeWord?: boolean;
+    };
   };
 
   function installLocalStorage(initial: Record<string, string>): Map<string, string> {
@@ -113,7 +131,7 @@ describe("terminalSearchHistoryStore cross-view write merge (#11351)", () => {
 
     // This fresh view (null baseline) changes only a toggle — its default empty
     // searches / regex must not clobber the sibling.
-    store.getState().setToggles(true, true);
+    store.getState().setToggles({ regexEnabled: true });
 
     const written = readBlob(backing);
     expect(written.state.searches).toEqual(["sibling"]);
@@ -153,11 +171,83 @@ describe("terminalSearchHistoryStore cross-view write merge (#11351)", () => {
       })
     );
 
-    store.getState().setToggles(true, false);
+    store.getState().setToggles({ caseSensitive: true });
 
     const written = readBlob(backing);
     expect(written.state.searches).toEqual(["s1", "s2"]);
     expect(written.state.caseSensitive).toBe(true);
     expect(written.state.regexEnabled).toBe(false);
+  });
+
+  it("hydrates a blob written before whole word was persisted with whole word off", async () => {
+    installLocalStorage({
+      [STORAGE_KEY]: JSON.stringify({
+        version: 0,
+        state: { searches: ["legacy"], caseSensitive: true, regexEnabled: true },
+      }),
+    });
+    const { useTerminalSearchHistoryStore: store } = await import("../terminalSearchHistoryStore");
+
+    const state = store.getState();
+    expect(state.searches).toEqual(["legacy"]);
+    expect(state.caseSensitive).toBe(true);
+    expect(state.regexEnabled).toBe(true);
+    expect(state.wholeWord).toBe(false);
+  });
+
+  it("hydrates a persisted whole-word toggle", async () => {
+    installLocalStorage({
+      [STORAGE_KEY]: JSON.stringify({
+        version: 0,
+        state: { searches: [], caseSensitive: false, regexEnabled: false, wholeWord: true },
+      }),
+    });
+    const { useTerminalSearchHistoryStore: store } = await import("../terminalSearchHistoryStore");
+
+    expect(store.getState().wholeWord).toBe(true);
+  });
+
+  it("a stale view's toggle write does not rewind a sibling's whole-word toggle", async () => {
+    const backing = installLocalStorage({
+      [STORAGE_KEY]: JSON.stringify({
+        version: 0,
+        state: { searches: [], caseSensitive: false, regexEnabled: false, wholeWord: false },
+      }),
+    });
+    const { useTerminalSearchHistoryStore: store } = await import("../terminalSearchHistoryStore");
+
+    // A sibling view turns whole word on after this view hydrated.
+    const disk = readBlob(backing);
+    disk.state.wholeWord = true;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setToggles({ caseSensitive: true });
+
+    const written = readBlob(backing);
+    expect(written.state.caseSensitive).toBe(true);
+    expect(written.state.wholeWord).toBe(true);
+  });
+
+  it("a stale view's whole-word write lands without rewinding a sibling's other toggles", async () => {
+    const backing = installLocalStorage({
+      [STORAGE_KEY]: JSON.stringify({
+        version: 0,
+        state: { searches: ["s1"], caseSensitive: false, regexEnabled: false, wholeWord: false },
+      }),
+    });
+    const { useTerminalSearchHistoryStore: store } = await import("../terminalSearchHistoryStore");
+
+    const disk = readBlob(backing);
+    disk.state.caseSensitive = true;
+    disk.state.regexEnabled = true;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setToggles({ wholeWord: true });
+
+    const written = readBlob(backing);
+    expect(written.state.searches).toEqual(["s1"]);
+    expect(written.state.caseSensitive).toBe(true);
+    expect(written.state.regexEnabled).toBe(true);
+    expect(written.state.wholeWord).toBe(true);
   });
 });

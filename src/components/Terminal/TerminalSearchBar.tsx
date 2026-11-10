@@ -78,7 +78,9 @@ export function TerminalSearchBar({
   const [regexEnabled, setRegexEnabled] = useState(
     () => useTerminalSearchHistoryStore.getState().regexEnabled
   );
-  const [wholeWord, setWholeWord] = useState(false);
+  const [wholeWord, setWholeWord] = useState(
+    () => useTerminalSearchHistoryStore.getState().wholeWord
+  );
   const [searchStatus, setSearchStatus] = useState<SearchStatus>("idle");
   const [matchResults, setMatchResults] = useState<MatchResults | null>(null);
   const [regexError, setRegexError] = useState<string | null>(null);
@@ -313,14 +315,14 @@ export function TerminalSearchBar({
   const handleCaseSensitiveToggle = useCallback(() => {
     setCaseSensitive((prev) => {
       const nextCaseSensitive = !prev;
-      setToggles(nextCaseSensitive, regexEnabled);
+      setToggles({ caseSensitive: nextCaseSensitive });
       if (searchTerm) {
         cancelPendingSearch();
         performSearch(searchTerm, "next", { caseSensitive: nextCaseSensitive });
       }
       return nextCaseSensitive;
     });
-  }, [searchTerm, performSearch, cancelPendingSearch, setToggles, regexEnabled]);
+  }, [searchTerm, performSearch, cancelPendingSearch, setToggles]);
 
   const handleRegexToggle = useCallback(() => {
     setRegexEnabled((prev) => {
@@ -328,25 +330,26 @@ export function TerminalSearchBar({
       if (!nextRegexEnabled) {
         setRegexError(null);
       }
-      setToggles(caseSensitive, nextRegexEnabled);
+      setToggles({ regexEnabled: nextRegexEnabled });
       if (searchTerm) {
         cancelPendingSearch();
         performSearch(searchTerm, "next", { regexEnabled: nextRegexEnabled });
       }
       return nextRegexEnabled;
     });
-  }, [searchTerm, performSearch, cancelPendingSearch, setToggles, caseSensitive]);
+  }, [searchTerm, performSearch, cancelPendingSearch, setToggles]);
 
   const handleWholeWordToggle = useCallback(() => {
     setWholeWord((prev) => {
       const nextWholeWord = !prev;
+      setToggles({ wholeWord: nextWholeWord });
       if (searchTerm) {
         cancelPendingSearch();
         performSearch(searchTerm, "next", { wholeWord: nextWholeWord });
       }
       return nextWholeWord;
     });
-  }, [searchTerm, performSearch, cancelPendingSearch]);
+  }, [searchTerm, performSearch, cancelPendingSearch, setToggles]);
 
   useEffect(() => {
     // Run once on mount with the pre-populated history term. The ref guard

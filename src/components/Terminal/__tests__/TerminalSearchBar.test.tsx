@@ -73,6 +73,7 @@ describe("TerminalSearchBar", () => {
       searches: [],
       caseSensitive: false,
       regexEnabled: false,
+      wholeWord: false,
     });
   });
 
@@ -83,6 +84,7 @@ describe("TerminalSearchBar", () => {
       searches: [],
       caseSensitive: false,
       regexEnabled: false,
+      wholeWord: false,
     });
   });
 
@@ -728,6 +730,58 @@ describe("TerminalSearchBar", () => {
       renderSearchBar();
       const toggle = screen.getByLabelText("Use regular expression");
       expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("persists whole-word toggle state across mounts", async () => {
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      const { unmount } = renderSearchBar();
+      await act(() => {
+        fireEvent.click(screen.getByLabelText("Match whole word"));
+      });
+      expect(useTerminalSearchHistoryStore.getState().wholeWord).toBe(true);
+      unmount();
+
+      renderSearchBar();
+      const toggle = screen.getByLabelText("Match whole word");
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("toggling whole word leaves the other persisted toggles alone", async () => {
+      useTerminalSearchHistoryStore.setState({ caseSensitive: true, regexEnabled: true });
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      renderSearchBar();
+      await act(() => {
+        fireEvent.click(screen.getByLabelText("Match whole word"));
+      });
+
+      const state = useTerminalSearchHistoryStore.getState();
+      expect(state.wholeWord).toBe(true);
+      expect(state.caseSensitive).toBe(true);
+      expect(state.regexEnabled).toBe(true);
+    });
+
+    it("searches the restored query with the persisted whole-word toggle", async () => {
+      useTerminalSearchHistoryStore.setState({ searches: ["recent"], wholeWord: true });
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      renderSearchBar();
+      await act(async () => Promise.resolve());
+
+      expect(mock.searchAddon.findNext).toHaveBeenCalledWith(
+        "recent",
+        expect.objectContaining({ wholeWord: true })
+      );
     });
 
     it("typing exits history-navigation mode (subsequent ArrowDown does not restore draft)", async () => {
