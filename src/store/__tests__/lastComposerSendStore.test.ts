@@ -25,7 +25,10 @@ describe("lastComposerSendStore (#16746)", () => {
     noteLastComposerSend("t1", long, ["/a.png", "/b.png"], claimComposerSendSeq());
     noteLastComposerSend("t2", "other", [], claimComposerSendSeq());
 
-    expect(getLastComposerSend("t1")).toMatchObject({ text: long, imagePaths: ["/a.png", "/b.png"] });
+    expect(getLastComposerSend("t1")).toMatchObject({
+      text: long,
+      imagePaths: ["/a.png", "/b.png"],
+    });
     expect(getLastComposerSend("t2")).toMatchObject({ text: "other", imagePaths: [] });
   });
 

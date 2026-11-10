@@ -40,10 +40,13 @@ describe("terminal.resendLastMessage (#16746)", () => {
   });
 
   it("resends to a named panel over the focused one", async () => {
-    await definition().run({ terminalId: "idle" }, {
-      focusedTerminalId: "empty",
-      dispatchSource: "context-menu",
-    });
+    await definition().run(
+      { terminalId: "idle" },
+      {
+        focusedTerminalId: "empty",
+        dispatchSource: "context-menu",
+      }
+    );
     expect(resend.resendLastComposerSend).toHaveBeenCalledWith("idle");
   });
 
