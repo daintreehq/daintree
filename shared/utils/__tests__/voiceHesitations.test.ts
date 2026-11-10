@@ -47,6 +47,22 @@ describe("stripHesitations", () => {
     expect(stripHesitations("I mean – um – no")).toBe("I mean – no");
   });
 
+  // The source writes these as escapes (#16682), so each one has a case here.
+  it("treats either dash as a pause", () => {
+    expect(stripHesitations("I think — um, we should")).toBe("I think — we should");
+    expect(stripHesitations("I think – um, we should")).toBe("I think – we should");
+    expect(stripHesitations("Um—so the build failed")).toBe("So the build failed");
+    expect(stripHesitations("Um–so the build failed")).toBe("So the build failed");
+    expect(stripHesitations("Is that right um—?")).toBe("Is that right?");
+    expect(stripHesitations("Is that right um–?")).toBe("Is that right?");
+  });
+
+  it("treats an ellipsis as a sentence end", () => {
+    expect(stripHesitations("Um… let me think")).toBe("Let me think");
+    expect(stripHesitations("That is the plan, um…")).toBe("That is the plan…");
+    expect(stripHesitations("It broke… Um, we should revert")).toBe("It broke… We should revert");
+  });
+
   it("keeps the sentence end a trailing hesitation sat in front of", () => {
     expect(stripHesitations("That is the plan, um.")).toBe("That is the plan.");
     expect(stripHesitations("Is that right um?")).toBe("Is that right?");
@@ -68,6 +84,8 @@ describe("stripHesitations", () => {
 
   it("opens a sentence after a bracket or quote", () => {
     expect(stripHesitations('He said "Um, no"')).toBe('He said "No"');
+    expect(stripHesitations("He said “Um, no”")).toBe("He said “No”");
+    expect(stripHesitations("He said ‘Uh, no’")).toBe("He said ‘No’");
   });
 
   it("does not cross a line break", () => {

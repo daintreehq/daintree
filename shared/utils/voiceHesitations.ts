@@ -20,10 +20,14 @@ const BETWEEN = "(?:[^\\S\\r\\n]|[,;:…—–])+";
 const CLUSTER_RE = new RegExp(`${HESITATION}(?:${BETWEEN}${HESITATION})*`, "gu");
 const HESITATION_AT_RE = new RegExp(HESITATION, "uy");
 
-const PAUSE_RE = /[,;:—–]/u;
-const TERMINATOR_RE = /[.!?…]/u;
-const RUN_CHAR_RE = /[,;:.!?…—–]/u;
-const OPENER_RE = /[(["'“‘{]/u;
+// Regex literals reach Main's bundle as written (esbuild escapes only strings),
+// and one character above U+00FF makes V8 hold the whole shared chunk as a
+// two-byte string (#16682), so — – … “ ‘ are written as escapes.
+const PAUSE_RE = /[,;:\u2014\u2013]/u;
+const PAUSES_RE = /[,;:\u2014\u2013]/gu;
+const TERMINATOR_RE = /[.!?\u2026]/u;
+const RUN_CHAR_RE = /[,;:.!?\u2026\u2014\u2013]/u;
+const OPENER_RE = /[(["'\u201c\u2018{]/u;
 const CLOSER_OF: Readonly<Record<string, string>> = {
   "(": ")",
   "[": "]",
@@ -83,7 +87,7 @@ export function stripHesitations(text: string, edits?: VoiceTextEdit[]): string 
       continue;
     }
     const afterPause = PAUSE_RE.test(prev);
-    const terminators = run.replace(/[,;:—–]/gu, "");
+    const terminators = run.replace(PAUSES_RE, "");
 
     let from = start;
     let to = next;

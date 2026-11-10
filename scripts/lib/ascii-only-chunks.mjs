@@ -11,7 +11,7 @@
 // Regex literals are escaped too, so `RegExp.prototype.source` reads the
 // escapes; matching is unchanged.
 
-import { minifySync } from "rolldown/utils";
+import { minifySync, parseSync, Visitor } from "rolldown/utils";
 
 /** Code units above U+00FF force a two-byte string in Blink and V8. */
 export function hasTwoByteCharacters(code) {
@@ -19,6 +19,37 @@ export function hasTwoByteCharacters(code) {
     if (code.charCodeAt(i) > 0xff) return true;
   }
   return false;
+}
+
+/**
+ * Offsets of the code units above U+00FF that an escape could remove: every
+ * one outside a tagged template's quasis, whose `raw` text a tag can read.
+ * Main's esbuild build has no re-print pass, so its chunks are checked
+ * against their source instead (#16682).
+ */
+export function findEscapableTwoByteCharacters(fileName, code) {
+  if (!hasTwoByteCharacters(code)) return [];
+  const result = parseSync(fileName, code, { sourceType: "module" });
+  if (result.errors.length) {
+    throw new Error(`parsing ${fileName} failed: ${result.errors[0].message}`);
+  }
+  const quasis = [];
+  new Visitor({
+    TaggedTemplateExpression(node) {
+      for (const quasi of node.quasi.quasis) quasis.push(quasi);
+    },
+  }).visit(result.program);
+  quasis.sort((a, b) => a.start - b.start);
+
+  const offsets = [];
+  let next = 0;
+  for (let i = 0; i < code.length; i++) {
+    if (code.charCodeAt(i) <= 0xff) continue;
+    while (next < quasis.length && quasis[next].end <= i) next++;
+    if (next < quasis.length && quasis[next].start <= i) continue;
+    offsets.push(i);
+  }
+  return offsets;
 }
 
 /** Re-prints a minified ES module chunk with non-ASCII characters escaped. */
