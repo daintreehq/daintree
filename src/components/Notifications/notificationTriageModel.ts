@@ -79,11 +79,16 @@ export interface FlatRow {
   context: NotificationHistoryEntry["context"];
 }
 
+/** A group's identity across the rail, the list and the roving focus ring. */
+export function groupKey(group: ThreadGroup): string {
+  return group.correlationId ?? group.entries[0]!.id;
+}
+
 export function buildFlatRow(group: ThreadGroup): FlatRow {
   const isThread = !!group.correlationId && group.entries.length > 1;
   const latest = group.entries[0]!;
   return {
-    key: group.correlationId ?? latest.id,
+    key: groupKey(group),
     isThread,
     correlationId: group.correlationId,
     entryId: latest.id,
@@ -185,6 +190,8 @@ export function filterTriageEntries(
 export interface TriageView {
   needsAttentionGroups: ThreadGroup[];
   needsAttentionOverflow: number;
+  /** The first severe thread past the cap, which "+N more below" jumps to. */
+  firstOverflowKey: string | null;
   chronoSections: ContextSection[];
   dividerGroupId: string | null;
 }
@@ -244,10 +251,20 @@ export function deriveTriageView({
           });
   const pinned = severeUnread.slice(0, NEEDS_ATTENTION_CAP);
 
-  const chronoGroups = groupByCorrelationId(filteredEntries);
+  // A pinned thread lives in the rail and nowhere else. Drawn in both, one
+  // failure read as two, its recovery buttons appeared twice, and j/k stopped
+  // on it twice. Overflow past the cap is not pinned, so it stays in the list.
+  const pinnedKeys = new Set(pinned.map(groupKey));
+  const chronoGroups = groupByCorrelationId(filteredEntries).filter(
+    (g) => !pinnedKeys.has(groupKey(g))
+  );
+  // No list section at all when the rail holds everything: an empty one still
+  // drew its label over nothing.
   const sections: ContextSection[] = groupByContext
     ? partitionByContext(chronoGroups)
-    : [{ key: "all", groups: chronoGroups }];
+    : chronoGroups.length > 0
+      ? [{ key: "all", groups: chronoGroups }]
+      : [];
 
   let divider: string | null = null;
   // Ungrouped only. Grouped, the new rows are spread across sections, and
@@ -257,7 +274,7 @@ export function deriveTriageView({
   if (!groupByContext && lastClosedAt > 0 && filter !== "archived" && filter !== "snoozed") {
     for (const g of chronoGroups) {
       if (g.latestTimestamp > lastClosedAt) {
-        divider = g.correlationId ?? g.entries[0]?.id ?? null;
+        divider = groupKey(g);
         break;
       }
     }
@@ -266,6 +283,9 @@ export function deriveTriageView({
   return {
     needsAttentionGroups: pinned,
     needsAttentionOverflow: severeUnread.length - pinned.length,
+    firstOverflowKey: severeUnread[NEEDS_ATTENTION_CAP]
+      ? groupKey(severeUnread[NEEDS_ATTENTION_CAP]!)
+      : null,
     chronoSections: sections,
     dividerGroupId: divider,
   };

@@ -108,7 +108,8 @@ describe("notificationTriageModel", () => {
     expect(result.needsAttentionOverflow).toBe(0);
     for (const filter of ["all", "unread"] as const) {
       const rows = view([recent, stale], { filter }).chronoSections.flatMap((s) => s.groups);
-      expect(rows.map((g) => g.entries[0]!.id)).toEqual([recent.id, stale.id]);
+      // The recent warning is pinned, so it lives in the rail alone.
+      expect(rows.map((g) => g.entries[0]!.id)).toEqual([stale.id]);
     }
   });
 
@@ -277,18 +278,20 @@ describe("notificationTriageModel", () => {
     const p2 = entry({ context: { projectId: "p2" } });
     const p1b = entry({ correlationId: "lone", context: { projectId: "p1" } });
     const result = view([err, errTail, p2, p1b], { groupByContext: true });
-    expect(result.chronoSections.map((s) => s.key)).toEqual(["proj:p1", "proj:p2"]);
-    expect(result.chronoSections[0]!.groups.map((g) => g.correlationId)).toEqual(["x", "lone"]);
+    // The pinned thread is not repeated in the list, so p1's section holds
+    // only the lone row and p2's comes first.
+    expect(result.chronoSections.map((s) => s.key)).toEqual(["proj:p2", "proj:p1"]);
+    expect(result.chronoSections[1]!.groups.map((g) => g.correlationId)).toEqual(["lone"]);
 
     const rows = buildFlatRows(result.needsAttentionGroups, result.chronoSections);
-    expect(rows.map((r) => r.key)).toEqual(["x", "x", "lone", p2.id]);
-    expect(rows.map((r) => r.isThread)).toEqual([true, true, false, false]);
+    expect(rows.map((r) => r.key)).toEqual(["x", p2.id, "lone"]);
+    expect(rows.map((r) => r.isThread)).toEqual([true, false, false]);
     expect(rows[0]).toMatchObject({
       entryId: err.id,
       correlationId: "x",
       context: { projectId: "p1" },
       primaryAction: { actionId: "app.settings.openTab" },
     });
-    expect(rows[3]!.correlationId).toBeUndefined();
+    expect(rows[1]!.correlationId).toBeUndefined();
   });
 });

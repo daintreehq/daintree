@@ -50,7 +50,11 @@ import {
   resolveSnoozeDuration,
   type SnoozeDurationOption,
 } from "@shared/utils/snoozeTimestamps";
-import { useNotificationDestination, useNotificationSource } from "./notificationSource";
+import {
+  useNotificationDestination,
+  useNotificationRowSource,
+  useNotificationSource,
+} from "./notificationSource";
 import { goToNotificationSource } from "./notificationNavigation";
 import {
   NOTIFICATION_UNAVAILABLE_LABEL,
@@ -193,17 +197,11 @@ interface NotificationCenterEntryProps {
   /** Archive's inverse, offered in the Archived tab. */
   onRestore?: () => void;
   /**
-   * False where something above the row already names its project and
-   * worktree — a grouped section header — so the row doesn't say it twice.
+   * True under a grouped section header, which already names the row's host,
+   * project and worktree; the row then names only what the header can't (a
+   * plugin).
    */
-  showSource?: boolean;
-  /**
-   * The pinned rail's preview: the title (or, untitled, the message on one
-   * line), the source, the recovery actions and the controls, but not the
-   * body. The full row sits in the list below, so the rail's job is to name
-   * what needs you, not to repeat it at length.
-   */
-  compact?: boolean;
+  grouped?: boolean;
 }
 
 export function NotificationCenterEntry({
@@ -226,16 +224,14 @@ export function NotificationCenterEntry({
   onArchive,
   onToggleRead,
   onRestore,
-  showSource = true,
-  compact = false,
+  grouped = false,
 }: NotificationCenterEntryProps) {
   const config = TYPE_CONFIG[displayType ?? entry.type];
   const Icon = config.icon;
   const source = useNotificationSource(entry.context);
   const label = rowLabel(entry);
   const showSnoozeLine = isSnoozed && snoozedUntil !== undefined;
-  const metaSource = showSource ? source : null;
-  const showMessage = !compact || !entry.title;
+  const metaSource = useNotificationRowSource(entry.context, grouped);
   const destination = useNotificationDestination(entry.context);
   const navigable = destination.kind !== "none";
   // Rows from another project or machine already name it, so saying it again
@@ -301,25 +297,26 @@ export function NotificationCenterEntry({
       onClick={navigable ? handleRowClick : undefined}
       data-navigable={navigable ? "true" : undefined}
       className={cn(
-        "group flex items-start gap-2 pl-4 pr-3 transition-colors",
+        "group relative flex items-start gap-2 py-2.5 pl-4 pr-3 transition-colors",
         // A row with nowhere to go does not dress as a link. `group` stays, so
         // hovering still reveals the row's own controls.
         navigable ? "cursor-pointer hover:bg-overlay-subtle" : "cursor-default",
-        // The rail is a preview, so it is packed tighter than the list: at the
-        // list's rhythm three pinned rows took nearly half the panel before
-        // anything that had just arrived.
-        compact ? "py-1.5" : "py-2.5",
         // The shared palette-row focus treatment, not a bespoke ring: `outline`
         // survives Windows High Contrast where a box-shadow ring does not, and
         // the offset is negative because this row is full-bleed inside three
         // nested clipping ancestors (ScrollShadow's scrollport and wrapper, and
         // the popover itself), so an outset outline loses all four sides.
-        tabIndex !== undefined && PALETTE_ROW_FOCUS_CLASS
+        tabIndex !== undefined && PALETTE_ROW_FOCUS_CLASS,
+        // The row the list's cursor is on wears the app's one highlighted-row
+        // fill; the accent ring is the focus anchor on top of it, not the mark.
+        // Both high-contrast modes keep that ring as the fill's outline.
+        tabIndex !== undefined &&
+          "focus-visible:bg-overlay-highlight contrast-more:focus-visible:outline-2 forced-colors:focus-visible:outline-2"
       )}
     >
       <div
         className={cn(
-          "relative flex w-4 shrink-0 items-center justify-center",
+          "flex w-4 shrink-0 items-center justify-center",
           // Grid row 1 is 24px tall on a titled row — the trailing rail's
           // controls set that height and the title centres inside it. The icon
           // is a flex sibling of that grid rather than a cell in it, so
@@ -337,42 +334,28 @@ export function NotificationCenterEntry({
             reader. First in the row's DOM order, which is where it reads. */}
         {isNew && <span className="sr-only">Unread. </span>}
         <Icon className="h-4 w-4" />
-        {/* The unread dot badges the status icon's top-right corner rather than
-            floating in the row's left gutter, where it sat 3px off the icon and
-            7px off the panel edge — closer to the chrome than to the thing it
-            marked, and on the icon's own centre line, so it read as part of the
-            glyph. Straddling the corner it belongs to the icon unambiguously
-            and costs no horizontal space, so read rows still carry no spacer.
-
-            The ring is not decoration: the corner of a 16px Lucide circle
-            (CheckCircle2, XCircle, Info) passes under this dot, so without a
-            cut-out in the row's own backdrop the two silhouettes merge. It has
-            to be a flat colour — `.surface-overlay` is 94% + backdrop-blur, and
-            a translucent ring would show the desktop through it. */}
-        {isNew && (
-          <span
-            aria-hidden="true"
-            // The attribute is not styling — it is the handle the
-            // `forced-colors: active` block in index.css repaints, the same way
-            // ActivityLight's dot is handled. Without it the UA forces this
-            // background to Canvas and the dot disappears, and an unread row
-            // carries no border or tint by design, so an untitled one was left
-            // with no unread signal at all. The ring below needs a counterpart
-            // in that block: it is a box-shadow, forced colors does not paint
-            // box-shadows, and the icon this dot now overlaps is flattened to
-            // the same CanvasText — so the cut-out is re-declared there as an
-            // outline.
-            data-notification-unread="true"
-            className={cn(
-              "absolute right-0 h-1.5 w-1.5 translate-x-1/3 -translate-y-1/3 rounded-full",
-              "bg-status-info ring-[1.5px] ring-[var(--overlay-surface-solid)]",
-              // Anchored to the icon box, not the wrapper: on a titled row the
-              // wrapper is 4px taller than the glyph at each end.
-              entry.title ? "top-1" : "top-0"
-            )}
-          />
-        )}
       </div>
+      {/* Unread sits in the row's own gutter, on the first line, in one
+          column down the list. Badged onto the severity glyph's corner it
+          nicked the triangle and the circle that carry severity, and the eye
+          had to inspect each icon to find it. The 16px inset already holds
+          it, so read rows keep the same text column. After the icon in the
+          DOM, so the row's leading in-flow child is the same read or unread. */}
+      {isNew && (
+        <span
+          aria-hidden="true"
+          // The handle the `forced-colors: active` block repaints: the UA
+          // forces this background to Canvas, and an untitled unread row has
+          // no other visual unread signal.
+          data-notification-unread="true"
+          className={cn(
+            "absolute left-[5px] h-1.5 w-1.5 rounded-full bg-status-info",
+            // Centred on the first line: the 24px title track on a titled row,
+            // the message's first line on an untitled one.
+            entry.title ? "top-[19px]" : "top-[15px]"
+          )}
+        />
+      )}
       <div className="grid flex-1 min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-2">
         {entry.title && (
           <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-1.5">
@@ -413,17 +396,22 @@ export function NotificationCenterEntry({
             this popover actually uses: the rail is about 100px for a relative
             stamp, and a message long enough to wrap at 210px was already
             wrapping at 312px. */}
-        {showMessage && (
-          <p
-            className={cn(
-              "text-xs text-text-secondary leading-snug",
-              compact ? "truncate" : "break-words",
-              entry.title ? "col-span-2 row-start-2" : "col-start-1 row-start-1 min-w-0"
-            )}
-          >
-            {entry.message}
-          </p>
-        )}
+        {/* Untitled, the message is the row's headline, so it takes the
+            title's ink and its unread weight; in secondary ink it read as the
+            supporting line of a row that had none. */}
+        <p
+          className={cn(
+            "text-xs leading-snug break-words",
+            entry.title
+              ? "col-span-2 row-start-2 text-text-secondary"
+              : cn(
+                  "col-start-1 row-start-1 min-w-0 text-text-primary",
+                  isNew ? "font-semibold" : "font-normal"
+                )
+          )}
+        >
+          {entry.message}
+        </p>
         {showChip && !entry.title && (
           <CountBadge
             key={bumpKey}
@@ -456,7 +444,7 @@ export function NotificationCenterEntry({
           <p
             data-testid="notification-source"
             className={cn(
-              "col-span-2 mt-0.5 flex min-w-0 text-2xs text-text-secondary",
+              "col-span-2 mt-1 flex min-w-0 items-baseline gap-1 text-2xs text-text-secondary",
               showSnoozeLine ? "row-start-4" : "row-start-3"
             )}
           >
@@ -469,25 +457,20 @@ export function NotificationCenterEntry({
                 carries no name: the record stays readable, and this says
                 that it no longer leads anywhere. */}
             {unavailableLabel && (
-              <span data-testid="notification-destination-unavailable" className="shrink-0">
-                {metaSource && (
-                  <>
-                    {" "}
-                    <FactSeparator />{" "}
-                  </>
-                )}
+              <span
+                data-testid="notification-destination-unavailable"
+                // `gap`, not spaces: a leading space is the first thing in a
+                // flex item and collapses, which glued the dot to the name.
+                className="flex shrink-0 items-baseline gap-1"
+              >
+                {metaSource && <FactSeparator />}
                 {unavailableLabel}
               </span>
             )}
           </p>
         )}
         {entry.actions && entry.actions.length > 0 && (
-          <div
-            className={cn(
-              "col-span-2 row-start-5 flex flex-wrap gap-1.5",
-              compact ? "mt-1" : "mt-1.5"
-            )}
-          >
+          <div className="col-span-2 row-start-5 mt-1.5 flex flex-wrap gap-1.5">
             {entry.actions.map((action, index) => {
               const manifest = actionService.get(action.actionId as ActionId);
               const isAvailable = manifest !== null && manifest.enabled;
@@ -609,7 +592,16 @@ export function NotificationCenterEntry({
             onArchive={onArchive}
             onToggleRead={onToggleRead}
             onRestore={onRestore}
-            source={entry.context?.projectId || entry.context?.worktreeId ? source : undefined}
+            // App-level rows have no source worth naming; every other kind,
+            // host- and plugin-only ones included, gets it in full here.
+            source={
+              entry.context?.projectId ||
+              entry.context?.worktreeId ||
+              entry.context?.hostName ||
+              entry.context?.plugin
+                ? source
+                : undefined
+            }
             destination={destination}
           />
           {onDismiss && (
@@ -809,8 +801,8 @@ function RowOptionsMenu({
     destination.kind === "none" && destination.reason
       ? NOTIFICATION_UNAVAILABLE_LABEL[destination.reason]
       : null;
-  const hasDiagnosticsActions =
-    supportsCopyCorrelationId || supportsReportOnGitHub || supportsGoToSource;
+  const hasReportingActions = supportsCopyCorrelationId || supportsReportOnGitHub;
+  const hasDiagnosticsActions = hasReportingActions || supportsGoToSource;
   const hasTriageActions = !!onToggleRead || !!onArchive || !!onRestore;
   const hasActions =
     hasTriageActions || hasContextActions || supportsSnooze || hasDiagnosticsActions;
@@ -979,7 +971,9 @@ function RowOptionsMenu({
               <>
                 <DropdownMenuLabel className="break-words font-medium normal-case tracking-normal">
                   {entry.title && <span className="block text-text-primary">{entry.title}</span>}
-                  {source && <span className="block">{source}</span>}
+                  {source && (
+                    <span className="mt-0.5 block font-normal text-text-secondary">{source}</span>
+                  )}
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
               </>
@@ -1039,14 +1033,6 @@ function RowOptionsMenu({
                   <DropdownMenuSubContent>{durationItems}</DropdownMenuSubContent>
                 </DropdownMenuSub>
               ))}
-            {(hasTriageActions || supportsSnooze) &&
-              (hasDiagnosticsActions || hasContextActions) && <DropdownMenuSeparator />}
-            {supportsCopyCorrelationId && (
-              <DropdownMenuItem onSelect={handleCopyCorrelationId}>
-                <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                Copy correlation ID
-              </DropdownMenuItem>
-            )}
             {supportsGoToSource && (
               <DropdownMenuItem
                 onSelect={handleGoToSource}
@@ -1067,18 +1053,11 @@ function RowOptionsMenu({
                 )}
               </DropdownMenuItem>
             )}
-            {supportsReportOnGitHub && (
-              <DropdownMenuItem
-                disabled={reportInFlight}
-                onSelect={() => {
-                  void handleReportOnGitHub();
-                }}
-              >
-                <Bug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                Report on GitHub
-              </DropdownMenuItem>
+            {/* Then what to hear less of, and the diagnostics last: on a
+                routine row they are the least likely thing anyone wants. */}
+            {(hasTriageActions || supportsSnooze || supportsGoToSource) && hasContextActions && (
+              <DropdownMenuSeparator />
             )}
-            {hasDiagnosticsActions && hasContextActions && <DropdownMenuSeparator />}
             {isNotificationEventKind(eventKind) && (
               <DropdownMenuItem
                 onSelect={() => {
@@ -1122,6 +1101,25 @@ function RowOptionsMenu({
               >
                 <BellOff data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Mute project notifications
+              </DropdownMenuItem>
+            )}
+            {(hasTriageActions || supportsSnooze || supportsGoToSource || hasContextActions) &&
+              hasReportingActions && <DropdownMenuSeparator />}
+            {supportsCopyCorrelationId && (
+              <DropdownMenuItem onSelect={handleCopyCorrelationId}>
+                <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Copy correlation ID
+              </DropdownMenuItem>
+            )}
+            {supportsReportOnGitHub && (
+              <DropdownMenuItem
+                disabled={reportInFlight}
+                onSelect={() => {
+                  void handleReportOnGitHub();
+                }}
+              >
+                <Bug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Report on GitHub
               </DropdownMenuItem>
             )}
           </>

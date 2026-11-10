@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { ArrowDown } from "lucide-react";
 import type { SnoozeDurationOption } from "@shared/utils/snoozeTimestamps";
 import { Button } from "@/components/ui/button";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
@@ -24,6 +25,7 @@ interface RovingSectionProps {
 export function NeedsAttentionSection({
   groups,
   overflowCount,
+  onJumpToOverflow,
   indexOffset,
   focusedIndex,
   setRowRef,
@@ -44,6 +46,8 @@ export function NeedsAttentionSection({
   groups: ThreadGroup[];
   /** Severe unread threads beyond the pinned cap — they remain in the chronological list below. */
   overflowCount: number;
+  /** Scrolls to and focuses the first overflow row; absent when it isn't in this view. */
+  onJumpToOverflow: (() => void) | undefined;
   onDismiss: (id: string) => void;
   onDismissThread: (correlationId: string) => void;
   snoozePendingIndex: number | null;
@@ -72,8 +76,7 @@ export function NeedsAttentionSection({
               setRowRef,
               onRowFocus,
               onDropdownOpenChange,
-              compact: true,
-              showSource: true,
+              grouped: false,
             },
             buildSnoozeProps(
               group,
@@ -93,12 +96,30 @@ export function NeedsAttentionSection({
           );
         })}
       </div>
+      {/* A way to them, not just a count: after the rail stopped repeating
+          the list, the overflow rows below looked like any other row. */}
       {overflowCount > 0 && (
-        <div
-          data-testid="needs-attention-overflow"
-          className="pl-4 pr-3 pb-2 text-3xs text-text-secondary"
-        >
-          +{overflowCount} more below
+        <div className="pl-4 pr-3 pb-2">
+          {onJumpToOverflow ? (
+            <button
+              type="button"
+              data-testid="needs-attention-overflow"
+              onClick={onJumpToOverflow}
+              className={cn(
+                // The negative margin keeps the text on the 16px edge at rest;
+                // the padding is for when high contrast frames it as a button.
+                "-mx-1 inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-1 py-0.5 text-2xs text-text-secondary",
+                "hover:text-text-primary transition-colors focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              )}
+            >
+              +{overflowCount} more below
+              <ArrowDown className="h-3 w-3" aria-hidden="true" />
+            </button>
+          ) : (
+            <span data-testid="needs-attention-overflow" className="text-2xs text-text-secondary">
+              +{overflowCount} more below
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -148,11 +169,9 @@ export function ChronoSection({
   onToggleReadRow: ((row: FlatRow) => void) | undefined;
   onRestoreRow: ((row: FlatRow) => void) | undefined;
   /**
-   * Whether the "Needs attention" rail is rendering above this list. That rail
-   * is a preview, not a filter — a pinned entry still appears here — so with
-   * one notification in the app the same row was drawn twice with nothing
-   * between the two but a divider, and it read as a duplicate rather than as a
-   * summary of a list. The header is what tells them apart.
+   * Whether the "Needs attention" rail is rendering above this list. The rail
+   * takes its rows out of the list, so the list is the rest of the inbox and
+   * says so; without the rail it is the whole inbox and needs no label.
    */
   hasPinnedAbove?: boolean;
 } & RovingSectionProps) {
@@ -162,7 +181,7 @@ export function ChronoSection({
   const newSinceUnreadIds = section.groups
     .filter((g) => g.latestTimestamp > lastClosedAt)
     .flatMap((g) => g.entries.filter((e) => !e.seenAsToast).map((e) => e.id));
-  const sectionLabel = "All notifications";
+  const sectionLabel = "Everything else";
   // Grouped, the section's name is its header's — "Notifications for this
   // context" named nothing a screen reader user could tell apart.
   const headerLabelId = useId();
@@ -256,9 +275,8 @@ export function ChronoSection({
                   setRowRef,
                   onRowFocus,
                   onDropdownOpenChange,
-                  compact: false,
                   // The section header names the place; the row needn't.
-                  showSource: !groupByContext,
+                  grouped: groupByContext,
                 },
                 buildSnoozeProps(
                   group,
@@ -290,8 +308,7 @@ interface RowRovingProps {
   setRowRef: (index: number, el: HTMLDivElement | null) => void;
   onRowFocus: (index: number) => void;
   onDropdownOpenChange: (open: boolean) => void;
-  compact: boolean;
-  showSource: boolean;
+  grouped: boolean;
 }
 
 interface SnoozeRowProps {
@@ -339,8 +356,7 @@ function renderGroup(
         onArchive={snooze.onArchive}
         onToggleRead={snooze.onToggleRead}
         onRestore={snooze.onRestore}
-        compact={roving.compact}
-        showSource={roving.showSource}
+        grouped={roving.grouped}
       />
     );
   }
@@ -365,8 +381,7 @@ function renderGroup(
       onArchive={snooze.onArchive}
       onToggleRead={snooze.onToggleRead}
       onRestore={snooze.onRestore}
-      compact={roving.compact}
-      showSource={roving.showSource}
+      grouped={roving.grouped}
     />
   );
 }

@@ -79,7 +79,9 @@ export function ContextSectionHeader({
         // Sentence case, not the uppercase eyebrow the other labels use: this
         // one is a name. Branch names are case-sensitive and uppercasing
         // "feature/refine-inbox" misstates the thing it identifies.
-        className="flex items-center justify-between gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-2xs font-medium text-text-secondary"
+        // `min-h-7` holds the height Mark read gives it, so the list doesn't
+        // jump up under the pointer when that button goes.
+        className="flex min-h-7 items-center justify-between gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-2xs font-medium text-text-secondary"
       >
         <span className="flex min-w-0 items-baseline gap-1.5">
           {/* Two spans so the worktree survives a long project name. As one
@@ -90,7 +92,7 @@ export function ContextSectionHeader({
             className="flex min-w-0 items-baseline text-text-primary"
             title={label}
           >
-            {host ? <span className="shrink-0 truncate">{host}</span> : null}
+            {host ? <span className="min-w-[5ch] truncate">{host}</span> : null}
             {host && (project || worktree) ? (
               <span aria-hidden="true" className="shrink-0 px-1">
                 <FactSeparator />

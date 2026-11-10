@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArrowDown,
@@ -61,7 +61,10 @@ import {
   PANE_TOOLBAR_ICON_CLASS,
   PANE_TOOLBAR_TEXT_BUTTON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
-import { FilterChip } from "@/components/ui/FilterChip";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 import { useWallClock } from "@/hooks/useWallClock";
 import {
   buildFlatRows,
@@ -173,6 +176,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const [filter, setFilter] = useState<NotificationFilter>("all");
   const [clearAllConfirmOpen, setClearAllConfirmOpen] = useState(false);
   const [frozenUnreadIds, setFrozenUnreadIds] = useState<Set<string> | null>(null);
+  const filterScrollRef = useRef<Map<NotificationFilter, number>>(new Map());
+  const pendingScrollRestoreRef = useRef<number | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const [dividerEl, setDividerEl] = useState<HTMLDivElement | null>(null);
@@ -204,8 +209,17 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   useEffect(() => {
     if (!open) {
       setFrozenUnreadIds(null);
+      filterScrollRef.current.clear();
     }
   }, [open]);
+
+  // After the new view has laid out, put it back where it was left.
+  useLayoutEffect(() => {
+    const top = pendingScrollRestoreRef.current;
+    if (top === null) return;
+    pendingScrollRestoreRef.current = null;
+    if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = top;
+  }, [filter]);
 
   useEffect(() => {
     if (!open) return;
@@ -334,7 +348,13 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   );
   const railNow = useWallClock(entries, nextRailExpiry);
 
-  const { needsAttentionGroups, needsAttentionOverflow, chronoSections, dividerGroupId } = useMemo(
+  const {
+    needsAttentionGroups,
+    needsAttentionOverflow,
+    firstOverflowKey,
+    chronoSections,
+    dividerGroupId,
+  } = useMemo(
     () =>
       deriveTriageView({
         entries,
@@ -396,6 +416,32 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     dispatchPrimaryAction,
   });
 
+  const pinnedCount = needsAttentionGroups.length;
+  const firstOverflowIndex =
+    firstOverflowKey === null
+      ? -1
+      : flatRows.findIndex((row, i) => i >= pinnedCount && row.key === firstOverflowKey);
+  const jumpToOverflow = () => {
+    if (firstOverflowIndex < 0) return;
+    // To the top of the port, like Jump to new, rather than focus's minimal
+    // scroll, which parked the row at the bottom edge under the fade.
+    scrollContainerRef.current
+      ?.querySelectorAll<HTMLElement>('[role="listitem"]')
+      [firstOverflowIndex]?.scrollIntoView({ block: "start", behavior: "instant" });
+    moveFocusTo(firstOverflowIndex);
+  };
+
+  const handleFilterChange = (next: NotificationFilter) => {
+    // The scrollport is shared by every view, so each keeps its own place for
+    // this opening: All, a look at Archived, and back lands where you were. A
+    // view not yet visited starts at its top.
+    const port = scrollContainerRef.current;
+    if (port) filterScrollRef.current.set(filter, port.scrollTop);
+    pendingScrollRestoreRef.current = filterScrollRef.current.get(next) ?? 0;
+    setFilter(next);
+    if (next !== "unread") setFrozenUnreadIds(null);
+  };
+
   const handleMarkAllRead = () => {
     // Archived entries are already done; they must never appear in the
     // mark-all-read undo set or the "Marked N as read" count. Snoozed
@@ -455,7 +501,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   // line that answers "what will fire right now" plus which kinds are switched
   // off. Memoized over the gate inputs so it's a stable value the rest of the
   // render (and the compiler) can lean on.
-  const { summaryHeroLine, offLabel, silencedLabel } = useMemo(() => {
+  const { summaryHeroLine, silencedLabel } = useMemo(() => {
     // `isQuiet` only encodes in-app suppression (session mute + scheduled
     // quiet) — OS DND must never be folded into `isQuiet` because it would
     // flip kinds to `quiet-gated`, which the hard constraint forbids.
@@ -478,7 +524,6 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       kinds.length > 0 ? `Off: ${kinds.map((k) => KIND_SHORT_LABEL[k]).join(", ")}` : "";
     return {
       summaryHeroLine: heroLine(states),
-      offLabel: label(offKinds),
       silencedLabel: label(silenced),
     };
   }, [
@@ -522,8 +567,13 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   })();
   const hasSilences =
     silencedLabel !== "" || projectOffLabel !== "" || otherProjectsOffLabel !== "";
-  const showQuietStrip = showMutedPill || hasSilences;
-  const quietCause = pillLabel || (hasSilences ? "Some notifications are off" : summaryHeroLine);
+  // Master off is the loudest silence of all, and it used to explain itself
+  // nowhere: the inbox just went quiet.
+  const masterOff = !notificationsEnabled;
+  const showQuietStrip = masterOff || showMutedPill || hasSilences;
+  const quietCause = masterOff
+    ? summaryHeroLine
+    : pillLabel || (hasSilences ? "Some notifications are off" : summaryHeroLine);
   // OS Do Not Disturb silences the OS's banners, not Daintree's, so under it
   // alone the breakthrough list named every kind the app has — six or seven
   // names that all said "nothing changed in here". One clause says that.
@@ -540,13 +590,21 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       ? (osDndDisplayNote(osDndActive) ?? "")
       : "",
   ];
-  const quietDetail = [
-    ...concurrentCauses,
-    pillLabel ? (osDndOnly ? "Daintree's own alerts still show" : summaryHeroLine) : "",
-    pillLabel ? offLabel : silencedLabel,
-    projectOffLabel,
-    otherProjectsOffLabel,
-  ].filter(Boolean);
+  // Off outranks any pause: nothing breaks through, so there is no
+  // breakthrough list to give, and the pause is only worth its end time.
+  const quietDetail = (
+    masterOff
+      ? [pillLabel]
+      : [
+          ...concurrentCauses,
+          pillLabel ? (osDndOnly ? "Daintree's own alerts still show" : summaryHeroLine) : "",
+          // Only what the user switched off. "Finished" ships off, so the full off
+          // list printed "Off: Finished" on every pause for a choice nobody made.
+          silencedLabel,
+          projectOffLabel,
+          otherProjectsOffLabel,
+        ]
+  ).filter(Boolean);
   // What "Clear all" actually costs, named in the confirm. The count is the
   // preview; the archived and snoozed breakdown is the part a user standing on
   // the Archived tab would not otherwise expect, since the store call ignores
@@ -568,6 +626,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const morningLabel = `Until ${timeFormatter.format(new Date(nextOccurrenceTimestamp(8 * 60)))}`;
 
   const showGroupToggle = entries.length > 0;
+  // Read state belongs to the inbox views; Archived and Snoozed hold nothing
+  // it would act on, so the header doesn't offer it there.
+  const showMarkAllRead = unreadCount > 0 && (filter === "all" || filter === "unread");
   // Hide the Snoozed tab when nothing is snoozed — it would otherwise be a
   // dead chip that always opens to an empty state, training users to ignore
   // it. Snap focus back to "all" if the active snooze just expired while the
@@ -579,11 +640,22 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     }
     return false;
   }, [snoozedThreads]);
+  // An emptied inbox hides the filter, so it must not stay on a tab nobody can
+  // see — the next notification would open onto "You're all caught up".
   useEffect(() => {
-    if (filter === "snoozed" && !hasSnoozedThreads) {
+    if (
+      (filter === "snoozed" && !hasSnoozedThreads) ||
+      (filter !== "all" && entries.length === 0)
+    ) {
       setFilter("all");
     }
-  }, [filter, hasSnoozedThreads]);
+  }, [filter, hasSnoozedThreads, entries.length]);
+  const filterOptions: SegmentedRadioOption<NotificationFilter>[] = [
+    { value: "all", label: "All" },
+    { value: "unread", label: "Unread" },
+    { value: "archived", label: "Archived" },
+    ...(hasSnoozedThreads ? [{ value: "snoozed" as const, label: "Snoozed" }] : []),
+  ];
 
   return (
     <div
@@ -655,7 +727,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           {/* gap-1.5, not gap-1: four controls at 4px apart, one of them a text
               button, read as a single crowded clump jammed into the corner. */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {unreadCount > 0 && (
+            {showMarkAllRead && (
               <button
                 type="button"
                 onClick={handleMarkAllRead}
@@ -686,6 +758,17 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 <TooltipContent side="bottom">Pause notifications</TooltipContent>
               </Tooltip>
               <DropdownMenuContent align="end" className="min-w-[180px]">
+                {/* The menu that paused them is where a user goes back to
+                    undo it, so it offers the way out first. */}
+                {isSessionMuted && (
+                  <>
+                    <DropdownMenuItem onSelect={handleResumeNotifications}>
+                      <Bell data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      Resume notifications
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuLabel>Pause notifications</DropdownMenuLabel>
                 <DropdownMenuItem onSelect={() => handleMuteFor(60 * 60 * 1000)}>
                   <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
@@ -762,46 +845,18 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           </div>
         </div>
         {entries.length > 0 && (
-          // The chip row sits on the same 16px margin as every other band. An
-          // earlier pass inset it by the chip's own padding so the LABELS
-          // landed on the text column, but that put the selected pill 4px off
-          // the panel edge, into the same crowded strip as the unread dots and
-          // the thread rail. Between aligning label-to-label and keeping one
-          // clean left margin, the margin wins: a pill is a surface, and
-          // surfaces line up with surfaces.
-          <div className="flex flex-wrap items-center gap-1.5 pl-4 pr-2 pb-2">
-            <FilterChip
-              selected={filter === "all"}
-              onClick={() => {
-                setFilter("all");
-                setFrozenUnreadIds(null);
-              }}
-            >
-              All
-            </FilterChip>
-            <FilterChip selected={filter === "unread"} onClick={() => setFilter("unread")}>
-              Unread
-            </FilterChip>
-            <FilterChip
-              selected={filter === "archived"}
-              onClick={() => {
-                setFilter("archived");
-                setFrozenUnreadIds(null);
-              }}
-            >
-              Archived
-            </FilterChip>
-            {hasSnoozedThreads && (
-              <FilterChip
-                selected={filter === "snoozed"}
-                onClick={() => {
-                  setFilter("snoozed");
-                  setFrozenUnreadIds(null);
-                }}
-              >
-                Snoozed
-              </FilterChip>
-            )}
+          // One choice of four views, so the app's one single-choice control:
+          // the outlined pills read as independent toggles, as they are in the
+          // filter surfaces that use them, and were a tab stop each.
+          <div className="flex items-center pl-4 pr-2.5 pb-2">
+            <SegmentedRadioGroup<NotificationFilter>
+              density="compact"
+              aria-label="Notification filter"
+              testId="notification-filter"
+              value={filter}
+              onChange={handleFilterChange}
+              options={filterOptions}
+            />
           </div>
         )}
       </div>
@@ -822,7 +877,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       {showQuietStrip && (
         <div
           data-testid="notification-muted-pill"
-          className="flex shrink-0 items-start gap-2 pl-4 pr-3 py-1.5 bg-overlay-raised text-2xs text-text-secondary"
+          className="flex shrink-0 items-start gap-2 border-b border-divider pl-4 pr-3 py-1.5 bg-overlay-raised text-2xs text-text-secondary"
         >
           <div className="min-w-0 flex-1 flex flex-col gap-0.5">
             <span className="font-medium text-text-primary">{quietCause}</span>
@@ -832,7 +887,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               </span>
             ))}
           </div>
-          {isSessionMuted && (
+          {/* Resume can't undo master off, so off gets Manage; the pause can
+              still be ended from the moon menu. */}
+          {isSessionMuted && !masterOff && (
             <Button
               variant="subtle"
               size="xs"
@@ -851,7 +908,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           )}
           {/* Quiet hours too: they explained the silence and then left the way
               to change them two menus away. */}
-          {!isSessionMuted && (hasSilences || isScheduledMuted) && (
+          {(masterOff || (!isSessionMuted && (hasSilences || isScheduledMuted))) && (
             <Button
               variant="subtle"
               size="xs"
@@ -909,7 +966,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   icon={<Archive />}
                   className="py-10"
                 />
-              ) : filter === "unread" && entries.length > 0 ? (
+              ) : (filter === "unread" || filter === "all") && entries.length > 0 ? (
+                // On All too: with history left in Archived or Snoozed, an
+                // emptied inbox is cleared, not new.
                 <EmptyState
                   variant="user-cleared"
                   scale="sidebar"
@@ -918,20 +977,16 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   className="py-10"
                 />
               ) : isSessionMuted || isScheduledMuted ? (
-                // OS DND alone does not trigger the "Notifications paused" copy
-                // — in-app toasts still fire, so naming them "paused" would be
-                // misleading. The pill above still surfaces the OS state.
-                //
-                // The popover scale and no description, like every other empty
-                // state here: the strip above already says until when and holds
-                // Resume, and at the canvas scale a 40px moon and an 18px title
-                // repeated that strip at three times its size.
+                // The strip above already says paused, until when, and holds
+                // Resume. The body says the one thing left: there is nothing
+                // here. A moon and "Notifications paused" under it said the
+                // pause twice and never said the inbox was empty.
                 <div data-testid="notification-muted-empty-state">
                   <EmptyState
                     variant="zero-data"
                     scale="popover"
-                    title="Notifications paused"
-                    icon={<Moon />}
+                    title="No notifications yet"
+                    icon={<Bell />}
                     className="py-10"
                   />
                 </div>
@@ -950,6 +1005,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   <NeedsAttentionSection
                     groups={needsAttentionGroups}
                     overflowCount={needsAttentionOverflow}
+                    onJumpToOverflow={firstOverflowIndex >= 0 ? jumpToOverflow : undefined}
                     indexOffset={0}
                     focusedIndex={focusedIndex}
                     setRowRef={setRowRef}
@@ -1014,8 +1070,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               dividerEl?.scrollIntoView({ block: "start", behavior: "instant" });
               // Land on the first new ROW, not the divider: the list's keys
               // only move between rows, so focus parked on the label left
-              // j/k/arrows doing nothing. The rail's copies come first in
-              // flat order, so search past them.
+              // j/k/arrows doing nothing. The rail's rows come first in flat
+              // order, so search past them.
               const pinned = needsAttentionGroups.length;
               const index = flatRows.findIndex(
                 (row, i) => i >= pinned && row.key === dividerGroupId
