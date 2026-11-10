@@ -329,13 +329,13 @@ describe("DockedTerminalItem move-to-grid gesture", () => {
     expect(screen.getByRole("button", { name: /— agent working/ })).not.toBeNull();
   });
 
-  // The glyph shows an idle agent as waiting so the indicator never drops out;
-  // the accessible name must still report what was observed.
+  // An idle agent draws no glyph here; the accessible name still reports what
+  // was observed, marked as an observation rather than a drawn state.
   it("names an idle agent idle, not waiting", () => {
     mockDockAgentState = "idle";
     mockIsAgent = true;
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
-    expect(screen.getByRole("button", { name: /— agent idle/ })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /— observed: agent idle/ })).not.toBeNull();
     expect(screen.queryByRole("button", { name: /waiting/ })).toBeNull();
   });
 

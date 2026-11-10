@@ -474,6 +474,52 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   }, []);
   const isTrayCompact = isCompact || isTrayCondensed;
 
+  // Which edges an asking chip is scrolled off past, for the chevrons. A chip
+  // counts as past an edge once its trailing state glyph (where the ask is
+  // drawn) is under that edge's chevron, not merely its centre. Chips
+  // mark themselves (`data-dock-attention`) and re-render on their own, so the
+  // rail watches the attribute rather than the store.
+  const [edgeAttention, setEdgeAttention] = useState({ left: false, right: false });
+  useLayoutEffect(() => {
+    const rail = scrollContainerRef.current;
+    const content = railContentRef.current;
+    if (!rail || !content) return;
+    // The chevron with its ring, and the glyph's centre from a chip's right
+    // edge (12px padding + half the 12px glyph).
+    const CHEVRON_ZONE = 60;
+    const GLYPH_FROM_RIGHT = 18;
+    const evaluate = () => {
+      const bounds = rail.getBoundingClientRect();
+      let left = false;
+      let right = false;
+      for (const chip of content.querySelectorAll<HTMLElement>("[data-dock-attention]")) {
+        const glyph = chip.getBoundingClientRect().right - GLYPH_FROM_RIGHT;
+        if (glyph < bounds.left + CHEVRON_ZONE) left = true;
+        else if (glyph > bounds.right - CHEVRON_ZONE) right = true;
+      }
+      setEdgeAttention((prev) =>
+        prev.left === left && prev.right === right ? prev : { left, right }
+      );
+    };
+    evaluate();
+    rail.addEventListener("scroll", evaluate, { passive: true });
+    const resize = new ResizeObserver(evaluate);
+    resize.observe(rail);
+    resize.observe(content);
+    const mutations = new MutationObserver(evaluate);
+    mutations.observe(content, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-dock-attention"],
+    });
+    return () => {
+      rail.removeEventListener("scroll", evaluate);
+      resize.disconnect();
+      mutations.disconnect();
+    };
+  }, []);
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -505,7 +551,12 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           </div>
 
           <div className="relative flex-1 min-w-0">
-            <DockScrollChevron side="left" visible={canScrollLeft} onClick={scrollLeft} />
+            <DockScrollChevron
+              side="left"
+              visible={canScrollLeft}
+              attention={edgeAttention.left}
+              onClick={scrollLeft}
+            />
 
             {/* Scrollable Container */}
             <div
@@ -517,7 +568,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               onKeyDown={handleDockKeyDown}
               onFocusCapture={handleDockFocusCapture}
               className={cn(
-                "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-px-4 transition-[color,background-color,box-shadow]",
+                // scroll-px clears the chevron overlay (60px with its waiting
+                // ring), so a chip reached by keyboard is never parked under it.
+                "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] scrollbar-none scroll-px-15 transition-[color,background-color,box-shadow]",
                 !skipMotion && "scroll-smooth",
                 isDockDropRejected && "cursor-no-drop",
                 isDropTarget && cn(DROP_TARGET_FRAME, "rounded-[var(--radius-md)]")
@@ -530,7 +583,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               >
                 <div
                   ref={railContentRef}
-                  className="flex items-center gap-[var(--dock-gap)] min-w-[100px] min-h-[calc(var(--dock-item-height)-4px)]"
+                  // shrink-0: the box is the chips' own width, so the ResizeObservers
+                  // watching it see a chip grow or shrink.
+                  className="flex shrink-0 items-center gap-[var(--dock-gap)] min-w-[100px] min-h-[calc(var(--dock-item-height)-4px)]"
                 >
                   {dockItems.length === 0 ? (
                     <SortableDockPlaceholder />
@@ -577,7 +632,12 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               </SortableContext>
             </div>
 
-            <DockScrollChevron side="right" visible={canScrollRight} onClick={scrollRight} />
+            <DockScrollChevron
+              side="right"
+              visible={canScrollRight}
+              attention={edgeAttention.right}
+              onClick={scrollRight}
+            />
           </div>
 
           {/* The rail above belongs to the active worktree; this tray counts the

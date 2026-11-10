@@ -54,7 +54,9 @@
 
 .dock-status-tray:has(> .dock-status-pill[data-visible="true"]) {
   padding: 2px;
-  background: var(--color-surface-panel);
+  /* The chips' own resting fill: the panel surface paints white on light
+     themes, where white is this dock's open state. */
+  background: var(--dock-item-bg);
   /* The chips' resting border: the strong step is an open chip's. */
   box-shadow: inset 0 0 0 1px var(--dock-item-border);
 }
@@ -105,7 +107,8 @@
  * also lives in the dot's shape (WCAG 1.4.1), which survives forced colours.
  */
 .dock-chip-badge {
-  --dock-chip-badge-fill: var(--color-text-muted);
+  /* Secondary, not muted: the mark is load-bearing and muted has no dark floor. */
+  --dock-chip-badge-fill: var(--color-text-secondary);
   flex-shrink: 0;
   background-color: var(--dock-chip-badge-fill);
   border-radius: 9999px;
@@ -151,5 +154,56 @@
   }
   .dock-chip-badge[data-dock-chip-badge="count"] {
     color: ButtonFace;
+  }
+}
+
+/* ── Open chip and open pill under the contrast modes ──
+ * At rest the open state is a neutral lift (fill, brighter text, the popover's
+ * own edge). When the user asks for more contrast the edge carries the state on
+ * its own, and must outrank the borders this mode already gives every resting
+ * button. A chip's edge is a border; a pill's is the Button pill's ring, so the
+ * pill takes an inset outline instead. The two queries stay separate: macOS
+ * fires only the first, Windows swaps in system colours. */
+@media (prefers-contrast: more) {
+  #dock-container [data-dock-item][aria-expanded="true"] {
+    border-color: var(--color-text-primary);
+  }
+  .dock-status-tray button[aria-expanded="true"]:not(:focus-visible) {
+    outline: 1px solid var(--color-text-primary);
+    outline-offset: -1px;
+  }
+  /* The focus ring covers that edge; open keeps an inner line beneath it. */
+  #dock-container [data-dock-item][aria-expanded="true"]:focus-visible,
+  .dock-status-tray button[aria-expanded="true"]:focus-visible {
+    position: relative;
+  }
+  #dock-container [data-dock-item][aria-expanded="true"]:focus-visible::after,
+  .dock-status-tray button[aria-expanded="true"]:focus-visible::after {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border: 1px solid var(--color-text-primary);
+    border-radius: inherit;
+    pointer-events: none;
+  }
+}
+
+/* Forced colours flattens fills and borders alike, so open gets a second,
+ * inner line a resting chip never has. It is drawn as its own box, not an
+ * outline, so it sits inside the focus ring rather than replacing it: open and
+ * focused stays distinguishable from closed and focused. */
+@media (forced-colors: active) {
+  #dock-container [data-dock-item][aria-expanded="true"],
+  .dock-status-tray button[aria-expanded="true"] {
+    position: relative;
+  }
+  #dock-container [data-dock-item][aria-expanded="true"]::after,
+  .dock-status-tray button[aria-expanded="true"]::after {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border: 1px solid CanvasText;
+    border-radius: inherit;
+    pointer-events: none;
   }
 }

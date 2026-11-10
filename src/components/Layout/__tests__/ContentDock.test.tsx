@@ -698,7 +698,8 @@ describe("ContentDock regression test", () => {
     it("applies scroll-padding so focused edge chips clear the gradient scrim", () => {
       const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 
-      expect(content).toContain("scroll-px-4");
+      // 60px: the chevron's 28px button, its waiting ring and the 16px fade.
+      expect(content).toContain("scroll-px-15");
     });
   });
 });
