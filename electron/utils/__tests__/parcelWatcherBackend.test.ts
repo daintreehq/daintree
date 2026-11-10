@@ -251,6 +251,50 @@ describe("subscribeParcelWatcher", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it("matches a flagless RegExp ignore against the root-relative path with forward slashes on Windows", async () => {
+    setPlatform("win32");
+    // The root's own ancestor is named `build`: only the part below the root
+    // may be tested, or every event in the worktree would be dropped.
+    const root = resolve("build", "regexp-ignore-test-repo");
+    const on = vi.fn();
+    const watcher = { close: vi.fn(), on };
+    on.mockReturnValue(watcher);
+    fsWatchMock.mockReturnValue(watcher);
+    existsSyncMock.mockReturnValue(true);
+    const callback = vi.fn();
+
+    const subscription = await subscribeParcelWatcher(root, callback, {
+      ignore: [/(?:^|\/)(?:node_modules|build|\.git)(?:\/|$)/],
+    });
+    const listener = fsWatchMock.mock.calls[0]?.[2] as (
+      eventType: "rename" | "change",
+      filename: string | null
+    ) => void;
+    // fs.watch reports Windows separators; the pattern is written for `/`.
+    listener("change", "packages\\app\\node_modules\\pkg\\index.js");
+    listener("change", "node_modules\\pkg\\index.js");
+    listener("change", "build\\out.js");
+    listener("change", ".git");
+    listener("change", "src\\index.ts");
+    listener("change", ".gitignore");
+
+    expect(callback.mock.calls).toEqual([
+      [null, [{ path: resolve(root, "src\\index.ts"), type: "update" }]],
+      [null, [{ path: resolve(root, ".gitignore"), type: "update" }]],
+    ]);
+    await subscription.unsubscribe();
+  });
+
+  it("refuses a RegExp ignore carrying flags on Windows, as Parcel's wrapper does", async () => {
+    setPlatform("win32");
+    await expect(
+      subscribeParcelWatcher(resolve("flagged-ignore-test-repo"), vi.fn(), {
+        ignore: [/node_modules/i],
+      })
+    ).rejects.toThrow(/must not have flags/);
+    expect(fsWatchMock).not.toHaveBeenCalled();
+  });
+
   it("routes Windows fs.watch runtime errors through the subscription callback", async () => {
     setPlatform("win32");
     const root = resolve("watcher-error-test-repo");

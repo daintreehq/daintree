@@ -427,3 +427,37 @@ describe("OS-level exclusion of hot directories", () => {
     expect(edit.fileSignals).toBeGreaterThan(0);
   });
 });
+
+describe("recursive ignore pattern against the real watcher (#16676)", () => {
+  it("drops nested ignored writes and still hears a root that sits under a `build` directory", async () => {
+    // The pattern is matched against the path below the watch root, so an
+    // ancestor named like an ignored directory must not silence the worktree.
+    const parent = mkdtempSync(join(tmpdir(), "daintree-ignore-"));
+    roots.push(parent);
+    const root = join(parent, "build", "repo");
+    mkdirSync(root, { recursive: true });
+    execFileSync("git", ["init", "-b", "main", "."], {
+      cwd: root,
+      stdio: ["ignore", "ignore", "pipe"],
+      env: GIT_ENV,
+    });
+    writeFileSync(join(root, "src.txt"), "untracked\n");
+    mkdirSync(join(root, "packages", "app", "dist"), { recursive: true });
+    mkdirSync(join(root, "packages", "app", "__pycache__"), { recursive: true });
+
+    const probe = await arm(root);
+    const churn = await probe(() => {
+      for (let i = 0; i < 15; i++) {
+        writeFileSync(join(root, "packages", "app", "dist", `chunk-${i}.js`), `${i}\n`);
+        writeFileSync(join(root, "packages", "app", "__pycache__", `m${i}.pyc`), `${i}\n`);
+      }
+    });
+    expect(churn).toEqual({ changes: 0, fileSignals: 0 });
+
+    const edit = await probe(() => {
+      writeFileSync(join(root, "src.txt"), "modified\n");
+    });
+    expect(edit.changes).toBeGreaterThan(0);
+    expect(edit.fileSignals).toBeGreaterThan(0);
+  });
+});

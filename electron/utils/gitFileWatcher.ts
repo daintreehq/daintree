@@ -30,49 +30,62 @@ const MACOS_EMFILE_LIMIT_HELP =
   "Permanent fix: create /Library/LaunchDaemons/limit.maxfiles.plist (see launchd.plist(5)). " +
   "/etc/sysctl.conf may not be respected on macOS 14+.";
 
-/**
- * Ignore globs for the cross-platform recursive watcher adapter.
- * Each bare directory name maps to a glob matching at any depth.
- * .git is included for both the bare worktree pointer file and
- * all child paths, replacing the old JS-side prefix check.
- */
 /** Name of the git config file inside the common dir. */
 const GIT_CONFIG_FILE_NAME = "config";
 
-const WORKTREE_IGNORE_GLOBS = [
-  "**/node_modules/**",
-  "**/dist/**",
-  "**/build/**",
-  "**/.next/**",
-  "**/target/**",
-  "**/coverage/**",
-  "**/.cache/**",
-  "**/.turbo/**",
-  "**/out/**",
-  "**/__pycache__/**",
-  "**/.venv/**",
+/**
+ * Names the recursive worktree watcher ignores at any depth: the entry itself
+ * and everything beneath it. `.git` covers both a linked worktree's `.git`
+ * pointer file and a `.git` directory's contents. Matched case-sensitively.
+ */
+const WORKTREE_IGNORED_NAMES = [
+  "node_modules",
+  "dist",
+  "build",
+  ".next",
+  "target",
+  "coverage",
+  ".cache",
+  ".turbo",
+  "out",
+  "__pycache__",
+  ".venv",
   // Python/Java agent-tooling cache dirs not covered by __pycache__/.venv.
   // Writes here during sustained tool runs would otherwise trigger a forced
   // full status chain (~3-5 git spawns) on every debounce flush.
-  "**/.pytest_cache/**",
-  "**/.mypy_cache/**",
-  "**/.ruff_cache/**",
-  "**/venv/**",
-  "**/.tox/**",
-  "**/.gradle/**",
-  "**/.git",
-  "**/.git/**",
-];
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  "venv",
+  ".tox",
+  ".gradle",
+  ".git",
+] as const;
+
+type WorktreeIgnoredName = (typeof WORKTREE_IGNORED_NAMES)[number];
+
+/**
+ * `WORKTREE_IGNORED_NAMES` as the single ignore entry the recursive watcher
+ * gets, tested against the path relative to the watch root with `/`
+ * separators. One expression, not a glob per name: @parcel/watcher compiles
+ * every entry into its own `std::regex` and runs each against every event on
+ * the FSEvents thread, and with a glob per name a write burst pinned that
+ * thread until FSEvents dropped events (#16676). Flagless, because the native
+ * matcher receives only the source and the Windows adapter rejects flags.
+ */
+export const WORKTREE_IGNORE_PATTERN = new RegExp(
+  `(?:^|/)(?:${WORKTREE_IGNORED_NAMES.map((name) => name.replace(/[.*+?^$()[\]{}|\\]/g, "\\$&")).join("|")})(?:/|$)`
+);
 
 /**
  * Top-level directories to exclude from the recursive stream at the OS level,
- * highest priority first — FSEvents takes at most eight. Every name must
- * already be covered by `WORKTREE_IGNORE_GLOBS`: an exclusion only stops churn
- * the globs would have discarded anyway, so nothing the user cares about goes
- * quiet. `.git` qualifies because the dedicated `fs.watch` handles, not this
- * stream, observe git state.
+ * highest priority first — FSEvents takes at most eight. Typed as ignored
+ * names because an exclusion may only stop churn `WORKTREE_IGNORE_PATTERN`
+ * would have discarded anyway, so nothing the user cares about goes quiet.
+ * `.git` qualifies because the dedicated `fs.watch` handles, not this stream,
+ * observe git state.
  */
-const WORKTREE_EXCLUSION_CANDIDATES = [
+const WORKTREE_EXCLUSION_CANDIDATES: readonly WorktreeIgnoredName[] = [
   "node_modules",
   ".git",
   "dist",
@@ -717,9 +730,9 @@ export class GitFileWatcher {
         // tracked status at all (#12235).
         this.handleWorktreeChange(events);
       },
-      // The globs stay: the exclusions cover only directories that existed
+      // The pattern stays: the exclusions cover only directories that existed
       // at subscribe time, only at the top level, and only eight of them.
-      { ignore: [...WORKTREE_IGNORE_GLOBS, ...exclusions] }
+      { ignore: [WORKTREE_IGNORE_PATTERN, ...exclusions] }
     )
       .then((sub) => {
         if (this.disposed) {
