@@ -236,11 +236,9 @@ test.describe.serial("Core: diff panel", () => {
   });
 
   test("] steps to the image, and both versions decode side by side", async () => {
-    // The file keys listen on the diff body, not the footer, so the key goes
-    // to the diff's own scroll region.
-    const region = diffDialog().getByRole("region", { name: MD_FILE, exact: true });
-    await region.focus();
-    await expect(region).toBeFocused();
+    // Focus is still on the Split radio in the toolbar: the file keys belong to
+    // the whole pane, not only its diff body.
+    await expect(layoutRadio("Split")).toBeFocused();
     await page.keyboard.press("]");
     await expect(positionIndicator()).toHaveText("3 of 3", { timeout: T_MEDIUM });
 
@@ -270,9 +268,12 @@ test.describe.serial("Core: diff panel", () => {
   });
 
   test("an edit on disk marks the diff stale, and Refresh draws the new hunk", async () => {
-    await diffDialog().getByRole("button", { name: "Previous file", exact: true }).click();
+    const previous = diffDialog().getByRole("button", { name: "Previous file", exact: true });
+    await previous.click();
     await expect(positionIndicator()).toHaveText("2 of 3", { timeout: T_MEDIUM });
-    await diffDialog().getByRole("button", { name: "Previous file", exact: true }).click();
+    // The key the button's tooltip names keeps working from the button.
+    await expect(previous).toBeFocused();
+    await page.keyboard.press("[");
     await expect(positionIndicator()).toHaveText("1 of 3", { timeout: T_MEDIUM });
     await expectTextHunks(["charlie revised", "foxtrot added"], "@@ -1,5 +1,6 @@");
     const banner = diffDialog()
