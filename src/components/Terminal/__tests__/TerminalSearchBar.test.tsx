@@ -751,22 +751,61 @@ describe("TerminalSearchBar", () => {
       expect(toggle.getAttribute("aria-pressed")).toBe("true");
     });
 
-    it("toggling whole word leaves the other persisted toggles alone", async () => {
-      useTerminalSearchHistoryStore.setState({ caseSensitive: true, regexEnabled: true });
+    it.each([
+      ["Match case", "caseSensitive"],
+      ["Use regular expression", "regexEnabled"],
+      ["Match whole word", "wholeWord"],
+    ] as const)(
+      "%s keeps the toggles another bar changed while this one was open",
+      async (label, key) => {
+        const mock = createMockManaged(true);
+        vi.mocked(terminalInstanceService.get).mockReturnValue(
+          mock as unknown as ReturnType<typeof terminalInstanceService.get>
+        );
+
+        renderSearchBar();
+        act(() => {
+          useTerminalSearchHistoryStore.setState({
+            caseSensitive: true,
+            regexEnabled: true,
+            wholeWord: true,
+            [key]: false,
+          });
+        });
+        await act(() => {
+          fireEvent.click(screen.getByLabelText(label));
+        });
+
+        expect(useTerminalSearchHistoryStore.getState()).toMatchObject({
+          caseSensitive: true,
+          regexEnabled: true,
+          wholeWord: true,
+        });
+      }
+    );
+
+    it("turning whole word off persists and searches without it", async () => {
+      useTerminalSearchHistoryStore.setState({ searches: ["recent"], wholeWord: true });
       const mock = createMockManaged(true);
       vi.mocked(terminalInstanceService.get).mockReturnValue(
         mock as unknown as ReturnType<typeof terminalInstanceService.get>
       );
 
-      renderSearchBar();
+      const { unmount } = renderSearchBar();
+      await act(async () => Promise.resolve());
       await act(() => {
         fireEvent.click(screen.getByLabelText("Match whole word"));
       });
 
-      const state = useTerminalSearchHistoryStore.getState();
-      expect(state.wholeWord).toBe(true);
-      expect(state.caseSensitive).toBe(true);
-      expect(state.regexEnabled).toBe(true);
+      expect(useTerminalSearchHistoryStore.getState().wholeWord).toBe(false);
+      expect(screen.getByLabelText("Match whole word").getAttribute("aria-pressed")).toBe("false");
+      const lastCall = mock.searchAddon.findNext.mock.calls.at(-1) as unknown[];
+      expect(lastCall[0]).toBe("recent");
+      expect(lastCall[1]).not.toHaveProperty("wholeWord", true);
+      unmount();
+
+      renderSearchBar();
+      expect(screen.getByLabelText("Match whole word").getAttribute("aria-pressed")).toBe("false");
     });
 
     it("searches the restored query with the persisted whole-word toggle", async () => {
@@ -835,7 +874,8 @@ describe("TerminalSearchBar", () => {
 
       expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(3);
       expect(writes).toHaveBeenCalledTimes(3);
-      expect(mock.searchAddon.findNext.mock.calls.at(-1)?.[1]).toMatchObject({
+      const lastCall = mock.searchAddon.findNext.mock.calls.at(-1) as unknown[];
+      expect(lastCall[1]).toMatchObject({
         caseSensitive: true,
         regex: true,
         wholeWord: true,

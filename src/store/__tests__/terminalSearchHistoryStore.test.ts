@@ -228,6 +228,41 @@ describe("terminalSearchHistoryStore cross-view write merge (#11351)", () => {
     expect(written.state.wholeWord).toBe(true);
   });
 
+  it("a stale view's toggle write keeps a sibling's whole word off", async () => {
+    const backing = installLocalStorage({
+      [STORAGE_KEY]: JSON.stringify({
+        version: 0,
+        state: { searches: [], caseSensitive: false, regexEnabled: false, wholeWord: true },
+      }),
+    });
+    const { useTerminalSearchHistoryStore: store } = await import("../terminalSearchHistoryStore");
+
+    const disk = readBlob(backing);
+    disk.state.wholeWord = false;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setToggles({ caseSensitive: true });
+
+    const written = readBlob(backing);
+    expect(written.state.caseSensitive).toBe(true);
+    expect(written.state.wholeWord).toBe(false);
+  });
+
+  it("turning whole word off writes it off", async () => {
+    const backing = installLocalStorage({
+      [STORAGE_KEY]: JSON.stringify({
+        version: 0,
+        state: { searches: [], caseSensitive: false, regexEnabled: false, wholeWord: true },
+      }),
+    });
+    const { useTerminalSearchHistoryStore: store } = await import("../terminalSearchHistoryStore");
+    expect(store.getState().wholeWord).toBe(true);
+
+    store.getState().setToggles({ wholeWord: false });
+
+    expect(readBlob(backing).state.wholeWord).toBe(false);
+  });
+
   it("a stale view's whole-word write lands without rewinding a sibling's other toggles", async () => {
     const backing = installLocalStorage({
       [STORAGE_KEY]: JSON.stringify({
