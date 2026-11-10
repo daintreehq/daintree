@@ -391,6 +391,57 @@ describe("ProjectCloneView", () => {
       expect(await screen.findByText("Sign in to GitHub")).toBeTruthy();
     });
 
+    it("uses the provider that matches the URL when several are registered", async () => {
+      m.getProviders.mockResolvedValue([
+        {
+          pluginId: "daintree.github",
+          contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+        },
+        {
+          pluginId: "acme.forge",
+          contribution: { id: "gitea", name: "Acme Gitea", matches: ["git.acme.test"] },
+        },
+      ]);
+      m.getCloneJob.mockResolvedValue(authFailure({ source: "https://git.acme.test/acme/w.git" }));
+      render(<ProjectCloneView project={project} />);
+
+      const signIn = await screen.findByRole("button", { name: "Sign in to Acme Gitea" });
+      await act(async () => {
+        fireEvent.click(signIn);
+      });
+
+      expect(screen.queryByText("Sign in to GitHub")).toBeNull();
+      expect(m.dispatch).toHaveBeenCalledWith(
+        "app.settings.openTab",
+        { tab: "code-forge", subtab: "acme.forge.gitea" },
+        { source: "user" }
+      );
+    });
+
+    it("drops the action when a retry fails for another reason, and restores it on auth again", async () => {
+      m.getCloneJob.mockResolvedValue(authFailure({ sequence: 1 }));
+      render(<ProjectCloneView project={project} />);
+      await screen.findByText("Sign in to GitHub");
+
+      act(() => push?.(snapshot({ sequence: 2, status: "running" })));
+      act(() =>
+        push?.(
+          snapshot({
+            sequence: 3,
+            status: "failed",
+            error: "Could not resolve host",
+            gitReason: "network-unavailable",
+            canRetry: true,
+          })
+        )
+      );
+      await screen.findByText("Could not resolve host");
+      expect(screen.queryByText("Sign in to GitHub")).toBeNull();
+
+      act(() => push?.(authFailure({ sequence: 4 })));
+      expect(await screen.findByText("Sign in to GitHub")).toBeTruthy();
+    });
+
     it("shows no action for a failure with another git reason", async () => {
       m.getCloneJob.mockResolvedValue(authFailure({ gitReason: "network-unavailable" }));
       render(<ProjectCloneView project={project} />);
