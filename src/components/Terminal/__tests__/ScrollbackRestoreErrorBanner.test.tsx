@@ -105,10 +105,10 @@ describe("ScrollbackRestoreErrorBanner", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("invokes onRestart with the terminal id when reset is clicked", () => {
+  it("invokes onRestart with the terminal id when restart is clicked", () => {
     const onRestart = vi.fn();
     renderBanner("error", { onRestart });
-    fireEvent.click(screen.getByRole("button", { name: /reset terminal/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart terminal" }));
     expect(onRestart).toHaveBeenCalledWith("t-1");
   });
 
@@ -119,9 +119,27 @@ describe("ScrollbackRestoreErrorBanner", () => {
     expect(onDismiss).toHaveBeenCalledWith("t-1");
   });
 
-  it("disables reset and shows aria-busy when isRestarting is true", () => {
+  it("names its one action Restart terminal in the label, accessible name and tooltip", () => {
+    renderBanner("error");
+    const button = screen.getByRole("button", { name: "Restart terminal" });
+    expect(button.textContent).toContain("Restart terminal");
+    expect(button.getAttribute("aria-label")).toBe("Restart terminal");
+    // The tooltip content renders inline under the mock, so it shows up as a
+    // second node carrying the same words.
+    expect(screen.getAllByText("Restart terminal").length).toBeGreaterThan(1);
+    expect(screen.queryByText(/reset terminal/i)).toBeNull();
+  });
+
+  it("wears the restart glyph, not the restore one", () => {
+    renderBanner("error");
+    const icon = screen.getByRole("button", { name: "Restart terminal" }).querySelector("svg");
+    expect(icon?.getAttribute("class")).toContain("lucide-rotate-cw");
+    expect(icon?.getAttribute("class")).not.toContain("lucide-rotate-ccw");
+  });
+
+  it("disables restart and shows aria-busy when isRestarting is true", () => {
     renderBanner("error", { isRestarting: true });
-    const button = screen.getByRole("button", { name: /reset terminal/i });
+    const button = screen.getByRole("button", { name: "Restart terminal" });
     // Loading keeps focus on the control (no native disabled) and blocks activation.
     expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(button.getAttribute("aria-busy")).toBe("true");

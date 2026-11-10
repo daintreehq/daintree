@@ -142,6 +142,7 @@ import {
 } from "./paneFocusRequest";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { isPtyPanel } from "@shared/types/panel";
+import { useScrollbackRestoreRestart } from "./useScrollbackRestoreRestart";
 import { useSessionLostBanner } from "./useSessionLostBanner";
 import { useWorktreeMoveBanner, resolveWorktreeMoveRoute } from "./useWorktreeMoveBanner";
 import { useTerminalInputBlock } from "@/hooks/useHostConnection";
@@ -1225,6 +1226,11 @@ function TerminalPaneComponent({
     inputTracker.reset();
   };
 
+  // The scrollback banner is the one restart surface that can land on a live
+  // agent, so it asks first; the banners for a process that already failed or
+  // exited keep `handleRestart` (#16622).
+  const handleScrollbackRestoreRestart = useScrollbackRestoreRestart(id, handleRestart);
+
   const handleStartWithoutPluginTools = () => {
     void restartTerminal(id, { allowMissingPluginTools: true });
     inputTracker.reset();
@@ -1796,7 +1802,7 @@ function TerminalPaneComponent({
               terminalId={id}
               error={scrollbackRestoreError}
               onDismiss={handleDismissScrollbackRestoreError}
-              onRestart={handleRestart}
+              onRestart={handleScrollbackRestoreRestart}
               isRestarting={isRestarting}
             />
           )}

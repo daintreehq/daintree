@@ -1,4 +1,4 @@
-import { RotateCcw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { sanitizeErrorText } from "@/utils/errorText";
 import type { TerminalScrollbackRestoreError } from "@/types";
@@ -57,13 +57,13 @@ export function ScrollbackRestoreErrorBanner({
       role="status"
       actions={[
         {
-          id: "reset",
-          label: "Reset terminal",
-          icon: RotateCcw,
+          id: "restart",
+          label: "Restart terminal",
+          icon: RotateCw,
           variant: "primary",
           onClick: () => onRestart(terminalId),
-          title: "Restart the terminal",
-          ariaLabel: "Reset terminal",
+          title: "Restart terminal",
+          ariaLabel: "Restart terminal",
           loading: isRestarting,
         },
       ]}
