@@ -920,6 +920,49 @@ describe("bondi", () => {
   });
 });
 
+describe("unfilled controls on the empty grid (#16723)", () => {
+  /**
+   * `#panel-grid` is the empty workbench as well as the gutter between panes, and
+   * the canvas home's quick-launch chips and recipe cards sit on it as resting
+   * `ChoiceCard`s: no fill, `border-default` as their only edge. A theme whose
+   * `surfaces.grid` is a mid-tone close to its border lifts the field through
+   * `panel-grid-bg`, as bondi does. The rule, not the hex.
+   */
+  const LIFTED_FIELD_THEMES = ["bondi", "svalbard", "hokkaido", "serengeti"] as const;
+  // Not a WCAG floor (the labels identify every control): within reach of the
+  // 1.32:1 the same edge draws on daintree's grid, where it reads as a control.
+  const EDGE_MIN_CONTRAST = 1.28;
+  const GUTTER_BELOW_PANEL_MIN_CONTRAST = 1.1;
+
+  it.each(LIFTED_FIELD_THEMES)("draws the resting edge and keeps the panes framed on %s", (id) => {
+    const scheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === id)!;
+    const extensions = (scheme.extensions ?? {}) as Record<string, string | undefined>;
+    const field =
+      extensions["panel-grid-bg"] ?? extensions["terminal-grid-bg"] ?? scheme.tokens["surface-grid"];
+    // `#panel-grid` paints this as background-color, where a gradient is invalid.
+    expect(field, `${id} grid field`).toMatch(/^#[0-9a-f]{6}$/i);
+
+    const border = scheme.tokens["border-default"];
+    const borderAlpha = parseRgba(border);
+    const edge = borderAlpha ? blendOverBackground(borderAlpha.hex, field, borderAlpha.opacity) : border;
+    const edgeRatio = contrastRatio(edge, field);
+    expect(
+      edgeRatio,
+      `${id}: border-default (${border}) is ${edgeRatio.toFixed(3)}:1 on the empty grid (${field})`
+    ).toBeGreaterThanOrEqual(EDGE_MIN_CONTRAST);
+
+    const panel = scheme.tokens["surface-panel"];
+    const gutterRatio = contrastRatio(field, panel);
+    expect(
+      gutterRatio,
+      `${id}: the gutter (${field}) is ${gutterRatio.toFixed(3)}:1 against surface-panel (${panel})`
+    ).toBeGreaterThanOrEqual(GUTTER_BELOW_PANEL_MIN_CONTRAST);
+    expect(hexToOklch(field)!.l, `${id}: the gutter must sit below the panes`).toBeLessThan(
+      hexToOklch(panel)!.l
+    );
+  });
+});
+
 describe("border-input", () => {
   /**
    * `border-input` — the resting boundary of `Input` and `Textarea`.

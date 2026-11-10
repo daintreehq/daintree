@@ -159,6 +159,12 @@ export const theme: BuiltInThemeSource = {
     // and focused share this border; panel-selected-bg keeps its fallback.
     "panel-focus-border": "rgba(68,144,177,0.85)",
     "panel-focus-shadow": "0 0 0 1px rgba(68,144,177,0.25), 0 1px 2px rgba(51,80,105,0.10)",
+    // The sidebar's glacial tone, not surfaces.grid: the same element is the
+    // empty workbench, where resting ChoiceCards draw only their border-default
+    // edge, and on #C2D9E6 that edge measured 1.08:1. Here it clears 1.29:1 and
+    // panes keep a 1.14:1 step above the gutter. Flat, because `#panel-grid`
+    // paints this as background-color.
+    "panel-grid-bg": "#DEEAF1",
     // Unselected caps sit a clear step below the field (sidebar-grid midpoint)
     // so the focused pane's bright cap reads side by side.
     "panel-header-bg": "#D0E1EB",

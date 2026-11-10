@@ -235,7 +235,7 @@ However, the empty grid area (when no panels are open) uses a special override:
 --color-grid-bg: var(--panel-grid-bg, var(--terminal-grid-bg, var(--theme-surface-grid)));
 ```
 
-Themes can set `panel-grid-bg` to make the empty grid lighter than the structural grid surface. **Bondi sets this to `#FFFFFF`** — pure white, so the empty state feels bright and airy rather than gray. All light themes now have this extension. The legacy `terminal-grid-bg` variable is still supported as a fallback for custom themes.
+Themes can set `panel-grid-bg` to make the empty grid lighter than the structural grid surface. The same element is the gutter between panes, so the value is a plain colour that stays below `surface-panel`. Bondi, Svalbard and Serengeti set it to their sidebar tone and Hokkaido to its toolbar tone: at their mid-tone `surfaces.grid`, the canvas home's unfilled chips and recipe cards, whose only edge is `border-default`, barely drew. The legacy `terminal-grid-bg` variable is still supported as a fallback for custom themes.
 
 ### Panel Arrangement
 
