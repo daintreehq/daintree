@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
+import { getAppThemeCssVariables } from "@shared/theme";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { useUIStore } from "@/store/uiStore";
@@ -962,6 +963,28 @@ describe("ThemeBrowser navigation contract", () => {
 
         press("ArrowDown");
         expect(previewId()).toBe(dark[2]!.id);
+      });
+
+      // An older deferred paint holds a valid claim on the screen until a newer
+      // write supersedes it, so landing on the row has to write, even though the
+      // theme it paints is the one already showing.
+      it("paints the project's theme when the cursor lands on its row", async () => {
+        const [globalScheme, project] = schemesOf("dark");
+        useAppThemeStore.setState({ projectSchemeId: project!.id });
+        render(<Harness />);
+        const projectVars = getAppThemeCssVariables(project!);
+        const globalVars = getAppThemeCssVariables(globalScheme!);
+        const probe = Object.keys(projectVars).find(
+          (name) => projectVars[name] !== globalVars[name]
+        )!;
+        document.documentElement.style.removeProperty(probe);
+
+        clickRow(project!.name);
+        await act(async () => {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        });
+
+        expect(document.documentElement.style.getPropertyValue(probe)).toBe(projectVars[probe]);
       });
 
       it("continues from that row after it is clicked", () => {
