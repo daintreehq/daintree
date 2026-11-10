@@ -282,6 +282,7 @@ describe("releaseCachedOwner", () => {
       expect((thrown as { userMessage?: string }).userMessage).toContain('"P"');
     }
     expect(pvm.releaseCachedView).toHaveBeenCalledTimes(3);
+    expect(pvm.getCachedViewReleaseBlock).toHaveBeenCalledWith("p");
     expect(getAppWebContentsMock).not.toHaveBeenCalled();
     expect(win.show).not.toHaveBeenCalled();
   });

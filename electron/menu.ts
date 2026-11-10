@@ -1191,7 +1191,8 @@ async function showProjectHeldElsewhere(
 async function openLocalFolderInHostWindow(
   directoryPath: string,
   targetWindow: BrowserWindow,
-  cliAvailabilityService?: CliAvailabilityService
+  cliAvailabilityService?: CliAvailabilityService,
+  options?: { showInOtherWindow?: boolean }
 ): Promise<void> {
   try {
     const project = await projectStore.addProject(directoryPath);
@@ -1203,8 +1204,9 @@ async function openLocalFolderInHostWindow(
         projectViewManager: pvm,
       });
       // One only keeping it cached lets it go once the switch home has its
-      // turn, in the same tick as this window's claim (#13291).
-      if (owner && owner.state !== "cached") {
+      // turn, in the same tick as this window's claim (#13291), unless the
+      // person chose to see it there (#16724).
+      if (owner && (owner.state !== "cached" || options?.showInOtherWindow === true)) {
         redirectToProjectOwner(owner, project);
         return;
       }
@@ -1243,7 +1245,7 @@ export async function handleDirectoryOpen(
   if (targetWindow.isDestroyed()) return;
   supersedePendingHostSwitch(targetWindow.id);
   if (isWindowOnRemoteHost(targetWindow.id)) {
-    await openLocalFolderInHostWindow(directoryPath, targetWindow, cliAvailabilityService);
+    await openLocalFolderInHostWindow(directoryPath, targetWindow, cliAvailabilityService, options);
     return;
   }
   const requestedAt = Date.now();
@@ -1253,7 +1255,12 @@ export async function handleDirectoryOpen(
     // A host switch that landed while the folder was being added put this
     // window on a host; it comes back the way any such open does.
     if (isWindowOnRemoteHost(targetWindow.id)) {
-      await openLocalFolderInHostWindow(directoryPath, targetWindow, cliAvailabilityService);
+      await openLocalFolderInHostWindow(
+        directoryPath,
+        targetWindow,
+        cliAvailabilityService,
+        options
+      );
       return;
     }
 

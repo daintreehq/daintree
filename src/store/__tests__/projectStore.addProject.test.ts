@@ -452,19 +452,19 @@ describe("projectStore addProject", () => {
       projectClientMock.add.mockResolvedValueOnce(REPO);
       const userMessage = '"repo" is open in another window (assistant).';
       const details = { code: "PROJECT_HELD_ELSEWHERE", reason: "assistant", showable: true };
+      const thrown = new Error(
+        `[AppError|PROJECT_HELD_ELSEWHERE|${encodeURIComponent(userMessage)}|#${encodeURIComponent(JSON.stringify(details))}] Another window's cached view of repo can't be released`
+      );
+      // ActionService decodes the throw once, then hands that same object back as details.
+      const { isClientAppError } = await import("@/utils/clientAppError");
+      expect(isClientAppError(thrown)).toBe(true);
       actionServiceDispatchMock.mockResolvedValueOnce({
         ok: false,
-        error: {
-          code: "EXECUTION_ERROR",
-          message: "Another window's cached view of repo can't be released",
-          // ActionService keeps the decoded throw as the error's details.
-          details: new Error(
-            `[AppError|PROJECT_HELD_ELSEWHERE|${encodeURIComponent(userMessage)}|#${encodeURIComponent(JSON.stringify(details))}] Another window's cached view of repo can't be released`
-          ),
-        },
+        error: { code: "EXECUTION_ERROR", message: thrown.message, details: thrown },
       });
 
       await useProjectStore.getState().addProjectByPath("/tmp/repo", { disposition: "new" });
+      expect(projectClientMock.switch).not.toHaveBeenCalled();
 
       expect(notifyMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -475,7 +475,7 @@ describe("projectStore addProject", () => {
       );
       actionServiceDispatchMock.mockClear();
       clickToastAction();
-      await vi.waitFor(() => expect(projectClientMock.switch).toHaveBeenCalled());
+      await vi.waitFor(() => expect(projectClientMock.switch).toHaveBeenCalledTimes(1));
       expect(projectClientMock.switch.mock.calls[0]![0]).toBe(REPO.id);
       expect(projectClientMock.switch.mock.calls[0]![2]).toMatchObject({ showInOtherWindow: true });
       expect(actionServiceDispatchMock).not.toHaveBeenCalled();

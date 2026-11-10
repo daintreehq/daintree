@@ -975,6 +975,7 @@ describe("File menu layout (#12473)", () => {
         })
       );
       expect(openFolderInNewWindowMock).toHaveBeenCalledTimes(2);
+      expect(openFolderInNewWindowMock).toHaveBeenLastCalledWith(RECENT.path, mockBrowserWindow.id);
       expect(projectStoreMock.addProject).not.toHaveBeenCalled();
       errSpy.mockRestore();
     });
@@ -2398,12 +2399,77 @@ describe("handleDirectoryOpen failure dialogs", () => {
       expect(opts.cancelId).toBe(1);
     });
 
-    it("offers a retry only for a hold that clears on its own", async () => {
-      projectStoreMock.addProject.mockRejectedValue(cachedViewBusy("alpha", "mcp"));
+    it("brings the window keeping it to the project only once the person chooses that", async () => {
+      const PROJECT = { id: "project-alpha", name: "alpha", path: FOLDER };
+      const ownerWindow = {
+        isDestroyed: () => false,
+        isMinimized: () => false,
+        show: vi.fn(),
+        focus: vi.fn(),
+      };
+      const ownerAppWebContents = {
+        isDestroyed: () => false,
+        isLoadingMainFrame: () => false,
+        send: vi.fn(),
+        once: vi.fn(),
+      };
+      const liveView = { webContents: { isDestroyed: () => false } };
+      const ownerManager = {
+        getActiveProjectId: () => "elsewhere",
+        getOutgoingBridgeProjectId: () => null,
+        getAllViews: () => [
+          { projectId: "elsewhere", view: liveView },
+          { projectId: PROJECT.id, view: liveView },
+        ],
+        releaseCachedView: vi.fn(() => false),
+        getCachedViewReleaseBlock: vi.fn(() => "assistant" as const),
+      };
+      windowRefMock.getWindowRegistry.mockReturnValue({
+        getByWindowId: () => undefined,
+        all: () => [
+          {
+            windowId: 4,
+            browserWindow: ownerWindow,
+            services: { projectViewManager: ownerManager },
+          },
+        ],
+      });
+      getAppWebContentsMock.mockImplementation((win) =>
+        win === ownerWindow ? ownerAppWebContents : mockWebContents
+      );
+      projectStoreMock.addProject.mockResolvedValue(PROJECT);
+      vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({
+        response: 0,
+        checkboxChecked: false,
+      });
 
       await handleDirectoryOpen(FOLDER, targetWindowStub());
 
-      expect(shownDialog().buttons).toEqual(["Try again", "Cancel"]);
+      // The first open met the hold and said so, moving nothing.
+      expect(shownDialog().buttons).toEqual(["Show in other window", "Cancel"]);
+      expect(ownerManager.releaseCachedView).toHaveBeenCalledTimes(1);
+      // The choice had that window's own renderer switch, its cached view kept.
+      expect(ownerAppWebContents.send).toHaveBeenCalledExactlyOnceWith(CHANNELS.MENU_ACTION, {
+        actionId: "project.switch",
+        args: { projectId: PROJECT.id },
+      });
+      expect(ownerWindow.focus).toHaveBeenCalled();
+      expect(projectStoreMock.addProject).toHaveBeenCalledTimes(2);
+    });
+
+    it("offers a retry only for a hold that clears on its own, and retries the same folder", async () => {
+      projectStoreMock.addProject
+        .mockRejectedValueOnce(cachedViewBusy("alpha", "mcp"))
+        .mockRejectedValueOnce(new Error("stop here"));
+      vi.mocked(dialog.showMessageBox)
+        .mockResolvedValueOnce({ response: 0, checkboxChecked: false })
+        .mockResolvedValueOnce({ response: 1, checkboxChecked: false });
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      const first = vi.mocked(dialog.showMessageBox).mock.calls[0]?.[1] as { buttons: string[] };
+      expect(first.buttons).toEqual(["Try again", "Cancel"]);
+      expect(projectStoreMock.addProject).toHaveBeenNthCalledWith(2, FOLDER);
     });
 
     it("offers nothing to press for a lasting hold it can't show from here", async () => {
@@ -3001,6 +3067,65 @@ describe("a window on a remote host", () => {
 
     expect(windowHosts.switchWindowToLocal).not.toHaveBeenCalled();
     expect(ownerWindow.focus).toHaveBeenCalled();
+  });
+
+  it("shows a project another window keeps for good in that window, when asked from a new-window open (#16724)", async () => {
+    projectStoreMock.getAllProjects.mockReturnValue([RECENT]);
+    projectStoreMock.addProject.mockResolvedValue({ id: RECENT.id, path: RECENT.path });
+    openFolderInNewWindowMock.mockRejectedValueOnce(cachedViewBusy(RECENT.name, "assistant"));
+    vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+    const ownerWindow = {
+      id: 4,
+      isDestroyed: () => false,
+      getTitle: () => "Daintree",
+      isMinimized: () => false,
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const ownerAppWebContents = {
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => false,
+      send: vi.fn(),
+      once: vi.fn(),
+    };
+    const liveView = { webContents: { isDestroyed: () => false } };
+    const ownerManager = {
+      getActiveProjectId: () => "elsewhere",
+      getOutgoingBridgeProjectId: () => null,
+      getAllViews: () => [
+        { projectId: "elsewhere", view: liveView },
+        { projectId: RECENT.id, view: liveView },
+      ],
+      releaseCachedView: vi.fn(() => false),
+    };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getPrimary: () => undefined,
+      getByWindowId: () => undefined,
+      all: () => [
+        { windowId: 4, browserWindow: ownerWindow, services: { projectViewManager: ownerManager } },
+      ],
+    });
+    getAppWebContentsMock.mockImplementation((win) =>
+      win === ownerWindow ? ownerAppWebContents : mockWebContents
+    );
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const recent = fileMenuItem("Open Recent").submenu as Electron.MenuItemConstructorOptions[];
+
+    await click(recent[0]!, { metaKey: true });
+
+    expect(dialog.showMessageBox).toHaveBeenCalledExactlyOnceWith(
+      mockBrowserWindow,
+      expect.objectContaining({ buttons: ["Show in other window", "Cancel"] })
+    );
+    // That window's own renderer runs the switch; this one stays on its host.
+    expect(ownerAppWebContents.send).toHaveBeenCalledExactlyOnceWith(CHANNELS.MENU_ACTION, {
+      actionId: "project.switch",
+      args: { projectId: RECENT.id },
+    });
+    expect(ownerWindow.focus).toHaveBeenCalled();
+    expect(ownerManager.releaseCachedView).not.toHaveBeenCalled();
+    expect(windowHosts.switchWindowToLocal).not.toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 
   it("opens a folder with no repository in a window on this machine, never the host window's git prompt", async () => {

@@ -2845,6 +2845,10 @@ describe("project switch/reopen redirects to the window that owns the project (#
             details: { reason: "assistant", showable: true },
           });
         }
+        expect(
+          (setup.ownerPvm as unknown as { getCachedViewReleaseBlock: ReturnType<typeof vi.fn> })
+            .getCachedViewReleaseBlock
+        ).toHaveBeenCalledWith(TARGET.id);
         expect(setup.senderPvm.switchTo).not.toHaveBeenCalled();
         expect(setup.ownerPvm.switchTo).not.toHaveBeenCalled();
         expect(setup.ownerAppWebContents.send).not.toHaveBeenCalled();

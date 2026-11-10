@@ -5246,6 +5246,8 @@ describe("ProjectViewManager — releasing a cached view to another window (#132
     expect(mgr.getCachedViewReleaseBlock("proj-a")).toBe("assistant");
     liveTerminals.delete("t-help-a");
     expect(mgr.getCachedViewReleaseBlock("proj-a")).toBe("mcp");
+    dispatching.delete("proj-a");
+    expect(mgr.getCachedViewReleaseBlock("proj-a")).toBeNull();
   });
 });
 

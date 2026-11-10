@@ -468,6 +468,25 @@ describe("AppError details allowlist", () => {
     ).toBeUndefined();
   });
 
+  it("keeps every hold reason, shown or not", () => {
+    for (const reason of [
+      "assistant",
+      "unsaved-work",
+      "mcp",
+      "flush",
+      "dictation",
+      "unavailable",
+    ]) {
+      for (const showable of [true, false]) {
+        expect(pickAppErrorDetails({ code: "PROJECT_HELD_ELSEWHERE", reason, showable })).toEqual({
+          code: "PROJECT_HELD_ELSEWHERE",
+          reason,
+          showable,
+        });
+      }
+    }
+  });
+
   it("rebuilds required plugin tools details, dropping extra fields and unknown states", () => {
     const serialized = serializeError(
       Object.assign(new Error("x"), {

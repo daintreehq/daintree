@@ -1430,14 +1430,14 @@ describe("a project another window keeps cached and can't let go of (#16724)", (
       expect(useProjectStore.getState().isSwitching).toBe(false);
       // Nothing asked main to move the other window until the person chose it.
       expect(projectClientMock[clientMethod]).toHaveBeenCalledTimes(1);
-      expect(projectClientMock[clientMethod].mock.calls[0]![2]).not.toMatchObject({
-        showInOtherWindow: true,
-      });
+      const firstOptions = projectClientMock[clientMethod].mock.calls[0]![2];
+      expect(firstOptions).toMatchObject({ trace: expect.any(Object) });
+      expect(firstOptions.showInOtherWindow).not.toBe(true);
     });
 
     it("asks main for that window only on the action, and says nothing more once it goes there", async () => {
       const { notify } = await import("@/lib/notify");
-      const { toast } = await runRefused(heldRejection("unsaved-work"));
+      const { useProjectStore, toast } = await runRefused(heldRejection("unsaved-work"));
       projectClientMock[clientMethod].mockResolvedValueOnce({
         outcome: "activated-elsewhere",
         project: projectB,
@@ -1451,6 +1451,11 @@ describe("a project another window keeps cached and can't let go of (#16724)", (
       expect(projectClientMock[clientMethod].mock.calls[1]![2]).toMatchObject({
         showInOtherWindow: true,
       });
+      // The other window took it, so this one is left as it was, not busy.
+      await vi.waitFor(() => expect(useProjectStore.getState().isSwitching).toBe(false));
+      expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+      expect(useProjectStore.getState().isLoading).toBe(false);
+      expect(useProjectStore.getState().currentProject).toEqual(projectA);
       expect(notify).toHaveBeenCalledTimes(1);
     });
 
@@ -1463,9 +1468,10 @@ describe("a project another window keeps cached and can't let go of (#16724)", (
         projectClientMock[clientMethod].mockResolvedValueOnce(undefined);
         void toast.actions![0]!.onClick();
         await vi.waitFor(() => expect(projectClientMock[clientMethod]).toHaveBeenCalledTimes(2));
-        expect(projectClientMock[clientMethod].mock.calls[1]![2]).not.toMatchObject({
-          showInOtherWindow: true,
-        });
+        const [target, , retryOptions] = projectClientMock[clientMethod].mock.calls[1]!;
+        expect(target).toBe(projectB.id);
+        expect(retryOptions).toMatchObject({ trace: expect.any(Object) });
+        expect(retryOptions.showInOtherWindow).not.toBe(true);
       }
     );
 
