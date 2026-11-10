@@ -261,6 +261,24 @@ describe("restoreFleetAfterCrash", () => {
     expect(deps.enableSaves).toHaveBeenCalledTimes(1);
   });
 
+  it("stays read-only when a picker carried background projects no window here can take", async () => {
+    const restoreCanopyWindow = vi.fn();
+    const { deps, createWindow } = harness({
+      readManifest: () => ({
+        hadManifest: false,
+        records: [{ projectId: null, backgroundProjectIds: ["x"] }],
+        canopyWindow: true,
+      }),
+      restoreCanopyWindow,
+    });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(createWindow).not.toHaveBeenCalled();
+    expect(deps.adoptBackgroundProjects).not.toHaveBeenCalled();
+    expect(deps.enableSaves).not.toHaveBeenCalled();
+  });
+
   it("opens no Canopy window the manifest didn't have open", async () => {
     const restoreCanopyWindow = vi.fn();
     const { deps } = harness({ restoreCanopyWindow });
