@@ -2193,17 +2193,19 @@ describe("PluginManagerView", () => {
       await findPluginRowButton("Plugin00");
       input.focus();
       fireEvent.change(input, { target: { value: "Plugin01" } });
-      // The search announcer, not the install banner's step announcer that
-      // shares the view.
-      const status = within(
-        screen.getByRole("group", { name: "Filter plugins" }).parentElement!
-      ).getByRole("status", { hidden: true });
-      await waitFor(() => expect(status.textContent).toBe("1 matching plugin"), {
+      // The master column's announcers, not the install banner's step
+      // announcer that shares the view. The search count shares the column
+      // with the install outcome's region (#16654).
+      const spoken = () =>
+        within(screen.getByRole("group", { name: "Filter plugins" }).parentElement!)
+          .getAllByRole("status", { hidden: true })
+          .map((region) => region.textContent);
+      await waitFor(() => expect(spoken()).toContain("1 matching plugin"), {
         timeout: 2000,
       });
       expect(document.activeElement).toBe(input);
       fireEvent.change(input, { target: { value: "zzzz" } });
-      await waitFor(() => expect(status.textContent).toBe("No matching plugins"), {
+      await waitFor(() => expect(spoken()).toContain("No matching plugins"), {
         timeout: 2000,
       });
     });
