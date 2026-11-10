@@ -147,14 +147,27 @@ vi.mock("@/components/ui/EmptyState", () => ({
 
 // Exposes the resolved index so the identity resolution is observable from the
 // sidebar as well as from the footer position indicator.
+// Its one row claims `v` for its own file the way the real row button does:
+// `preventDefault()` without stopping propagation.
 const sidebarSelect = vi.fn<(index: number) => void>();
+const { sidebarRowViewed } = vi.hoisted(() => ({ sidebarRowViewed: vi.fn() }));
 vi.mock("@/components/FileViewer/DiffFileSidebar", () => ({
   DiffFileSidebar: (props: { files: DiffChangeSetEntry[]; currentIndex: number }) => (
     <div
       data-testid="diff-sidebar-mock"
       data-current-index={props.currentIndex}
       data-file-count={props.files.length}
-    />
+    >
+      <button
+        type="button"
+        data-testid="diff-sidebar-row"
+        onKeyDown={(event) => {
+          if (event.key !== "v") return;
+          event.preventDefault();
+          sidebarRowViewed();
+        }}
+      />
+    </div>
   ),
 }));
 
@@ -244,13 +257,13 @@ function seedPanel(overrides: Record<string, unknown>): void {
   panelsById[PANEL_ID] = { id: PANEL_ID, kind: "diff", diffSource: "working-tree", ...overrides };
 }
 
-function paneElement(isFocused = true) {
+function paneElement(isFocused = true, location: "grid" | "dialog" = "dialog") {
   return (
     <DiffPane
       id={PANEL_ID}
       title="pane"
       isFocused={isFocused}
-      location="dialog"
+      location={location}
       worktreeId={WORKTREE_ID}
       onFocus={() => {}}
       onClose={() => {}}
@@ -258,8 +271,8 @@ function paneElement(isFocused = true) {
   );
 }
 
-function renderPane(isFocused = true) {
-  return render(paneElement(isFocused));
+function renderPane(isFocused = true, location: "grid" | "dialog" = "dialog") {
+  return render(paneElement(isFocused, location));
 }
 
 /** The stepping shortcuts ride bubbling from inside the pane, not the document. */
@@ -284,6 +297,7 @@ beforeEach(() => {
   });
   viewedKeys.clear();
   viewerOverlay.open = false;
+  sidebarRowViewed.mockReset();
   isImageDiffCandidateMock.mockReset();
   isImageDiffCandidateMock.mockReturnValue(false);
   preferences.diffShowFileList = true;
@@ -566,18 +580,21 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     );
   }
 
-  it("keeps stepping from the footer buttons the keys are advertised on", () => {
-    seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
-    renderPane();
-    const next = screen.getByRole("button", { name: "Next file" });
-    fireEvent.click(next);
-    setDiffPanelFileMock.mockReset();
+  it.each(["grid", "dialog"] as const)(
+    "keeps stepping from the footer buttons the keys are advertised on (%s)",
+    (location) => {
+      seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
+      renderPane(true, location);
+      const next = screen.getByRole("button", { name: "Next file" });
+      fireEvent.click(next);
+      setDiffPanelFileMock.mockReset();
 
-    fireEvent.keyDown(next, { key: "]" });
-    expectStepTo(2);
-    fireEvent.keyDown(screen.getByRole("button", { name: "Previous file" }), { key: "[" });
-    expectStepTo(0);
-  });
+      fireEvent.keyDown(next, { key: "]" });
+      expectStepTo(2);
+      fireEvent.keyDown(screen.getByRole("button", { name: "Previous file" }), { key: "[" });
+      expectStepTo(0);
+    }
+  );
 
   it("toggles Viewed and steps from the footer's Viewed checkbox", () => {
     seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet });
@@ -593,16 +610,66 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     expectStepTo(1);
   });
 
-  it("steps from the pane root, where focus lands when the pane is focused", () => {
+  it.each(["grid", "dialog"] as const)(
+    "steps from the pane root, where focus lands when the pane is focused (%s)",
+    (location) => {
+      seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
+      renderPane(true, location);
+      const root = screen.getByTestId("panel-root");
+      root.focus();
+
+      fireEvent.keyDown(root, { key: "]" });
+      expectStepTo(2);
+      fireEvent.keyDown(root, { key: "[" });
+      expectStepTo(0);
+    }
+  );
+
+  it("leaves a key the focused control already claimed to that control", () => {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet });
+    renderPane();
+
+    fireEvent.keyDown(screen.getByTestId("diff-sidebar-row"), { key: "v" });
+
+    // The row marked its own file; the pane's current file is left alone.
+    expect(sidebarRowViewed).toHaveBeenCalledTimes(1);
+    expect(toggleViewedMock).not.toHaveBeenCalled();
+  });
+
+  it("lets the keys type into text fields anywhere in the pane", () => {
     seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
     renderPane();
-    const root = screen.getByTestId("panel-root");
-    root.focus();
+    const search = document.createElement("input");
+    search.type = "search";
+    const note = document.createElement("textarea");
+    screen.getByTestId("diff-pane-body").appendChild(search);
+    screen.getByTestId("diff-pane-footer").appendChild(note);
 
-    fireEvent.keyDown(root, { key: "]" });
+    for (const field of [search, note]) {
+      for (const key of ["[", "]", "v"]) {
+        // Not cancelled, so the character still reaches the field.
+        expect(fireEvent.keyDown(field, { key })).toBe(true);
+      }
+    }
+
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+    expect(toggleViewedMock).not.toHaveBeenCalled();
+  });
+
+  it("follows the pane's focus as it leaves and returns", () => {
+    seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
+    const { rerender } = renderPane();
+    const press = () =>
+      fireEvent.keyDown(screen.getByRole("button", { name: "Next file" }), { key: "]" });
+
+    rerender(paneElement(false));
+    press();
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+
+    rerender(paneElement(true));
+    press();
+    expect(setDiffPanelFileMock).toHaveBeenCalledTimes(1);
     expectStepTo(2);
-    fireEvent.keyDown(root, { key: "[" });
-    expectStepTo(0);
   });
 
   it("steps from the header toolbar's controls", () => {
