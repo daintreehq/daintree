@@ -251,7 +251,9 @@ async function openCard(page: Page, range?: Range): Promise<void> {
 }
 
 async function collapseCard(page: Page): Promise<void> {
-  await page.locator('button:has-text("Collapse")').click({ timeout: 5000 });
+  await page
+    .locator('button[aria-expanded="true"][aria-label^="Project pulse"]')
+    .click({ timeout: 5000 });
   await page.locator(STRIP).waitFor({ state: "visible", timeout: 5000 });
   await settle(page, 300);
 }

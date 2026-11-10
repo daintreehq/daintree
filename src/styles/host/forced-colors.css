@@ -59,6 +59,21 @@
     color: CanvasText !important;
   }
 
+  /* The quick-launch chips mirror the toolbar's agent buttons, so their brand
+     marks take button ink here as the toolbar's do; left alone the dark
+     theme's pastels sat on a light Canvas under 3:1. Same for the resume row's
+     agent mark, the other button that leads with one. */
+  [data-canvas-home] :is(button, [role="button"]) .brand-mark {
+    color: ButtonText;
+  }
+
+  /* Every other control on the canvas home is a 1px ButtonText frame here, so
+     the launch anchor takes the 2px the `contrast` variant takes elsewhere:
+     with backgrounds discarded, weight is the only thing left to lead with. */
+  [data-canvas-home] [data-launcher-anchor] {
+    border-width: 2px;
+  }
+
   /* A separator is a 1px background, which forced colours paint as Canvas, so
      a menu's sections ran together. Drawn as a border it survives. */
   [role="menu"] [role="separator"] {

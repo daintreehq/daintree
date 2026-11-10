@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useId, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { PulseRangeDays } from "@shared/types";
-import { usePulseStore, useProjectStore, PULSE_MAX_RETRIES } from "@/store";
+import { usePulseStore, PULSE_MAX_RETRIES } from "@/store";
 import { cn } from "@/lib/utils";
 import { XCircle, RefreshCw, GitBranch, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,6 @@ import {
   type SegmentedRadioOption,
 } from "@/components/ui/SegmentedRadioGroup";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
-import { Activity } from "@/components/icons";
 import { PulseHeatmap, getPulseHeatLevelBackground } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import { PulseHealthSignals } from "./PulseHealthSignals";
@@ -55,7 +54,7 @@ function PulseSkeleton({ className }: { className?: string }) {
         className
       )}
     >
-      <div className="pulse-card-header animate-pulse-delayed px-4 py-3 border-b border-border-default flex items-center justify-between">
+      <div className="pulse-card-header animate-pulse-delayed px-3 py-3 border-b border-border-default flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div
             data-skeleton-bone=""
@@ -72,7 +71,7 @@ function PulseSkeleton({ className }: { className?: string }) {
         </div>
       </div>
 
-      <div className="p-4 space-y-4 animate-pulse-delayed overflow-x-hidden">
+      <div className="px-3 py-4 space-y-4 animate-pulse-delayed overflow-x-hidden">
         <div
           className="grid grid-flow-col"
           style={{
@@ -201,7 +200,6 @@ function PulseHeatmapLegend({ descriptionId }: { descriptionId: string }) {
 }
 
 export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProps) {
-  const projectName = useProjectStore((s) => s.currentProject?.name);
   const { health, loading: healthLoading, refresh: refreshHealth } = useProjectHealth();
   // Filtered once and handed to both the coach line and the chips, so the two
   // can't contradict each other about whether forge data is usable.
@@ -219,7 +217,9 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       }))
     );
 
-  const title = projectName ? `${projectName} Project Pulse` : "Project Pulse";
+  // The strip's own row heads the card, already naming the pulse beside the
+  // project identity above it, so the card names only what it plots.
+  const title = "Activity";
   // Stable id pair for the legend (aria-describedby link from the heatmap grid
   // to a screen-reader description; the visual legend is aria-hidden because
   // each cell already exposes its value via aria-label).
@@ -414,9 +414,10 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       <span role="status" aria-live="polite" className="sr-only">
         {refreshAnnouncement}
       </span>
-      <div className="pulse-card-header px-4 py-3 border-b border-border-default flex items-center justify-between">
+      {/* `px-3` inside the 1px edge: the card opens under the strip's row, so
+          its content starts on the canvas home's glyph line, not a third one. */}
+      <div className="pulse-card-header px-3 py-3 border-b border-border-default flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Activity className="w-4 h-4 text-text-secondary" />
           <span className="text-sm font-medium text-text-primary">{title}</span>
           {isLoading && <Spinner size="xs" className="text-text-secondary" />}
         </div>
@@ -442,7 +443,9 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             }}
             // Not `disabled`: pressing it would drop keyboard focus to the page.
             aria-disabled={isLoading}
-            className="pulse-control aria-disabled:cursor-not-allowed"
+            // `-mr-1.5` takes back the icon button's own padding, so the glyph
+            // ends on the right edge the strip's chevron above it ends on.
+            className="pulse-control -mr-1.5 aria-disabled:cursor-not-allowed"
             aria-label="Refresh"
           >
             <SpinningIcon icon={RefreshCw} active={isLoading} className="w-3 h-3" />
@@ -450,7 +453,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         </div>
       </div>
 
-      <div className="p-4 space-y-4">
+      <div className="px-3 py-4 space-y-4">
         {/* The card obeys the column (it used to be `w-fit`, and a 60-day row
             of cells made the lowest-priority band the widest on the surface).
             The week-column calendar fits that width at every range; the

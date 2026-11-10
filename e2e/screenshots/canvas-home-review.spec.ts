@@ -532,12 +532,17 @@ test("canvas home review — every state of the empty grid", async () => {
     // hundred pixels on click, pushing everything below it down.
     await step("pulse", async () => {
       await page.locator(PULSE_STRIP).click({ timeout: 8000 });
+      // The toggle re-renders under the pointer that clicked it, so park the
+      // pointer or the capture is a hover state, not the expanded one.
+      await page.mouse.move(2, 2);
       await settle(page, 1200);
       await snapCanvas(page, "04-pulse-expanded");
+      // Not swallowed: a collapse that silently fails leaves every later
+      // state photographed with the card open.
       await page
-        .locator('button:has-text("Collapse")')
-        .click({ timeout: 5000 })
-        .catch(() => {});
+        .locator('button[aria-expanded="true"][aria-label^="Project pulse"]')
+        .click({ timeout: 5000 });
+      await page.mouse.move(2, 2);
       await settle(page, 500);
     });
 
