@@ -26,6 +26,7 @@ import { useTabLoad } from "@/hooks";
 import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { ErrorRetryRow } from "@/components/Settings/auditLogParts";
 import { logError } from "@/utils/logger";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { pluralize } from "@/lib/pluralize";
 
 const GENERAL_ID = "general";
@@ -618,6 +619,11 @@ function GenericCredentialForm({
                       setResult(null);
                       setErrorMessage(null);
                     }
+                  }}
+                  onKeyDown={(e) => {
+                    if (!isEnterToSubmit(e)) return;
+                    e.preventDefault();
+                    void handleSave();
                   }}
                   placeholder={field.placeholder}
                   aria-label={field.label}

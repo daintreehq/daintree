@@ -24,6 +24,7 @@ import { useSettingsTabValidation } from "@/components/Settings/SettingsValidati
 import { useTabLoad } from "@/hooks";
 import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { logError } from "@/utils/logger";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
 
@@ -331,6 +332,12 @@ export function GitHubSettingsTab() {
                   type="password"
                   value={githubToken}
                   onValueChange={handleTokenChange}
+                  onKeyDown={(e) => {
+                    if (!isEnterToSubmit(e)) return;
+                    e.preventDefault();
+                    if (isTesting || isValidating || isClearing || isImporting) return;
+                    void handleSaveToken();
+                  }}
                   placeholder={
                     githubConfig?.hasToken
                       ? "Enter new token to replace"
