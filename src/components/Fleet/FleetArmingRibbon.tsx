@@ -481,6 +481,25 @@ export function FleetArmingRibbon(): ReactElement | null {
     [setPreviewArmedIds, clearPreviewArmedIds]
   );
 
+  // A preset replaces the fleet, so one matching nothing would disband it. The
+  // rows disable at a count of 0, but the count is live while the menu is
+  // open: re-read it when the row is chosen so a stale render can't empty the
+  // armed set. "Clear selection" is the only row that means that.
+  const armStatePreset = useCallback(
+    (preset: FleetArmStatePreset, scope: FleetArmScope) => {
+      if (computePreviewByState(preset, scope).size === 0) return;
+      armByState(preset, scope, false);
+    },
+    [armByState, computePreviewByState]
+  );
+  const armAllPreset = useCallback(
+    (scope: FleetArmScope) => {
+      if (computePreviewAll(scope).size === 0) return;
+      armAll(scope);
+    },
+    [armAll, computePreviewAll]
+  );
+
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId) ?? null;
   // Selection-menu preset counts, derived inside the selector so the ribbon
   // re-renders only when a count changes rather than on every panel-map
@@ -619,8 +638,9 @@ export function FleetArmingRibbon(): ReactElement | null {
     <>
       <DropdownMenuLabel>Select by state</DropdownMenuLabel>
       <DropdownMenuItem
+        disabled={presetCounts.waitingCurrent === 0}
         onSelect={() => {
-          armByState("waiting", "current", false);
+          armStatePreset("waiting", "current");
         }}
         {...previewItemHandlers(() => computePreviewByState("waiting", "current"))}
         aria-label={`All waiting — this worktree, ${presetCounts.waitingCurrent}`}
@@ -630,8 +650,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         <DropdownMenuMeta>{presetCounts.waitingCurrent}</DropdownMenuMeta>
       </DropdownMenuItem>
       <DropdownMenuItem
+        disabled={presetCounts.waitingAll === 0}
         onSelect={() => {
-          armByState("waiting", "all", false);
+          armStatePreset("waiting", "all");
         }}
         {...previewItemHandlers(() => computePreviewByState("waiting", "all"))}
         aria-label={`All waiting — all worktrees, ${presetCounts.waitingAll}`}
@@ -641,8 +662,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         <DropdownMenuMeta>{presetCounts.waitingAll}</DropdownMenuMeta>
       </DropdownMenuItem>
       <DropdownMenuItem
+        disabled={presetCounts.workingCurrent === 0}
         onSelect={() => {
-          armByState("working", "current", false);
+          armStatePreset("working", "current");
         }}
         {...previewItemHandlers(() => computePreviewByState("working", "current"))}
         aria-label={`All working — this worktree, ${presetCounts.workingCurrent}`}
@@ -652,8 +674,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         <DropdownMenuMeta>{presetCounts.workingCurrent}</DropdownMenuMeta>
       </DropdownMenuItem>
       <DropdownMenuItem
+        disabled={presetCounts.workingAll === 0}
         onSelect={() => {
-          armByState("working", "all", false);
+          armStatePreset("working", "all");
         }}
         {...previewItemHandlers(() => computePreviewByState("working", "all"))}
         aria-label={`All working — all worktrees, ${presetCounts.workingAll}`}
@@ -664,8 +687,9 @@ export function FleetArmingRibbon(): ReactElement | null {
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem
+        disabled={presetCounts.eligibleCurrent === 0}
         onSelect={() => {
-          armAll("current");
+          armAllPreset("current");
         }}
         {...previewItemHandlers(() => computePreviewAll("current"))}
         aria-label={`All in this worktree, ${presetCounts.eligibleCurrent}`}
