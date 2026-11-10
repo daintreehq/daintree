@@ -86,6 +86,14 @@ async function load(dir: string): Promise<void> {
     // with the user's work. Core ML was 3x slower at 6-9x the memory.
     intraOpNumThreads: 2,
     interOpNumThreads: 1,
+    // Memory-pattern planning is built for repeated input shapes, and every
+    // read here has its own (its token and line counts). Left on, the reader's
+    // footprint after 1,000 varying screens came out up to 15 MB higher,
+    // depending on screen order, for identical outputs and read time. The
+    // arena stays: reads ran about 50% slower without it. Measured on macOS
+    // arm64 with the 17M INT8 model and onnxruntime-node 1.31.1; re-measure
+    // when either changes.
+    enableMemPattern: false,
   });
   if (destroyed) {
     await session.release();
