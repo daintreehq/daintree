@@ -63,6 +63,8 @@ vi.mock("@/components/ui/ConfirmDialog", async () => {
   };
 });
 
+import type { SearchableProject } from "@/hooks/projectSwitcher/types";
+
 const { ProjectSwitcherConfirmDialogs } = await import("../ProjectSwitcherConfirmDialogs");
 
 const followUp = {
@@ -139,18 +141,31 @@ describe("Save as project follow-up", () => {
 
 describe("Remove project confirm", () => {
   function renderRemove(isActive: boolean) {
-    const project = {
+    const project: SearchableProject = {
       id: "p1",
       name: "retry-queue",
       path: "/Users/me/code/retry-queue",
+      emoji: "🚀",
+      lastOpened: 0,
+      status: "closed",
       isActive,
+      isBackground: false,
+      isMissing: false,
+      isPinned: false,
+      frecencyScore: 0,
+      displayPath: "retry-queue",
+      section: "other",
       processCount: 0,
       activeAgentCount: 0,
       waitingAgentCount: 0,
+      blockedAgentCount: 0,
+      completedAgentCount: 0,
+      unacknowledgedCompletedAgentCount: 0,
+      snoozedAgentCount: 0,
     };
     render(
       <ProjectSwitcherConfirmDialogs
-        removeConfirmProject={project as never}
+        removeConfirmProject={project}
         onRemoveConfirmClose={vi.fn()}
         onConfirmRemove={vi.fn()}
         paletteInputRef={createRef<HTMLInputElement>()}

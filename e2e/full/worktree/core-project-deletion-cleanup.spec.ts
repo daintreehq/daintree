@@ -259,9 +259,7 @@ test.describe.serial("Deletion Cleanup: Background project removal", () => {
 
     await removeProjectViaSwitcher(window, PROJECT_B);
 
-    const dialog = window
-      .getByRole("alertdialog", { name: /^Remove '.+'\?$/ })
-      .last();
+    const dialog = window.getByRole("alertdialog", { name: /^Remove '.+'\?$/ }).last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
     await expect(dialog.getByRole("button", { name: "Remove project" })).toBeVisible();
     // The confirmation names the project being removed.
@@ -291,9 +289,7 @@ test.describe.serial("Deletion Cleanup: Background project removal", () => {
 
     await removeProjectViaSwitcher(window, PROJECT_B);
 
-    const dialog = window
-      .getByRole("alertdialog", { name: /^Remove '.+'\?$/ })
-      .last();
+    const dialog = window.getByRole("alertdialog", { name: /^Remove '.+'\?$/ }).last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
     await dialog.getByRole("button", { name: "Remove project" }).click();
