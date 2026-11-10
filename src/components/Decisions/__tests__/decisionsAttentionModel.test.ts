@@ -133,6 +133,7 @@ describe("Mark handled's confirmation (#16638)", () => {
   it("asks first only while the answer can still be resumed or sent on", () => {
     expect(handledNeedsConfirm({ canResume: true, canReassign: true })).toBe(true);
     expect(handledNeedsConfirm({ canResume: false, canReassign: true })).toBe(true);
+    expect(handledNeedsConfirm({ canResume: true, canReassign: false })).toBe(true);
     // A delivery that may already have gone in offers neither: Mark handled is the way out.
     expect(handledNeedsConfirm({ canResume: false, canReassign: false })).toBe(false);
   });
