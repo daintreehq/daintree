@@ -6,13 +6,18 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuMeta,
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { AssistantPicker } from "./AssistantPicker";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
-import { NewSessionWithAgentLabel } from "@/components/HelpPanel/NewSessionWithAgentLabel";
+import {
+  NewSessionWithAgentLabel,
+  SessionCeilingReason,
+  announceSessionCeiling,
+} from "@/components/HelpPanel/NewSessionWithAgentLabel";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { cn } from "@/lib/utils";
@@ -21,12 +26,14 @@ import { useFocusStore } from "@/store/focusStore";
 import {
   useHelpPanelStore,
   selectHasRoomForSession,
+  selectOpenSlots,
   selectSlotTerminalIds,
 } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { isPtyPanel } from "@shared/types/panel";
+import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
 import { useAssistantAgentChoices } from "@/hooks/useAssistantAgentChoices";
@@ -226,6 +233,8 @@ export function ToolbarAssistantButton({
   const scratchId = useScratchStore((s) => s.currentScratch?.id ?? null);
   const workspaceId = projectId ?? scratchId;
   const canOpenSession = useHelpPanelStore((s) => selectHasRoomForSession(s, workspaceId));
+  const openSessionCount = useHelpPanelStore((s) => selectOpenSlots(s).length);
+  const atSessionCeiling = !canOpenSession && openSessionCount >= MAX_ASSISTANT_SLOTS;
 
   const pip = describePip(mcp);
   const agentPip = describeAgentPip(unreadPipState);
@@ -246,7 +255,11 @@ export function ToolbarAssistantButton({
 
   return (
     <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
-      <ContextMenu>
+      <ContextMenu
+        onOpenChange={(open) => {
+          if (open && hasAgentChoice && atSessionCeiling) announceSessionCeiling();
+        }}
+      >
         <ContextMenuTrigger asChild>
           <span className="inline-flex">
             <Tooltip>
@@ -327,6 +340,7 @@ export function ToolbarAssistantButton({
               <ContextMenuItem
                 key={agentId}
                 disabled={!canOpenSession}
+                className={atSessionCeiling ? "data-[disabled]:opacity-100" : undefined}
                 onSelect={() => {
                   void actionService.dispatch(
                     "help.newSessionWithAgent",
@@ -335,7 +349,10 @@ export function ToolbarAssistantButton({
                   );
                 }}
               >
-                <NewSessionWithAgentLabel agentId={agentId} />
+                <NewSessionWithAgentLabel agentId={agentId} parked={atSessionCeiling} />
+                {atSessionCeiling && (
+                  <SessionCeilingReason open={openSessionCount} meta={ContextMenuMeta} />
+                )}
               </ContextMenuItem>
             ))}
         </ContextMenuContent>
