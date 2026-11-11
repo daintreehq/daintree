@@ -319,6 +319,12 @@ vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
 }));
 
+const rendererMemorySignalsMock = vi.hoisted(() => ({
+  sampleBlinkMemory: vi.fn(),
+  releaseRendererMemory: vi.fn(),
+}));
+vi.mock("../rendererMemorySignals.js", () => rendererMemorySignalsMock);
+
 vi.mock("../../ipc/handlers/projectCrud/index.js", () => ({
   getProjectStatsService: vi.fn(),
 }));
@@ -1034,6 +1040,49 @@ describe("initGlobalServices task ordering", () => {
       setStopAppMetricsMonitor(previousStop);
     }
   });
+
+  it.each([
+    ["a window registry", true],
+    ["no window registry", false],
+  ])(
+    "hands the monitor's Blink sample and reclaim levers every window, with %s (#16810)",
+    async (_, withRegistry) => {
+      const previousStop = getStopAppMetricsMonitor();
+      setStopAppMetricsMonitor(null);
+      vi.mocked(startAppMetricsMonitor).mockClear();
+      rendererMemorySignalsMock.sampleBlinkMemory.mockClear();
+      rendererMemorySignalsMock.releaseRendererMemory.mockClear();
+
+      try {
+        const windows = [{ id: "w1" }, { id: "w2" }];
+        const fakeRegistry = withRegistry
+          ? ({ all: () => windows, size: windows.length } as unknown as WindowRegistry)
+          : undefined;
+        await initGlobalServices(fakeRegistry);
+        registeredTaskRuns.get("app-metrics-monitor")!();
+        const actions = vi.mocked(startAppMetricsMonitor).mock.calls[0]![0]!;
+
+        actions.sampleBlinkMemory!();
+        actions.releaseRendererMemory!();
+
+        if (withRegistry) {
+          expect(rendererMemorySignalsMock.sampleBlinkMemory).toHaveBeenCalledWith(windows);
+        } else {
+          expect(rendererMemorySignalsMock.sampleBlinkMemory).not.toHaveBeenCalled();
+        }
+        expect(rendererMemorySignalsMock.releaseRendererMemory).toHaveBeenCalledWith(
+          withRegistry ? windows : []
+        );
+        expect(broadcastToRendererMock).not.toHaveBeenCalledWith(
+          CHANNELS.EVENTS_PUSH,
+          expect.objectContaining({ name: "window:reclaim-memory" })
+        );
+      } finally {
+        getStopAppMetricsMonitor()?.();
+        setStopAppMetricsMonitor(previousStop);
+      }
+    }
+  );
 
   it("wires the plugin work hold into automatic sleep before it starts (#14093)", async () => {
     idleAutoCloseServiceMock.setPluginWorkProvider.mockClear();

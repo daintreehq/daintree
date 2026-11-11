@@ -489,9 +489,22 @@ export function isWithheldFromView(
 }
 
 export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
+  broadcastToRendererExcept(null, channel, ...args);
+}
+
+/**
+ * {@link broadcastToRenderer} that leaves out the local views `skip` names.
+ * Remote views still hear it: whether they can take it is their host's call.
+ */
+export function broadcastToRendererExcept(
+  skip: ((wc: WebContents) => boolean) | null,
+  channel: string,
+  ...args: unknown[]
+): void {
   for (const wc of getAllAppWebContents()) {
     if (!wc.isDestroyed()) {
       if (isWithheldFromView(wc.id, channel, args)) continue;
+      if (skip?.(wc)) continue;
       try {
         wc.send(channel, ...args);
       } catch {
