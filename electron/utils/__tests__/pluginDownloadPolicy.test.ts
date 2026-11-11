@@ -701,7 +701,11 @@ describe("fetchWithPrivateHostGuard — over Electron's net stack (#16855)", () 
       [ASSET]: { status: 200, headers: { "content-type": "application/octet-stream" }, body: "PK" },
     });
 
-    const result = await fetchWithPrivateHostGuard(createManualRedirectFetch(net.request), RELEASE, {});
+    const result = await fetchWithPrivateHostGuard(
+      createManualRedirectFetch(net.request),
+      RELEASE,
+      {}
+    );
 
     expect(result.ok && result.url).toBe(ASSET);
     expect(result.ok && (await result.response.text())).toBe("PK");
@@ -716,7 +720,11 @@ describe("fetchWithPrivateHostGuard — over Electron's net stack (#16855)", () 
   it.each([
     ["an http URL", "http://release-assets.githubusercontent.com/a.dntr", "insecure-protocol"],
     ["a loopback address", "https://127.0.0.1/a.dntr", "private-redirect"],
-    ["a link-local metadata address", "https://169.254.169.254/latest/meta-data", "private-redirect"],
+    [
+      "a link-local metadata address",
+      "https://169.254.169.254/latest/meta-data",
+      "private-redirect",
+    ],
     ["a URL with credentials", "https://user:pass@cdn.example.com/a.dntr", "private-redirect"],
   ])("refuses a redirect to %s at its hop, without connecting to it", async (_, target, reason) => {
     const net = new FakeElectronNet({
@@ -724,7 +732,11 @@ describe("fetchWithPrivateHostGuard — over Electron's net stack (#16855)", () 
       [target]: { status: 200, body: "PK" },
     });
 
-    const result = await fetchWithPrivateHostGuard(createManualRedirectFetch(net.request), RELEASE, {});
+    const result = await fetchWithPrivateHostGuard(
+      createManualRedirectFetch(net.request),
+      RELEASE,
+      {}
+    );
 
     expect(result).toEqual({ ok: false, reason });
     expect(net.connected).toEqual([RELEASE]);
@@ -779,7 +791,11 @@ describe("fetchWithPrivateHostGuard — over Electron's net stack (#16855)", () 
       [ASSET]: { status: 200, body: "PK" },
     });
 
-    const result = await fetchWithPrivateHostGuard(createManualRedirectFetch(net.request), RELEASE, {});
+    const result = await fetchWithPrivateHostGuard(
+      createManualRedirectFetch(net.request),
+      RELEASE,
+      {}
+    );
 
     expect(result).toEqual({ ok: false, reason: "private-host" });
     expect(net.connected).toEqual([RELEASE]);

@@ -48,7 +48,8 @@ export class FakeClientRequest extends EventEmitter {
   }
 
   followRedirect(): void {
-    if (!this.followCb) throw new Error("followRedirect() called, but was not waiting for a redirect");
+    if (!this.followCb)
+      throw new Error("followRedirect() called, but was not waiting for a redirect");
     this.followCb();
   }
 
@@ -141,7 +142,9 @@ export class FakeElectronNet {
         redirect: init.redirect ?? "follow",
       }) as unknown as FakeClientRequest;
       request.on("response", (message: Readable & { statusCode: number }) => {
-        resolve(new Response(Readable.toWeb(message) as ReadableStream, { status: message.statusCode }));
+        resolve(
+          new Response(Readable.toWeb(message) as ReadableStream, { status: message.statusCode })
+        );
       });
       request.on("error", reject);
       request.end();
