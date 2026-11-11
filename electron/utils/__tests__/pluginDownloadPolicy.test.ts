@@ -11,6 +11,8 @@ vi.mock("node:dns/promises", () => {
 
 import dns from "node:dns/promises";
 import { acceptedMime, dntrSuffixOk, fetchWithPrivateHostGuard } from "../pluginDownloadPolicy.js";
+import { createManualRedirectFetch } from "../netManualRedirectFetch.js";
+import { FakeElectronNet } from "./helpers/fakeElectronNet.js";
 
 const mockLookup = dns.lookup as unknown as ReturnType<typeof vi.fn>;
 
@@ -668,5 +670,78 @@ describe("fetchWithPrivateHostGuard — cancellation during the DNS check", () =
       ok: true,
       value: { ok: true, response: ok, url: "https://stall.example/p.dntr" },
     });
+  });
+});
+
+describe("fetchWithPrivateHostGuard — over Electron's net stack (#16855)", () => {
+  const RELEASE =
+    "https://github.com/daintreehq/plugin-continue-session/releases/download/v0.1.1/daintreehq.continue-session-0.1.1.dntr";
+  const ASSET =
+    "https://release-assets.githubusercontent.com/github-production-release-asset/1/abc?sp=r&sig=x";
+
+  beforeEach(() => {
+    mockLookup.mockReset();
+    resolveAllTo("140.82.112.3");
+  });
+
+  it("can't get past a redirect with Electron's own net.fetch", async () => {
+    const net = new FakeElectronNet({
+      [RELEASE]: { redirect: ASSET },
+      [ASSET]: { status: 200, body: "PK" },
+    });
+
+    await expect(
+      fetchWithPrivateHostGuard(net.electronFetch as never, RELEASE, {})
+    ).rejects.toThrow("Redirect was cancelled");
+  });
+
+  it("follows a GitHub Release asset redirect through the manual-redirect fetch", async () => {
+    const net = new FakeElectronNet({
+      [RELEASE]: { redirect: ASSET },
+      [ASSET]: { status: 200, headers: { "content-type": "application/octet-stream" }, body: "PK" },
+    });
+
+    const result = await fetchWithPrivateHostGuard(createManualRedirectFetch(net.request), RELEASE, {});
+
+    expect(result.ok && result.url).toBe(ASSET);
+    expect(result.ok && (await result.response.text())).toBe("PK");
+    // Each hop is its own request; the redirecting one never followed itself.
+    expect(net.connected).toEqual([RELEASE, ASSET]);
+    expect(net.requests.map((r) => [r.options.redirect, r.aborted])).toEqual([
+      ["manual", true],
+      ["manual", false],
+    ]);
+  });
+
+  it.each([
+    ["an http URL", "http://release-assets.githubusercontent.com/a.dntr", "insecure-protocol"],
+    ["a loopback address", "https://127.0.0.1/a.dntr", "private-redirect"],
+    ["a link-local metadata address", "https://169.254.169.254/latest/meta-data", "private-redirect"],
+    ["a URL with credentials", "https://user:pass@cdn.example.com/a.dntr", "private-redirect"],
+  ])("refuses a redirect to %s at its hop, without connecting to it", async (_, target, reason) => {
+    const net = new FakeElectronNet({
+      [RELEASE]: { redirect: target },
+      [target]: { status: 200, body: "PK" },
+    });
+
+    const result = await fetchWithPrivateHostGuard(createManualRedirectFetch(net.request), RELEASE, {});
+
+    expect(result).toEqual({ ok: false, reason });
+    expect(net.connected).toEqual([RELEASE]);
+  });
+
+  it("refuses a redirect to a host that resolves privately, without connecting to it", async () => {
+    mockLookup.mockImplementation(async (host: string) => [
+      { address: host === "github.com" ? "140.82.112.3" : "10.0.0.7", family: 4 },
+    ]);
+    const net = new FakeElectronNet({
+      [RELEASE]: { redirect: ASSET },
+      [ASSET]: { status: 200, body: "PK" },
+    });
+
+    const result = await fetchWithPrivateHostGuard(createManualRedirectFetch(net.request), RELEASE, {});
+
+    expect(result).toEqual({ ok: false, reason: "private-host" });
+    expect(net.connected).toEqual([RELEASE]);
   });
 });
