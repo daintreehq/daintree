@@ -4,10 +4,8 @@ import type {
   ScheduledAssistantLaunchResult,
 } from "./ScheduledRunLauncher.js";
 
-const REFUSALS: Record<"no-project" | "launch-failed", string> = {
-  "no-project": "The project couldn't be found.",
-  "launch-failed": "The Daintree Assistant couldn't start.",
-};
+const NO_PROJECT = "The project couldn't be found.";
+const LAUNCH_FAILED = "The Daintree Assistant couldn't start.";
 
 /**
  * Starts the project's Daintree Assistant for a schedule's run (#16169), the
@@ -47,5 +45,5 @@ export async function launchScheduledAssistantLive(
   );
   if (result.status === "started") return { status: "started" };
   if (result.reason === "no-slot") return { status: "no-session" };
-  return { status: "failed", message: REFUSALS[result.reason] };
+  return { status: "failed", message: result.reason === "no-project" ? NO_PROJECT : LAUNCH_FAILED };
 }

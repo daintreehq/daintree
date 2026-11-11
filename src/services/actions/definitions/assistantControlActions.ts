@@ -4,6 +4,7 @@ import {
   AgentReadQuotaResultSchema,
   AssistantListArgsSchema,
   AssistantListResultSchema,
+  AssistantResumeArgsSchema,
   AssistantStartArgsSchema,
   AssistantStartResultSchema,
 } from "@shared/types/assistantControl";
@@ -17,8 +18,8 @@ function mainProcessOnly(id: string): () => Promise<never> {
 }
 
 /**
- * One assistant finding and starting another (#13496), and this machine's
- * quota, registered here for manifest metadata only — schema, description,
+ * One assistant finding, starting and resuming another (#13496, #16763), and
+ * this machine's quota, registered here for manifest metadata only — schema, description,
  * tier and audit. Execution lives in the MCP CallTool handler
  * (electron/services/mcp-server/sessionServer.ts), for an assistant caller
  * alone: this machine's own, or another machine's through its Shell's
@@ -72,6 +73,30 @@ export function registerAssistantControlActions(actions: ActionRegistry): void {
       openWorldHint: false,
     },
     run: mainProcessOnly("assistant.start"),
+  }));
+
+  actions.set("assistant.resume", () => ({
+    id: "assistant.resume",
+    title: "Resume a kept assistant",
+    description:
+      "Reopen the conversation a stopped Daintree Assistant slot keeps, in that slot with no window, returned as the assistant listing shows it. Refused, never started fresh, when it can't be. Not ready still means it runs.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["assistant", "resume", "kept", "lane", "host"],
+    palette: { mode: "hidden" },
+    argsSchema: AssistantResumeArgsSchema,
+    resultSchema: AssistantStartResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+    run: mainProcessOnly("assistant.resume"),
   }));
 
   actions.set("agent.readQuota", () => ({

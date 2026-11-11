@@ -6,9 +6,11 @@ import {
   ASSISTANT_TARGET_REFUSALS,
   type AssistantEntry,
   type AssistantListResult,
+  type AssistantResumeArgs,
   type AssistantStartArgs,
   type AssistantStartResult,
   type GlobalAssistantEntry,
+  type KeptAssistantSlot,
 } from "../../../shared/types/assistantControl.js";
 import type { AgentId, AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
@@ -52,11 +54,17 @@ import {
 } from "../mcp-server/resourceOwnership.js";
 import type {
   HelpSessionStartedBy,
+  KeptLane,
+  LaneResumeClaim,
   RunningLane,
   RunningLaneSession,
 } from "../HelpSessionService.js";
 import type { PtyClient } from "../PtyClient.js";
-import type { AssistantLaunchRequest, AssistantLaunchResult } from "./assistantLaunch.js";
+import type {
+  AssistantLaunchRefusal,
+  AssistantLaunchRequest,
+  AssistantLaunchResult,
+} from "./assistantLaunch.js";
 import type { WhenBusy } from "./GlobalWorkerSteer.js";
 import { HoldRefusedError, type WorkerSteerQueue } from "./WorkerSteerQueue.js";
 
@@ -160,6 +168,10 @@ export interface AssistantTerminalControlDeps {
   /** Raw bytes, as a person's keystrokes arrive, filed under `inputOwner`. */
   write(terminalId: string, data: string, inputOwner: string): void;
   launch(request: AssistantLaunchRequest): Promise<AssistantLaunchResult>;
+  /** The project's stopped lanes keeping a conversation (#16763), running ones included. */
+  keptLanes(projectId: string): KeptLane[];
+  /** `HelpSessionService.claimLaneResume`: one resume of a kept lane at a time. */
+  claimLaneResume(projectId: string, slot: number): Promise<LaneResumeClaim>;
   /** A project's name as its person set it, for the stamp on a message to the global (#16410). */
   projectName(projectId: string): string | null;
   /** Ends the session, which kills its PTY. */
@@ -291,6 +303,54 @@ function reachesGlobal(caller: AssistantCaller): boolean {
   return caller.kind === "local" && !isGlobalAssistantId(caller.projectId);
 }
 
+function startRefusalMessage(reason: AssistantLaunchRefusal, slot: number | undefined): string {
+  switch (reason) {
+    case "no-project":
+      return "This machine has no such project. Nothing was started.";
+    case "no-slot":
+      return slot !== undefined
+        ? `Slot ${slot} already runs an assistant. Nothing was started; use it, or start in another slot.`
+        : `No slot of this project is free: each runs an assistant or keeps a stopped conversation. Nothing was started; use a running one, or reopen a kept one with 'assistant.resume'.`;
+    case "kept":
+      return `Slot ${slot} keeps a stopped conversation. Nothing was started; reopen it with 'assistant.resume', or start in a vacant slot from 'assistant.list'.`;
+    default:
+      return "The assistant couldn't be started here, or that agent can't run as one. Nothing is running for it.";
+  }
+}
+
+const RESUME_CLAIM_REFUSALS: Record<
+  Exclude<LaneResumeClaim["status"], "claimed">,
+  (slot: number) => string
+> = {
+  none: (slot) =>
+    `Slot ${slot} keeps no conversation to resume. Nothing was started; 'assistant.list' names the kept slots.`,
+  occupied: (slot) =>
+    `Slot ${slot} already runs an assistant. Nothing was started; 'assistant.list' gives its terminal.`,
+  resuming: (slot) =>
+    `Slot ${slot} is already being resumed. Nothing more was started; list the assistants again shortly.`,
+};
+
+function resumeRefusalMessage(
+  reason: AssistantLaunchRefusal,
+  slot: number,
+  agentId: string
+): string {
+  switch (reason) {
+    case "no-project":
+      return "This machine has no such project. Nothing was started.";
+    case "no-slot":
+      return `Slot ${slot} was taken while it was being resumed. Nothing more was started; 'assistant.list' shows what runs there.`;
+    case "agent-unavailable":
+      return `Slot ${slot}'s agent, ${agentId}, can't start here with no window. Nothing was started; its conversation stays kept.`;
+    case "folder-moved":
+      return `Slot ${slot}'s conversation ran in a folder its lane no longer uses, so it can't be reopened there. Nothing was started; its conversation stays kept.`;
+    case "withdrawn":
+      return `Slot ${slot}'s conversation was cleared while it was being resumed. Nothing is running for it.`;
+    default:
+      return `Slot ${slot}'s conversation couldn't be reopened. Nothing is running for it; its conversation stays kept.`;
+  }
+}
+
 const GLOBAL_SEND_ONLY_MESSAGE =
   "The global Assistant is the person's own conversation, so a project's assistant may only send to it and read its status. Nothing was done.";
 
@@ -420,10 +480,16 @@ export class AssistantTerminalControl {
       if (entry) assistants.push(entry);
     }
     assistants.sort((a, b) => a.slot - b.slot);
+    // A running lane keeps its pointer too; only a stopped one is kept.
+    const keptSlots: KeptAssistantSlot[] = this.deps
+      .keptLanes(caller.projectId)
+      .filter((lane) => !occupied.has(lane.slot))
+      .map(({ slot, agentId, capturedAt }) => ({ slot, agentId, capturedAt }));
+    const kept = new Set(keptSlots.map((lane) => lane.slot));
     const vacantSlots = Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter(
-      (slot) => !occupied.has(slot)
+      (slot) => !occupied.has(slot) && !kept.has(slot)
     );
-    return { projectId: caller.projectId, assistants, vacantSlots, global };
+    return { projectId: caller.projectId, assistants, vacantSlots, keptSlots, global };
   }
 
   /** The global Assistant's lane as a listing shows it; null while its run has no generation. */
@@ -442,25 +508,77 @@ export class AssistantTerminalControl {
       ...(args.slot !== undefined ? { slot: args.slot } : {}),
       ...(args.agentId !== undefined ? { agentId: args.agentId } : {}),
       startedBy: startedByCaller(caller),
+      // A start never replaces the conversation a stopped lane keeps (#16763).
+      preserveKept: true,
     });
     if (result.status === "refused") {
-      const message =
-        result.reason === "no-project"
-          ? "This machine has no such project. Nothing was started."
-          : result.reason === "no-slot"
-            ? args.slot !== undefined
-              ? `Slot ${args.slot} already runs an assistant. Nothing was started; use it, or start in another slot.`
-              : `This project already runs ${MAX_ASSISTANT_SLOTS} assistants, its limit. Nothing was started; use one of them.`
-            : "The assistant couldn't be started here, or that agent can't run as one. Nothing is running for it.";
-      throw new AssistantTargetError(ASSISTANT_TARGET_REFUSALS.startRefused, message);
+      throw new AssistantTargetError(
+        ASSISTANT_TARGET_REFUSALS.startRefused,
+        startRefusalMessage(result.reason, args.slot)
+      );
     }
+    return this.started(caller, result);
+  }
+
+  /**
+   * Reopen the conversation a stopped lane keeps (#16763), with no view, in
+   * its own slot, on the agent and in the folder it ran in, through the claim
+   * a view's resume takes, so the two never resume one lane at once. Refused,
+   * never started fresh, when it can't be: the lane keeps its pointer.
+   */
+  async resume(caller: AssistantCaller, args: AssistantResumeArgs): Promise<AssistantStartResult> {
+    const { slot } = args;
+    const claim = await this.deps.claimLaneResume(caller.projectId, slot);
+    if (claim.status !== "claimed") {
+      throw new AssistantTargetError(
+        ASSISTANT_TARGET_REFUSALS.resumeRefused,
+        RESUME_CLAIM_REFUSALS[claim.status](slot)
+      );
+    }
+    let result: AssistantLaunchResult;
+    try {
+      if (!claim.agentSessionId) {
+        throw new AssistantTargetError(
+          ASSISTANT_TARGET_REFUSALS.resumeRefused,
+          `Slot ${slot} never recorded its conversation's id, so it can't be reopened. Nothing was started; the person can find it under Resume a past session… in the Assistant panel.`
+        );
+      }
+      result = await this.deps.launch({
+        projectId: caller.projectId,
+        slot,
+        agentId: claim.agentId,
+        startedBy: startedByCaller(caller),
+        resume: { agentSessionId: claim.agentSessionId, cwd: claim.cwd, claimId: claim.claimId },
+        stillWanted: () => claim.holds(),
+      });
+    } finally {
+      await claim.release().catch(() => {});
+    }
+    if (result.status === "refused") {
+      throw new AssistantTargetError(
+        ASSISTANT_TARGET_REFUSALS.resumeRefused,
+        resumeRefusalMessage(result.reason, slot, claim.agentId)
+      );
+    }
+    return this.started(caller, result);
+  }
+
+  /** A run `launch` started, as the assistant listing shows it, once a send would go in. */
+  private async started(
+    caller: AssistantCaller,
+    result: Extract<AssistantLaunchResult, { status: "started" }>
+  ): Promise<AssistantStartResult> {
+    const lane = this.deps
+      .listRunningLanes()
+      .find((running) => running.projectId === caller.projectId && running.slot === result.slot);
     const target: AssistantTarget = {
       scope: "project",
       projectId: caller.projectId,
       slot: result.slot,
       sessionId: result.sessionId,
       terminalId: result.terminalId,
-      attached: false,
+      // A view of the project may already have taken it over.
+      attached: lane !== undefined && lane.attached !== false,
       startedBy: startedByCaller(caller),
     };
     const settled = result.ready ? await this.untilSendAdmitted(result.terminalId) : null;
@@ -472,7 +590,7 @@ export class AssistantTerminalControl {
       agentId: result.agentId,
       agentState: null,
       waitingReason: null,
-      attached: false,
+      attached: target.attached,
       startedByYou: true,
     };
     return {
@@ -1032,6 +1150,8 @@ export function liveAssistantTerminalControl(deps: {
     listRunningLanes(): RunningLane[];
     getRunningLaneSession(projectId: string, slot: number): RunningLaneSession | null;
     revokeSession(sessionId: string): Promise<void>;
+    listKeptLanes(projectId: string): KeptLane[];
+    claimLaneResume(projectId: string, slot: number): Promise<LaneResumeClaim>;
   };
   pty: () => PtyClient | null;
   extractReply: AssistantTerminalControlDeps["extractReply"];
@@ -1068,6 +1188,8 @@ export function liveAssistantTerminalControl(deps: {
         await import("./assistantLaunch.js");
       return startAssistantWithoutView(request, await liveAssistantLaunchDeps());
     },
+    keptLanes: (projectId) => deps.help.listKeptLanes(projectId),
+    claimLaneResume: (projectId, slot) => deps.help.claimLaneResume(projectId, slot),
     revoke: (sessionId) => deps.help.revokeSession(sessionId),
     extractReply: deps.extractReply,
     projectName: deps.projectName,

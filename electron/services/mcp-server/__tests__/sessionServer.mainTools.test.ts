@@ -699,6 +699,7 @@ describe("one assistant addressing another (#13496)", () => {
       ),
       list: vi.fn(async () => LISTED),
       start: vi.fn(async () => ({ assistant: {}, ready: true, notReadyReason: null })),
+      resume: vi.fn(async () => ({ assistant: {}, ready: false, notReadyReason: "timed-out" })),
       submit: vi.fn(async () => RECEIPT),
       sendKeys: vi.fn(async () => ({ terminalId: ASSISTANT_TERMINAL, keys: ["Enter"] })),
       interrupt: vi.fn(async () => ({
@@ -723,6 +724,7 @@ describe("one assistant addressing another (#13496)", () => {
           [
             "assistant.list",
             "assistant.start",
+            "assistant.resume",
             "agent.readQuota",
             "terminal.sendCommand",
             "terminal.sendCommandOwned",
@@ -772,7 +774,12 @@ describe("one assistant addressing another (#13496)", () => {
   it("lists the assistant tools only to an assistant caller", async () => {
     const assistant = await serve(assistantDeps({ caller: CALLER }).deps);
     expect((await listTools(assistant)).tools.map((t) => t.name)).toEqual(
-      expect.arrayContaining(["assistant.list", "assistant.start", "agent.readQuota"])
+      expect.arrayContaining([
+        "assistant.list",
+        "assistant.start",
+        "assistant.resume",
+        "agent.readQuota",
+      ])
     );
 
     const pane = await serve(
@@ -781,6 +788,7 @@ describe("one assistant addressing another (#13496)", () => {
     const names = (await listTools(pane)).tools.map((t) => t.name);
     expect(names).not.toContain("assistant.list");
     expect(names).not.toContain("assistant.start");
+    expect(names).not.toContain("assistant.resume");
     expect(names).not.toContain("agent.readQuota");
   });
 
@@ -798,6 +806,28 @@ describe("one assistant addressing another (#13496)", () => {
       claude: { source: "seen-in-panes", readings: [] },
       codex: { status: "unavailable", reason: "cli-missing", fetchedAt: 3 },
     });
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("resumes a kept slot in main for the caller, refusing a call that names none (#16763)", async () => {
+    const { deps, control } = assistantDeps({ caller: CALLER });
+    const server = await serve(deps);
+
+    const resumed = await callTool(server, { name: "assistant.resume", arguments: { slot: 2 } });
+    expect(resumed.isError).toBeFalsy();
+    expect(control.resume).toHaveBeenCalledExactlyOnceWith(CALLER, { slot: 2 });
+
+    for (const args of [{}, { slot: 99 }, { slot: "2" }]) {
+      const refused = await callTool(server, { name: "assistant.resume", arguments: args });
+      expect(toolErrorPayload(refused).code).toBe("VALIDATION_ERROR");
+    }
+    expect(control.resume).toHaveBeenCalledTimes(1);
+
+    control.resume.mockRejectedValueOnce(
+      new AssistantTargetError("ASSISTANT_RESUME_REFUSED", "Slot 3 keeps no conversation.")
+    );
+    const none = await callTool(server, { name: "assistant.resume", arguments: { slot: 3 } });
+    expect(toolErrorPayload(none).code).toBe("ASSISTANT_RESUME_REFUSED");
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
 
@@ -827,12 +857,21 @@ describe("one assistant addressing another (#13496)", () => {
   it("refuses the assistant tools to anyone else, whatever its tier", async () => {
     const { deps, control } = assistantDeps({ caller: null, origin: "external", tier: "full" });
     const server = await serve(deps);
-    for (const name of ["assistant.list", "assistant.start", "agent.readQuota"]) {
-      const result = await callTool(server, { name, arguments: {} });
+    for (const name of [
+      "assistant.list",
+      "assistant.start",
+      "assistant.resume",
+      "agent.readQuota",
+    ]) {
+      const result = await callTool(server, {
+        name,
+        arguments: name === "assistant.resume" ? { slot: 0 } : {},
+      });
       expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
     }
     expect(control.list).not.toHaveBeenCalled();
     expect(control.start).not.toHaveBeenCalled();
+    expect(control.resume).not.toHaveBeenCalled();
   });
 
   it("describes the assistant tools to a relayed assistant's schema read, and withholds what it can't call", async () => {
@@ -869,7 +908,7 @@ describe("one assistant addressing another (#13496)", () => {
       };
     };
 
-    for (const id of ["assistant.list", "assistant.start", "agent.readQuota"]) {
+    for (const id of ["assistant.list", "assistant.start", "assistant.resume", "agent.readQuota"]) {
       expect(await schemaOf(id), id).toMatchObject({
         ok: true,
         policy: { callable: true, minimumTier: "core" },
@@ -898,6 +937,9 @@ describe("one assistant addressing another (#13496)", () => {
     const result = await callTool(server, { name: "assistant.start", arguments: {} });
     expect(toolErrorPayload(result).code).toBe("DRIVEN_ELSEWHERE");
     expect(control.start).not.toHaveBeenCalled();
+    const resumed = await callTool(server, { name: "assistant.resume", arguments: { slot: 1 } });
+    expect(toolErrorPayload(resumed).code).toBe("DRIVEN_ELSEWHERE");
+    expect(control.resume).not.toHaveBeenCalled();
   });
 
   it("sends to an assistant in main, with the generation and handback it was given", async () => {

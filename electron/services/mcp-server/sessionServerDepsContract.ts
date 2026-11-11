@@ -321,6 +321,7 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     | "resolve"
     | "list"
     | "start"
+    | "resume"
     | "submit"
     | "sendKeys"
     | "interrupt"

@@ -22,6 +22,9 @@
  * session provisioned under it would launch with no MCP wiring at all. The
  * renderer has no dedicated copy for it yet and degrades to the generic
  * spawn-failed shape.
+ *
+ * `LANE_KEPT` refuses a start that would take a stopped lane whose
+ * conversation is kept for the person (#16763): only a resume reopens it.
  */
 export type HelpSessionErrorCode =
   | "MCP_NOT_READY"
@@ -29,6 +32,7 @@ export type HelpSessionErrorCode =
   | "MCP_PROBE_FAILED"
   | "USER_CONTENT_SYNC_FAILED"
   | "LANE_OCCUPIED"
+  | "LANE_KEPT"
   | "UNSUPPORTED_ASSISTANT_AGENT";
 
 export class HelpSessionError extends Error {

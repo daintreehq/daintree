@@ -49,12 +49,31 @@ export interface AssistantLaunchRequest {
     agentSessionId: string;
     /** The folder the conversation ran in, which the lane's must still be. */
     cwd: string;
+    /** The claim on the lane's pointer the resume holds, which its provision quotes. */
+    claimId: string;
   };
+  /**
+   * Never take a slot keeping a stopped conversation (#16763): a start that
+   * names one is refused, and one that names none skips them, rather than
+   * replace the lane's pointer. Absent, they are only tried last.
+   */
+  preserveKept?: true;
   /** Asked again right before the spawn; false abandons the start. */
   stillWanted?: () => boolean;
 }
 
-export type AssistantLaunchRefusal = "no-project" | "no-slot" | "launch-failed";
+export type AssistantLaunchRefusal =
+  | "no-project"
+  | "no-slot"
+  /** The slot named keeps a stopped conversation, which `preserveKept` leaves alone. */
+  | "kept"
+  /** The agent can't start here as an assistant with no view. */
+  | "agent-unavailable"
+  /** A resume's lane would run in another folder than its conversation did. */
+  | "folder-moved"
+  /** Asked again before the spawn and no longer wanted: its claim was dropped. */
+  | "withdrawn"
+  | "launch-failed";
 
 export type AssistantLaunchResult =
   | {
@@ -93,6 +112,8 @@ export interface AssistantLaunchDeps {
     windowId: number;
     projectViewWebContentsId: number;
     vacantOnly: true;
+    refuseKept?: true;
+    resumeClaimId?: string;
     startedBy: HelpSessionStartedBy;
   }): Promise<{
     sessionId: string;
@@ -158,7 +179,7 @@ export async function startAssistantWithoutView(
   if (resume && (request.slot === undefined || request.agentId === undefined || scheduled)) {
     return refused("launch-failed");
   }
-  if (resume && !resume.agentSessionId) return refused("launch-failed");
+  if (resume && (!resume.agentSessionId || !resume.claimId)) return refused("launch-failed");
   const project = deps.getProject(request.projectId);
   if (!project) return refused("no-project");
 
@@ -167,18 +188,31 @@ export async function startAssistantWithoutView(
   );
   const agentId = request.agentId ?? launchable.find((agent) => agent.byDefault)?.id ?? undefined;
   if (agentId === undefined || !launchable.some(({ id }) => id === agentId)) {
-    return refused("launch-failed");
+    return refused("agent-unavailable");
   }
 
   const occupied = new Set(deps.occupiedSlots(project.id));
   const kept = new Set(deps.keptSlots?.(project.id) ?? []);
+  const preserveKept = request.preserveKept === true && !resume;
+  // A running lane has its pointer too; its provision answers it as in use.
+  if (
+    preserveKept &&
+    request.slot !== undefined &&
+    kept.has(request.slot) &&
+    !occupied.has(request.slot)
+  ) {
+    return refused("kept");
+  }
   const vacant = Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter(
     (slot) => !occupied.has(slot)
   );
   const slots =
     request.slot !== undefined
       ? [request.slot]
-      : [...vacant.filter((slot) => !kept.has(slot)), ...vacant.filter((slot) => kept.has(slot))];
+      : [
+          ...vacant.filter((slot) => !kept.has(slot)),
+          ...(preserveKept ? [] : vacant.filter((slot) => kept.has(slot))),
+        ];
   let session: Awaited<ReturnType<AssistantLaunchDeps["provision"]>> = null;
   let slot: number | undefined;
   for (const candidate of slots) {
@@ -191,11 +225,18 @@ export async function startAssistantWithoutView(
         windowId: NO_VIEW_HANDLE,
         projectViewWebContentsId: NO_VIEW_HANDLE,
         vacantOnly: true,
+        ...(preserveKept ? { refuseKept: true as const } : {}),
+        ...(resume ? { resumeClaimId: resume.claimId } : {}),
         startedBy: request.startedBy,
       });
     } catch (err) {
-      // Taken since it was read: the next one may still be vacant.
-      if ((err as { code?: unknown } | null)?.code === "LANE_OCCUPIED") continue;
+      const code = (err as { code?: unknown } | null)?.code;
+      // Taken or kept since it was read: the next one may still be vacant.
+      if (code === "LANE_OCCUPIED") continue;
+      if (code === "LANE_KEPT") {
+        if (request.slot !== undefined) return refused("kept");
+        continue;
+      }
       return refused("launch-failed");
     }
     if (!session) return refused("launch-failed");
@@ -207,9 +248,10 @@ export async function startAssistantWithoutView(
   const agentLaunchFlags = await deps.launchFlags(agentId).catch(() => []);
   // A conversation lives in the folder it ran in; a lane provisioned anywhere
   // else would reopen nothing there.
-  if ((resume && session.sessionPath !== resume.cwd) || request.stillWanted?.() === false) {
+  const moved = resume !== undefined && session.sessionPath !== resume.cwd;
+  if (moved || request.stillWanted?.() === false) {
     await deps.revoke(session.sessionId).catch(() => {});
-    return refused("launch-failed");
+    return refused(moved ? "folder-moved" : "withdrawn");
   }
 
   const terminalId = scheduled?.terminalId ?? `terminal-${randomUUID()}`;
@@ -348,6 +390,7 @@ export async function liveAssistantLaunchDeps(): Promise<AssistantLaunchDeps> {
         .listRunningLanes()
         .filter((lane) => lane.projectId === projectId)
         .map((lane) => lane.slot),
+    keptSlots: (projectId) => helpSessionService.listPendingHibernationSlots(projectId),
     provision: (input) => helpSessionService.provisionSession(input),
     revoke: (sessionId) => helpSessionService.revokeSession(sessionId),
     launchFlags: async (agentId) => {

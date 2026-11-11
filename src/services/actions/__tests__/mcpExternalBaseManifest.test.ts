@@ -62,6 +62,7 @@ const MAIN_PROCESS_TOOLS = [
   "terminal.cancelQueuedSend",
   "assistant.list",
   "assistant.start",
+  "assistant.resume",
   "agent.readQuota",
   "agent.resumeOwned",
 ];

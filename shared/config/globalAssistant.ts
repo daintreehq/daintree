@@ -102,6 +102,7 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "agent.resumeOwned",
   "agentSessionHistory.list",
   "assistant.list",
+  "assistant.resume",
   "assistant.start",
   "terminal.list",
   "terminal.getStatus",
