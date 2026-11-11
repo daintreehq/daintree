@@ -274,7 +274,7 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
 
   it("drops the previous pair's file diff and source once another pair is chosen", async () => {
     setWorktrees(LEFT(), RIGHT(), snapshot("wt-other", "other"));
-    const view = render(tree());
+    render(tree());
     const stalePatch = deferred<string>();
     const staleSource = deferred<string>();
     mockCompareWorktrees.mockImplementation(
