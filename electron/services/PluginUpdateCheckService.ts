@@ -233,14 +233,14 @@ export class PluginUpdateCheckService {
     // — don't touch lastCheckedAt or the cache. `inconclusive` is true when the
     // pass couldn't fully determine status (import/list threw, or a per-plugin
     // fetch failed), so a partial-failure pass doesn't clear a valid cache.
-    let outcome: { updates: PluginBackgroundUpdateEntry[]; inconclusive: boolean } | null;
+    let outcome: PassOutcome | null;
     try {
       outcome = await this.collectUpdates();
     } catch (err) {
       logError("plugin-update-check-pass-failed", err);
       // A hard failure still persists lastCheckedAt (below) so it doesn't
       // retry-storm on every tick, but is inconclusive so the cache survives.
-      outcome = { updates: [], inconclusive: true };
+      outcome = { updates: [], inconclusive: true, unchecked: null };
     }
 
     if (outcome === null) return;
@@ -254,12 +254,17 @@ export class PluginUpdateCheckService {
     // entry it already cleared.
     if (this.disposed || !this.getSettings().enabled) return;
 
-    const { updates, inconclusive } = outcome;
+    const { updates, inconclusive, unchecked } = outcome;
     if (updates.length === 0) {
       // A conclusive empty pass supersedes any cached detection so a
       // late-mounting renderer doesn't hydrate an already-resolved update. Keep
       // the cache when the pass was inconclusive — we genuinely don't know.
       if (!inconclusive) this.lastDetected = null;
+      // Otherwise only the offers this pass couldn't check again survive: one it
+      // did check found no update, current or delisted (#16781).
+      else if (this.lastDetected && unchecked) {
+        this.lastDetected = keepUnchecked(this.lastDetected, unchecked);
+      }
       return;
     }
 
@@ -286,10 +291,7 @@ export class PluginUpdateCheckService {
    * or disposed mid-init); otherwise the available updates + whether the pass
    * was inconclusive (any per-plugin fetch failure).
    */
-  private async collectUpdates(): Promise<{
-    updates: PluginBackgroundUpdateEntry[];
-    inconclusive: boolean;
-  } | null> {
+  private async collectUpdates(): Promise<PassOutcome | null> {
     const { pluginService } = await import("./PluginService.js");
     try {
       await pluginService.waitForCatalog();
@@ -307,19 +309,23 @@ export class PluginUpdateCheckService {
       )
       .map((p) => p.manifest.name);
 
-    const { found, hadError } = await this.checkAll(pluginService, targets);
-    return { updates: found, inconclusive: hadError };
+    const { found, failedIds } = await this.checkAll(pluginService, targets);
+    return {
+      updates: found,
+      inconclusive: failedIds.length > 0,
+      unchecked: new Set(failedIds),
+    };
   }
 
   /**
    * Bounded worker-pool over the plugin ids; collects only `available` results.
-   * `hadError` is true if any per-plugin check threw, so the caller can tell a
-   * clean "nothing available" pass from one that couldn't determine status.
+   * `failedIds` names every plugin whose check failed or threw, so the caller can
+   * tell a clean "nothing available" pass from one that couldn't determine status.
    */
   private async checkAll(
     pluginService: typeof import("./PluginService.js").pluginService,
     ids: string[]
-  ): Promise<{ found: PluginBackgroundUpdateEntry[]; hadError: boolean }> {
+  ): Promise<{ found: PluginBackgroundUpdateEntry[]; failedIds: string[] }> {
     const found: PluginBackgroundUpdateEntry[] = [];
     // Ids we couldn't determine this pass (fetch-failed or threw). Collected as
     // a pushed-to array (like `found`) so the caller can tell a clean "nothing
@@ -355,8 +361,28 @@ export class PluginUpdateCheckService {
 
     const pool = Math.min(CONCURRENCY, Math.max(ids.length, 1));
     await Promise.all(Array.from({ length: pool }, () => worker()));
-    return { found, hadError: failedIds.length > 0 };
+    return { found, failedIds };
   }
+}
+
+/**
+ * What a pass found. `unchecked` names the plugins it couldn't check, or is
+ * `null` when the pass failed before it knew which.
+ */
+interface PassOutcome {
+  updates: PluginBackgroundUpdateEntry[];
+  inconclusive: boolean;
+  unchecked: ReadonlySet<string> | null;
+}
+
+/** The cached result cut down to the plugins a pass couldn't check, or `null` when none is left. */
+function keepUnchecked(
+  cached: PluginBackgroundUpdateCheckResult,
+  unchecked: ReadonlySet<string>
+): PluginBackgroundUpdateCheckResult | null {
+  const updates = cached.updates.filter((u) => unchecked.has(u.pluginId));
+  if (updates.length === cached.updates.length) return cached;
+  return updates.length === 0 ? null : { ...cached, updates, signature: computeSignature(updates) };
 }
 
 /** Deterministic digest of the update set so repeated passes dedupe to one row. */

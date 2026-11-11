@@ -717,14 +717,20 @@ describe("checkForUpdate — catalog installs (#16781)", () => {
     return createHash("sha256").update(bytes).digest("hex");
   }
 
-  /** The catalog answers each fetch with the next document, or fails as offline. */
-  function catalogServes(...documents: Array<{ entries: unknown[] } | "offline">) {
+  /**
+   * The catalog answers each fetch with the next document, or fails: offline,
+   * not published (404), or with a body that isn't a catalog.
+   */
+  function catalogServes(
+    ...documents: Array<{ entries: unknown[] } | "offline" | "not-found" | "invalid">
+  ) {
     const queue = [...documents];
     const fetchImpl = vi.fn(async () => {
       const next = queue.shift();
       if (next === undefined) throw new Error("unexpected catalog fetch");
       if (next === "offline") throw new TypeError("net::ERR_INTERNET_DISCONNECTED");
-      return new Response(JSON.stringify(next), {
+      if (next === "not-found") return new Response("Not Found", { status: 404 });
+      return new Response(next === "invalid" ? "{ not json" : JSON.stringify(next), {
         headers: { "content-type": "application/json" },
       });
     });
@@ -845,38 +851,51 @@ describe("checkForUpdate — catalog installs (#16781)", () => {
     service.dispose();
   });
 
-  it("reports an unreachable catalog offline and offers nothing", async () => {
-    const service = new PluginService(pluginsRoot, "0.0.0");
-    await installFromCatalog(service);
-    catalogServes("offline");
+  it.each([
+    ["offline", "unreachable"],
+    ["not-found", "not-published"],
+    ["invalid", "invalid"],
+  ] as const)(
+    "reports an unavailable catalog (%s) as such and offers nothing",
+    async (served, failure) => {
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await installFromCatalog(service);
+      catalogServes(served);
 
-    expect(await service.checkForUpdate(ID)).toEqual({
-      status: "catalog-unavailable",
-      catalog: "unavailable",
-      failure: "unreachable",
-    });
-    expect(netMock.fetch).not.toHaveBeenCalled();
-    service.dispose();
-  });
+      expect(await service.checkForUpdate(ID)).toEqual({
+        status: "catalog-unavailable",
+        catalog: "unavailable",
+        failure,
+      });
+      expect(netMock.fetch).not.toHaveBeenCalled();
+      service.dispose();
+    }
+  );
 
-  it("reports a stale catalog when only an older copy is left, offering nothing from it", async () => {
-    const service = new PluginService(pluginsRoot, "0.0.0");
-    const installedHash = await installFromCatalog(service);
-    const next = await readArchiveBytes({ name: ID, version: "0.1.1" });
-    const listing = { entries: [entry("0.1.0", installedHash), entry("0.1.1", sha(next))] };
-    catalogServes(listing, "offline");
-    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(next)]));
-    expect(await service.checkForUpdate(ID)).toMatchObject({ status: "available" });
+  it.each([
+    ["offline", "unreachable"],
+    ["not-found", "not-published"],
+  ] as const)(
+    "reports a stale catalog (%s) when only an older copy is left, offering nothing from it",
+    async (served, failure) => {
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      const installedHash = await installFromCatalog(service);
+      const next = await readArchiveBytes({ name: ID, version: "0.1.1" });
+      const listing = { entries: [entry("0.1.0", installedHash), entry("0.1.1", sha(next))] };
+      catalogServes(listing, served);
+      netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(next)]));
+      expect(await service.checkForUpdate(ID)).toMatchObject({ status: "available" });
 
-    // The cached copy still lists 0.1.1, but an update never reads a cache.
-    expect(await service.checkForUpdate(ID)).toEqual({
-      status: "catalog-unavailable",
-      catalog: "stale",
-      failure: "unreachable",
-    });
-    expect(netMock.fetch).toHaveBeenCalledTimes(1);
-    service.dispose();
-  });
+      // The cached copy still lists 0.1.1, but an update never reads a cache.
+      expect(await service.checkForUpdate(ID)).toEqual({
+        status: "catalog-unavailable",
+        catalog: "stale",
+        failure,
+      });
+      expect(netMock.fetch).toHaveBeenCalledTimes(1);
+      service.dispose();
+    }
+  );
 
   it("refuses bytes that aren't the entry's digest, before reading their manifest", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
@@ -895,6 +914,22 @@ describe("checkForUpdate — catalog installs (#16781)", () => {
     expect(readSpy).not.toHaveBeenCalled();
     expect(await leftoverTempDirs()).toHaveLength(0);
     readSpy.mockRestore();
+    service.dispose();
+  });
+
+  it("refuses an archive for another plugin, even at the entry's version and digest", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service);
+    const stranger = await readArchiveBytes({ name: "acme.stranger", version: "0.1.1" });
+    catalogServes({ entries: [entry("0.1.0", installedHash), entry("0.1.1", sha(stranger))] });
+    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(stranger)]));
+
+    const result = await service.checkForUpdate(ID);
+
+    expect(result.status).toBe("fetch-failed");
+    if (result.status === "fetch-failed") {
+      expect(result.message).toContain("isn't the release it names");
+    }
     service.dispose();
   });
 
@@ -918,6 +953,8 @@ describe("checkForUpdate — catalog installs (#16781)", () => {
     ["missing", undefined],
     ["for another plugin", { id: "acme.other", version: "0.1.0", repo: REPO }],
     ["with a malformed version", { id: ID, version: "latest", repo: REPO }],
+    // Canonical in spelling, but beyond what semver can compare.
+    ["with an uncomparable version", { id: ID, version: "9007199254740992.0.0", repo: REPO }],
   ])(
     "fails closed on provenance %s, never falling back to the install URL",
     async (_label, catalog) => {

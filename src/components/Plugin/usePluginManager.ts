@@ -293,6 +293,11 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const [notice, setNotice] = useState<string | null>(null);
   // A notice is neutral unless it reports something that went partly wrong.
   const [noticeTone, setNoticeTone] = useState<"neutral" | "warning">("neutral");
+  // What a single update check found that isn't an update or a failure (a
+  // delisted catalog plugin, #16781). Its own slot, so the next check replaces
+  // it without touching an "Update all" summary, and a late answer can't
+  // overwrite one.
+  const [checkNotice, setCheckNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [refreshKey, setRefreshKey] = useState(0);
   // A load failure's own message, so the refresh that succeeds clears that and
@@ -661,6 +666,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     if (!reopened) return;
     setError(null);
     setNotice(null);
+    setCheckNotice(null);
     setUpToDateId(null);
     setPendingUninstall(null);
     setDeleteSettings(false);
@@ -1006,6 +1012,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     if (intent === "update" && result.status !== "installed") setUpdatingPluginId(null);
     switch (result.status) {
       case "installed":
+        setCheckNotice(null);
         // An update leaves the notice and error alone, here and on failure:
         // during "Update all" they hold the run's warning and any earlier
         // plugin's failure.
@@ -1479,6 +1486,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setCheckingUpdate((prev) => new Set(prev).add(id));
     // A fresh check supersedes any lingering "up to date" note for this plugin.
     if (upToDateId === id) setUpToDateId(null);
+    setCheckNotice(null);
     // Snapshot the list generation. If the list refreshes mid-check (a reopen,
     // a mutation, or a cross-window uninstall), the response references a plugin
     // that may no longer exist — discard it rather than surface a stale confirm.
@@ -1504,8 +1512,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           setPendingUpdate({ plugin, result });
           break;
         case "delisted":
-          setNoticeTone("warning");
-          setNotice(delistedMessage(plugin, result));
+          setCheckNotice(delistedMessage(plugin, result));
           break;
         case "catalog-unavailable":
           setError(catalogUnavailableMessage(result));
@@ -1596,6 +1603,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setIsCheckingAllUpdates(true);
     setError(null);
     setNotice(null);
+    setCheckNotice(null);
     setUpToDateId(null);
     // Same staleness guard as the single check: if the list refreshes mid-run
     // (reopen, mutation, cross-window change), discard rather than surface a
@@ -1604,7 +1612,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const available: PendingUpdate[] = [];
     // A delisted catalog plugin has no update and wasn't a failed check
     // (#16781): it gets its own line in the summary.
-    const delisted: LoadedPluginInfo[] = [];
+    const delisted: string[] = [];
     // A check that FAILED is not a check that found nothing. Counting only
     // `available` meant a run where every request errored still reported "All
     // plugins are up to date" — the most reassuring possible summary of a total
@@ -1618,7 +1626,12 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           if (result.status === "available") {
             available.push({ plugin, result });
           } else if (result.status === "delisted") {
-            delisted.push(plugin);
+            // A delisted release names its version: the plugin is still listed.
+            delisted.push(
+              result.scope === "plugin"
+                ? pluginName(plugin)
+                : `${pluginName(plugin)} ${result.version}`
+            );
           } else if (result.status !== "up-to-date") {
             // `fetch-failed` / `catalog-unavailable` / `invalid-id` arrive as
             // data, not as a throw.
@@ -1632,9 +1645,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       }
       if (refreshKeyRef.current !== startKey) return;
       const delistedNote =
-        delisted.length === 0
-          ? null
-          : `The plugin catalog no longer lists ${delisted.map(pluginName).join(", ")}.`;
+        delisted.length === 0 ? null : `The plugin catalog no longer lists ${delisted.join(", ")}.`;
       const [first, ...rest] = available;
       if (!first) {
         if (failed === targets.length) {
@@ -1827,6 +1838,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     error,
     notice,
     noticeTone,
+    checkNotice,
     pending,
     pendingUninstall,
     uninstallPanels,

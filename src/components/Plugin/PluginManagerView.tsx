@@ -1111,6 +1111,11 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 <p>{pm.notice}</p>
               </Callout>
             )}
+            {pm.checkNotice && (
+              <Callout severity="warning" size="compact" role="status">
+                <p>{pm.checkNotice}</p>
+              </Callout>
+            )}
             {/* Suppressed while a dialog is showing the same error inside
                 itself — otherwise the message renders twice, once of them
                 underneath the scrim. */}

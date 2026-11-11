@@ -796,6 +796,13 @@ describe("PluginCatalogService", () => {
       expect(result).toMatchObject({ status: "update", entry: { version: "0.2.0" } });
     });
 
+    it("says a stable install's release was delisted when only prereleases replaced it", async () => {
+      const result = await service(
+        respondWith(ok({ entries: [release("0.2.0-rc.1"), release("0.3.0-rc.1")] }))
+      ).lookupUpdate(ID, "0.1.0");
+      expect(result).toEqual({ status: "delisted", scope: "release", fetchedAt: T0 });
+    });
+
     it("keeps a stable install off prereleases", async () => {
       const result = await service(
         respondWith(ok({ entries: [release("0.1.0"), release("0.2.0-rc.1")] }))
@@ -824,6 +831,13 @@ describe("PluginCatalogService", () => {
         respondWith(ok({ entries: [release("1.0.0+build.1"), release("1.0.0+build.2")] }))
       ).lookupUpdate(ID, "1.0.0+build.1");
       expect(result).toEqual({ status: "current", fetchedAt: T0 });
+    });
+
+    it("matches the installed release by its exact version, build metadata included", async () => {
+      const result = await service(
+        respondWith(ok({ entries: [release("1.0.0+build.2")] }))
+      ).lookupUpdate(ID, "1.0.0+build.1");
+      expect(result).toEqual({ status: "delisted", scope: "release", fetchedAt: T0 });
     });
 
     it("offers an entry listed from another repository as it is", async () => {

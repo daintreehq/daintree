@@ -356,6 +356,11 @@ function newestRelease(releases: readonly PluginCatalogEntry[]): PluginCatalogEn
   return [...pool].sort((a, b) => semver.compareBuild(b.version, a.version))[0];
 }
 
+/** A version semver can compare: canonical spelling alone admits numbers it can't hold. */
+export function isComparableVersion(version: string): boolean {
+  return semver.valid(version) !== null;
+}
+
 /**
  * The release an update offers: the highest stable version above the installed
  * one, or when there is none and the installed version is itself a prerelease,

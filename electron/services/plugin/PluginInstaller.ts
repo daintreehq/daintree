@@ -1201,6 +1201,10 @@ export class PluginInstaller {
     record: InstalledPluginRecord
   ): Promise<PluginCheckUpdateResult> {
     const installed = record.catalog;
+    const unusable: PluginCheckUpdateResult = {
+      status: "fetch-failed",
+      message: "The install record doesn't name the catalog release this plugin came from",
+    };
     // Records are read back with a cast, so the provenance is checked before
     // it decides what is fetched or compared.
     if (
@@ -1211,13 +1215,13 @@ export class PluginInstaller {
       !isRequestablePluginVersion(installed.version) ||
       typeof installed.repo !== "string"
     ) {
-      return {
-        status: "fetch-failed",
-        message: "The install record doesn't name the catalog release this plugin came from",
-      };
+      return unusable;
     }
     // Lazy: the catalog client costs nothing until a catalog install is checked.
-    const { getPluginCatalogService } = await import("./PluginCatalogService.js");
+    const { getPluginCatalogService, isComparableVersion } =
+      await import("./PluginCatalogService.js");
+    // The pattern admits numbers semver can't hold, and its comparisons throw.
+    if (!isComparableVersion(installed.version)) return unusable;
     const lookup = await getPluginCatalogService().lookupUpdate(pluginId, installed.version);
     switch (lookup.status) {
       case "stale":
