@@ -58,6 +58,22 @@ const InstallParamsSchema = z
     message: "install requires exactly one of 'path' or 'url'",
   });
 
+// A separate method rather than an extra `install` param: Zod strips unknown
+// keys, so an older Daintree would drop the digest and install unverified. An
+// unknown method fails instead, and the CLI never falls back (#16342).
+const VerifiedInstallParamsSchema = z
+  .object({
+    path: z.string().min(1).optional(),
+    url: z.string().min(1).optional(),
+    sha256: z
+      .string()
+      .regex(/^[0-9a-fA-F]{64}$/, "sha256 must be 64 hex characters")
+      .transform((hex) => hex.toLowerCase()),
+  })
+  .refine((p) => Boolean(p.path) !== Boolean(p.url), {
+    message: "install requires exactly one of 'path' or 'url'",
+  });
+
 const UninstallParamsSchema = z.object({
   pluginId: z.string().min(1),
   deleteSettings: z.boolean().optional(),
@@ -74,6 +90,11 @@ const DevSessionParamsSchema = DevParamsSchema.extend({
 
 export interface PluginCliServerHandlers {
   install: (params: { path?: string; url?: string }) => Promise<unknown>;
+  /**
+   * A fresh install held to `sha256`, a lowercase hex digest: refused unless the
+   * archive matches it, and refused if the plugin is already installed.
+   */
+  installVerified: (params: { path?: string; url?: string; sha256: string }) => Promise<unknown>;
   uninstall: (params: { pluginId: string; deleteSettings?: boolean }) => Promise<void>;
   /** Load + activate a dev plugin the CLI symlinked into the plugins root. */
   devStart: (params: { pluginId: string; sessionId?: string }) => Promise<void>;
@@ -173,6 +194,10 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
       case "plugin.install": {
         const p = InstallParamsSchema.parse(params ?? {});
         return handlers.install(p);
+      }
+      case "plugin.install.verified": {
+        const p = VerifiedInstallParamsSchema.parse(params ?? {});
+        return handlers.installVerified(p);
       }
       case "plugin.uninstall": {
         const p = UninstallParamsSchema.parse(params ?? {});
@@ -363,7 +388,7 @@ let singleton: PluginCliServer | null = null;
 export async function startPluginCliServer(): Promise<void> {
   if (singleton) return;
   const { pluginService } = await import("./PluginService.js");
-  const { handleInstallFromPath, handleInstallFromUrl, handleUninstall } =
+  const { handleInstall, handleInstallFromPath, handleInstallFromUrl, handleUninstall } =
     await import("../ipc/handlers/plugin.js");
 
   // On Windows the named pipe can't carry a restrictive DACL from pure node, so
@@ -384,6 +409,12 @@ export async function startPluginCliServer(): Promise<void> {
         // Schema guarantees exactly one source; these branches are defensive.
         if (url) return handleInstallFromUrl(url);
         if (installPath) return handleInstallFromPath(installPath);
+        return Promise.reject(new Error("install requires exactly one of 'path' or 'url'"));
+      },
+      installVerified: ({ path: installPath, url, sha256 }) => {
+        const expected = { kind: "install", archiveHash: sha256 } as const;
+        if (url) return handleInstallFromUrl(url, undefined, expected);
+        if (installPath) return handleInstall(installPath, { expected });
         return Promise.reject(new Error("install requires exactly one of 'path' or 'url'"));
       },
       uninstall: ({ pluginId, deleteSettings }) => handleUninstall(pluginId, deleteSettings),

@@ -9,7 +9,7 @@ import type {
   LoadedPluginInfo,
   PluginDeepLinkIntent,
   PluginInstallError,
-  PluginInstallExpectation,
+  PluginUpdateExpectation,
   PluginInstallProgressEvent,
 } from "@shared/types/plugin";
 import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
@@ -255,7 +255,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // The reviewed-archive binding of a reinstall parked behind the HTTP confirm,
   // so the install that follows is held to the preview the user approved
   // (#12612). Null for a manual URL install. Cleared with `pendingHttpUrlRef`.
-  const pendingHttpExpectedRef = useRef<PluginInstallExpectation | null>(null);
+  const pendingHttpExpectedRef = useRef<PluginUpdateExpectation | null>(null);
   // The update a reinstall parked behind the HTTP confirm, with the unsaved
   // panels its confirm showed, so confirming HTTP checks for work that turned
   // dirty while it was open and can put the update back up (#15031).
@@ -774,7 +774,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     }
   };
 
-  const performInstallFromUrl = async (url: string, expected?: PluginInstallExpectation) => {
+  const performInstallFromUrl = async (url: string, expected?: PluginUpdateExpectation) => {
     setIsInstalling(true);
     if (expected) setUpdatingPluginId(expected.pluginId);
     try {
@@ -1259,7 +1259,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     }
     // The confirm re-downloads the URL, so hold it to the archive this preview
     // was read from — main refuses anything else (#12612).
-    const expected: PluginInstallExpectation = {
+    const expected: PluginUpdateExpectation = {
       pluginId: pendingUpdate.plugin.manifest.name,
       archiveHash: pendingUpdate.result.archiveHash,
     };

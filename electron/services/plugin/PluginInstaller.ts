@@ -29,6 +29,7 @@ import { getPluginMcpConsentService, getPluginMcpRateLimiter } from "../plugin-m
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { clearProjectPluginVisibilityForPlugin } from "./projectPluginVisibility.js";
 import { findUnusablePluginAssets } from "./pluginManifestAssetFiles.js";
+import { parseInstallExpectation } from "./installExpectation.js";
 import type {
   PluginManifest,
   PluginInstallError,
@@ -351,14 +352,16 @@ export class PluginInstaller {
    * 1. Acquire the cross-process `install.lock` (sub-30s stale TTL so a crashed
    *    prior install can't hold it forever). A second instance blocks, not races.
    * 2. Compute the `.dntr` SHA-256 for the `archiveHash` provenance field. A
-   *    reviewed update (`opts.expected`) is refused here if the digest differs,
-   *    before anything is unpacked (#12612).
+   *    bound install (`opts.expected`: a reviewed update, #12612, or a fresh
+   *    install pinned to a reviewed digest, #16342) is refused here if the
+   *    digest differs, before anything is unpacked.
    * 3. Extract / copy the source into a sibling `.install-tmp-*` dir — same
    *    filesystem as the final location so the eventual rename is atomic.
    * 4. Validate `plugin.json` with the strict Zod schema (unknown keys, reserved
    *    `daintree.*` namespace, publisher/name agreement). An unmet engine range
    *    doesn't fail the install — the load that follows warns about it (#12589).
-   *    A reviewed update must also still name the plugin it was approved for.
+   *    A bound install must also still name the plugin it was approved for, and
+   *    find it installed (an update) or not installed (a fresh install).
    * 5. If the id already exists: `unloadPlugin` as a reload (disposer cascade, agent
    *    credentials held until the version left loaded is known), then swap via
    *    rename — park old aside → move new in → restore old on failure. Per-plugin
@@ -413,6 +416,18 @@ export class PluginInstaller {
     // cancel was ever accepted.
     const fail = (code: PluginInstallErrorCode, message: string): PluginInstallResult =>
       jobSignal?.aborted === true ? cancelled : { status: "failed", errors: [{ code, message }] };
+
+    // Re-read rather than trusted: `expected` crosses IPC from the renderer on
+    // more than one route, and a malformed binding must refuse, not install
+    // unbound. Checked before the lock, since nothing has been staged yet.
+    const expected =
+      opts?.expected === undefined ? undefined : parseInstallExpectation(opts.expected);
+    if (expected === null) {
+      return fail(
+        "archive_mismatch",
+        "The install's digest binding was malformed, so nothing was installed."
+      );
+    }
 
     await fs.mkdir(this.pluginsRoot, { recursive: true });
 
@@ -473,7 +488,6 @@ export class PluginInstaller {
 
       pluginInstallJobs.setPhase(jobId, "extracting");
 
-      const expected = opts?.expected;
       let hash: string | null = null;
       if (sourceIsDir) {
         // A directory has no archive digest, so an approval bound to one can't
@@ -481,7 +495,9 @@ export class PluginInstaller {
         if (expected) {
           return fail(
             "archive_mismatch",
-            "A reviewed update can only be installed from the archive it was reviewed from"
+            expected.kind === "install"
+              ? "A digest-bound install needs a .dntr archive; a directory has no digest to check"
+              : "A reviewed update can only be installed from the archive it was reviewed from"
           );
         }
         try {
@@ -506,7 +522,9 @@ export class PluginInstaller {
         if (expected && hash !== expected.archiveHash) {
           return fail(
             "archive_mismatch",
-            "The downloaded archive isn't the one reviewed for this update"
+            expected.kind === "install"
+              ? "The archive's SHA-256 doesn't match the digest this install was bound to"
+              : "The downloaded archive isn't the one reviewed for this update"
           );
         }
         try {
@@ -575,8 +593,8 @@ export class PluginInstaller {
 
       // A matching digest already proves these are the reviewed bytes; this
       // keeps the destination below from ever being a different installed
-      // plugin than the one the user approved updating.
-      if (expected && manifest.name !== expected.pluginId) {
+      // plugin than the one the user approved updating or installing.
+      if (expected?.pluginId !== undefined && manifest.name !== expected.pluginId) {
         return fail(
           "archive_mismatch",
           `The archive is for "${manifest.name}", not "${expected.pluginId}"`
@@ -596,10 +614,19 @@ export class PluginInstaller {
 
       // A reviewed update replaces an installed plugin; one uninstalled since
       // its preview (say, from another window) isn't this approval's to restore.
-      if (expected && !existing) {
+      if (expected?.kind === "update" && !existing) {
         return fail(
           "archive_mismatch",
           `"${pluginId}" is no longer installed, so its update wasn't applied`
+        );
+      }
+      // A fresh install never replaces: new bytes for an installed plugin are an
+      // update, which has its own preview. Checked here, under the lock, so two
+      // bound installs queued for the same plugin can't both land.
+      if (expected?.kind === "install" && existing) {
+        return fail(
+          "archive_mismatch",
+          `"${pluginId}" is already installed, so this install wasn't applied. Uninstall it first, or update it from the plugin manager.`
         );
       }
 

@@ -125,6 +125,7 @@ import { PluginBlocklistService } from "../plugin/PluginBlocklistService.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { pluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
+import type { PluginInstallExpectation } from "../../../shared/types/plugin.js";
 
 /** A PluginBlocklistService backed by an in-memory list (no network/disk). */
 function fakeBlocklist(entries: Array<Record<string, unknown>>): PluginBlocklistService {
@@ -2353,6 +2354,163 @@ describe("installPlugin — reviewed-update binding (#12612)", () => {
     if (result.status === "failed") expect(result.errors[0]?.code).toBe("archive_mismatch");
     expect(await exists(path.join(pluginsRoot, "acme.dir-bound"))).toBe(false);
     expect(await stagingLeftovers()).toHaveLength(0);
+
+    service.dispose();
+  });
+});
+
+describe("installPlugin — digest-bound fresh install (#16342)", () => {
+  async function sha256(file: string): Promise<string> {
+    return createHash("sha256")
+      .update(await fs.readFile(file))
+      .digest("hex");
+  }
+
+  function recordedHash(pluginId: string): string | null {
+    const plugins = storeState.get("plugins") as {
+      installed: Record<string, { archiveHash: string | null }>;
+    };
+    return plugins.installed[pluginId]?.archiveHash ?? null;
+  }
+
+  async function stagingLeftovers(): Promise<string[]> {
+    const entries = await fs.readdir(pluginsRoot);
+    return entries.filter((e) => e.startsWith(".install-tmp-") || e.includes(".old-"));
+  }
+
+  it.each([
+    ["a digest alone", false],
+    ["a digest and the plugin id", true],
+  ])("installs a plugin that isn't installed yet when bound to %s", async (_label, withId) => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const archive = await makeArchive({ name: "acme.fresh", version: "1.0.0" });
+    const archiveHash = await sha256(archive);
+
+    const result = await service.installPlugin(archive, {
+      source: "url",
+      originalUrl: "https://example.com/fresh.dntr",
+      expected: withId
+        ? { kind: "install", pluginId: "acme.fresh", archiveHash }
+        : { kind: "install", archiveHash },
+    });
+
+    expect(result).toEqual({ status: "installed", pluginId: "acme.fresh" });
+    expect(recordedHash("acme.fresh")).toBe(archiveHash);
+
+    service.dispose();
+  });
+
+  it("refuses a digest mismatch before extracting a single entry", async () => {
+    const archive = await makeArchive({ name: "acme.fresh-swapped", version: "1.0.0" });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const extractSpy = vi.spyOn(PluginArchive, "extractPluginArchive");
+
+    try {
+      const result = await service.installPlugin(archive, {
+        expected: { kind: "install", archiveHash: "0".repeat(64) },
+      });
+
+      expect(result.status).toBe("failed");
+      if (result.status === "failed") {
+        expect(result.errors[0]?.code).toBe("archive_mismatch");
+        expect(result.errors[0]?.message).toContain("SHA-256");
+      }
+      expect(extractSpy).not.toHaveBeenCalled();
+      expect(await exists(path.join(pluginsRoot, "acme.fresh-swapped"))).toBe(false);
+      expect(await stagingLeftovers()).toHaveLength(0);
+    } finally {
+      extractSpy.mockRestore();
+      service.dispose();
+    }
+  });
+
+  it("refuses an archive for another plugin than the one it names", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const archive = await makeArchive({ name: "acme.impostor", version: "1.0.0" });
+
+    const result = await service.installPlugin(archive, {
+      expected: { kind: "install", pluginId: "acme.listed", archiveHash: await sha256(archive) },
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") expect(result.errors[0]?.code).toBe("archive_mismatch");
+    expect(await exists(path.join(pluginsRoot, "acme.impostor"))).toBe(false);
+    expect(await stagingLeftovers()).toHaveLength(0);
+
+    service.dispose();
+  });
+
+  it("never replaces an installed plugin, even with matching bytes", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const v1 = await makeArchive({ name: "acme.present", version: "1.0.0" }, { "v1.txt": "1" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+    const v1Hash = recordedHash("acme.present");
+    const v2 = await makeArchive({ name: "acme.present", version: "2.0.0" }, { "v2.txt": "2" });
+
+    const result = await service.installPlugin(v2, {
+      expected: { kind: "install", pluginId: "acme.present", archiveHash: await sha256(v2) },
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.errors[0]?.code).toBe("archive_mismatch");
+      expect(result.errors[0]?.message).toContain("already installed");
+    }
+    expect(await exists(path.join(pluginsRoot, "acme.present", "v1.txt"))).toBe(true);
+    expect(await exists(path.join(pluginsRoot, "acme.present", "v2.txt"))).toBe(false);
+    expect(recordedHash("acme.present")).toBe(v1Hash);
+    expect(await stagingLeftovers()).toHaveLength(0);
+
+    service.dispose();
+  });
+
+  it("lets only one of two queued bound installs for the same plugin land", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const archive = await makeArchive({ name: "acme.twice", version: "1.0.0" });
+    const binding = { kind: "install" as const, archiveHash: await sha256(archive) };
+
+    const results = await Promise.all([
+      service.installPlugin(archive, { expected: binding }),
+      service.installPlugin(archive, { expected: binding }),
+    ]);
+
+    expect(results.map((r) => r.status).sort()).toEqual(["failed", "installed"]);
+
+    service.dispose();
+  });
+
+  it("refuses a directory source, which has no digest to check", async () => {
+    const src = await makeSourceDir({ name: "acme.fresh-dir", version: "1.0.0" });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const result = await service.installPlugin(src, {
+      expected: { kind: "install", archiveHash: "0".repeat(64) },
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") expect(result.errors[0]?.code).toBe("archive_mismatch");
+    expect(await exists(path.join(pluginsRoot, "acme.fresh-dir"))).toBe(false);
+
+    service.dispose();
+  });
+
+  it.each([
+    ["an unknown kind", { kind: "replace", archiveHash: "0".repeat(64) }],
+    ["an update with no plugin id", { kind: "update", archiveHash: "0".repeat(64) }],
+    ["a short digest", { kind: "install", archiveHash: "0".repeat(63) }],
+  ])("refuses %s rather than installing unbound", async (_label, binding) => {
+    const archive = await makeArchive({ name: "acme.malformed", version: "1.0.0" });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    // The renderer's plain `install` channel hands `opts` straight through, so
+    // the installer can't rely on a caller having validated the binding.
+    const result = await service.installPlugin(archive, {
+      expected: binding as unknown as PluginInstallExpectation,
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") expect(result.errors[0]?.code).toBe("archive_mismatch");
+    expect(await exists(path.join(pluginsRoot, "acme.malformed"))).toBe(false);
 
     service.dispose();
   });

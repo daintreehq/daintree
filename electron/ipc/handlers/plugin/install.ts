@@ -21,6 +21,7 @@ import {
 } from "../../../schemas/pluginIdentifiers.js";
 import { describePluginInstallSource } from "../../../../shared/utils/pluginInstallSource.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
+import { parseInstallExpectation } from "../../../services/plugin/installExpectation.js";
 import { sendToRendererContext } from "../../utils.js";
 import type {
   LoadedPluginInfo,
@@ -288,19 +289,6 @@ export async function handleInstallFromUrlOp(
   return withInstallJob(ctx, jobId, url, (id) => handleInstallFromUrl(url, id, expected));
 }
 
-const ARCHIVE_HASH_PATTERN = /^[0-9a-f]{64}$/;
-
-function isInstallExpectation(value: unknown): value is PluginInstallExpectation {
-  if (typeof value !== "object" || value === null) return false;
-  const { pluginId, archiveHash } = value as Record<string, unknown>;
-  return (
-    typeof pluginId === "string" &&
-    SCOPED_PLUGIN_NAME_PATTERN.test(pluginId) &&
-    typeof archiveHash === "string" &&
-    ARCHIVE_HASH_PATTERN.test(archiveHash)
-  );
-}
-
 /**
  * Download a `.dntr` archive from a user-supplied URL into a temp file under
  * bounded conditions, then hand the path to the atomic installer (F24).
@@ -316,10 +304,11 @@ function isInstallExpectation(value: unknown): value is PluginInstallExpectation
  * (PluginService extracts into its own temp dir and doesn't take ownership of
  * the download artifact).
  *
- * `expected` binds a confirmed update to the archive its preview was read from
- * (#12612): the installer refuses the download unless its digest and
- * `manifest.name` match. Omitted for ordinary URL installs, including the
- * `daintree-plugin install` CLI, which has no preview step.
+ * `expected` binds the download to a reviewed digest: a confirmed update to the
+ * archive its preview was read from (#12612), or a fresh install to a digest
+ * reviewed elsewhere (#16342, `daintree-plugin install --sha256`). The
+ * installer refuses the download unless its digest, and `manifest.name` when
+ * the binding names one, match. Omitted for ordinary URL installs.
  */
 export async function handleInstallFromUrl(
   url: string,
@@ -356,10 +345,12 @@ export async function handleInstallFromUrl(
 
   // A binding that arrives malformed must fail closed — falling back to an
   // unbound install would quietly drop the guarantee the caller asked for.
-  if (expected !== undefined && !isInstallExpectation(expected)) {
+  // Checked here as well as in the installer so nothing is downloaded for it.
+  const binding = expected === undefined ? undefined : parseInstallExpectation(expected);
+  if (binding === null) {
     return failed(
       "archive_mismatch",
-      "The update approval was malformed, so nothing was installed."
+      "The install's digest binding was malformed, so nothing was installed."
     );
   }
 
@@ -490,9 +481,7 @@ export async function handleInstallFromUrl(
       source: "url",
       originalUrl: trimmed,
       ...(jobId === undefined ? {} : { jobId }),
-      ...(expected === undefined
-        ? {}
-        : { expected: { pluginId: expected.pluginId, archiveHash: expected.archiveHash } }),
+      ...(binding === undefined ? {} : { expected: binding }),
     });
   } finally {
     if (wroteTempFile) {

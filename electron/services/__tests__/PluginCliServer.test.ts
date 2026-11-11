@@ -37,6 +37,7 @@ afterEach(async () => {
 function noopHandlers(): PluginCliServerHandlers {
   return {
     install: vi.fn(async () => ({ status: "installed" })),
+    installVerified: vi.fn(async () => ({ status: "installed" })),
     uninstall: vi.fn(async () => {}),
     devStart: vi.fn(async () => {}),
     devStop: vi.fn(async () => {}),
@@ -149,6 +150,44 @@ describe("createPluginCliServer", () => {
     expect(res.id).toBe(1);
     expect(res.result).toEqual({ status: "installed" });
     expect(handlers.install).toHaveBeenCalledWith({ path: "/tmp/foo.dntr" });
+  });
+
+  it("routes plugin.install.verified with a lowercased digest", async () => {
+    const handlers = noopHandlers();
+    server = makeServer(handlers);
+    await server.listen();
+
+    const res = await request({
+      id: 2,
+      method: "plugin.install.verified",
+      params: { url: "https://example.com/foo.dntr", sha256: "AB".repeat(32) },
+    });
+    expect(res.result).toEqual({ status: "installed" });
+    expect(handlers.installVerified).toHaveBeenCalledWith({
+      url: "https://example.com/foo.dntr",
+      sha256: "ab".repeat(32),
+    });
+    expect(handlers.install).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no digest", { path: "/tmp/foo.dntr" }],
+    ["a short digest", { path: "/tmp/foo.dntr", sha256: "a".repeat(63) }],
+    ["a non-hex digest", { path: "/tmp/foo.dntr", sha256: "g".repeat(64) }],
+    ["no source", { sha256: "a".repeat(64) }],
+    [
+      "two sources",
+      { path: "/tmp/foo.dntr", url: "https://example.com/foo.dntr", sha256: "a".repeat(64) },
+    ],
+  ])("rejects plugin.install.verified with %s", async (_label, params) => {
+    const handlers = noopHandlers();
+    server = makeServer(handlers);
+    await server.listen();
+
+    const res = await request({ id: 3, method: "plugin.install.verified", params });
+    expect(res.error).toBeDefined();
+    expect(handlers.installVerified).not.toHaveBeenCalled();
+    expect(handlers.install).not.toHaveBeenCalled();
   });
 
   it("routes plugin.project.status to the project-status handler", async () => {
@@ -437,6 +476,7 @@ describe("createPluginCliServer", () => {
       install: vi.fn(async () => {
         throw new Error("disk on fire");
       }),
+      installVerified: vi.fn(async () => ({ status: "installed" })),
       uninstall: vi.fn(async () => {}),
       devStart: vi.fn(async () => {}),
       devStop: vi.fn(async () => {}),
@@ -461,6 +501,7 @@ describe("createPluginCliServer", () => {
   it("handles concurrent requests on one connection, matching ids", async () => {
     server = makeServer({
       install: vi.fn(async () => ({ status: "installed" })),
+      installVerified: vi.fn(async () => ({ status: "installed" })),
       uninstall: vi.fn(async () => {}),
       devStart: vi.fn(async () => {}),
       devStop: vi.fn(async () => {}),
