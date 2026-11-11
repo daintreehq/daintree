@@ -268,9 +268,18 @@ vi.mock("electron", () => ({
   BrowserWindow: {
     getFocusedWindow: (...args: unknown[]) => mockGetFocusedWindow(...args),
   },
+  // Electron's own net.fetch rejects every manual-mode redirect (#16855), so a
+  // download wired back to it fails here instead of reaching the scripted stub.
   net: {
-    fetch: (...args: unknown[]) => mockNetFetch(...args),
+    fetch: vi.fn(async () => {
+      throw new Error("Redirect was cancelled");
+    }),
   },
+}));
+// URL downloads fetch through the manual-redirect adapter over `net.request`;
+// route it to the stub so each case still scripts every hop.
+vi.mock("../../../utils/netManualRedirectFetch.js", () => ({
+  createManualRedirectFetch: () => (url: string, init?: RequestInit) => mockNetFetch(url, init),
 }));
 
 import { registerPluginHandlers } from "../plugin.js";

@@ -1,5 +1,5 @@
 import dns from "node:dns/promises";
-import type { net as ElectronNet } from "electron";
+import type { ManualRedirectFetch } from "./netManualRedirectFetch.js";
 import { MAX_DNTR_BYTES } from "./pluginArchiveConstants.js";
 import { isPrivateOrLoopbackHostname } from "../schemas/pluginIdentifiers.js";
 
@@ -193,11 +193,13 @@ export async function resolvesToPrivateAddress(
 }
 
 /**
- * `net.fetch` with manual redirect following so EVERY hop's host is revalidated
+ * A fetch with manual redirect following so EVERY hop's host is revalidated
  * through {@link isPrivateOrLoopbackHostname}. The original-host guard alone is
  * bypassable: a public URL can 30x-redirect to loopback/link-local/RFC1918
  * (SSRF). Following manually lets us reject a private `Location` before the body
- * is ever read.
+ * is ever read. `manualFetch` comes from {@link createManualRedirectFetch}:
+ * Electron's own `net.fetch` rejects every manual-mode redirect instead of
+ * answering it (#16855).
  *
  * Beyond the literal-host check, every hop's hostname is resolved via DNS and
  * the resolved IP is re-validated through {@link resolvesToPrivateAddress} —
@@ -210,7 +212,7 @@ export async function resolvesToPrivateAddress(
  * The caller still owns the timeout/size signal — it's threaded through every
  * hop via `init.signal`, and it governs each hop's DNS check as well as its
  * fetch: once it aborts, the call rejects with `signal.reason` and no further
- * `netFetch` starts, so a caller tells a user cancel from a deadline the same
+ * `manualFetch` starts, so a caller tells a user cancel from a deadline the same
  * way whichever step was running. A signal from `hops.initFor` joins it for
  * that hop rather than replacing it. Non-redirect responses (including the final
  * 2xx and any 4xx/5xx) are returned as-is for the caller to inspect.
@@ -222,7 +224,7 @@ export async function resolvesToPrivateAddress(
  * provider's token once a redirect leaves its origin.
  */
 export async function fetchWithPrivateHostGuard(
-  netFetch: typeof ElectronNet.fetch,
+  manualFetch: ManualRedirectFetch,
   url: string,
   init: RequestInit,
   isAllowedHost?: (hostname: string) => boolean,
@@ -263,13 +265,13 @@ export async function fetchWithPrivateHostGuard(
       return { ok: false, reason: "private-host" };
     }
     signal?.throwIfAborted();
-    const response = await netFetch(currentUrl, {
+    const response = await manualFetch(currentUrl, {
       ...hopInit,
       ...(signal ? { signal } : {}),
       redirect: "manual",
     });
-    // Electron surfaces a manual-mode redirect as an opaqueredirect/3xx with a
-    // populated Location header; a normal response has no Location to follow.
+    // A manual-mode redirect comes back as its 3xx with the Location to follow;
+    // a normal response has no Location.
     const location =
       response.status >= 300 && response.status < 400 ? response.headers.get("location") : null;
     if (!location) {

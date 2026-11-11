@@ -17,6 +17,7 @@ interface MockWebContents {
 const webContentsCreatedListeners: WebContentsCreatedListener[] = [];
 
 const mockFromWebContents = vi.hoisted(() => vi.fn<() => unknown>(() => null));
+const mockNetRequest = vi.hoisted(() => vi.fn());
 vi.mock("electron", () => ({
   app: {
     on: vi.fn((event: string, listener: WebContentsCreatedListener) => {
@@ -33,6 +34,7 @@ vi.mock("electron", () => ({
   },
   net: {
     fetch: vi.fn(),
+    request: (options: unknown) => mockNetRequest(options),
   },
   session: {
     fromPartition: vi.fn(() => ({
@@ -193,6 +195,8 @@ import {
 } from "../protocols.js";
 import { mintHtmlPreviewToken, _resetHtmlPreviewTokensForTests } from "../htmlPreviewTokens.js";
 import { createDaintreeHtmlProtocolHandler } from "../protocols/html.js";
+import type { ManualRedirectFetch } from "../../utils/netManualRedirectFetch.js";
+import { FakeElectronNet } from "../../utils/__tests__/helpers/fakeElectronNet.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 import { setRemoteWebviewSrcGate } from "../../window/webviewSrcGate.js";
 import { PATH_CANONICAL_HEADER, PREVIEW_REFUSAL_HEADER } from "../../../shared/types/ipc/files.js";
@@ -3502,9 +3506,28 @@ describe("createPluginProtocolHandler", () => {
           authority === "pi-abc" && tourId === "welcome" && chapterId === "publish"
             ? REMOTE
             : undefined,
-        netFetch as unknown as typeof fetch
+        netFetch as unknown as ManualRedirectFetch
       );
     }
+
+    it("follows a narration host's redirect over Electron's net.request by default", async () => {
+      const moved = "https://cdn.example.com/tours/welcome/publish-v2.ogg";
+      const net = new FakeElectronNet({
+        [REMOTE.url]: { redirect: moved },
+        [moved]: { status: 200, headers: { "content-type": "audio/ogg" }, body: "abc" },
+      });
+      mockNetRequest.mockImplementation(net.request);
+
+      const response = await createPluginProtocolHandler(
+        (authority) => (authority === "pi-abc" ? PLUGIN_ROOT : undefined),
+        () => REMOTE
+      )(makeRequest("plugin://pi-abc/__dtv-2/__dta/welcome/publish"));
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("abc");
+      expect(net.connected).toEqual([REMOTE.url, moved]);
+      expect(net.requests.map((r) => r.options.credentials)).toEqual(["omit", "omit"]);
+    });
 
     it("streams a bundled narration file with byte ranges", async () => {
       const fs = await import("fs/promises");

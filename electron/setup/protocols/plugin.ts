@@ -13,6 +13,10 @@ import {
   stripPluginViewGeneration,
 } from "../../../shared/utils/pluginViewUrl.js";
 import { fetchWithPrivateHostGuard } from "../../utils/pluginDownloadPolicy.js";
+import {
+  createManualRedirectFetch,
+  type ManualRedirectFetch,
+} from "../../utils/netManualRedirectFetch.js";
 import { logWarn } from "../../utils/logger.js";
 import { isPluginDirResolverLive, markPluginDirResolverLive } from "../pluginProtocolReadiness.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -115,7 +119,7 @@ const PLUGIN_TOUR_AUDIO_TIMEOUT_MS = 15_000;
 async function proxyPluginTourAudio(
   source: { url: string; hosts: ReadonlySet<string> },
   request: GlobalRequest,
-  netFetch: typeof net.fetch
+  netFetch: ManualRedirectFetch
 ): Promise<Response> {
   const headers: Record<string, string> = {};
   const range = request.headers.get("range");
@@ -313,7 +317,7 @@ async function serveRemotePluginAsset(
 export function createPluginProtocolHandler(
   getPluginRoot: GetPluginRootByAuthority,
   getTourAudio: GetPluginTourAudio = resolvePluginTourAudio,
-  netFetch: typeof net.fetch = (input, init) => net.fetch(input, init)
+  netFetch: ManualRedirectFetch = createManualRedirectFetch((options) => net.request(options))
 ) {
   return async (request: GlobalRequest) => {
     if (request.method !== "GET" && request.method !== "HEAD") {

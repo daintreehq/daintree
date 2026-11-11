@@ -9,11 +9,11 @@ import os from "os";
  * `PluginService.checkForUpdate` re-fetches the plugin's `originalUrl`, streams
  * the archive to a temp file (capped at `MAX_DNTR_BYTES`), hashes it, and
  * compares against the installed `archiveHash`. It returns a structured result
- * for every domain outcome and never throws. `net.fetch` is the only mocked
+ * for every domain outcome and never throws. The fetch is the only mocked
  * collaborator; the real pack/hash/manifest-read logic runs unmocked.
  *
- * Mocks mirror `PluginService.install.test.ts`, plus `net` on the electron mock
- * (the service lazy-imports it via `await import("electron")`).
+ * Mocks mirror `PluginService.install.test.ts`, plus the manual-redirect fetch
+ * the download goes through, routed to `netMock.fetch`.
  */
 
 const appMock = vi.hoisted(() => ({
@@ -40,8 +40,17 @@ const capConsentMock = vi.hoisted(() => ({
 
 vi.mock("electron", () => ({
   app: appMock,
-  net: netMock,
+  // Electron's own net.fetch rejects every manual-mode redirect (#16855), so a
+  // download wired back to it fails here instead of reaching the scripted stub.
+  net: {
+    fetch: vi.fn(async () => {
+      throw new Error("Redirect was cancelled");
+    }),
+  },
   ipcMain: { on: vi.fn(), removeListener: vi.fn() },
+}));
+vi.mock("../../utils/netManualRedirectFetch.js", () => ({
+  createManualRedirectFetch: () => (url: string, init?: RequestInit) => netMock.fetch(url, init),
 }));
 vi.mock("../../window/windowRef.js", () => ({
   getWindowRegistry: vi.fn(() => null),

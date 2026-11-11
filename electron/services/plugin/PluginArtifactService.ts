@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { FileHandle } from "node:fs/promises";
-import type { net as ElectronNet } from "electron";
+import type { ManualRedirectFetch } from "../../utils/netManualRedirectFetch.js";
 import {
   PLUGIN_ARTIFACT_DEFAULT_TTL_MS,
   PLUGIN_ARTIFACT_MAX_TRANSFERS,
@@ -32,7 +32,7 @@ import {
 
 export interface PluginArtifactServiceDeps {
   store: PluginArtifactStore;
-  netFetch: typeof ElectronNet.fetch;
+  netFetch: ManualRedirectFetch;
   httpsRequest?: HttpsRequest;
   now?: () => number;
   /** How often expired artifacts are swept; 0 disables the timer (tests). */

@@ -12,6 +12,7 @@ import { setArtifactSourceResolver } from "../setup/artifactSourceResolver.js";
 import type { PluginArtifact, PluginArtifactSource } from "../../shared/types/pluginArtifacts.js";
 import { PRODUCT_WEBSITE } from "../utils/productBranding.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
+import { createManualRedirectFetch } from "../utils/netManualRedirectFetch.js";
 // Aliased to avoid colliding with Vite's auto-injected ESM shim
 // (`import { createRequire } from 'module'; const require = createRequire(import.meta.url);`),
 // which it adds to every bundled chunk for CJS interop.
@@ -4223,7 +4224,7 @@ export class PluginService {
       store: new PluginArtifactStore({
         rootDir: path.join(app.getPath("userData"), "plugin-artifacts"),
       }),
-      netFetch: (input, init) => net.fetch(input, init),
+      netFetch: createManualRedirectFetch((options) => net.request(options)),
     });
     this.artifactService = service;
     setArtifactSourceResolver((artifactId, lease) => service.openLeased(artifactId, lease));
