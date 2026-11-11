@@ -1060,6 +1060,38 @@ describe("HelpSessionService", () => {
       expect(service.getScheduledRunOf(resumed.sessionId)).toBeNull();
     });
 
+    it("keeps a view from provisioning into a lane while main resumes it, and a discard from bringing it back (#16753)", async () => {
+      const resumeInput = {
+        ...provisionInput(),
+        slot: 1,
+        windowId: NO_VIEW_HANDLE,
+        projectViewWebContentsId: NO_VIEW_HANDLE,
+        vacantOnly: true,
+        startedBy: { kind: "update-restart" },
+      } as const;
+      const end = service.beginLaneResume("proj-1", 1);
+
+      await expect(
+        service.provisionSession({ ...provisionInput(), slot: 1 })
+      ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+      const resumed = await service.provisionSession(resumeInput);
+      if (!resumed) throw new Error("expected result");
+      // Another lane is untouched.
+      await expect(
+        service.provisionSession({ ...provisionInput(), slot: 2 })
+      ).resolves.toBeTruthy();
+
+      // Discarded before its spawn: the bearer the spawn would carry is dead.
+      expect(service.validateToken(resumed.token)).toBeTruthy();
+      await service.discardConversation("proj-1", 1);
+      expect(service.validateToken(resumed.token)).toBe(false);
+
+      end();
+      await expect(
+        service.provisionSession({ ...provisionInput(), slot: 1 })
+      ).resolves.toBeTruthy();
+    });
+
     it("refuses a schedule's start that names no run", async () => {
       await expect(
         service.provisionSession({

@@ -1132,6 +1132,19 @@ export class HelpSessionService {
       }
     }
 
+    // A lane coming back after an update restart (#16753) is main's until its
+    // resume settles: a view's launch that missed it at adoption would otherwise
+    // start a fresh conversation over the one being resumed.
+    if (
+      this.resumingSlotKeys.has(assistantSlotKey(input.projectId, slot)) &&
+      input.startedBy?.kind !== "update-restart"
+    ) {
+      throw new HelpSessionError(
+        "LANE_OCCUPIED",
+        `Assistant ${slot + 1} of this project is coming back after the update; try again in a moment.`
+      );
+    }
+
     // Checked inside the lane lock, so nothing can take the lane between this
     // and the provision below.
     if (input.vacantOnly) {
@@ -1974,8 +1987,21 @@ export class HelpSessionService {
         this.emitSessionEnded(record, "discarded");
       }
     }
-    if (!this.pendingHibernationStore) return;
     const slotKey = assistantSlotKey(projectId, slot);
+    // A resume still on its way to its spawn (#16753) would bring the discarded
+    // conversation back: its revoked bearer is refused at the spawn instead.
+    if (this.resumingSlotKeys.has(slotKey)) {
+      const unspawned = [...this.sessionsById.values()].filter(
+        (record) =>
+          record.projectId === projectId &&
+          record.slot === slot &&
+          !record.revoked &&
+          record.startedBy?.kind === "update-restart" &&
+          !this.terminalBySessionId.has(record.sessionId)
+      );
+      await Promise.all(unspawned.map((record) => this.revokeSession(record.sessionId)));
+    }
+    if (!this.pendingHibernationStore) return;
     this.pendingCapturesBySlotKey.delete(slotKey);
     this.claimsBySlotKey.delete(slotKey);
     this.bumpLaneRevision(slotKey);
