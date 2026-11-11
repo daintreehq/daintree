@@ -3984,7 +3984,7 @@ describe("PluginManagerView — Browse (#16782)", () => {
         {
           code: "catalog_not_listed",
           message:
-            "The plugin catalog doesn't list version 1.0.0 of \"acme.demo\", so nothing was installed. It may have been removed, or the link may be wrong.",
+            'The plugin catalog doesn\'t list version 1.0.0 of "acme.demo", so nothing was installed. It may have been removed, or the link may be wrong.',
         },
       ],
     });

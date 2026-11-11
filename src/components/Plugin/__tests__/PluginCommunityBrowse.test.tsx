@@ -51,9 +51,9 @@ beforeEach(() => {
   window.electron = { plugin: { browseCatalog } } as unknown as typeof window.electron;
 });
 
-function renderBrowse(
-  props: Partial<Parameters<typeof PluginCommunityBrowse>[0]> = {}
-): ReturnType<typeof render> & {
+function renderBrowse(props: Partial<Parameters<typeof PluginCommunityBrowse>[0]> = {}): ReturnType<
+  typeof render
+> & {
   onInstall: ReturnType<typeof vi.fn>;
   onViewInstalled: ReturnType<typeof vi.fn>;
 } {
@@ -105,9 +105,7 @@ describe("PluginCommunityBrowse", () => {
     fireEvent.click(within(card).getByRole("button", { name: /github\.com\/daintreehq/ }));
     expect(openExternal).toHaveBeenCalledWith(SESSION.repo);
 
-    expect(
-      within(listingCard(LINEAR.id)).getByText("No capabilities declared")
-    ).toBeTruthy();
+    expect(within(listingCard(LINEAR.id)).getByText("No capabilities declared")).toBeTruthy();
   });
 
   it("offers Install for a listing that isn't installed, and hands back the listing", async () => {
@@ -142,8 +140,9 @@ describe("PluginCommunityBrowse", () => {
     renderBrowse({ installDisabled: true });
     await screen.findByRole("list", { name: "Community plugins" });
     const install = screen.getByRole("button", { name: `Install ${SESSION.id}` });
-    expect(install.hasAttribute("disabled") || install.getAttribute("aria-disabled") === "true")
-      .toBe(true);
+    expect(
+      install.hasAttribute("disabled") || install.getAttribute("aria-disabled") === "true"
+    ).toBe(true);
   });
 
   it("searches by id, repository and capability, and clears a search that matched nothing", async () => {

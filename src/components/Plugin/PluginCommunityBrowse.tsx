@@ -27,7 +27,8 @@ export const COMMUNITY_LISTING_NOTE =
 const UNAVAILABLE_COPY: Record<PluginCatalogFailure, { title: string; description: string }> = {
   "not-published": {
     title: "Check back for community plugins",
-    description: "The community catalog isn't published yet. Your installed plugins aren't affected.",
+    description:
+      "The community catalog isn't published yet. Your installed plugins aren't affected.",
   },
   unreachable: {
     title: "Connect to browse community plugins",
@@ -107,10 +108,7 @@ function ListingCard({
       <Card padding="md" className="flex items-start gap-3">
         <div className="min-w-0 flex-1 space-y-1.5">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
-            <span
-              id={`${idBase}-name`}
-              className="text-sm font-medium text-text-primary break-all"
-            >
+            <span id={`${idBase}-name`} className="text-sm font-medium text-text-primary break-all">
               {listing.id}
             </span>
             <span className="text-2xs text-text-secondary tabular-nums">v{listing.version}</span>
@@ -204,8 +202,8 @@ export function PluginCommunityBrowse({
     <div>
       <h3 className="text-lg font-semibold text-text-primary">Community plugins</h3>
       <p className="text-sm text-text-secondary mt-1">
-        Plugins listed in the community catalog. Each one runs with full access to your machine,
-        so install only what you trust.
+        Plugins listed in the community catalog. Each one runs with full access to your machine, so
+        install only what you trust.
       </p>
     </div>
   );

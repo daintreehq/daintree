@@ -4,8 +4,7 @@ import { logError } from "@/utils/logger";
 
 /** What a read of the catalog came back with: main's answer, or a call that failed outright. */
 export type CatalogBrowseAnswer =
-  | { kind: "result"; result: PluginCatalogBrowseResult }
-  | { kind: "error" };
+  { kind: "result"; result: PluginCatalogBrowseResult } | { kind: "error" };
 
 /**
  * The community catalog as the Browse view reads it (#16782). It asks main once
