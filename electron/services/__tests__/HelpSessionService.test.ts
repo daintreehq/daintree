@@ -5459,8 +5459,8 @@ describe("HelpSessionService", () => {
       if (!claude || !lane0 || !lane1) throw new Error("expected results");
 
       const hash = path.basename(claude.sessionPath);
-      expect(path.basename(lane0.sessionPath)).toBe(`${hash}.antigravity-s0`);
-      expect(path.basename(lane1.sessionPath)).toBe(`${hash}.antigravity-s1`);
+      expect(path.basename(lane0.sessionPath)).toBe(`${hash}.antigravity.s0`);
+      expect(path.basename(lane1.sessionPath)).toBe(`${hash}.antigravity.s1`);
       // Both lanes stay live, each with its own bearer in its own folder.
       expect(service.validateToken(lane0.token)).not.toBe(false);
       expect(service.validateToken(lane1.token)).not.toBe(false);
@@ -5474,13 +5474,41 @@ describe("HelpSessionService", () => {
       expect(await exists(path.join(claude.sessionPath, ".agents"))).toBe(false);
     });
 
-    it("never shares a lane folder with a custom agent whose id reads like a lane key", async () => {
-      expect(assistantAgentDirKey("antigravity")).toBe("antigravity");
-      expect(assistantAgentDirKey("antigravity-s0")).toMatch(/^[0-9a-f]{16}$/);
-      expect(assistantAgentDirKey("antigravity-s12")).toMatch(/^[0-9a-f]{16}$/);
-      // Only the generated shape is reserved.
-      expect(assistantAgentDirKey("antigravity-sx")).toBe("antigravity-sx");
-      expect(assistantAgentDirKey("codex-s0")).toBe("codex-s0");
+    it("never shares a lane folder with a custom agent whose id reads like a lane", async () => {
+      setUserRegistry({
+        "antigravity-s0": {
+          id: "antigravity-s0",
+          name: "Lookalike",
+          command: "lookalike",
+          color: "#FF8800",
+          iconId: "custom",
+          supportsContextInjection: true,
+          supports: {
+            mcpInjection: "env-only",
+            settingsOverlay: false,
+            permissionBypass: false,
+            trustDialog: false,
+            versionProbe: true,
+            tier: "stable",
+          },
+        },
+      });
+      try {
+        const lane0 = await service.provisionSession(agyInput(0));
+        const lookalike = await service.provisionSession({
+          ...provisionInput(),
+          agentId: "antigravity-s0",
+          slot: 1,
+        });
+        if (!lane0 || !lookalike) throw new Error("expected results");
+
+        // The custom agent keeps the folder its id has always named.
+        expect(path.basename(lookalike.sessionPath)).toMatch(/\.antigravity-s0$/);
+        expect(lookalike.sessionPath).not.toBe(lane0.sessionPath);
+        expect(await exists(path.join(lookalike.sessionPath, ".agents"))).toBe(false);
+      } finally {
+        setUserRegistry({});
+      }
     });
 
     it("writes .agents/mcp_config.json in agy's dialect, with the reply-wait timeout", async () => {
@@ -5645,7 +5673,7 @@ describe("HelpSessionService", () => {
 
       const sessionsRoot = path.join(userData, "help-sessions");
       const [dir] = await fs.readdir(sessionsRoot);
-      expect(dir).toMatch(/\.antigravity-s0$/);
+      expect(dir).toMatch(/\.antigravity\.s0$/);
       const config = await readAgyConfig(path.join(sessionsRoot, dir!));
       expect(config.mcpServers.daintree).toBeUndefined();
     });
@@ -5653,7 +5681,7 @@ describe("HelpSessionService", () => {
     it("gcStaleSessions keeps a lane folder but strips a bearer left by a previous run", async () => {
       const live = await service.provisionSession(agyInput(0));
       if (!live) throw new Error("expected result");
-      const staleDir = path.join(userData, "help-sessions", "deadbeefdeadbeef.antigravity-s2");
+      const staleDir = path.join(userData, "help-sessions", "deadbeefdeadbeef.antigravity.s2");
       const staleConfig = path.join(staleDir, ".agents", "mcp_config.json");
       await fs.mkdir(path.dirname(staleConfig), { recursive: true });
       await fs.writeFile(

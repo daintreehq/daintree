@@ -27,6 +27,16 @@ describe("assistantSlots", () => {
     );
   });
 
+  it("names a lane's own directory apart from every agent key, and recognises it", () => {
+    const lane = assistantSessionDirName(HASH, "antigravity", 3);
+    expect(lane).not.toBe(assistantSessionDirName(HASH, "antigravity"));
+    // An agent key can't hold a dot, so no agent's id can spell a lane.
+    expect(lane).not.toBe(assistantSessionDirName(HASH, "antigravity-s3"));
+    expect(isAssistantSessionDirName(lane, HASH.length)).toBe(true);
+    // A lane needs an agent key; the bare hash stays Claude's.
+    expect(assistantSessionDirName(HASH, null, 3)).toBe(HASH);
+  });
+
   it("recognises the project hash, bare or agent-qualified, as a live session directory", () => {
     // Load-bearing for GC, which deletes whatever this rejects. The two legacy
     // shapes — per-launch UUIDs and the `-sN` per-lane directories — must be
@@ -35,6 +45,17 @@ describe("assistantSlots", () => {
     expect(isAssistantSessionDirName(`${HASH}.codex`, HASH.length)).toBe(true);
     expect(isAssistantSessionDirName(`${HASH}.my-agent-2`, HASH.length)).toBe(true);
     expect(isAssistantSessionDirName(`${HASH}.s1`, HASH.length)).toBe(true);
+    // A lane suffix after an agent key: Antigravity's folder per lane (#16814).
+    expect(isAssistantSessionDirName(`${HASH}.antigravity.s0`, HASH.length)).toBe(true);
+    expect(
+      isAssistantSessionDirName(`${HASH}.antigravity.s${MAX_ASSISTANT_SLOTS - 1}`, HASH.length)
+    ).toBe(true);
+    expect(
+      isAssistantSessionDirName(`${HASH}.antigravity.s${MAX_ASSISTANT_SLOTS}`, HASH.length)
+    ).toBe(false);
+    expect(isAssistantSessionDirName(`${HASH}.antigravity.s`, HASH.length)).toBe(false);
+    expect(isAssistantSessionDirName(`${HASH}.antigravity.x1`, HASH.length)).toBe(false);
+    expect(isAssistantSessionDirName(`${HASH}.antigravity.s1.s2`, HASH.length)).toBe(false);
     expect(isAssistantSessionDirName(`${HASH}.Codex`, HASH.length)).toBe(false);
     expect(isAssistantSessionDirName(`${HASH}.`, HASH.length)).toBe(false);
     expect(isAssistantSessionDirName(`${HASH}.-codex`, HASH.length)).toBe(false);

@@ -330,21 +330,8 @@ describe("help.launchAgent", () => {
           message: expect.stringMatching(/Antigravity.*1\.4\.12.*1\.5\.5/),
         })
       );
-      // The lane it had claimed is free again for the next launch.
+      // Refused before any lane was claimed.
       expect(claimedHelpLaneKeys.size).toBe(0);
-    });
-
-    it("gates an agent it settled on itself, not only one it was named", async () => {
-      agyVersion("1.4.12");
-      useHelpPanelStore.setState({ preferredAgentId: "antigravity" });
-
-      await action.run(undefined, stubCtx);
-
-      expect(window.electron.system.getAgentVersion).toHaveBeenCalledWith(
-        "antigravity",
-        expect.anything()
-      );
-      expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
     });
 
     it("refuses silently for a caller that asked for a vacant lane", async () => {
@@ -374,6 +361,13 @@ describe("help.launchAgent", () => {
         true,
       ]);
       expect(window.electron.help.provisionSession).toHaveBeenCalledTimes(1);
+
+      // Once it passes, launches go back to the cached version.
+      await action.run({ agentId: "antigravity" }, stubCtx);
+      expect(vi.mocked(window.electron.system.getAgentVersion).mock.calls.at(-1)).toEqual([
+        "antigravity",
+        false,
+      ]);
     });
 
     it("launches and binds Antigravity once its CLI meets the floor", async () => {

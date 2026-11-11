@@ -432,12 +432,6 @@ const DIGEST_AGENT_DIR_KEY = new RegExp(`^[0-9a-f]{${PROJECT_HASH_LEN}}$`);
  */
 const PER_LANE_DIR_AGENT_IDS: ReadonlySet<string> = new Set(["antigravity"]);
 
-/** Whether `agentId` reads like the key of one of those agents' lanes, `<id>-s<slot>`. */
-function isPerLaneDirKeyShape(agentId: string): boolean {
-  const match = /^(.+)-s\d+$/.exec(agentId);
-  return match !== null && PER_LANE_DIR_AGENT_IDS.has(match[1]!);
-}
-
 /**
  * What qualifies an agent's session directory: null for Claude, which keeps
  * the bare project hash (see `shared/config/assistantSlots.ts`); the id itself
@@ -445,16 +439,14 @@ function isPerLaneDirKeyShape(agentId: string): boolean {
  * otherwise a digest. A user-defined id may carry uppercase, dots or any
  * length, and two that differ only by case would share one directory on a
  * case-insensitive filesystem. An id shaped like a digest is digested too, so
- * a literal id can never land on another agent's digest, and so is one shaped
- * like a per-lane key (`antigravity-s0`), which would land in that lane's.
+ * a literal id can never land on another agent's digest.
  */
 export function assistantAgentDirKey(agentId: string): string | null {
   if (agentId === "claude") return null;
   if (
     agentId.length <= ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH &&
     SAFE_AGENT_DIR_KEY.test(agentId) &&
-    !DIGEST_AGENT_DIR_KEY.test(agentId) &&
-    !isPerLaneDirKeyShape(agentId)
+    !DIGEST_AGENT_DIR_KEY.test(agentId)
   ) {
     return agentId;
   }
@@ -462,10 +454,10 @@ export function assistantAgentDirKey(agentId: string): string | null {
 }
 
 function agentSessionDirName(pathHash: string, agentId: string, slot: number): string {
-  const agentKey = assistantAgentDirKey(agentId);
   return assistantSessionDirName(
     pathHash,
-    agentKey && PER_LANE_DIR_AGENT_IDS.has(agentId) ? `${agentKey}-s${slot}` : agentKey
+    assistantAgentDirKey(agentId),
+    PER_LANE_DIR_AGENT_IDS.has(agentId) ? slot : null
   );
 }
 

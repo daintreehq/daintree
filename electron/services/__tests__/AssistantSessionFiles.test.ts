@@ -190,7 +190,7 @@ describe("AssistantSessionFiles Antigravity bearer removal (#16814)", () => {
 
   beforeEach(async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-session-files-agy-"));
-    sessionPath = path.join(root, "abc.antigravity-s0");
+    sessionPath = path.join(root, "abc.antigravity.s0");
     await fs.mkdir(sessionPath, { recursive: true });
   });
 

@@ -2696,7 +2696,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     // A user-data folder with a space and an apostrophe in it, as a home
     // folder can have, so the quoting is what keeps the path one argument.
     const settingsPath =
-      "/data/O'Brien Help/help-sessions/abc123.antigravity-s1/.antigravity-session-settings.json";
+      "/data/O'Brien Help/help-sessions/abc123.antigravity.s1/.antigravity-session-settings.json";
 
     async function spawnAntigravity(token: string, command = "agy") {
       const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -2725,11 +2725,13 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       const command = await spawnAntigravity("help-token");
 
       expect(command).toMatch(/^agy /);
-      if (process.platform !== "win32") {
-        expect(command).toContain(
-          `'--settings' '/data/O'\\''Brien Help/help-sessions/abc123.antigravity-s1/.antigravity-session-settings.json'`
-        );
-      }
+      // POSIX shells close and reopen the quote around an apostrophe; PowerShell
+      // doubles it.
+      expect(command).toContain(
+        process.platform === "win32"
+          ? `'--settings' '/data/O''Brien Help/help-sessions/abc123.antigravity.s1/.antigravity-session-settings.json'`
+          : `'--settings' '/data/O'\\''Brien Help/help-sessions/abc123.antigravity.s1/.antigravity-session-settings.json'`
+      );
       expect(command).not.toContain("help-token");
       expect(command).not.toContain("--dangerously-skip-permissions");
       expect(mockPreparePaneConfig).not.toHaveBeenCalled();
