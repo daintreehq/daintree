@@ -354,6 +354,43 @@ describe("makePluginViewHost", () => {
     }
   });
 
+  it("starts loading the view loader when the host is made, so a later open draws in its first commit (#16802)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const imported = vi.fn();
+    vi.doMock("@/components/Plugin/PluginViewContent", async () => {
+      imported();
+      await gate;
+      return { makePluginViewContent: () => () => <div data-testid="content-probe" /> };
+    });
+
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+      // Registered, never rendered: the loader is already on its way.
+      await vi.waitFor(() => expect(imported).toHaveBeenCalledTimes(1));
+
+      await act(async () => {
+        release();
+        await vi.dynamicImportSettled();
+      });
+      render(
+        <Host
+          id="panel-later"
+          title="Dashboard"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+        />
+      );
+
+      expect(screen.getByTestId("content-probe")).toBeTruthy();
+      expect(imported).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("@/components/Plugin/PluginViewContent");
+    }
+  });
+
   it("reports a view loader that fails to load inside the panel, under its header (#16802)", async () => {
     vi.doMock("@/components/Plugin/PluginViewContent", () => {
       throw new Error("chunk missing");

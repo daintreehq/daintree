@@ -96,4 +96,37 @@ describe("LazyPluginHostedView (#16802)", () => {
     expect(await within(box).findByText("Mission Control unavailable")).toBeTruthy();
     expect(screen.queryByTestId("content")).toBeNull();
   });
+
+  it("names a hosted view's own title when its chunk fails to load", async () => {
+    vi.doMock(CONTENT_MODULE, () => {
+      throw new Error("chunk missing");
+    });
+    const { LazyPluginHostedView } = await import("../LazyPluginHostedView");
+
+    render(
+      <LazyPluginHostedView
+        source={{
+          from: "hosted",
+          view: {
+            id: "plugin-view:acme.beads/board",
+            pluginId: "acme.beads",
+            viewId: "board",
+            location: "sidebar",
+            name: "Acme Beads Board",
+            title: "Board",
+            pluginName: "Acme Beads",
+            iconId: "list",
+            priority: 10,
+            componentPath: "plugin://acme.beads/__dtv-1/board.js",
+          },
+        }}
+        host="sidebar"
+        mountId="sidebar:board"
+        testId="hosted-box"
+      />
+    );
+
+    const box = screen.getByTestId("hosted-box");
+    expect(await within(box).findByText("Acme Beads Board unavailable")).toBeTruthy();
+  });
 });

@@ -197,4 +197,30 @@ describe("usePreloadedComponent", () => {
     await act(async () => resolve({ Greeting }));
     expect(result.current.status).toBe("ready");
   });
+
+  it("keeps a different component's answer when the last one's load settles late", async () => {
+    let resolveFirst!: (m: { Greeting: typeof Greeting }) => void;
+    const First = lazyWithPreload(
+      () => new Promise<{ Greeting: typeof Greeting }>((r) => (resolveFirst = r)),
+      (m) => m.Greeting
+    );
+    const error = new Error("chunk missing");
+    const secondLoad = vi
+      .fn<() => Promise<{ Greeting: typeof Greeting }>>()
+      .mockRejectedValue(error);
+    const Second = lazyWithPreload(secondLoad, (m) => m.Greeting);
+
+    const { result, rerender } = renderHook(({ target }) => usePreloadedComponent(target), {
+      initialProps: { target: First },
+    });
+    rerender({ target: Second });
+    await act(async () => {});
+    expect(result.current).toEqual({ status: "failed", error });
+
+    // The first component's load lands after the switch: it must neither
+    // overwrite the second's failure nor send the second loading again.
+    await act(async () => resolveFirst({ Greeting }));
+    expect(result.current).toEqual({ status: "failed", error });
+    expect(secondLoad).toHaveBeenCalledTimes(1);
+  });
 });

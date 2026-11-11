@@ -57,6 +57,7 @@ vi.mock("@/components/Plugin/PluginHostedView", async () => {
 });
 
 const { PluginToolbarButton } = await import("../PluginTrayButton");
+const { preloadPluginHostedView } = await import("@/components/Plugin/LazyPluginHostedView");
 
 const KIND_ID = "acme.inbox.inbox";
 
@@ -122,7 +123,10 @@ describe("plugin toolbar popover, first open (#16802)", () => {
     expect(popover()).toBeNull();
     expect(document.activeElement).toBe(button);
 
-    await act(async () => h.release());
+    await act(async () => {
+      h.release();
+      await preloadPluginHostedView();
+    });
     await act(async () => {
       fireEvent.click(button);
     });

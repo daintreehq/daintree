@@ -91,6 +91,7 @@ describe("ProjectSurfaceView", () => {
 
   it("offers its view no requestReload, having no panel record to police it (#12609)", () => {
     render(<ProjectSurfaceView config={surfaceKind()} />);
+    expect(h.mounts).not.toHaveLength(0);
     expect(h.mounts.at(-1)?.offerRequestReload).toBeFalsy();
   });
 
