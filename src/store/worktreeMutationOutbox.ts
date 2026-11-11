@@ -23,8 +23,8 @@ import {
 
 /**
  * Options carried alongside a delete-in-flight so the card's "Retry" button
- * can re-fire the original request without re-opening the dialog. The dialog
- * confirms once; the card retries with the same intent.
+ * can re-fire the original request without re-opening the dialog — unless
+ * {@link deleteRetryNeedsReview} says the tree has to be previewed again first.
  */
 export interface WorktreeDeleteOptions {
   force?: boolean;
@@ -163,6 +163,41 @@ function isPermanentDeleteError(message: string): boolean {
     if (message.includes(pattern)) return true;
   }
   return false;
+}
+
+/**
+ * Refusals {@link WorkspaceService.deleteWorktree} raises because only `force`
+ * consents to what the delete would destroy: a dirty or untracked tree, or
+ * modified files inside a submodule. The submodule refusal shares the closing
+ * sentence but none of the dirty-tree words, so it is classified generic, not
+ * permanent.
+ */
+const FORCE_REQUIRED_PATTERNS = [
+  "Use force delete to proceed",
+  "uncommitted changes",
+  "untracked files",
+];
+
+/** What the card's Retry did: re-fired the delete, needs the dialog, or nothing. */
+export type DeleteRetryOutcome = "dispatched" | "needs-review" | "none";
+
+/**
+ * Whether a manual Retry has to go back through the delete dialog instead of
+ * re-firing the options confirmed earlier (#16791).
+ *
+ * A force delete is only ever sent straight after a preview the user saw. By
+ * the time Retry is pressed, a failed attempt has relaunched the agents it
+ * closed, and agents it never closed have kept writing, so the tree is no
+ * longer the one that was confirmed.
+ *
+ * An unforced delete the host refused for needing force can only be refused
+ * again; the dialog is where the changes are shown and force is chosen. Any
+ * other unforced failure re-fires: the host re-reads the tree and refuses a
+ * dirty one, which sends the next Retry here.
+ */
+export function deleteRetryNeedsReview(options: WorktreeDeleteOptions, error: string): boolean {
+  if (options.force === true) return true;
+  return FORCE_REQUIRED_PATTERNS.some((pattern) => error.includes(pattern));
 }
 
 /**

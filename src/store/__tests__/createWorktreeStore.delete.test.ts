@@ -462,29 +462,31 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     expect(logErrorWithContextMock).not.toHaveBeenCalled();
   });
 
-  it("retryDelete re-fires with the stored args", async () => {
+  it("retryDelete re-fires a non-force delete with the stored args", async () => {
     worktreeClientDeleteMock.mockRejectedValueOnce(new Error("first fail"));
 
     const store = createWorktreeStore();
     store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
 
-    store.getState().startDelete("wt-1", { force: true, deleteBranch: true });
+    store.getState().startDelete("wt-1", { force: false, deleteBranch: true });
     await flushPromises();
     await flushPromises();
 
     expect(store.getState().deleteErrors.has("wt-1")).toBe(true);
     worktreeClientDeleteMock.mockResolvedValueOnce();
 
-    store.getState().retryDelete("wt-1");
+    expect(store.getState().retryDelete("wt-1")).toBe("dispatched");
 
     expect(store.getState().deletingIds.has("wt-1")).toBe(true);
     expect(store.getState().deleteErrors.has("wt-1")).toBe(false);
+    // The generic failure's charge against the cap survives the manual retry.
+    expect([...store.getState().mutationOutbox.values()][0]!.retryCount).toBe(1);
     await flushPromises();
     await flushPromises();
 
     expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(2);
     expect(worktreeClientDeleteMock).toHaveBeenLastCalledWith("wt-1", {
-      force: true,
+      force: false,
       deleteBranch: true,
       mutationId: expect.any(String),
     });
@@ -524,10 +526,33 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     expect(store.getState().mutationOutbox.get(before.mutationId)).toEqual(before);
   });
 
-  it("retryDelete sends a non-force delete the host refused as dirty back for review", async () => {
-    worktreeClientDeleteMock.mockRejectedValueOnce(
-      new Error("Worktree has uncommitted changes. Use force delete to proceed.")
-    );
+  it("retryDelete reviews a force delete still parked for automatic retry", async () => {
+    // A generic failure under the cap leaves the entry `pending` with its
+    // banner up, and with `closeTerminals` off the agents never stopped.
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("git error: ref already exists"));
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: true, closeTerminals: false });
+    await flushPromises();
+    await flushPromises();
+    expect([...store.getState().mutationOutbox.values()][0]!.status).toBe("pending");
+
+    expect(store.getState().retryDelete("wt-1")).toBe("needs-review");
+    await flushPromises();
+    expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["tracked changes", "Worktree has uncommitted changes. Use force delete to proceed."],
+    ["untracked files", "Worktree has untracked files. Use force delete to proceed."],
+    [
+      "modified submodule files",
+      "Worktree has 2 modified submodule files. Deleting the worktree discards them along with its submodule checkouts. Use force delete to proceed.",
+    ],
+  ])("retryDelete sends a non-force delete refused for %s back for review", async (_, message) => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error(message));
 
     const store = createWorktreeStore();
     store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
@@ -539,12 +564,94 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     expect(store.getState().retryDelete("wt-1")).toBe("needs-review");
     await flushPromises();
     expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
+    expect(store.getState().deleteErrors.get("wt-1")).toBe(message);
+  });
+
+  it("a reviewed resubmit keeps the failed delete's mutationId and sends the new options", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(
+      new Error("Worktree has uncommitted changes. Use force delete to proceed.")
+    );
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false, deleteBranch: true });
+    await flushPromises();
+    await flushPromises();
+    const failedId = worktreeClientDeleteMock.mock.calls[0]![1].mutationId;
+    expect(store.getState().retryDelete("wt-1")).toBe("needs-review");
+
+    // What the dialog dispatches once the user has seen the changes again.
+    worktreeClientDeleteMock.mockResolvedValueOnce();
+    store.getState().startDelete("wt-1", { force: true, deleteBranch: false });
+    await flushPromises();
+    await flushPromises();
+
+    expect(worktreeClientDeleteMock).toHaveBeenLastCalledWith("wt-1", {
+      force: true,
+      deleteBranch: false,
+      mutationId: failedId,
+    });
+  });
+
+  it("retryDelete does nothing while a reconnect replay is running under the banner", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("git error: ref already exists"));
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: true });
+    await flushPromises();
+    await flushPromises();
     expect(store.getState().deleteErrors.has("wt-1")).toBe(true);
+
+    let resolveReplay: () => void = () => {};
+    worktreeClientDeleteMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveReplay = resolve;
+        })
+    );
+    // The automatic replay still re-fires the force delete as it always has.
+    store.getState().replayOutboxAfterReconnect();
+    await flushPromises();
+    await flushPromises();
+    expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(2);
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(true);
+
+    expect(store.getState().retryDelete("wt-1")).toBe("none");
+    expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(2);
+    resolveReplay();
+    await flushPromises();
+  });
+
+  it("retryDelete still re-fires a non-force failure that never reached the outbox", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+    store.setState({
+      deleteErrors: new Map([["wt-1", "fatal: worktree is locked"]]),
+      deleteErrorArgs: new Map([["wt-1", { force: false }]]),
+    });
+
+    expect(store.getState().retryDelete("wt-1")).toBe("dispatched");
+    expect(store.getState().deletingIds.has("wt-1")).toBe(true);
+  });
+
+  it("retryDelete reviews a force failure that never reached the outbox", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+    store.setState({
+      deleteErrors: new Map([["wt-1", "fatal: worktree is locked"]]),
+      deleteErrorArgs: new Map([["wt-1", { force: true }]]),
+    });
+
+    expect(store.getState().retryDelete("wt-1")).toBe("needs-review");
+    expect(store.getState().deletingIds.has("wt-1")).toBe(false);
   });
 
   it("retryDelete with no stored args is a no-op", () => {
     const store = createWorktreeStore();
-    store.getState().retryDelete("wt-1");
+    expect(store.getState().retryDelete("wt-1")).toBe("none");
     expect(store.getState().deletingIds.has("wt-1")).toBe(false);
     expect(worktreeClientDeleteMock).not.toHaveBeenCalled();
   });
@@ -850,10 +957,11 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
       await flushPromises();
       expect(restoreClosedTerminalsMock).toHaveBeenCalledTimes(1);
 
-      // Retry while the restore is still spawning panels.
+      // Confirm again from the dialog (a dirty refusal's Retry reopens it)
+      // while the restore is still spawning panels.
       closeTerminalsForWorktreeMock.mockClear();
       worktreeClientDeleteMock.mockResolvedValueOnce();
-      store.getState().retryDelete("wt-1");
+      store.getState().startDelete("wt-1", { closeTerminals: true, force: false });
       await flushPromises();
       await flushPromises();
       // Blocked on the in-flight restore — must not close terminals yet, which
@@ -1164,8 +1272,9 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
       expect(resumeDevPreviewsMock).toHaveBeenCalledTimes(1);
       expect(devPreviewStopByWorktreeMock).toHaveBeenCalledTimes(1);
 
+      // Confirmed again from the dialog, which a dirty refusal's Retry reopens.
       worktreeClientDeleteMock.mockRejectedValueOnce(new Error("worktree has uncommitted changes"));
-      store.getState().retryDelete("wt-1");
+      store.getState().startDelete("wt-1", { force: false });
       await flushPromises();
       await flushPromises();
       expect(devPreviewStopByWorktreeMock).toHaveBeenCalledTimes(1);
