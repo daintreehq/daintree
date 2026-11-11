@@ -8,15 +8,15 @@
  * tree cannot recover it. De-emphasise with a solid token one step down the text
  * hierarchy (`text-text-secondary`, `text-text-muted`) instead.
  *
- * This is not theoretical: the host CSS already carries a
+ * This is not theoretical: the host CSS used to carry a
  * `[class*="text-daintree-text/"] { color: … !important }` override inside the
  * `prefers-contrast: more` block, added to claw back the legibility this pattern
- * costs under macOS Increase Contrast. The rule stops the override's surface
- * area from growing.
+ * cost under macOS Increase Contrast. It went with the last site it reached
+ * (#16804), and this rule, now an error, keeps the pattern from coming back.
  *
  * Flagged in every position, variant-prefixed forms included — `hover:` alpha
- * fades the label exactly as hard as base alpha does, and the production
- * override above matches on a substring precisely because it has to catch both.
+ * fades the label exactly as hard as base alpha does, which is why that
+ * override matched on a substring: it had to catch both.
  *
  * Not flagged:
  *   - `bg-…/N`, `border-…/N`, `ring-…/N` — surface and edge tinting composite

@@ -1485,7 +1485,7 @@ export function BulkCreateWorktreeDialog({
                     </div>
                     {!item.skipped && (
                       <div className="flex items-center gap-1.5 mt-0.5">
-                        <Icon name="worktree" className="w-3 h-3 text-daintree-text/40 shrink-0" />
+                        <Icon name="worktree" className="w-3 h-3 text-text-secondary shrink-0" />
                         <span className="text-xs text-text-secondary font-mono truncate">
                           {item.branchName}
                         </span>

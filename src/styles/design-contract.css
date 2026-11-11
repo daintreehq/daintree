@@ -449,6 +449,12 @@
   /* Every step Tailwind ships must be overridden here, or the ones we skip keep
    * their stock constants and stop tracking --theme-radius-scale. Bare `rounded`
    * and its directional forms resolve through --radius, so they scale too. */
+  /* Hairline corners for marks only a few pixels across (Pulse heat cells, the
+   * voice stop square), where xs would round them into dots. A ratio of the base
+   * rather than an offset from xs: xs reaches zero on Movile's 0.6 scale, and
+   * these must stay a corner there. */
+  --radius-3xs: calc(var(--radius) * 0.15);
+  --radius-2xs: calc(var(--radius) / 5);
   --radius-xs: calc(var(--radius) - 6px);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -461,20 +467,15 @@
   --height-sm: 2rem;
   --height-md: 2.5rem;
   --height-lg: 3rem;
-  /* Legacy aliases (#12031). Every solid call site now spells the semantic
-   * token directly; these five survive only because Tailwind v4 generates
-   * utilities on demand from this namespace, and the alpha-modified forms
-   * still in the tree would stop generating without them.
-   *
-   * Two things still need them. The non-text alpha composites — background,
-   * ring and border tints over these five aliases — are deliberate and
-   * unreviewed, left to #12029. (Naming one of those utilities literally here
-   * would trip the accent guard in `accentGuard.contract.test.ts`, which reads
-   * this file as text and cannot tell a comment from a declaration.)
-   * And what #12065 left of the `text-daintree-text/NN` hierarchy ramp: the
-   * prose is off it, but the icon affordances, decorative glyphs, disabled
-   * states and opacity composites are still dim on purpose, each one recorded
-   * in `scripts/baselines/text-ramp-manifest.json`. They go when those do. */
+  /* Legacy aliases (#12031). Every call site now spells the semantic token
+   * directly: #12056 took the solid uses, #12065 the text opacity ramp, and
+   * #16804 the last alpha composites and dim icon, after which
+   * `component-contract/no-legacy-daintree-utilities` became an error. Nothing
+   * in the renderer paints through these five any more; they are declarations
+   * only, and Tailwind v4 generates no utility from them unless one is used.
+   * (Naming one of those utilities literally here would trip the accent guard
+   * in `accentGuard.contract.test.ts`, which reads this file as text and cannot
+   * tell a comment from a declaration.) */
   --color-daintree-bg: var(--theme-surface-canvas);
   --color-daintree-sidebar: var(--theme-surface-sidebar);
   --color-daintree-border: var(--theme-border-default);
@@ -525,13 +526,21 @@
  * size is not something a colour scheme should decide. App-wide text scaling
  * already exists as Chromium zoom (View ▸ Zoom In/Out), which scales rem and px
  * alike. If a text scalar is ever wanted it has to cover the whole --text-*
- * family at once — wiring it to these three steps alone would reproduce, for
- * type, exactly the split-scale defect this scale exists to avoid.
+ * family at once — wiring it to these steps alone would reproduce, for type,
+ * exactly the split-scale defect this scale exists to avoid.
+ *
+ * 5xs through 7xs continue the same 1px ladder for miniature illustrations —
+ * the setup wizard's thumbnail of the app window — where the type is scenery
+ * drawn at a fixed ratio to the picture. Nothing anyone has to read goes below
+ * 4xs.
  */
 @theme {
   --text-2xs: 0.6875rem;
   --text-3xs: 0.625rem;
   --text-4xs: 0.5625rem;
+  --text-5xs: 0.5rem;
+  --text-6xs: 0.4375rem;
+  --text-7xs: 0.375rem;
 }
 
 /* Motion token scale — single source of truth for durations and easings.

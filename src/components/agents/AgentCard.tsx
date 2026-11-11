@@ -88,7 +88,7 @@ function OnboardingCard({
   return (
     <label
       className={cn(
-        "flex items-center gap-3 px-3 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30 cursor-pointer hover:bg-daintree-bg/60 transition-colors",
+        "flex items-center gap-3 px-3 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30 cursor-pointer hover:bg-surface-canvas/60 transition-colors",
         compact ? "py-2" : "py-2.5"
       )}
     >

@@ -3,10 +3,12 @@
  * docs/themes/component-contract.md.
  *
  * One plugin rather than six so the config carries a single block and every
- * opt-out comment shares a prefix. Five ship as `warn`: each has thousands of
- * pre-existing violations, and `scripts/lint-ratchet.mjs` grandfathers warnings
- * per rule while failing any increase. `no-raw-shadow` shipped with none left,
- * so it is an error. Errors are never grandfathered.
+ * opt-out comment shares a prefix. Five shipped as `warn` over pre-existing
+ * violations, with `scripts/lint-ratchet.mjs` grandfathering warnings per rule
+ * while failing any increase; four have since been cleared and promoted to
+ * errors, leaving `no-unpaired-outline-suppression` on the ratchet.
+ * `no-raw-shadow` shipped with none left, so it was always an error. Errors are
+ * never grandfathered.
  */
 
 import noArbitraryTextSize from "./no-arbitrary-text-size.js";
