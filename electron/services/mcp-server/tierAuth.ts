@@ -597,6 +597,11 @@ export interface TargetPolicySessionSnapshot {
    */
   relay?: boolean;
   /**
+   * Whether that relayed assistant is its Shell's global Assistant (#14545) —
+   * see {@link SessionSurfacePolicy.relayGlobal}. Read as `=== true`.
+   */
+  relayGlobal?: boolean;
+  /**
    * Whether the session is an agent pane (#12692) — see
    * {@link SessionSurfacePolicy.paneApproval}. Optional and read as `=== true`.
    */
@@ -903,18 +908,22 @@ const LADDER_RANK: Readonly<Record<LadderTier, number>> = {
 /**
  * Whether this session may be told that actions exist above its tier (#12117).
  *
- * Two conditions, both necessary. The origin must be renderer-owned — `help`,
- * a pinned panel with a human watching and a first-party prompt that carries
- * the rule for reading a stub. And the tier must be on the
- * in-app ladder: `external` is a flat peer of that ladder rather than a rung on
- * it, so there is no tier an external caller could be raised to and nothing
- * honest to report.
+ * Two conditions, both necessary. The caller must be an assistant whose tier a
+ * person can raise: a renderer-owned origin — `help`, a pinned panel with a
+ * human watching and a first-party prompt that carries the rule for reading a
+ * stub — or a relay, an assistant reaching this project through its Shell's
+ * `host.call` at the tier its own Tool set gave it (#16764). And the tier must
+ * be on the in-app ladder: `external` is a flat peer of that ladder rather than
+ * a rung on it, so there is no tier an external caller could be raised to and
+ * nothing honest to report.
  *
  * Asked of the ORIGIN, never of the routing. `getOrigin` fails closed to
  * `external` for a session it does not recognise, and a workspace-bound
  * external session can hold a renderer route without being renderer-owned — so
  * "has a renderer" is the wrong question and would open the catalog to
- * api-key clients (#11789).
+ * api-key clients (#11789). A relay's origin is `external` too; it is admitted
+ * only by the relay flag, which main sets when it opens the session and no
+ * bearer can present.
  *
  * An absent snapshot is a denial. Every introspection call in `sessionServer`
  * supplies one; its absence means a caller this module cannot classify.
@@ -923,7 +932,7 @@ function isExistenceCatalogVisible(
   snapshot: TargetPolicySessionSnapshot | undefined
 ): snapshot is TargetPolicySessionSnapshot & { tier: LadderTier } {
   if (snapshot === undefined) return false;
-  if (!snapshot.rendererOwnedOrigin) return false;
+  if (!snapshot.rendererOwnedOrigin && snapshot.relay !== true) return false;
   // Named positively rather than as `!== "external"`. A second flat peer added
   // to `McpTier` would be admitted by the negative form on the day it landed,
   // with no tier to report and nothing here to notice; this form refuses it
@@ -949,7 +958,12 @@ function isExistenceCatalogVisible(
  *   from;
  * - `hidden` and `restricted`, which are ceilings rather than tiers — no
  *   elevation reaches them, so naming them would describe a door with no key;
- * - an id no in-app tier permits, for the same reason;
+ * - an id no in-app tier permits for this caller's origin, for the same
+ *   reason: a relay's origin is not renderer-owned, so an unscoped panel tool
+ *   it reaches only through its owned twin is never offered (#16764);
+ * - an id a relay is never given, or that the calling Shell's global Assistant
+ *   is never allowed to send ({@link isWithheldFromRelayDiscovery}), since no
+ *   tier changes that either;
  * - an id whose minimum tier is not strictly above this session's. The ladder
  *   nests (`full` = core ∪ addons), so a
  *   non-permitted id always has a higher minimum and this is a backstop rather
@@ -974,6 +988,7 @@ export function buildUnavailableStub(
   // No tier makes these exist for anything but an assistant, so "raise your tier" would be wrong.
   if (HOST_CONTROL_TOOL_IDS.has(id) && snapshot.hostCall !== true) return null;
   if (ASSISTANT_CONTROL_TOOL_IDS.has(id)) return null;
+  if (isWithheldFromRelayDiscovery(id, snapshot)) return null;
   const record = entry as Partial<ActionManifestEntry>;
 
   if (record.mcpVisibility === "hidden") return null;
@@ -983,7 +998,7 @@ export function buildUnavailableStub(
   if (typeof title !== "string" || title.length === 0) return null;
   if (typeof category !== "string" || category.length === 0) return null;
 
-  const minimumTier = minimumPermittingTier(id);
+  const minimumTier = minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
   if (minimumTier === null) return null;
   if (LADDER_RANK[minimumTier] <= LADDER_RANK[snapshot.tier]) return null;
 
@@ -1190,17 +1205,18 @@ export function filterIntrospectionResultForSession(
       }
     }
 
-    // A renderer-owned session asking about a real action above its tier is
-    // told so, and told which tier would permit it (#12117). This is the
-    // lookup the issue was filed about: the indistinguishable denial below
-    // left an assistant unable to tell "no such action" from "not at your
-    // tier", so it reported `worktree.delete` as a capability Daintree lacks.
+    // A renderer-owned or relayed session asking about a real action above
+    // its tier is told so, and told which tier would permit it (#12117,
+    // #16764). This is the lookup the issue was filed about: the
+    // indistinguishable denial below left an assistant unable to tell "no such
+    // action" from "not at your tier", so it reported `worktree.delete` as a
+    // capability Daintree lacks.
     //
     // Still a DENIAL — `ok: false`, no entry, no policy, no schemas. The
     // reasoning against a tier-specific error stands for everyone else and is
     // unchanged for them: naming an id an external client cannot act on only
-    // tells it about a door it has no key to. A renderer-owned session does
-    // have one — the panel's tier control — which is what makes the answer
+    // tells it about a door it has no key to. These sessions do have one — the
+    // Tool set of the assistant they belong to — which is what makes the answer
     // worth giving here and nowhere else.
     if (answersTheRequest && !introspectable) {
       const unavailable = buildUnavailableStub(payload?.entry, options.policySnapshot);
