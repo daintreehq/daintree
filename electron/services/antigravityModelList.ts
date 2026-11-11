@@ -9,8 +9,9 @@ export interface AgyListedModel {
 // A single space never separates them, so prose can't read as a row, and an
 // id ends on a letter or digit, so a label (`Error:  …`) can't either.
 const MODEL_ROW = /^([A-Za-z0-9](?:[A-Za-z0-9._:/-]*[A-Za-z0-9])?)(?: {2,}|\t+)(\S.*)$/;
-// A marker some list printers put before the current choice.
-const ROW_MARKER = /^[*>•●✓]\s+/;
+// A marker some list printers put before the current choice: `*`, `>`, `•`,
+// `●` or `✓`, escaped so Main's startup chunk stays one byte per character.
+const ROW_MARKER = /^[*>\u2022\u25CF\u2713]\s+/;
 
 /**
  * Reads `agy models` output into its model rows, in printed order.
