@@ -1430,7 +1430,12 @@ describe("git-write commit and working diff", () => {
       const result = await handler(null, { cwd: "/tmp/repo", message: "feat: add foo" });
       expect(git.commit).toHaveBeenCalledWith("feat: add foo");
       // Read back from the hash git printed, never from HEAD.
-      expect(raw).toHaveBeenCalledWith(["rev-list", "--parents", "--max-count=1", "abc123^{commit}"]);
+      expect(raw).toHaveBeenCalledWith([
+        "rev-list",
+        "--parents",
+        "--max-count=1",
+        "abc123^{commit}",
+      ]);
       expect(result).toEqual({
         hash: "abc123",
         summary: "1 changed, 1 insertions(+), 0 deletions(-)",

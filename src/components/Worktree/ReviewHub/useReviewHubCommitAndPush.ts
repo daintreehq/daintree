@@ -264,7 +264,15 @@ export function useReviewHubCommitAndPush({
         setIsCommitPushInFlight(false);
       }
     },
-    [worktreePath, refresh, runPush, withholdPush, setActionError, debouncedBgRefreshRef, onCommitted]
+    [
+      worktreePath,
+      refresh,
+      runPush,
+      withholdPush,
+      setActionError,
+      debouncedBgRefreshRef,
+      onCommitted,
+    ]
   );
 
   const handleRetryPush = useCallback(async () => {
