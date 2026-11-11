@@ -1556,10 +1556,17 @@ function CanopyInbox({
         ref={bodyRef}
         className="canopy-frame flex min-h-0 flex-1 flex-col"
         onKeyDownCapture={(event) => {
+          // React carries a keydown up the component tree through a portal, so
+          // a dialog, popover or menu drawn into the page from a card, the
+          // reply's expanded editor included, reaches this box without being in
+          // it. Its keys are its own: stepping the agent would re-key the card
+          // and unmount the overlay mid-edit.
+          if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) {
+            return;
+          }
           // While a plugin's view is in the pane, ⌘↑/⌘↓ step the agents only
           // from the search, the list and the docked global assistant:
-          // anywhere else they are the view's, its dialogs and menus too,
-          // which sit outside this box.
+          // anywhere else they are the view's.
           if (
             shownPluginView !== null &&
             !(
