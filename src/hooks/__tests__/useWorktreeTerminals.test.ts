@@ -4,9 +4,15 @@ import { renderHook, act } from "@testing-library/react";
 import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import type { PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { bandForRun, type FleetBand } from "@/lib/fleetAttention";
-import { aggregateAgentStates, useWorktreeTerminals } from "../useWorktreeTerminals";
+import {
+  aggregateAgentStates,
+  countsFromKey,
+  countsKey,
+  useWorktreeTerminals,
+  type WorktreeTerminalCounts,
+} from "../useWorktreeTerminals";
 
 // #6650 — Active agentState (working/waiting/directing) credited to counts
 // even when agent identity hasn't committed yet, so collapsed worktree badges
@@ -218,6 +224,18 @@ describe("aggregateAgentStates (#6650)", () => {
     });
   });
 
+  describe("counts key (#16800)", () => {
+    it("round-trips every field to its own slot", () => {
+      const counts: WorktreeTerminalCounts = {
+        total: 1,
+        byState: { idle: 2, working: 3, waiting: 4, directing: 5, completed: 6, exited: 7 },
+        unread: 8,
+        blocked: 9,
+      };
+      expect(countsFromKey(countsKey(counts))).toEqual(counts);
+    });
+  });
+
   describe("useWorktreeTerminals under streaming panel patches (#16800)", () => {
     afterEach(() => {
       usePanelStore.setState({ panelsById: {}, panelIdsByWorktreeId: {} });
@@ -240,12 +258,11 @@ describe("aggregateAgentStates (#6650)", () => {
     // fresh `panelsById`, with every bucket array left as it was.
     const patch = (id: string, fields: Partial<PtyPanelData>) =>
       act(() => {
-        usePanelStore.setState((state) => ({
-          panelsById: {
-            ...state.panelsById,
-            [id]: { ...(state.panelsById[id] as PtyPanelData), ...fields },
-          },
-        }));
+        usePanelStore.setState((state) => {
+          const panel = state.panelsById[id];
+          if (!panel || !isPtyPanel(panel)) throw new Error(`no PTY panel ${id}`);
+          return { panelsById: { ...state.panelsById, [id]: { ...panel, ...fields } } };
+        });
       });
 
     const advance = (ms: number) =>
@@ -292,8 +309,15 @@ describe("aggregateAgentStates (#6650)", () => {
       patch("a", { agentState: "idle" });
       advance(100);
       patch("a", { agentState: "working" });
-      advance(300);
+      expect(result.current.counts).toBe(before);
 
+      // Stepped so a stale timer for the excursion would land on its own,
+      // not be batched away by the restoring one.
+      advance(149);
+      expect(result.current.counts).toBe(before);
+      advance(1);
+      expect(result.current.counts).toBe(before);
+      advance(100);
       expect(result.current.counts).toBe(before);
     });
 
