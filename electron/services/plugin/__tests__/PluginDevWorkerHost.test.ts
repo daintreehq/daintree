@@ -14,12 +14,16 @@ const { forkMock, mockChildren, appMock, loggerMock } = vi.hoisted(() => {
   return { forkMock, mockChildren, appMock, loggerMock };
 });
 
+// Above every platform's pid ceiling (macOS 99998, Linux 2^22), so a backstop
+// that outlives its test and reaches the real `process.kill` hits nothing.
+let nextMockPid = 10_000_001;
+
 class MockUtilityChild extends EventEmitter {
   stdout: Readable;
   stderr: Readable;
   postMessage = vi.fn();
   kill = vi.fn(() => true);
-  pid = 99;
+  pid: number | undefined = nextMockPid++;
   constructor() {
     super();
     this.stdout = new Readable({ read() {} });
@@ -62,6 +66,8 @@ async function flush(): Promise<void> {
 }
 
 describe("PluginDevWorkerHost", () => {
+  let killSpy: ReturnType<typeof vi.spyOn<typeof process, "kill">>;
+
   beforeEach(() => {
     vi.resetModules();
     forkMock.mockReset();
@@ -72,6 +78,7 @@ describe("PluginDevWorkerHost", () => {
     loggerMock.warn.mockClear();
     loggerMock.error.mockClear();
     forkMock.mockImplementation(() => new MockUtilityChild());
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
   });
 
   afterEach(() => {
@@ -292,9 +299,110 @@ describe("PluginDevWorkerHost", () => {
 
     host.dispose();
     expect(child.postMessage.mock.calls.some((c) => c[0]?.type === "dispose")).toBe(true);
-    expect(child.kill).not.toHaveBeenCalled();
+    expect(killSpy).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1100);
-    expect(child.kill).toHaveBeenCalled();
+    // Raw SIGKILL, never the blocking UtilityProcess.kill() (#11069, #16808).
+    expect(killSpy).toHaveBeenCalledWith(child.pid, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  describe("force-kill does not block main (#16808)", () => {
+    it("leaves a backstop-killed worker to its own exit event", async () => {
+      vi.useFakeTimers();
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      void host.start();
+      const child = mockChildren[0] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+
+      host.dispose();
+      vi.advanceTimersByTime(1000);
+      expect(killSpy).toHaveBeenCalledWith(child.pid, "SIGKILL");
+      // The signal is asynchronous: the worker is still alive until `exit`
+      // says otherwise, and that exit is what retires it.
+      expect(host.pid).toBe(child.pid);
+
+      child.emit("exit", 137);
+      expect(host.pid).toBeNull();
+      expect(host.isReady()).toBe(false);
+    });
+
+    it("does not signal a worker that exits inside the grace period", async () => {
+      vi.useFakeTimers();
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      void host.start();
+      const child = mockChildren[0] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+
+      host.dispose();
+      child.emit("exit", 0);
+      vi.advanceTimersByTime(5000);
+
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
+    });
+
+    it("holds the SIGKILL for a worker that has not spawned until it does", async () => {
+      vi.useFakeTimers();
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      const started = host.start().catch((err: Error) => err.message);
+      const child = mockChildren[0] as MockUtilityChild;
+      const pid = child.pid;
+      child.pid = undefined;
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(await started).toContain("did not become ready");
+      expect(killSpy).not.toHaveBeenCalled();
+
+      child.pid = pid;
+      child.emit("spawn");
+      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(killSpy).toHaveBeenCalledWith(pid, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalled();
+      host.dispose();
+    });
+
+    it("treats a worker already gone at the backstop as nothing to report", async () => {
+      vi.useFakeTimers();
+      killSpy.mockImplementation(() => {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      });
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      void host.start();
+      const child = mockChildren[0] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+
+      host.dispose();
+      vi.advanceTimersByTime(1000);
+
+      expect(killSpy).toHaveBeenCalledWith(child.pid, "SIGKILL");
+      expect(loggerMock.warn).not.toHaveBeenCalled();
+      child.emit("exit", 0);
+      expect(host.pid).toBeNull();
+    });
+
+    it("reports a backstop SIGKILL the OS refused", async () => {
+      vi.useFakeTimers();
+      killSpy.mockImplementation(() => {
+        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+      });
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      void host.start();
+      const child = mockChildren[0] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+
+      host.dispose();
+      vi.advanceTimersByTime(1000);
+
+      expect(loggerMock.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to kill worker during dispose"),
+        expect.anything()
+      );
+    });
   });
 
   it("prod mode forks with the prod-worker kind (#10526)", async () => {
@@ -325,7 +433,8 @@ describe("PluginDevWorkerHost", () => {
       await vi.advanceTimersByTimeAsync(5000);
 
       expect(await rejection).toContain("did not become ready");
-      expect(child.kill).toHaveBeenCalled();
+      expect(killSpy).toHaveBeenCalledWith(child.pid, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalled();
       host.dispose();
     });
 
@@ -340,7 +449,7 @@ describe("PluginDevWorkerHost", () => {
 
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(child.kill).not.toHaveBeenCalled();
+      expect(killSpy).not.toHaveBeenCalled();
       host.dispose();
     });
 
@@ -383,7 +492,7 @@ describe("PluginDevWorkerHost", () => {
       // second, competing restart policy layered over it.
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(second.kill).not.toHaveBeenCalled();
+      expect(killSpy).not.toHaveBeenCalled();
       host.dispose();
     });
   });
