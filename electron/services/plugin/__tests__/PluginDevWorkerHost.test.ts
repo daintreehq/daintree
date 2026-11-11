@@ -293,6 +293,47 @@ describe("PluginDevWorkerHost", () => {
     host.dispose();
   });
 
+  it("logs a worker's fatal V8 error without throwing and leaves the crash ladder to its exit (#16807)", async () => {
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost(OPTS);
+    const crashLoop = vi.fn();
+    const exits: unknown[] = [];
+    host.on("crash-loop", crashLoop);
+    host.on("exit", (code, expected) => exits.push({ code, expected }));
+    void host.start();
+    mockChildren[0].emit("message", { type: "ready" });
+
+    // UtilityProcess is an EventEmitter: an "error" nobody listens for throws in
+    // Main, taking the whole app down over one plugin's heap cap.
+    for (let i = 0; i < 3; i++) {
+      const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
+      expect(() =>
+        child.emit("error", "FatalError", "Reached heap limit", '{"header":{}}')
+      ).not.toThrow();
+      await flush();
+      expect(forkMock).toHaveBeenCalledTimes(i + 1);
+      expect(exits).toHaveLength(i);
+
+      child.emit("exit", 134);
+      await flush();
+      expect(exits).toHaveLength(i + 1);
+      // A crash counted twice would trip the cap one crash early.
+      expect(crashLoop).toHaveBeenCalledTimes(i < 2 ? 0 : 1);
+    }
+
+    const fatal = loggerMock.warn.mock.calls.filter(([message]) =>
+      String(message).includes("fatal error")
+    );
+    expect(fatal).toHaveLength(3);
+    expect(fatal[0][1]).toEqual({
+      pluginId: OPTS.pluginId,
+      pid: mockChildren[0].pid,
+      type: "FatalError",
+      location: "Reached heap limit",
+    });
+    host.dispose();
+  });
+
   it("dispose sends a cooperative dispose then force-kills after the grace period", async () => {
     vi.useFakeTimers();
     const { PluginDevWorkerHost } = await loadModule();

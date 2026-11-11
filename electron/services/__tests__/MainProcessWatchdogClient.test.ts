@@ -368,6 +368,39 @@ describe("MainProcessWatchdogClient", () => {
     expect(shared.loggerCalls.some((c) => c.message.includes("Restarting watchdog in"))).toBe(true);
   });
 
+  it("logs a fatal V8 error without throwing and leaves the restart to the exit that follows (#16807)", () => {
+    shared.loggerCalls.length = 0;
+    new WatchdogClient({ mainPid: 4242 });
+    mockChild.pid = 31337;
+    mockChild.emit("spawn");
+
+    // UtilityProcess is an EventEmitter: an "error" nobody listens for throws in Main.
+    expect(() =>
+      mockChild.emit("error", "FatalError", "Reached heap limit", '{"header":{}}')
+    ).not.toThrow();
+
+    const fatal = shared.loggerCalls.filter((c) => c.message.includes("fatal error"));
+    expect(fatal).toHaveLength(1);
+    expect(fatal[0].level).toBe("warn");
+    expect(fatal[0].context).toEqual({
+      pid: 31337,
+      type: "FatalError",
+      location: "Reached heap limit",
+    });
+
+    vi.advanceTimersByTime(6_000);
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+
+    shared.forkMock.mockReturnValue(createMockChild());
+    mockChild.emit("exit", 134);
+    vi.advanceTimersByTime(6_000);
+
+    expect(shared.forkMock).toHaveBeenCalledTimes(2);
+    const restarts = shared.loggerCalls.filter((c) => c.message.includes("Restarting watchdog in"));
+    expect(restarts).toHaveLength(1);
+    expect(restarts[0].message).toContain("(1/");
+  });
+
   it("does not restart a watchdog that exits while the app is shutting down", () => {
     shared.loggerCalls.length = 0;
     new WatchdogClient({ mainPid: 4242 });

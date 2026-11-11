@@ -656,6 +656,39 @@ describe("PtyHostLifecycle", () => {
     expect(lifecycle.child).toBe(newChild);
   });
 
+  it("logs a fatal V8 error without throwing and leaves crash accounting to the exit that follows (#16807)", async () => {
+    const { lifecycle, callbacks } = makeLifecycle();
+    lifecycle.start();
+    lifecycle.markReady();
+
+    // UtilityProcess is an EventEmitter: an "error" nobody listens for throws in Main.
+    expect(() =>
+      mockChild.emit("error", "FatalError", "Reached heap limit", '{"header":{}}')
+    ).not.toThrow();
+
+    const fatal = (callbacks.callbacks.logWarn as Mock).mock.calls
+      .map(([message]) => message as string)
+      .filter((message) => message.includes("fatal error"));
+    expect(fatal).toHaveLength(1);
+    expect(fatal[0]).toContain("daintree-pty-host");
+    expect(fatal[0]).toContain("pid=321");
+    expect(fatal[0]).toContain("FatalError");
+    expect(fatal[0]).toContain("Reached heap limit");
+    expect(fatal[0]).not.toContain("header");
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(callbacks.log.onExitSyncCalls).toHaveLength(0);
+    expect(lifecycle.crashTimestamps).toHaveLength(0);
+    expect(lifecycle.restartTimer).toBeNull();
+
+    mockChild.emit("exit", 134);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(callbacks.log.onExitSyncCalls).toHaveLength(1);
+    expect(callbacks.log.onCrashClassifiedCalls).toHaveLength(1);
+    expect(lifecycle.crashTimestamps).toHaveLength(1);
+    expect(lifecycle.restartTimer).not.toBeNull();
+  });
+
   it("holds the auto-restart fork until the restart barrier settles", async () => {
     const { lifecycle, callbacks } = makeLifecycle();
     let releaseReap!: () => void;

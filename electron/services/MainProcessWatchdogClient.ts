@@ -194,6 +194,12 @@ export class MainProcessWatchdogClient {
     launchedChild.on("spawn", () => {
       watchdogPid = launchedChild.pid;
     });
+    // A fatal V8 error in the child, such as its heap cap. UtilityProcess is an
+    // EventEmitter, so with no listener this would throw in main. The exit that
+    // always follows owns the restart; the diagnostic report stays out of the log.
+    launchedChild.on("error", (type, location) => {
+      logger.warn("Watchdog process fatal error", { pid: watchdogPid ?? null, type, location });
+    });
     this.child.on("exit", (code) => {
       const wasDisposed = this.isDisposed;
       this.child = null;
