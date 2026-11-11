@@ -69,6 +69,10 @@ import {
 } from "@/components/Tour/tourRegistry";
 import { PanelContextMenuTriggerScope } from "./PanelContextMenuTrigger";
 import { panelHasComposer } from "./terminalComposer";
+import { isResendLiveTerminal, resendUnavailableReason } from "./resendLastComposerSend";
+import { useLastComposerSendStore } from "@/store/lastComposerSendStore";
+import { useHeldComposerSendStore } from "@/store/heldComposerSendStore";
+import { useTerminalInputBlock } from "@/hooks/useHostConnection";
 import {
   canReloadPanelKind,
   hasGenericPanelMenu,
@@ -398,6 +402,10 @@ function TerminalContextMenuBody({
   const fleetSize = useFleetArmingStore((s) => (isMenuLive ? s.armedIds.size : 0));
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
   const hybridInputEnabled = useTerminalInputStore((s) => isMenuLive && s.hybridInputEnabled);
+  // What Resend last message needs to know, read only while the menu is live.
+  const hasLastSend = useLastComposerSendStore((s) => isMenuLive && terminalId in s.sends);
+  const isHoldingSend = useHeldComposerSendStore((s) => isMenuLive && terminalId in s.held);
+  const inputBlock = useTerminalInputBlock();
   const recentVoiceTargets = useVoiceRecordingStore((s) => s.recentTargets);
   // Pull the panel directly here (rather than indexing through the shallow
   // selector above) so the eligibility check sees the live record. The
@@ -851,6 +859,26 @@ function TerminalContextMenuBody({
     );
   }
 
+  const hasComposer =
+    isMenuLive &&
+    panelHasComposer(terminal, { hybridInputEnabled, isFleetArmed: isArmed, fleetSize });
+  // A fleet-scope mount locks the managed terminal without the store.
+  const inputLocked =
+    !!terminal.isInputLocked || !!peekTerminalService()?.get(terminalId)?.isInputLocked;
+  // Offered where a composer sends, or where a fleet broadcast reached a shell.
+  const resend =
+    hasPty && (hasComposer || hasLastSend)
+      ? {
+          unavailableReason: resendUnavailableReason({
+            hasSend: hasLastSend,
+            isLive: isResendLiveTerminal(terminalPty),
+            isInputLocked: inputLocked,
+            inputBlock,
+            isHolding: isHoldingSend,
+          }),
+        }
+      : undefined;
+
   return (
     <>
       {destructiveConfirmDialog}
@@ -888,10 +916,7 @@ function TerminalContextMenuBody({
           {hasPty && (
             <TerminalSelectionMenuItems
               hasSelection={hasSelection}
-              // A fleet-scope mount locks the managed terminal without the store.
-              pasteLocked={
-                !!terminal.isInputLocked || !!peekTerminalService()?.get(terminalId)?.isInputLocked
-              }
+              pasteLocked={inputLocked}
               hoveredUrl={hoveredUrl}
               hoveredUrlPluginName={hoveredUrlPluginName}
               hoveredFilePath={hoveredFilePath}
@@ -925,10 +950,8 @@ function TerminalContextMenuBody({
             isPaused={isPaused}
             isInputLocked={terminal.isInputLocked}
             isVoiceLockedHere={isVoiceLockedHere}
-            canDictateHere={
-              isMenuLive &&
-              panelHasComposer(terminal, { hybridInputEnabled, isFleetArmed: isArmed, fleetSize })
-            }
+            canDictateHere={hasComposer}
+            resend={resend}
             liveRecentVoiceTargets={liveRecentVoiceTargets}
             orchestratorCandidateIds={orchestratorCandidateIds}
             onRequestHandOver={handleRequestHandOver}

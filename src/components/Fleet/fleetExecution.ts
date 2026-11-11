@@ -3,6 +3,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { claimComposerSendSeq, noteLastComposerSend } from "@/store/lastComposerSendStore";
 import { terminalClient } from "@/clients";
 import {
   peek as peekTerminalService,
@@ -34,6 +35,7 @@ import {
 import { draftIsOnlyNotesTokens } from "@/components/Terminal/hybridInputParsing";
 import { isDiffNotesTarget } from "@/components/Terminal/diffNotesReference";
 import { clearDiffNotesOnceWritten } from "@/components/Terminal/diffNotesDelivery";
+import { attachableImagePaths } from "@/components/Terminal/submitComposerText";
 import type { DiffNote } from "@/components/Worktree/diffNotes";
 
 export interface FleetTargetPreview {
@@ -322,9 +324,11 @@ function carriesLocalContext(submission: ResolvedSubmission): boolean {
 
 // A send that landed is one its terminal's dictations can be cleaned up
 // against, noted as it lands so a slower target can't put it behind a later
-// send. Another host's agent keeps its own.
+// send, and the pane's last message to send again (#16746). Another host's
+// agent keeps its own.
 function submitAndNote(submission: ResolvedSubmission, retry: boolean): Promise<void> {
   const sentAt = Date.now();
+  const seq = claimComposerSendSeq();
   return submitTarget(submission, retry).then(() => {
     if (isHostQualifiedTargetId(submission.terminalId)) return;
     // Only this target's own send answers for the notes it carried: a sibling
@@ -336,6 +340,12 @@ function submitAndNote(submission: ResolvedSubmission, retry: boolean): Promise<
     useTerminalInputStore
       .getState()
       .recordSentPrompt(submission.terminalId, submission.authored, sentAt);
+    noteLastComposerSend(
+      submission.terminalId,
+      submission.payload,
+      attachableImagePaths(submission.imagePaths),
+      seq
+    );
   });
 }
 

@@ -26,8 +26,11 @@ vi.mock("@/services/terminal/inputGate", () => ({
 }));
 
 import { submitComposerText, submitPaneComposerText } from "../submitComposerText";
+import { getLastComposerSend, useLastComposerSendStore } from "@/store/lastComposerSendStore";
+import { MAX_SUBMIT_IMAGE_PATHS } from "@shared/utils/imageAttachmentInput";
 
 beforeEach(() => {
+  useLastComposerSendStore.setState({ sends: {} });
   client.submit.mockReset();
   client.submitWithImages.mockReset();
   holdClient.hold.mockReset();
@@ -284,5 +287,100 @@ describe("submitPaneComposerText holding for a busy agent (#16379)", () => {
 
     await expect(submitPaneComposerText("t1", "ship it", [], hooks)).resolves.toBe(false);
     expect(client.submit).not.toHaveBeenCalled();
+  });
+});
+
+describe("submitPaneComposerText noting the pane's last message (#16746)", () => {
+  const pane = (hold?: { mayHold: boolean }) => ({
+    canTakeInput: () => true,
+    onSending: vi.fn(),
+    onAccepted: vi.fn(),
+    ...(hold && {
+      hold: {
+        isHolding: () => false,
+        mayHold: () => hold.mayHold,
+        onHeld: vi.fn(),
+        onRefused: vi.fn(),
+      },
+    }),
+  });
+
+  it("notes a taken send as it went, with the images that went as attachments", async () => {
+    client.submitWithImages.mockResolvedValue(undefined);
+
+    await submitPaneComposerText(
+      "t1",
+      "expanded diff\nlook /a.png relative.png",
+      ["/a.png", "relative.png"],
+      pane()
+    );
+
+    expect(getLastComposerSend("t1")).toMatchObject({
+      text: "expanded diff\nlook /a.png relative.png",
+      imagePaths: ["/a.png"],
+    });
+  });
+
+  it("notes a held send as main holds it, so a dropped or withdrawn one can go again", async () => {
+    // What main keeps is what its delivery will write, so that is what is noted.
+    holdClient.hold.mockResolvedValue({
+      held: true,
+      send: {
+        terminalId: "t1",
+        token: "token-1",
+        text: "ship it, as main keeps it",
+        imagePaths: ["/kept.png"],
+        heldAt: 1,
+        expiresAt: 2,
+        status: "held",
+      },
+    });
+
+    await submitPaneComposerText(
+      "t1",
+      "ship it /a.png /b.png",
+      ["/a.png", "/b.png"],
+      pane({ mayHold: true })
+    );
+
+    expect(getLastComposerSend("t1")).toMatchObject({
+      text: "ship it, as main keeps it",
+      imagePaths: ["/kept.png"],
+    });
+  });
+
+  it("notes only as many images as one submit attaches, past the ones that can't be", async () => {
+    client.submitWithImages.mockResolvedValue(undefined);
+    const valid = Array.from({ length: MAX_SUBMIT_IMAGE_PATHS + 2 }, (_, i) => `/shot-${i}.png`);
+
+    const images = ["relative.png", ...valid];
+    await submitPaneComposerText("t1", `many ${images.join(" ")}`, images, pane());
+
+    expect(getLastComposerSend("t1")?.imagePaths).toEqual(valid.slice(0, MAX_SUBMIT_IMAGE_PATHS));
+  });
+
+  it("keeps the message on record when a later send is refused", async () => {
+    client.submit.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("gone"));
+
+    await submitPaneComposerText("t1", "first", undefined, pane());
+    await expect(submitPaneComposerText("t1", "second", undefined, pane())).resolves.toBe(false);
+    holdClient.hold.mockResolvedValue({ held: false, reason: "already-held" });
+    await submitPaneComposerText("t1", "third", undefined, pane({ mayHold: true }));
+
+    expect(getLastComposerSend("t1")?.text).toBe("first");
+  });
+
+  it("keeps a newer send when an older one is answered after it", async () => {
+    let answerFirst!: () => void;
+    client.submit
+      .mockImplementationOnce(() => new Promise<void>((resolve) => (answerFirst = resolve)))
+      .mockResolvedValueOnce(undefined);
+
+    const first = submitPaneComposerText("t1", "first", undefined, pane());
+    await submitPaneComposerText("t1", "second", undefined, pane());
+    answerFirst();
+    await first;
+
+    expect(getLastComposerSend("t1")?.text).toBe("second");
   });
 });

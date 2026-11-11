@@ -31,6 +31,14 @@ import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { getTerminalInputBlock, getTerminalInputBlockMessage } from "@/services/terminal/inputGate";
 import { RunGenerationArgSchema } from "@shared/types/assistantControl";
+import {
+  readResendReadiness,
+  resendLastComposerSend,
+  resendUnavailableReason,
+} from "@/components/Terminal/resendLastComposerSend";
+import { notify } from "@/lib/notify";
+
+const NO_FOCUSED_PANEL = "No panel is focused";
 
 /**
  * What an interrupt request can honestly report (#12338).
@@ -539,6 +547,51 @@ export function registerTerminalInputActions(
       const state = usePanelStore.getState();
       const targetId = state.focusedId;
       if (targetId) triggerPopStash(targetId);
+    },
+  }));
+
+  // A person's own message, kept in memory for its pane (#16746): no agent or
+  // plugin replays it, so it is in no MCP tier and refused to plugin dispatch.
+  actions.set("terminal.resendLastMessage", () => ({
+    id: "terminal.resendLastMessage",
+    title: "Resend last message",
+    description:
+      "Send a panel's last message from its composer or a fleet broadcast again, with the same text and images, leaving the composer's draft as it is",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    nonRepeatable: true,
+    selfNotifiesOnExecutionError: true,
+    scope: "renderer",
+    keywords: ["retry", "again", "repeat", "prompt", "send"],
+    argsSchema: z.object({ terminalId: z.string().min(1).optional() }).optional(),
+    isEnabled: (ctx) =>
+      ctx.focusedTerminalId !== undefined &&
+      resendUnavailableReason(readResendReadiness(ctx.focusedTerminalId)) === undefined,
+    disabledReason: (ctx) =>
+      ctx.focusedTerminalId === undefined
+        ? NO_FOCUSED_PANEL
+        : resendUnavailableReason(readResendReadiness(ctx.focusedTerminalId)),
+    run: async (args: { terminalId?: string } | undefined, ctx) => {
+      if (!isForegroundDispatch(ctx.dispatchSource)) {
+        throw new UnactionableTargetError("Only a person can resend a panel's last message");
+      }
+      const targetId = args?.terminalId ?? ctx.focusedTerminalId;
+      if (targetId === undefined) throw new UnactionableTargetError(NO_FOCUSED_PANEL);
+      const reason = resendUnavailableReason(readResendReadiness(targetId));
+      if (reason !== undefined) throw new UnactionableTargetError(reason);
+      const taken = await resendLastComposerSend(targetId).catch(() => false);
+      if (taken) return;
+      // Turned down between the check and the send: nothing else on screen
+      // says so, as a backgrounded panel has no held row to show.
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title: "Couldn't resend message",
+        message: "The panel didn't take its last message, so nothing was sent or held.",
+      });
+      throw new Error("The last message wasn't sent");
     },
   }));
 

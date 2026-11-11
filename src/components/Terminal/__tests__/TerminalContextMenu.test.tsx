@@ -60,6 +60,7 @@ vi.mock("@/components/ui/context-menu", () => {
     ContextMenuSeparator: () => <hr />,
     ContextMenuLabel: Passthrough,
     ContextMenuShortcut: Passthrough,
+    ContextMenuMeta: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
     ContextMenuGroup: Passthrough,
     ContextMenuPortal: Passthrough,
     ContextMenuSub: Passthrough,
@@ -150,7 +151,12 @@ const {
 }));
 
 vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch, get: () => undefined, list: () => [] },
+  actionService: {
+    dispatch,
+    get: () => undefined,
+    list: () => [],
+    getContext: () => ({ focusedTerminalId: "elsewhere", projectId: "project-1" }),
+  },
 }));
 
 vi.mock("@/services/TerminalInstanceService", () => {
@@ -258,6 +264,12 @@ vi.mock("@/components/Terminal/TerminalHandOver", async (importOriginal) => ({
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
+import {
+  claimComposerSendSeq,
+  noteLastComposerSend,
+  useLastComposerSendStore,
+} from "@/store/lastComposerSendStore";
+import { useHeldComposerSendStore } from "@/store/heldComposerSendStore";
 import { AGENT_SNOOZE_LABEL } from "@shared/utils/agentSnoozeDurations";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
@@ -1484,6 +1496,8 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     expect(level(submenu(tree, "Session"))).toEqual([
       "Redraw",
       "---",
+      // Disabled, with its reason beside it, until something is sent (#16746).
+      "Resend last messageNothing sent to this panel yet",
       "Lock input",
       "Lock dictation to this panel",
     ]);
@@ -1516,6 +1530,7 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
       "Redraw",
       "Restart on preset ›",
       "---",
+      "Resend last messageNothing sent to this panel yet",
       "Lock input",
       "Lock dictation to this panel",
       "Recent dictation targets ›",
@@ -1632,6 +1647,68 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     expect(level(submenu(menuTree(), "Fleet")).at(-1)).toBe(label);
     fireEvent.click(screen.getByText(label));
     expect(fleet[call]).toHaveBeenCalledWith("panel-1");
+  });
+
+  it("resends for the panel the menu is on, not whichever has focus (#16746)", () => {
+    noteLastComposerSend("panel-1", "again", [], claimComposerSendSeq());
+    renderMenu(agentPane);
+    try {
+      const row = screen.getByText("Resend last message").closest("button")!;
+      expect(row.getAttribute("aria-disabled")).toBeNull();
+      fireEvent.click(row);
+
+      expect(dispatch).toHaveBeenCalledWith(
+        "terminal.resendLastMessage",
+        { terminalId: "panel-1" },
+        expect.objectContaining({
+          contextOverride: { focusedTerminalId: "panel-1", projectId: "project-1" },
+        })
+      );
+    } finally {
+      useLastComposerSendStore.setState({ sends: {} });
+    }
+  });
+
+  it.each([
+    ["nothing has been sent", false, "Nothing sent to this panel yet"],
+    ["a message is already held", true, "A message is already held"],
+  ])("offers Resend last message disabled when %s, saying why", (_name, holding, why) => {
+    if (holding) {
+      noteLastComposerSend("panel-1", "again", [], claimComposerSendSeq());
+      useHeldComposerSendStore.getState().noteHeld({
+        terminalId: "panel-1",
+        token: "token-1",
+        text: "waiting",
+        imagePaths: [],
+        heldAt: 1,
+        expiresAt: 2,
+        status: "held",
+      });
+    }
+    try {
+      renderMenu(agentPane);
+      const row = screen.getByText("Resend last message").closest("button")!;
+      expect(row.getAttribute("aria-disabled")).toBe("true");
+      expect(row.textContent).toContain(why);
+    } finally {
+      useLastComposerSendStore.setState({ sends: {} });
+      useHeldComposerSendStore.setState({ held: {}, dropped: {}, refused: {} });
+    }
+  });
+
+  it("offers Resend last message on a plain shell only once a broadcast has reached it", () => {
+    const shell = { id: "panel-1", title: "zsh", kind: "terminal", worktreeId: "wt-1" };
+    renderMenu(shell);
+    expect(screen.queryByText("Resend last message")).toBeNull();
+    cleanup();
+
+    noteLastComposerSend("panel-1", "make test", [], claimComposerSendSeq());
+    try {
+      renderMenu(shell);
+      expect(level(submenu(menuTree(), "Session"))).toContain("Resend last message");
+    } finally {
+      useLastComposerSendStore.setState({ sends: {} });
+    }
   });
 
   it("still dispatches a row from inside a submenu", () => {
