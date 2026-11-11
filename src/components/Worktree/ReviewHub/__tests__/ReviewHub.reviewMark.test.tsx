@@ -857,7 +857,9 @@ describe("Review Hub review marks (#14585)", () => {
         await waitFor(() => expect(closeById).toHaveBeenCalledWith("diff-panel"));
         expect(openDiff).toHaveBeenCalledTimes(1);
       } finally {
-        usePanelDialogStore.setState(initial, true);
+        act(() => {
+          usePanelDialogStore.setState(initial, true);
+        });
       }
     });
 
