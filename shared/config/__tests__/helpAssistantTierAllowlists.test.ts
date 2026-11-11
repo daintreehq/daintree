@@ -133,11 +133,15 @@ describe("session continuity tier placement (#11908)", () => {
   /**
    * Session-continuity placement, asserted against the allowlists rather than
    * restated in prose. #11908 put these tools on the in-app ladder; the core/full
-   * split kept history listing and resume in `full` and took the bookmark and
-   * recipe-editor tools off MCP entirely. Nothing else proves an id did not
-   * quietly drift into `core` or onto the third-party surface.
+   * split took the bookmark and recipe-editor tools off MCP entirely. #16764
+   * moved the history read and the owned reopen into `core`, so a restart can
+   * be recovered at the default tool set, and kept the unowned resume in
+   * `full`. Nothing else proves an id did not quietly drift between tiers or
+   * onto the third-party surface.
    */
-  const CONTINUITY_TOOLS = ["agentSessionHistory.list", "agentSessionHistory.resume"] as const;
+  const CORE_RECOVERY_TOOLS = ["agentSessionHistory.list", "agent.resumeOwned"] as const;
+  const FULL_ONLY_RESUME = "agentSessionHistory.resume";
+  const CONTINUITY_TOOLS = [...CORE_RECOVERY_TOOLS, FULL_ONLY_RESUME] as const;
 
   /** Driven from the UI only since the core/full split. */
   const OFF_MCP = [
@@ -157,11 +161,20 @@ describe("session continuity tier placement (#11908)", () => {
   const fullAddons = new Set<string>(FULL_TIER_ADDONS);
   const external = new Set<string>(MCP_EXTERNAL_TIER_TOOLS);
 
-  it("keeps session history in the full tool set, out of core", () => {
-    for (const id of CONTINUITY_TOOLS) {
-      expect(fullAddons.has(id), `${id} should be a full-tier addon`).toBe(true);
-      expect(core.has(id), `${id} must not be in core`).toBe(false);
+  it("reaches the history and the owned reopen at core, for every origin", () => {
+    const nonRendererCore = new Set<string>(toNonRendererOwnedTools(HELP_TIER_CUMULATIVE.core));
+    for (const id of CORE_RECOVERY_TOOLS) {
+      expect(core.has(id), `${id} should be in core`).toBe(true);
+      expect(nonRendererCore.has(id), `${id} should survive the non-renderer projection`).toBe(
+        true
+      );
     }
+  });
+
+  it("keeps the unowned resume in the full tool set, out of core", () => {
+    expect(fullAddons.has(FULL_ONLY_RESUME)).toBe(true);
+    expect(HELP_TIER_CUMULATIVE.core).not.toContain(FULL_ONLY_RESUME);
+    expect(toNonRendererOwnedTools(HELP_TIER_CUMULATIVE.core)).not.toContain(FULL_ONLY_RESUME);
   });
 
   it("leaves bookmarks and the recipe editor off every in-app tier", () => {

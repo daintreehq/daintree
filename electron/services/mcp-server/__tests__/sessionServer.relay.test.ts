@@ -133,6 +133,77 @@ function errorCode(result: { content: unknown }): string {
   return (JSON.parse(first!.text) as { code: string }).code;
 }
 
+describe("telling a relayed assistant which tier an action needs (#16764)", () => {
+  const SCHEMA_MANIFEST = [...MANIFEST, entry("actions.getSchema")];
+  const GLOBAL_RELAY = {
+    shellName: "greg-mbp",
+    global: true as const,
+    refuseWrite: vi.fn(() => null),
+  };
+
+  /** A relay whose view answers `actions.getSchema` with `target`, as the renderer does. */
+  function schemaRead(target: ActionManifestEntry): Partial<SessionServerDeps> {
+    return {
+      requestManifest: vi.fn().mockResolvedValue(SCHEMA_MANIFEST),
+      getCachedManifest: vi.fn(() => SCHEMA_MANIFEST),
+      dispatchAction: vi.fn().mockResolvedValue({
+        result: { ok: true, result: { ok: true, entry: target, policy: null, error: null } },
+      }),
+    };
+  }
+
+  async function readSchema(relay: Harness, actionId: string) {
+    const result = await relay.client.callTool({
+      name: "actions.getSchema",
+      arguments: { actionId },
+    });
+    const [first] = result.content as Array<{ text: string }>;
+    return JSON.parse(first!.text) as {
+      ok: boolean;
+      entry: unknown;
+      unavailable?: { id: string; minimumTier: string; callable: boolean };
+      error: { code: string } | null;
+    };
+  }
+
+  it("names the full tier to the global Assistant's core relay", async () => {
+    const relay = await relayed("core", {
+      ...schemaRead(entry("recipe.run", "command", "confirm")),
+      relay: GLOBAL_RELAY,
+    });
+
+    const body = await readSchema(relay, "recipe.run");
+
+    expect(body.ok).toBe(false);
+    expect(body.entry).toBeNull();
+    expect(body.error?.code).toBe("TIER_NOT_PERMITTED");
+    expect(body.unavailable).toEqual(
+      expect.objectContaining({ id: "recipe.run", minimumTier: "full", callable: false })
+    );
+  });
+
+  it("keeps the unknown-id denial for what the global Assistant never sends", async () => {
+    const relay = await relayed("core", {
+      ...schemaRead(entry("agentSessionHistory.resume", "command")),
+      relay: GLOBAL_RELAY,
+    });
+
+    const body = await readSchema(relay, "agentSessionHistory.resume");
+
+    expect(body.error?.code).toBe("NOT_FOUND");
+    expect(body.unavailable).toBeUndefined();
+  });
+
+  it("names the full tier to a project assistant's relay for the same id", async () => {
+    const relay = await relayed("core", schemaRead(entry("agentSessionHistory.resume", "command")));
+
+    const body = await readSchema(relay, "agentSessionHistory.resume");
+
+    expect(body.error?.code).toBe("TIER_NOT_PERMITTED");
+    expect(body.unavailable?.minimumTier).toBe("full");
+  });
+});
+
 describe("waiting on a relayed close (#15728)", () => {
   // One Shell assistant's sessions on this host share a relay principal, one
   // per project it drives here, so a close in one project must not let a
@@ -512,6 +583,21 @@ describe("a relayed session (#13493)", () => {
         relay.store.resourceOwnership.get("relay-session", "terminal", "terminal-1")
       ).toBeDefined();
       expect(globalAssistantMayRelay("agentSessionHistory.resume")).toBe(false);
+    });
+
+    it("reaches the global Assistant's relay at the core tier (#16764)", async () => {
+      const relay = await relayed("core", {
+        handleAgentResumeOwned: answered("launched"),
+        relay: { shellName: "greg-mbp", global: true, refuseWrite: vi.fn(() => null) },
+      });
+
+      const listed = (await relay.client.listTools()).tools.map((tool) => tool.name);
+      expect(listed).toContain("agent.resumeOwned");
+
+      const result = await relay.client.callTool(RESUME);
+
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({ status: "launched" });
     });
 
     it("holds a session in a view to the view's drive rule", async () => {

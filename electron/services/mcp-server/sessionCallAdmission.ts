@@ -119,6 +119,9 @@ export function buildCallIntrospectionSurface(
       // policy record carries it rather than re-deriving it.
       rendererOwnedOrigin,
       relay: sessionSurface.relay === true,
+      // So an existence stub names nothing the global Assistant's runtime
+      // would refuse to send (#16764).
+      relayGlobal: sessionSurface.relayGlobal === true,
       paneApproval: sessionSurface.paneApproval === true,
       paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
       hostCall: hostCallOffered(),

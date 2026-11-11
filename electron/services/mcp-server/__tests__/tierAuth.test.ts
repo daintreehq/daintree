@@ -43,7 +43,7 @@ import {
 } from "../tierAuth.js";
 import { McpUnavailableActionStubSchema } from "../../../../shared/types/mcpIntrospection.js";
 import { findWireStrippedKeywords } from "../../../../shared/utils/mcpWireSchema.js";
-import { TIER_ALLOWLISTS, TIER_NOT_PERMITTED_CODE } from "../shared.js";
+import { TIER_ALLOWLISTS, TIER_NOT_PERMITTED_CODE, minimumPermittingTier } from "../shared.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import {
   OWNED_TWIN_TOOLS,
@@ -2823,6 +2823,115 @@ describe("filterIntrospectionResultForSession", () => {
       expect(payload.ok).toBe(false);
       expect(payload.error?.code).toBe("NOT_FOUND");
       expect(payload.unavailable).toBeUndefined();
+    });
+
+    // An assistant reaching a project through its Shell's `host.call` holds an
+    // `external` origin and the tier its own Tool set gave it (#16764). It is
+    // told what Full would unlock for it, and nothing Full never would: the
+    // relay's origin swaps unscoped panel tools for their owned twins, and the
+    // global Assistant's runtime refuses what its allowlist does not name.
+    describe("relayed sessions (#16764)", () => {
+      // On the full add-ons and on the global Assistant's allowlist.
+      const RELAY_FULL_ONLY = "recipe.run";
+
+      function relayed(
+        overrides: Partial<TargetPolicySessionSnapshot> = {}
+      ): TargetPolicySessionSnapshot {
+        return firstParty({ rendererOwnedOrigin: false, relay: true, ...overrides });
+      }
+
+      it.each([
+        ["a project assistant's relay", relayed()],
+        ["the global Assistant's relay", relayed({ relayGlobal: true })],
+      ])("names a full-only action to %s", (_label, snap) => {
+        expect(buildUnavailableStub(makeEntry({ id: RELAY_FULL_ONLY }), snap)).toMatchObject({
+          id: RELAY_FULL_ONLY,
+          minimumTier: "full",
+          callable: false,
+        });
+      });
+
+      it("names an owned twin, never the unscoped tool a relay never holds", () => {
+        expect(
+          buildUnavailableStub(makeEntry({ id: "terminal.injectOwned" }), relayed())
+        ).toMatchObject({ minimumTier: "full" });
+        // A renderer-owned session at core is offered the unscoped inject, so
+        // the null below is the relay's origin speaking, not the id.
+        expect(
+          buildUnavailableStub(makeEntry({ id: "terminal.inject" }), firstParty())
+        ).toMatchObject({ minimumTier: "full" });
+        expect(buildUnavailableStub(makeEntry({ id: "terminal.inject" }), relayed())).toBeNull();
+      });
+
+      it.each(["agentSessionHistory.resume", OUT_OF_TIER])(
+        "offers the global Assistant no stub for %s, which it may never send",
+        (id) => {
+          expect(buildUnavailableStub(makeEntry({ id }), relayed())).toMatchObject({
+            minimumTier: "full",
+          });
+          expect(
+            buildUnavailableStub(makeEntry({ id }), relayed({ relayGlobal: true }))
+          ).toBeNull();
+        }
+      );
+
+      it("reaches the recovery tools at core, so no stub names them", () => {
+        for (const id of ["agentSessionHistory.list", "agent.resumeOwned"]) {
+          expect(
+            buildUnavailableStub(makeEntry({ id }), relayed({ relayGlobal: true })),
+            id
+          ).toBeNull();
+          expect(minimumPermittingTier(id, false), id).toBe("core");
+        }
+      });
+
+      it("answers actions.getSchema with the tier", () => {
+        const payload = schemaFor(
+          makeEntry({ id: RELAY_FULL_ONLY }),
+          relayed({ relayGlobal: true })
+        );
+
+        expect(payload.ok).toBe(false);
+        expect(payload.entry).toBeNull();
+        expect(payload.policy).toBeNull();
+        expect(payload.error?.code).toBe("TIER_NOT_PERMITTED");
+        expect(payload.unavailable).toEqual(
+          expect.objectContaining({ id: RELAY_FULL_ONLY, minimumTier: "full", callable: false })
+        );
+        expect(McpGetSchemaWireResultSchema.safeParse(payload).success).toBe(true);
+      });
+
+      it("keeps the plain NOT_FOUND for what the global Assistant may never send", () => {
+        const payload = schemaFor(
+          makeEntry({ id: "agentSessionHistory.resume" }),
+          relayed({ relayGlobal: true })
+        );
+
+        expect(payload.error?.code).toBe("NOT_FOUND");
+        expect(payload.unavailable).toBeUndefined();
+      });
+
+      it("reports relay stubs in actions.search, with nothing the caller can't reach", () => {
+        const payload = searchFor(
+          [
+            makeEntry({ id: "worktree.list" }),
+            makeEntry({ id: RELAY_FULL_ONLY }),
+            makeEntry({ id: "terminal.inject" }),
+            makeEntry({ id: OUT_OF_TIER }),
+          ],
+          relayed({ relayGlobal: true })
+        );
+
+        expect(payload.totalMatches).toBe(1);
+        expect(stubIds(payload.unavailable)).toEqual([RELAY_FULL_ONLY]);
+      });
+
+      it.each([
+        ["a relay flag on the external tier", relayed({ tier: "external" })],
+        ["a foreign origin with no relay flag", relayed({ relay: false })],
+      ])("stays closed to %s", (_label, snap) => {
+        expect(buildUnavailableStub(makeEntry({ id: RELAY_FULL_ONLY }), snap)).toBeNull();
+      });
     });
   });
 });
