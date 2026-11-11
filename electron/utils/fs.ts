@@ -215,12 +215,15 @@ export async function prepareAtomicWriteFile(
  * leaves a torn file. Those two syncs only protect against power loss or a
  * kernel panic, and on macOS each one is a full drive-cache flush. Opt out only
  * for a file that is worthless after a reboot anyway.
+ *
+ * `onCommitted` runs as soon as the rename lands, before the directory sync,
+ * which can still throw with the new contents already in place.
  */
 export function resilientAtomicWriteFileSync(
   filePath: string,
   data: string,
   encoding: BufferEncoding = "utf-8",
-  options?: { mode?: number; durable?: boolean }
+  options?: { mode?: number; durable?: boolean; onCommitted?: () => void }
 ): void {
   const tempPath = generateTempPath(filePath);
   const applyMode = options?.mode !== undefined && process.platform !== "win32";
@@ -237,6 +240,7 @@ export function resilientAtomicWriteFileSync(
       chmodSync(tempPath, options!.mode!);
     }
     resilientRenameSync(tempPath, filePath);
+    options?.onCommitted?.();
     if (durable) syncParentDirectorySync(filePath);
   } catch (error) {
     try {

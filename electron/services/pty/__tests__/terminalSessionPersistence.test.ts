@@ -30,9 +30,11 @@ import {
 } from "../../../../shared/config/terminalScreenPersistence.js";
 import { HOST_THROWAWAY_TERMINAL_PREFIX } from "../../../../shared/config/hostThrowaway.js";
 
-// Pass-through by default; a test swaps in a writer that lands the rename and
-// then throws, the way a failed parent-directory fsync does.
+// Pass-through by default. A test fails the sync writer before its rename
+// (a full disk), or lets the rename land and then throws, the way a failed
+// parent-directory fsync does.
 const syncWriter = vi.hoisted(() => ({
+  beforeWrite: null as null | (() => void),
   afterWrite: null as null | (() => void),
 }));
 vi.mock("../../../utils/fs.js", async (importOriginal) => {
@@ -42,6 +44,7 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
     resilientAtomicWriteFileSync: (
       ...args: Parameters<typeof actual.resilientAtomicWriteFileSync>
     ) => {
+      syncWriter.beforeWrite?.();
       actual.resilientAtomicWriteFileSync(...args);
       syncWriter.afterWrite?.();
     },
@@ -716,6 +719,7 @@ describe("terminalSessionPersistence", () => {
         : [];
 
     afterEach(() => {
+      syncWriter.beforeWrite = null;
       syncWriter.afterWrite = null;
       setSessionPersistSuppressed(false);
       flushPendingSessionWritesSync();
@@ -775,6 +779,42 @@ describe("terminalSessionPersistence", () => {
       await write;
 
       expect(readSession("term-fsync")).toBe("DAINTREE_SESSION_v2\n80x24\nnewer");
+    });
+
+    it("leaves an in-flight async write standing when the sync write fails before its rename", async () => {
+      const write = persistSessionSnapshotAsync("term-enospc", {
+        data: "older",
+        cols: 80,
+        rows: 24,
+      });
+      syncWriter.beforeWrite = () => {
+        throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+      };
+      expect(() =>
+        persistSessionSnapshotSync("term-enospc", { data: "newer", cols: 80, rows: 24 })
+      ).toThrow("disk full");
+      await write;
+
+      expect(readSession("term-enospc")).toBe("DAINTREE_SESSION_v2\n80x24\nolder");
+    });
+
+    it("drops the superseded write's screen when persistence is suppressed by release", async () => {
+      const periodic = persistSessionSnapshotAsync("term-quiet", {
+        data: "periodic",
+        cols: 80,
+        rows: 24,
+      });
+      const exitClaim = claimSessionWrite("term-quiet")!;
+      await periodic;
+      setSessionPersistSuppressed(true);
+
+      releaseSessionWrite(exitClaim);
+      // A fallback write started by the release would still be pending here,
+      // and teardown would land it.
+      setSessionPersistSuppressed(false);
+      flushPendingSessionWritesSync();
+
+      expect(fs.existsSync(getSessionPath("term-quiet")!)).toBe(false);
     });
 
     it("lets a write superseded mid-flight neither land nor give up the newer claim", async () => {

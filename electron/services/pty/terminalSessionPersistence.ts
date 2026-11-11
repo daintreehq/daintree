@@ -487,14 +487,14 @@ export function persistSessionSnapshotSync(
     return;
   }
 
-  // Voided before the write rather than after it: the rename can land and the
-  // directory fsync still throw, and an older async write must not then cover
-  // the newer screen.
-  pendingSessionWrites.delete(sessionPath);
   mkdirSync(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
   tightenDirPermissionsSync(dir);
   resilientAtomicWriteFileSync(sessionPath, formatSessionFile(snapshot), "utf8", {
     mode: OWNER_RW_FILE_MODE,
+    // At the rename, in the same tick: the directory fsync after it can still
+    // throw with this screen in place, and an older async write must not then
+    // cover it. A failure before the rename leaves that older write standing.
+    onCommitted: () => pendingSessionWrites.delete(sessionPath),
   });
 }
 
@@ -548,7 +548,10 @@ export function claimSessionWrite(terminalId: string): SessionWriteClaim | null 
  */
 export function releaseSessionWrite(claim: SessionWriteClaim): void {
   if (!holdsSessionWrite(claim)) return;
-  const fallback = claim.snapshot === null ? claim.fallback : null;
+  const fallback =
+    claim.snapshot === null && TERMINAL_SESSION_PERSISTENCE_ENABLED && !isSessionPersistSuppressed()
+      ? claim.fallback
+      : null;
   claim.fallback = null;
   if (fallback) {
     persistSessionSnapshotAsync(claim.terminalId, fallback, claim).catch(() => {

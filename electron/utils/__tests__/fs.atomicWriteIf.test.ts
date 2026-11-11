@@ -4,7 +4,10 @@ import { mkdtemp, rm } from "fs/promises";
 import os from "os";
 import path from "path";
 
-const { renameTap, openTap } = vi.hoisted(() => ({ renameTap: vi.fn(), openTap: vi.fn() }));
+const { renameTap, dirSyncTap } = vi.hoisted(() => ({
+  renameTap: vi.fn(),
+  dirSyncTap: vi.fn(),
+}));
 
 // The tap records the call and then defers to the real rename; a tap that
 // throws stops the real call, which is how a failing attempt is injected.
@@ -19,15 +22,20 @@ vi.mock("fs", async (importOriginal) => {
   };
 });
 
-// Only the parent-directory fsync opens through fs/promises, so the open tap
-// is how the directory sync is observed or failed.
+// Only the parent-directory fsync opens through fs/promises. Its handle's
+// sync() is tapped, which is how the directory sync is observed or failed.
 vi.mock("fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("fs/promises")>();
   return {
     ...actual,
-    open: (...args: Parameters<typeof actual.open>) => {
-      openTap(...args);
-      return actual.open(...args);
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      const sync = handle.sync.bind(handle);
+      handle.sync = async () => {
+        await dirSyncTap(args[0]);
+        return sync();
+      };
+      return handle;
     },
   };
 });
@@ -46,7 +54,7 @@ describe("resilientAtomicWriteFileIf", () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "daintree-atomic-if-"));
     target = path.join(tmpDir, "session.restore");
     renameTap.mockReset();
-    openTap.mockReset();
+    dirSyncTap.mockReset();
   });
 
   afterEach(async () => {
@@ -111,20 +119,18 @@ describe("resilientAtomicWriteFileIf", () => {
   });
 
   const posixIt = process.platform === "win32" ? it.skip : it;
-  const dirSyncs = () => openTap.mock.calls.filter(([opened]) => opened === tmpDir);
+  const dirSyncs = () => dirSyncTap.mock.calls.filter(([synced]) => synced === tmpDir);
 
   posixIt("syncs the parent directory after the rename, and not when refused", async () => {
     await resilientAtomicWriteFileIf(target, "payload", () => false);
     expect(dirSyncs()).toEqual([]);
 
     await resilientAtomicWriteFileIf(target, "payload", () => true);
-    expect(dirSyncs()).toEqual([[tmpDir, "r"]]);
+    expect(dirSyncs()).toEqual([[tmpDir]]);
   });
 
   posixIt("surfaces a failed directory sync with the file already in place", async () => {
-    openTap.mockImplementationOnce(() => {
-      throw errno("EIO");
-    });
+    dirSyncTap.mockRejectedValueOnce(errno("EIO"));
 
     await expect(resilientAtomicWriteFileIf(target, "payload", () => true)).rejects.toMatchObject({
       code: "EIO",
