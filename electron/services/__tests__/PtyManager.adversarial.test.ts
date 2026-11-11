@@ -547,17 +547,20 @@ describe("PtyManager adversarial", () => {
       expect(manager.getTerminalInfo("t1")!.ptyTty).toBe(ptsName);
     });
 
-    it("NEVER_PROBES_PS_OR_PROC_ACROSS_REPEATED_QUERIES", () => {
-      setPlatform("darwin");
-      const { manager } = spawnWithTty("/dev/ttys003");
+    it.each(["darwin", "linux"] as const)(
+      "NEVER_PROBES_PS_OR_PROC_ACROSS_REPEATED_QUERIES_ON_%s",
+      (platform) => {
+        setPlatform(platform);
+        const { manager } = spawnWithTty("/dev/ttys003");
 
-      for (let i = 0; i < 50; i++) {
-        expect(manager.getTerminalInfo("t1")!.ptyTty).toBe("/dev/ttys003");
+        for (let i = 0; i < 50; i++) {
+          expect(manager.getTerminalInfo("t1")!.ptyTty).toBe("/dev/ttys003");
+        }
+
+        expect(shared.execFileSync).not.toHaveBeenCalled();
+        expect(shared.readlinkSync).not.toHaveBeenCalled();
       }
-
-      expect(shared.execFileSync).not.toHaveBeenCalled();
-      expect(shared.readlinkSync).not.toHaveBeenCalled();
-    });
+    );
 
     it("OMITS_THE_PATH_ONCE_THE_PTY_HAS_EXITED_OR_BEEN_KILLED", () => {
       setPlatform("linux");
@@ -578,11 +581,24 @@ describe("PtyManager adversarial", () => {
       expect(manager.getTerminalInfo("t1")!.ptyTty).toBeUndefined();
     });
 
-    it.each([undefined, ""])("OMITS_THE_PATH_WHEN_THE_PTY_REPORTS_%j", (ptsName) => {
+    it.each([undefined, "", 7, null])("OMITS_THE_PATH_WHEN_THE_PTY_REPORTS_%j", (ptsName) => {
       setPlatform("darwin");
-      const { manager } = spawnWithTty(ptsName);
+      const { manager } = spawnWithTty(ptsName as string | undefined);
 
       expect(manager.getTerminalInfo("t1")!.ptyTty).toBeUndefined();
+    });
+
+    it("REPORTS_THE_SUCCESSOR_PATH_AFTER_A_SAME_ID_RESPAWN", () => {
+      setPlatform("linux");
+      const { manager, created } = spawnWithTty("/dev/pts/7");
+      created.info.wasKilled = true;
+      shared.acquirePtyProcess.mockImplementation(() => ({
+        ptyProcess: { ...createPtyProcess(), ptsName: "/dev/pts/9" },
+      }));
+
+      manager.spawn("t1", spawnOptions({ kind: "terminal" }));
+
+      expect(manager.getTerminalInfo("t1")!.ptyTty).toBe("/dev/pts/9");
     });
   });
 
