@@ -941,7 +941,8 @@ describe("BulkCreateWorktreeDialog", () => {
   it("recipe verification with multiple crashed terminals reports correct count", async () => {
     mockSelectedRecipeId = "test-recipe";
     mockRunRecipeWithResults.mockResolvedValue({
-      spawned: [{ index: 0, terminalId: "t-a" },
+      spawned: [
+        { index: 0, terminalId: "t-a" },
         { index: 1, terminalId: "t-b" },
         { index: 2, terminalId: "t-c" },
       ],
@@ -1234,7 +1235,10 @@ describe("BulkCreateWorktreeDialog", () => {
 
   it("stops the batch when the dialog unmounts without going through Cancel", async () => {
     mockSelectedRecipeId = "test-recipe";
-    mockRunRecipeWithResults.mockResolvedValue({ spawned: [{ index: 0, terminalId: "t-1" }], failed: [] });
+    mockRunRecipeWithResults.mockResolvedValue({
+      spawned: [{ index: 0, terminalId: "t-1" }],
+      failed: [],
+    });
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
