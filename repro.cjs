@@ -49,10 +49,16 @@ function showWindowInactive(win) {
   const focused = BrowserWindow.getFocusedWindow();
   win.showInactive();
   log(win.__name, `showInactive done, focused=${focused?.__name ?? "none"}`);
-  if (VARIANT === "restack" && focused && focused !== win && !focused.isDestroyed()) {
-    focused.moveTop();
-    log(focused.__name, "moveTop");
-  }
+  if (!focused || focused === win || focused.isDestroyed()) return;
+  const DELAY = Number(process.env.RESTACK_DELAY_MS || 0);
+  const target = VARIANT === "restack-entering" ? win : focused;
+  const run = () => {
+    target.moveTop();
+    log(target.__name, `moveTop (fs=${target.isFullScreen()} revealed fs=${win.isFullScreen()})`);
+  };
+  if (VARIANT === "none") return;
+  if (DELAY > 0) setTimeout(run, DELAY);
+  else run();
 }
 
 function sh(cmd, args) {

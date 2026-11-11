@@ -7,7 +7,7 @@ permissions:
 jobs:
   repro:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -20,14 +20,29 @@ jobs:
           npm install --no-audit --no-fund electron@45.2.3
       - name: Build probe
         run: swiftc -O probe.swift -o "$RUNNER_TEMP/probe"
+      - name: Animation settings
+        run: |
+          set -x
+          sw_vers || true
+          defaults read -g NSAutomaticWindowAnimationsEnabled || true
+          defaults read com.apple.universalaccess reduceMotion || true
+          defaults read com.apple.dock || true
+          defaults write -g NSAutomaticWindowAnimationsEnabled -bool true || true
+          defaults write com.apple.universalaccess reduceMotion -bool false || true
+          defaults delete com.apple.dock expose-animation-duration || true
+          defaults delete com.apple.dock workspaces-swoosh-animation-off || true
+          killall Dock || true
+          sleep 5
       - name: Run variants
         run: |
           E="$RUNNER_TEMP/e/node_modules/.bin/electron"
-          for v in none restack; do
-            mkdir -p "out/$v"
-            VARIANT=$v OUT_DIR="$PWD/out/$v" PROBE="$RUNNER_TEMP/probe" "$E" repro.cjs || echo "variant $v exited $?"
-            sleep 3
-          done
+          run() { mkdir -p "out/$1"; OUT_DIR="$PWD/out/$1" PROBE="$RUNNER_TEMP/probe" "$E" repro.cjs || echo "variant $1 exited $?"; sleep 3; }
+          VARIANT=none run none
+          VARIANT=restack run restack
+          VARIANT=restack RESTACK_DELAY_MS=150 run restack-150
+          VARIANT=restack RESTACK_DELAY_MS=400 run restack-400
+          VARIANT=restack-entering RESTACK_DELAY_MS=150 run entering-150
+          VARIANT=restack GAP_MS=300 PRIMARY_SETTLE_MS=300 run restack-overlap
       - uses: actions/upload-artifact@v4
         if: always()
         with:
