@@ -86,7 +86,12 @@ function pty(id: string, fields: Partial<PtyPanelData> = {}): PtyPanelData {
   };
 }
 
-const group: TabGroup = { id: GROUP, location: "grid", activeTabId: SHOWN, panelIds: [SHOWN, BACK] };
+const group: TabGroup = {
+  id: GROUP,
+  location: "grid",
+  activeTabId: SHOWN,
+  panelIds: [SHOWN, BACK],
+};
 
 function seed(fields: { shown?: Partial<PtyPanelData>; back?: Partial<PtyPanelData> } = {}) {
   const panelsById: Record<string, PanelInstance> = {
@@ -299,9 +304,7 @@ describe("GridTabGroup render isolation", () => {
   it("closes the shown tab onto its neighbour after background churn", () => {
     seed();
     renderGroup();
-    flush(() =>
-      enqueueActivityUpdate(BACK, "Running tests", "working", "interactive", "npm test")
-    );
+    flush(() => enqueueActivityUpdate(BACK, "Running tests", "working", "interactive", "npm test"));
     lastProps().onTabClose?.(SHOWN);
     const request = vi.mocked(requestPanelClose).mock.calls[0]![0];
     act(() => request.onOutcome?.(true));
