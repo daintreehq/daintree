@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/SegmentedRadioGroup";
 import { SavedFleetQuickRecall } from "./SavedFleetQuickRecall";
 import { SavedFleetsDialog } from "./SavedFleetsDialog";
+import { useRetainedDialog } from "./useRetainedDialog";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 
 type CommitMode = "replace" | "append";
@@ -50,7 +51,8 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const addToFleet = useFleetArmingStore((s) => s.addToFleet);
   const armedIds = useFleetArmingStore((s) => s.armedIds);
   const [commitMode, setCommitMode] = useState<CommitMode>("replace");
-  const [manageOpen, setManageOpen] = useState(false);
+  // The palette stays mounted once used; the dialog only while it's in use.
+  const manageDialog = useRetainedDialog();
 
   useEffect(() => {
     if (!isOpen) setCommitMode("replace");
@@ -171,7 +173,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
           // animation and would pull focus back out of the dialog.
           suppressPaletteFocusRestore();
           onClose();
-          setManageOpen(true);
+          manageDialog.open();
         }}
       />
       <div className="flex items-center justify-between gap-2 pt-2">
@@ -239,7 +241,13 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
 
   return (
     <>
-      <SavedFleetsDialog isOpen={manageOpen} onClose={() => setManageOpen(false)} />
+      {manageDialog.isMounted && (
+        <SavedFleetsDialog
+          isOpen={manageDialog.isOpen}
+          onClose={manageDialog.close}
+          onCloseComplete={manageDialog.onCloseComplete}
+        />
+      )}
       <AppPaletteDialog
         isOpen={isOpen}
         onClose={onClose}
