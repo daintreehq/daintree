@@ -9,6 +9,7 @@ import {
   isValidAssistantSlot,
   projectIdFromSlotKey,
   sessionIdFromLaneMcpConfigName,
+  slotFromSlotKey,
 } from "../assistantSlots.js";
 
 const HASH = "0123456789abcdef";
@@ -69,6 +70,23 @@ describe("assistantSlots", () => {
     expect(projectIdFromSlotKey(key)).toBe(id);
     expect(projectIdFromSlotKey(`weird\u0000inside\u00001`)).toBe("weird\u0000inside");
     expect(projectIdFromSlotKey("no-delimiter")).toBe("no-delimiter");
+  });
+
+  it("reads back the slot of a key, and none from one that names no valid slot", () => {
+    expect(slotFromSlotKey(assistantSlotKey("/repo\u0000x", 2))).toBe(2);
+    expect(slotFromSlotKey(assistantSlotKey("p", MAX_ASSISTANT_SLOTS - 1))).toBe(
+      MAX_ASSISTANT_SLOTS - 1
+    );
+    for (const key of [
+      "no-delimiter",
+      "p\u0000",
+      "p\u0000-1",
+      "p\u00001.5",
+      "p\u0000 1",
+      `p\u0000${MAX_ASSISTANT_SLOTS}`,
+    ]) {
+      expect(slotFromSlotKey(key)).toBeNull();
+    }
   });
 
   it("accepts exactly the slots below the ceiling", () => {

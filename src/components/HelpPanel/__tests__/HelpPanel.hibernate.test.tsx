@@ -2603,6 +2603,75 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
     expect(helpPanelState.ensureSlot).not.toHaveBeenCalled();
   });
 
+  it("adds a tab for a lane started with no view since the view came up, as the panel opens (#16753)", async () => {
+    // A restart for an update resumes its lanes after this view's cold read, so
+    // that read finds none of them running yet.
+    helpPanelState.isOpen = false;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    helpPanelState.ensureSlot = vi.fn((slot: number) => {
+      helpPanelState.sessions = {
+        ...helpPanelState.sessions,
+        [slot]: { terminalId: null, agentId: null, sessionId: null, conversationTouched: false },
+      };
+    });
+    helpPanelState.closeSlot = vi.fn();
+    let liveNow = false;
+    mockListPendingHibernationSlots.mockResolvedValue([2, 3]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) =>
+      slot === 2 || slot === 3
+        ? {
+            agentId: "claude",
+            agentSessionId: `conv-${slot}`,
+            cwd: "/tmp/help",
+            panelWasOpen: false,
+            // Slot 3 only keeps a stopped conversation, which gets no tab (#16495).
+            live: slot === 2 && liveNow,
+          }
+        : null
+    );
+    const setOpen = async (open: boolean) => {
+      helpPanelState.isOpen = open;
+      await act(async () => {
+        view!.rerender(<HelpPanel width={380} />);
+      });
+      await flushAsyncWork();
+    };
+
+    let view: ReturnType<typeof render> | undefined;
+    try {
+      await act(async () => {
+        view = render(<HelpPanel width={380} />);
+      });
+      await flushAsyncWork();
+      expect(mockListPendingHibernationSlots).toHaveBeenCalledTimes(1);
+      expect(helpPanelState.ensureSlot).not.toHaveBeenCalled();
+
+      liveNow = true;
+      await setOpen(true);
+      expect(mockListPendingHibernationSlots).toHaveBeenCalledTimes(2);
+      expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(2);
+      expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(3);
+      // The tab doesn't start anything in its lane.
+      expect(mockProvisionSession).not.toHaveBeenCalledWith(expect.objectContaining({ slot: 2 }));
+
+      // A rerender while open is no opening.
+      await act(async () => {
+        view!.rerender(<HelpPanel width={380} />);
+      });
+      await flushAsyncWork();
+      expect(mockListPendingHibernationSlots).toHaveBeenCalledTimes(2);
+
+      // Every opening reads again: the lane has stopped, so its unused tab goes.
+      await setOpen(false);
+      liveNow = false;
+      await setOpen(true);
+      expect(mockListPendingHibernationSlots).toHaveBeenCalledTimes(3);
+      expect(helpPanelState.closeSlot).toHaveBeenCalledWith(2);
+    } finally {
+      helpPanelState.sessions = {};
+    }
+  });
+
   it("adds a tab for the lane a schedule's Assistant started in, as its run is recorded (#16169)", async () => {
     helpPanelState.terminalId = "term-live";
     helpPanelState.agentId = "claude";

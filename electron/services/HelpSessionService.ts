@@ -56,6 +56,7 @@ import {
   assistantSlotKey,
   isAssistantSessionDirName,
   isValidAssistantSlot,
+  projectIdFromSlotKey,
 } from "../../shared/config/assistantSlots.js";
 
 export { codexTrustArgs, projectRuleRoots } from "./AssistantSessionFiles.js";
@@ -103,6 +104,7 @@ const DEFAULT_BYPASS_PERMISSIONS = false;
 const SCHEDULED_RUN_SESSIONS_KEPT = 64;
 
 function isValidStartedBy(startedBy: HelpSessionStartedBy): boolean {
+  if (startedBy.kind === "update-restart") return true;
   const parts =
     startedBy.kind === "relay"
       ? [startedBy.senderId, startedBy.linkSessionId, startedBy.askingHelpSessionId]
@@ -191,7 +193,9 @@ export type HelpSessionStartedBy =
   | { kind: "local"; askingHelpSessionId: string }
   | { kind: "relay"; senderId: string; linkSessionId: string; askingHelpSessionId: string }
   /** A due schedule whose agent is the Assistant (#16169), for one run of it. */
-  | { kind: "schedule"; scheduleId: string; runId: string };
+  | { kind: "schedule"; scheduleId: string; runId: string }
+  /** A lane a restart to install an update stopped, resumed by the next launch (#16753). */
+  | { kind: "update-restart" };
 
 export interface ProvisionResult {
   sessionId: string;
@@ -489,6 +493,8 @@ export class HelpSessionService {
   private onMcpSessionRevokedFn: ((token: string, sessionId: string) => void) | null = null;
   private readonly sessionEndedListeners = new Set<(event: HelpSessionEndedEvent) => void>();
   private readonly sessionReattachedListeners = new Set<(lane: RunningLane) => void>();
+  // Lanes main is resuming after a restart to install an update (#16753).
+  private readonly resumingSlotKeys = new Set<string>();
   private readonly laneDetachedListeners = new Set<(projectId: string) => void>();
   private onMcpSessionRepinnedFn: ((token: string) => void) | null = null;
   private disposed = false;
@@ -1124,6 +1130,19 @@ export class HelpSessionService {
           `Daintree Assistant needs the in-process MCP server, but it isn't ready: ${reason}`
         );
       }
+    }
+
+    // A lane coming back after an update restart (#16753) is main's until its
+    // resume settles: a view's launch that missed it at adoption would otherwise
+    // start a fresh conversation over the one being resumed.
+    if (
+      this.resumingSlotKeys.has(assistantSlotKey(input.projectId, slot)) &&
+      input.startedBy?.kind !== "update-restart"
+    ) {
+      throw new HelpSessionError(
+        "LANE_OCCUPIED",
+        `Assistant ${slot + 1} of this project is coming back after the update; try again in a moment.`
+      );
     }
 
     // Checked inside the lane lock, so nothing can take the lane between this
@@ -1908,6 +1927,47 @@ export class HelpSessionService {
     });
   }
 
+  /**
+   * Records which lanes a restart to install an update is leaving running
+   * (#16753), after shutdown's captures have landed, so the next launch resumes
+   * exactly those conversations. A lane counts only while it still points where
+   * it did at the snapshot, at a conversation it can be resumed into by id: a
+   * discard or relaunch during the kill, or a Codex lane whose id never came
+   * back, is left to the ordinary restart rule (#10815).
+   */
+  recordLanesToResumeAtLaunch(lanes: Iterable<AssistantLaneSnapshot>): Promise<void> {
+    const store = this.pendingHibernationStore;
+    if (!store) return Promise.resolve();
+    const resume: Record<string, string> = {};
+    for (const lane of lanes) {
+      if (isGlobalAssistantId(projectIdFromSlotKey(lane.slotKey))) continue;
+      const entry = store.get(lane.slotKey);
+      if (!entry?.agentSessionId) continue;
+      if ((this.laneRevisionBySlotKey.get(lane.slotKey) ?? 0) !== lane.revision) continue;
+      if (!getEffectiveAgentConfig(entry.agentId)?.resume) continue;
+      resume[lane.slotKey] = entry.agentSessionId;
+    }
+    return store.recordResumeAtLaunch(resume);
+  }
+
+  /**
+   * Marks a lane main is resuming with no view after an update restart
+   * (#16753), until the returned release runs. Until its assistant is bound, a
+   * view asking to take the lane over is told it is occupied.
+   */
+  beginLaneResume(projectId: string, slot: number): () => void {
+    const slotKey = assistantSlotKey(projectId, slot);
+    this.resumingSlotKeys.add(slotKey);
+    return () => {
+      this.resumingSlotKeys.delete(slotKey);
+    };
+  }
+
+  /** Whether `claimId` still holds the lane's pointer; a discard drops it. */
+  holdsPendingHibernationClaim(projectId: string, slot: number, claimId: string): boolean {
+    return this.claimsBySlotKey.get(assistantSlotKey(projectId, slot))?.claimId === claimId;
+  }
+
   private bumpLaneRevision(slotKey: string): void {
     this.laneRevisionBySlotKey.set(slotKey, (this.laneRevisionBySlotKey.get(slotKey) ?? 0) + 1);
   }
@@ -1927,8 +1987,21 @@ export class HelpSessionService {
         this.emitSessionEnded(record, "discarded");
       }
     }
-    if (!this.pendingHibernationStore) return;
     const slotKey = assistantSlotKey(projectId, slot);
+    // A resume still on its way to its spawn (#16753) would bring the discarded
+    // conversation back: its revoked bearer is refused at the spawn instead.
+    if (this.resumingSlotKeys.has(slotKey)) {
+      const unspawned = [...this.sessionsById.values()].filter(
+        (record) =>
+          record.projectId === projectId &&
+          record.slot === slot &&
+          !record.revoked &&
+          record.startedBy?.kind === "update-restart" &&
+          !this.terminalBySessionId.has(record.sessionId)
+      );
+      await Promise.all(unspawned.map((record) => this.revokeSession(record.sessionId)));
+    }
+    if (!this.pendingHibernationStore) return;
     this.pendingCapturesBySlotKey.delete(slotKey);
     this.claimsBySlotKey.delete(slotKey);
     this.bumpLaneRevision(slotKey);
@@ -2244,9 +2317,14 @@ export class HelpSessionService {
     }
     const claimableBy = (record: HelpSessionRecord): boolean =>
       record.detachedAt !== undefined || record.projectViewWebContentsId === webContentsId;
-    return this.withLaneLock(assistantSlotKey(projectId, slot), async () => {
+    const slotKey = assistantSlotKey(projectId, slot);
+    return this.withLaneLock(slotKey, async () => {
       const record = this.findLaneBackend(projectId, slot);
-      if (!record) return { status: "absent" };
+      // Coming back on its own: a launch that only restores or starts itself
+      // stands down rather than start a fresh conversation over it.
+      if (!record) {
+        return this.resumingSlotKeys.has(slotKey) ? { status: "occupied" } : { status: "absent" };
+      }
       if (!claimableBy(record)) return { status: "occupied" };
       const terminalId = this.terminalBySessionId.get(record.sessionId)!;
 

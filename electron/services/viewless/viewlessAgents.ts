@@ -536,6 +536,11 @@ export async function spawnHostAssistant(
     /** Reopen this exact conversation instead of starting one (#14159); never "the latest". */
     resumeAgentSessionId?: string;
     /**
+     * Refuse rather than open an empty conversation under that id when it was
+     * never written (#16019, #16753).
+     */
+    exactResume?: true;
+    /**
      * A schedule's run (#16169): the prompt gets the run's handback
      * instruction, and the spawn handler registers the run from this spawn.
      */
@@ -619,6 +624,7 @@ export async function spawnHostAssistant(
         launchAgentId: agentId,
         agentLaunchFlags: plan.launchFlags,
         agentSessionId: spec.resumeAgentSessionId ?? plan.assignedSessionId,
+        ...(spec.resumeAgentSessionId && spec.exactResume ? { exactResume: true } : {}),
         agentPresetId: plan.preset?.id,
         agentPresetColor: plan.preset?.color,
         originalAgentPresetId: plan.preset?.id,

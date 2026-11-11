@@ -97,6 +97,16 @@ export function projectIdFromSlotKey(slotKey: string): string {
   return at === -1 ? slotKey : slotKey.slice(0, at);
 }
 
+/** The slot a slot key names, or null when it names none. */
+export function slotFromSlotKey(slotKey: string): number | null {
+  const at = slotKey.lastIndexOf("\u0000");
+  if (at === -1) return null;
+  const digits = slotKey.slice(at + 1);
+  if (!/^\d+$/.test(digits)) return null;
+  const slot = Number(digits);
+  return isValidAssistantSlot(slot) ? slot : null;
+}
+
 /**
  * Session directory name for a project's lanes on one agent. Every lane of a
  * project on that agent shares it, so this takes no slot. A null key is the

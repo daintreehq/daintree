@@ -858,7 +858,14 @@ export function HelpPanel({
     handleConfirmCloseSlot,
     handleCancelCloseSlot,
     resolveCloseFocusTarget,
-  } = useHelpSessionLanes({ panelRef, activeSlot, activeWorkspaceId, terminalId, pausedLane });
+  } = useHelpSessionLanes({
+    panelRef,
+    activeSlot,
+    activeWorkspaceId,
+    terminalId,
+    pausedLane,
+    isOpen,
+  });
   // A restart can target a background lane, whose agent may not be the one on
   // screen: read from the same lane record the confirm gate reads. A paused lane
   // has no agent bound, so its captured one names the conversation instead.

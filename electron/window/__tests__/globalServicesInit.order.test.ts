@@ -10,6 +10,10 @@ const registeredTaskRuns = new Map<string, () => unknown>();
 const setMcpRegistry = vi.hoisted(() => vi.fn());
 const dbMaintenanceCalls = vi.hoisted(() => [] as string[]);
 const setProjectMetadataReader = vi.hoisted(() => vi.fn());
+const updateRestartResume = vi.hoisted(() => ({
+  record: null as { recordedAt: number; lanes: Record<string, string> } | null,
+  resume: vi.fn(async (_record: unknown) => {}),
+}));
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
 let storeFreshAtBoot = false;
@@ -365,7 +369,18 @@ vi.mock("../../services/HelpSessionService.js", () => ({
 }));
 
 vi.mock("../../services/PendingHelpHibernationStore.js", () => ({
-  getPendingHelpHibernationStore: vi.fn(() => ({ load: vi.fn(async () => {}) })),
+  getPendingHelpHibernationStore: vi.fn(() => ({
+    load: vi.fn(async () => {}),
+    takeResumeAtLaunch: vi.fn(() => {
+      const taken = updateRestartResume.record;
+      updateRestartResume.record = null;
+      return taken;
+    }),
+  })),
+}));
+
+vi.mock("../../services/assistants/updateRestartResume.js", () => ({
+  resumeLanesAfterUpdateLive: updateRestartResume.resume,
 }));
 
 // globalServicesInit statically imports menu.ts (wireUpdateMenuState), which
@@ -457,7 +472,9 @@ import {
   loadDecisionsModule,
   peekDecisionsModule,
   sealDecisionsModule,
+  setPtyClientRef,
 } from "../serviceRefs.js";
+import type { PtyClient } from "../../services/PtyClient.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 import { app, ipcMain, powerMonitor } from "electron";
 import { startEventLoopLagMonitor } from "../../utils/performance.js";
@@ -928,6 +945,7 @@ describe("initGlobalServices task ordering", () => {
       "decisions",
       "help-session-gc",
       "help-session-pty",
+      "assistant-update-resume",
       "session-eviction",
       "prune-old-logs",
       "prune-native-crash-dumps",
@@ -1178,7 +1196,52 @@ describe("initGlobalServices task ordering", () => {
     expect(registeredTaskNames).not.toContain("mcp-server");
     expect(registeredTaskNames).not.toContain("help-session-gc");
     expect(registeredTaskNames).not.toContain("help-session-pty");
+    expect(registeredTaskNames).not.toContain("assistant-update-resume");
     expect(setMcpRegistry).not.toHaveBeenCalled();
+  });
+
+  it("resumes the lanes an update restart stopped once the PTY host is ready, after its wiring (#16753)", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    const record = { recordedAt: 1_000, lanes: { "p1\u00001": "conv-1" } };
+    let ready!: () => void;
+    const waitForReady = vi.fn(() => new Promise<void>((resolve) => (ready = resolve)));
+    setPtyClientRef({ waitForReady } as unknown as PtyClient);
+    updateRestartResume.record = record;
+    updateRestartResume.resume.mockClear();
+    try {
+      await initGlobalServices(fakeRegistry);
+      expect(registeredTaskNames.indexOf("assistant-update-resume")).toBeGreaterThan(
+        registeredTaskNames.indexOf("help-session-pty")
+      );
+
+      // The queue moves on while the PTY host comes up.
+      await registeredTaskRuns.get("assistant-update-resume")!();
+      expect(waitForReady).toHaveBeenCalledTimes(1);
+      expect(updateRestartResume.resume).not.toHaveBeenCalled();
+
+      ready();
+      await vi.waitFor(() => expect(updateRestartResume.resume).toHaveBeenCalledWith(record));
+    } finally {
+      setPtyClientRef(null);
+    }
+  });
+
+  it("loads nothing for an update resume when the last quit recorded none (#16753)", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    const waitForReady = vi.fn(async () => {});
+    setPtyClientRef({ waitForReady } as unknown as PtyClient);
+    updateRestartResume.record = null;
+    updateRestartResume.resume.mockClear();
+    try {
+      await initGlobalServices(fakeRegistry);
+      await registeredTaskRuns.get("assistant-update-resume")!();
+      await Promise.resolve();
+
+      expect(waitForReady).not.toHaveBeenCalled();
+      expect(updateRestartResume.resume).not.toHaveBeenCalled();
+    } finally {
+      setPtyClientRef(null);
+    }
   });
 
   it("registers database-maintenance after system-sleep-service so onSuspend can attach to a live service", async () => {

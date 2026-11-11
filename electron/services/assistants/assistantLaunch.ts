@@ -40,6 +40,18 @@ export interface AssistantLaunchRequest {
     prompt: string;
     scheduledRun: ScheduledRunRef;
   };
+  /**
+   * Reopen this exact conversation instead of starting one (#16753): only in
+   * the slot and on the agent named, in the folder it ran in, with no greeting.
+   * Refused rather than started fresh when it can't be resumed.
+   */
+  resume?: {
+    agentSessionId: string;
+    /** The folder the conversation ran in, which the lane's must still be. */
+    cwd: string;
+  };
+  /** Asked again right before the spawn; false abandons the start. */
+  stillWanted?: () => boolean;
 }
 
 export type AssistantLaunchRefusal = "no-project" | "no-slot" | "launch-failed";
@@ -103,6 +115,9 @@ export interface AssistantLaunchDeps {
       agentLaunchFlags: string[];
       /** A schedule's run, whose handback instruction the spawn adds to `prompt`. */
       scheduledRun?: ScheduledRunRef;
+      /** The conversation to reopen, refused rather than started fresh. */
+      resumeAgentSessionId?: string;
+      exactResume?: true;
     }
   ): Promise<boolean>;
   /** Whether the session is still the one running in its lane. */
@@ -138,6 +153,12 @@ export async function startAssistantWithoutView(
 ): Promise<AssistantLaunchResult> {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const { scheduled, resume } = request;
+  // A resume names its lane and agent: any other would be a fresh session.
+  if (resume && (request.slot === undefined || request.agentId === undefined || scheduled)) {
+    return refused("launch-failed");
+  }
+  if (resume && !resume.agentSessionId) return refused("launch-failed");
   const project = deps.getProject(request.projectId);
   if (!project) return refused("no-project");
 
@@ -183,7 +204,14 @@ export async function startAssistantWithoutView(
   }
   if (!session || slot === undefined) return refused("no-slot");
 
-  const { scheduled } = request;
+  const agentLaunchFlags = await deps.launchFlags(agentId).catch(() => []);
+  // A conversation lives in the folder it ran in; a lane provisioned anywhere
+  // else would reopen nothing there.
+  if ((resume && session.sessionPath !== resume.cwd) || request.stillWanted?.() === false) {
+    await deps.revoke(session.sessionId).catch(() => {});
+    return refused("launch-failed");
+  }
+
   const terminalId = scheduled?.terminalId ?? `terminal-${randomUUID()}`;
   const env: Record<string, string> = {
     DAINTREE_MCP_TOKEN: session.token,
@@ -196,9 +224,12 @@ export async function startAssistantWithoutView(
       agentId,
       cwd: session.sessionPath,
       env,
-      prompt: scheduled?.prompt ?? HUB_STARTED_ASSISTANT_GREETING,
-      agentLaunchFlags: await deps.launchFlags(agentId).catch(() => []),
+      prompt: resume ? "" : (scheduled?.prompt ?? HUB_STARTED_ASSISTANT_GREETING),
+      agentLaunchFlags,
       ...(scheduled ? { scheduledRun: scheduled.scheduledRun } : {}),
+      ...(resume
+        ? { resumeAgentSessionId: resume.agentSessionId, exactResume: true as const }
+        : {}),
     })
     .catch(() => false);
   if (!spawned) {
@@ -228,7 +259,8 @@ export async function startAssistantWithoutView(
     },
     // Only this run, while it still holds its lane, is ever typed into.
     authorized: stillOurs,
-    ...(scheduled ? { greeted: false } : {}),
+    // A schedule's prompt or a resumed conversation: no greeting to wait on.
+    ...(scheduled || resume ? { greeted: false } : {}),
     now,
     sleep,
   });
