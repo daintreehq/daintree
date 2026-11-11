@@ -410,7 +410,10 @@ describe("LinkSession request/response", () => {
       client.close("gone");
       b.resume();
       await waitFor(() => written.length === 1);
-      expect(frames.some((f) => f.lane === Lane.CONTROL)).toBe(true);
+      // The callback fires once the socket has taken the frame, which can be
+      // before the resumed peer has read it.
+      await waitFor(() => frames.some((f) => f.lane === Lane.CONTROL));
+      expect(written).toEqual(["ping"]);
     });
   });
 

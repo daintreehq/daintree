@@ -2510,7 +2510,9 @@ describe("DecisionsService disk-space recovery (#16605)", () => {
       await vi.advanceTimersByTimeAsync(DISK_FULL_RESTART_DELAYS_MS[0]!);
 
       expect(checks).toEqual(["check"]);
-      expect(stores).toHaveLength(2);
+      // Closing the old store's attachments waits on their spool sweep, real
+      // file I/O the fake clock doesn't drive, before the fresh store opens.
+      await vi.waitFor(() => expect(stores).toHaveLength(2));
       expect(made.map((m) => m.stopped)).toEqual([true, false]);
     } finally {
       vi.useRealTimers();
