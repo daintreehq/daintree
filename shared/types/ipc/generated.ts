@@ -674,6 +674,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./composerHold.js").HeldComposerSend[];
   };
+  "composer-hold:send-now": {
+    args: [terminalId: string, token: string, inputBlocked?: boolean | undefined];
+    result: import("./composerHold.js").ComposerHoldSendNowResult;
+  };
   "composer-hold:withdraw": {
     args: [terminalId: string, token: string];
     result: import("./composerHold.js").ComposerHoldWithdrawResult;

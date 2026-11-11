@@ -1,6 +1,7 @@
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToProjectRenderers } from "../../ipc/utils.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
+import { COMPOSER_PROMPT_OWNER } from "../../../shared/utils/terminalInputProvenance.js";
 import { ComposerSendHold } from "./ComposerSendHold.js";
 
 let service: ComposerSendHold | null = null;
@@ -19,8 +20,25 @@ export function getComposerSendHold(): Promise<ComposerSendHold> {
       getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
       getTerminalProjectId: (terminalId) =>
         getPtyClient()?.getTerminalProjectId(terminalId) ?? null,
-      readTerminal: async (terminalId) =>
-        (await getPtyClient()?.getTerminalAsync(terminalId)) ?? null,
+      readTerminal: async (terminalId, submissionToken) =>
+        (await getPtyClient()?.getTerminalAsync(terminalId, submissionToken)) ?? null,
+      submit: (terminalId, text, submissionToken, imagePaths) => {
+        const client = getPtyClient();
+        if (!client) throw new Error("The terminal host isn't running");
+        // Unguarded, as the composer sends: filed as the person's prompt, as
+        // the pane's own line files a held send it types (#16379).
+        client.submit(
+          terminalId,
+          text,
+          submissionToken,
+          undefined,
+          undefined,
+          imagePaths.length > 0 ? imagePaths : undefined,
+          text,
+          undefined,
+          COMPOSER_PROMPT_OWNER
+        );
+      },
       publish: (projectId, change) =>
         broadcastToProjectRenderers(projectId, CHANNELS.COMPOSER_HOLD_CHANGED, change),
     });

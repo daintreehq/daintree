@@ -13,8 +13,9 @@ export const COMPOSER_HOLD_TTL_MS = 60 * 60_000;
  * `closed`: the pane was closed. `ended`: its terminal or agent ended.
  * `expired`: its time ran out. `stopped`: the pane's line stopped taking it,
  * such as its notices being stopped. `driven-elsewhere`: another screen took
- * over driving the project. `unconfirmed`: it went to the terminal, but
- * whether it was written is unknown, so it is never sent again.
+ * over driving the project. `input-blocked`: it was sent now while the panel
+ * couldn't take input. `unconfirmed`: it went to the terminal, but whether it
+ * was written is unknown, so it is never sent again.
  */
 export type ComposerHoldDropReason =
   | "typed"
@@ -24,6 +25,7 @@ export type ComposerHoldDropReason =
   | "expired"
   | "stopped"
   | "driven-elsewhere"
+  | "input-blocked"
   | "unconfirmed";
 
 /** A send held for a pane, as main holds it. */
@@ -75,4 +77,13 @@ export type ComposerHoldResult =
 export interface ComposerHoldWithdrawResult {
   /** False once it is on its way to the terminal or has ended. */
   withdrawn: boolean;
+}
+
+/**
+ * The answer to sending a held send now. `sending`: it is on its way to the
+ * terminal. `already-sending`: the pane's prompt took it first. `dropped`: it
+ * couldn't go, and its views hear why. `not-held`: it isn't held any more.
+ */
+export interface ComposerHoldSendNowResult {
+  outcome: "sending" | "already-sending" | "dropped" | "not-held";
 }

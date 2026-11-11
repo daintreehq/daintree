@@ -343,6 +343,9 @@ export interface GeneratedElectronAPI {
     list(
       ...args: IpcInvokeMap["composer-hold:list"]["args"]
     ): Promise<IpcInvokeMap["composer-hold:list"]["result"]>;
+    sendNow(
+      ...args: IpcInvokeMap["composer-hold:send-now"]["args"]
+    ): Promise<IpcInvokeMap["composer-hold:send-now"]["result"]>;
     withdraw(
       ...args: IpcInvokeMap["composer-hold:withdraw"]["args"]
     ): Promise<IpcInvokeMap["composer-hold:withdraw"]["result"]>;

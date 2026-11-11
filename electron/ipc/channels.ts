@@ -1562,6 +1562,7 @@ export const CHANNELS = {
   // A pane composer's send held while its agent works (#16379)
   COMPOSER_HOLD_HOLD: "composer-hold:hold",
   COMPOSER_HOLD_WITHDRAW: "composer-hold:withdraw",
+  COMPOSER_HOLD_SEND_NOW: "composer-hold:send-now",
   COMPOSER_HOLD_LIST: "composer-hold:list",
   COMPOSER_HOLD_CHANGED: "composer-hold:changed",
 

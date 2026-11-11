@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from "react";
+import { useId, useState, type ReactElement } from "react";
 import { Clock } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -24,6 +24,7 @@ const DROP_REASON: Record<ComposerHoldDropReason, string> = {
   expired: "it waited an hour",
   stopped: "the panel's notices were stopped",
   "driven-elsewhere": "another screen took over driving this project",
+  "input-blocked": "the panel couldn't take input",
   unconfirmed: "Daintree couldn't confirm it reached the agent",
 };
 
@@ -33,6 +34,9 @@ const NOT_AT_PROMPT: Partial<Record<string, string>> = {
   approval: "an approval",
   error: "an error",
 };
+
+/** Prompts that take typed text as their answer: Send now says so before it types. */
+const ANSWERED_BY_TEXT = new Set(["question", "approval"]);
 
 /** The first line of what was sent, for the row: the whole text comes back on Edit. */
 function previewOf(text: string): string {
@@ -57,29 +61,34 @@ export interface HeldComposerSendRowProps {
   agentId?: string;
   /** The pane's composer is there to take the text back: otherwise it is offered to copy. */
   canEdit: boolean;
+  /** The panel can't take input: Send now drops the send, saying why, rather than typing it. */
+  inputBlocked?: boolean;
 }
 
 /**
  * The pane composer's send held for its agent's next prompt (#16379), in the
- * composer's area: what it is waiting on, Edit to take it back into the
- * composer, and Withdraw. Once dropped it says why and keeps the text to take
- * back until dismissed.
+ * composer's area: what it is waiting on, Send now to stop waiting (#16745),
+ * Edit to take it back into the composer, and Withdraw. Once dropped it says
+ * why and keeps the text to take back until dismissed.
  */
 export function HeldComposerSendRow({
   terminalId,
   agentId,
   canEdit,
+  inputBlocked = false,
 }: HeldComposerSendRowProps): ReactElement | null {
   const held = useHeldComposerSendStore((s) => s.held[terminalId]);
   const dropped = useHeldComposerSendStore((s) => s.dropped[terminalId]);
   const refused = useHeldComposerSendStore((s) => s.refused[terminalId] === true);
-  const waitingOn = usePanelStore((s) => {
+  const waitingReason = usePanelStore((s) => {
     const panel = s.panelsById[terminalId];
     if (!panel || !isPtyPanel(panel) || panel.agentState !== "waiting") return undefined;
-    return panel.waitingReason === undefined ? undefined : NOT_AT_PROMPT[panel.waitingReason];
+    return panel.waitingReason;
   });
+  const waitingOn = waitingReason === undefined ? undefined : NOT_AT_PROMPT[waitingReason];
   const projectId = useProjectStore((s) => s.currentProject?.id);
   const [busy, setBusy] = useState(false);
+  const sendNowHintId = useId();
 
   if (held === undefined && dropped === undefined) return null;
   const agentName =
@@ -98,8 +107,23 @@ export function HeldComposerSendRow({
     }
   };
 
+  // Main types it, or drops it saying why, and its push moves the row on.
+  const sendNow = async (): Promise<void> => {
+    if (held === undefined || busy) return;
+    setBusy(true);
+    try {
+      await composerHoldClient.sendNow(terminalId, held.token, inputBlocked);
+    } catch (err) {
+      logWarn("[HeldComposerSend] send now failed", { terminalId, error: err });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (held !== undefined) {
     const sending = held.status === "sending";
+    const answers =
+      waitingReason !== undefined && ANSWERED_BY_TEXT.has(waitingReason) ? waitingReason : null;
     const images =
       held.imagePaths.length > 0 ? ` · ${pluralize(held.imagePaths.length, "image")}` : "";
     const status = sending
@@ -116,10 +140,28 @@ export function HeldComposerSendRow({
         data-testid="held-composer-send"
         className="mx-2 mb-1"
         action={
-          sending || !canEdit ? undefined : (
-            <Button variant="ghost" size="xs" disabled={busy} onClick={() => void withdraw(true)}>
-              Edit
-            </Button>
+          sending ? undefined : (
+            <div className="flex items-center gap-1">
+              {canEdit && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  disabled={busy}
+                  onClick={() => void withdraw(true)}
+                >
+                  Edit
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={busy}
+                aria-describedby={answers !== null ? sendNowHintId : undefined}
+                onClick={() => void sendNow()}
+              >
+                Send now
+              </Button>
+            </div>
           )
         }
         dismiss={
@@ -138,8 +180,17 @@ export function HeldComposerSendRow({
           {previewOf(held.text)}
           {images}
         </p>
+        {answers !== null && !sending && (
+          <p id={sendNowHintId} className="text-text-secondary">
+            Send now types it into that {answers}.
+          </p>
+        )}
         {refused && !sending && (
-          <p className="text-text-secondary">Edit or withdraw it to send another.</p>
+          <p className="text-text-secondary">
+            {canEdit
+              ? "Send it now, edit it or withdraw it to send another."
+              : "Send it now or withdraw it to send another."}
+          </p>
         )}
       </Callout>
     );

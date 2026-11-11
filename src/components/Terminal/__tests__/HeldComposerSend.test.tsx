@@ -11,7 +11,12 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 const withdraw = vi.hoisted(() => vi.fn<(terminalId: string, token: string) => Promise<boolean>>());
-vi.mock("@/clients/composerHoldClient", () => ({ composerHoldClient: { withdraw } }));
+const sendNow = vi.hoisted(() =>
+  vi.fn<
+    (terminalId: string, token: string, inputBlocked: boolean) => Promise<{ outcome: string }>
+  >()
+);
+vi.mock("@/clients/composerHoldClient", () => ({ composerHoldClient: { withdraw, sendNow } }));
 
 const requestPaneFocus = vi.hoisted(() => vi.fn());
 vi.mock("../paneFocusRequest", () => ({ requestPaneFocus }));
@@ -59,6 +64,7 @@ function pane(agentState: string, waitingReason?: string) {
 beforeEach(() => {
   useHeldComposerSendStore.setState({ held: {}, dropped: {}, refused: {}, endedTokens: [] });
   withdraw.mockReset();
+  sendNow.mockReset().mockResolvedValue({ outcome: "sending" });
   requestPaneFocus.mockReset();
   inputs.bumpExternalDraftRevision.mockReset();
   drafts.clear();
@@ -133,7 +139,7 @@ describe("HeldComposerSendRow", () => {
     useHeldComposerSendStore.getState().noteRefused("t1");
     render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
     expect(screen.getByTestId("held-composer-send").textContent).toContain(
-      "Edit or withdraw it to send another"
+      "Send it now, edit it or withdraw it to send another"
     );
   });
 
@@ -182,5 +188,100 @@ describe("HeldComposerSendRow", () => {
     render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit={false} />);
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
     expect(screen.getByRole("button", { name: "Withdraw held message" })).toBeTruthy();
+  });
+
+  it("sends it now, from the keyboard as well as the pointer, leaving the draft alone", async () => {
+    drafts.set("t1", "a newer thought");
+    useHeldComposerSendStore.getState().noteHeld(send());
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+
+    const button = screen.getByRole("button", { name: "Send now" });
+    // A native button: Tab reaches it, and Enter and Space press it.
+    expect(button.tagName).toBe("BUTTON");
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(sendNow).toHaveBeenCalledWith("t1", "token-1", false));
+    expect(withdraw).not.toHaveBeenCalled();
+    expect(drafts.get("t1")).toBe("a newer thought");
+  });
+
+  it("offers Send now where the pane has no composer to edit into", () => {
+    useHeldComposerSendStore.getState().noteHeld(send());
+    useHeldComposerSendStore.getState().noteRefused("t1");
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit={false} />);
+    expect(screen.getByRole("button", { name: "Send now" })).toBeTruthy();
+    expect(screen.getByTestId("held-composer-send").textContent).toContain(
+      "Send it now or withdraw it to send another"
+    );
+  });
+
+  it("tells main the panel can't take input, and keeps the text once it drops the send", async () => {
+    sendNow.mockImplementation(async () => {
+      useHeldComposerSendStore.getState().applyChange({
+        terminalId: "t1",
+        held: null,
+        ended: {
+          token: "token-1",
+          outcome: { kind: "dropped", reason: "input-blocked" },
+          text: "held text",
+        },
+      });
+      return { outcome: "dropped" };
+    });
+    useHeldComposerSendStore.getState().noteHeld(send({ text: "held text" }));
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit inputBlocked />);
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    await waitFor(() => expect(sendNow).toHaveBeenCalledWith("t1", "token-1", true));
+    await waitFor(() => expect(screen.getByTestId("held-composer-send-dropped")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(drafts.get("t1")).toBe("held text");
+  });
+
+  it("takes no second press while one is on its way, and offers them again if it fails", async () => {
+    let fail!: (err: Error) => void;
+    sendNow.mockImplementationOnce(() => new Promise((_resolve, reject) => (fail = reject)));
+    useHeldComposerSendStore.getState().noteHeld(send());
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+
+    const button = screen.getByRole("button", { name: "Send now" });
+    fireEvent.click(button);
+    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(true));
+    fireEvent.click(button);
+    fireEvent.click(screen.getByRole("button", { name: "Withdraw held message" }));
+    expect(sendNow).toHaveBeenCalledTimes(1);
+    expect(withdraw).not.toHaveBeenCalled();
+
+    await act(async () => fail(new Error("ipc down")));
+    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+    expect(screen.getByTestId("held-composer-send")).toBeTruthy();
+  });
+
+  it.each(["question", "approval"])(
+    "says before sending that the text goes into the %s the pane was last seen at",
+    (reason) => {
+      pane("waiting", reason);
+      useHeldComposerSendStore.getState().noteHeld(send());
+      render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+      const button = screen.getByRole("button", { name: "Send now" });
+      const hintId = button.getAttribute("aria-describedby");
+      expect(hintId).toBeTruthy();
+      expect(document.getElementById(hintId!)?.textContent).toContain(`into that ${reason}`);
+      expect(sendNow).not.toHaveBeenCalled();
+    }
+  );
+
+  it("adds no such warning while the pane works or waits at its prompt", () => {
+    for (const [state, reason] of [["working"], ["waiting", "prompt"], ["waiting", "error"]]) {
+      pane(state!, reason);
+      useHeldComposerSendStore.getState().noteHeld(send());
+      const { unmount } = render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+      expect(
+        screen.getByRole("button", { name: "Send now" }).getAttribute("aria-describedby")
+      ).toBeNull();
+      expect(screen.getByTestId("held-composer-send").textContent).not.toContain("into that");
+      unmount();
+    }
   });
 });

@@ -3,6 +3,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const COMPOSER_HOLD_METHOD_CHANNELS = {
   hold: "composer-hold:hold",
   withdraw: "composer-hold:withdraw",
+  sendNow: "composer-hold:send-now",
   list: "composer-hold:list",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
