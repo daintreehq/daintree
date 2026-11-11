@@ -913,7 +913,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           <Button
             variant="ghost"
             size="sm"
-            aria-pressed={showingBrowse}
+            pressed={showingBrowse}
             onClick={() => {
               if (showingBrowse) {
                 setBrowsing(false);
