@@ -30,6 +30,15 @@ const appMock = vi.hoisted(() => {
 });
 
 const utilsMock = vi.hoisted(() => ({
+  prepareAtomicWriteFile: vi.fn(async (fp: string, data: string) => {
+    const { writeFileSync } = await import("node:fs");
+    const tempPath = `${fp}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    writeFileSync(tempPath, data, "utf-8");
+    return tempPath;
+  }),
+  syncParentDirectory: vi.fn(async () => {}),
+  tightenDirPermissions: vi.fn(async () => {}),
+  tightenFilePermissions: vi.fn(async () => {}),
   resilientAtomicWriteFileSync: vi.fn(),
   resilientRenameSync: vi.fn(),
   tightenFilePermissionsSync: vi.fn(),
@@ -138,12 +147,27 @@ describe("CrashRecoveryService", () => {
       return h as () => void;
     }
 
-    it("unregisters blur and focus listeners on stopBackupTimer", () => {
+    // One window-state capture per backup run, whether or not it writes.
+    const backupsRun = () => windowStatesStoreMock.get.mock.calls.length;
+
+    async function startTimerAndSettle(svc: CrashRecoveryService): Promise<number> {
+      svc.startBackupTimer();
+      await svc.whenScheduledWorkSettled();
+      return backupsRun();
+    }
+
+    async function settle(svc: CrashRecoveryService, ms: number): Promise<void> {
+      await vi.advanceTimersByTimeAsync(ms);
+      await svc.whenScheduledWorkSettled();
+    }
+
+    it("unregisters blur and focus listeners on stopBackupTimer", async () => {
       const svc = makeService();
       svc.initialize();
       svc.startBackupTimer();
 
       svc.stopBackupTimer();
+      await svc.whenScheduledWorkSettled();
 
       expect(appMock.removeListener).toHaveBeenCalledWith(
         "browser-window-blur",
@@ -155,78 +179,79 @@ describe("CrashRecoveryService", () => {
       );
     });
 
-    it("calls takeBackup after 100ms debounce when no window is focused", () => {
+    it("takes a backup after 100ms debounce when no window is focused", async () => {
       const svc = makeService();
       svc.initialize();
-      svc.startBackupTimer();
+      const baseline = await startTimerAndSettle(svc);
 
-      const spy = vi.spyOn(svc, "takeBackup");
       (BrowserWindow.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
       getBlurHandler()();
-      expect(spy).not.toHaveBeenCalled();
+      await settle(svc, 99);
+      expect(backupsRun()).toBe(baseline);
 
-      vi.advanceTimersByTime(100);
-      expect(spy).toHaveBeenCalledTimes(1);
+      await settle(svc, 1);
+      expect(backupsRun()).toBe(baseline + 1);
+      svc.stopBackupTimer();
     });
 
-    it("does not call takeBackup when another window is focused after blur", () => {
+    it("does not take a backup when another window is focused after blur", async () => {
       const svc = makeService();
       svc.initialize();
-      svc.startBackupTimer();
+      const baseline = await startTimerAndSettle(svc);
 
-      const spy = vi.spyOn(svc, "takeBackup");
       (BrowserWindow.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(
         {} as Electron.BrowserWindow
       );
 
       getBlurHandler()();
-      vi.advanceTimersByTime(100);
+      await settle(svc, 100);
 
-      expect(spy).not.toHaveBeenCalled();
+      expect(backupsRun()).toBe(baseline);
+      svc.stopBackupTimer();
     });
 
-    it("cancels blur backup when focus arrives within debounce window", () => {
+    it("cancels blur backup when focus arrives within debounce window", async () => {
       const svc = makeService();
       svc.initialize();
-      svc.startBackupTimer();
+      const baseline = await startTimerAndSettle(svc);
 
-      const spy = vi.spyOn(svc, "takeBackup");
       (BrowserWindow.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
       getBlurHandler()();
-      vi.advanceTimersByTime(50);
+      await settle(svc, 50);
 
       (BrowserWindow.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(
         {} as Electron.BrowserWindow
       );
       getFocusHandler()();
 
-      vi.advanceTimersByTime(100);
+      await settle(svc, 100);
 
-      expect(spy).not.toHaveBeenCalled();
+      expect(backupsRun()).toBe(baseline);
+      svc.stopBackupTimer();
     });
 
-    it("deduplicates rapid blur events (debounce reset)", () => {
+    it("deduplicates rapid blur events (debounce reset)", async () => {
       const svc = makeService();
       svc.initialize();
-      svc.startBackupTimer();
+      const baseline = await startTimerAndSettle(svc);
 
-      const spy = vi.spyOn(svc, "takeBackup");
       (BrowserWindow.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
       getBlurHandler()();
-      vi.advanceTimersByTime(50);
+      await settle(svc, 50);
       getBlurHandler()();
-      vi.advanceTimersByTime(50);
+      await settle(svc, 50);
 
-      expect(spy).not.toHaveBeenCalled();
+      expect(backupsRun()).toBe(baseline);
 
-      vi.advanceTimersByTime(100);
-      expect(spy).toHaveBeenCalledTimes(1);
+      await settle(svc, 100);
+      expect(backupsRun()).toBe(baseline + 1);
+      svc.stopBackupTimer();
     });
 
-    it("startBackupTimer is idempotent for blur listeners", () => {
+    it("startBackupTimer is idempotent for blur listeners", async () => {
       const svc = makeService();
       svc.initialize();
 
@@ -235,21 +260,22 @@ describe("CrashRecoveryService", () => {
 
       svc.startBackupTimer();
       expect(appMock.on.mock.calls.length).toBe(onCallCount);
+      svc.stopBackupTimer();
+      await svc.whenScheduledWorkSettled();
     });
 
-    it("stopBackupTimer clears pending blur debounce", () => {
+    it("stopBackupTimer clears pending blur debounce", async () => {
       const svc = makeService();
       svc.initialize();
-      svc.startBackupTimer();
+      const baseline = await startTimerAndSettle(svc);
 
-      const spy = vi.spyOn(svc, "takeBackup");
       (BrowserWindow.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
       getBlurHandler()();
       svc.stopBackupTimer();
 
-      vi.advanceTimersByTime(200);
-      expect(spy).not.toHaveBeenCalled();
+      await settle(svc, 200);
+      expect(backupsRun()).toBe(baseline);
     });
   });
 

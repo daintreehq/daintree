@@ -152,6 +152,30 @@ export async function resilientAtomicWriteFile(
   encoding: BufferEncoding = "utf-8",
   options?: { mode?: number }
 ): Promise<void> {
+  const tempPath = await prepareAtomicWriteFile(filePath, data, encoding, options);
+  try {
+    await resilientRename(tempPath, filePath);
+    await syncParentDirectory(filePath);
+  } catch (error) {
+    fsUnlink(tempPath).catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * The first half of {@link resilientAtomicWriteFile}: writes `data` to a flushed
+ * sibling temp file at its final mode and returns the temp's path, leaving the
+ * rename and the parent-directory sync to the caller, who then owns the temp.
+ * For a caller that has to order the rename itself, such as against a
+ * synchronous writer of the same path (an async rename queued on libuv's
+ * threadpool can land after a later synchronous write).
+ */
+export async function prepareAtomicWriteFile(
+  filePath: string,
+  data: string | Buffer | Uint8Array,
+  encoding: BufferEncoding = "utf-8",
+  options?: { mode?: number }
+): Promise<string> {
   const tempPath = generateTempPath(filePath);
   const applyMode = options?.mode !== undefined && process.platform !== "win32";
   const baseWriteOptions = typeof data === "string" ? { encoding, flush: true } : { flush: true };
@@ -166,8 +190,7 @@ export async function resilientAtomicWriteFile(
     if (applyMode) {
       await fsChmod(tempPath, options!.mode!);
     }
-    await resilientRename(tempPath, filePath);
-    await syncParentDirectory(filePath);
+    return tempPath;
   } catch (error) {
     fsUnlink(tempPath).catch(() => {});
     throw error;
@@ -243,6 +266,17 @@ export function tightenFilePermissionsSync(filePath: string): void {
   if (process.platform === "win32" || !filePath) return;
   try {
     chmodSync(filePath, OWNER_RW_FILE_MODE);
+  } catch (error) {
+    if (isMissingPathError(error)) return;
+    console.warn("[fs] Failed to tighten file permissions:", filePath, error);
+  }
+}
+
+/** Async counterpart to {@link tightenFilePermissionsSync}. */
+export async function tightenFilePermissions(filePath: string): Promise<void> {
+  if (process.platform === "win32" || !filePath) return;
+  try {
+    await fsChmod(filePath, OWNER_RW_FILE_MODE);
   } catch (error) {
     if (isMissingPathError(error)) return;
     console.warn("[fs] Failed to tighten file permissions:", filePath, error);
