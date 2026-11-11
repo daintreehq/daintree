@@ -496,6 +496,52 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     expect(secondId).toBe(firstId);
   });
 
+  // #16791 — a force delete that failed for good relaunches the terminals it
+  // closed, and a resumed agent can write work the original confirm never saw.
+  it("retryDelete never re-fires a failed force delete without a fresh review", async () => {
+    captureWorktreeTerminalSnapshotMock.mockReturnValueOnce([{ id: "t-1", location: "grid" }]);
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("Cannot delete active worktree"));
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: true, closeTerminals: true });
+    await flushPromises();
+    await flushPromises();
+    expect(restoreClosedTerminalsMock).toHaveBeenCalledTimes(1);
+    const before = [...store.getState().mutationOutbox.values()][0]!;
+    expect(before.status).toBe("failed");
+
+    expect(store.getState().retryDelete("wt-1")).toBe("needs-review");
+    await flushPromises();
+    await flushPromises();
+
+    expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
+    expect(store.getState().deletingIds.has("wt-1")).toBe(false);
+    // The banner and the parked entry stay put, so cancelling the review leaves
+    // the card exactly where the failure left it.
+    expect(store.getState().deleteErrors.get("wt-1")).toContain("Cannot delete active worktree");
+    expect(store.getState().mutationOutbox.get(before.mutationId)).toEqual(before);
+  });
+
+  it("retryDelete sends a non-force delete the host refused as dirty back for review", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(
+      new Error("Worktree has uncommitted changes. Use force delete to proceed.")
+    );
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false });
+    await flushPromises();
+    await flushPromises();
+
+    expect(store.getState().retryDelete("wt-1")).toBe("needs-review");
+    await flushPromises();
+    expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(true);
+  });
+
   it("retryDelete with no stored args is a no-op", () => {
     const store = createWorktreeStore();
     store.getState().retryDelete("wt-1");
