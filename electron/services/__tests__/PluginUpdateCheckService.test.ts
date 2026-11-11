@@ -263,6 +263,63 @@ describe("PluginUpdateCheckService", () => {
     expect(svc.getLatest()).not.toBeNull();
   });
 
+  it("checks catalog installs and never offers a delisted one (#16781)", async () => {
+    storeState.value = { enabled: true, lastCheckedAt: null };
+    pluginServiceMock.listPlugins.mockReturnValue([
+      urlPlugin("pub.listed", { source: "catalog" }),
+      urlPlugin("pub.gone", { source: "catalog" }),
+    ]);
+    pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+      id === "pub.listed"
+        ? available("pub.listed", "0.1.1")
+        : { status: "delisted", scope: "plugin", version: "1.0.0" }
+    );
+
+    const svc = new PluginUpdateCheckService();
+    await svc._checkNowForTest();
+
+    const checkedIds = pluginServiceMock.checkForUpdate.mock.calls.map((c) => c[0]);
+    expect(checkedIds.sort()).toEqual(["pub.gone", "pub.listed"]);
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    expect(
+      broadcastMock.mock.calls[0][1].payload.updates.map((u: { pluginId: string }) => u.pluginId)
+    ).toEqual(["pub.listed"]);
+  });
+
+  it("reads a delisted result as a conclusive answer, clearing an obsolete cache", async () => {
+    storeState.value = { enabled: true, lastCheckedAt: null };
+    pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a", { source: "catalog" })]);
+    pluginServiceMock.checkForUpdate.mockResolvedValue(available("pub.a", "2.0.0"));
+    const svc = new PluginUpdateCheckService();
+    await svc._checkNowForTest();
+    expect(svc.getLatest()).not.toBeNull();
+
+    pluginServiceMock.checkForUpdate.mockResolvedValue({
+      status: "delisted",
+      scope: "release",
+      version: "1.0.0",
+    });
+    await svc._checkNowForTest();
+    expect(svc.getLatest()).toBeNull();
+  });
+
+  it("keeps the cache when the catalog couldn't be read", async () => {
+    storeState.value = { enabled: true, lastCheckedAt: null };
+    pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a", { source: "catalog" })]);
+    pluginServiceMock.checkForUpdate.mockResolvedValue(available("pub.a", "2.0.0"));
+    const svc = new PluginUpdateCheckService();
+    await svc._checkNowForTest();
+    expect(svc.getLatest()).not.toBeNull();
+
+    pluginServiceMock.checkForUpdate.mockResolvedValue({
+      status: "catalog-unavailable",
+      catalog: "stale",
+      failure: "unreachable",
+    });
+    await svc._checkNowForTest();
+    expect(svc.getLatest()).not.toBeNull();
+  });
+
   it("does not broadcast or cache when disabled mid-pass", async () => {
     storeState.value = { enabled: true, lastCheckedAt: null };
     pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a")]);

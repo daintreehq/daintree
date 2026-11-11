@@ -35,7 +35,7 @@ const capConsentMock = vi.hoisted(() => ({
 const rateLimiterMock = vi.hoisted(() => ({ dropPlugin: vi.fn() }));
 // The catalog client is exercised in its own suite; here it answers whatever
 // each case says the freshly fetched catalog holds.
-const catalogMock = vi.hoisted(() => ({ lookup: vi.fn() }));
+const catalogMock = vi.hoisted(() => ({ lookup: vi.fn(), lookupUpdate: vi.fn() }));
 const serviceRef = vi.hoisted(() => ({
   current: null as unknown,
   // Holds the next service lookup, which is where the preview's probe starts.
@@ -940,5 +940,150 @@ describe("a catalog install (#16779)", () => {
       expect(failureCode(await handleInstall(archive, opts))).toBe("catalog_mismatch");
     }
     expect(await installedDir("acme.forged")).toBe(false);
+  });
+});
+
+describe("a catalog install's update (#16781)", () => {
+  const REPO = "https://github.com/acme/listed";
+  const MOVED_REPO = "https://github.com/someone-else/listed";
+
+  async function release(version: string, repo = REPO, files: Record<string, string> = {}) {
+    const archive = await makeArchive({ name: "acme.listed", version }, files);
+    const entry = {
+      id: "acme.listed",
+      repo,
+      version,
+      url: `${repo}/releases/download/v${version}/acme.listed-${version}.dntr`,
+      sha256: await sha256(archive),
+      capabilities: [],
+    };
+    return { archive, entry };
+  }
+
+  /** Install 0.1.0 the way a catalog install link does. */
+  async function installListed() {
+    const installed = await release("0.1.0");
+    catalogMock.lookup.mockResolvedValueOnce({
+      status: "listed",
+      entry: installed.entry,
+      fetchedAt: 1,
+    });
+    servesInOrder(installed.archive);
+    const result = await handleInstallFromCatalog({
+      pluginId: "acme.listed",
+      version: "0.1.0",
+      repo: REPO,
+      expected: { kind: "install", pluginId: "acme.listed", archiveHash: installed.entry.sha256 },
+    });
+    expect(result).toEqual({ status: "installed", pluginId: "acme.listed" });
+    netFetch.mockReset();
+    catalogMock.lookup.mockReset();
+    return installed;
+  }
+
+  /** Check for an update, as Check for updates does, and return the offer. */
+  async function checkOffers(next: Awaited<ReturnType<typeof release>>) {
+    catalogMock.lookupUpdate.mockResolvedValueOnce({
+      status: "update",
+      entry: next.entry,
+      fetchedAt: 1,
+    });
+    const result = await service.checkForUpdate("acme.listed");
+    if (result.status !== "available") throw new Error(JSON.stringify(result));
+    return result;
+  }
+
+  /** What the update confirm sends: the offered release by name, held to its digest. */
+  function confirmUpdate(offer: Awaited<ReturnType<typeof checkOffers>>) {
+    return handleInstallFromCatalog({
+      pluginId: offer.catalog!.id,
+      version: offer.catalog!.version,
+      repo: offer.catalog!.repo,
+      expected: { kind: "update", pluginId: offer.name, archiveHash: offer.archiveHash },
+    });
+  }
+
+  it("offers 0.1.1 from the catalog and installs only that entry's digest", async () => {
+    await installListed();
+    const next = await release("0.1.1");
+    servesInOrder(next.archive, next.archive);
+
+    const offer = await checkOffers(next);
+    expect(catalogMock.lookupUpdate).toHaveBeenCalledWith("acme.listed", "0.1.0");
+    expect(offer).toMatchObject({
+      version: "0.1.1",
+      archiveHash: next.entry.sha256,
+      catalog: { id: "acme.listed", version: "0.1.1", repo: REPO },
+    });
+    expect(offer.previousRepo).toBeUndefined();
+
+    catalogMock.lookup.mockResolvedValueOnce({ status: "listed", entry: next.entry, fetchedAt: 2 });
+    const result = await confirmUpdate(offer);
+
+    expect(result).toEqual({ status: "installed", pluginId: "acme.listed" });
+    expect(catalogMock.lookup).toHaveBeenCalledWith("acme.listed", "0.1.1");
+    expect(netFetch.mock.calls.map((call) => call[0])).toEqual([next.entry.url, next.entry.url]);
+    expect(record("acme.listed")).toMatchObject({
+      source: "catalog",
+      catalog: { id: "acme.listed", version: "0.1.1", repo: REPO },
+      originalUrl: next.entry.url,
+      archiveHash: next.entry.sha256,
+    });
+    expect(await downloadsLeft()).toEqual([]);
+  });
+
+  it("records the new repository when an update moved to one", async () => {
+    await installListed();
+    const next = await release("0.1.1", MOVED_REPO);
+    servesInOrder(next.archive, next.archive);
+
+    const offer = await checkOffers(next);
+    expect(offer).toMatchObject({ catalog: { repo: MOVED_REPO }, previousRepo: REPO });
+
+    catalogMock.lookup.mockResolvedValueOnce({ status: "listed", entry: next.entry, fetchedAt: 2 });
+    expect(await confirmUpdate(offer)).toEqual({ status: "installed", pluginId: "acme.listed" });
+    expect(record("acme.listed")?.catalog).toEqual({
+      id: "acme.listed",
+      version: "0.1.1",
+      repo: MOVED_REPO,
+    });
+  });
+
+  it("keeps the installed copy when the update was delisted before the confirm", async () => {
+    const installed = await installListed();
+    const next = await release("0.1.1");
+    servesInOrder(next.archive);
+    const offer = await checkOffers(next);
+
+    catalogMock.lookup.mockResolvedValueOnce({ status: "not-listed", fetchedAt: 2 });
+    const result = await confirmUpdate(offer);
+
+    expect(failureCode(result)).toBe("catalog_not_listed");
+    expect(netFetch).toHaveBeenCalledTimes(1);
+    expect(record("acme.listed")).toMatchObject({
+      catalog: { version: "0.1.0" },
+      archiveHash: installed.entry.sha256,
+    });
+  });
+
+  it("keeps the installed copy when the server swaps the update's bytes after the check", async () => {
+    const installed = await installListed();
+    const next = await release("0.1.1");
+    const swapped = await release("0.1.1", REPO, {
+      "dist/index.js": "module.exports = { swapped: true };",
+    });
+    servesInOrder(next.archive, swapped.archive);
+    const offer = await checkOffers(next);
+
+    catalogMock.lookup.mockResolvedValueOnce({ status: "listed", entry: next.entry, fetchedAt: 2 });
+    const result = await confirmUpdate(offer);
+
+    expect(failureCode(result)).toBe("archive_mismatch");
+    expect(record("acme.listed")).toMatchObject({
+      catalog: { version: "0.1.0" },
+      archiveHash: installed.entry.sha256,
+    });
+    expect(await installedDir("acme.listed")).toBe(true);
+    expect(await downloadsLeft()).toEqual([]);
   });
 });

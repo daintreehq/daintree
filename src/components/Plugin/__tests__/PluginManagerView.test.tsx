@@ -1276,6 +1276,172 @@ describe("PluginManagerView", () => {
     expect(screen.queryByText(/Install it from the URL again/)).toBeNull();
   });
 
+  describe("a catalog install's update (#16781)", () => {
+    const REPO = "https://github.com/acme/demo";
+    const MOVED_REPO = "https://github.com/someone-else/demo";
+    const catalogPlugin = () =>
+      urlPlugin({
+        source: "catalog",
+        originalUrl: `${REPO}/releases/download/v1.0.0/acme.demo-1.0.0.dntr`,
+        catalog: { id: "acme.demo", version: "1.0.0", repo: REPO },
+      });
+    const offer = (repo = REPO) => ({
+      status: "available" as const,
+      name: "acme.demo",
+      version: "1.0.1",
+      capabilities: [],
+      archiveHash: REVIEWED_HASH,
+      catalog: { id: "acme.demo", version: "1.0.1", repo },
+      ...(repo === REPO ? {} : { previousRepo: REPO }),
+    });
+
+    beforeEach(() => {
+      window.electron.plugin.installFromCatalog = vi.fn(async () => ({
+        status: "installed" as const,
+        pluginId: "acme.demo",
+      }));
+    });
+
+    async function checkSelected() {
+      renderDialog();
+      await selectPlugin();
+      fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+    }
+
+    it("shows where the release is listed and installs it by name, held to its digest", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+      vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue(offer());
+      await checkSelected();
+
+      const dialog = await screen.findByRole("dialog", { name: "Update 'Acme Demo'?" });
+      expect(within(dialog).getByText("v1.0.1")).toBeTruthy();
+      expect(within(dialog).getByText("github.com/acme/demo")).toBeTruthy();
+      expect(screen.queryByTestId("plugin-update-source-changed")).toBeNull();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Update plugin" }));
+      await waitFor(() =>
+        expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+          {
+            pluginId: "acme.demo",
+            version: "1.0.1",
+            repo: REPO,
+            expected: { kind: "update", pluginId: "acme.demo", archiveHash: REVIEWED_HASH },
+          },
+          expect.any(String)
+        )
+      );
+      expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+    });
+
+    it("says an update from another repository is a different source, naming both", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+      vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue(offer(MOVED_REPO));
+      await checkSelected();
+
+      const warning = await screen.findByTestId("plugin-update-source-changed");
+      expect(warning.textContent).toBe(
+        "This update comes from a different repository: github.com/someone-else/demo. The installed version came from github.com/acme/demo."
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
+      // The confirm names the repository the user saw, so main refuses it if
+      // the listing has moved again since.
+      await waitFor(() =>
+        expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({ repo: MOVED_REPO }),
+          expect.any(String)
+        )
+      );
+    });
+
+    it("reports a delisted plugin as delisted, not as up to date or failed", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+      vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+        status: "delisted",
+        scope: "plugin",
+        version: "1.0.0",
+      });
+      await checkSelected();
+
+      await waitFor(() =>
+        expect(
+          screen.getByText(
+            "The plugin catalog no longer lists Acme Demo, so it won't get updates from it. The installed copy keeps running."
+          )
+        ).toBeTruthy()
+      );
+      expect(screen.queryByText("Already up to date")).toBeNull();
+      expect(screen.queryByText(/Couldn't check for an update/)).toBeNull();
+      expect(screen.queryByRole("dialog", { name: "Update 'Acme Demo'?" })).toBeNull();
+    });
+
+    it("names the installed release when only it was delisted", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+      vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+        status: "delisted",
+        scope: "release",
+        version: "1.0.0",
+      });
+      await checkSelected();
+
+      await waitFor(() =>
+        expect(
+          screen.getByText(
+            "The plugin catalog no longer lists Acme Demo 1.0.0, and lists no newer release. The installed copy keeps running."
+          )
+        ).toBeTruthy()
+      );
+    });
+
+    it.each([
+      [
+        { catalog: "stale", failure: "unreachable" },
+        "Couldn't refresh the plugin catalog, and an older copy isn't used for updates. Check your connection and try again.",
+      ],
+      [
+        { catalog: "unavailable", failure: "unreachable" },
+        "Couldn't reach the plugin catalog to check for updates. Check your connection and try again.",
+      ],
+      [
+        { catalog: "unavailable", failure: "not-published" },
+        "The plugin catalog isn't published yet, so this plugin can't be checked for updates.",
+      ],
+    ] as const)(
+      "reports a catalog it couldn't read and offers nothing: %o",
+      async (state, copy) => {
+        vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+        vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+          status: "catalog-unavailable",
+          ...state,
+        });
+        await checkSelected();
+
+        await waitFor(() => expect(screen.getByText(copy)).toBeTruthy());
+        expect(screen.queryByRole("dialog", { name: "Update 'Acme Demo'?" })).toBeNull();
+      }
+    );
+
+    it("sends a refused catalog update back to another check, not to an install link", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+      vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue(offer());
+      vi.mocked(window.electron.plugin.installFromCatalog).mockResolvedValue({
+        status: "failed",
+        errors: [{ code: "catalog_mismatch", message: "Open the link again to review it." }],
+      });
+      await checkSelected();
+
+      fireEvent.click(await screen.findByRole("button", { name: "Update plugin" }));
+      await waitFor(() =>
+        expect(
+          screen.getByText(
+            "The catalog's listing of this update changed since you reviewed it, so nothing was installed. Check for updates again."
+          )
+        ).toBeTruthy()
+      );
+      expect(screen.queryByText(/Open the link again/)).toBeNull();
+    });
+  });
+
   it("guards against double-clicks while a check is in flight", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
     // Never-resolving check keeps the in-flight guard active across both clicks.
@@ -2886,6 +3052,31 @@ describe("PluginManagerView", () => {
           expect.any(String),
           { pluginId: "acme.a", archiveHash: "a".repeat(64) }
         )
+      );
+    });
+
+    it("names delisted catalog plugins in the summary, apart from failed checks (#16781)", async () => {
+      listMock().mockResolvedValue([
+        makeUrl("acme.a", "Plugin A"),
+        makeUrl("acme.b", "Plugin B"),
+        makeUrl("acme.c", "Plugin C"),
+      ]);
+      checkMock().mockImplementation(async (id: string) =>
+        id === "acme.a"
+          ? { status: "delisted", scope: "plugin", version: "1.0.0" }
+          : id === "acme.b"
+            ? { status: "catalog-unavailable", catalog: "unavailable", failure: "unreachable" }
+            : { status: "up-to-date" }
+      );
+      renderDialog();
+      fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+
+      await waitFor(() =>
+        expect(
+          screen.getByText(
+            "No updates found. 1 plugin couldn't be checked. The plugin catalog no longer lists Plugin A."
+          )
+        ).toBeTruthy()
       );
     });
 
