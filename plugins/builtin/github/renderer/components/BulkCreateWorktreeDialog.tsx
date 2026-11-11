@@ -110,29 +110,48 @@ function exitedNonZero(panel: PanelInstance): boolean {
   return isPtyPanel(panel) && panel.exitCode !== undefined && panel.exitCode !== 0;
 }
 
+// Broader than verification's crash check: a restart the user tried by hand
+// clears the exit code even when the replacement never came up.
+function terminalIsDead(panel: PanelInstance): boolean {
+  return (
+    isPtyPanel(panel) &&
+    (exitedNonZero(panel) || panel.restartError !== undefined || panel.spawnStatus === "failed")
+  );
+}
+
 /**
- * Before a retry relaunches the entries that crashed after launch, their dead
- * panels go to the trash (recoverable) so each replacement doesn't sit beside
- * a corpse of itself. A panel the user has since restarted is healthy again:
- * it stays, and its entry no longer needs relaunching.
+ * Settles, before a retry, which of an item's entries launch again. A dead
+ * terminal still in this worktree goes to the trash (recoverable) and its
+ * entry relaunches, so the replacement doesn't sit beside a dead copy of
+ * itself; that covers entries that died after an earlier failure, not just the
+ * ones verification flagged. A failed entry whose terminal is running again
+ * stays as it is. One whose terminal is gone, already trashed or moved to
+ * another worktree relaunches without touching that panel.
  */
-function releaseCrashedTerminals(
+function releaseDeadTerminals(
   tracked: BatchItemTracking,
   panelsById: Record<string, PanelInstance | undefined>,
   trashPanel: (id: string) => void
 ) {
-  const stillFailed: number[] = [];
-  for (const index of tracked.failedTerminalIndices) {
-    const panelId = tracked.terminalIdByIndex.get(index);
-    const panel = panelId === undefined ? undefined : panelsById[panelId];
-    if (panelId !== undefined && panel && panel.location !== "trash") {
-      if (!exitedNonZero(panel)) continue;
+  const failed = new Set(tracked.failedTerminalIndices);
+  for (const [index, panelId] of [...tracked.terminalIdByIndex]) {
+    const panel = panelsById[panelId];
+    const owned =
+      panel !== undefined &&
+      panel.location !== "trash" &&
+      panel.worktreeId === tracked.worktreeId;
+    if (!owned) {
+      // A healthy entry the user closed or moved stays that way.
+      tracked.terminalIdByIndex.delete(index);
+    } else if (terminalIsDead(panel)) {
       trashPanel(panelId);
+      tracked.terminalIdByIndex.delete(index);
+      failed.add(index);
+    } else {
+      failed.delete(index);
     }
-    tracked.terminalIdByIndex.delete(index);
-    stillFailed.push(index);
   }
-  tracked.failedTerminalIndices = stillFailed;
+  tracked.failedTerminalIndices = [...failed].sort((a, b) => a - b);
 }
 
 function waitForPanelSpawns(panelIds: string[], timeoutMs: number): Promise<void> {
@@ -1198,7 +1217,7 @@ export function BulkCreateWorktreeDialog({
       const { panelsById, trashPanel } = usePanelStore.getState();
       for (const issueNumber of failedIssueNumbers) {
         const tracked = batchTrackingRef.current.get(issueNumber);
-        if (tracked) releaseCrashedTerminals(tracked, panelsById, trashPanel);
+        if (tracked) releaseDeadTerminals(tracked, panelsById, trashPanel);
       }
 
       dispatchProgress({ type: "RETRY_FAILED" });

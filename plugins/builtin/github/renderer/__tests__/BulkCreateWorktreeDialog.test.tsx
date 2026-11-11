@@ -171,7 +171,14 @@ vi.mock("@/store/worktreeStore", () => ({
   },
 }));
 
-let mockTerminals: Array<{ id: string; exitCode?: number }> = [];
+let mockTerminals: Array<{
+  id: string;
+  exitCode?: number;
+  worktreeId?: string;
+  location?: string;
+  restartError?: unknown;
+  spawnStatus?: string;
+}> = [];
 const mockAddPanel = vi.fn();
 const mockTrashPanel = vi.fn();
 const mockBeginSpawnBatch = vi.fn(() => Symbol("test-spawn-batch"));
@@ -3022,8 +3029,8 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
         failed: [],
       });
     mockTerminals = [
-      { id: "t-0", exitCode: undefined },
-      { id: "t-1-retry", exitCode: undefined },
+      { id: "t-0", worktreeId: "wt-1", exitCode: undefined },
+      { id: "t-1-retry", worktreeId: "wt-1", exitCode: undefined },
     ];
 
     render(<BulkCreateWorktreeDialog {...props} />);
@@ -3035,14 +3042,103 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     expect(screen.getByText(/Terminal spawn failed/)).toBeTruthy();
     expect(recipeIndicesForCall(0)).toBeUndefined();
 
+    // The worktree exists, so nothing about it needs looking up again.
+    mockGetAvailableBranch.mockClear().mockRejectedValue(new Error("lookup timed out"));
+    mockGetDefaultPath.mockClear().mockRejectedValue(new Error("lookup timed out"));
     await act(async () => {
       screen.getByTestId("bulk-create-retry-button").click();
     });
     await advanceTimersGradually(5000);
 
+    expect(mockGetAvailableBranch).not.toHaveBeenCalled();
+    expect(mockGetDefaultPath).not.toHaveBeenCalled();
     expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(2);
     expect(recipeIndicesForCall(1)).toEqual([1]);
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+  });
+
+  it("keeps verifying the terminals an earlier attempt launched", async () => {
+    mockSelectedRecipeId = "test-recipe";
+    mockRunRecipeWithResults
+      .mockResolvedValueOnce({
+        spawned: [{ index: 0, terminalId: "t-0" }],
+        failed: [{ index: 1, error: "spawn failed" }],
+      })
+      .mockImplementationOnce(async () => {
+        // t-0 dies while the retry is relaunching entry 1.
+        mockTerminals = [
+          { id: "t-0", worktreeId: "wt-1", exitCode: 1 },
+          { id: "t-1", worktreeId: "wt-1", exitCode: undefined },
+        ];
+        return { spawned: [{ index: 1, terminalId: "t-1" }], failed: [] };
+      })
+      .mockResolvedValueOnce({ spawned: [{ index: 0, terminalId: "t-0b" }], failed: [] });
+    mockTerminals = [{ id: "t-0", worktreeId: "wt-1", exitCode: undefined }];
+
+    render(<BulkCreateWorktreeDialog {...props} />);
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+    await act(async () => {
+      screen.getByTestId("bulk-create-retry-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(recipeIndicesForCall(1)).toEqual([1]);
+    expect(screen.getByText(/1 terminal\(s\) crashed/)).toBeTruthy();
+
+    mockTerminals = [
+      { id: "t-0", worktreeId: "wt-1", exitCode: 1 },
+      { id: "t-0b", worktreeId: "wt-1", exitCode: undefined },
+      { id: "t-1", worktreeId: "wt-1", exitCode: undefined },
+    ];
+    await act(async () => {
+      screen.getByTestId("bulk-create-retry-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(recipeIndicesForCall(2)).toEqual([0]);
+    expect(mockTrashPanel).toHaveBeenCalledWith("t-0");
+    expect(mockTrashPanel).not.toHaveBeenCalledWith("t-1");
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+  });
+
+  it("relaunches an entry that died after another entry failed to launch", async () => {
+    mockSelectedRecipeId = "test-recipe";
+    mockRunRecipeWithResults
+      .mockResolvedValueOnce({
+        spawned: [{ index: 0, terminalId: "t-0" }],
+        failed: [{ index: 1, error: "spawn failed" }],
+      })
+      .mockResolvedValueOnce({
+        spawned: [
+          { index: 0, terminalId: "t-0b" },
+          { index: 1, terminalId: "t-1" },
+        ],
+        failed: [],
+      });
+    mockTerminals = [{ id: "t-0", worktreeId: "wt-1", exitCode: undefined }];
+
+    render(<BulkCreateWorktreeDialog {...props} />);
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    mockTerminals = [
+      { id: "t-0", worktreeId: "wt-1", exitCode: 1 },
+      { id: "t-0b", worktreeId: "wt-1", exitCode: undefined },
+      { id: "t-1", worktreeId: "wt-1", exitCode: undefined },
+    ];
+    await act(async () => {
+      screen.getByTestId("bulk-create-retry-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(recipeIndicesForCall(1)).toEqual([0, 1]);
+    expect(mockTrashPanel).toHaveBeenCalledWith("t-0");
     expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
   });
 
@@ -3061,8 +3157,8 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
         failed: [],
       });
     mockTerminals = [
-      { id: "t-0", exitCode: undefined },
-      { id: "t-1", exitCode: 1 },
+      { id: "t-0", worktreeId: "wt-1", exitCode: undefined },
+      { id: "t-1", worktreeId: "wt-1", exitCode: 1 },
     ];
 
     render(<BulkCreateWorktreeDialog {...props} />);
@@ -3074,9 +3170,9 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     expect(screen.getByText(/1 terminal\(s\) crashed/)).toBeTruthy();
 
     mockTerminals = [
-      { id: "t-0", exitCode: undefined },
-      { id: "t-1", exitCode: 1 },
-      { id: "t-1-retry", exitCode: undefined },
+      { id: "t-0", worktreeId: "wt-1", exitCode: undefined },
+      { id: "t-1", worktreeId: "wt-1", exitCode: 1 },
+      { id: "t-1-retry", worktreeId: "wt-1", exitCode: undefined },
     ];
     await act(async () => {
       screen.getByTestId("bulk-create-retry-button").click();
@@ -3103,8 +3199,8 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       failed: [],
     });
     mockTerminals = [
-      { id: "t-0", exitCode: undefined },
-      { id: "t-1", exitCode: 1 },
+      { id: "t-0", worktreeId: "wt-1", exitCode: undefined },
+      { id: "t-1", worktreeId: "wt-1", exitCode: 1 },
     ];
 
     render(<BulkCreateWorktreeDialog {...props} />);
@@ -3115,8 +3211,8 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     expect(screen.getByText(/1 terminal\(s\) crashed/)).toBeTruthy();
 
     mockTerminals = [
-      { id: "t-0", exitCode: undefined },
-      { id: "t-1", exitCode: undefined },
+      { id: "t-0", worktreeId: "wt-1", exitCode: undefined },
+      { id: "t-1", worktreeId: "wt-1", exitCode: undefined },
     ];
     await act(async () => {
       screen.getByTestId("bulk-create-retry-button").click();
@@ -3125,6 +3221,61 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
 
     expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(1);
     expect(mockTrashPanel).not.toHaveBeenCalled();
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+  });
+
+  it.each([
+    {
+      name: "a restart that failed is replaced",
+      atRetry: { exitCode: undefined, restartError: { message: "spawn failed" } },
+      trashed: true,
+    },
+    {
+      name: "a terminal moved to another worktree is relaunched but not trashed",
+      atRetry: { exitCode: 1, worktreeId: "other-wt" },
+      trashed: false,
+    },
+    {
+      name: "a terminal already in the trash is relaunched without trashing it again",
+      atRetry: { exitCode: 1, location: "trash" },
+      trashed: false,
+    },
+  ])("on retry, $name", async ({ atRetry, trashed }) => {
+    mockSelectedRecipeId = "test-recipe";
+    mockRunRecipeWithResults
+      .mockResolvedValueOnce({
+        spawned: [
+          { index: 0, terminalId: "t-0" },
+          { index: 1, terminalId: "t-1" },
+        ],
+        failed: [],
+      })
+      .mockResolvedValueOnce({ spawned: [{ index: 1, terminalId: "t-1b" }], failed: [] });
+    mockTerminals = [
+      { id: "t-0", worktreeId: "wt-1", exitCode: undefined },
+      { id: "t-1", worktreeId: "wt-1", exitCode: 1 },
+    ];
+
+    render(<BulkCreateWorktreeDialog {...props} />);
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+    expect(screen.getByText(/1 terminal\(s\) crashed/)).toBeTruthy();
+
+    mockTerminals = [
+      { id: "t-0", worktreeId: "wt-1", exitCode: undefined },
+      { id: "t-1", worktreeId: "wt-1", ...atRetry },
+      { id: "t-1b", worktreeId: "wt-1", exitCode: undefined },
+    ];
+    await act(async () => {
+      screen.getByTestId("bulk-create-retry-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(recipeIndicesForCall(1)).toEqual([1]);
+    if (trashed) expect(mockTrashPanel).toHaveBeenCalledWith("t-1");
+    else expect(mockTrashPanel).not.toHaveBeenCalled();
     expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
   });
 
@@ -3140,8 +3291,8 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
         failed: [],
       });
     mockTerminals = [
-      { id: "t-0", exitCode: undefined },
-      { id: "t-1", exitCode: undefined },
+      { id: "t-0", worktreeId: "wt-1", exitCode: undefined },
+      { id: "t-1", worktreeId: "wt-1", exitCode: undefined },
     ];
 
     render(<BulkCreateWorktreeDialog {...props} />);
@@ -3163,8 +3314,8 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     ]);
     mockAddPanel.mockResolvedValueOnce("panel-a").mockResolvedValueOnce("panel-b");
     mockTerminals = [
-      { id: "panel-a", exitCode: undefined },
-      { id: "panel-b", exitCode: 1 },
+      { id: "panel-a", worktreeId: "wt-1", exitCode: undefined },
+      { id: "panel-b", worktreeId: "wt-1", exitCode: 1 },
     ];
 
     render(<BulkCreateWorktreeDialog {...props} />);
@@ -3180,9 +3331,9 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     ]);
     mockAddPanel.mockResolvedValueOnce("panel-b2");
     mockTerminals = [
-      { id: "panel-a", exitCode: undefined },
-      { id: "panel-b", exitCode: 1 },
-      { id: "panel-b2", exitCode: undefined },
+      { id: "panel-a", worktreeId: "wt-1", exitCode: undefined },
+      { id: "panel-b", worktreeId: "wt-1", exitCode: 1 },
+      { id: "panel-b2", worktreeId: "wt-1", exitCode: undefined },
     ];
     await act(async () => {
       screen.getByTestId("bulk-create-retry-button").click();
@@ -3197,6 +3348,101 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
   });
 
+  it("keeps a cloned entry's original index across repeated retries", async () => {
+    mockSelectedRecipeId = "__clone_layout__";
+    mockGenerateRecipeFromActiveTerminals.mockReturnValue([
+      { type: "terminal", title: "A", exitBehavior: "close", command: "cmd-a" },
+      { type: "terminal", title: "B", exitBehavior: "close", command: "cmd-b" },
+    ]);
+    mockAddPanel
+      .mockResolvedValueOnce("panel-a")
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce("panel-b2")
+      .mockResolvedValueOnce("panel-b3");
+
+    render(<BulkCreateWorktreeDialog {...props} />);
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+    expect(screen.getByText(/Terminal spawn failed/)).toBeTruthy();
+
+    // B's first replacement crashes; the next retry must relaunch B again.
+    mockTerminals = [
+      { id: "panel-a", worktreeId: "wt-1", exitCode: undefined },
+      { id: "panel-b2", worktreeId: "wt-1", exitCode: 1 },
+    ];
+    await act(async () => {
+      screen.getByTestId("bulk-create-retry-button").click();
+    });
+    await advanceTimersGradually(5000);
+    expect(screen.getByText(/1 terminal\(s\) crashed/)).toBeTruthy();
+
+    mockTerminals = [
+      { id: "panel-a", worktreeId: "wt-1", exitCode: undefined },
+      { id: "panel-b2", worktreeId: "wt-1", exitCode: 1 },
+      { id: "panel-b3", worktreeId: "wt-1", exitCode: undefined },
+    ];
+    await act(async () => {
+      screen.getByTestId("bulk-create-retry-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(mockAddPanel.mock.calls.map((c) => c[0].command)).toEqual([
+      "cmd-a",
+      "cmd-b",
+      "cmd-b",
+      "cmd-b",
+    ]);
+    expect(mockTrashPanel).toHaveBeenCalledWith("panel-b2");
+    expect(mockTrashPanel).not.toHaveBeenCalledWith("panel-a");
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+  });
+
+  it("fails only the PR still needing a worktree when the retry can't list branches", async () => {
+    mockSelectedRecipeId = "test-recipe";
+    mockListBranches.mockResolvedValue([
+      { name: "origin/feature/pr-1", current: false, remote: true },
+      { name: "origin/feature/pr-2", current: false, remote: true },
+    ]);
+    mockWorktreeCreate.mockImplementation((opts: { newBranch: string }) =>
+      opts.newBranch === "feature/pr-2"
+        ? Promise.reject(new Error("Some error"))
+        : Promise.resolve(createdWorktree("wt-1", "feature/pr-1"))
+    );
+    mockRunRecipeWithResults
+      .mockResolvedValueOnce({ spawned: [], failed: [{ index: 0, error: "spawn failed" }] })
+      .mockResolvedValueOnce({ spawned: [{ index: 0, terminalId: "t-0" }], failed: [] });
+    mockTerminals = [{ id: "t-0", worktreeId: "wt-1", exitCode: undefined }];
+    const prProps = {
+      ...props,
+      mode: "pr" as const,
+      selectedIssues: [],
+      selectedPRs: [makePR(1), makePR(2)],
+    };
+
+    render(<BulkCreateWorktreeDialog {...prProps} />);
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+    expect(screen.getByText(/0 of 2 created/)).toBeTruthy();
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
+
+    const listCallsBefore = mockListBranches.mock.calls.length;
+    mockListBranches.mockRejectedValue(new Error("git exploded"));
+    await act(async () => {
+      screen.getByTestId("bulk-create-retry-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(mockListBranches.mock.calls.length).toBe(listCallsBefore + 1);
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
+    expect(recipeIndicesForCall(1)).toEqual([0]);
+    expect(screen.getByText(/1 of 2 created/)).toBeTruthy();
+    expect(screen.getByText(/git exploded/)).toBeTruthy();
+  });
+
   it("retries a PR's terminals without listing branches for a worktree it already has", async () => {
     mockSelectedRecipeId = "test-recipe";
     mockListBranches.mockResolvedValue([
@@ -3205,7 +3451,7 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     mockRunRecipeWithResults
       .mockResolvedValueOnce({ spawned: [], failed: [{ index: 0, error: "spawn failed" }] })
       .mockResolvedValueOnce({ spawned: [{ index: 0, terminalId: "t-0" }], failed: [] });
-    mockTerminals = [{ id: "t-0", exitCode: undefined }];
+    mockTerminals = [{ id: "t-0", worktreeId: "wt-1", exitCode: undefined }];
     const prProps = { ...props, mode: "pr" as const, selectedIssues: [], selectedPRs: [makePR(1)] };
 
     render(<BulkCreateWorktreeDialog {...prProps} />);
