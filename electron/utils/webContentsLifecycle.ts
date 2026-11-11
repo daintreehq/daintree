@@ -63,80 +63,82 @@ export function ensureAttached(wc: Electron.WebContents): void {
 }
 
 /**
- * Renderers that may be frozen, each mapped to the latest freeze asked of it.
- * Held from the moment a freeze is asked for, not when CDP acks it, since a
- * push sent before the ack lands in the freeze anyway. Released by a thaw that
- * succeeds with no newer freeze asked for since it started. A freeze that
- * failed after its command went out, or a failed thaw, proves nothing about
- * the page (Chromium also keeps a page's frozen state on its host across a
- * reload), so the hold stays; a freeze whose command never went out puts back
- * the latest earlier hold that still stands. Holding too long costs a skipped
- * periodic push, and every activation thaws.
+ * What main knows about each renderer's CDP lifecycle state, for
+ * {@link isWebContentsFrozen}. Commands on one debugger session are applied in
+ * the order they are sent, whatever order their answers come back in, so a
+ * page is frozen when the latest freeze sent outranks the latest thaw that
+ * succeeded. A freeze counts from the moment it is asked for, since a push sent
+ * before its command lands in the freeze anyway, and one that fails after its
+ * command went out still counts, since it may have landed (Chromium also keeps
+ * a page's frozen state on its host across a reload). Erring toward frozen
+ * costs a skipped periodic push, and every activation thaws.
  */
-const lifecycleHolds = new WeakMap<Electron.WebContents, FreezeHold>();
-
-interface FreezeHold {
-  /** The hold this one replaced, kept only until this freeze's command goes out. */
-  prior: FreezeHold | undefined;
-  /** This freeze's command never went out, so it froze nothing. */
-  unsent: boolean;
+interface LifecycleTrack {
+  /** Freezes asked for that haven't yet sent their command or failed to. */
+  freezesInFlight: number;
+  /** Send order of the latest freeze command that went out; 0 for none. */
+  lastFreezeSent: number;
+  /** Send order of the latest thaw command that succeeded; 0 for none. */
+  lastThawApplied: number;
 }
 
-type LifecycleOutcome = "applied" | "unsent" | "failed";
+const lifecycleTracks = new WeakMap<Electron.WebContents, LifecycleTrack>();
+let lifecycleSendOrder = 0;
+
+type LifecycleResult = { sent: false } | { sent: true; order: number; applied: boolean };
 
 async function setLifecycleState(
   wc: Electron.WebContents,
   state: "frozen" | "active"
-): Promise<LifecycleOutcome> {
-  if (wc.isDestroyed()) return "unsent";
-  let sent = false;
+): Promise<LifecycleResult> {
+  if (wc.isDestroyed()) return { sent: false };
+  let order = 0;
   try {
     ensureAttached(wc);
     await wc.debugger.sendCommand("Page.enable");
-    sent = true;
+    order = ++lifecycleSendOrder;
     await wc.debugger.sendCommand("Page.setWebLifecycleState", { state });
-    return "applied";
+    return { sent: true, order, applied: true };
   } catch (err) {
     const message = formatErrorMessage(err, "CDP lifecycle state failed");
     if (!EXPECTED_CDP_ERRORS.some((s) => message.includes(s))) {
       console.warn(`[webContentsLifecycle] setWebLifecycleState(${state}) failed:`, message);
     }
-    return sent ? "failed" : "unsent";
+    return order === 0 ? { sent: false } : { sent: true, order, applied: false };
   }
 }
 
 export async function freezeWebContents(wc: Electron.WebContents): Promise<void> {
   if (wc.isDestroyed()) return;
-  const hold: FreezeHold = { prior: lifecycleHolds.get(wc), unsent: false };
-  lifecycleHolds.set(wc, hold);
-  if ((await setLifecycleState(wc, "frozen")) !== "unsent") {
-    hold.prior = undefined;
-    return;
+  let track = lifecycleTracks.get(wc);
+  if (!track) {
+    track = { freezesInFlight: 0, lastFreezeSent: 0, lastThawApplied: 0 };
+    lifecycleTracks.set(wc, track);
   }
-  hold.unsent = true;
-  if (lifecycleHolds.get(wc) !== hold) return;
-  let standing = hold.prior;
-  while (standing?.unsent) standing = standing.prior;
-  if (standing) lifecycleHolds.set(wc, standing);
-  else lifecycleHolds.delete(wc);
+  track.freezesInFlight++;
+  const result = await setLifecycleState(wc, "frozen");
+  track.freezesInFlight--;
+  if (result.sent) track.lastFreezeSent = Math.max(track.lastFreezeSent, result.order);
 }
 
 export async function unfreezeWebContents(wc: Electron.WebContents): Promise<void> {
-  const hold = lifecycleHolds.get(wc);
-  const outcome = await setLifecycleState(wc, "active");
-  if (outcome === "applied" && hold && lifecycleHolds.get(wc) === hold) {
-    lifecycleHolds.delete(wc);
-  }
+  const result = await setLifecycleState(wc, "active");
+  const track = lifecycleTracks.get(wc);
+  if (!track || !result.sent || !result.applied) return;
+  track.lastThawApplied = Math.max(track.lastThawApplied, result.order);
 }
 
 /**
- * Whether this renderer may be frozen: asked to freeze and not since thawed.
- * A push to a frozen renderer either wakes JS in a page frozen to stay idle or
- * schedules work that all fires at once on thaw, inside the warm paint gate,
- * so periodic work that can simply skip a frozen view should (#16810).
+ * Whether this renderer may be frozen: a freeze is in flight, or the latest
+ * one sent has no successful thaw sent after it. A push to a frozen renderer
+ * either wakes JS in a page frozen to stay idle or schedules work that all
+ * fires at once on thaw, inside the warm paint gate, so periodic work that can
+ * simply skip a frozen view should (#16810).
  */
 export function isWebContentsFrozen(wc: Electron.WebContents): boolean {
-  return lifecycleHolds.has(wc);
+  const track = lifecycleTracks.get(wc);
+  if (!track) return false;
+  return track.freezesInFlight > 0 || track.lastFreezeSent > track.lastThawApplied;
 }
 
 /**

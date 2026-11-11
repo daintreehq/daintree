@@ -288,6 +288,68 @@ describe("webContentsLifecycle", () => {
       expect(isWebContentsFrozen(asWc(wc))).toBe(true);
     });
 
+    it("a freeze that never went out, started while a thaw's command was out, doesn't outlive the thaw", async () => {
+      const wc = createMockWc({ attached: true });
+      await freezeWebContents(asWc(wc));
+      const { sent } = holdCommands(wc);
+
+      const thawing = unfreezeWebContents(asWc(wc));
+      (await sent(1))[0]!.resolve();
+      const thawLifecycle = (await sent(2))[1]!;
+      const refreezing = freezeWebContents(asWc(wc));
+      const refreezeEnable = (await sent(3))[2]!;
+      thawLifecycle.resolve();
+      await thawing;
+      refreezeEnable.reject();
+      await refreezing;
+
+      expect(isWebContentsFrozen(asWc(wc))).toBe(false);
+    });
+
+    it("a thaw started under a freeze that never went out still releases the earlier freeze", async () => {
+      const wc = createMockWc({ attached: true });
+      await freezeWebContents(asWc(wc));
+      const { sent } = holdCommands(wc);
+
+      const refreezing = freezeWebContents(asWc(wc));
+      const thawing = unfreezeWebContents(asWc(wc));
+      const [refreezeEnable, thawEnable] = await sent(2);
+      refreezeEnable!.reject();
+      await refreezing;
+      expect(isWebContentsFrozen(asWc(wc))).toBe(true);
+      thawEnable!.resolve();
+      (await sent(3))[2]!.resolve();
+      await thawing;
+
+      expect(isWebContentsFrozen(asWc(wc))).toBe(false);
+    });
+
+    it.each([
+      ["a freeze then a thaw", "freeze-first", false],
+      ["a thaw then a freeze", "thaw-first", true],
+    ] as const)(
+      "of %s, the command sent last decides, even when its answer comes back first",
+      async (_, first, held) => {
+        const wc = createMockWc({ attached: true });
+        await freezeWebContents(asWc(wc));
+        const { sent } = holdCommands(wc);
+
+        const ops =
+          first === "freeze-first"
+            ? [freezeWebContents(asWc(wc)), unfreezeWebContents(asWc(wc))]
+            : [unfreezeWebContents(asWc(wc)), freezeWebContents(asWc(wc))];
+        const [enableA, enableB] = await sent(2);
+        enableA!.resolve();
+        enableB!.resolve();
+        const commands = await sent(4);
+        commands[3]!.resolve();
+        commands[2]!.resolve();
+        await Promise.all(ops);
+
+        expect(isWebContentsFrozen(asWc(wc))).toBe(held);
+      }
+    );
+
     it("a thaw that lands after a newer freeze leaves that freeze's hold", async () => {
       const wc = createMockWc();
       await freezeWebContents(asWc(wc));
