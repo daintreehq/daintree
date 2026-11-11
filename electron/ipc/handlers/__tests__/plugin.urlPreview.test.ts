@@ -134,7 +134,8 @@ vi.mock("../../../services/plugin-mcp/instances.js", () => ({
   getPluginMcpConsentService: () => consentMock,
   getPluginMcpRateLimiter: () => rateLimiterMock,
 }));
-vi.mock("../../../services/plugin/PluginCatalogService.js", () => ({
+vi.mock("../../../services/plugin/PluginCatalogService.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/plugin/PluginCatalogService.js")>()),
   getPluginCatalogService: () => catalogMock,
 }));
 vi.mock("../../../services/plugin-capability/instances.js", () => ({
