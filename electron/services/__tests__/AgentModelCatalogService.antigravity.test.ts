@@ -280,6 +280,61 @@ describe("AgentModelCatalogService — Antigravity", () => {
   });
 
   it.each([
+    ["an older", -1_000, LISTED_IDS],
+    ["a newer", 1_000, ["gemini-disk-high"]],
+  ])(
+    "keeps the newer of memory and %s disk listing when the refresh fails",
+    async (_label, offset, expected) => {
+      let attempt = 0;
+      const exec = vi.fn(async () => {
+        attempt += 1;
+        if (attempt > 1) throw offline();
+        return { stdout: LISTING, stderr: "" };
+      }) as unknown as ExecFn;
+      const svc = service(exec);
+      await svc.getResolvedModels("antigravity");
+      await persisted(LISTED_IDS);
+      const { fetchedAt } = JSON.parse(await fs.readFile(antigravityCachePath, "utf-8")) as {
+        fetchedAt: number;
+      };
+      await seedDisk(fetchedAt + offset, ["gemini-disk-high"]);
+
+      const clock = frozenClock();
+      try {
+        clock.advance(DAY_MS + 10_000);
+        const result = await svc.getResolvedModels("antigravity");
+        expect(exec).toHaveBeenCalledTimes(2);
+        expect(result.models.map((m) => m.id)).toEqual(expected);
+      } finally {
+        clock.restore();
+      }
+    }
+  );
+
+  it("keeps the stale listing through a failed refresh that clearCache() interrupted", async () => {
+    await seedDisk(Date.now() - DAY_MS - 1_000, ["gemini-legacy-high"]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const exec = vi.fn(async () => {
+      await gate;
+      throw offline();
+    }) as unknown as ExecFn;
+    const svc = service(exec);
+
+    const pending = svc.getResolvedModels("antigravity");
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(1));
+    svc.clearCache();
+    release();
+    await pending;
+    const during = await svc.getResolvedModels("antigravity");
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(during.models.map((m) => m.id)).toEqual(["gemini-legacy-high"]);
+  });
+
+  it.each([
     ["unparseable JSON", "{not json"],
     ["an empty model list", JSON.stringify({ fetchedAt: Date.now(), models: [] })],
     ["a missing timestamp", JSON.stringify({ models: [{ id: "gemini-disk-high", name: "D" }] })],

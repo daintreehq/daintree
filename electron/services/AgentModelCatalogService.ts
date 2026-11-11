@@ -548,6 +548,7 @@ export class AgentModelCatalogService {
     }
 
     this.agyRetryAt = Date.now() + AGY_RETRY_MS;
+    this.agyCache = known;
     return known;
   }
 
