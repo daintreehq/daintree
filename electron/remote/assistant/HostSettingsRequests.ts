@@ -67,6 +67,12 @@ export interface HostSettingsRequestDeps {
     subject: string;
     lines: string[];
   }): Promise<McpConfirmationDecision | null>;
+  /**
+   * Whether the person handed this assistant's settings changes over to it
+   * (#16752), read at each apply: then nobody is asked. Never "Never ask",
+   * and never anything the caller sends.
+   */
+  skipsApproval?(helpSessionId: string): boolean;
   now(): number;
   newId(): string;
 }
@@ -92,6 +98,8 @@ const EXPIRED_DETAIL =
 const NO_ASK_DETAIL =
   "The person couldn't be asked here, so nothing was changed. Ask them to open the assistant's window, then apply a new preview.";
 const REJECTED_DETAIL = "The person declined. Nothing was changed.";
+const TIMEOUT_DETAIL =
+  "The person didn't answer in time, so nothing was changed. That ticket is spent: preview again, then apply the new one.";
 const GONE_DETAIL =
   "The assistant was replaced or control was turned off while the person decided. Nothing was changed.";
 const CONFLICT_DETAIL =
@@ -174,8 +182,9 @@ function hostOutcome(error: unknown): Detail {
  * always two calls: a preview, which reads every host named, freezes what it
  * read (values, revisions, the launch they were read in) behind a ticket here
  * and changes nothing; and an apply of that ticket, which asks the person in
- * the assistant's own window about exactly what was frozen and only then
- * writes it, against those same revisions. An approval is never taken from
+ * the assistant's own window about exactly what was frozen, unless they
+ * handed these changes over to it (#16752), and only then writes it, against
+ * those same revisions. An approval is never taken from
  * the caller's arguments, and a ticket is spent by its first apply.
  */
 export class HostSettingsRequests {
@@ -190,7 +199,8 @@ export class HostSettingsRequests {
   async run(
     helpSessionId: string,
     stillRunning: () => boolean,
-    args: HostSettingsArgs
+    args: HostSettingsArgs,
+    noteSkipped?: () => void
   ): Promise<HostSettingsResult> {
     switch (args.operation) {
       case "read":
@@ -198,7 +208,7 @@ export class HostSettingsRequests {
       case "preview":
         return this.preview(helpSessionId, args.hostIds ?? [], args.patch ?? {});
       case "apply":
-        return this.apply(helpSessionId, stillRunning, args.ticket ?? "");
+        return this.apply(helpSessionId, stillRunning, args.ticket ?? "", noteSkipped);
     }
   }
 
@@ -359,7 +369,8 @@ export class HostSettingsRequests {
   private async apply(
     helpSessionId: string,
     stillRunning: () => boolean,
-    id: string
+    id: string,
+    noteSkipped: (() => void) | undefined
   ): Promise<HostSettingsResult> {
     const ticket = this.tickets.get(id);
     // One apply per preview: a retry previews again rather than asking twice.
@@ -393,25 +404,11 @@ export class HostSettingsRequests {
         ],
       };
     }
-    const ask = this.deps.askApproval;
-    if (!ask) return none("policy_rejected", NO_ASK_DETAIL);
-    const count = ticket.hosts.length;
-    let decision: McpConfirmationDecision | null;
-    try {
-      decision = await ask({
-        helpSessionId,
-        actionId: HOST_SETTINGS_TOOL,
-        args: { hostIds: ticket.hosts.map((host) => host.hostId), patch: ticket.patch },
-        subject:
-          count === 1
-            ? `Change settings on ${ticket.hosts[0]!.name}`
-            : `Change settings on ${count} hosts`,
-        lines: this.lines(ticket),
-      });
-    } catch {
-      decision = null;
-    }
+    const decision = await this.decide(helpSessionId, ticket, noteSkipped);
     if (decision === null) return none("policy_rejected", NO_ASK_DETAIL);
+    // Unseen isn't declined (#16752): the ticket is already spent, so the
+    // assistant is told to preview again rather than that the person said no.
+    if (decision === "timeout") return none("confirmation_timeout", TIMEOUT_DETAIL);
     if (decision !== "approved") return none("policy_rejected", REJECTED_DETAIL);
     if (!stillRunning() || ticket.hosts.some((host) => !this.deps.controlOn(host.hostId))) {
       return none("policy_rejected", GONE_DETAIL);
@@ -422,6 +419,39 @@ export class HostSettingsRequests {
       )
     );
     return { ...this.ok(), ticket: null, hosts: rows };
+  }
+
+  /**
+   * The person's answer to one apply, or null when they couldn't be asked.
+   * A change they handed over to this assistant (#16752) is approved without
+   * asking, and the call's record is told so.
+   */
+  private async decide(
+    helpSessionId: string,
+    ticket: Ticket,
+    noteSkipped: (() => void) | undefined
+  ): Promise<McpConfirmationDecision | null> {
+    if (this.deps.skipsApproval?.(helpSessionId) === true) {
+      noteSkipped?.();
+      return "approved";
+    }
+    const ask = this.deps.askApproval;
+    if (!ask) return null;
+    const count = ticket.hosts.length;
+    try {
+      return await ask({
+        helpSessionId,
+        actionId: HOST_SETTINGS_TOOL,
+        args: { hostIds: ticket.hosts.map((host) => host.hostId), patch: ticket.patch },
+        subject:
+          count === 1
+            ? `Change settings on ${ticket.hosts[0]!.name}`
+            : `Change settings on ${count} hosts`,
+        lines: this.lines(ticket),
+      });
+    } catch {
+      return null;
+    }
   }
 
   /**

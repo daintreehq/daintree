@@ -296,6 +296,76 @@ describe("host.settings (#14167)", () => {
     expect(t.client.update).not.toHaveBeenCalled();
   });
 
+  // A dialog nobody saw isn't a no (#16752): the ticket is spent, so the
+  // answer says to preview again rather than that the person declined.
+  it("reports a missed dialog as a timeout that needs a new preview", async () => {
+    const t = setup();
+    t.askApproval.mockResolvedValueOnce("timeout");
+    const { ticket } = await t.run({
+      operation: "preview",
+      hostIds: ["a"],
+      patch: { canopyMode: "on" },
+    });
+
+    const applied = await t.run({ operation: "apply", ticket: ticket! });
+
+    expect(applied.outcome).toBe("confirmation_timeout");
+    expect(applied.detail).toContain("preview again");
+    expect(t.client.update).not.toHaveBeenCalled();
+    expect((await t.run({ operation: "apply", ticket: ticket! })).outcome).toBe("expired");
+  });
+
+  it("applies a change the person handed over without asking, and notes it", async () => {
+    const skipsApproval = vi.fn(() => true);
+    const t = setup(undefined, { skipsApproval });
+    const noted = vi.fn();
+    const { ticket } = await t.run({
+      operation: "preview",
+      hostIds: ["a"],
+      patch: { canopyMode: "on" },
+    });
+
+    const applied = await t.requests.run(
+      "s1",
+      () => true,
+      { operation: "apply", ticket: ticket! },
+      noted
+    );
+
+    expect(applied.outcome).toBe("ok");
+    expect(t.askApproval).not.toHaveBeenCalled();
+    expect(skipsApproval).toHaveBeenCalledWith("s1");
+    expect(noted).toHaveBeenCalledTimes(1);
+    expect(t.client.update).toHaveBeenCalled();
+  });
+
+  it("still checks the ticket and the control switch before a handed-over change", async () => {
+    const t = setup(undefined, { skipsApproval: () => true });
+    const noted = vi.fn();
+    const { ticket } = await t.run({
+      operation: "preview",
+      hostIds: ["a"],
+      patch: { canopyMode: "on" },
+    });
+    t.control.delete("a");
+
+    const applied = await t.requests.run(
+      "s1",
+      () => true,
+      { operation: "apply", ticket: ticket! },
+      noted
+    );
+
+    expect(applied.outcome).toBe("opted_out");
+    expect(noted).not.toHaveBeenCalled();
+    expect(t.client.update).not.toHaveBeenCalled();
+    expect(
+      (await t.requests.run("s1", () => true, { operation: "apply", ticket: "forged" }, noted))
+        .outcome
+    ).toBe("expired");
+    expect(noted).not.toHaveBeenCalled();
+  });
+
   it("never applies without a way to ask the person, whatever the caller says", async () => {
     const t = setup(undefined, { askApproval: undefined });
     const { ticket } = await t.run({

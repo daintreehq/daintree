@@ -5,6 +5,7 @@ import { HELP_MCP_TOOL_TIMEOUT_MS } from "../../shared/types/replyWait.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
+import type { AssistantConfirmationPolicy } from "../../shared/utils/assistantDaintreeConfirmations.js";
 import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
 import {
   buildRunCheckpointAddendum,
@@ -21,6 +22,7 @@ import {
   RUNBOOKS_BLOCK_START,
   RUNBOOKS_MCP_SERVER_NAME,
   buildConfirmationsAddendum,
+  buildDelegatedConfirmationsAddendum,
   buildRunbooksAddendum,
   buildRunbooksHeaders,
   resolveRunbooksMcpUrl,
@@ -450,8 +452,8 @@ export interface PrepareSessionDirectoryInput {
   tier: HelpAssistantTier;
   settings: AssistantSessionSettings;
   runCheckpointKey: string;
-  /** Whether this session's confirm-gated Daintree calls skip their dialog, asked when the note is written. */
-  confirmationsSkipped: () => boolean;
+  /** Which of this session's confirm-gated Daintree calls skip their dialog, asked when the note is written. */
+  confirmations: () => AssistantConfirmationPolicy;
   projectFacts: HelpSessionProjectFacts;
   pluginKnowledge: readonly AssistantPluginKnowledge[];
   /** The global assistant's launch snapshot (#14547); null when it couldn't be read. Ignored for a project lane. */
@@ -695,10 +697,8 @@ export class AssistantSessionFiles {
         });
         // Its project calls are relayed with `external` origin, which never take
         // the skip preference, so the note would promise what it can't get.
-        await this.writeConfirmationsAddendum(
-          sessionPath,
-          input.global ? false : input.confirmationsSkipped()
-        );
+        // Calls handed over one by one do reach it, relayed or not (#16752).
+        await this.writeConfirmationsAddendum(sessionPath, input.confirmations(), input.global);
         await this.stripMessagingAddendum(sessionPath);
         // Same unconditional placement, for the same reason: the facts change
         // independently of the template, and every lane shares these files, so
@@ -1231,12 +1231,22 @@ export class AssistantSessionFiles {
 
   /**
    * Tells a session whose confirm-gated calls will skip the dialog that they
-   * will (#12874), and drops the note when they won't. Unlike the runbook
-   * slot it has no position to hold: it overrides by what it says, not where.
+   * will (#12874), or which ones will (#16752), and drops the note when none
+   * will. Unlike the runbook slot it has no position to hold: it overrides by
+   * what it says, not where.
    */
-  private async writeConfirmationsAddendum(sessionPath: string, skipped: boolean): Promise<void> {
+  private async writeConfirmationsAddendum(
+    sessionPath: string,
+    policy: AssistantConfirmationPolicy,
+    global: boolean
+  ): Promise<void> {
     const markers = { start: CONFIRMATIONS_BLOCK_START, end: CONFIRMATIONS_BLOCK_END };
-    const body = skipped ? buildConfirmationsAddendum() : null;
+    const body =
+      policy.skipsAll && !global
+        ? buildConfirmationsAddendum()
+        : policy.delegated.size > 0
+          ? buildDelegatedConfirmationsAddendum([...policy.delegated])
+          : null;
     await Promise.all(
       ["CLAUDE.md", "AGENTS.md"].map((name) =>
         this.writeManagedBlock(path.join(sessionPath, name), markers, body)

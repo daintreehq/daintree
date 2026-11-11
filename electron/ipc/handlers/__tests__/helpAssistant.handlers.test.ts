@@ -89,6 +89,7 @@ describe("registerHelpAssistantHandlers", () => {
       idleHibernateMinutes: 5,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
+      daintreeConfirmationsExcept: [],
       acceptRemoteControl: true,
     });
   });
@@ -115,6 +116,7 @@ describe("registerHelpAssistantHandlers", () => {
       idleHibernateMinutes: 5,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
+      daintreeConfirmationsExcept: [],
       acceptRemoteControl: true,
     });
   });
@@ -260,6 +262,41 @@ describe("registerHelpAssistantHandlers", () => {
     storeMock.set.mockClear();
     await handler(null, { daintreeConfirmations: "skip" as unknown as "inherit" });
     expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("stores only delegable ids for ask-except, and skips anything but a list (#16752)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, {
+      daintreeConfirmations: "ask-except",
+      daintreeConfirmationsExcept: ["host.settings", "worktree.delete", "worktree.deleteOwned"],
+    });
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.daintreeConfirmations", "ask-except");
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.daintreeConfirmationsExcept", [
+      "worktree.deleteOwned",
+      "host.settings",
+    ]);
+
+    storeMock.set.mockClear();
+    await handler(null, {
+      daintreeConfirmationsExcept: "worktree.deleteOwned" as unknown as string[],
+    });
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("reads a stored list back as the delegable ids alone (#16752)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    storeMock.get.mockReturnValue({
+      daintreeConfirmations: "ask-except",
+      daintreeConfirmationsExcept: ["worktree.delete", "worktree.retireOwned"],
+    });
+    expect(await handler(null)).toMatchObject({
+      daintreeConfirmations: "ask-except",
+      daintreeConfirmationsExcept: ["worktree.retireOwned"],
+    });
   });
 
   it("reads a stored daintreeConfirmations, and anything unrecognised as inherit (#12874)", async () => {
@@ -457,6 +494,7 @@ describe("registerHelpAssistantHandlers", () => {
       idleHibernateMinutes: 5,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
+      daintreeConfirmationsExcept: [],
       acceptRemoteControl: true,
     });
   });

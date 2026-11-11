@@ -3,7 +3,7 @@ import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { readAssistantConfirmationsSkipped } from "./assistantConfirmationsPreference.js";
+import { readAssistantConfirmationPolicy } from "./assistantConfirmationsPreference.js";
 import type { ActionManifestEntry } from "../../../shared/types/actions.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../shared/utils/mcpArgsSummary.js";
@@ -1322,12 +1322,12 @@ export function createSessionServerDeps(
       helpSessionId !== null
         ? deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
         : null,
-    // Live, never snapshotted (#12874): "Always ask" takes effect on the
-    // assistant's next call. sessionServer consults it for help sessions only.
-    // The default follows the skip setting of the agent this session runs,
-    // else the assistant's chosen agent (#14141).
-    readAssistantConfirmationsSkipped: () =>
-      readAssistantConfirmationsSkipped(
+    // Live, never snapshotted (#12874): "Always ask", or an unticked action
+    // (#16752), takes effect on the assistant's next call. sessionServer
+    // consults it for help sessions only. The default follows the skip setting
+    // of the agent this session runs, else the assistant's chosen agent (#14141).
+    readAssistantConfirmationPolicy: () =>
+      readAssistantConfirmationPolicy(
         (helpSessionId !== null
           ? host.assistantControlBinding()?.sessionAgent?.(helpSessionId)
           : null) ?? null

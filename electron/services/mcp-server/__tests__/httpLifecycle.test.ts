@@ -1571,7 +1571,7 @@ describe("HttpLifecycle", () => {
         lc as unknown as {
           buildSessionServerDeps: (id: string) => SessionServerDeps;
         }
-      ).buildSessionServerDeps(sessionId).readAssistantConfirmationsSkipped!();
+      ).buildSessionServerDeps(sessionId).readAssistantConfirmationPolicy!().skipsAll;
 
     const storeWith = (
       helpAssistant: Record<string, unknown>,
@@ -1628,16 +1628,34 @@ describe("HttpLifecycle", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const read = (
         lc as unknown as { buildSessionServerDeps: (id: string) => SessionServerDeps }
-      ).buildSessionServerDeps("s").readAssistantConfirmationsSkipped!;
+      ).buildSessionServerDeps("s").readAssistantConfirmationPolicy!;
       storeWith({ agentId: "claude" }, { agents: { claude: { dangerousMode: "on" } } });
-      expect(read()).toBe(true);
+      expect(read().skipsAll).toBe(true);
       storeWith({ agentId: "claude" }, { agents: { claude: { dangerousMode: "off" } } });
-      expect(read()).toBe(false);
+      expect(read().skipsAll).toBe(false);
       storeWith(
         { agentId: "claude", daintreeConfirmations: "never-ask" },
         { agents: { claude: { dangerousMode: "off" } } }
       );
-      expect(read()).toBe(true);
+      expect(read().skipsAll).toBe(true);
+    });
+
+    it("hands over only the delegable ids ticked under ask-except (#16752)", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const read = (
+        lc as unknown as { buildSessionServerDeps: (id: string) => SessionServerDeps }
+      ).buildSessionServerDeps("s").readAssistantConfirmationPolicy!;
+      storeWith(
+        {
+          agentId: "claude",
+          daintreeConfirmations: "ask-except",
+          daintreeConfirmationsExcept: ["worktree.deleteOwned", "worktree.delete"],
+        },
+        { agents: { claude: { dangerousMode: "on" } } }
+      );
+      const policy = read();
+      expect(policy.skipsAll).toBe(false);
+      expect([...policy.delegated]).toEqual(["worktree.deleteOwned"]);
     });
 
     it("still asks under always ask whatever the agent says", () => {

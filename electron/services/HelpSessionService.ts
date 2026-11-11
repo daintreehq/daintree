@@ -22,10 +22,12 @@ import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
 import type { HelpAdoptResult } from "../../shared/types/ipc/help.js";
 import type { HelpAssistantDaintreeConfirmations } from "../../shared/types/ipc/api.js";
 import {
-  assistantSkipsDaintreeConfirmations,
+  ASKS_FOR_EVERYTHING,
   isHelpAssistantDaintreeConfirmations,
   resolveAssistantAgentSkip,
+  resolveAssistantConfirmationPolicy,
 } from "../../shared/utils/assistantDaintreeConfirmations.js";
+import { sanitizeDelegatedConfirmations } from "../../shared/config/assistantConfirmationDelegation.js";
 import {
   DEFAULT_HELP_ASSISTANT_TIER,
   normalizeHelpAssistantTier,
@@ -1207,12 +1209,14 @@ export class HelpSessionService {
       tier,
       settings,
       runCheckpointKey: runCheckpointKeyFor(input.projectId),
-      confirmationsSkipped: () =>
-        settings.daintreeControl &&
-        assistantSkipsDaintreeConfirmations(
-          settings.daintreeConfirmations,
-          resolveAssistantAgentSkip(input.agentId, store.get("agentSettings")).skips
-        ),
+      confirmations: () =>
+        settings.daintreeControl
+          ? resolveAssistantConfirmationPolicy(
+              settings.daintreeConfirmations,
+              settings.daintreeConfirmationsExcept,
+              resolveAssistantAgentSkip(input.agentId, store.get("agentSettings")).skips
+            )
+          : ASKS_FOR_EVERYTHING,
       projectFacts,
       pluginKnowledge,
       hostInventory,
@@ -2728,6 +2732,7 @@ export class HelpSessionService {
     bypassPermissions: boolean;
     loadGlobalHooksAndServers: boolean;
     daintreeConfirmations: HelpAssistantDaintreeConfirmations;
+    daintreeConfirmationsExcept: string[];
   } {
     const stored = (store.get("helpAssistant") as Record<string, unknown> | undefined) ?? {};
     // Read-time migration from the legacy `skipPermissions` boolean. This
@@ -2760,6 +2765,9 @@ export class HelpSessionService {
       daintreeConfirmations: isHelpAssistantDaintreeConfirmations(stored.daintreeConfirmations)
         ? stored.daintreeConfirmations
         : "inherit",
+      daintreeConfirmationsExcept: sanitizeDelegatedConfirmations(
+        stored.daintreeConfirmationsExcept
+      ),
     };
   }
 

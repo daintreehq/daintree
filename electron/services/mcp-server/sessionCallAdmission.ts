@@ -6,6 +6,7 @@ import {
   TERMINAL_LAUNCH_ACTION_ID,
 } from "../../../shared/utils/dispatchTerminalCommand.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
+import type { AssistantConfirmationPolicy } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { OWNED_TWIN_TOOLS } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import {
   TIER_NOT_PERMITTED_CODE,
@@ -51,7 +52,7 @@ export function buildCallIntrospectionSurface(
   hostCallOffered: () => boolean,
   facts: CallFacts,
   call: CallerAdmission & {
-    readonly confirmationsSkipped: boolean;
+    readonly confirmationPolicy: AssistantConfirmationPolicy;
     readonly searchLimit: ReturnType<typeof readSearchLimit>;
     readonly listPaging: ReturnType<typeof readListPaging>;
   }
@@ -60,7 +61,7 @@ export function buildCallIntrospectionSurface(
   const {
     commandRunnerCaller,
     assistantControlCaller,
-    confirmationsSkipped,
+    confirmationPolicy,
     searchLimit,
     listPaging,
   } = call;
@@ -124,7 +125,7 @@ export function buildCallIntrospectionSurface(
       assistantControl: assistantControlCaller,
       perToolGrantedActionIds,
       nativeGrantedActionIds,
-      confirmationsSkipped,
+      confirmationPolicy,
     } satisfies TargetPolicySessionSnapshot,
   };
 }
