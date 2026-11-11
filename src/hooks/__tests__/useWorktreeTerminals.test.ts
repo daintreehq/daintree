@@ -217,4 +217,115 @@ describe("aggregateAgentStates (#6650)", () => {
       expect(result.current.dominantAgentState).toBe("waiting");
     });
   });
+
+  describe("useWorktreeTerminals under streaming panel patches (#16800)", () => {
+    afterEach(() => {
+      usePanelStore.setState({ panelsById: {}, panelIdsByWorktreeId: {} });
+      useFleetSnapshotStore.setState({ snapshot: null });
+      vi.useRealTimers();
+    });
+
+    const seed = (panels: PtyPanelData[]) => {
+      const panelsById: Record<string, PtyPanelData> = {};
+      const panelIdsByWorktreeId: Record<string, string[]> = {};
+      for (const panel of panels) {
+        panelsById[panel.id] = panel;
+        const key = panel.worktreeId ?? "__none__";
+        (panelIdsByWorktreeId[key] ??= []).push(panel.id);
+      }
+      usePanelStore.setState({ panelsById, panelIdsByWorktreeId });
+    };
+
+    // Patches a panel the way the status buffer does: a fresh object in a
+    // fresh `panelsById`, with every bucket array left as it was.
+    const patch = (id: string, fields: Partial<PtyPanelData>) =>
+      act(() => {
+        usePanelStore.setState((state) => ({
+          panelsById: {
+            ...state.panelsById,
+            [id]: { ...(state.panelsById[id] as PtyPanelData), ...fields },
+          },
+        }));
+      });
+
+    const advance = (ms: number) =>
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+
+    it("lands a count change within the debounce while a sibling streams patches", () => {
+      vi.useFakeTimers();
+      seed([
+        term({ id: "agent", worktreeId: "wt-s", agentState: "working" }),
+        term({ id: "streamer", worktreeId: "wt-s" }),
+      ]);
+      const { result } = renderHook(() => useWorktreeTerminals("wt-s"));
+      expect(result.current.counts.byState.working).toBe(1);
+
+      patch("agent", { agentState: "idle" });
+      for (let i = 0; i < 3; i++) {
+        advance(100);
+        patch("streamer", { activityHeadline: `line ${i}` });
+      }
+
+      expect(result.current.counts.byState.working).toBe(0);
+      expect(result.current.counts.byState.idle).toBe(2);
+    });
+
+    it("keeps the counts object when a patch leaves every count unchanged", () => {
+      vi.useFakeTimers();
+      seed([
+        term({ id: "a", worktreeId: "wt-s", agentState: "working" }),
+        term({ id: "b", worktreeId: "wt-s" }),
+      ]);
+      const { result } = renderHook(() => useWorktreeTerminals("wt-s"));
+      const before = result.current;
+
+      patch("b", { activityHeadline: "compiling" });
+      advance(300);
+
+      // The panel changed, so the list carries it; the counts did not.
+      expect(result.current.terminals).not.toBe(before.terminals);
+      expect(result.current.terminals[1]?.activityHeadline).toBe("compiling");
+      expect(result.current.counts).toBe(before.counts);
+    });
+
+    it("hands back a fresh counts object once a count does change", () => {
+      vi.useFakeTimers();
+      seed([term({ id: "a", worktreeId: "wt-s", agentState: "working" })]);
+      const { result } = renderHook(() => useWorktreeTerminals("wt-s"));
+      const before = result.current.counts;
+
+      patch("a", { agentState: "idle" });
+      advance(300);
+
+      expect(result.current.counts).not.toBe(before);
+      expect(result.current.counts.byState.idle).toBe(1);
+      expect(before.byState.working).toBe(1);
+    });
+
+    it("neither re-renders nor rebuilds anything when another worktree's panel streams", () => {
+      vi.useFakeTimers();
+      seed([
+        term({ id: "mine", worktreeId: "wt-s", agentState: "working" }),
+        term({ id: "theirs", worktreeId: "wt-other" }),
+      ]);
+      let renders = 0;
+      const { result } = renderHook(() => {
+        renders += 1;
+        return useWorktreeTerminals("wt-s");
+      });
+      const before = result.current;
+      const rendersBefore = renders;
+
+      for (let i = 0; i < 3; i++) {
+        patch("theirs", { activityHeadline: `line ${i}` });
+        advance(100);
+      }
+
+      expect(renders).toBe(rendersBefore);
+      expect(result.current.terminals).toBe(before.terminals);
+      expect(result.current.counts).toBe(before.counts);
+    });
+  });
 });
