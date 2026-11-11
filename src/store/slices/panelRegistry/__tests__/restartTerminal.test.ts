@@ -2507,6 +2507,36 @@ describe("restartTerminalOnPreset", () => {
       expect(pane().titleMode).toBe("user");
     });
 
+    it("names the model when the rename is cleared before the spawn", async () => {
+      codexPane({ title: "My Codex", titleMode: "user" });
+      let finishKill: () => void = () => {};
+      let killStarted: () => void = () => {};
+      const killing = new Promise<void>((resolve) => {
+        killStarted = resolve;
+      });
+      mockKill.mockImplementationOnce(() => {
+        killStarted();
+        return new Promise<void>((resolve) => {
+          finishKill = resolve;
+        });
+      });
+
+      const switching = usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+      await killing;
+      // What clearing a rename leaves: the identity default, unlocked.
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "test-1": { ...pane(), title: getAgentDisplayTitle("codex"), titleMode: "default" },
+        },
+      }));
+      finishKill();
+      await switching;
+
+      expect(pane().title).toBe("Codex (GPT-5.5) [Work]");
+      expect(mockSpawn.mock.calls[0]![0].title).toBe("Codex (GPT-5.5) [Work]");
+    });
+
     it("keeps a caller's name shaped like a stamp with another label while the catalog names the model", async () => {
       codexPane({ title: "Codex (Audit) [Personal]", titleMode: "custom" });
 
