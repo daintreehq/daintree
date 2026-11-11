@@ -490,6 +490,13 @@ export function WorktreeCard({
     }
   };
 
+  // A delete that starts while the dialog is open — a reconnect replaying the
+  // parked one under the banner, or another surface — runs with the options it
+  // was sent with, so the dialog's choices no longer apply to anything.
+  useEffect(() => {
+    if (isBeingDeleted) setShowDeleteDialog(false);
+  }, [isBeingDeleted, setShowDeleteDialog]);
+
   const handleOpenIssueExternal = () => {
     void actionService.dispatch(
       "worktree.openIssue",

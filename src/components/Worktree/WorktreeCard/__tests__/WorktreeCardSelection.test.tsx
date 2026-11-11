@@ -8,7 +8,7 @@
  */
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createPortal } from "react-dom";
 import type { WorktreeState } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -533,5 +533,16 @@ describe("WorktreeCard delete Retry", () => {
     expect(store.getState().deletingIds.has(WORKTREE.id)).toBe(false);
     // The failure stays on the card until the dialog's own submit replaces it.
     expect(screen.getByTestId("worktree-delete-error-banner")).toBeTruthy();
+  });
+
+  it("closes the reopened dialog once a reconnect replay starts the delete anyway", () => {
+    const { store } = renderCard({ isActive: false, deleteError: "fatal: refused" });
+    store.setState({ deleteErrorArgs: new Map([[WORKTREE.id, { force: true }]]) });
+    press(screen.getByTestId("worktree-delete-retry"));
+    expect(deleteDialogOpen).toBe(true);
+
+    act(() => store.setState({ deletingIds: new Set([WORKTREE.id]) }));
+
+    expect(deleteDialogOpen).toBe(false);
   });
 });
