@@ -788,7 +788,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       // so a Retry can land on one that is already running. Opening the dialog
       // over it would offer a second delete of the same worktree.
       if (prev.deletingIds.has(worktreeId)) return "none";
-      if (findDeleteOutboxEntryForWorktree(prev.mutationOutbox, worktreeId)?.status === "in-flight") {
+      if (
+        findDeleteOutboxEntryForWorktree(prev.mutationOutbox, worktreeId)?.status === "in-flight"
+      ) {
         return "none";
       }
       if (deleteRetryNeedsReview(args, error)) return "needs-review";
