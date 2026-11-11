@@ -6,6 +6,7 @@ import { BrowserToolbar } from "../BrowserToolbar";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { normalizeBrowserUrl } from "../browserUtils";
 import { getFrecencySuggestions } from "@/store/urlHistoryStore";
+import { isTooltipSuppressedForElement } from "@/lib/tooltipFocusSuppression";
 import type { ViewportPresetId } from "@shared/types/panel";
 import {
   VIEWPORT_PRESET_LIST,
@@ -1248,6 +1249,19 @@ describe("BrowserToolbar zoom popover focus", () => {
     await waitFor(() => expect(queryByTestId("browser-zoom-indicator")).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(getByLabelText("Copy URL")));
   });
+
+  it("suppresses the Copy URL tooltip when the fallback focus lands on it", async () => {
+    const { getByTestId, getByLabelText, queryByTestId } = render(<ZoomHarness />);
+    fireEvent.click(getByTestId("browser-zoom-indicator"));
+    await waitFor(() => expect(getByLabelText("Reset zoom")).toBeTruthy());
+    fireEvent.click(getByLabelText("Reset zoom"));
+
+    fireEvent.keyDown(getByLabelText("Zoom in"), { key: "Escape" });
+    await waitFor(() => expect(queryByTestId("browser-zoom-indicator")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(getByLabelText("Copy URL")));
+
+    expect(isTooltipSuppressedForElement(getByLabelText("Copy URL"))).toBe(true);
+  });
 });
 
 describe("BrowserToolbar device picker keyboard", () => {
@@ -1305,6 +1319,55 @@ describe("BrowserToolbar back/forward history menu", () => {
     fireEvent.click(items[1]!);
     expect(onGoToHistoryIndex).toHaveBeenCalledWith(0);
     expect(onBack).not.toHaveBeenCalled();
+  });
+
+  describe("closing", () => {
+    async function openBackMenu() {
+      const utils = renderToolbar({ canGoBack: true, navSnapshot });
+      const back = utils.getByTestId("browser-back");
+      fireEvent.contextMenu(back);
+      const menu = await utils.findByRole("menu", { name: "Back history" });
+      return { ...utils, back, menu };
+    }
+
+    it("leaves focus on the element that was clicked to dismiss it", async () => {
+      const outside = document.createElement("input");
+      document.body.appendChild(outside);
+      const { back, menu } = await openBackMenu();
+      const focusBack = vi.spyOn(back, "focus");
+
+      fireEvent.pointerDown(outside, { pointerType: "mouse" });
+      outside.focus();
+      await waitFor(() => expect(menu.isConnected).toBe(false));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(document.activeElement).toBe(outside);
+      expect(focusBack).not.toHaveBeenCalled();
+      outside.remove();
+    });
+
+    it("restores focus without the focus ring after a mouse selection", async () => {
+      const { back, menu } = await openBackMenu();
+      const focusBack = vi.spyOn(back, "focus");
+      const item = menu.querySelector('[role="menuitem"]') as HTMLElement;
+
+      fireEvent.pointerDown(item, { pointerType: "mouse" });
+      fireEvent.click(item, { detail: 1 });
+      await waitFor(() => expect(focusBack).toHaveBeenCalled());
+
+      expect(focusBack).toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
+    });
+
+    it("still restores focus visibly after a keyboard selection", async () => {
+      const { back, menu } = await openBackMenu();
+      const focusBack = vi.spyOn(back, "focus");
+      const item = menu.querySelector('[role="menuitem"]') as HTMLElement;
+
+      fireEvent.click(item, { detail: 0 });
+      await waitFor(() => expect(focusBack).toHaveBeenCalled());
+
+      expect(focusBack).not.toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
+    });
   });
 
   it("leaves the native menu alone when there is no history in that direction", () => {
