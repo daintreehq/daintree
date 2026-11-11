@@ -284,12 +284,7 @@ export function HeldComposerSendRow({
           <CopyButton text={dropped.text} label="Copy message" variant="ghost" size="xs" />
         )
       }
-      dismiss={
-        <DismissButton
-          aria-label="Dismiss unsent held message"
-          onClick={dismissDropped}
-        />
-      }
+      dismiss={<DismissButton aria-label="Dismiss unsent held message" onClick={dismissDropped} />}
     >
       <p>Held message not sent: {DROP_REASON[dropped.reason]}</p>
       <p className="truncate text-text-secondary">

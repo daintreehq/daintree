@@ -47,10 +47,7 @@ export function takePendingComposerImages(
  * list them. A path `text` doesn't spell after the one before it is left out
  * rather than put on some other mention of it.
  */
-export function imageRangesIn(
-  text: string,
-  imagePaths: readonly string[]
-): PendingImageRange[] {
+export function imageRangesIn(text: string, imagePaths: readonly string[]): PendingImageRange[] {
   const ranges: PendingImageRange[] = [];
   let from = 0;
   for (const filePath of imagePaths) {
