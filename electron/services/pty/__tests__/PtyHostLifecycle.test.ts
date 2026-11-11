@@ -1245,9 +1245,7 @@ describe("PtyHostLifecycle", () => {
       mockChild.pid = 654;
       mockChild.emit("spawn");
 
-      expect(getTerminationIntent({ serviceName: "daintree-pty-host" })).toBe(
-        "postMessage failed"
-      );
+      expect(getTerminationIntent({ serviceName: "daintree-pty-host" })).toBe("postMessage failed");
     });
 
     it("treats a host already gone as nothing to report", () => {

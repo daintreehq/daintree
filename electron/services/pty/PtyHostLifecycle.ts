@@ -526,7 +526,10 @@ export class PtyHostLifecycle {
    * before spawn drops it. The intent is noted when the signal actually goes
    * out, so a late spawn cannot outlive its TTL.
    */
-  private forceKill(child: UtilityProcess, reason: string): "sent" | "deferred" | "gone" | "failed" {
+  private forceKill(
+    child: UtilityProcess,
+    reason: string
+  ): "sent" | "deferred" | "gone" | "failed" {
     const pid = child.pid;
     if (pid === undefined) {
       if (this.spawnKill?.child === child) return "deferred";
