@@ -1,17 +1,19 @@
-import { useId, useState, type ReactElement } from "react";
+import { useId, useRef, useState, type ReactElement } from "react";
 import { Clock } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { composerHoldClient } from "@/clients/composerHoldClient";
+import { imageRangesIn, setPendingComposerImages } from "@/lib/composerPendingImages";
+import { makeDraftKey } from "@/lib/draftKey";
 import { pluralize } from "@/lib/pluralize";
 import { logWarn } from "@/utils/logger";
 import { useHeldComposerSendStore } from "@/store/heldComposerSendStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
-import { useTerminalInputStore } from "@/store/terminalInputStore";
-import { requestPaneFocus } from "./paneFocusRequest";
+import { selectHomeFocusTarget, useTerminalInputStore } from "@/store/terminalInputStore";
+import { captureFocusEpoch, isFocusEpochCurrent, requestPaneFocus } from "./paneFocusRequest";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { ComposerHoldDropReason } from "@shared/types/ipc/composerHold";
 import { isPtyPanel } from "@shared/types/panel";
@@ -44,14 +46,64 @@ function previewOf(text: string): string {
   return line.trim().slice(0, 200);
 }
 
+/** The images that go with the text, after its preview: they come back on Edit too. */
+function imageCountOf(imagePaths: readonly string[]): string {
+  return imagePaths.length > 0 ? ` · ${pluralize(imagePaths.length, "image")}` : "";
+}
+
+/** Where the keyboard was when a row control was pressed, read before it acts and goes. */
+interface PressedControl {
+  control: Element;
+  epoch: number;
+}
+
+/** The control inside `row` holding the keyboard, or null when the keyboard is elsewhere. */
+function pressedIn(row: HTMLElement | null): PressedControl | null {
+  const active = document.activeElement;
+  if (row === null || active === null || !row.contains(active)) return null;
+  return { control: active, epoch: captureFocusEpoch() };
+}
+
 /**
- * Put a held send's text back in the pane's composer, ahead of anything typed
- * since, and hand the composer the keyboard.
+ * The control pressed is gone or going: the keyboard goes back to the pane
+ * rather than the page, unless the user has taken it somewhere since.
  */
-function restoreToDraft(terminalId: string, projectId: string | undefined, text: string): void {
+function returnFocusToPane(terminalId: string, pressed: PressedControl | null): void {
+  if (pressed === null || !isFocusEpochCurrent(pressed.epoch)) return;
+  const active = document.activeElement;
+  const stranded =
+    active === null ||
+    active === document.body ||
+    active === document.documentElement ||
+    active === pressed.control;
+  if (!stranded) return;
+  requestPaneFocus(terminalId, selectHomeFocusTarget(useTerminalInputStore.getState()));
+}
+
+/**
+ * Put a held send's text and images back in the pane's composer, ahead of
+ * anything typed since, and hand the composer the keyboard.
+ */
+function restoreToDraft(
+  terminalId: string,
+  projectId: string | undefined,
+  text: string,
+  imagePaths: readonly string[]
+): void {
   const inputs = useTerminalInputStore.getState();
-  const draft = inputs.getDraftInput(terminalId, projectId);
-  inputs.setDraftInput(terminalId, draft.trim() === "" ? text : `${text}\n\n${draft}`, projectId);
+  const before = inputs.getDraftInput(terminalId, projectId);
+  const replaces = before.trim() === "";
+  const draft = replaces ? text : `${text}\n\n${before}`;
+  // The draft store holds text: the composer takes the images from here.
+  setPendingComposerImages(makeDraftKey(terminalId, projectId), {
+    draft,
+    before,
+    change: replaces
+      ? { from: 0, to: before.length, insert: text }
+      : { from: 0, to: 0, insert: `${text}\n\n` },
+    images: imageRangesIn(text, imagePaths),
+  });
+  inputs.setDraftInput(terminalId, draft, projectId);
   inputs.bumpExternalDraftRevision();
   requestPaneFocus(terminalId, "hybridInput");
 }
@@ -89,6 +141,7 @@ export function HeldComposerSendRow({
   const projectId = useProjectStore((s) => s.currentProject?.id);
   const [busy, setBusy] = useState(false);
   const sendNowHintId = useId();
+  const rowRef = useRef<HTMLDivElement>(null);
 
   if (held === undefined && dropped === undefined) return null;
   const agentName =
@@ -96,10 +149,13 @@ export function HeldComposerSendRow({
 
   const withdraw = async (thenEdit: boolean): Promise<void> => {
     if (held === undefined || busy) return;
+    const pressed = pressedIn(rowRef.current);
     setBusy(true);
     try {
       const withdrawn = await composerHoldClient.withdraw(terminalId, held.token);
-      if (withdrawn && thenEdit) restoreToDraft(terminalId, projectId, held.text);
+      if (withdrawn && thenEdit) restoreToDraft(terminalId, projectId, held.text, held.imagePaths);
+      // Withdrawn, or already on its way: either way the row's controls go.
+      else returnFocusToPane(terminalId, pressed);
     } catch (err) {
       logWarn("[HeldComposerSend] withdraw failed", { terminalId, error: err });
     } finally {
@@ -110,9 +166,12 @@ export function HeldComposerSendRow({
   // Main types it, or drops it saying why, and its push moves the row on.
   const sendNow = async (): Promise<void> => {
     if (held === undefined || busy) return;
+    const pressed = pressedIn(rowRef.current);
     setBusy(true);
     try {
+      // Whatever main answers, the held row's controls go: it is sending, dropped or gone.
       await composerHoldClient.sendNow(terminalId, held.token, inputBlocked);
+      returnFocusToPane(terminalId, pressed);
     } catch (err) {
       logWarn("[HeldComposerSend] send now failed", { terminalId, error: err });
     } finally {
@@ -124,8 +183,6 @@ export function HeldComposerSendRow({
     const sending = held.status === "sending";
     const answers =
       waitingReason !== undefined && ANSWERED_BY_TEXT.has(waitingReason) ? waitingReason : null;
-    const images =
-      held.imagePaths.length > 0 ? ` · ${pluralize(held.imagePaths.length, "image")}` : "";
     const status = sending
       ? "Sending the held message…"
       : waitingOn !== undefined
@@ -137,6 +194,7 @@ export function HeldComposerSendRow({
         size="compact"
         icon={Clock}
         role="status"
+        ref={rowRef}
         data-testid="held-composer-send"
         className="mx-2 mb-1"
         action={
@@ -178,7 +236,7 @@ export function HeldComposerSendRow({
         <p>{status}</p>
         <p className="truncate text-text-secondary">
           {previewOf(held.text)}
-          {images}
+          {imageCountOf(held.imagePaths)}
         </p>
         {answers !== null && !sending && (
           <p id={sendNowHintId} className="text-text-secondary">
@@ -197,11 +255,17 @@ export function HeldComposerSendRow({
   }
 
   if (dropped === undefined) return null;
+  const dismissDropped = (): void => {
+    const pressed = pressedIn(rowRef.current);
+    useHeldComposerSendStore.getState().clearDropped(terminalId);
+    returnFocusToPane(terminalId, pressed);
+  };
   return (
     <Callout
       severity="warning"
       size="compact"
       role="status"
+      ref={rowRef}
       data-testid="held-composer-send-dropped"
       className="mx-2 mb-1"
       action={
@@ -211,7 +275,7 @@ export function HeldComposerSendRow({
             size="xs"
             onClick={() => {
               useHeldComposerSendStore.getState().clearDropped(terminalId);
-              restoreToDraft(terminalId, projectId, dropped.text);
+              restoreToDraft(terminalId, projectId, dropped.text, dropped.imagePaths);
             }}
           >
             Edit
@@ -220,15 +284,13 @@ export function HeldComposerSendRow({
           <CopyButton text={dropped.text} label="Copy message" variant="ghost" size="xs" />
         )
       }
-      dismiss={
-        <DismissButton
-          aria-label="Dismiss unsent held message"
-          onClick={() => useHeldComposerSendStore.getState().clearDropped(terminalId)}
-        />
-      }
+      dismiss={<DismissButton aria-label="Dismiss unsent held message" onClick={dismissDropped} />}
     >
       <p>Held message not sent: {DROP_REASON[dropped.reason]}</p>
-      <p className="truncate text-text-secondary">{previewOf(dropped.text)}</p>
+      <p className="truncate text-text-secondary">
+        {previewOf(dropped.text)}
+        {imageCountOf(dropped.imagePaths)}
+      </p>
     </Callout>
   );
 }
