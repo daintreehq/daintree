@@ -263,13 +263,38 @@ describe("aggregateAgentStates (#6650)", () => {
       expect(result.current.counts.byState.working).toBe(1);
 
       patch("agent", { agentState: "idle" });
-      for (let i = 0; i < 3; i++) {
-        advance(100);
-        patch("streamer", { activityHeadline: `line ${i}` });
-      }
+      advance(100);
+      patch("streamer", { activityHeadline: "line 1" });
+      advance(100);
+      patch("streamer", { activityHeadline: "line 2" });
+      advance(49);
+      expect(result.current.counts.byState.working).toBe(1);
 
+      advance(1);
       expect(result.current.counts.byState.working).toBe(0);
       expect(result.current.counts.byState.idle).toBe(2);
+
+      // The stream carrying on neither republishes nor rebuilds the counts.
+      const landed = result.current.counts;
+      for (let i = 3; i < 7; i++) {
+        patch("streamer", { activityHeadline: `line ${i}` });
+        advance(100);
+      }
+      expect(result.current.counts).toBe(landed);
+    });
+
+    it("keeps the counts object through a change that reverts before it lands", () => {
+      vi.useFakeTimers();
+      seed([term({ id: "a", worktreeId: "wt-s", agentState: "working" })]);
+      const { result } = renderHook(() => useWorktreeTerminals("wt-s"));
+      const before = result.current.counts;
+
+      patch("a", { agentState: "idle" });
+      advance(100);
+      patch("a", { agentState: "working" });
+      advance(300);
+
+      expect(result.current.counts).toBe(before);
     });
 
     it("keeps the counts object when a patch leaves every count unchanged", () => {

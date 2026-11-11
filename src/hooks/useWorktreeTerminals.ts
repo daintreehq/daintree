@@ -146,26 +146,35 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
     const { byState, unread, blocked, agentStates } = aggregateAgentStates(terminals, (id) =>
       bandById.get(id)
     );
-    const dominantAgentState = getDominantAgentState(agentStates);
+    const counts: WorktreeTerminalCounts = {
+      total: terminals.length,
+      byState,
+      unread,
+      blocked,
+    };
 
     return {
       terminals,
-      counts: {
-        total: terminals.length,
-        byState,
-        unread,
-        blocked,
-      },
-      dominantAgentState,
+      countsKey: JSON.stringify(counts),
+      dominantAgentState: getDominantAgentState(agentStates),
     };
   }, [terminals, terminalIds, bands]);
 
-  // Debounce counts to prevent UI jitter during rapid state changes (e.g., app restart)
-  const debouncedCounts = useDebouncedValue(result.counts, 250);
+  // Debounce counts to prevent UI jitter during rapid state changes (e.g., app
+  // restart). It runs on a value key, not the counts object: any patch to a
+  // panel in this worktree rebuilds the counts, and a fresh but equal object
+  // restarted the timer each time, so a streaming sibling kept a real count
+  // change from landing until its output settled (#16800). The key also keeps
+  // `counts` the same object for as long as no count changes.
+  const debouncedCountsKey = useDebouncedValue(result.countsKey, 250);
+  const counts = useMemo(
+    () => JSON.parse(debouncedCountsKey) as WorktreeTerminalCounts,
+    [debouncedCountsKey]
+  );
 
   return {
     terminals: result.terminals,
-    counts: debouncedCounts,
+    counts,
     dominantAgentState: result.dominantAgentState,
   };
 }
