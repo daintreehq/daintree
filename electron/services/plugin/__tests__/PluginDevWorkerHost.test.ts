@@ -321,10 +321,12 @@ describe("PluginDevWorkerHost", () => {
       expect(crashLoop).toHaveBeenCalledTimes(i < 2 ? 0 : 1);
     }
 
+    expect(forkMock).toHaveBeenCalledTimes(3);
     const fatal = loggerMock.warn.mock.calls.filter(([message]) =>
       String(message).includes("fatal error")
     );
     expect(fatal).toHaveLength(3);
+    expect(fatal[0][0]).toContain("daintree-plugin-");
     expect(fatal[0][1]).toEqual({
       pluginId: OPTS.pluginId,
       pid: mockChildren[0].pid,
@@ -332,6 +334,25 @@ describe("PluginDevWorkerHost", () => {
       location: "Reached heap limit",
     });
     host.dispose();
+  });
+
+  it("survives a fatal V8 error from a retiring worker after dispose (#16807)", async () => {
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost(OPTS);
+    void host.start();
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "ready" });
+
+    // The cooperative dispose runs the plugin's own cleanup, which can still
+    // blow its heap cap before the grace-period kill lands.
+    host.dispose();
+    expect(() =>
+      child.emit("error", "FatalError", "Reached heap limit", '{"header":{}}')
+    ).not.toThrow();
+    child.emit("exit", 134);
+    await flush();
+
+    expect(forkMock).toHaveBeenCalledTimes(1);
   });
 
   it("dispose sends a cooperative dispose then force-kills after the grace period", async () => {

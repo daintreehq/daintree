@@ -364,7 +364,7 @@ export class PluginDevWorkerHost extends EventEmitter {
     child.on("error", (type, location) => {
       logger.warn(`[${this.serviceName}] Worker fatal error`, {
         pluginId: this.pluginId,
-        pid: child.pid,
+        pid: child.pid ?? null,
         type,
         location,
       });

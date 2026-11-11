@@ -687,6 +687,14 @@ describe("PtyHostLifecycle", () => {
     expect(callbacks.log.onCrashClassifiedCalls).toHaveLength(1);
     expect(lifecycle.crashTimestamps).toHaveLength(1);
     expect(lifecycle.restartTimer).not.toBeNull();
+
+    const newChild = createMockChild();
+    shared.forkMock.mockReturnValueOnce(newChild);
+    await vi.advanceTimersByTimeAsync(2_001);
+    lifecycle.waitForReady().catch(() => undefined);
+    expect(shared.forkMock).toHaveBeenCalledTimes(2);
+    expect(callbacks.log.onBeforeRestartCalls).toBe(1);
+    expect(lifecycle.child).toBe(newChild);
   });
 
   it("holds the auto-restart fork until the restart barrier settles", async () => {
