@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { ProjectSurfaceSlot } from "@shared/types/plugin";
-import { PluginHostedView } from "@/components/Plugin/PluginHostedView";
+import { LazyPluginHostedView } from "@/components/Plugin/LazyPluginHostedView";
 import {
   useRenderableSurfaceClaim,
   type RenderableSurfaceClaim,
@@ -91,7 +91,7 @@ export function ProjectSurfaceView({
   onClose?: () => void;
 }) {
   return (
-    <PluginHostedView
+    <LazyPluginHostedView
       source={{ from: "panel-kind", config }}
       host="surface"
       mountId={`surface:${config.id}`}

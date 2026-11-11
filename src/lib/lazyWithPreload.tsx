@@ -1,4 +1,4 @@
-import { lazy, useState, type ComponentType } from "react";
+import { lazy, useEffect, useState, type ComponentType } from "react";
 
 /**
  * `React.lazy` that renders synchronously once its chunk has been preloaded.
@@ -54,4 +54,46 @@ export function lazyWithPreload<M, P extends object>(
   }
 
   return Object.assign(Preloadable, { preload, isLoaded: () => resolved !== null });
+}
+
+export type PreloadStatus =
+  | { status: "loading" }
+  | { status: "ready" }
+  | { status: "failed"; error: unknown };
+
+/**
+ * Whether `component` can render now without suspending, loading its chunk
+ * when it can't yet.
+ *
+ * For a host that draws its own placeholder while the chunk loads instead of
+ * going through Suspense: a plain state update commits the moment the chunk
+ * lands, where a Suspense fallback holds the reveal back for React 19's
+ * 300ms throttle. A failed load is reported rather than thrown, so the host
+ * keeps its chrome around the failure; the next mount tries again. Pass a
+ * component that lives at module or factory scope.
+ */
+export function usePreloadedComponent(component: {
+  preload: () => Promise<unknown>;
+  isLoaded: () => boolean;
+}): PreloadStatus {
+  const [state, setState] = useState<PreloadStatus>(() =>
+    component.isLoaded() ? { status: "ready" } : { status: "loading" }
+  );
+  const loading = state.status === "loading";
+  useEffect(() => {
+    if (!loading) return;
+    let live = true;
+    component.preload().then(
+      () => {
+        if (live) setState({ status: "ready" });
+      },
+      (error: unknown) => {
+        if (live) setState({ status: "failed", error });
+      }
+    );
+    return () => {
+      live = false;
+    };
+  }, [component, loading]);
+  return state;
 }

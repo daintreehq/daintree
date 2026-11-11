@@ -46,6 +46,7 @@ import {
   useSurfaceSwitchedToStock,
 } from "../ProjectSurfaceView";
 import { _resetPluginHostedViewRuntimesForTest } from "../PluginHostedView";
+import { preloadPluginHostedView } from "../LazyPluginHostedView";
 import {
   _resetPluginProjectSurfacesStoreForTest,
   selectSurfaceChoice,
@@ -126,6 +127,13 @@ const press = async (element: HTMLElement) => {
     await settle();
   });
 };
+
+// The hosted-view chunk loads on first use (#16802), which
+// LazyPluginHostedView's own suite covers; loaded up front here, every test
+// reads what the host hands its view from the first render.
+beforeAll(async () => {
+  await preloadPluginHostedView();
+});
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {

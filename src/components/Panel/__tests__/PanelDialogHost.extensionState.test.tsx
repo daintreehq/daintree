@@ -233,7 +233,7 @@ describe("PanelDialogHost extension state (#12608)", () => {
     expect(lastProps(probeRender).extensionStateVersion).toBe(2);
   });
 
-  it("mounts a plugin view with the saved state the plugin can read", () => {
+  it("mounts a plugin view with the saved state the plugin can read", async () => {
     registry.publish(PLUGIN_KIND, makePluginViewHost(pluginConfig()));
     const extensionState = { tab: "logs" };
     openDialog({
@@ -244,7 +244,8 @@ describe("PanelDialogHost extension state (#12608)", () => {
       extensionStateVersion: 1,
     });
 
-    expect(screen.queryByTestId("plugin-content")).not.toBeNull();
+    // The view loader's chunk lands after the first commit (#16802).
+    expect(await screen.findByTestId("plugin-content")).not.toBeNull();
     expect(lastProps(contentRender).initialArgs).toBe(extensionState);
     expect(lastProps(contentRender).stateVersion).toBe(1);
   });

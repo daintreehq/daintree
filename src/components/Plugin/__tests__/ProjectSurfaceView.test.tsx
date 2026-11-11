@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, act } from "@testing-library/react";
 import {
   registerPanelKind,
@@ -31,6 +31,7 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
 
 import { ProjectSurfaceView } from "../ProjectSurfaceView";
 import { _resetPluginHostedViewRuntimesForTest } from "../PluginHostedView";
+import { preloadPluginHostedView } from "../LazyPluginHostedView";
 
 const KIND_ID = "project:p1/acme.dash/overview";
 
@@ -47,6 +48,13 @@ function surfaceKind(componentPath = "plugin://acme.dash/1/overview.js"): PanelK
     componentPath,
   };
 }
+
+// The hosted-view chunk loads on first use (#16802), which
+// LazyPluginHostedView's own suite covers; loaded up front here, every test
+// reads what the host hands its view from the first render.
+beforeAll(async () => {
+  await preloadPluginHostedView();
+});
 
 beforeEach(() => {
   h.mounts = [];
