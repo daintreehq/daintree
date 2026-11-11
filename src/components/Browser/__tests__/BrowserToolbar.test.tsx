@@ -6,6 +6,7 @@ import { BrowserToolbar } from "../BrowserToolbar";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { normalizeBrowserUrl } from "../browserUtils";
 import { getFrecencySuggestions } from "@/store/urlHistoryStore";
+import { isTooltipSuppressedForElement } from "@/lib/tooltipFocusSuppression";
 import type { ViewportPresetId } from "@shared/types/panel";
 import {
   VIEWPORT_PRESET_LIST,
@@ -1248,6 +1249,19 @@ describe("BrowserToolbar zoom popover focus", () => {
     await waitFor(() => expect(queryByTestId("browser-zoom-indicator")).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(getByLabelText("Copy URL")));
   });
+
+  it("suppresses the Copy URL tooltip when the fallback focus lands on it", async () => {
+    const { getByTestId, getByLabelText, queryByTestId } = render(<ZoomHarness />);
+    fireEvent.click(getByTestId("browser-zoom-indicator"));
+    await waitFor(() => expect(getByLabelText("Reset zoom")).toBeTruthy());
+    fireEvent.click(getByLabelText("Reset zoom"));
+
+    fireEvent.keyDown(getByLabelText("Zoom in"), { key: "Escape" });
+    await waitFor(() => expect(queryByTestId("browser-zoom-indicator")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(getByLabelText("Copy URL")));
+
+    expect(isTooltipSuppressedForElement(getByLabelText("Copy URL"))).toBe(true);
+  });
 });
 
 describe("BrowserToolbar device picker keyboard", () => {
@@ -1307,11 +1321,144 @@ describe("BrowserToolbar back/forward history menu", () => {
     expect(onBack).not.toHaveBeenCalled();
   });
 
+  // Longer than the zero-delay task the deferred focus fallback runs on.
+  const FALLBACK_SETTLE_MS = 20;
+
+  describe("closing", () => {
+    async function openBackMenu() {
+      const utils = renderToolbar({ canGoBack: true, navSnapshot });
+      const back = utils.getByTestId("browser-back");
+      fireEvent.contextMenu(back);
+      const menu = await utils.findByRole("menu", { name: "Back history" });
+      return { ...utils, back, menu };
+    }
+
+    it("leaves focus on the element that was clicked to dismiss it", async () => {
+      const outside = document.createElement("input");
+      document.body.appendChild(outside);
+      const { back, menu } = await openBackMenu();
+      const focusBack = vi.spyOn(back, "focus");
+
+      fireEvent.pointerDown(outside, { pointerType: "mouse" });
+      outside.focus();
+      await waitFor(() => expect(menu.isConnected).toBe(false));
+      await new Promise((resolve) => setTimeout(resolve, FALLBACK_SETTLE_MS));
+
+      expect(document.activeElement).toBe(outside);
+      expect(focusBack).not.toHaveBeenCalled();
+      outside.remove();
+    });
+
+    it("restores focus without the focus ring after a mouse selection", async () => {
+      const { back, menu } = await openBackMenu();
+      const focusBack = vi.spyOn(back, "focus");
+      const item = menu.querySelector<HTMLElement>('[role="menuitem"]')!;
+
+      fireEvent.pointerDown(item, { pointerType: "mouse" });
+      fireEvent.click(item, { detail: 1 });
+      await waitFor(() => expect(focusBack).toHaveBeenCalled());
+
+      expect(focusBack).toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
+    });
+
+    it("treats Radix's pointer-up fallback as a mouse selection", async () => {
+      const { back, menu } = await openBackMenu();
+      const focusBack = vi.spyOn(back, "focus");
+      const item = menu.querySelector<HTMLElement>('[role="menuitem"]')!;
+
+      // Press on padding, release over an entry: Radix synthesizes a click with
+      // detail 0, which is only told from Enter by the press inside the menu.
+      fireEvent.pointerDown(menu, { pointerType: "mouse" });
+      fireEvent.click(item, { detail: 0 });
+      await waitFor(() => expect(focusBack).toHaveBeenCalled());
+
+      expect(focusBack).toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
+    });
+
+    it("treats a long press that opens the menu and releases over an entry as a mouse selection", async () => {
+      const utils = renderToolbar({ canGoBack: true, navSnapshot });
+      const back = utils.getByTestId("browser-back");
+      const focusBack = vi.spyOn(back, "focus");
+
+      fireEvent.pointerDown(back, { button: 0, pointerType: "mouse" });
+      const menu = await utils.findByRole("menu", { name: "Back history" });
+      const item = menu.querySelector<HTMLElement>('[role="menuitem"]')!;
+      // The press began on the button, so nothing was pressed inside the menu.
+      fireEvent.click(item, { detail: 0 });
+      await waitFor(() => expect(focusBack).toHaveBeenCalled());
+
+      expect(focusBack).toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
+    });
+
+    it("falls back to the toolbar, ringless, when the dismissing press took no focus", async () => {
+      const { back, menu } = await openBackMenu();
+      const focusBack = vi.spyOn(back, "focus");
+
+      fireEvent.pointerDown(document.body, { pointerType: "mouse" });
+      await waitFor(() => expect(menu.isConnected).toBe(false));
+      await waitFor(() => expect(focusBack).toHaveBeenCalled());
+
+      expect(focusBack).toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
+    });
+
+    it("still restores focus visibly after a keyboard selection", async () => {
+      const { back, menu } = await openBackMenu();
+      const focusBack = vi.spyOn(back, "focus");
+      const item = menu.querySelector<HTMLElement>('[role="menuitem"]')!;
+
+      fireEvent.click(item, { detail: 0 });
+      await waitFor(() => expect(focusBack).toHaveBeenCalled());
+
+      expect(focusBack).not.toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
+    });
+  });
+
   it("leaves the native menu alone when there is no history in that direction", () => {
     const { getByTestId, queryByRole } = renderToolbar({ canGoForward: false, navSnapshot });
     const event = fireEvent.contextMenu(getByTestId("browser-forward"));
     expect(event).toBe(true);
     expect(queryByRole("menu")).toBeNull();
+  });
+});
+
+describe("BrowserToolbar history menu focus after jumping to the oldest entry", () => {
+  beforeAll(async () => {
+    const { primeRadix } = await import("@/components/ui/radix-loader");
+    await primeRadix();
+  });
+
+  const entries = [
+    { index: 0, url: "http://localhost:5173/", title: "Home" },
+    { index: 1, url: "http://localhost:5173/dashboard", title: "Dashboard" },
+    { index: 2, url: "http://localhost:5173/pricing", title: "Pricing" },
+  ];
+
+  function Harness() {
+    const [activeIndex, setActiveIndex] = useState(2);
+    const canGoBack = activeIndex > 0;
+    const canGoForward = activeIndex < entries.length - 1;
+    return (
+      <BrowserToolbar
+        {...defaultProps}
+        canGoBack={canGoBack}
+        canGoForward={canGoForward}
+        navSnapshot={{ entries, activeIndex, canGoBack, canGoForward }}
+        onGoToHistoryIndex={setActiveIndex}
+      />
+    );
+  }
+
+  it("lands on Forward when Back becomes disabled after an Enter selection", async () => {
+    const { getByTestId, findByRole } = render(<Harness />);
+    fireEvent.contextMenu(getByTestId("browser-back"));
+    const menu = await findByRole("menu", { name: "Back history" });
+    const oldest = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
+      (item) => item.textContent?.includes("Home")
+    )!;
+    oldest.focus();
+    fireEvent.keyDown(oldest, { key: "Enter" });
+
+    await waitFor(() => expect(document.activeElement).toBe(getByTestId("browser-forward")));
   });
 });
 

@@ -264,6 +264,10 @@ export function BrowserToolbar({
     forward: null,
   });
 
+  // Radix's pointer-up fallback (press on padding, release over an entry) clicks
+  // with detail 0, which only a pointer press inside the menu tells from Enter.
+  const historyPointerInsideRef = useRef(false);
+
   const clearLongPress = useCallback(() => {
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
@@ -274,6 +278,9 @@ export function BrowserToolbar({
 
   const handlePointerDown = useCallback((dir: "back" | "forward", e: React.PointerEvent) => {
     if (e.button !== 0) return;
+    // A long press opens the menu under a button still held down, and releasing
+    // over an entry is a pointer selection however the click reports it.
+    historyPointerInsideRef.current = true;
     longPressTargetRef.current = dir;
     longPressTimerRef.current = setTimeout(() => {
       if (longPressTargetRef.current === dir) {
@@ -347,6 +354,7 @@ export function BrowserToolbar({
   const copyButtonRef = useRef<HTMLButtonElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const zoomClosedOutsideRef = useRef(false);
+  const historyCloseRef = useRef<"outside" | "select" | null>(null);
   const errorId = useId();
   const listboxId = useId();
 
@@ -780,7 +788,12 @@ export function BrowserToolbar({
       <DropdownMenu
         open={longPressDir === dir}
         onOpenChange={(open) => {
-          if (!open) setLongPressDir(null);
+          if (open) {
+            historyCloseRef.current = null;
+            historyPointerInsideRef.current = false;
+          } else {
+            setLongPressDir(null);
+          }
         }}
       >
         {/* The button itself keeps plain click and Enter as navigation, so the
@@ -795,8 +808,32 @@ export function BrowserToolbar({
           // Radix labels the menu by its trigger, which here is the inert
           // stand-in with no name of its own.
           aria-labelledby={undefined}
+          onPointerDownOutside={() => {
+            historyCloseRef.current = "outside";
+          }}
+          onInteractOutside={(event) => {
+            // A vetoed interaction leaves the menu open.
+            if (event.defaultPrevented) historyCloseRef.current = null;
+          }}
+          onPointerDown={() => {
+            historyPointerInsideRef.current = true;
+          }}
+          onClick={(event) => {
+            const onItem =
+              event.target instanceof Element && event.target.closest('[role="menuitem"]');
+            historyCloseRef.current =
+              onItem && (event.detail > 0 || historyPointerInsideRef.current) ? "select" : null;
+          }}
+          onKeyDown={() => {
+            historyCloseRef.current = null;
+            historyPointerInsideRef.current = false;
+          }}
           onCloseAutoFocus={(e) => {
+            // Radix would restore to the inert stand-in, so the restore is ours.
             e.preventDefault();
+            const closedBy = historyCloseRef.current;
+            historyCloseRef.current = null;
+            historyPointerInsideRef.current = false;
             // Jumping to the oldest or newest entry disables this direction's
             // button, so focus falls back to the other one.
             const other = dir === "back" ? "forward" : "back";
@@ -804,6 +841,23 @@ export function BrowserToolbar({
               (button) => button && !button.disabled
             );
             armTooltipFocusSuppression();
+            if (closedBy === "select") {
+              // The item unmounted under the pointer; focus must land somewhere,
+              // but a mouse user is owed no focus ring.
+              target?.focus({ preventScroll: true, focusVisible: false });
+              return;
+            }
+            if (closedBy === "outside") {
+              // The clicked element owns focus. Only a press that took none (a
+              // modal menu swallows it) falls back to the toolbar.
+              setTimeout(() => {
+                if (document.activeElement && document.activeElement !== document.body) return;
+                if (!target?.isConnected) return;
+                armTooltipFocusSuppression();
+                target.focus({ preventScroll: true, focusVisible: false });
+              }, 0);
+              return;
+            }
             target?.focus({ preventScroll: true });
           }}
         >
@@ -841,6 +895,7 @@ export function BrowserToolbar({
                   const entries = dir === "back" ? recentBackEntries : recentForwardEntries;
                   if (entries.length === 0) return;
                   e.preventDefault();
+                  historyPointerInsideRef.current = false;
                   setLongPressDir(dir);
                 }}
                 onContextMenu={(e) => {
@@ -848,6 +903,7 @@ export function BrowserToolbar({
                   if (entries.length === 0) return;
                   e.preventDefault();
                   clearLongPress();
+                  historyPointerInsideRef.current = false;
                   setLongPressDir(dir);
                 }}
                 onPointerUp={(e) => handlePointerUp(dir, e)}
@@ -1103,6 +1159,9 @@ export function BrowserToolbar({
                         requestAnimationFrame(() => {
                           if (document.activeElement !== document.body) return;
                           const fallback = copyButtonRef.current ?? moreButtonRef.current;
+                          // The fallback is a toolbar button under a pointer that is
+                          // nowhere near it; without this its tooltip opens on focus.
+                          armTooltipFocusSuppression();
                           fallback?.focus({ preventScroll: true });
                         });
                       }}
