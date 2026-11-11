@@ -297,7 +297,9 @@ describe("CanopyLocalReader", () => {
   const readers: Array<{ release(): void }> = [];
 
   afterEach(() => {
+    // Before the clock goes back to real: a timer left behind is cleared on the clock that made it.
     for (const made of readers.splice(0)) made.release();
+    vi.useRealTimers();
   });
 
   async function harness(dir: string | null = "/models/light", idleMs?: number) {
@@ -463,10 +465,6 @@ describe("CanopyLocalReader", () => {
   describe("idle", () => {
     const IDLE_MS = 60_000;
 
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
     it("lets the model go once nothing has been read for the idle period, and loads it again on the next read", async () => {
       vi.useFakeTimers();
       const h = await harness("/models/light", IDLE_MS);
@@ -588,17 +586,70 @@ describe("CanopyLocalReader", () => {
       expect(h.made).toHaveLength(2);
     });
 
-    it("keeps the process it started after an idle one, whenever the idle one exits", async () => {
-      const h = await harness();
+    it("keeps the process it started after an idle one, and its idle period, whenever the idle one exits", async () => {
+      vi.useFakeTimers();
+      const h = await harness("/models/light", IDLE_MS);
       await h.reader.read(input({ lines }), signal());
       h.reader.retireIdle();
       await h.reader.read(input({ lines }), signal());
-      // The retired process's exit lands after its successor has started.
+      await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+      // The retired process's exit lands halfway through its successor's idle period.
       h.made[0]!.die();
       expect(h.reader.loaded).toBe(true);
+      await vi.advanceTimersByTimeAsync(IDLE_MS / 2 - 1);
+      expect(h.made[1]!.retire).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.made[1]!.retire).toHaveBeenCalledTimes(1);
+      expect(h.made).toHaveLength(2);
+    });
+
+    it("gives a replacement model an idle period of its own", async () => {
+      vi.useFakeTimers();
+      const h = await harness("/models/light", IDLE_MS);
+      await h.reader.read(input({ lines }), signal());
+      await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+      h.setDir("/models/best");
+      await h.reader.read(input({ lines }), signal());
+      expect(h.made[0]!.retire).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+      expect(h.made[1]!.retire).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+      expect(h.made[1]!.retire).toHaveBeenCalledTimes(1);
+    });
+
+    it("replaces a process that gave up on its own rather than letting it go again", async () => {
+      vi.useFakeTimers();
+      const h = await harness("/models/light", IDLE_MS);
+      await h.reader.read(input({ lines }), signal());
+      // A wedged read or a slow load retires the process itself; its exit is still to come.
+      h.made[0]!.live = false;
+      expect(h.reader.retireIdle()).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
       await h.reader.read(input({ lines }), signal());
       expect(h.made).toHaveLength(2);
-      expect(h.made[1]!.read).toHaveBeenCalledTimes(2);
+      expect(h.reader.loaded).toBe(true);
+    });
+
+    it("leaves no idle period behind a read that a release cut short", async () => {
+      vi.useFakeTimers();
+      const h = await harness("/models/light", IDLE_MS);
+      await h.reader.read(input({ lines }), signal());
+      let fail!: () => void;
+      h.made[0]!.read.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            fail = () => reject(h.lost());
+          })
+      );
+      const cut = h.reader.read(input({ lines }), signal());
+      await vi.advanceTimersByTimeAsync(0);
+      h.reader.release();
+      fail();
+      await expect(cut).rejects.toMatchObject({ message: "request cancelled" });
+      expect(vi.getTimerCount()).toBe(0);
+      await h.reader.read(input({ lines }), signal());
+      expect(h.made).toHaveLength(2);
+      expect(vi.getTimerCount()).toBe(1);
     });
 
     it("keeps counting crashes across idle spells, so a model that keeps dying stops being started", async () => {

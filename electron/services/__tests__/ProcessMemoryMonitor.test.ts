@@ -1350,13 +1350,45 @@ describe("ProcessMemoryMonitor", () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
       stop = startAppMetricsMonitor({ ...mockActions, retireIdleCanopyReader });
 
-      await advancePolls(WARMUP_INTERVALS + 1);
-
+      for (let i = 0; i < WARMUP_INTERVALS + 1; i++) {
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+      // Pulled on the pressure poll itself; the pass reports once the window has run.
       expect(retireIdleCanopyReader).toHaveBeenCalledTimes(1);
+      expect(logInfo).not.toHaveBeenCalledWith("memory-pressure-tier1-reclaim", expect.any(Object));
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
+
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
       expect(logInfo).toHaveBeenCalledWith(
         "memory-pressure-tier1-reclaim",
         expect.objectContaining({ canopyReadersRetired: 1, canopyReaderRetireFailed: false })
+      );
+    });
+
+    it("counts a retired Canopy reader as productive even when the re-sample fails (#16816)", async () => {
+      let throwNextSample = false;
+      mockGetAppMetrics.mockImplementation(() => {
+        if (throwNextSample) {
+          throwNextSample = false;
+          throw new Error("getAppMetrics unavailable");
+        }
+        return [makeMetric("Browser", 350 * 1024, 100)];
+      });
+      mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async (tier) => {
+        if (tier === 1) throwNextSample = true;
+        return 0;
+      });
+      stop = startAppMetricsMonitor({ ...mockActions, retireIdleCanopyReader: vi.fn(() => 1) });
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({
+          resampleFailed: true,
+          canopyReadersRetired: 1,
+          outcome: "productive",
+        })
       );
     });
 
