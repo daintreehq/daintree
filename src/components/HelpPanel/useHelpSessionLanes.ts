@@ -75,6 +75,7 @@ interface UseHelpSessionLanesOptions {
   activeWorkspaceId: string | null;
   terminalId: string | null;
   pausedLane: PausedLane | null;
+  isOpen: boolean;
 }
 
 // The session-lane tab strip: its tab model, the select/close/restart handlers,
@@ -86,6 +87,7 @@ export function useHelpSessionLanes({
   activeWorkspaceId,
   terminalId,
   pausedLane,
+  isOpen,
 }: UseHelpSessionLanesOptions) {
   // The lane a restart is waiting on confirmation for. The header's overflow item,
   // every tab's own menu and the paused lane's own button share it, so the lane
@@ -305,6 +307,31 @@ export function useHelpSessionLanes({
       cancelled = true;
     };
   }, [activeWorkspaceId, openSlots.length, terminalId, openDiscoveredLane]);
+
+  // A lane started with no view after this one came up, such as one a restart to
+  // install an update resumes (#16753), gets its tab as the panel opens, as one
+  // running at the cold read did. Only on an opening: the read above covered the
+  // panel as it mounted.
+  const wasOpenRef = useRef(isOpen);
+  useEffect(() => {
+    const opened = isOpen && !wasOpenRef.current;
+    wasOpenRef.current = isOpen;
+    if (!opened || !activeWorkspaceId) return;
+    let cancelled = false;
+    laneReadRef.current += 1;
+    const read = laneReadRef.current;
+    readKeptLanes(activeWorkspaceId)
+      .then((kept) => {
+        if (!kept || cancelled || read !== laneReadRef.current) return;
+        for (const lane of kept) if (lane.live) openDiscoveredLane(activeWorkspaceId, lane.slot);
+      })
+      .catch((err) => {
+        logWarn("HelpPanel: failed to list running lanes as the panel opened", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, activeWorkspaceId, openDiscoveredLane]);
 
   // A schedule's Assistant (#16169) is started by main, with no view: as its
   // run is recorded, its lane gets a tab here too, which takes it over when

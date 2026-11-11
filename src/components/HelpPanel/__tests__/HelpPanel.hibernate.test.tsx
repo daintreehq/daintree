@@ -2603,6 +2603,51 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
     expect(helpPanelState.ensureSlot).not.toHaveBeenCalled();
   });
 
+  it("adds a tab for a lane started with no view since the view came up, as the panel opens (#16753)", async () => {
+    // A restart for an update resumes its lanes after this view's cold read, so
+    // that read found none of them running.
+    helpPanelState.isOpen = false;
+    helpPanelState.terminalId = "term-live";
+    helpPanelState.agentId = "claude";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockListPendingHibernationSlots.mockResolvedValue([2, 3]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) => ({
+      agentId: "claude",
+      agentSessionId: `conv-${slot}`,
+      cwd: "/tmp/help",
+      panelWasOpen: false,
+      // Slot 3 only keeps a stopped conversation, which gets no tab (#16495).
+      live: slot === 2,
+    }));
+
+    let view: ReturnType<typeof render> | undefined;
+    await act(async () => {
+      view = render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(mockListPendingHibernationSlots).not.toHaveBeenCalled();
+
+    helpPanelState.isOpen = true;
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(mockListPendingHibernationSlots).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(2);
+    expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(3);
+    // Opening the tab doesn't start anything in it.
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+
+    // A rerender while open is no opening.
+    mockListPendingHibernationSlots.mockClear();
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(mockListPendingHibernationSlots).not.toHaveBeenCalled();
+  });
+
   it("adds a tab for the lane a schedule's Assistant started in, as its run is recorded (#16169)", async () => {
     helpPanelState.terminalId = "term-live";
     helpPanelState.agentId = "claude";
