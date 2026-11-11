@@ -68,6 +68,17 @@ export const config: AgentConfig = {
       "Verify installation with: agy --version",
     ],
   },
+  // `agy models` as of 1.5.5, only for when the installed CLI can't answer
+  // (offline, signed out, not installed): `AgentModelCatalogService` asks it
+  // first and lets its list decide, so this stays unmarked `curatedModels`.
+  models: [
+    { id: "gemini-4-carbon-high", name: "Gemini 4 Carbon (High)", shortLabel: "Carbon" },
+    { id: "gemini-4-argon-high", name: "Gemini 4 Argon (High)", shortLabel: "Argon" },
+    { id: "gemini-3.8-flash-high", name: "Gemini 3.8 Flash (High)", shortLabel: "Flash 3.8" },
+    { id: "claude-opus-5-5-high", name: "Claude Opus 5.5 (High)", shortLabel: "Opus 5.5" },
+    { id: "claude-sonnet-5-5-high", name: "Claude Sonnet 5.5 (High)", shortLabel: "Sonnet 5.5" },
+    { id: "gpt-oss-120b-medium", name: "GPT-OSS 120B (Medium)", shortLabel: "GPT-OSS 120B" },
+  ],
   capabilities: {
     scrollback: 10000,
     blockAltScreen: true,

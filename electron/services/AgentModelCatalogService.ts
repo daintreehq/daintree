@@ -9,8 +9,11 @@ import {
   type AgentModelConfig,
 } from "../../shared/config/agentRegistry.js";
 import type { ResolvedModelCatalog } from "../../shared/types/ipc/agentCapabilities.js";
-import { buildProbeEnv } from "../utils/spawnEnv.js";
+import type { AgentCliDetail } from "../../shared/types/ipc/system.js";
+import { isAgentLaunchable } from "../../shared/utils/agentAvailability.js";
+import { buildNetworkProbeEnv, buildProbeEnv } from "../utils/spawnEnv.js";
 import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
+import { parseAgyModelsOutput } from "./antigravityModelList.js";
 
 const execFileAsync = execFileWithTreeKill;
 
@@ -37,8 +40,8 @@ const CatalogSchema = z.record(z.string(), ProviderSchema);
 
 type ParsedCatalog = z.infer<typeof CatalogSchema>;
 
-/** Agents whose models never come from models.dev: Codex answers through its own CLI. */
-const MODELS_DEV_SKIPPED_AGENTS: ReadonlySet<string> = new Set(["codex"]);
+/** Agents whose models never come from models.dev: each answers through its own CLI. */
+const MODELS_DEV_SKIPPED_AGENTS: ReadonlySet<string> = new Set(["codex", "antigravity"]);
 
 /**
  * Every mapped provider is persisted, including ones this build never reads:
@@ -64,6 +67,16 @@ interface AgentResolved {
 interface CodexResolved extends AgentResolved {
   upgrades: Record<string, string>;
 }
+
+interface AgyListed {
+  models: AgentModelConfig[];
+  fetchedAt: number;
+}
+
+const AgyDiskSchema = z.object({
+  fetchedAt: z.number().finite(),
+  models: z.array(z.object({ id: z.string().min(1), name: z.string() })).min(1),
+});
 
 interface DiskPayload {
   fetchedAt: number;
@@ -103,6 +116,14 @@ interface CatalogDeps {
   execFileImpl?: typeof execFileAsync;
   /** Override for the codex command name (used by tests). Defaults to `"codex"`. */
   codexCommand?: string;
+  /** Override for the `agy models` disk-cache path. Defaults to `userData/antigravity-models.json`. */
+  antigravityCachePath?: string;
+  /**
+   * The detected copy of an agent's CLI, so a probe runs the binary a launch
+   * would: Electron's PATH often misses `~/.local/bin`, where agy installs.
+   * Without it the registry command is run from PATH.
+   */
+  getCliDetail?: (agentId: string) => Promise<AgentCliDetail | null | undefined>;
 }
 
 const CATALOG_URL = "https://models.dev/api.json";
@@ -112,6 +133,12 @@ const CODEX_TIMEOUT_MS = 5000;
 // `codex debug models --bundled` carries each model's full base instructions;
 // by Codex 0.15x it was ~600 KB and still growing, past the old 256 KB cap.
 const MAX_CODEX_BUFFER = 4 * 1024 * 1024;
+// `agy models` fetches the list over the network before printing it.
+const AGY_TIMEOUT_MS = 15_000;
+const MAX_AGY_BUFFER = 256 * 1024;
+// An offline machine fails every probe; without a pause each catalog read
+// would spawn agy and wait on the network again.
+const AGY_RETRY_MS = 60_000;
 
 /**
  * Resolves agent model lists and context windows at runtime against the
@@ -122,7 +149,9 @@ const MAX_CODEX_BUFFER = 4 * 1024 * 1024;
  *
  * Codex has no bundled list at all: its models come from the installed CLI's
  * `codex debug models --bundled`, along with the upgrade pointers that move a
- * retired model onto its successor.
+ * retired model onto its successor. Antigravity's come from `agy models`,
+ * which asks Google's service, so its last answer is kept on disk and its
+ * bundled list only stands in when no answer was ever had.
  *
  * Sources contribute metadata freely, but membership is decided by whichever
  * source actually speaks for the CLI — see {@link authoritativeIds}. models.dev
@@ -138,6 +167,9 @@ export class AgentModelCatalogService {
   private memCache: CachedCatalog | null = null;
   private codexCache: (CodexResolved & { fetchedAt: number }) | null = null;
   private codexInFlight: Promise<CodexResolved | null> | null = null;
+  private agyCache: AgyListed | null = null;
+  private agyInFlight: Promise<AgyListed | null> | null = null;
+  private agyRetryAt = 0;
 
   constructor(private readonly deps: CatalogDeps = {}) {}
 
@@ -165,16 +197,14 @@ export class AgentModelCatalogService {
 
     const remote = catalog ? this.extractRemote(agentId, catalog) : null;
     const codex = isCodex ? await this.getCodexCatalog() : null;
+    const agy = agentId === "antigravity" ? await this.getAntigravityCatalog() : null;
+    const cli: AgentResolved | null =
+      codex ?? (agy ? { models: agy.models, contextWindow: null } : null);
 
-    const merged = this.merge(
-      bundled,
-      remote,
-      codex,
-      this.authoritativeIds(agentId, bundled, codex)
-    );
+    const merged = this.merge(bundled, remote, cli, this.authoritativeIds(agentId, bundled, cli));
 
     let source: ResolvedModelCatalog["source"];
-    if (!remote && !codex) {
+    if (!remote && !cli) {
       source = "bundled";
     } else if (bundled.models.length === 0) {
       source = "remote";
@@ -198,6 +228,8 @@ export class AgentModelCatalogService {
   clearCache(): void {
     this.memCache = null;
     this.codexCache = null;
+    this.agyCache = null;
+    this.agyRetryAt = 0;
   }
 
   private getBundled(agentId: string): AgentResolved {
@@ -248,7 +280,8 @@ export class AgentModelCatalogService {
    *
    * Codex answers only through its own CLI: the live catalog is the binary that
    * will receive `--model`. Without the CLI there is nothing to offer, and the
-   * CLI default still launches. An agent whose
+   * CLI default still launches. Antigravity's CLI decides too when it has
+   * answered; until then its bundled list stands. An agent whose
    * bundled list is marked {@link AgentConfig.curatedModels} answers for itself
    * — its own aliases, which never go stale. Everyone else keeps discovering
    * new models from the remote catalog.
@@ -256,9 +289,10 @@ export class AgentModelCatalogService {
   private authoritativeIds(
     agentId: string,
     bundled: AgentResolved,
-    codex: AgentResolved | null
+    cli: AgentResolved | null
   ): string[] | null {
-    if (agentId === "codex") return codex ? codex.models.map((m) => m.id) : [];
+    if (agentId === "codex") return cli ? cli.models.map((m) => m.id) : [];
+    if (agentId === "antigravity") return cli ? cli.models.map((m) => m.id) : null;
     const curated = getEffectiveAgentConfig(agentId)?.curatedModels === true;
     return curated && bundled.models.length > 0 ? bundled.models.map((m) => m.id) : null;
   }
@@ -266,10 +300,10 @@ export class AgentModelCatalogService {
   private merge(
     bundled: AgentResolved,
     remote: AgentResolved | null,
-    codex: AgentResolved | null,
+    cli: AgentResolved | null,
     authoritativeIds: string[] | null
   ): AgentResolved {
-    if (!remote && !codex) return bundled;
+    if (!remote && !cli) return bundled;
 
     const byId = new Map<string, AgentModelConfig>();
     for (const m of bundled.models) byId.set(m.id, m);
@@ -287,8 +321,8 @@ export class AgentModelCatalogService {
         }
       }
     }
-    if (codex) {
-      for (const m of codex.models) {
+    if (cli) {
+      for (const m of cli.models) {
         const existing = byId.get(m.id);
         if (existing) {
           byId.set(m.id, {
@@ -303,7 +337,7 @@ export class AgentModelCatalogService {
     }
 
     const contextWindow =
-      codex?.contextWindow ?? remote?.contextWindow ?? bundled.contextWindow ?? null;
+      cli?.contextWindow ?? remote?.contextWindow ?? bundled.contextWindow ?? null;
 
     // Every source contributed metadata; only the authoritative one decides
     // membership and order. Projecting last means a curated entry still picks
@@ -460,15 +494,150 @@ export class AgentModelCatalogService {
     await fs.writeFile(cachePath, JSON.stringify(payload), "utf-8");
   }
 
-  private async resolveCachePath(): Promise<string | null> {
-    if (this.deps.cachePath) return this.deps.cachePath;
+  private resolveCachePath(): Promise<string | null> {
+    return resolveUserDataFile(this.deps.cachePath, "models-catalog.json");
+  }
+
+  /**
+   * The last list `agy models` gave, or null when it never answered. Fresh for
+   * a day, from memory or disk; past that the CLI is asked again, and its
+   * failure keeps the stale list rather than dropping to the bundled one.
+   */
+  private async getAntigravityCatalog(): Promise<AgyListed | null> {
+    if (this.agyCache && isWithinTtl(this.agyCache.fetchedAt)) return this.agyCache;
+    // Bounded by the pause itself, so a clock set back can't stretch it.
+    const pause = this.agyRetryAt - Date.now();
+    if (pause > 0 && pause <= AGY_RETRY_MS) return this.agyCache;
+    // Everything up to the fallback lives in the shared promise, so a caller
+    // joining a refresh gets the same answer as the one that started it.
+    const inFlight = (this.agyInFlight ??= this.refreshAntigravityCatalog()
+      .catch((err: unknown) => {
+        console.warn("[AgentModelCatalogService] antigravity catalog failed", err);
+        return this.agyCache;
+      })
+      .finally(() => {
+        this.agyInFlight = null;
+      }));
+    return inFlight;
+  }
+
+  private async refreshAntigravityCatalog(): Promise<AgyListed | null> {
+    const disk = await this.readAgyDisk();
+    // The newer of memory and disk (a write can fail after a good probe), held
+    // in memory before the probe so nothing the probe does can lose it.
+    if (disk && (!this.agyCache || disk.fetchedAt > this.agyCache.fetchedAt)) {
+      this.agyCache = disk;
+    }
+    const known = this.agyCache;
+    if (known && isWithinTtl(known.fetchedAt)) return known;
+
+    let listed: AgentModelConfig[] | null = null;
     try {
-      const { app } = await import("electron");
-      return path.join(app.getPath("userData"), "models-catalog.json");
-    } catch {
-      // Outside Electron (tests without override) — skip disk cache.
+      listed = await this.fetchAntigravityCatalog();
+    } catch (err: unknown) {
+      console.warn("[AgentModelCatalogService] antigravity catalog failed", err);
+    }
+    if (listed) {
+      const fresh: AgyListed = { models: listed, fetchedAt: Date.now() };
+      this.agyCache = fresh;
+      this.agyRetryAt = 0;
+      void this.writeAgyDisk(fresh).catch((err) => {
+        console.warn("[AgentModelCatalogService] antigravity disk write failed", err);
+      });
+      return fresh;
+    }
+
+    this.agyRetryAt = Date.now() + AGY_RETRY_MS;
+    this.agyCache = known;
+    return known;
+  }
+
+  private async fetchAntigravityCatalog(): Promise<AgentModelConfig[] | null> {
+    const config = getEffectiveAgentConfig("antigravity");
+    const command = await this.resolveCliCommand("antigravity", config?.command ?? "agy");
+    if (!command) return null;
+    const exec = this.deps.execFileImpl ?? execFileAsync;
+    let output: { stdout: string; stderr: string };
+    try {
+      const env = buildNetworkProbeEnv(
+        config?.account?.kind === "api-key" ? config.account.keyVars : []
+      );
+      const target = await cliSpawnTarget(command, ["models"], process.platform, { env });
+      output = await exec(target.command, target.args, {
+        timeout: AGY_TIMEOUT_MS,
+        maxBuffer: MAX_AGY_BUFFER,
+        shell: target.shell,
+        windowsVerbatimArguments: target.windowsVerbatimArguments,
+        windowsHide: true,
+        env: { ...env, ...target.env },
+      });
+    } catch (err: unknown) {
+      if (isNodeError(err) && err.code === "ENOENT") return null;
+      // Offline, signed out, or a timeout: the stale or bundled list stands in.
+      console.warn("[AgentModelCatalogService] agy models failed", err);
       return null;
     }
+
+    const rows = parseAgyModelsOutput(output.stdout);
+    const listed = rows.length > 0 ? rows : parseAgyModelsOutput(output.stderr);
+    if (listed.length === 0) return null;
+    return listed.map(({ id, name }) => ({ id, name, shortLabel: deriveShortLabel(name, id) }));
+  }
+
+  /**
+   * The binary a launch of this agent would run, or null when none can: a
+   * chosen copy that is missing runs nothing rather than another copy, and a
+   * WSL-only install can't be run from here. Before the first availability
+   * check, the registry command from PATH.
+   */
+  private async resolveCliCommand(agentId: string, command: string): Promise<string | null> {
+    if (!this.deps.getCliDetail) return command;
+    let detail: AgentCliDetail | null | undefined;
+    try {
+      detail = await this.deps.getCliDetail(agentId);
+    } catch {
+      return command;
+    }
+    if (!detail) return command;
+    if (!isAgentLaunchable(detail.state) || detail.via === "wsl") return null;
+    if (detail.resolvedPath) return detail.resolvedPath;
+    return detail.chosenPath !== undefined ? null : command;
+  }
+
+  private async readAgyDisk(): Promise<AgyListed | null> {
+    const cachePath = await this.resolveAgyCachePath();
+    if (!cachePath) return null;
+    try {
+      const parsed = AgyDiskSchema.safeParse(JSON.parse(await fs.readFile(cachePath, "utf-8")));
+      if (!parsed.success) return null;
+      return {
+        fetchedAt: parsed.data.fetchedAt,
+        models: parsed.data.models.map(({ id, name }) => ({
+          id,
+          name,
+          shortLabel: deriveShortLabel(name, id),
+        })),
+      };
+    } catch (err: unknown) {
+      if (isNodeError(err) && err.code === "ENOENT") return null;
+      console.warn("[AgentModelCatalogService] antigravity disk read failed", err);
+      return null;
+    }
+  }
+
+  private async writeAgyDisk(listed: AgyListed): Promise<void> {
+    const cachePath = await this.resolveAgyCachePath();
+    if (!cachePath) return;
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    const payload = {
+      fetchedAt: listed.fetchedAt,
+      models: listed.models.map(({ id, name }) => ({ id, name })),
+    };
+    await fs.writeFile(cachePath, JSON.stringify(payload), "utf-8");
+  }
+
+  private resolveAgyCachePath(): Promise<string | null> {
+    return resolveUserDataFile(this.deps.antigravityCachePath, "antigravity-models.json");
   }
 
   private async getCodexCatalog(): Promise<CodexResolved | null> {
@@ -613,6 +782,26 @@ export class AgentModelCatalogService {
 
 function isFresh(cache: CachedCatalog): boolean {
   return cache.complete && Date.now() - cache.fetchedAt < TTL_MS;
+}
+
+/** A timestamp from a clock that has since gone backwards counts as stale. */
+function isWithinTtl(fetchedAt: number): boolean {
+  const age = Date.now() - fetchedAt;
+  return age >= 0 && age < TTL_MS;
+}
+
+async function resolveUserDataFile(
+  override: string | undefined,
+  fileName: string
+): Promise<string | null> {
+  if (override) return override;
+  try {
+    const { app } = await import("electron");
+    return path.join(app.getPath("userData"), fileName);
+  } catch {
+    // Outside Electron (tests without override) — skip disk cache.
+    return null;
+  }
 }
 
 /**

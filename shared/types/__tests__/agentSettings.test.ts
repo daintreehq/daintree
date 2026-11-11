@@ -686,6 +686,38 @@ describe("generateAgentCommand antigravity prompt injection", () => {
   });
 });
 
+describe("antigravity model selection", () => {
+  forcePosixPlatform();
+
+  // Not in the bundled list: a model agy lists that this build doesn't know.
+  const modelId = "gemini-5.1-preview-high";
+  const quotedModel = `'?${modelId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'?`;
+  const sessionId = "b0bced34-800c-4859-aaae-81d5f961c0f7";
+
+  it("passes the chosen model on a fresh launch, interactive or headless", () => {
+    for (const interactive of [true, false]) {
+      const cmd = generateAgentCommand("agy", {}, "antigravity", {
+        modelId,
+        initialPrompt: "Fix the bug",
+        interactive,
+      });
+      expect(cmd).toMatch(new RegExp(`^agy .*--model ${quotedModel}( |$)`));
+    }
+  });
+
+  it("replays the chosen model ahead of the conversation on an exact and a latest resume", () => {
+    const flags = buildAgentLaunchFlags({}, "antigravity", { modelId });
+    expect(flags[flags.indexOf("--model") + 1]).toBe(modelId);
+
+    expect(buildResumeCommand("antigravity", sessionId, flags)).toMatch(
+      new RegExp(`^agy .*--model ${quotedModel} .*--conversation ${sessionId}$`)
+    );
+    expect(buildResumeLatestCommand("antigravity", flags)).toMatch(
+      new RegExp(`^agy .*--model ${quotedModel} .*-c$`)
+    );
+  });
+});
+
 describe("generateAgentCommand with modelId", () => {
   it("includes --model flag in command when modelId is provided", () => {
     const cmd = generateAgentCommand("claude", {}, "claude", { modelId: "claude-opus-4-6" });
