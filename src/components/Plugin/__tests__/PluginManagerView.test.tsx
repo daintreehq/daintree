@@ -3849,6 +3849,66 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy();
     expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
   });
+
+  it("holds a Browse install while an HTTP update reads its panels, then allows it (#16782)", async () => {
+    updatablePlugin("http://example.com/p.dntr");
+    const read = deferred<PluginUnsavedPanel[]>();
+    vi.mocked(window.electron.plugin.getUnsavedPanels)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(read.promise)
+      .mockResolvedValue([]);
+    window.electron.plugin.browseCatalog = vi.fn(async () => ({
+      status: "available" as const,
+      listings: [
+        {
+          id: "acme.other",
+          version: "1.0.0",
+          repo: "https://github.com/acme/other",
+          capabilities: [],
+        },
+      ],
+      fetchedAt: Date.now(),
+      stale: false as const,
+    }));
+    window.electron.plugin.previewFromCatalog = vi.fn(async () => ({
+      status: "cancelled" as const,
+    }));
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+    await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
+    await waitFor(() => expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Install over HTTP" }));
+    await waitFor(() => expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
+
+    // The update's confirms have closed, but its read hasn't settled.
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Install acme.other" }));
+    expect(
+      await screen.findByText("Finish or cancel the current install, then install from Browse.")
+    ).toBeTruthy();
+    expect(window.electron.plugin.previewFromCatalog).not.toHaveBeenCalled();
+
+    await act(async () => {
+      read.resolve([]);
+      await read.promise;
+    });
+    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalledOnce());
+    const install = screen.getByRole("button", { name: "Install acme.other" });
+    await waitFor(() => expect(install.hasAttribute("disabled")).toBe(false));
+
+    fireEvent.click(install);
+    await waitFor(() =>
+      expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
+        { pluginId: "acme.other", version: "1.0.0" },
+        expect.any(String)
+      )
+    );
+  });
 });
 
 describe("PluginManagerView — Browse (#16782)", () => {
