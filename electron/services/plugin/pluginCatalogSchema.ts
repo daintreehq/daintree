@@ -75,8 +75,18 @@ function isVersionedReleaseAsset(url: string, repo: [string, string]): boolean {
   if (owner.toLowerCase() !== repo[0].toLowerCase()) return false;
   if (name.toLowerCase() !== repo[1].toLowerCase()) return false;
   if (releases !== "releases" || download !== "download") return false;
-  if (tag.toLowerCase() === "latest") return false;
+  // The parser keeps percent escapes, so `%6catest` would otherwise slip past.
+  const decodedTag = decodeSegment(tag);
+  if (decodedTag === null || decodedTag.toLowerCase() === "latest") return false;
   return asset.endsWith(".dntr") && asset.length > ".dntr".length;
+}
+
+function decodeSegment(segment: string): string | null {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
 }
 
 const PluginCatalogEntrySchema = z
@@ -125,8 +135,8 @@ const PluginCatalogEntrySchema = z
 /**
  * The whole document is refused when any entry is malformed or an
  * `(id, version)` pair repeats. Dropping only the bad entry would make a
- * missing release ambiguous: "not listed" has to mean delisted, never "listed,
- * but the listing didn't parse".
+ * missing release ambiguous: "not listed" has to mean absent from a fully
+ * validated catalog, never "listed, but the listing didn't parse".
  */
 const PluginCatalogSchema = z
   .object({ entries: z.array(PluginCatalogEntrySchema) })

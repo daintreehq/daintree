@@ -69,7 +69,7 @@ Each entry is one reviewed release:
 
 - The file is `{ "entries": [ ... ] }`. Unknown fields are ignored, and so are capability names the reading build doesn't know: the list is shown, never granted.
 - An entry is valid when `id` is a scoped plugin name outside `daintree.*`, `version` is canonical semver, `repo` is `https://github.com/{owner}/{repo}`, `url` is a `.dntr` asset under that repository's `releases/download/{tag}/` (never `releases/latest/download`, never a tag named `latest`), and `sha256` is 64 hex digits.
-- One malformed entry or a repeated `(id, version)` rejects the whole file, and the last good copy stays cached. A partly read catalog would make a missing release ambiguous, so "not listed" always means delisted.
+- One malformed entry or a repeated `(id, version)` rejects the whole file, and the last good copy stays cached. A partly read catalog would make a missing release ambiguous, so "not listed" always means absent from a freshly fetched, fully validated catalog.
 - Browsing reuses a copy fetched in the last 15 minutes, and falls back to an older one, marked stale, when it can't refresh. Installing or updating always fetches again, so offline nothing installs from the catalog, and a caller can tell a stale or unavailable catalog from a release that isn't listed.
 - A 404 means the catalog isn't published, not an error.
 

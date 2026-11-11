@@ -97,6 +97,8 @@ export class PluginCatalogService {
   private snapshot: CatalogSnapshot | null = null;
   private diskLoad: Promise<void> | null = null;
   private inFlight: Promise<RemoteOutcome> | null = null;
+  /** Writes run in order, so an older catalog never lands over a newer one. */
+  private diskWrites: Promise<void> = Promise.resolve();
   private cachePath: Promise<string | null> | null = null;
 
   constructor(private readonly deps: PluginCatalogDeps = {}) {}
@@ -149,25 +151,33 @@ export class PluginCatalogService {
     return this.diskLoad;
   }
 
-  private revalidate(): Promise<RemoteOutcome> {
+  /**
+   * The shared fetch ends once the catalog is in memory, not when the disk
+   * write does: a caller arriving during a slow write starts its own request
+   * instead of being handed a fetch that finished before it asked.
+   */
+  private async revalidate(): Promise<RemoteOutcome> {
     this.inFlight ??= this.fetchRemote()
       .catch((err: unknown): RemoteOutcome => {
         logger.warn("Catalog fetch failed", { error: describeError(err) });
         return { ok: false, failure: "unreachable" };
       })
-      .then(async (outcome) => {
+      .then((outcome) => {
         if (outcome.ok) {
           // A successful fetch replaces the cache outright, so a delisted
           // release disappears rather than lingering from an older copy.
           this.snapshot = outcome.snapshot;
-          await this.writeDisk(outcome.snapshot);
+          const snapshot = outcome.snapshot;
+          this.diskWrites = this.diskWrites.then(() => this.writeDisk(snapshot));
         }
         return outcome;
       })
       .finally(() => {
         this.inFlight = null;
       });
-    return this.inFlight;
+    const outcome = await this.inFlight;
+    await this.diskWrites;
+    return outcome;
   }
 
   private async fetchRemote(): Promise<RemoteOutcome> {
