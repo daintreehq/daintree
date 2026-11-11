@@ -6,6 +6,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { readAssistantConfirmationPolicy } from "./assistantConfirmationsPreference.js";
 import type { ActionManifestEntry } from "../../../shared/types/actions.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
+import type { McpSessionRole } from "../../../shared/types/mcpSurface.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../shared/utils/mcpArgsSummary.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
@@ -310,6 +311,8 @@ export interface SessionServerDepsSource {
  */
 export interface SessionHandshakeCapture {
   readonly sessionId: string;
+  /** Which kind of session the handshake took this for (#16765). */
+  readonly role: McpSessionRole;
   readonly workspaceBinding?: McpWorkspaceBinding;
   readonly paneBinding?: PaneWorkspaceBinding;
   readonly ownPane?: import("./terminalNotify.js").OwnPane | null;
@@ -591,7 +594,7 @@ export function createSessionServerDeps(
   host: SessionServerDepsHost,
   capture: SessionHandshakeCapture
 ): import("./sessionServer.js").SessionServerDeps {
-  const { sessionId, workspaceBinding, paneBinding, ownPane, relay } = capture;
+  const { sessionId, role, workspaceBinding, paneBinding, ownPane, relay } = capture;
   const pinnedDispatch = deps.dispatchActionForWebContents;
   const pinnedManifest = deps.requestManifestForWebContents;
   const workspaceDispatch = deps.dispatchActionForWorkspace;
@@ -1090,6 +1093,7 @@ export function createSessionServerDeps(
 
   return {
     sessionStore: deps.sessionStore,
+    sessionRole: role,
     // Forwarded so the session server can echo it in the `initialize` result
     // (#11789) — a client must be able to verify where its calls will land
     // before it issues the first mutation.

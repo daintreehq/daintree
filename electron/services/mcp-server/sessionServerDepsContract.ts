@@ -17,6 +17,7 @@ import type {
   AssistantTerminalControl,
 } from "../assistants/AssistantTerminalControl.js";
 import type { SessionStore } from "./sessionStore.js";
+import type { McpSessionRole } from "../../../shared/types/mcpSurface.js";
 
 /**
  * The main-process executors an owned tool can name. Kept apart from the rest
@@ -58,6 +59,12 @@ export function isHandedBackUntouched(context: TerminalCloseContext): boolean {
 
 export interface SessionServerDeps extends OwnedMainExecutors {
   sessionStore: SessionStore;
+  /**
+   * Which kind of session the handshake took this for (#16765), fixed for its
+   * life. `mcp.surface` reports it, so a session that reached the server
+   * under another credential than it meant to can see so.
+   */
+  sessionRole: McpSessionRole;
   /**
    * The workspace this session was bound to at handshake (#11789), echoed in
    * the `initialize` result so a client can verify where its calls will land

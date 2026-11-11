@@ -59,7 +59,7 @@ export function registerIntrospectionActions(
     id: "mcp.surface",
     title: "Get MCP surface",
     description:
-      "Report this session's tool surface as data: its tier, a stable hash, and per-tool tier, kind, read-only and idempotency hints and deprecation. Call once at startup to check it matches what this client expects, then compare the hash to detect drift.",
+      "Report this session's tool surface as data: the kind of session the server took it for (role), its tier, a stable hash, and per-tool tier, kind, read-only and idempotency hints and deprecation. Call once at startup to check it matches what this client expects, then compare the hash to detect drift.",
     category: "introspection",
     kind: "query",
     danger: "safe",

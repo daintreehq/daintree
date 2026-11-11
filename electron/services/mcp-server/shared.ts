@@ -485,6 +485,18 @@ export type McpWorkspaceSelectorRejectionCode =
   | "WORKSPACE_SELECTOR_NOT_ALLOWED";
 
 /**
+ * Why a Daintree Assistant's bearer was refused at the handshake (#16765),
+ * carried in `error.data.code` beside the selector codes above. The server
+ * recognised the bearer as an Assistant's, but not everything that ties it to
+ * its Assistant resolved: the view it was opened in, the project of one with
+ * no view, or its help session. Admitting it anyway would give it another
+ * kind of session's tools and none of its own, so it gets none: no client
+ * retries a refused `initialize`, so the session stays without Daintree tools
+ * until its Assistant starts again.
+ */
+export const ASSISTANT_BINDING_INCOMPLETE_CODE = "ASSISTANT_BINDING_INCOMPLETE";
+
+/**
  * Application-level convention: codes here flag transient failures that a
  * model could reasonably retry without changing arguments. Other codes are
  * structural (validation, permission, missing entity) and a retry would just
