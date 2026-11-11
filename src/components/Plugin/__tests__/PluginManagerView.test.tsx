@@ -2190,7 +2190,7 @@ describe("PluginManagerView", () => {
       });
 
       it("leaves an open uninstall confirm alone, for a link and for a refusal", async () => {
-        (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+        vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
         const view = (intent: PluginDeepLinkIntent | null) => (
           <TooltipProvider>
             <PluginManagerView deepLinkIntent={intent} onDeepLinkConsumed={() => {}} />
