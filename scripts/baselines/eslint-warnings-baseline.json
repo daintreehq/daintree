@@ -1,13 +1,9 @@
 {
-  "count": 1042,
+  "count": 1018,
   "byRule": {
     "@typescript-eslint/no-explicit-any": 48,
     "@typescript-eslint/no-floating-promises": 51,
     "@typescript-eslint/no-unsafe-type-assertion": 470,
-    "component-contract/no-arbitrary-text-size": 5,
-    "component-contract/no-legacy-daintree-utilities": 11,
-    "component-contract/no-raw-radius": 7,
-    "component-contract/no-text-color-slash-alpha": 1,
     "component-contract/no-unpaired-outline-suppression": 13,
     "no-restricted-imports": 5,
     "no-restricted-syntax": 340,
@@ -16,5 +12,5 @@
     "react-compiler/react-compiler": 15,
     "react-hooks/exhaustive-deps": 22
   },
-  "updatedAt": "2026-11-08T13:33:35.669Z"
+  "updatedAt": "2026-11-11T18:02:14.012Z"
 }
