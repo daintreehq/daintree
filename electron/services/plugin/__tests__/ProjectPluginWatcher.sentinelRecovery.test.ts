@@ -106,7 +106,7 @@ describe("ProjectPluginWatcher sentinel recovery", () => {
   });
 
   describe("native sentinel events", () => {
-    type SentinelListener = (event: string, filename: string | null) => void;
+    type SentinelListener = (event: string, filename: unknown) => void;
 
     function sentinelListener(dir: string): SentinelListener {
       const calls = vi.mocked(watch).mock.calls.filter(([watched]) => watched === dir);
@@ -134,7 +134,7 @@ describe("ProjectPluginWatcher sentinel recovery", () => {
       }
     });
 
-    it.each([".daintree", ".DAINTREE", null, ""])(
+    it.each([".daintree", ".DAINTREE", null, undefined, "", Buffer.from("README.md")])(
       "moves inward when a %j root event lands after .daintree appears",
       async (filename) => {
         await watcher.ensure("project", root);
@@ -168,19 +168,23 @@ describe("ProjectPluginWatcher sentinel recovery", () => {
       await vi.waitFor(() => expect(reload).toHaveBeenCalledWith("project", root, []));
     });
 
-    it("moves back out to the project root when .daintree reports its own removal", async () => {
-      // inotify names a watched directory's own deletion after the directory
-      // itself, not after any entry inside it.
-      const daintreeDir = path.join(root, ".daintree");
-      await fsp.mkdir(daintreeDir);
-      await watcher.ensure("project", root);
-      const onDaintreeEvent = sentinelListener(daintreeDir);
-      expect(watchCount(root)).toBe(0);
+    // A watched directory's own deletion is named after the directory itself,
+    // not after any entry inside it: its basename on inotify, its full path on
+    // Windows.
+    it.each(["basename", "full path"] as const)(
+      "moves back out to the project root when .daintree reports its own removal by %s",
+      async (form) => {
+        const daintreeDir = path.join(root, ".daintree");
+        await fsp.mkdir(daintreeDir);
+        await watcher.ensure("project", root);
+        const onDaintreeEvent = sentinelListener(daintreeDir);
+        expect(watchCount(root)).toBe(0);
 
-      await fsp.rm(daintreeDir, { recursive: true });
-      onDaintreeEvent("rename", ".daintree");
-      expect(watchCount(root)).toBe(1);
-    });
+        await fsp.rm(daintreeDir, { recursive: true });
+        onDaintreeEvent("rename", form === "basename" ? ".daintree" : daintreeDir);
+        expect(watchCount(root)).toBe(1);
+      }
+    );
   });
 
   it.each(["stop", "dispose"] as const)(

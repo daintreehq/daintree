@@ -209,7 +209,8 @@ export function attributeProjectPluginEvent(pluginsRoot: string, eventPath: stri
  * The lowercased entry names a non-recursive sentinel on `watchedDir` has to
  * act on: the next directory down towards the plugins root, and the watched
  * directory's own name, which inotify reports when that directory is deleted
- * or moved. Lowercased because the macOS and Windows defaults are
+ * or moved (Windows reports its full path, hence the caller's basename).
+ * Lowercased because the macOS and Windows defaults are
  * case-insensitive, so `.Daintree` satisfies the existence check. Null when
  * the plugins root does not live under `watchedDir`, as after `arm()` resolved
  * a symlinked root, and no name can be ruled out.
@@ -506,7 +507,7 @@ export class ProjectPluginWatcher {
           relevantNames &&
           typeof filename === "string" &&
           filename !== "" &&
-          !relevantNames.has(filename.toLowerCase())
+          !relevantNames.has(path.basename(filename).toLowerCase())
         ) {
           return;
         }
