@@ -454,6 +454,7 @@ export const CHANNEL_LEASE_POLICY = {
   // Grants or revokes a plugin's agent tools for the caller's project, or as
   // the default for every project, so an observing window cannot do it.
   "plugin-agent-mcp:set-plugin-access": "driver",
+  "plugin-capability:get-host-targeting": "free",
   "plugin-capability:get-os-notifications": "free",
   "plugin-capability:get-panel-attention": "free",
   "plugin-capability:get-project-targeting": "free",
@@ -462,6 +463,7 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin-capability:list-preset-grants": "free",
   // Only ever takes a preset grant away, as the switches above may.
   "plugin-capability:revoke-preset-grant": "free",
+  "plugin-capability:set-host-targeting": "free",
   "plugin-capability:set-os-notifications": "free",
   "plugin-capability:set-panel-attention": "free",
   "plugin-capability:set-project-targeting": "free",

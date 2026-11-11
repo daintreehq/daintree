@@ -115,6 +115,7 @@ export type CapabilityHostApi = Pick<
   | "actions"
   | "sendToActiveAgent"
   | "agents"
+  | "remoteHosts"
   | "terminals"
   | "sendToAgent"
   | "runRecipe"
