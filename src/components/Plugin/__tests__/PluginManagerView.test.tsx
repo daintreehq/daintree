@@ -14,8 +14,10 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
   LoadedPluginInfo,
+  PluginArchiveManifestPreview,
   PluginInstallProgressEvent,
   PluginInstallResult,
+  PluginUrlInstallPreviewResult,
   SettingDefinition,
 } from "@shared/types/plugin";
 import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
@@ -125,6 +127,52 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
   };
 }
 
+/** The digest main reports for a previewed URL archive (#16776). */
+const PREVIEW_HASH = "c".repeat(64);
+
+function previewManifest(
+  overrides: Partial<PluginArchiveManifestPreview> = {}
+): PluginArchiveManifestPreview {
+  return {
+    name: "acme.demo",
+    displayName: "Acme Demo",
+    version: "1.0.0",
+    category: "other",
+    authors: [{ name: "Jordan Reyes" }],
+    capabilities: ["shell:exec"],
+    recipes: { count: 0, names: [] },
+    projectTemplates: [],
+    permissionBypassAgents: [],
+    ...overrides,
+  };
+}
+
+function previewed(
+  url: string,
+  manifest: PluginArchiveManifestPreview = previewManifest()
+): PluginUrlInstallPreviewResult {
+  return { status: "preview", preview: { url, archiveHash: PREVIEW_HASH, manifest } };
+}
+
+/** A URL install's review, once its download has been read (#16776). */
+function urlReviewDialog(label = "Acme Demo"): Promise<HTMLElement> {
+  return screen.findByRole("dialog", { name: `Install '${label}'?` });
+}
+
+/**
+ * Approve the review on screen. Its confirm sits behind the dialog's read-time
+ * cooldown and the installed-version read, so this waits for it to arm.
+ */
+async function approveUrlReview(label = "Acme Demo") {
+  const confirm = within(await urlReviewDialog(label)).getByRole("button", {
+    name: "Install plugin",
+  });
+  await waitFor(() => expect(confirm.getAttribute("aria-disabled")).not.toBe("true"), {
+    timeout: 3000,
+  });
+  fireEvent.click(confirm);
+}
+
 /** The native path the OS would report for a dropped test file; absent means none. */
 const droppedPaths = new WeakMap<File, string>();
 
@@ -137,6 +185,7 @@ beforeEach(() => {
       setEnabled: vi.fn().mockResolvedValue(undefined),
       installFromFile: vi.fn().mockResolvedValue({ status: "not-implemented" }),
       installFromUrl: vi.fn().mockResolvedValue({ status: "not-implemented" }),
+      previewFromUrl: vi.fn(async (url: string) => previewed(url)),
       installFromPath: vi.fn().mockResolvedValue({ status: "not-implemented" }),
       uninstall: vi.fn().mockResolvedValue(undefined),
       checkForUpdate: vi.fn().mockResolvedValue({ status: "up-to-date" }),
@@ -332,6 +381,7 @@ describe("PluginManagerView — after an install (#16654)", () => {
       target: { value: "https://example.com/demo.dntr" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await approveUrlReview();
 
     await installStatus("Acme Demo installed");
     expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true");
@@ -603,10 +653,10 @@ describe("PluginManagerView — after an install (#16654)", () => {
     expect(screen.getByText("1 plugin couldn't be checked for updates.")).toBeTruthy();
   });
 
-  it("cancels a running URL install from the dialog's own Cancel", async () => {
-    let settleInstall!: (result: PluginInstallResult) => void;
-    vi.mocked(window.electron.plugin.installFromUrl).mockImplementation(
-      () => new Promise((resolve) => (settleInstall = resolve))
+  it("cancels a running URL download from the dialog's own Cancel", async () => {
+    let settlePreview!: (result: PluginUrlInstallPreviewResult) => void;
+    vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(
+      () => new Promise((resolve) => (settlePreview = resolve))
     );
     renderDialog();
     await screen.findByText("No plugins installed");
@@ -615,15 +665,16 @@ describe("PluginManagerView — after an install (#16654)", () => {
       target: { value: "https://example.com/slow.dntr" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
-    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalled());
-    const jobId = String(vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]![1]);
+    await waitFor(() => expect(window.electron.plugin.previewFromUrl).toHaveBeenCalled());
+    const jobId = String(vi.mocked(window.electron.plugin.previewFromUrl).mock.calls[0]![1]);
 
     // The progress banner's Cancel is behind this dialog's scrim.
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(window.electron.plugin.cancelInstall).toHaveBeenCalledWith(jobId));
 
-    await act(async () => settleInstall({ status: "cancelled" }));
+    await act(async () => settlePreview({ status: "cancelled" }));
     await waitFor(() => expect(screen.queryByLabelText("Plugin URL")).toBeNull());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
   });
 
   it("says nothing and selects nothing when an install fails or is cancelled", async () => {
@@ -1259,7 +1310,7 @@ describe("PluginManagerView", () => {
     expect(screen.queryByText(/HTTP 500/)).toBeNull();
   });
 
-  it("opens the URL dialog and routes the URL through installFromUrl", async () => {
+  it("shows a URL's archive for review before installing anything (#16776)", async () => {
     renderDialog();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
 
@@ -1267,16 +1318,163 @@ describe("PluginManagerView", () => {
     await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
 
     fireEvent.change(screen.getByLabelText("Plugin URL"), {
-      target: { value: "https://example.com/p.dntr" },
+      target: { value: "https://example.com/p.dntr?token=secret" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
 
     await waitFor(() =>
-      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
-        "https://example.com/p.dntr",
+      expect(window.electron.plugin.previewFromUrl).toHaveBeenCalledWith(
+        "https://example.com/p.dntr?token=secret",
         expect.any(String)
       )
     );
+    const review = within(await urlReviewDialog());
+    // The downloaded archive's own identity and permissions, and the warning.
+    expect(review.getByText("acme.demo")).toBeTruthy();
+    expect(review.getByText(CAPABILITY_META["shell:exec"].label)).toBeTruthy();
+    expect(review.getByText(/full Node\.js privileges/)).toBeTruthy();
+    // Named by host and path: a signed link's token stays off the screen.
+    expect(review.getByTestId("archive-install-source").textContent).toBe("example.com/p.dntr");
+    await waitFor(() => expect(screen.queryByLabelText("Plugin URL")).toBeNull());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("installs exactly the reviewed archive, bound to its digest as a fresh install", async () => {
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "  https://example.com/p.dntr  " },
+    });
+    // Main hands back the URL as it fetched it; the confirm installs that.
+    vi.mocked(window.electron.plugin.previewFromUrl).mockResolvedValueOnce(
+      previewed("https://example.com/p.dntr")
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    await approveUrlReview();
+
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+        "https://example.com/p.dntr",
+        expect.any(String),
+        { kind: "install", pluginId: "acme.demo", archiveHash: PREVIEW_HASH }
+      )
+    );
+    const previewJob = vi.mocked(window.electron.plugin.previewFromUrl).mock.calls[0]![1];
+    const installJob = vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]![1];
+    expect(installJob).not.toBe(previewJob);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Install '/ })).toBeNull());
+  });
+
+  it("binds a review that replaces an installed plugin as a replacement", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(async (url) =>
+      previewed(url, previewManifest({ version: "2.0.0" }))
+    );
+    renderDialog();
+    await findPluginRowButton("Acme Demo");
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    const review = within(await urlReviewDialog());
+    await waitFor(() => expect(review.getByTestId("archive-installed-version")).toBeTruthy());
+    expect(
+      review.getByText(/replaces the installed v1\.0\.0 with this newer v2\.0\.0/)
+    ).toBeTruthy();
+    await approveUrlReview();
+
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+        "https://example.com/p.dntr",
+        expect.any(String),
+        { kind: "update", pluginId: "acme.demo", archiveHash: PREVIEW_HASH }
+      )
+    );
+  });
+
+  it("installs nothing when the review is cancelled", async () => {
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    fireEvent.click(within(await urlReviewDialog()).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Install '/ })).toBeNull());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByLabelText("Plugin URL")).toBeNull());
+  });
+
+  it("explains a refused URL install as a change since the review, not an update", async () => {
+    vi.mocked(window.electron.plugin.installFromUrl).mockResolvedValue({
+      status: "failed",
+      errors: [{ code: "archive_mismatch", message: "raw" }],
+    });
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await approveUrlReview();
+
+    await waitFor(() =>
+      expect(screen.getByText(/Install it from the URL again to review it/)).toBeTruthy()
+    );
+    expect(screen.queryByText(/Check for updates again/)).toBeNull();
+  });
+
+  it("starts one download when Install is pressed twice before it renders", async () => {
+    vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(
+      () => new Promise<PluginUrlInstallPreviewResult>(() => {})
+    );
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    const input = await screen.findByLabelText("Plugin URL");
+    fireEvent.change(input, { target: { value: "https://example.com/p.dntr" } });
+
+    // One act, so the second press runs before the first one's state renders.
+    act(() => {
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+
+    await waitFor(() => expect(window.electron.plugin.previewFromUrl).toHaveBeenCalled());
+    expect(window.electron.plugin.previewFromUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a download for review when the manager closes, and drops what it returns", async () => {
+    let settlePreview!: (result: PluginUrlInstallPreviewResult) => void;
+    vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(
+      () => new Promise((resolve) => (settlePreview = resolve))
+    );
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(window.electron.plugin.previewFromUrl).toHaveBeenCalled());
+    const jobId = String(vi.mocked(window.electron.plugin.previewFromUrl).mock.calls[0]![1]);
+
+    act(() => usePluginManagerStore.setState({ isOpen: false }));
+    await waitFor(() => expect(window.electron.plugin.cancelInstall).toHaveBeenCalledWith(jobId));
+    await act(async () => settlePreview(previewed("https://example.com/p.dntr")));
+    act(() => usePluginManagerStore.setState({ isOpen: true }));
+
+    await screen.findByRole("button", { name: "Install from URL" });
+    expect(screen.queryByRole("dialog", { name: /^Install '/ })).toBeNull();
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
   });
 
   it("surfaces the no-sandbox security disclosure in the URL dialog", async () => {
@@ -1298,9 +1496,7 @@ describe("PluginManagerView", () => {
   });
 
   it("keeps the URL dialog open and shows an error on an invalid URL", async () => {
-    (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: "invalid-url",
-    });
+    vi.mocked(window.electron.plugin.previewFromUrl).mockResolvedValue({ status: "invalid-url" });
     renderDialog();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
 
@@ -1357,11 +1553,11 @@ describe("PluginManagerView", () => {
       emit = cb;
       return () => {};
     });
-    let settleInstall: ((result: PluginInstallResult) => void) | undefined;
-    vi.mocked(window.electron.plugin.installFromUrl).mockImplementation(
-      () => new Promise((resolve) => (settleInstall = resolve))
+    let settlePreview: ((result: PluginUrlInstallPreviewResult) => void) | undefined;
+    vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(
+      () => new Promise((resolve) => (settlePreview = resolve))
     );
-    // The install raced past its commit point before the request landed.
+    // The job raced past its commit point before the request landed.
     vi.mocked(window.electron.plugin.cancelInstall).mockResolvedValue(false);
     renderDialog();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
@@ -1372,8 +1568,8 @@ describe("PluginManagerView", () => {
       target: { value: "https://example.com/p.dntr" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
-    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalled());
-    const jobId = String(vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]![1]);
+    await waitFor(() => expect(window.electron.plugin.previewFromUrl).toHaveBeenCalled());
+    const jobId = String(vi.mocked(window.electron.plugin.previewFromUrl).mock.calls[0]![1]);
     act(() => emit!({ jobId, phase: "validating", cancellable: true }));
 
     const cancel = await screen.findByRole(
@@ -1388,7 +1584,7 @@ describe("PluginManagerView", () => {
     expect(screen.getAllByText("Checking the plugin").length).toBeGreaterThan(0);
     expect(cancel.getAttribute("aria-disabled")).toBe("true");
 
-    await act(async () => settleInstall!({ status: "cancelled" }));
+    await act(async () => settlePreview!({ status: "cancelled" }));
   });
 
   it("cancelling the http confirm does not call installFromUrl", async () => {
@@ -1409,6 +1605,7 @@ describe("PluginManagerView", () => {
     fireEvent.click(confirm.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
     expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+    expect(window.electron.plugin.previewFromUrl).not.toHaveBeenCalled();
     // Cancelling reopens the URL dialog with the typed URL intact so the user
     // can switch to https.
     await waitFor(() =>
@@ -1418,11 +1615,7 @@ describe("PluginManagerView", () => {
     );
   });
 
-  it("confirming the http warning routes the URL through installFromUrl", async () => {
-    (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: "installed",
-      pluginId: "acme.demo",
-    });
+  it("confirming the http warning downloads the URL for review", async () => {
     renderDialog();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
 
@@ -1436,15 +1629,19 @@ describe("PluginManagerView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Install over HTTP" }));
     await waitFor(() =>
-      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+      expect(window.electron.plugin.previewFromUrl).toHaveBeenCalledWith(
         "http://example.com/p.dntr",
         expect.any(String)
       )
     );
+    await urlReviewDialog();
+    // The warning was answered once; the review's confirm doesn't ask again.
+    await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
   });
 
-  it("shows a tailored error when a URL install fails with size_exceeded", async () => {
-    (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
+  it("shows a tailored error when a URL download fails with size_exceeded", async () => {
+    vi.mocked(window.electron.plugin.previewFromUrl).mockResolvedValue({
       status: "failed",
       errors: [{ code: "size_exceeded", message: "too big" }],
     });
@@ -1560,12 +1757,20 @@ describe("PluginManagerView", () => {
     await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Install over HTTP" }));
 
-    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalledTimes(1));
-    // A stale binding here would refuse an unrelated plugin as a "mismatch".
-    expect(vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]).toEqual([
+    // The manual URL goes to its own review; the cancelled reinstall's
+    // binding would refuse an unrelated plugin as a "mismatch".
+    await waitFor(() => expect(window.electron.plugin.previewFromUrl).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(window.electron.plugin.previewFromUrl).mock.calls[0]).toEqual([
       "http://example.com/other.dntr",
       expect.any(String),
     ]);
+    await approveUrlReview();
+    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]![2]).toEqual({
+      kind: "update",
+      pluginId: "acme.demo",
+      archiveHash: PREVIEW_HASH,
+    });
   });
 
   it("hides the empty state when the initial list load fails", async () => {
@@ -1601,7 +1806,34 @@ describe("PluginManagerView", () => {
       );
       // Never auto-installs — the user must press install (gates stay intact).
       expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+      expect(window.electron.plugin.previewFromUrl).not.toHaveBeenCalled();
       expect(onConsumed).toHaveBeenCalledOnce();
+    });
+
+    it("leaves an open review alone when an install link arrives (#16776)", async () => {
+      const onConsumed = vi.fn();
+      const view = (intent: { action: "install"; url: string } | null) => (
+        <TooltipProvider>
+          <PluginManagerView deepLinkIntent={intent} onDeepLinkConsumed={onConsumed} />
+        </TooltipProvider>
+      );
+      const { rerender } = render(view(null));
+      await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+      fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+        target: { value: "https://example.com/p.dntr" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Install" }));
+      await urlReviewDialog();
+      await waitFor(() => expect(screen.queryByLabelText("Plugin URL")).toBeNull());
+
+      rerender(view({ action: "install", url: "https://evil.example/swap.dntr" }));
+
+      await waitFor(() => expect(onConsumed).toHaveBeenCalledOnce());
+      // Give a URL dialog the chance to open, so its absence means something.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(screen.queryByLabelText("Plugin URL")).toBeNull();
+      expect(await urlReviewDialog()).toBeTruthy();
     });
 
     it("scrolls to and highlights the target row for an open intent", async () => {
@@ -1737,9 +1969,9 @@ describe("PluginManagerView", () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         makePlugin({ disabled: true, pendingRestart: true }),
       ]);
-      let settleInstall: ((result: PluginInstallResult) => void) | undefined;
-      vi.mocked(window.electron.plugin.installFromUrl).mockImplementation(
-        () => new Promise((resolve) => (settleInstall = resolve))
+      let settlePreview: ((result: PluginUrlInstallPreviewResult) => void) | undefined;
+      vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(
+        () => new Promise((resolve) => (settlePreview = resolve))
       );
       renderDialog();
       await waitFor(() => expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy());
@@ -1750,13 +1982,13 @@ describe("PluginManagerView", () => {
         target: { value: "https://example.com/p.dntr" },
       });
       fireEvent.click(screen.getByRole("button", { name: "Install" }));
-      await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalled());
+      await waitFor(() => expect(window.electron.plugin.previewFromUrl).toHaveBeenCalled());
 
       // Relaunching now would take the install down with it.
       await waitFor(() => expect(screen.queryByRole("button", { name: "Restart" })).toBeNull());
       expect(screen.getByText(/Restart once the install finishes/)).toBeTruthy();
 
-      await act(async () => settleInstall!({ status: "cancelled" }));
+      await act(async () => settlePreview!({ status: "cancelled" }));
       await waitFor(() => expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy());
     });
 

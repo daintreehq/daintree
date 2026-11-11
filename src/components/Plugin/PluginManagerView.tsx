@@ -63,6 +63,8 @@ import { usePluginManager, type InstallOutcome } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
 import { UnsavedPanelsCallout } from "./UnsavedPanelsCallout";
 import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
+import { PluginInstallConfirmDialog } from "./PluginInstallConfirmDialog";
+import { describePluginInstallSource } from "@shared/utils/pluginInstallSource";
 import { PluginCatalog } from "./PluginCatalog";
 import { PluginIconTile } from "./pluginIcons";
 import { pluginSignalFor } from "./pluginStatus";
@@ -1440,15 +1442,15 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         </AppDialog.Header>
         <AppDialog.Body className="space-y-3">
           <AppDialog.Description>
-            Enter the URL of a Daintree plugin archive (.dntr). It&rsquo;s downloaded, validated,
-            and installed.
+            Enter the URL of a Daintree plugin archive (.dntr). It&rsquo;s downloaded first, and you
+            see what it can do before anything is installed.
           </AppDialog.Description>
           {/* The security note is the reason to hesitate, so it stops sharing a
               paragraph — and a weight — with the mechanics of the field above. */}
           <Callout severity="warning">
             <p>
-              Plugins run with full Node.js privileges — no sandbox, no signature check, and no
-              capability prompt before install. Only install from sources you trust.
+              Plugins run with full Node.js privileges — no sandbox and no signature check. Only
+              install from sources you trust.
             </p>
           </Callout>
           {/* A correctable failure keeps this dialog open, but the only error
@@ -1489,6 +1491,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           }}
         />
       </AppDialog>
+
+      {/* A URL install's review (#16776): the downloaded archive's identity
+          and permissions, the same disclosure an archive opened from the
+          operating system gets, before anything is installed. */}
+      <PluginInstallConfirmDialog
+        request={
+          pm.urlReview === null
+            ? null
+            : {
+                key: pm.urlReview.key,
+                manifest: pm.urlReview.manifest,
+                source: { kind: "url", label: describePluginInstallSource(pm.urlReview.url) },
+              }
+        }
+        onConfirm={(approval) => void pm.confirmUrlReview(approval)}
+        onClose={pm.cancelUrlReview}
+      />
 
       <ConfirmDialog
         isOpen={isRestartConfirmOpen}
