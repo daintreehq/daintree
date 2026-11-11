@@ -5,9 +5,20 @@ import { disabledBuiltinDirs, checkVanillaPluginBundles } from "./check-vanilla-
 const DISABLED = ["plugins/builtin/markdown-editor/"];
 const STUB = "plugins/builtin/markdown-editor/renderer/index.ts";
 const VIEW = "plugins/builtin/markdown-editor/renderer/MarkdownEditorView.tsx";
+/** What draws a plugin view, which vanilla Daintree never shows (#16802). */
+const VIEW_LOADER = [
+  "src/components/Plugin/PluginHostedView.tsx",
+  "src/components/Plugin/PluginViewContent.tsx",
+  "src/components/Plugin/pluginViewLoader.ts",
+  "src/pluginUi/kit.tsx",
+];
 
 /** The entry statically imports a shared chunk and lazily the app root, which the seeds name; the editor view is lazy. */
-function build({ sharedModules = [STUB], viewChunkImportedBy = "lazy" } = {}) {
+function build({
+  sharedModules = [STUB],
+  viewChunkImportedBy = "lazy",
+  lazyModules = [VIEW],
+} = {}) {
   const manifest = {
     "index.html": {
       file: "assets/index-a.js",
@@ -28,7 +39,7 @@ function build({ sharedModules = [STUB], viewChunkImportedBy = "lazy" } = {}) {
     "assets/index-a.js": ["src/main.tsx"],
     "assets/shared-b.js": sharedModules,
     "assets/App-c.js": ["src/App.tsx"],
-    "assets/View-d.js": [VIEW],
+    "assets/View-d.js": lazyModules,
   };
   return { manifest, modulesByFile, seeds: ["src/App.tsx"], disabledDirs: DISABLED };
 }
@@ -41,6 +52,30 @@ describe("checkVanillaPluginBundles", () => {
   it("fails when the optional implementation is merged into a statically imported chunk", () => {
     const problems = checkVanillaPluginBundles(build({ sharedModules: [STUB, VIEW] }));
     expect(problems.some((p) => p.includes(VIEW))).toBe(true);
+  });
+
+  it("fails when any part of the plugin view loader is merged into a startup chunk (#16802)", () => {
+    for (const loader of VIEW_LOADER) {
+      const problems = checkVanillaPluginBundles(
+        build({ sharedModules: [STUB, "src/hooks/useRenderableSurfaceClaim.ts", loader] })
+      );
+      expect(problems.filter((p) => p.includes(loader))).toHaveLength(2);
+    }
+  });
+
+  it("passes the light plugin resolvers that stay eager beside a lazy loader", () => {
+    const problems = checkVanillaPluginBundles(
+      build({
+        lazyModules: [VIEW, ...VIEW_LOADER],
+        sharedModules: [
+          STUB,
+          "src/hooks/useRenderableSurfaceClaim.ts",
+          "src/components/Plugin/LazyPluginHostedView.tsx",
+          "src/components/Plugin/PluginViewHost.tsx",
+        ],
+      })
+    );
+    expect(problems).toEqual([]);
   });
 
   it("fails closed on a chunk with no module list", () => {

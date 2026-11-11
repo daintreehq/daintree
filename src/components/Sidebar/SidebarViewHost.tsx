@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import { FolderGit2, FolderOpen } from "lucide-react";
-import { PluginHostedView } from "@/components/Plugin/PluginHostedView";
+import { LazyPluginHostedView } from "@/components/Plugin/LazyPluginHostedView";
 import { useSidebarViewOptions } from "@/hooks/useSidebarViews";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { isProjectSidebarView, resolveActiveSidebarView } from "@/lib/sidebarViews";
@@ -130,7 +130,7 @@ export function SidebarViewHost({ children }: { children: ReactNode }) {
                 }}
               />
             )}
-            <PluginHostedView
+            <LazyPluginHostedView
               key={active.id}
               source={{ from: "hosted", view: activeView }}
               host="sidebar"

@@ -26,6 +26,10 @@ import {
   readPluginViewState,
   type PluginViewStateIdentity,
 } from "@/services/plugin/pluginViewStateStore";
+import {
+  PLUGIN_HOSTED_VIEW_BOX_CLASS,
+  PLUGIN_HOSTED_VIEW_BOX_STYLE,
+} from "@/components/Plugin/pluginHostedViewBox";
 import { cn } from "@/lib/utils";
 
 /**
@@ -224,12 +228,10 @@ function stateIdentityFor(
  * the words for its button. A host the view may dismiss itself (the toolbar
  * popover) passes `onClose`, which reaches the view as `hostContext.close`.
  *
- * The box isolates and contains the plugin's layout: `isolate` caps its
- * z-indexes in its own stacking context, and `contain: layout paint` with
- * overflow clipping keeps a `position: fixed` descendant inside, so no view can
- * paint over the host chrome around it. A flex COLUMN, because the loader fills
- * its host with `flex-1 min-h-0`, which is inert outside a flex container
- * (#12361). Callers size the box; anything outside it is not the view's.
+ * The box isolates and contains the plugin's layout
+ * ({@link PLUGIN_HOSTED_VIEW_BOX_CLASS}). Callers size the box; anything
+ * outside it is not the view's. Hosts on the first-render path mount this
+ * through `LazyPluginHostedView`, which keeps the chunk off cold boot.
  */
 export function PluginHostedView({
   source,
@@ -290,8 +292,8 @@ export function PluginHostedView({
   );
   return (
     <div
-      className={cn("relative isolate flex min-h-0 min-w-0 flex-col overflow-hidden", className)}
-      style={{ contain: "layout paint" }}
+      className={cn(PLUGIN_HOSTED_VIEW_BOX_CLASS, className)}
+      style={PLUGIN_HOSTED_VIEW_BOX_STYLE}
       data-testid={testId}
     >
       <HostedViewMount
