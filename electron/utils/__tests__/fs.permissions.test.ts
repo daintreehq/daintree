@@ -285,10 +285,14 @@ describe("prepareAtomicWriteFile", () => {
   });
 
   posixIt("creates the temp at the requested mode", async () => {
+    const writes = tapWriteFile();
     const tempPath = await prepareAtomicWriteFile(path.join(tmpDir, "secret.json"), "x", "utf-8", {
       mode: 0o600,
     });
     expect(mode(tempPath)).toBe(0o600);
+    // Created at the mode, not chmodded to it afterwards, so the contents are
+    // never readable at the umask default.
+    expect(writes).toHaveBeenCalledWith(tempPath, "x", expect.objectContaining({ mode: 0o600 }));
   });
 
   it("removes the temp when the write fails", async () => {

@@ -463,17 +463,24 @@ describe("CrashRecoveryService scheduled writes (#16813)", () => {
       svc.initialize();
       seedMarker({ lastHeartbeatMs: 0 });
       let failures = 2;
-      const renameSync = renameFailing((dest) =>
-        dest === markerPath && failures-- > 0 ? lockedError(code) : null
-      );
+      let firstFailedAt: number | null = null;
+      let installedAt: number | null = null;
+      const renameSync = renameFailing((dest) => {
+        if (dest !== markerPath) return null;
+        if (failures-- > 0) {
+          firstFailedAt ??= Date.now();
+          return lockedError(code);
+        }
+        installedAt = Date.now();
+        return null;
+      });
 
-      const started = Date.now();
       svc.startBackupTimer();
       await svc.whenScheduledWorkSettled();
 
       // Waits of 25ms and 50ms; a retry that only yielded microtasks would
-      // finish at once.
-      expect(Date.now() - started).toBeGreaterThanOrEqual(60);
+      // land at once.
+      expect(installedAt! - firstFailedAt!).toBeGreaterThanOrEqual(60);
       expect(renamesTo(renameSync, markerPath)).toBe(3);
       expect(readJson(markerPath).lastHeartbeatMs).toBeGreaterThan(0);
       expect(tempFiles()).toEqual([]);
