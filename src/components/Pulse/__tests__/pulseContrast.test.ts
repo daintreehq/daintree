@@ -151,7 +151,22 @@ describe("PulseSummary — streak flame color fidelity (issue #9820)", () => {
 describe("PulseHeatmap — contrast on elevated card (issue #2645)", () => {
   it("heatmap uses square indicators and pulse component vars", async () => {
     const content = await readFile(HEATMAP_PATH, "utf-8");
-    expect(content).toContain("rounded-[2px]");
+    const card = await readFile(CARD_PATH, "utf-8");
+    // Every cell the heatmap draws (grid, legend, loading skeleton) takes the same
+    // corner, and it is a hairline step under xs: anything rounder turns the
+    // 10px cells into dots.
+    const heatCellClasses = (source: string) =>
+      [...source.matchAll(/"([^"]*)"/g)]
+        .map((m) => m[1] ?? "")
+        .filter((cls) => cls.split(/\s+/).includes("pulse-heat-cell"));
+    const skeletonCell = /SKELETON_WEEKS \* 7[\s\S]*?className="([^"]*)"/.exec(card)?.[1];
+    const cellRadii = [
+      ...heatCellClasses(content),
+      ...heatCellClasses(card),
+      skeletonCell ?? "",
+    ].map((cls) => cls.split(/\s+/).find((token) => token.startsWith("rounded")));
+    expect(cellRadii.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(cellRadii)).toEqual(new Set(["rounded-2xs"]));
     expect(content).toContain("var(--pulse-empty-bg");
   });
 

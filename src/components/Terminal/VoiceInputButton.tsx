@@ -430,7 +430,7 @@ export function VoiceInputButton({
             ) : isSessionOpen || isPending ? (
               <span
                 ref={iconRef}
-                className="status-mark block h-2 w-2 rounded-[1.5px] bg-current transition-transform duration-100"
+                className="status-mark block h-2 w-2 rounded-3xs bg-current transition-transform duration-100"
               />
             ) : (
               <Mic className="h-3.5 w-3.5 relative" />

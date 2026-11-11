@@ -454,7 +454,7 @@ export function CrashRecoveryDialog({
                 {crash.entry.errorStack && (
                   <div>
                     <div className="text-xs text-text-secondary mb-1">Stack trace</div>
-                    <pre className="text-xs text-text-secondary bg-overlay-soft rounded p-2 overflow-x-auto max-h-32 whitespace-pre-wrap break-all select-text">
+                    <pre className="text-xs text-text-secondary bg-overlay-soft rounded-[var(--radius-md)] p-2 overflow-x-auto max-h-32 whitespace-pre-wrap break-all select-text">
                       {crash.entry.errorStack}
                     </pre>
                   </div>
@@ -501,7 +501,7 @@ export function CrashRecoveryDialog({
                     </InlineError>
                     <div className="flex items-center gap-2">
                       <code
-                        className="min-w-0 flex-1 text-xs text-text-secondary bg-overlay-soft rounded p-2 break-all select-text"
+                        className="min-w-0 flex-1 text-xs text-text-secondary bg-overlay-soft rounded-[var(--radius-md)] p-2 break-all select-text"
                         data-testid="log-open-error-path"
                       >
                         {crash.logPath}
@@ -523,7 +523,7 @@ export function CrashRecoveryDialog({
                       Recent actions ({recentActions.length})
                     </div>
                     <div
-                      className="max-h-32 overflow-y-auto rounded bg-overlay-soft divide-y divide-border-default/40"
+                      className="max-h-32 overflow-y-auto rounded-[var(--radius-md)] bg-overlay-soft divide-y divide-border-default/40"
                       data-testid="actions-list"
                     >
                       {actionsNewestFirst.map((action) => (

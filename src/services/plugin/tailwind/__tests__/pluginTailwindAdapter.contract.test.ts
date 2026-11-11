@@ -110,11 +110,20 @@ describe("plugin Tailwind adapter — the design system, enforced by the compile
   });
 
   it("compiles the host's sub-12px type scale", () => {
-    const css = compiler.build(["text-2xs", "text-3xs", "text-4xs"]);
+    const steps = ["2xs", "3xs", "4xs", "5xs", "6xs", "7xs"];
+    const css = compiler.build(steps.map((step) => `text-${step}`));
 
-    expect(css).toContain("var(--text-2xs)");
-    expect(css).toContain("var(--text-3xs)");
-    expect(css).toContain("var(--text-4xs)");
+    for (const step of steps) expect(css).toContain(`var(--text-${step})`);
+  });
+
+  it("compiles the hairline radius steps against the theme's radius base", () => {
+    // The radius block is `@theme inline`, so each step lands as its own
+    // derivation from --radius; a literal here would stop tracking the theme.
+    for (const step of ["rounded-2xs", "rounded-3xs"]) {
+      const css = compiler.build([step]);
+      expect(selectorIndex(css, step)).not.toBe(-1);
+      expect(css).toMatch(/border-radius: calc\(var\(--radius\)[^;]*\);/);
+    }
   });
 
   it("compiles the overlay, shadow, font and SVG paint vocabulary the plugin docs list", () => {

@@ -13,6 +13,10 @@ describe("no-raw-radius", () => {
         code: 'const a = <div className="rounded-sm rounded-md rounded-lg rounded-2xl" />;',
       },
       {
+        name: "the hairline steps below xs are on the scale too",
+        code: 'const a = <div className="rounded-2xs rounded-3xs rounded-tl-2xs" />;',
+      },
+      {
         name: "the same value spelled as an explicit token read",
         code: 'const a = <div className="rounded-[var(--radius-md)]" />;',
       },
@@ -112,6 +116,11 @@ describe("no-raw-radius", () => {
         name: "a step the repo does not redefine is not on its scale",
         code: 'const a = <div className="rounded-4xl" />;',
         errors: [{ messageId: "hardcoded", data: { token: "rounded-4xl" } }],
+      },
+      {
+        name: "a step below the hairline steps is not on the scale",
+        code: 'const a = <div className="rounded-4xs" />;',
+        errors: [{ messageId: "hardcoded", data: { token: "rounded-4xs" } }],
       },
       {
         name: "a zero radius is still a literal",

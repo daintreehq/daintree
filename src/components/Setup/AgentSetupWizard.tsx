@@ -102,7 +102,7 @@ function ThemeMockup({ scheme }: { scheme: AppColorScheme }) {
           </div>
         )}
         <div className="flex-1" />
-        <div className="text-[6px] font-medium tracking-wide" style={{ color: t["text-muted"] }}>
+        <div className="text-7xs font-medium tracking-wide" style={{ color: t["text-muted"] }}>
           Daintree
         </div>
         <div className="flex-1" />
@@ -145,7 +145,7 @@ function ThemeMockup({ scheme }: { scheme: AppColorScheme }) {
             style={{ borderBottom: `1px solid ${t["border-default"]}` }}
           >
             <div
-              className="px-2 py-0.5 text-[6px]"
+              className="px-2 py-0.5 text-7xs"
               style={{
                 backgroundColor: t["surface-panel"],
                 color: t["text-primary"],
@@ -155,7 +155,7 @@ function ThemeMockup({ scheme }: { scheme: AppColorScheme }) {
               main.ts
             </div>
             <div
-              className="px-2 py-0.5 text-[6px]"
+              className="px-2 py-0.5 text-7xs"
               style={{
                 backgroundColor: t["surface-canvas"],
                 color: t["text-muted"],
@@ -166,7 +166,7 @@ function ThemeMockup({ scheme }: { scheme: AppColorScheme }) {
           </div>
 
           <div
-            className="flex-1 px-2 py-1.5 font-mono text-[7px] leading-[11px] space-y-px overflow-hidden"
+            className="flex-1 px-2 py-1.5 font-mono text-6xs leading-[11px] space-y-px overflow-hidden"
             style={{ backgroundColor: t["surface-panel"] }}
           >
             <div>
@@ -200,7 +200,7 @@ function ThemeMockup({ scheme }: { scheme: AppColorScheme }) {
           </div>
 
           <div
-            className="px-2 py-1 font-mono text-[7px] leading-[10px]"
+            className="px-2 py-1 font-mono text-6xs leading-[10px]"
             style={{
               backgroundColor: t["surface-canvas"],
               borderTop: `1px solid ${t["border-default"]}`,
