@@ -57,7 +57,17 @@ export interface ForgeStatPillProps {
   onPointerEnter?: (e: React.PointerEvent) => void;
   onPointerLeave?: (e: React.PointerEvent) => void;
 
-  activityChip?: React.ReactNode;
+  /**
+   * The count rose recently: the strip's neutral round pip on the glyph, the
+   * same mark the bell wears for unread. The name says it in words.
+   */
+  activity?: boolean;
+  /**
+   * False when the click goes somewhere else (Settings to repair a token, the
+   * forge's website) instead of opening this segment's panel, so the button
+   * claims no expanded state it can never reach.
+   */
+  hasDisclosure?: boolean;
 }
 
 export function ForgeStatPill({
@@ -84,7 +94,8 @@ export function ForgeStatPill({
   onOpenChange,
   onPointerEnter,
   onPointerLeave,
-  activityChip,
+  activity = false,
+  hasDisclosure = true,
 }: ForgeStatPillProps) {
   // A disclosure, and modelled as one. The panel is non-modal — focus is not
   // trapped, the rest of the app stays reachable — so `dialog` was the wrong
@@ -95,9 +106,15 @@ export function ForgeStatPill({
   // actually is, and only exists while it is open.
   const dropdownId = useId();
   const triggerId = useId();
+  // A segment whose click went elsewhere (a token error arriving while its
+  // panel was open) shows no panel, so it never stacks under the token callout.
+  const panelOpen = hasDisclosure && open;
   return (
     <>
-      <Tooltip open={tooltipSuppressed ? false : undefined}>
+      {/* Held shut while this segment's own panel is open: the tooltip and the
+          panel both hang off the segment's bottom edge, and the tooltip would
+          land on the panel's header. */}
+      <Tooltip open={tooltipSuppressed || panelOpen ? false : undefined}>
         <ContextMenu onOpenChange={onContextMenuOpenChange}>
           <ContextMenuTrigger asChild>
             <TooltipTrigger asChild>
@@ -112,38 +129,48 @@ export function ForgeStatPill({
                 className={cn(
                   // Press, transition and the open state's fill and inset edge
                   // all come from toolbar/controls.css, shared with the toolbar's other
-                  // controls. `bg-clip-padding` keeps the hover, press and open
-                  // tints off the segment's divider, which would otherwise
-                  // brighten on one side of the lit segment only. The ring is
-                  // inset: the container's overflow-hidden clips an outward one.
-                  "toolbar-stat-pill h-full flex-1 justify-center gap-1.5 rounded-none bg-clip-padding px-2 text-text-primary hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary focus-visible:-outline-offset-2",
-                  activityChip != null && "relative",
+                  // controls, and so does the divider, a background line the
+                  // fills paint under. The ring is inset: the container's
+                  // overflow-hidden clips an outward one.
+                  "toolbar-stat-pill relative h-full flex-1 justify-center gap-1.5 rounded-none px-2 text-text-primary hover:bg-[var(--toolbar-stats-hover-bg,var(--toolbar-control-hover-bg,var(--theme-overlay-hover)))] hover:text-text-primary focus-visible:-outline-offset-2",
                   className
                 )}
                 id={triggerId}
                 aria-label={ariaLabel}
                 aria-describedby={ariaDescribedBy}
-                aria-expanded={open}
-                aria-controls={open ? dropdownId : undefined}
+                aria-expanded={hasDisclosure ? open : undefined}
+                aria-controls={panelOpen ? dropdownId : undefined}
                 data-testid={testId}
               >
-                <Icon
-                  className={cn(
-                    "h-4 w-4",
-                    tone === "unavailable" ? "text-text-secondary" : iconClassName
-                  )}
-                />
+                <span className="relative inline-flex">
+                  <Icon
+                    className={cn(
+                      "h-4 w-4",
+                      tone === "unavailable" ? "text-text-secondary" : iconClassName
+                    )}
+                  />
+                  <span
+                    aria-hidden="true"
+                    data-visible={activity}
+                    className="toolbar-pip toolbar-badge bg-text-secondary"
+                  />
+                </span>
                 <span
                   key={animKey}
+                  data-stat-quiet={tone !== "default" ? "" : undefined}
                   className={cn(
-                    "min-w-[2ch] text-center text-xs font-medium tabular-nums",
+                    "text-xs font-medium tabular-nums",
                     tone !== "default" && "text-text-secondary",
                     animKey > 0 && "animate-badge-bump"
                   )}
                 >
-                  {formatForgeBadgeCount(displayCount ?? count) ?? "—"}
+                  {/* Unavailable shows the dash even over counts kept from an
+                      earlier fetch: the name says the token needs repair, and a
+                      number beside it would contradict that. */}
+                  {tone === "unavailable"
+                    ? "—"
+                    : (formatForgeBadgeCount(displayCount ?? count) ?? "—")}
                 </span>
-                {activityChip}
               </Button>
             </TooltipTrigger>
           </ContextMenuTrigger>
@@ -154,7 +181,7 @@ export function ForgeStatPill({
         <TooltipContent side="bottom">{tooltipContent}</TooltipContent>
       </Tooltip>
       <FixedDropdown
-        open={open}
+        open={panelOpen}
         onOpenChange={onOpenChange}
         anchorRef={buttonRef}
         className="p-0 w-[450px]"
@@ -163,14 +190,14 @@ export function ForgeStatPill({
       >
         <div
           id={dropdownId}
-          role={open ? "region" : undefined}
-          aria-labelledby={open ? triggerId : undefined}
+          role={panelOpen ? "region" : undefined}
+          aria-labelledby={panelOpen ? triggerId : undefined}
           // `keepMounted` keeps this subtree in the DOM between opens. Hidden
           // content that is still reachable by a screen reader's virtual
           // cursor is worse than no content, so it is taken out of the tree
           // and out of the tab order whenever the panel is not open.
-          aria-hidden={open ? undefined : true}
-          inert={!open}
+          aria-hidden={panelOpen ? undefined : true}
+          inert={!panelOpen}
         >
           {dropdownContent}
         </div>

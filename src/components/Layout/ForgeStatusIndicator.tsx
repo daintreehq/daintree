@@ -25,13 +25,16 @@ export function ForgeStatusIndicator({ status, error }: ForgeStatusIndicatorProp
       )}
       role="status"
       aria-live="polite"
-      aria-label={
-        status === "loading"
+    >
+      {/* Announced as text: a live region reads changes to its content, not
+          to a label on an empty element. */}
+      <span className="sr-only">
+        {status === "loading"
           ? "Loading repository data"
           : status === "error"
             ? `Repository error: ${error ?? "Unknown error"}`
-            : undefined
-      }
-    />
+            : ""}
+      </span>
+    </div>
   );
 }

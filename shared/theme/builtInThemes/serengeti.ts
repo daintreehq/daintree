@@ -218,7 +218,6 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-bg": "#FBF9F0",
     "toolbar-stats-border": "rgba(210,205,180,0.7)",
     "toolbar-stats-divider": "rgba(210,205,180,0.7)",
-    "toolbar-stats-hover-bg": "#FCFBF2",
     // The field stays flat (welcome-field-wash unauthored — a screen-spanning
     // wash would band).
     "welcome-mark-color": "#467030",

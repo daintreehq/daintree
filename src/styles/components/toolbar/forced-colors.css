@@ -25,13 +25,11 @@
  * without one, the dots that sit at the button corner land on the glyph's
  * own CanvasText stroke and fuse with it (the problems dot became a filled
  * quadrant of its circle). Re-declared as a Canvas outline, per the
- * design-system rule for badge cut-outs. The corner chips are clipPath
- * triangles, which an outline cannot follow, so they stay as they are. The
+ * design-system rule for badge cut-outs. The
  * per-severity shape tiers (border-radius — not a color property) survive
  * and remain the non-color WCAG 1.4.1 cue. */
 @media (forced-colors: active) {
   .toolbar-badge,
-  .toolbar-badge-chip,
   .toolbar-overflow-badge,
   .toolbar-problems-badge {
     background-color: CanvasText;
@@ -85,10 +83,33 @@
 
   .toolbar-stats > [data-stat-segment] ~ [data-stat-segment] {
     border-inline-start: 1px solid ButtonText;
+    background-image: none;
+  }
+
+  /* The open segment's own 2px edge is the boundary beside it. */
+  .toolbar-stats > [aria-expanded="true"][data-stat-segment] + [data-stat-segment] {
+    border-inline-start-width: 0;
   }
 
   .toolbar-stat-pill[aria-expanded="true"]::after {
     border-width: 2px;
+  }
+
+  /* After the first segment the open edge also covers the segment's own
+     divider border, or that side reads 3px against the other's 2px. */
+  .toolbar-stats > [data-stat-segment] ~ .toolbar-stat-pill[aria-expanded="true"]::after {
+    inset-inline-start: -1px;
+  }
+
+  /* The capsule's glyphs set their colour on the <svg>, which Chromium leaves
+     unforced, as the brand marks above did: the forge hues and secondary ink
+     sat on a light Canvas under 3:1. They take button ink here, whatever the
+     hover lift says; shape and order still tell issues from pull requests. */
+  .toolbar-stats [data-stat-segment] svg,
+  .toolbar-stats
+    .toolbar-stat-status:is(:hover, :focus-visible, [data-state="delayed-open"], [data-state="instant-open"])
+    > svg {
+    color: ButtonText;
   }
 
   /* The waiting ring keeps its hollow centre — filled, it would read as the

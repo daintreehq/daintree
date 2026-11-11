@@ -311,7 +311,7 @@ describe("ForgeStatsToolbarButton corner activity chip wiring", () => {
     const commitsAnchor = source.indexOf("buttonRef={commitsButtonRef}");
     const commitsSlice = source.slice(commitsAnchor, commitsAnchor + 3000);
     expect(commitsSlice).not.toContain("showCommitsChip");
-    expect(commitsSlice).not.toContain("activityChip=");
+    expect(commitsSlice).not.toMatch(/\bactivity=/);
   });
 
   it("folds the recent-increase cue into the issues + PRs names and tooltips", () => {

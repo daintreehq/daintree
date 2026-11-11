@@ -56,12 +56,18 @@ export function resolveForgeDisplayCount(
 /**
  * The badge text for a resolved display count: numbers compacted, the list's
  * approximate `N+` form compacted on its numeric part, anything else as-is.
+ * A compacted figure already truncates (`1.2k` is "at least 1,200"), so the
+ * `+` only survives below a thousand; past that it bought a fifth character
+ * that widened every segment of the capsule. The exact `1,240+` stays in the
+ * accessible name and the tooltip.
  */
 export function formatForgeBadgeCount(display: number | string | null): string | null {
   if (display === null) return null;
   if (typeof display === "number") return formatCompactCount(display);
   const approximate = /^(\d+)\+$/.exec(display);
-  return approximate ? `${formatCompactCount(Number(approximate[1]))}+` : display;
+  if (!approximate) return display;
+  const compact = formatCompactCount(Number(approximate[1]));
+  return compact === approximate[1] ? `${compact}+` : compact;
 }
 
 /** The exact form for accessible names and tooltips: `23,645`. */
@@ -81,4 +87,22 @@ export function formatExactCountNoun(
   // No count is no count: "— open issues" read aloud as "em dash open issues".
   if (display === null) return `${plural.charAt(0).toUpperCase()}${plural.slice(1)} unavailable`;
   return `${formatExactCount(display)} ${display === 1 ? singular : plural}`;
+}
+
+/**
+ * A segment's accessible name. It leads with the figure the badge shows, so a
+ * voice-control user can say what they see (WCAG 2.5.3), and adds the exact
+ * figure when the badge compacted it: `35k commits (35,123)`, `6 open issues`.
+ */
+export function formatBadgeCountName(
+  display: number | string | null,
+  singular: string,
+  plural = `${singular}s`
+): string {
+  const badge = formatForgeBadgeCount(display);
+  const exact = formatExactCountNoun(display, singular, plural);
+  if (badge === null) return exact;
+  const exactFigure = formatExactCount(display);
+  if (badge === exactFigure) return exact;
+  return `${badge} ${plural} (${exactFigure})`;
 }

@@ -294,10 +294,41 @@
  * ring is drawn inset (the container's overflow-hidden clips an outward one),
  * and an inset ring on a square corner would be cut by the rounded clip. The
  * container's own radius sits just outside its clip curve, so the ring's
- * corner stays whole. */
+ * corner stays whole.
+ *
+ * Each divider is the strip's own: a 1.25rem rule, the height of the toolbar's
+ * group dividers, centred in the segment's leading edge. Full-height rules in
+ * the frame's colour cut the capsule into three cells and, on the light
+ * themes, outranked its outline. Drawn as a background line so it takes no
+ * width and the segments' hover, armed and pressed fills paint under it. */
 
 .toolbar-stats > [data-stat-segment] ~ [data-stat-segment] {
-  border-inline-start: 1px solid var(--_divider);
+  background-image: linear-gradient(var(--_divider), var(--_divider));
+  background-position: left center;
+  background-repeat: no-repeat;
+  background-size: 1px 1.25rem;
+}
+
+/* A lit segment's own edge is the boundary: the rule on either side of it
+ * would sit beside the open frame or the focus ring and thicken its middle
+ * into a 2px stub, or vanish into the fill. A status slot has no fill to
+ * light, so only its focus ring stands in for its rule. */
+.toolbar-stats > .toolbar-stat-pill:is(:hover, :active, :focus-visible, [aria-expanded="true"]),
+.toolbar-stats > .toolbar-stat-status:focus-visible,
+.toolbar-stats
+  > .toolbar-stat-pill:is(:hover, :active, :focus-visible, [aria-expanded="true"])
+  + [data-stat-segment],
+.toolbar-stats > .toolbar-stat-status:focus-visible + [data-stat-segment] {
+  background-image: none;
+}
+
+/* The activity pip's cut-out is the capsule's own fill, not the strip's: the
+ * translucent capsule tint laid over the strip colour beneath it. Opaque light
+ * fills simply cover the lower ring. */
+.toolbar-stats .toolbar-pip {
+  box-shadow:
+    0 0 0 1px var(--_bg),
+    0 0 0 1px var(--toolbar-bg, var(--theme-surface-toolbar));
 }
 
 .toolbar-stats > :nth-child(1 of [data-stat-segment]) {
@@ -328,8 +359,15 @@
     border-color: ButtonText;
   }
 
-  .toolbar-stat-pill:focus-visible {
+  .toolbar-stat-pill:focus-visible,
+  .toolbar-stat-status:focus-visible {
     outline-color: Highlight;
+  }
+
+  /* With the fill gone the open edge is the only "this one is open" cue, and
+   * an inset ring would sit exactly on top of it. */
+  .toolbar-stat-pill[aria-expanded="true"]:focus-visible {
+    outline-offset: -4px;
   }
 }
 
@@ -345,25 +383,53 @@
 }
 
 .toolbar-stat-pill[aria-expanded="true"] {
-  background: var(--toolbar-control-armed-bg, var(--theme-overlay-emphasis));
+  background-color: var(--toolbar-control-armed-bg, var(--theme-overlay-emphasis));
+}
+
+/* Zero and dash counts rest on secondary ink, which drops under 4.5:1 once a
+ * hover, armed or pressed fill lifts the segment. They step up the text ramp
+ * while it is lifted, as the project pill's branch chip does, which also reads
+ * as the whole segment answering the pointer. */
+.toolbar-stat-pill [data-stat-quiet] {
+  transition: color var(--duration-150) ease-out;
+}
+
+.toolbar-stat-pill:is(:hover, :active, [aria-expanded="true"]) [data-stat-quiet] {
+  color: var(--theme-text-primary);
 }
 
 /* The inset ring shares the capsule's bottom rows with the forge status bar,
  * which comes later in the DOM and would otherwise paint across the ring. */
-.toolbar-stat-pill:focus-visible {
+.toolbar-stat-pill:focus-visible,
+.toolbar-stat-status:focus-visible {
   z-index: 1;
 }
 
+/* The trailing status slots have no fill of their own to lift, so the glyph
+ * answers the pointer and the keyboard by stepping up the text ramp. */
+.toolbar-stat-status {
+  position: relative;
+}
+
+.toolbar-stat-status > svg {
+  transition: color var(--duration-150) ease-out;
+}
+
+.toolbar-stat-status:is(:hover, :focus-visible, [data-state="delayed-open"], [data-state="instant-open"])
+  > svg {
+  color: var(--theme-text-primary);
+}
+
 .toolbar-stat-pill:active {
-  background: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
+  background-color: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
 }
 
 :where(.light, [data-color-mode="light"]) .toolbar-stat-pill[aria-expanded="true"] {
-  background: var(--toolbar-control-armed-bg, var(--theme-overlay-raised));
+  background-color: var(--toolbar-control-armed-bg, var(--theme-overlay-raised));
 }
 
 :where(.light, [data-color-mode="light"]) .toolbar-stat-pill:active {
-  background: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
+  background-color: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
 }
 
 .toolbar-project-pill {

@@ -202,27 +202,6 @@
   }
 }
 
-/* GitHub activity corner chips use clipPath for the triangle shape so scale
- * would distort. Opacity-only entrance / exit keeps the chip crisp. */
-.toolbar-badge-chip {
-  display: none;
-  opacity: 0;
-  transition:
-    display var(--duration-120) allow-discrete,
-    opacity var(--duration-120) var(--ease-exit);
-}
-
-.toolbar-badge-chip[data-visible="true"] {
-  display: block;
-  opacity: 1;
-  transition-duration: var(--duration-200);
-  transition-timing-function: var(--ease-spring-critical);
-
-  @starting-style {
-    opacity: 0;
-  }
-}
-
 /* ── Overflow `…` trigger entry / exit ──
  * The trigger appears only while items are evicted into it. Without an
  * animation it pops in/out instantly, unlike every other toolbar badge
