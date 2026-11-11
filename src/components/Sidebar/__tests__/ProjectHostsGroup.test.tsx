@@ -21,7 +21,7 @@ vi.mock("@/components/Hosts/hostSwitching", () => ({
   isNewWindowClick: (event: { metaKey: boolean; ctrlKey: boolean }) =>
     event.metaKey || event.ctrlKey,
 }));
-vi.mock("@/components/Hosts/OpenOnHostSubmenu", () => ({ openProjectOnHost }));
+vi.mock("@/components/Hosts/openProjectOnHost", () => ({ openProjectOnHost }));
 // Which mark a count wears, without copying the glyphs' own geometry.
 vi.mock("@/components/Pilot/PilotRunState", () => ({
   PilotRunState: ({ band }: { band: string }) => <span data-mark={band} />,
