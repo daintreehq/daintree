@@ -83,6 +83,9 @@ describe("publish-plugin-blocklist workflow", () => {
     const contexts = [...workflow.concurrency.group.matchAll(/\$\{\{\s*([^}]+?)\s*\}\}/g)].map(
       ([, expression]) => expression
     );
+    // Keyed by ref, so a refused dispatch from another branch can't take a
+    // queued develop run's place.
+    expect(contexts.length).toBeGreaterThan(0);
     expect(contexts.every((expression) => expression === "github.ref")).toBe(true);
     expect(job.concurrency).toBeUndefined();
 
