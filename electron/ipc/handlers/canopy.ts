@@ -1607,17 +1607,29 @@ export async function resolveAssistantDestination(
 }
 
 /**
- * Whether a view holds the lane's running assistant. A detached one runs with
- * no window to show it in until someone takes it over from its project's
- * Assistant panel.
+ * The view holding the lane's running assistant, by its WebContents id, or null
+ * when it runs detached, with no view to show it in until someone takes it
+ * over from its project's Assistant panel. A remote person's view is named by
+ * its endpoint handle in the same place, so the id alone says nothing of where
+ * the view is.
  */
-export async function isAssistantLaneAttached(projectId: string, lane: number): Promise<boolean> {
+export async function assistantLaneHolder(projectId: string, lane: number): Promise<number | null> {
   const { helpSessionService } = await import("../../services/HelpSessionService.js");
-  return helpSessionService
+  const attached = helpSessionService
     .listRunningLanes()
     .some(
       (running) => running.projectId === projectId && running.slot === lane && running.attached
     );
+  if (!attached) return null;
+  return (
+    helpSessionService.getRunningLaneSession(projectId, lane)?.projectViewWebContentsId ?? null
+  );
+}
+
+/** The view on this machine that has the global assistant's input, if any. */
+export async function globalAssistantInputOwner(): Promise<number | null> {
+  const { peekGlobalAssistantService } = await import("../../services/globalAssistant.js");
+  return peekGlobalAssistantService()?.inputOwnerWebContentsId() ?? null;
 }
 
 /**

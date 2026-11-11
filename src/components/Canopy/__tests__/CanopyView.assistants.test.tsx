@@ -833,6 +833,32 @@ describe("CanopyView role filter", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it("says nothing of an earlier open that settles after a newer one went through", async () => {
+    let refuseEarlier: (text: string) => void = () => {};
+    vi.mocked(frame.openAssistant)
+      .mockImplementationOnce(
+        () =>
+          new Promise<string | null>((resolve) => {
+            refuseEarlier = resolve;
+          })
+      )
+      .mockResolvedValueOnce(null);
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const open = () =>
+      [...document.querySelectorAll("button")].find(
+        (button) => button.textContent === "Open in Assistant"
+      )!;
+    await act(async () => fireEvent.click(open()));
+    await act(async () => fireEvent.click(open()));
+    await act(async () => refuseEarlier(ENDED));
+
+    expect(frame.openAssistant).toHaveBeenCalledTimes(2);
+    expect(document.body.textContent).not.toContain(ENDED);
+    expect(document.body.textContent).not.toContain("Couldn't open this assistant");
+  });
+
   it("marks a handback seen only for the assistant chosen, never by default", async () => {
     directory.entries = [
       assistant(0, { handback: { observedAt: NOW - 500 } }),

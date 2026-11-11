@@ -5,6 +5,8 @@ const nav = vi.hoisted(() => ({
   projects: new Map<string, { id: string; name: string; path: string; status?: string }>(),
   scratches: new Set<string>(),
   contexts: [] as unknown[],
+  /** Window ids most recently focused first; unset, the order they were added. */
+  focusOrder: null as number[] | null,
   remoteWindows: new Set<number>(),
   hydrated: new Set<number>(),
   waiters: new Map<number, Array<() => void>>(),
@@ -26,7 +28,12 @@ vi.mock("../../services/ScratchStore.js", () => ({
 vi.mock("../windowRef.js", () => ({
   getWindowRegistry: () => ({
     all: () => nav.contexts,
-    focusOrder: () => nav.contexts,
+    focusOrder: () =>
+      nav.focusOrder === null
+        ? nav.contexts
+        : nav.focusOrder.map((id) =>
+            nav.contexts.find((context) => (context as { windowId: number }).windowId === id)
+          ),
     getByWindowId: (id: number) =>
       nav.contexts.find((context) => (context as { windowId: number }).windowId === id),
   }),
@@ -56,6 +63,7 @@ import {
   CANOPY_RUN_OPENING_TIMEOUT_MS,
   _resetCanopyGoToRunForTesting,
   goToCanopyRun,
+  isWorkspaceViewHere,
   openCanopyAssistantLane,
   setCanopyRunWindowOpener,
   showCanopyGlobalAssistant,
@@ -157,6 +165,7 @@ beforeEach(() => {
   nav.scratches.clear();
   nav.scratches.add(SCRATCH);
   nav.contexts = [];
+  nav.focusOrder = null;
   nav.remoteWindows.clear();
   nav.hydrated.clear();
   nav.waiters.clear();
@@ -510,36 +519,58 @@ describe("Open in Assistant from the Canopy window (#16758)", () => {
       actionId: "project.switch",
       args: { projectId: PROJECT },
     });
+    expect(owner.browserWindow.focus).toHaveBeenCalled();
   });
 
   it("asks a window caching its scratch for nothing it can't carry, and says where to go", async () => {
     const owner = addWindow(PROJECT, [SCRATCH]);
+    const { opener } = openerThatOpens();
     const subject = { ...lane, scope: { kind: "project" as const, projectId: SCRATCH } };
 
     await expect(openCanopyAssistantLane(SCRATCH, subject)).rejects.toMatchObject({
       code: "UNSUPPORTED",
+      userMessage: expect.stringMatching(/scratch/),
     });
     expect(owner.appWebContents.send).not.toHaveBeenCalled();
     expect(owner.pvm.setPendingFocusIntent).not.toHaveBeenCalled();
+    expect(owner.browserWindow.show).not.toHaveBeenCalled();
     expect(owner.browserWindow.focus).not.toHaveBeenCalled();
+    expect(opener).not.toHaveBeenCalled();
   });
 
-  it("opens a window for a project no window has, and shows the lane there", async () => {
+  it("opens one window for a project no window has, and shows the lane there", async () => {
     const { opener, opened } = openerThatOpens();
 
     await openCanopyAssistantLane(PROJECT, lane);
 
+    expect(opener).toHaveBeenCalledTimes(1);
     expect(opener).toHaveBeenCalledWith(PROJECT);
+    expect(opened).toHaveLength(1);
     expect(assistantIntents(opened[0]!.appWebContents)).toEqual([openLane(lane)]);
+  });
+
+  it("knows a lane's view as one of this machine's only when a window here holds it", () => {
+    const shown = addWindow(PROJECT);
+    const cached = addWindow(OTHER, [SCRATCH]);
+    const cachedScratch = cached.views.get(SCRATCH)!;
+
+    expect(isWorkspaceViewHere(PROJECT, shown.appWebContents.id)).toBe(true);
+    expect(isWorkspaceViewHere(SCRATCH, cachedScratch.id)).toBe(true);
+    // Another workspace's view, or a remote person's endpoint handle.
+    expect(isWorkspaceViewHere(OTHER, shown.appWebContents.id)).toBe(false);
+    expect(isWorkspaceViewHere(PROJECT, 9_999)).toBe(false);
+    cachedScratch.isDestroyed = () => true;
+    expect(isWorkspaceViewHere(SCRATCH, cachedScratch.id)).toBe(false);
   });
 
   it("shows the global session in the window on this machine last in use, past a host's", async () => {
     const onHost = addWindow(OTHER);
     nav.remoteWindows.add(onHost.windowId);
-    const local = addWindow(PROJECT);
     const older = addWindow(null);
+    const local = addWindow(PROJECT);
+    nav.focusOrder = [onHost.windowId, local.windowId, older.windowId];
 
-    showCanopyGlobalAssistant(global);
+    showCanopyGlobalAssistant(global, null);
     expect(assistantIntents(local.appWebContents)).toEqual([]);
     hydrate(local.appWebContents);
 
@@ -552,11 +583,38 @@ describe("Open in Assistant from the Canopy window (#16758)", () => {
     expect(older.appWebContents.send).not.toHaveBeenCalled();
   });
 
+  it("prefers the window whose view has the global session's input", () => {
+    const recent = addWindow(PROJECT);
+    const owner = addWindow(OTHER);
+    nav.hydrated.add(owner.appWebContents.id);
+
+    showCanopyGlobalAssistant(global, owner.appWebContents.id);
+
+    expect(assistantIntents(owner.appWebContents)).toEqual([
+      { intent: "open-assistant", subject: global },
+    ]);
+    expect(recent.browserWindow.focus).not.toHaveBeenCalled();
+  });
+
+  it("passes over a window whose view is gone, and lands in a window with no project", () => {
+    const broken = addWindow(PROJECT);
+    broken.appWebContents.isDestroyed = () => true;
+    const welcome = addWindow(null);
+    nav.hydrated.add(welcome.appWebContents.id);
+
+    showCanopyGlobalAssistant(global, null);
+
+    expect(assistantIntents(welcome.appWebContents)).toEqual([
+      { intent: "open-assistant", subject: global },
+    ]);
+    expect(broken.browserWindow.focus).not.toHaveBeenCalled();
+  });
+
   it("says so when no window on this machine could show the global session", () => {
     const onHost = addWindow(OTHER);
     nav.remoteWindows.add(onHost.windowId);
 
-    expect(() => showCanopyGlobalAssistant(global)).toThrow(
+    expect(() => showCanopyGlobalAssistant(global, null)).toThrow(
       expect.objectContaining({ code: "NOT_FOUND" })
     );
     expect(onHost.browserWindow.focus).not.toHaveBeenCalled();

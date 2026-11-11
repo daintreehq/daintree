@@ -16,16 +16,19 @@ import {
 } from "../../window/canopyWindow.js";
 import {
   goToCanopyRun,
+  isWorkspaceViewHere,
   openCanopyAssistantLane,
   showCanopyGlobalAssistant,
 } from "../../window/canopyGoToRun.js";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import type { IpcContext } from "../types.js";
 import {
-  isAssistantLaneAttached,
+  assistantLaneHolder,
+  globalAssistantInputOwner,
   observeCanopySnapshots,
   resolveAssistantDestination,
 } from "./canopy.js";
+import { checkRateLimit } from "../utils.js";
 import { CANOPY_WINDOW_METHOD_CHANNELS } from "./canopyWindow.preload.js";
 
 const id = z.string().min(1).max(512);
@@ -111,12 +114,12 @@ export const canopyWindowNamespace = defineIpcNamespace({
     ),
     /**
      * Open in Assistant from the Canopy window (#16758), for an assistant on
-     * this machine: its project's window, or for the global session the window
-     * last in use, comes forward and shows it. Main finds where it runs itself
-     * rather than take a project from the renderer, and refuses before anything
-     * moves when it has ended or no view holds its lane: null once it is on
-     * its way. Another host's assistant opens through that host's window
-     * switch instead.
+     * this machine: the window holding its lane, or for the global session the
+     * one with its input or else the one last in use, comes forward and shows
+     * it. Main finds where it runs itself rather than take a project from the
+     * renderer, and refuses before anything moves when it has ended or no view
+     * here holds its lane: null once it is on its way. Another host's assistant
+     * opens through that host's window switch instead.
      */
     openAssistant: opValidated(
       CANOPY_WINDOW_METHOD_CHANNELS.openAssistant,
@@ -126,6 +129,7 @@ export const canopyWindowNamespace = defineIpcNamespace({
         subject: AgentDirectorySubject
       ): Promise<CanopyAssistantOpenRefusal | null> => {
         refuseUnlessCanopyWindow(ctx, "Only the Canopy window opens an assistant this way");
+        checkRateLimit(CANOPY_WINDOW_METHOD_CHANNELS.openAssistant, 20, 10_000);
         if (!isLocalHostId(subject.hostId)) {
           throw new AppError({
             code: "UNSUPPORTED",
@@ -135,10 +139,11 @@ export const canopyWindowNamespace = defineIpcNamespace({
         const destination = await resolveAssistantDestination(subject);
         if (!destination) return "ended";
         if (destination.scope === "global") {
-          showCanopyGlobalAssistant(subject);
+          showCanopyGlobalAssistant(subject, await globalAssistantInputOwner());
           return null;
         }
-        if (!(await isAssistantLaneAttached(destination.projectId, destination.lane))) {
+        const holder = await assistantLaneHolder(destination.projectId, destination.lane);
+        if (holder === null || !isWorkspaceViewHere(destination.projectId, holder)) {
           return "not-attached";
         }
         await openCanopyAssistantLane(destination.projectId, subject);

@@ -350,7 +350,7 @@ describe("assistant subject adapter", () => {
     it.each([subject, globalSubject])(
       "hands one of this machine's assistants to main whole, moving nothing here",
       async (target) => {
-        expect(await openAssistantFromCanopyWindow(target)).toEqual({ ok: true });
+        expect(await openAssistantFromCanopyWindow(target, true)).toEqual({ ok: true });
         expect(canopyWindow.openAssistant).toHaveBeenCalledWith(target);
         expect(canopy.resolveAssistant).not.toHaveBeenCalled();
         expect(switchProject).not.toHaveBeenCalled();
@@ -360,32 +360,48 @@ describe("assistant subject adapter", () => {
       }
     );
 
-    it("passes on main's refusal, and its failure to bring a window forward", async () => {
-      canopyWindow.openAssistant.mockResolvedValueOnce("not-attached");
-      expect(await openAssistantFromCanopyWindow(subject)).toEqual({
-        ok: false,
-        reason: "not-attached",
-      });
-      canopyWindow.openAssistant.mockRejectedValueOnce(new Error("no window"));
-      await expect(openAssistantFromCanopyWindow(subject)).rejects.toThrow("no window");
+    it("leaves whether a lane here is held to main, which knows it now", async () => {
+      expect(await openAssistantFromCanopyWindow(subject, false)).toEqual({ ok: true });
+      expect(canopyWindow.openAssistant).toHaveBeenCalledWith(subject);
     });
 
-    it("opens another host's lane in a new window there, never moving this one", async () => {
-      canopyHost.resolveAssistant.mockResolvedValue({ ...destination, hostId: "studio" });
-      expect(await openAssistantFromCanopyWindow(remote)).toEqual({ ok: true });
-      expect(remoteHosts.switchWindowHost).toHaveBeenCalledWith({
-        hostId: "studio",
-        newWindow: true,
-        projectId: "p2",
-        focusIntent: { intent: "open-assistant", subject: remote },
-      });
-      expect(canopyWindow.openAssistant).not.toHaveBeenCalled();
-      expect(canopyHost.releaseAssistant).toHaveBeenCalledTimes(1);
+    it.each(["ended", "not-attached"] as const)(
+      "passes on main's refusal as it gave it (%s)",
+      async (reason) => {
+        canopyWindow.openAssistant.mockResolvedValueOnce(reason);
+        expect(await openAssistantFromCanopyWindow(subject, true)).toEqual({ ok: false, reason });
+      }
+    );
+
+    it("passes on main's failure to bring a window forward", async () => {
+      canopyWindow.openAssistant.mockRejectedValueOnce(new Error("no window"));
+      await expect(openAssistantFromCanopyWindow(subject, true)).rejects.toThrow("no window");
     });
+
+    it.each(["switched", "focused-elsewhere"])(
+      "opens another host's lane in a window there, never moving this one (%s)",
+      async (outcome) => {
+        canopyHost.resolveAssistant.mockResolvedValue({ ...destination, hostId: "studio" });
+        remoteHosts.switchWindowHost.mockResolvedValueOnce({ outcome, hostId: "studio" });
+        expect(await openAssistantFromCanopyWindow(remote, true)).toEqual({ ok: true });
+        expect(remoteHosts.switchWindowHost).toHaveBeenCalledWith({
+          hostId: "studio",
+          newWindow: true,
+          projectId: "p2",
+          focusIntent: { intent: "open-assistant", subject: remote },
+        });
+        expect(canopyWindow.openAssistant).not.toHaveBeenCalled();
+        const consumer = canopyHost.resolveAssistant.mock.calls[0]![0];
+        expect(canopyHost.releaseAssistant).toHaveBeenCalledWith(consumer);
+      }
+    );
 
     it("refuses another host's lane that ended, or whose window there didn't open", async () => {
       canopyHost.resolveAssistant.mockResolvedValueOnce(null);
-      expect(await openAssistantFromCanopyWindow(remote)).toEqual({ ok: false, reason: "ended" });
+      expect(await openAssistantFromCanopyWindow(remote, true)).toEqual({
+        ok: false,
+        reason: "ended",
+      });
       expect(remoteHosts.switchWindowHost).not.toHaveBeenCalled();
 
       canopyHost.resolveAssistant.mockResolvedValueOnce({ ...destination, hostId: "studio" });
@@ -393,10 +409,25 @@ describe("assistant subject adapter", () => {
         outcome: "superseded",
         hostId: "studio",
       });
-      expect(await openAssistantFromCanopyWindow(remote)).toEqual({
+      expect(await openAssistantFromCanopyWindow(remote, true)).toEqual({
         ok: false,
         reason: "not-switched",
       });
+    });
+
+    it("moves nothing for another host's lane its host lists as held by no view", async () => {
+      canopyHost.resolveAssistant.mockResolvedValue({ ...destination, hostId: "studio" });
+      expect(await openAssistantFromCanopyWindow(remote, false)).toEqual({
+        ok: false,
+        reason: "not-attached",
+      });
+      expect(remoteHosts.switchWindowHost).not.toHaveBeenCalled();
+    });
+
+    it("passes on a switch to another host that failed", async () => {
+      canopyHost.resolveAssistant.mockResolvedValue({ ...destination, hostId: "studio" });
+      remoteHosts.switchWindowHost.mockRejectedValueOnce(new Error("host unreachable"));
+      await expect(openAssistantFromCanopyWindow(remote, true)).rejects.toThrow("host unreachable");
     });
 
     it("refuses another host's global session, which only that machine's windows hold", async () => {
@@ -407,7 +438,7 @@ describe("assistant subject adapter", () => {
         terminalId: "g1",
         incarnation: 2,
       });
-      expect(await openAssistantFromCanopyWindow(remoteGlobal)).toEqual({
+      expect(await openAssistantFromCanopyWindow(remoteGlobal, true)).toEqual({
         ok: false,
         reason: "unsupported",
       });

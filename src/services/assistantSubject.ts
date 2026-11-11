@@ -182,12 +182,15 @@ export async function openInAssistant(
  * on, and the Canopy window stays where it is. One of this machine's is placed
  * by main, which refuses before anything moves when it has ended or no view
  * holds its lane. Another host's lane opens in a window on that host, the one
- * showing its project or a new one, and is checked again once it arrives;
- * another host's global session takes its input only from that machine's own
+ * showing its project or a new one, and is checked again once it arrives; one
+ * its host lists as held by no view opens nothing, as main refuses here.
+ * Another host's global session takes its input only from that machine's own
  * windows. A window that didn't come forward rejects with why.
  */
 export async function openAssistantFromCanopyWindow(
-  subject: AgentDirectorySubject
+  subject: AgentDirectorySubject,
+  /** Whether its host's directory lists a view holding it. */
+  attached: boolean
 ): Promise<OpenInAssistantResult> {
   if (watchedHere(subject)) {
     const refused = await window.electron.canopyWindow.openAssistant(subject);
@@ -196,6 +199,7 @@ export async function openAssistantFromCanopyWindow(
   const destination = await resolveDestination(subject);
   if (!destination) return { ok: false, reason: "ended" };
   if (destination.scope === "global") return { ok: false, reason: "unsupported" };
+  if (!attached) return { ok: false, reason: "not-attached" };
   const result = await window.electron.remoteHosts.switchWindowHost({
     hostId: destination.hostId,
     newWindow: true,

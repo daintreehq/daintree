@@ -353,14 +353,19 @@ describe("the Canopy window's frame", () => {
       incarnation: 2,
       lane: 1,
     };
-    const item = { id: "a1", subject } as unknown as CanopyAssistantItem;
-    const open = () => CANOPY_WINDOW_FRAME.openAssistant(item, () => true);
+    const item = { id: "a1", subject, attached: true } as unknown as CanopyAssistantItem;
+    const open = (target = item) => CANOPY_WINDOW_FRAME.openAssistant(target, () => true);
 
     it("opens the assistant where it runs, says nothing in the pane, and stays open", async () => {
       expect(await open()).toBeNull();
-      expect(openAssistantFromCanopyWindow).toHaveBeenCalledWith(subject);
+      expect(openAssistantFromCanopyWindow).toHaveBeenCalledWith(subject, true);
       expect(closeWindow).not.toHaveBeenCalled();
       expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("says whether the list saw a view holding it", async () => {
+      await open({ ...item, attached: false });
+      expect(openAssistantFromCanopyWindow).toHaveBeenCalledWith(subject, false);
     });
 
     it.each(["ended", "not-attached", "unsupported"] as const)(
@@ -375,6 +380,7 @@ describe("the Canopy window's frame", () => {
       openAssistantFromCanopyWindow.mockResolvedValueOnce({ ok: false, reason: "not-switched" });
       const text = await open();
       expect(text).toMatch(/another host/);
+      expect(text).toMatch(/didn't open/);
       expect(text).not.toBe(assistantOpenRefusal("not-switched"));
     });
 
@@ -386,8 +392,9 @@ describe("the Canopy window's frame", () => {
       );
       expect(await open()).toBe("A window for its project didn't open.");
 
-      openAssistantFromCanopyWindow.mockRejectedValueOnce(new Error("socket hang up"));
-      expect(await open()).toEqual(expect.any(String));
+      // Nothing in it to say: the pane still says the assistant didn't open.
+      openAssistantFromCanopyWindow.mockRejectedValueOnce(undefined);
+      expect(await open()).toMatch(/couldn't open this assistant/);
       expect(notifyMock).not.toHaveBeenCalled();
     });
   });

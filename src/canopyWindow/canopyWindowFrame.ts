@@ -60,14 +60,14 @@ function goToRun({ place }: CanopyGoToRun): void {
  */
 async function openAssistant(item: CanopyAssistantItem): Promise<string | null> {
   try {
-    const result = await openAssistantFromCanopyWindow(item.subject);
+    const result = await openAssistantFromCanopyWindow(item.subject, item.attached);
     if (result.ok) return null;
     // The shared wording says the asking window couldn't move; this one never does.
     return result.reason === "not-switched"
       ? "This assistant runs on another host, and a window there didn't open on it."
       : assistantOpenRefusal(result.reason);
   } catch (error) {
-    return clientErrorText(error, "Its window didn't open. Try again.");
+    return clientErrorText(error, "Daintree couldn't open this assistant.");
   }
 }
 

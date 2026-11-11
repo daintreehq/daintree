@@ -256,25 +256,54 @@ async function landFromCanopy(landing: CanopyLanding): Promise<void> {
 }
 
 /**
- * Open in Assistant from the Canopy window for this machine's global session
- * (#16758), which no workspace holds: the window on this machine the person
- * was last in comes forward and shows it in its Assistant panel, once its view
- * has checked again that the same session still runs. A window on a remote
- * host is passed over: its view types to that host, not to this machine.
+ * Whether one of this machine's windows holds a view of the workspace with
+ * this WebContents id, shown or cached: a lane held there can be shown by
+ * bringing that window to it. A remote person's view of it is held elsewhere.
  */
-export function showCanopyGlobalAssistant(subject: AgentDirectorySubject): void {
+export function isWorkspaceViewHere(workspaceId: string, webContentsId: number): boolean {
+  return (getWindowRegistry()?.all() ?? []).some((context) => {
+    try {
+      return (context.services.projectViewManager?.getAllViews() ?? []).some(
+        (entry) =>
+          entry.projectId === workspaceId &&
+          !entry.view.webContents.isDestroyed() &&
+          entry.view.webContents.id === webContentsId
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Open in Assistant from the Canopy window for this machine's global session
+ * (#16758), which no workspace holds: the window whose view has its input, or
+ * else the one on this machine the person was last in, comes forward and shows
+ * it in its Assistant panel once its view has checked again that the same
+ * session still runs. A window on a remote host is passed over: its view types
+ * to that host, not to this machine.
+ */
+export function showCanopyGlobalAssistant(
+  subject: AgentDirectorySubject,
+  inputOwnerWebContentsId: number | null
+): void {
   if (getActiveShutdown() !== null) return;
-  const context = getWindowRegistry()
-    ?.focusOrder()
-    .find((ctx) => !ctx.browserWindow.isDestroyed() && !isWindowOnRemoteHost(ctx.windowId));
-  const webContents = context ? activeWebContents(context, { orStartup: true }) : null;
-  if (!context || !webContents) {
+  const candidates = (getWindowRegistry()?.focusOrder() ?? []).flatMap((context) => {
+    if (context.browserWindow.isDestroyed() || isWindowOnRemoteHost(context.windowId)) return [];
+    const webContents = activeWebContents(context, { orStartup: true });
+    return webContents ? [{ context, webContents }] : [];
+  });
+  const target =
+    candidates.find(({ webContents }) => webContents.id === inputOwnerWebContentsId) ??
+    candidates[0];
+  if (!target) {
     throw new AppError({
       code: "NOT_FOUND",
       message: "No window on this machine to show the global assistant in",
       userMessage: "Open a Daintree window on this computer, then open the assistant again.",
     });
   }
+  const { context, webContents } = target;
   const intent: ProjectFocusOnActivateIntent = { intent: "open-assistant", subject };
   revealWindow(context.browserWindow);
   afterHydrated(webContents, (hydrated) => {

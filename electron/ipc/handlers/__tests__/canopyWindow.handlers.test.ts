@@ -15,9 +15,15 @@ const windowMock = vi.hoisted(() => ({
 const goToCanopyRun = vi.hoisted(() => vi.fn(async () => {}));
 const openCanopyAssistantLane = vi.hoisted(() => vi.fn(async () => {}));
 const showCanopyGlobalAssistant = vi.hoisted(() => vi.fn());
+const isWorkspaceViewHere = vi.hoisted(() =>
+  vi.fn((_workspaceId: string, _webContentsId: number) => true)
+);
 const assistants = vi.hoisted(() => ({
   resolveAssistantDestination: vi.fn(async (_subject: unknown): Promise<unknown> => null),
-  isAssistantLaneAttached: vi.fn(async (_projectId: string, _lane: number) => true),
+  assistantLaneHolder: vi.fn(
+    async (_projectId: string, _lane: number): Promise<number | null> => 41
+  ),
+  globalAssistantInputOwner: vi.fn(async (): Promise<number | null> => null),
 }));
 const CANOPY_VIEW_ID = vi.hoisted(() => 7);
 const ipcHandlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => unknown>());
@@ -34,8 +40,14 @@ vi.mock("../../../services/canopy/canopyMode.js", () => ({ readCanopyMode: () =>
 vi.mock("../../../window/canopyWindow.js", () => windowMock);
 vi.mock("../../../window/canopyGoToRun.js", () => ({
   goToCanopyRun,
+  isWorkspaceViewHere,
   openCanopyAssistantLane,
   showCanopyGlobalAssistant,
+}));
+// The limit is per channel across this file's calls; its own tests cover it.
+vi.mock("../../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils.js")>()),
+  checkRateLimit: vi.fn(),
 }));
 vi.mock("../canopy.js", () => ({
   ...assistants,
@@ -211,40 +223,57 @@ describe("Open in Assistant from the Canopy window (#16758)", () => {
     openCanopyAssistantLane.mockReset();
     openCanopyAssistantLane.mockResolvedValue(undefined);
     showCanopyGlobalAssistant.mockReset();
+    isWorkspaceViewHere.mockReset();
+    isWorkspaceViewHere.mockReturnValue(true);
     assistants.resolveAssistantDestination.mockReset();
     assistants.resolveAssistantDestination.mockResolvedValue(lane);
-    assistants.isAssistantLaneAttached.mockReset();
-    assistants.isAssistantLaneAttached.mockResolvedValue(true);
+    assistants.assistantLaneHolder.mockReset();
+    assistants.assistantLaneHolder.mockResolvedValue(41);
+    assistants.globalAssistantInputOwner.mockReset();
+    assistants.globalAssistantInputOwner.mockResolvedValue(null);
   });
 
-  const answer = (payload: unknown) => open(payload);
-
-  it("lands a running, held lane in the project main found it in", async () => {
-    expect(await answer(subject)).toBeNull();
-    expect(assistants.isAssistantLaneAttached).toHaveBeenCalledWith("project-a", 1);
+  it("lands a running lane, held by a view here, in the project main found it in", async () => {
+    expect(await open(subject)).toBeNull();
+    expect(assistants.resolveAssistantDestination).toHaveBeenCalledWith(subject);
+    expect(assistants.assistantLaneHolder).toHaveBeenCalledWith("project-a", 1);
+    expect(isWorkspaceViewHere).toHaveBeenCalledWith("project-a", 41);
     expect(openCanopyAssistantLane).toHaveBeenCalledWith("project-a", subject);
   });
 
-  it("goes by the project main resolved, not the one the subject names", async () => {
-    assistants.resolveAssistantDestination.mockResolvedValue({ ...lane, projectId: "project-b" });
-    await answer(subject);
+  it("goes by the lane main resolved, not the one the subject names", async () => {
+    assistants.resolveAssistantDestination.mockResolvedValue({
+      ...lane,
+      projectId: "project-b",
+      lane: 3,
+    });
+    await open(subject);
+    expect(assistants.assistantLaneHolder).toHaveBeenCalledWith("project-b", 3);
+    expect(isWorkspaceViewHere).toHaveBeenCalledWith("project-b", 41);
     expect(openCanopyAssistantLane).toHaveBeenCalledWith("project-b", subject);
   });
 
   it("moves nothing for a session that ended", async () => {
     assistants.resolveAssistantDestination.mockResolvedValue(null);
-    expect(await answer(subject)).toBe("ended");
+    expect(await open(subject)).toBe("ended");
     expect(openCanopyAssistantLane).not.toHaveBeenCalled();
     expect(showCanopyGlobalAssistant).not.toHaveBeenCalled();
   });
 
   it("moves nothing for a lane no view holds", async () => {
-    assistants.isAssistantLaneAttached.mockResolvedValue(false);
-    expect(await answer(subject)).toBe("not-attached");
+    assistants.assistantLaneHolder.mockResolvedValue(null);
+    expect(await open(subject)).toBe("not-attached");
+    expect(isWorkspaceViewHere).not.toHaveBeenCalled();
     expect(openCanopyAssistantLane).not.toHaveBeenCalled();
   });
 
-  it("shows the global session in a window on this machine", async () => {
+  it("moves nothing for a lane a view on another machine holds", async () => {
+    isWorkspaceViewHere.mockReturnValue(false);
+    expect(await open(subject)).toBe("not-attached");
+    expect(openCanopyAssistantLane).not.toHaveBeenCalled();
+  });
+
+  it("shows the global session where its input is, or in a window on this machine", async () => {
     const global = { hostId: "local", scope: { kind: "global" }, terminalId: "g", incarnation: 1 };
     assistants.resolveAssistantDestination.mockResolvedValue({
       scope: "global",
@@ -252,33 +281,61 @@ describe("Open in Assistant from the Canopy window (#16758)", () => {
       terminalId: "g",
       incarnation: 1,
     });
-    expect(await answer(global)).toBeNull();
-    expect(showCanopyGlobalAssistant).toHaveBeenCalledWith(global);
-    expect(assistants.isAssistantLaneAttached).not.toHaveBeenCalled();
+    assistants.globalAssistantInputOwner.mockResolvedValue(77);
+    expect(await open(global)).toBeNull();
+    expect(showCanopyGlobalAssistant).toHaveBeenCalledWith(global, 77);
+    expect(assistants.assistantLaneHolder).not.toHaveBeenCalled();
     expect(openCanopyAssistantLane).not.toHaveBeenCalled();
   });
 
-  it("passes on why its window didn't come forward", async () => {
-    openCanopyAssistantLane.mockRejectedValue(
-      new AppError({
-        code: "PROJECT_OPEN_FAILED",
-        message: "No window opened",
-        userMessage: "A window for its project didn't open.",
-      })
-    );
+  it.each([
+    [
+      "its window didn't come forward",
+      () =>
+        openCanopyAssistantLane.mockRejectedValue(
+          new AppError({
+            code: "PROJECT_OPEN_FAILED",
+            message: "No window opened",
+            userMessage: "A window for its project didn't open.",
+          })
+        ),
+    ],
+    [
+      "no window here could show the global session",
+      () => {
+        assistants.resolveAssistantDestination.mockResolvedValue({
+          scope: "global",
+          hostId: "local",
+          terminalId: "g",
+          incarnation: 1,
+        });
+        showCanopyGlobalAssistant.mockImplementation(() => {
+          throw new AppError({
+            code: "PROJECT_OPEN_FAILED",
+            message: "No window",
+            userMessage: "A window for its project didn't open.",
+          });
+        });
+      },
+    ],
+  ])("passes on why, when %s", async (_label, arrange) => {
+    arrange();
     await expect(open(subject)).rejects.toMatchObject({
       code: "PROJECT_OPEN_FAILED",
       userMessage: "A window for its project didn't open.",
     });
   });
 
-  it("refuses any view but the Canopy window's", async () => {
-    expect(await refused(open(subject, 3))).toBe(true);
+  it.each([
+    ["any view but the Canopy window's", subject, 3],
+    ["another host's assistant", { ...subject, hostId: "studio" }, CANOPY_VIEW_ID],
+  ])("refuses %s without resolving anything", async (_label, payload, sender) => {
+    await expect(open(payload, sender)).rejects.toMatchObject({ code: "UNSUPPORTED" });
     expect(assistants.resolveAssistantDestination).not.toHaveBeenCalled();
+    expect(openCanopyAssistantLane).not.toHaveBeenCalled();
   });
 
   it.each([
-    ["another host's assistant", { ...subject, hostId: "studio" }],
     ["a malformed subject", { ...subject, terminalId: "" }],
     ["nothing", undefined],
   ])("refuses %s without resolving it", async (_label, payload) => {

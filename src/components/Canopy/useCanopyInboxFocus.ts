@@ -137,6 +137,8 @@ export function useCanopyInboxFocus({
   // An answer or a reply settles after the panel may have closed, and a new
   // one opened over the same ids: only this one's own may move the keyboard.
   const mountedRef = useRef(false);
+  /** The newest Open in Assistant: an older one settling later says nothing over it. */
+  const assistantOpenRef = useRef(0);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -545,9 +547,11 @@ export function useCanopyInboxFocus({
       setAssistantId(item.id);
     }
     setAssistantRefusal(null);
+    const request = ++assistantOpenRef.current;
     const mounted = () => mountedRef.current;
     void frame.openAssistant(item, mounted).then((refused) => {
-      if (refused !== null && mounted()) setAssistantRefusal({ id: item.id, text: refused });
+      if (refused === null || !mounted() || assistantOpenRef.current !== request) return;
+      setAssistantRefusal({ id: item.id, text: refused });
     });
   };
   const selectAssistant = useCallback((id: string) => {
