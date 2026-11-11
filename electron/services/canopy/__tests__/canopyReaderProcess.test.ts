@@ -103,3 +103,71 @@ describe("waitForRetiringReaders", () => {
     expect(process.kill).not.toHaveBeenCalled();
   });
 });
+
+describe("an idle local reader's process", () => {
+  it("is still waited for at quit once the local reader has let it go (#16816)", async () => {
+    const { CanopyLocalReader } = await import("../canopyLocalReader.js");
+    const IDLE_MS = 1_000;
+    const local = new CanopyLocalReader(async () => "/models/reader", undefined, IDLE_MS);
+    const read = local.read(
+      {
+        agent: "claude",
+        title: "",
+        screen: "",
+        lines: ["$ "],
+        observed: { agentState: null, waitingReason: null, secondsInState: null },
+      },
+      new AbortController().signal
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const child = state.children.at(-1) as FakeChild;
+    child.emit("message", { type: "ready" });
+    await vi.advanceTimersByTimeAsync(0);
+    const asked = child.posted.find(
+      (m): m is { type: "read"; id: number } => (m as { type: string }).type === "read"
+    )!;
+    child.emit("message", {
+      type: "reading",
+      id: asked.id,
+      ms: 9,
+      reading: {
+        category: "idle",
+        category_probs: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.94],
+        needs_attention: 0.1,
+        needs_attention_raw: 0.1,
+        blocked_on_user: 0.05,
+        notable: 0.1,
+        question_line: -1,
+        status_line: -1,
+        action_line: -1,
+        task_line: -1,
+        summary_lines: [],
+        card_lines: [],
+        card_mode: "summary",
+        option_lines: [],
+        tests: "unknown",
+        changes: "unknown",
+        risk: "none",
+        instruction: "none",
+        progress: "none",
+        failure_repeats: "0",
+        score: "10",
+      },
+    });
+    await expect(read).resolves.toMatchObject({ classifier: { category: "idle" } });
+
+    await vi.advanceTimersByTimeAsync(IDLE_MS);
+    expect(child.posted).toContainEqual({ type: "destroy" });
+    expect(local.loaded).toBe(false);
+
+    let settled: number | undefined;
+    void readerModule.waitForRetiringReaders(5_000).then((pending) => {
+      settled = pending;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBeUndefined();
+    child.emit("exit", 0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(0);
+  });
+});

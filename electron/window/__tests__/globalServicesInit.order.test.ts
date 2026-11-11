@@ -306,6 +306,11 @@ vi.mock("../../ipc/handlers.js", () => ({
   sendToRenderer: vi.fn(),
 }));
 
+const retireIdleCanopyReaderMock = vi.hoisted(() => vi.fn(() => 0));
+vi.mock("../../ipc/handlers/canopy.js", () => ({
+  retireIdleCanopyReader: retireIdleCanopyReaderMock,
+}));
+
 vi.mock("../webContentsRegistry.js", () => ({
   getAppWebContents: vi.fn(),
 }));
@@ -1035,6 +1040,27 @@ describe("initGlobalServices task ordering", () => {
       idleAutoCloseServiceMock.sleepUnderMemoryPressure.mockResolvedValueOnce(3);
       await expect(actions.hibernateIdleProjects()).resolves.toBe(3);
       expect(idleAutoCloseServiceMock.sleepUnderMemoryPressure).toHaveBeenCalledTimes(1);
+    } finally {
+      getStopAppMetricsMonitor()?.();
+      setStopAppMetricsMonitor(previousStop);
+    }
+  });
+
+  it("hands the pressure ladder Canopy's idle reader to let go (#16816)", async () => {
+    const previousStop = getStopAppMetricsMonitor();
+    setStopAppMetricsMonitor(null);
+    vi.mocked(startAppMetricsMonitor).mockClear();
+    retireIdleCanopyReaderMock.mockClear().mockReturnValueOnce(1);
+
+    try {
+      const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+      await initGlobalServices(fakeRegistry);
+      registeredTaskRuns.get("app-metrics-monitor")!();
+      const actions = vi.mocked(startAppMetricsMonitor).mock.calls[0]![0]!;
+
+      expect(retireIdleCanopyReaderMock).not.toHaveBeenCalled();
+      expect(actions.retireIdleCanopyReader!()).toBe(1);
+      expect(retireIdleCanopyReaderMock).toHaveBeenCalledTimes(1);
     } finally {
       getStopAppMetricsMonitor()?.();
       setStopAppMetricsMonitor(previousStop);

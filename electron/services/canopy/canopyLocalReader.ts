@@ -40,6 +40,13 @@ const TRIAL_EXIT_GRACE_MS = 2_000;
 /** Times a reader may die in a row before Canopy stops starting new ones until the model changes. */
 const MAX_CRASHES = 3;
 
+/**
+ * How long a reader with nothing to read keeps its model loaded. Loading it
+ * again takes well under a second, out of process, while the screen's own
+ * words keep showing, so an idle ~160 MB process isn't worth keeping longer.
+ */
+export const READER_IDLE_RETIRE_MS = 5 * 60_000;
+
 /** Whole seconds, as the model was trained on: `JSON.stringify(1.0)` writes `1`. */
 function seconds(value: number | null | undefined): number | undefined {
   return value === null || value === undefined || !Number.isFinite(value)
@@ -193,8 +200,9 @@ export async function tryReaderModel(
 
 /**
  * The reader process for the chosen model: started on the first read, let go
- * on `release()`, and swapped when the model changes. A process that dies is
- * replaced on the next read, up to `MAX_CRASHES` in a row.
+ * on `release()`, after `idleMs` with nothing to read, or on `retireIdle()`,
+ * and swapped when the model changes. A process that dies is replaced on the
+ * next read, up to `MAX_CRASHES` in a row.
  */
 export class CanopyLocalReader {
   private process: CanopyReaderProcess | null = null;
@@ -204,6 +212,12 @@ export class CanopyLocalReader {
   private readonly counted = new WeakSet<CanopyReaderProcess>();
   /** Bumped by `release()`: a read started before it says nothing about the model's health. */
   private generation = 0;
+  /**
+   * Reads under way, counted from before the model's folder is looked up: an
+   * idle retirement waits for none, so it never cuts a pass short.
+   */
+  private inFlight = 0;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     /** The folder of the chosen model when it is on this machine, else null. */
@@ -211,7 +225,8 @@ export class CanopyLocalReader {
     private readonly spawn: (dir: string, onExit: () => void) => CanopyReaderProcess = (
       dir,
       onExit
-    ) => new CanopyReaderProcess(dir, onExit)
+    ) => new CanopyReaderProcess(dir, onExit),
+    private readonly idleMs: number = READER_IDLE_RETIRE_MS
   ) {}
 
   /** A process is up, with a model loaded or loading. */
@@ -220,6 +235,17 @@ export class CanopyLocalReader {
   }
 
   async read(input: CanopyScreenInput, signal: AbortSignal): Promise<CanopyReading> {
+    this.inFlight++;
+    this.clearIdleTimer();
+    try {
+      return await this.readOnce(input, signal);
+    } finally {
+      this.inFlight--;
+      if (this.inFlight === 0 && this.process?.live) this.armIdleTimer();
+    }
+  }
+
+  private async readOnce(input: CanopyScreenInput, signal: AbortSignal): Promise<CanopyReading> {
     const generation = this.generation;
     const dir = await this.modelDir();
     if (dir === null) throw new CanopyProviderError("classifier", "model not available");
@@ -233,7 +259,9 @@ export class CanopyLocalReader {
     if (process === null || !process.live || process.modelDir !== dir) {
       process?.retire();
       const made: CanopyReaderProcess = this.spawn(dir, () => {
-        if (this.process === made) this.process = null;
+        if (this.process !== made) return;
+        this.process = null;
+        this.clearIdleTimer();
       });
       process = made;
       this.process = made;
@@ -275,12 +303,44 @@ export class CanopyLocalReader {
     }
   }
 
+  /**
+   * Lets the model go to give its memory back, when nothing is being read: the
+   * next read loads it again. Refused while any read is under way. The crash
+   * count stays, so a model that keeps dying still stops being started rather
+   * than dying once per idle spell. True when a process went.
+   */
+  retireIdle(): boolean {
+    if (this.inFlight > 0) return false;
+    this.clearIdleTimer();
+    const process = this.process;
+    if (process === null || !process.live) return false;
+    this.process = null;
+    process.retire();
+    return true;
+  }
+
   /** Lets the model go: Canopy turned off, or its model removed or changed. */
   release(): void {
     this.generation++;
+    this.clearIdleTimer();
     this.process?.retire();
     this.process = null;
     this.crashes = 0;
     this.crashedDir = null;
+  }
+
+  private armIdleTimer(): void {
+    this.clearIdleTimer();
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      this.retireIdle();
+    }, this.idleMs);
+    this.idleTimer.unref?.();
+  }
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer === null) return;
+    clearTimeout(this.idleTimer);
+    this.idleTimer = null;
   }
 }
