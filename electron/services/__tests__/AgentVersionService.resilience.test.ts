@@ -369,6 +369,23 @@ describe("AgentVersionService resilience", () => {
       vi.mocked(globalThis.fetch).mockRestore();
     });
 
+    it("shares one CLI read between launches asking at once", async () => {
+      setSpawnSuccess("agy 1.5.5\n");
+      const { service } = createService(async () => ({ antigravity: "ready" }));
+
+      const answers = await Promise.all([
+        service.getInstalledVersionForLaunch("antigravity" as AgentId),
+        service.getInstalledVersionForLaunch("antigravity" as AgentId, true),
+        service.getInstalledVersionForLaunch("antigravity" as AgentId),
+      ]);
+
+      expect(answers).toEqual(["1.5.5", "1.5.5", "1.5.5"]);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      // Once settled, the next launch asks the CLI again.
+      await service.getInstalledVersionForLaunch("antigravity" as AgentId);
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+
     it("answers null rather than throwing when the CLI can't be asked", async () => {
       setSpawnError(Object.assign(new Error("denied"), { code: "EACCES" }));
       const { service } = createService(async () => ({ antigravity: "ready" }));

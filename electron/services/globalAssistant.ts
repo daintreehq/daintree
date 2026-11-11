@@ -20,9 +20,10 @@ export function liveGlobalAssistantDeps(): GlobalAssistantDeps {
 
   return {
     agentId: async () => {
-      const { liveAssistantLaunchDeps } = await launch();
-      const agents = await (await liveAssistantLaunchDeps()).launchableAgents();
-      return agents.find((agent) => agent.byDefault)?.id ?? null;
+      const { liveAssistantLaunchDeps, firstUsableDefault } = await launch();
+      const deps = await liveAssistantLaunchDeps();
+      const newEnough = (id: string) => deps.meetsVersionFloor?.(id) ?? Promise.resolve(true);
+      return (await firstUsableDefault(await deps.launchableAgents(), newEnough)) ?? null;
     },
     provision: async (agentId) => {
       const service = await help();

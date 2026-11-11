@@ -38,29 +38,37 @@ export interface LaunchableAssistantAgent {
 /**
  * The agents a start with no view can run here, the machine's own pick first.
  * Wired takes an experimental backend run by name; the picker offers stable
- * ones only, and only those may be picked for a start that names none. A CLI
- * definitively older than its assistant wiring needs is passed over like an
- * uninstalled one, as the panel and `help.launchAgent` do (#16815): an `agy`
- * before 1.5.5 would start without its lane's `--settings`. A too-old reading
- * is checked once more past any cache, so an upgrade counts at once, and a
- * version that can't be read doesn't hold a start back.
+ * ones only, and only those may be picked for a start that names none.
  */
-export async function viewlessLaunchableAgents(input: {
+export function viewlessLaunchableAgents(input: {
   wired: readonly string[];
   offered: readonly string[];
   isLaunchable(agentId: string): boolean;
-  minVersion(agentId: string): string | undefined;
-  /** `refresh` asks the CLI itself rather than a cached reading. */
-  installedVersion(agentId: string, refresh: boolean): Promise<string | null>;
   /** The assistant's own pick, then the general default, as a view's launch reads them. */
   preferred: readonly (string | null | undefined)[];
-}): Promise<LaunchableAssistantAgent[]> {
+}): LaunchableAssistantAgent[] {
   const wired = new Set(input.wired);
   const offered = new Set(input.offered);
-  const candidates = VIEWLESS_START_AGENT_IDS.filter(
-    (id) => wired.has(id) && input.isLaunchable(id)
+  const usable = VIEWLESS_START_AGENT_IDS.filter((id) => wired.has(id) && input.isLaunchable(id));
+  const preferred = input.preferred.filter(
+    (id): id is string => typeof id === "string" && usable.includes(id)
   );
-  const tooOld = (installed: string | null, required: string): boolean => {
+  return [...new Set([...preferred, ...usable])].map((id) => ({ id, byDefault: offered.has(id) }));
+}
+
+/**
+ * Whether an installed CLI is new enough for its assistant wiring (#16815): an
+ * `agy` before 1.5.5 would start without its lane's `--settings`. Only a
+ * definite too-old reading fails, and it is read once more past any cache, so
+ * an upgrade counts at once; a version that can't be read or compared passes,
+ * as the panel's own gate lets it.
+ */
+export async function meetsAssistantVersionFloor(
+  required: string | undefined,
+  installedVersion: (refresh: boolean) => Promise<string | null>
+): Promise<boolean> {
+  if (!required) return true;
+  const tooOld = (installed: string | null): boolean => {
     if (!installed) return false;
     try {
       return semver.lt(installed, required);
@@ -68,19 +76,22 @@ export async function viewlessLaunchableAgents(input: {
       return false;
     }
   };
-  const current = await Promise.all(
-    candidates.map(async (id) => {
-      const required = input.minVersion(id);
-      if (!required) return true;
-      if (!tooOld(await input.installedVersion(id, false).catch(() => null), required)) return true;
-      return !tooOld(await input.installedVersion(id, true).catch(() => null), required);
-    })
-  );
-  const usable = candidates.filter((_, index) => current[index]);
-  const preferred = input.preferred.filter(
-    (id): id is string => typeof id === "string" && usable.includes(id)
-  );
-  return [...new Set([...preferred, ...usable])].map((id) => ({ id, byDefault: offered.has(id) }));
+  if (!tooOld(await installedVersion(false).catch(() => null))) return true;
+  return !tooOld(await installedVersion(true).catch(() => null));
+}
+
+/**
+ * The agent a start that names none settles on: the first default whose CLI is
+ * new enough, each asked in turn, so no later one's version read holds it up.
+ */
+export async function firstUsableDefault(
+  agents: readonly LaunchableAssistantAgent[],
+  newEnough: (agentId: string) => Promise<boolean>
+): Promise<string | undefined> {
+  for (const agent of agents) {
+    if (agent.byDefault && (await newEnough(agent.id))) return agent.id;
+  }
+  return undefined;
 }
 
 /** What one assistant asks of a start with no view (#13496). */
@@ -164,6 +175,11 @@ export interface AssistantLaunchDeps {
    * assistant's own picker offers it; any other runs only when named.
    */
   launchableAgents(): Promise<LaunchableAssistantAgent[]>;
+  /**
+   * Whether the agent's CLI is new enough for its assistant wiring, asked only
+   * of the agent a start settles on. Absent, every launchable one is.
+   */
+  meetsVersionFloor?(agentId: string): Promise<boolean>;
   /** `HelpSessionService.provisionSession`; throws `LANE_OCCUPIED` for a lane in use. */
   provision(input: {
     projectId: string;
@@ -247,10 +263,19 @@ export async function startAssistantWithoutView(
   const launchable = (await deps.launchableAgents()).filter(({ id }) =>
     VIEWLESS_START_AGENT_IDS.includes(id)
   );
-  const agentId = request.agentId ?? launchable.find((agent) => agent.byDefault)?.id ?? undefined;
-  if (agentId === undefined || !launchable.some(({ id }) => id === agentId)) {
-    return refused("agent-unavailable");
+  // A CLI too old for its wiring is passed over like an uninstalled one, as
+  // `help.launchAgent` does; only the agents a start could settle on are
+  // asked, in turn, so no other CLI's version read holds it up.
+  const newEnough = (id: string) => deps.meetsVersionFloor?.(id) ?? Promise.resolve(true);
+  let agentId: string | undefined;
+  if (request.agentId !== undefined) {
+    if (launchable.some(({ id }) => id === request.agentId) && (await newEnough(request.agentId))) {
+      agentId = request.agentId;
+    }
+  } else {
+    agentId = await firstUsableDefault(launchable, newEnough);
   }
+  if (agentId === undefined) return refused("agent-unavailable");
 
   const occupied = new Set(deps.occupiedSlots(project.id));
   const kept = new Set(deps.keptSlots?.(project.id) ?? []);
@@ -436,18 +461,22 @@ export async function liveAssistantLaunchDeps(): Promise<AssistantLaunchDeps> {
       const availability = service
         ? (service.getAvailability() ?? (await service.checkAvailability()))
         : null;
-      const versions = getAgentVersionService();
       const { assistantAgentId, defaultAgent } = readAgentDefaults();
       return viewlessLaunchableAgents({
         wired: getAssistantWiredAgentIds(),
         offered: getAssistantSupportedAgentIds(),
         isLaunchable: (id) =>
           isAgentLaunchable(availability?.[id as keyof typeof availability] ?? undefined),
-        minVersion: (id) => getEffectiveAgentConfig(id)?.assistantMinVersion,
-        installedVersion: async (id, refresh) =>
-          versions ? versions.getInstalledVersionForLaunch(id as AgentId, refresh) : null,
         preferred: [assistantAgentId, defaultAgent],
       });
+    },
+    meetsVersionFloor: (agentId) => {
+      const versions = getAgentVersionService();
+      return meetsAssistantVersionFloor(
+        getEffectiveAgentConfig(agentId)?.assistantMinVersion,
+        async (refresh) =>
+          versions ? versions.getInstalledVersionForLaunch(agentId as AgentId, refresh) : null
+      );
     },
     occupiedSlots: (projectId) =>
       helpSessionService

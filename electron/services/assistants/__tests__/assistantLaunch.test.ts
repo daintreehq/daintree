@@ -5,9 +5,10 @@ import { NO_VIEW_HANDLE } from "../../../ipc/endpoint.js";
 import {
   getAssistantSupportedAgentIds,
   getAssistantWiredAgentIds,
-  getEffectiveAgentConfig,
 } from "../../../../shared/config/agentRegistry.js";
 import {
+  firstUsableDefault,
+  meetsAssistantVersionFloor,
   spawnAndConfirm,
   startAssistantWithoutView,
   viewlessLaunchableAgents,
@@ -214,6 +215,31 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
       { id: "codex", byDefault: true },
     ];
     await expect(start()).resolves.toMatchObject({ status: "started", agentId: "antigravity" });
+  });
+
+  it("asks only the agent it settles on whether its CLI is new enough, passing over a too-old one (#16815)", async () => {
+    const tooOld = new Set(["codex"]);
+    const meetsVersionFloor = vi.fn(async (id: string) => !tooOld.has(id));
+    deps.meetsVersionFloor = meetsVersionFloor;
+
+    // The default skips a too-old pick for the next default, and asks no further.
+    await expect(start()).resolves.toMatchObject({ status: "started", agentId: "claude" });
+    expect(meetsVersionFloor.mock.calls).toEqual([["codex"], ["claude"]]);
+
+    // Named, a too-old agent is refused before anything is provisioned.
+    deps.provision.mockClear();
+    meetsVersionFloor.mockClear();
+    await expect(start({ agentId: "codex" })).resolves.toEqual({
+      status: "refused",
+      reason: "agent-unavailable",
+    });
+    expect(meetsVersionFloor.mock.calls).toEqual([["codex"]]);
+    expect(deps.provision).not.toHaveBeenCalled();
+
+    // A new-enough named agent is the only one asked.
+    meetsVersionFloor.mockClear();
+    await expect(start({ agentId: "copilot" })).resolves.toMatchObject({ agentId: "copilot" });
+    expect(meetsVersionFloor.mock.calls).toEqual([["copilot"]]);
   });
 
   it("refuses a slot in use without touching it, and an unknown project", async () => {
@@ -510,59 +536,82 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
 });
 
 describe("viewlessLaunchableAgents against the real registry (#16815)", () => {
-  const launchable = (
-    installed: Record<string, string | null>,
-    preferred: (string | null)[] = [null, null],
-    reread: Record<string, string | null> = installed
-  ) =>
+  const launchable = (installed: string[], preferred: (string | null)[] = [null, null]) =>
     viewlessLaunchableAgents({
       wired: getAssistantWiredAgentIds(),
       offered: getAssistantSupportedAgentIds(),
-      isLaunchable: (id) => id in installed,
-      minVersion: (id) => getEffectiveAgentConfig(id)?.assistantMinVersion,
-      installedVersion: async (id, refresh) => (refresh ? reread : installed)[id] ?? null,
+      isLaunchable: (id) => installed.includes(id),
       preferred,
     });
 
-  it("offers an installed Antigravity as a default, first when it's the assistant's pick", async () => {
-    await expect(
-      launchable({ codex: "0.130.0", antigravity: "1.5.5" }, ["antigravity", "codex"])
-    ).resolves.toEqual([
+  it("offers an installed Antigravity as a default, first when it's the assistant's pick", () => {
+    expect(launchable(["codex", "antigravity"], ["antigravity", "codex"])).toEqual([
       { id: "antigravity", byDefault: true },
       { id: "codex", byDefault: true },
     ]);
     // With no pick, the order a view's fallback would read keeps Codex first.
-    await expect(launchable({ codex: "0.130.0", antigravity: "1.5.5" })).resolves.toEqual([
+    expect(launchable(["codex", "antigravity"])).toEqual([
       { id: "codex", byDefault: true },
       { id: "antigravity", byDefault: true },
     ]);
   });
 
-  it("passes over a CLI older than its assistant floor, even as the pick", async () => {
-    await expect(
-      launchable({ codex: "0.130.0", antigravity: "1.4.12" }, ["antigravity", null])
-    ).resolves.toEqual([{ id: "codex", byDefault: true }]);
-  });
-
-  it("counts an upgrade at once: a too-old cached reading is read again past the cache", async () => {
-    await expect(
-      launchable({ antigravity: "1.4.12" }, ["antigravity", null], { antigravity: "1.5.5" })
-    ).resolves.toEqual([{ id: "antigravity", byDefault: true }]);
-  });
-
-  it("doesn't hold back a CLI whose version can't be read or compared", async () => {
-    await expect(launchable({ antigravity: null })).resolves.toEqual([
-      { id: "antigravity", byDefault: true },
-    ]);
-    await expect(launchable({ antigravity: "not a version" })).resolves.toEqual([
-      { id: "antigravity", byDefault: true },
+  it("keeps an experimental backend for starts that name it, and drops a picked agent with no viewless start", () => {
+    expect(launchable(["copilot", "gemini"], ["gemini", null])).toEqual([
+      { id: "copilot", byDefault: false },
     ]);
   });
+});
 
-  it("keeps an experimental backend for starts that name it, and drops a picked agent with no viewless start", async () => {
-    await expect(
-      launchable({ copilot: "1.0.40", gemini: "1.0.0" }, ["gemini", null])
-    ).resolves.toEqual([{ id: "copilot", byDefault: false }]);
+describe("firstUsableDefault (#16815)", () => {
+  const agents = [
+    { id: "copilot", byDefault: false },
+    { id: "antigravity", byDefault: true },
+    { id: "codex", byDefault: true },
+    { id: "claude", byDefault: true },
+  ];
+
+  it("settles on the first default new enough, asking no agent after it", async () => {
+    const newEnough = vi.fn(async (id: string) => id !== "antigravity");
+    await expect(firstUsableDefault(agents, newEnough)).resolves.toBe("codex");
+    expect(newEnough.mock.calls).toEqual([["antigravity"], ["codex"]]);
+  });
+
+  it("settles on nothing when no default is new enough", async () => {
+    await expect(firstUsableDefault(agents, async () => false)).resolves.toBeUndefined();
+  });
+});
+
+describe("meetsAssistantVersionFloor (#16815)", () => {
+  const reads = (cached: string | null, fresh: string | null = cached) => {
+    const read = vi.fn(async (refresh: boolean) => (refresh ? fresh : cached));
+    return read;
+  };
+
+  it("passes a CLI at or above the floor on its cached reading alone", async () => {
+    const read = reads("1.5.5");
+    await expect(meetsAssistantVersionFloor("1.5.5", read)).resolves.toBe(true);
+    expect(read.mock.calls).toEqual([[false]]);
+  });
+
+  it("fails a CLI below the floor only once a fresh read agrees", async () => {
+    const read = reads("1.4.12");
+    await expect(meetsAssistantVersionFloor("1.5.5", read)).resolves.toBe(false);
+    expect(read.mock.calls).toEqual([[false], [true]]);
+    // An upgrade since the cached reading counts at once.
+    await expect(meetsAssistantVersionFloor("1.5.5", reads("1.4.12", "1.5.5"))).resolves.toBe(true);
+  });
+
+  it("doesn't hold back a CLI whose version can't be read or compared, or one with no floor", async () => {
+    await expect(meetsAssistantVersionFloor("1.5.5", reads(null))).resolves.toBe(true);
+    await expect(meetsAssistantVersionFloor("1.5.5", reads("not a version"))).resolves.toBe(true);
+    const failing = vi.fn(async () => {
+      throw new Error("probe failed");
+    });
+    await expect(meetsAssistantVersionFloor("1.5.5", failing)).resolves.toBe(true);
+    const unread = reads("0.0.1");
+    await expect(meetsAssistantVersionFloor(undefined, unread)).resolves.toBe(true);
+    expect(unread).not.toHaveBeenCalled();
   });
 });
 
