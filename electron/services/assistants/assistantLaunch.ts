@@ -20,7 +20,12 @@ import { READY_SCREEN_LINES, untilAssistantReady } from "./assistantReadiness.js
  * backends that run live, each answering its own folder-trust question or told
  * to trust its folder at launch.
  */
-export const VIEWLESS_START_AGENT_IDS: readonly string[] = ["claude", "codex", "copilot"];
+export const VIEWLESS_START_AGENT_IDS: readonly string[] = [
+  "claude",
+  "codex",
+  "copilot",
+  "antigravity",
+];
 
 /** What one assistant asks of a start with no view (#13496). */
 export interface AssistantLaunchRequest {

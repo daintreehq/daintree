@@ -112,7 +112,7 @@ export const AssistantStartArgsSchema = z.object({
     .min(1)
     .max(64)
     .optional()
-    .describe("claude, codex or copilot. Omit for this machine's default."),
+    .describe("claude, codex, copilot or antigravity. Omit for this machine's default."),
 });
 export type AssistantStartArgs = z.infer<typeof AssistantStartArgsSchema>;
 

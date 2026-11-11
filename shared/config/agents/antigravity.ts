@@ -29,14 +29,14 @@ export const config: AgentConfig = {
   // it, so each lane's folder carries its literal bearer; a session-only
   // `--settings` file trusts that folder and allows Daintree's own servers
   // (`--settings` refuses any key it doesn't know, `mcpServers` included).
-  // Experimental keeps it out of the picker until exposure ships.
+  // Stable offers it in the assistant picker beside Claude and Codex (#16815).
   supports: {
     mcpInjection: "project-config",
     settingsOverlay: true,
     permissionBypass: true,
     trustDialog: true,
     versionProbe: true,
-    tier: "experimental",
+    tier: "stable",
   },
   // The only release verified to honour the wiring above; `--settings` isn't
   // in agy's changelog, so no earlier floor can be shown.

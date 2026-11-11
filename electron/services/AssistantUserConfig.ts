@@ -39,6 +39,11 @@ const MAX_STARTER_FILE_BYTES = 16 * 1024;
 // `daintree` entry carries the session bearer and the tier boundary.
 const RESERVED_MCP_SERVER_NAMES = new Set(["daintree", "daintree-docs", "daintree-runbooks"]);
 
+// The backends whose launch carries the user's servers (`AssistantSessionFiles`
+// writes or passes them for these alone). Antigravity's lane config holds
+// Daintree's own servers only, so reading the file for it would promise nothing.
+const USER_MCP_SERVER_AGENT_IDS: ReadonlySet<string> = new Set(["claude", "codex", "copilot"]);
+
 // Bare-key safe (TOML `-c mcp_servers.<name>.…` for Codex) and a valid Claude
 // tool-name prefix (`mcp__<name>__*`).
 const MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -527,8 +532,17 @@ export async function loadAssistantUserConfig(
   let claudeHooks: Record<string, unknown> | null = null;
   if (input.loadGlobalHooksAndServers) {
     const mcpPath = path.join(globalDir, MCP_CONFIG_FILE);
-    const mcpRaw = await readBoundedFile(mcpPath, MAX_CONFIG_BYTES);
-    if (mcpRaw !== null) mcpServers = parseMcpConfig(mcpRaw, warnings);
+    if (USER_MCP_SERVER_AGENT_IDS.has(input.agentId)) {
+      const mcpRaw = await readBoundedFile(mcpPath, MAX_CONFIG_BYTES);
+      if (mcpRaw !== null) mcpServers = parseMcpConfig(mcpRaw, warnings);
+    } else {
+      try {
+        await fs.lstat(mcpPath);
+        warnings.push(`mcp.json servers aren't passed to ${input.agentId} sessions`);
+      } catch {
+        // absent — nothing to report
+      }
+    }
     // Hooks are Claude's alone. Other agents never read the file, so a broken
     // one must not block their launch — the session's leftover hooks are
     // stripped separately for them.

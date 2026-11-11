@@ -1091,7 +1091,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           maximum: 5,
         },
         agentId: {
-          description: "claude, codex or copilot. Omit for this machine's default.",
+          description: "claude, codex, copilot or antigravity. Omit for this machine's default.",
           type: "string",
           minLength: 1,
           maxLength: 64,
