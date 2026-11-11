@@ -28,6 +28,7 @@ import {
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useStableGridTabs } from "./stableGridTabs";
 
 export interface GridTabGroupProps {
   group: TabGroup;
@@ -98,8 +99,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
   const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
 
-  // Build tabs array for PanelHeader
-  const tabs: TabInfo[] = useMemo(() => {
+  const builtTabs: TabInfo[] = useMemo(() => {
     return panels.map((p) => {
       const pty = isPtyPanel(p) ? p : null;
       let presetColor = pty?.agentPresetColor;
@@ -167,6 +167,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     projectPresetsByAgent,
     showAgentTaskTitles,
   ]);
+  const tabs = useStableGridTabs(builtTabs);
 
   // Check if this group is currently focused
   const isGroupFocused = useMemo(() => panels.some((p) => p.id === focusedId), [panels, focusedId]);
@@ -266,18 +267,20 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         // Switching tabs unmounts the closing view, so it waits for a guarded
         // close to be approved: a cancelled close must leave the view, and any
         // unsaved work in it, where it was.
+        // The neighbour comes from the tabs, not the panels: they keep their
+        // identity through background status writes, so this handler does too.
         onOutcome: (closing) => {
           if (!closing || tabId !== activeTabId) return;
-          const currentIndex = panels.findIndex((p) => p.id === tabId);
-          const nextPanel = panels[currentIndex + 1] ?? panels[currentIndex - 1];
-          if (nextPanel) {
-            setActiveTab(group.id, nextPanel.id);
-            setFocused(nextPanel.id);
+          const currentIndex = tabs.findIndex((t) => t.id === tabId);
+          const nextTab = tabs[currentIndex + 1] ?? tabs[currentIndex - 1];
+          if (nextTab) {
+            setActiveTab(group.id, nextTab.id);
+            setFocused(nextTab.id);
           }
         },
       });
     },
-    [activeTabId, panels, group.id, setActiveTab, setFocused, trashPanel]
+    [activeTabId, tabs, group.id, setActiveTab, setFocused, trashPanel]
   );
 
   // Handle tab reorder - update group panel order. It reaches the shown pane's
