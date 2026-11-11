@@ -1202,6 +1202,160 @@ describe("PtyClient fabric", () => {
       expect(messagesOfType(shardA.child, "dispose")).toHaveLength(0);
       client.dispose();
     });
+
+    const READ_TYPES = [
+      "get-serialized-state",
+      "get-terminal-info",
+      "get-terminal",
+      "replay-history",
+    ];
+
+    const readPreserved = (client: InstanceType<typeof PtyClientClass>, id: string) => {
+      void client.getSerializedStateAsync(id);
+      void client.getTerminalInfo(id);
+      void client.getTerminalAsync(id);
+      void client.replayHistoryAsync(id);
+    };
+
+    it("keeps a preserved exit routed to its shard until the pane is killed (#16811)", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0, preserved: true });
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+      expect(messagesOfType(shardA.child, "dispose")).toHaveLength(0);
+
+      readPreserved(client, "t1");
+      for (const type of READ_TYPES) {
+        expect(messagesOfType(shardA.child, type).map((m) => m.id)).toEqual(["t1"]);
+        expect(messagesOfType(defaultShard().child, type)).toHaveLength(0);
+      }
+
+      client.kill("t1");
+      expect(messagesOfType(shardA.child, "kill").map((m) => m.id)).toEqual(["t1"]);
+      expect(messagesOfType(defaultShard().child, "kill")).toHaveLength(0);
+
+      // The kill removed the preserved entry, so nothing routes to it any more.
+      readPreserved(client, "t1");
+      for (const type of READ_TYPES) {
+        expect(messagesOfType(shardA.child, type)).toHaveLength(1);
+        expect(messagesOfType(defaultShard().child, type).map((m) => m.id)).toEqual(["t1"]);
+      }
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+      expect(messagesOfType(shardA.child, "dispose")).toHaveLength(1);
+      client.dispose();
+    });
+
+    it("releases a preserved exit's shard once its host reports the entry removed (#16811)", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0, preserved: true });
+      // Only the shard holding the entry can say it is gone.
+      defaultShard().child.emit("message", { type: "terminal-removed", id: "t1" });
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+      expect(messagesOfType(shardA.child, "dispose")).toHaveLength(0);
+
+      shardA.child.emit("message", { type: "terminal-removed", id: "t1" });
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+      expect(messagesOfType(shardA.child, "dispose")).toHaveLength(1);
+      client.dispose();
+    });
+
+    it("keeps a preserved exit's owner when another shard reports an exit for the id (#16811)", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0, preserved: true });
+
+      defaultShard().child.emit("message", { type: "exit", id: "t1", exitCode: 1 });
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+
+      expect(messagesOfType(shardA.child, "dispose")).toHaveLength(0);
+      readPreserved(client, "t1");
+      expect(messagesOfType(shardA.child, "get-serialized-state").map((m) => m.id)).toEqual(["t1"]);
+      client.dispose();
+    });
+
+    it("keeps a same-id respawn's routing when the replaced preserved entry's removal lands (#16811)", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0, preserved: true });
+
+      // The host replaces the preserved entry with the respawn, removing it first.
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      shardA.child.emit("message", { type: "terminal-removed", id: "t1" });
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+
+      expect(messagesOfType(shardA.child, "dispose")).toHaveLength(0);
+      client.write("t1", "ls\r");
+      expect(messagesOfType(shardA.child, "write").map((m) => m.id)).toEqual(["t1"]);
+      client.dispose();
+    });
+
+    it("retires the old shard when a preserved id respawns on another project's shard (#16811)", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      client.spawn("t2", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+      const shardB = projectShard("project-b");
+      shardB.child.emit("message", { type: "ready" });
+      shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0, preserved: true });
+
+      client.spawn("t1", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+
+      expect(messagesOfType(shardA.child, "dispose")).toHaveLength(1);
+      expect(messagesOfType(shardB.child, "dispose")).toHaveLength(0);
+      client.dispose();
+    });
+
+    it("keeps the shard until its host reports the entry removed when a kill races a preserved exit (#16811)", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      // The pane's kill leaves main while the natural exit is already in flight.
+      client.kill("t1");
+      shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0, preserved: true });
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+      expect(messagesOfType(shardA.child, "dispose")).toHaveLength(0);
+
+      // The host's kill then finds the exited entry and removes it.
+      shardA.child.emit("message", { type: "terminal-removed", id: "t1" });
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+      expect(messagesOfType(shardA.child, "dispose")).toHaveLength(1);
+      client.dispose();
+    });
+
+    it("retires a restarted shard whose only owners were preserved entries lost in the crash (#16811)", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0, preserved: true });
+      const forkCountBefore = forks.length;
+
+      shardA.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(forks.length).toBe(forkCountBefore + 1);
+      const restarted = forks[forks.length - 1];
+      restarted.child.emit("message", { type: "ready" });
+
+      expect(messagesOfType(restarted.child, "spawn")).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+      expect(messagesOfType(restarted.child, "dispose")).toHaveLength(1);
+      client.dispose();
+    });
   });
 
   describe("aggregated host signals", () => {

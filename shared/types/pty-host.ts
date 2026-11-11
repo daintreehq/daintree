@@ -738,6 +738,8 @@ export type PtyHostEvent =
   // `spawnedAt` names that incarnation as session records do (#15976).
   // `preserveSession` marks an exit a session-preserving project teardown
   // caused, so the renderer keeps the pane in the layout (#13841).
+  // `preserved` marks an exit the host kept the terminal's entry past, for its
+  // final screen and scrollback (#16811); `terminal-removed` reports its end.
   | {
       type: "exit";
       id: string;
@@ -746,6 +748,7 @@ export type PtyHostEvent =
       launchGeneration?: number;
       spawnedAt?: number;
       preserveSession?: boolean;
+      preserved?: boolean;
     }
   // The exit of an incarnation a same-id respawn already replaced in the host
   // (#15976). The host keeps nothing for it any more, so this is the facts
@@ -758,6 +761,9 @@ export type PtyHostEvent =
       launchGeneration?: number;
       spawnedAt: number;
     }
+  // The host dropped its entry for the terminal: after an unpreserved exit, or
+  // a preserved one's kill, replacement or eviction (#16811).
+  | { type: "terminal-removed"; id: string }
   | { type: "error"; id: string; error: string }
   // Typed submit-lane status (#11875). Deliberately NOT folded into the `error`
   // carrier above: "this prompt is taking a while" is not an error, and the

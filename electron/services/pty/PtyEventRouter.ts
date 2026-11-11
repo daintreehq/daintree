@@ -82,6 +82,15 @@ export interface PtyEventRouterCallbacks {
     stopped?: boolean
   ) => void;
   /**
+   * Optional. Fires for the current incarnation's exit, after the pending maps
+   * settle and before the public `exit`, with whether the host kept the
+   * terminal's entry past it (#16811). PtyClient decides from it whether the
+   * terminal still owns its shard.
+   */
+  onCurrentExit?: (id: string, preserved: boolean) => void;
+  /** Optional. The host dropped its entry for the terminal (#16811). */
+  onTerminalRemoved?: (id: string) => void;
+  /**
    * Optional. Fires for each terminal a `graceful-kill-by-project` captures, as
    * it settles rather than when the whole project has. Lets PtyClient answer
    * with partial results for a call that is still in flight (#12180). Pure side
@@ -254,9 +263,14 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       // ledger/reaper above, but never clear the successor's PID/trash state or
       // broadcast an id-only exit that would auto-trash its live renderer pane.
       if (superseded) return true;
+      callbacks.onCurrentExit?.(event.id, event.preserved === true);
       emitter.emit("exit", event.id, event.exitCode, event.signal, event.preserveSession);
       return true;
     }
+
+    case "terminal-removed":
+      callbacks.onTerminalRemoved?.(event.id);
+      return true;
 
     // Facts only: the id belongs to the successor, so nothing keyed by it moves.
     case "superseded-exit":

@@ -172,6 +172,8 @@ export class PtyManager extends EventEmitter {
   constructor() {
     super();
     this.registry = new TerminalRegistry(undefined, (id) => {
+      // Main keeps a preserved entry's shard routing until it hears this.
+      this.emit("terminal-removed", id);
       const streamEnd = this.streamOffsets.get(id);
       if (streamEnd === undefined) return;
       this.streamOffsets.delete(id);
@@ -610,6 +612,7 @@ export class PtyManager extends EventEmitter {
               );
               return;
             }
+            const preserved = terminalProcess.shouldPreserveOnExit(exitCode);
             this.emit(
               "exit",
               termId,
@@ -617,9 +620,10 @@ export class PtyManager extends EventEmitter {
               signal,
               options.launchGeneration,
               this.sessionPreservingTeardowns.has(terminalProcess) || undefined,
-              terminalProcess.getInfo().spawnedAt
+              terminalProcess.getInfo().spawnedAt,
+              preserved
             );
-            if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
+            if (!preserved) {
               this.registry.delete(termId);
             }
             this.syncTreeKillHelperWarmth();
@@ -1478,6 +1482,15 @@ export class PtyManager extends EventEmitter {
     // without killing. Fall back to immediate kill in that case.
     if (!terminal.getInfo().wasKilled && !terminal.getInfo().isExited) {
       this.kill(id, "graceful-kill-fallback", options);
+    } else if (
+      terminal.getInfo().isExited &&
+      !options?.preserveSession &&
+      this.registry.get(id) === terminal
+    ) {
+      // An exited entry still registered was kept for its final output. Closing
+      // its pane removes it, as a plain kill does, or it would outlive the pane
+      // and hold its shard (#16811). A session-preserving teardown keeps it.
+      this.kill(id, "graceful-kill-exited");
     }
 
     return { sessionId };
