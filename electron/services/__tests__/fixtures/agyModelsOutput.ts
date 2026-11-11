@@ -31,8 +31,15 @@ function rows(eol: string): string {
   return ROWS.map(([id, name]) => `${id.padEnd(WIDTH)}${name}${eol}`).join("");
 }
 
+/** `rows` as `agy models` prints them: the spinner erased in place, then the list. */
+export function agyModelsListing(listed: readonly { id: string; name: string }[]): string {
+  const width = Math.max(...listed.map(({ id }) => id.length)) + 2;
+  const body = listed.map(({ id, name }) => `${id.padEnd(width)}${name}\n`).join("");
+  return `${HIDE_CURSOR}${spinner("Fetching models…")}${ERASE_LINE}${SHOW_CURSOR}${body}`;
+}
+
 /** Spinner erased in place, cursor restored, then the rows. */
-export const AGY_MODELS_SPINNER_CLEARED = `${HIDE_CURSOR}${spinner("Fetching models…")}${ERASE_LINE}${SHOW_CURSOR}${rows("\n")}`;
+export const AGY_MODELS_SPINNER_CLEARED = agyModelsListing(AGY_MODELS);
 
 /** The first row written over the last spinner frame without its own line. */
 export const AGY_MODELS_SPINNER_OVERWRITTEN = `${spinner("Fetching models…")}\r${rows("\n")}`;

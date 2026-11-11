@@ -11,8 +11,6 @@ export interface AgyListedModel {
 const MODEL_ROW = /^([A-Za-z0-9](?:[A-Za-z0-9._:/-]*[A-Za-z0-9])?)(?: {2,}|\t+)(\S.*)$/;
 // A marker some list printers put before the current choice.
 const ROW_MARKER = /^[*>•●✓]\s+/;
-// Column headers have a row's shape.
-const HEADER_IDS = new Set(["id", "model", "models", "name", "slug"]);
 
 /**
  * Reads `agy models` output into its model rows, in printed order.
@@ -31,7 +29,11 @@ export function parseAgyModelsOutput(output: string): AgyListedModel[] {
     const match = MODEL_ROW.exec(line);
     if (!match) continue;
     const id = match[1]!;
-    if (HEADER_IDS.has(id.toLowerCase()) || seen.has(id)) continue;
+    // A row agy didn't mean as a model becomes `--model <it>` and fails the
+    // launch, while a missed row only narrows the list. Every model id agy
+    // lists is hyphenated (`gemini-4-carbon-high`), and padded words that
+    // have a row's shape (`ID  NAME`, `WARNING  …`, `login  Sign in`) aren't.
+    if (!id.includes("-") || id.includes("://") || seen.has(id)) continue;
     seen.add(id);
     models.push({ id, name: match[2]!.trim() });
   }

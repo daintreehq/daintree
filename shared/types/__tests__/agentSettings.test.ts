@@ -689,7 +689,8 @@ describe("generateAgentCommand antigravity prompt injection", () => {
 describe("antigravity model selection", () => {
   forcePosixPlatform();
 
-  const modelId = getEffectiveAgentConfig("antigravity")!.models![0]!.id;
+  // Not in the bundled list: a model agy lists that this build doesn't know.
+  const modelId = "gemini-5.1-preview-high";
   const quotedModel = `'?${modelId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'?`;
   const sessionId = "b0bced34-800c-4859-aaae-81d5f961c0f7";
 

@@ -218,8 +218,10 @@ describe("spawnEnv", () => {
         https_proxy: "http://proxy:8080",
         NODE_EXTRA_CA_CERTS: "/etc/ssl/corp-ca.pem",
         GOOGLE_API_KEY: "google-key",
+        ACME_AGENT_TOKEN: "acme-token",
       });
-      const env = buildNetworkProbeEnv(["GOOGLE_API_KEY"]);
+      const env = buildNetworkProbeEnv(["GOOGLE_API_KEY", "ACME_AGENT_TOKEN"]);
+      expect(env.ACME_AGENT_TOKEN).toBe("acme-token");
       expect(env.PATH).toBe("/usr/bin");
       expect(env.HOME).toBe("/home/u");
       expect(env.https_proxy).toBe("http://proxy:8080");
@@ -244,8 +246,9 @@ describe("spawnEnv", () => {
     });
 
     it("matches a declared credential var case-insensitively", () => {
-      setEnv({ HOME: "/h", google_api_key: "google-key" });
+      setEnv({ HOME: "/h", google_api_key: "google-key", ACME_AGENT_TOKEN: "acme-token" });
       expect(buildNetworkProbeEnv(["GOOGLE_API_KEY"]).google_api_key).toBe("google-key");
+      expect(buildNetworkProbeEnv(["acme_agent_token"]).ACME_AGENT_TOKEN).toBe("acme-token");
     });
   });
 });

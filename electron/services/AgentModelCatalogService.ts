@@ -505,7 +505,9 @@ export class AgentModelCatalogService {
    */
   private async getAntigravityCatalog(): Promise<AgyListed | null> {
     if (this.agyCache && isWithinTtl(this.agyCache.fetchedAt)) return this.agyCache;
-    if (Date.now() < this.agyRetryAt) return this.agyCache;
+    // Bounded by the pause itself, so a clock set back can't stretch it.
+    const pause = this.agyRetryAt - Date.now();
+    if (pause > 0 && pause <= AGY_RETRY_MS) return this.agyCache;
     // Everything up to the fallback lives in the shared promise, so a caller
     // joining a refresh gets the same answer as the one that started it.
     const inFlight = (this.agyInFlight ??= this.refreshAntigravityCatalog()
@@ -521,15 +523,20 @@ export class AgentModelCatalogService {
 
   private async refreshAntigravityCatalog(): Promise<AgyListed | null> {
     const disk = await this.readAgyDisk();
-    // The newer of memory and disk: a write can fail after a good probe.
-    const known =
-      disk && (!this.agyCache || disk.fetchedAt > this.agyCache.fetchedAt) ? disk : this.agyCache;
-    if (known && isWithinTtl(known.fetchedAt)) {
-      this.agyCache = known;
-      return known;
+    // The newer of memory and disk (a write can fail after a good probe), held
+    // in memory before the probe so nothing the probe does can lose it.
+    if (disk && (!this.agyCache || disk.fetchedAt > this.agyCache.fetchedAt)) {
+      this.agyCache = disk;
     }
+    const known = this.agyCache;
+    if (known && isWithinTtl(known.fetchedAt)) return known;
 
-    const listed = await this.fetchAntigravityCatalog();
+    let listed: AgentModelConfig[] | null = null;
+    try {
+      listed = await this.fetchAntigravityCatalog();
+    } catch (err: unknown) {
+      console.warn("[AgentModelCatalogService] antigravity catalog failed", err);
+    }
     if (listed) {
       const fresh: AgyListed = { models: listed, fetchedAt: Date.now() };
       this.agyCache = fresh;
@@ -541,7 +548,6 @@ export class AgentModelCatalogService {
     }
 
     this.agyRetryAt = Date.now() + AGY_RETRY_MS;
-    this.agyCache = known;
     return known;
   }
 
