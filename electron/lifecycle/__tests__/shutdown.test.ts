@@ -270,6 +270,7 @@ const helpSessionMock = vi.hoisted(() => ({
     (): Map<string, { slotKey: string; agentSessionId: string; revision: number }> => new Map()
   ),
   noteQuitCapture: vi.fn(async (_lane: unknown, _agentSessionId: string) => {}),
+  recordLanesToResumeAtLaunch: vi.fn(async (_lanes: unknown) => {}),
   revokeAll: vi.fn(async () => {}),
 }));
 vi.mock("../../services/HelpSessionService.js", () => ({
@@ -2397,6 +2398,49 @@ describe("registerShutdownHandler", () => {
       // Snapshotted before the kill, while the lanes were still bound.
       expect(helpSessionMock.snapshotLaneTerminals.mock.invocationCallOrder[0]).toBeLessThan(
         gracefulKillByProject.mock.invocationCallOrder[0]!
+      );
+      // An ordinary quit leaves its lanes to be resumed by hand (#10815).
+      expect(helpSessionMock.recordLanesToResumeAtLaunch).not.toHaveBeenCalled();
+    });
+
+    it("records the lanes an update restart stops, after their captures and before the install (#16753)", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const running = { slotKey: "proj-1#0", agentSessionId: "", revision: 1 };
+      const exited = { slotKey: "proj-1#1", agentSessionId: "conv-1", revision: 1 };
+      const gone = { slotKey: "proj-1#2", agentSessionId: "conv-2", revision: 1 };
+      helpSessionMock.snapshotLaneTerminals.mockReturnValueOnce(
+        new Map([
+          ["assistant-0", running],
+          ["assistant-1", exited],
+          ["assistant-2", gone],
+        ])
+      );
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [
+          { ...agentTerminal, id: "assistant-0", isAssistantTerminal: true },
+          { ...agentTerminal, id: "assistant-1", isAssistantTerminal: true, isExited: true },
+        ]),
+        gracefulKillByProject: vi.fn(async () => [
+          { id: "assistant-0", agentSessionId: "codex-thread-0" },
+        ]),
+      });
+      await setup({ getPtyClient: () => ptyClient });
+      const coordinator = await import("../shutdownCoordinator.js");
+      const onReadyToInstall = vi.fn();
+
+      coordinator.requestGracefulShutdownForUpdate(onReadyToInstall);
+      await vi.waitFor(() => expect(onReadyToInstall).toHaveBeenCalled());
+
+      // Only the lane whose assistant was alive when the quit began.
+      expect(helpSessionMock.recordLanesToResumeAtLaunch).toHaveBeenCalledExactlyOnceWith([
+        running,
+      ]);
+      // After the capture that gives a Codex lane its id, before the install takes the process.
+      expect(helpSessionMock.noteQuitCapture.mock.invocationCallOrder[0]).toBeLessThan(
+        helpSessionMock.recordLanesToResumeAtLaunch.mock.invocationCallOrder[0]!
+      );
+      expect(helpSessionMock.recordLanesToResumeAtLaunch.mock.invocationCallOrder[0]).toBeLessThan(
+        onReadyToInstall.mock.invocationCallOrder[0]!
       );
     });
 

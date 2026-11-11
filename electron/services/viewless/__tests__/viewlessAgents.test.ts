@@ -608,6 +608,41 @@ describe("a schedule's Assistant spawned with no frontend (#16169)", () => {
   });
 });
 
+describe("an Assistant reopening one exact conversation with no frontend (#16753)", () => {
+  const spec = {
+    terminalId: "terminal-assistant",
+    agentId: "claude",
+    cwd: "/help-sessions/abc",
+    env: { DAINTREE_MCP_TOKEN: "bearer" },
+    prompt: "",
+    agentLaunchFlags: [],
+  };
+
+  it("asks the spawn to refuse rather than open an empty conversation under the id", async () => {
+    const { deps, invoke } = launchDeps();
+
+    await expect(
+      spawnHostAssistant(
+        PROJECT,
+        { ...spec, resumeAgentSessionId: "conv-7", exactResume: true },
+        deps
+      )
+    ).resolves.toBe(true);
+
+    const payload = spawned(invoke);
+    expect(payload).toMatchObject({ agentSessionId: "conv-7", exactResume: true });
+    expect(String(payload.command)).toContain("conv-7");
+  });
+
+  it("leaves a resume that didn't ask for it as it was", async () => {
+    const { deps, invoke } = launchDeps();
+
+    await spawnHostAssistant(PROJECT, { ...spec, resumeAgentSessionId: "conv-8" }, deps);
+
+    expect(spawned(invoke)).not.toHaveProperty("exactResume");
+  });
+});
+
 describe("agent.listAvailable with no frontend", () => {
   it("reports the registry with the host's own probe", async () => {
     const { deps } = makeDeps();

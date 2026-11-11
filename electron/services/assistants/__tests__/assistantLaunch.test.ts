@@ -246,6 +246,82 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
     });
   });
 
+  describe("resuming a conversation by id (#16753)", () => {
+    const resume = { agentSessionId: "conv-7", cwd: SESSION_FOLDER };
+    const UPDATE_RESTART = { kind: "update-restart" } as const;
+
+    it("reopens it in its own slot on its own agent, with no greeting, refusing a fresh one", async () => {
+      // Back at its prompt with the conversation on screen: nothing to wait on.
+      screens = [["› earlier work", "", "› Ask Codex to do anything"].join("\n")];
+      const result = await start({ slot: 2, agentId: "claude", startedBy: UPDATE_RESTART, resume });
+
+      expect(result).toMatchObject({ status: "started", slot: 2, agentId: "claude", ready: true });
+      expect(clock).toBe(0);
+      expect(deps.provision).toHaveBeenCalledTimes(1);
+      expect(deps.provision.mock.calls[0]![0]).toMatchObject({
+        slot: 2,
+        agentId: "claude",
+        vacantOnly: true,
+        startedBy: UPDATE_RESTART,
+      });
+      expect(deps.spawn.mock.calls[0]![1]).toMatchObject({
+        prompt: "",
+        resumeAgentSessionId: "conv-7",
+        exactResume: true,
+      });
+    });
+
+    it("never moves to another slot or agent, or starts with nothing to resume", async () => {
+      deps.provision.mockRejectedValueOnce(
+        Object.assign(new Error("busy"), { code: "LANE_OCCUPIED" })
+      );
+      await expect(
+        start({ slot: 2, agentId: "claude", startedBy: UPDATE_RESTART, resume })
+      ).resolves.toEqual({ status: "refused", reason: "no-slot" });
+      expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([2]);
+
+      deps.provision.mockClear();
+      for (const request of [
+        { slot: undefined, agentId: "claude" },
+        { slot: 2, agentId: undefined },
+        { slot: 2, agentId: "claude", resume: { ...resume, agentSessionId: "" } },
+        // Not one this machine starts with no view: no other agent stands in.
+        { slot: 2, agentId: "gemini" },
+      ]) {
+        await expect(start({ startedBy: UPDATE_RESTART, resume, ...request })).resolves.toEqual({
+          status: "refused",
+          reason: "launch-failed",
+        });
+      }
+      expect(deps.provision).not.toHaveBeenCalled();
+      expect(deps.spawn).not.toHaveBeenCalled();
+    });
+
+    it("gives the lane back unspawned when its folder isn't the conversation's, or it's no longer wanted", async () => {
+      await expect(
+        start({
+          slot: 2,
+          agentId: "claude",
+          startedBy: UPDATE_RESTART,
+          resume: { ...resume, cwd: "/elsewhere" },
+        })
+      ).resolves.toEqual({ status: "refused", reason: "launch-failed" });
+
+      await expect(
+        start({
+          slot: 2,
+          agentId: "claude",
+          startedBy: UPDATE_RESTART,
+          resume,
+          stillWanted: () => false,
+        })
+      ).resolves.toEqual({ status: "refused", reason: "launch-failed" });
+
+      expect(deps.revoke.mock.calls).toEqual([["session-1"], ["session-1"]]);
+      expect(deps.spawn).not.toHaveBeenCalled();
+    });
+  });
+
   it("tries a slot keeping a stopped session's conversation last", async () => {
     occupied = [0];
     deps.keptSlots = () => [1];

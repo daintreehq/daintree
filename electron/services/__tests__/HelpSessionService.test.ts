@@ -1040,6 +1040,26 @@ describe("HelpSessionService", () => {
       });
     });
 
+    it("starts a lane an update restart stopped with no view, for the first view to take over (#16753)", async () => {
+      const resumed = await service.provisionSession({
+        ...provisionInput(),
+        slot: 2,
+        windowId: NO_VIEW_HANDLE,
+        projectViewWebContentsId: NO_VIEW_HANDLE,
+        vacantOnly: true,
+        startedBy: { kind: "update-restart" },
+      });
+      if (!resumed) throw new Error("expected result");
+      expect(service.markTerminalForToken(resumed.token, "term-resumed")).toBe(true);
+
+      expect(service.getRunningLaneSession("proj-1", 2)).toMatchObject({
+        terminalId: "term-resumed",
+        startedBy: { kind: "update-restart" },
+      });
+      expect(service.detachedSlots("proj-1")).toEqual([2]);
+      expect(service.getScheduledRunOf(resumed.sessionId)).toBeNull();
+    });
+
     it("refuses a schedule's start that names no run", async () => {
       await expect(
         service.provisionSession({
@@ -3621,6 +3641,7 @@ describe("HelpSessionService", () => {
       set: ReturnType<typeof vi.fn>;
       clear: ReturnType<typeof vi.fn>;
       flush: ReturnType<typeof vi.fn>;
+      recordResumeAtLaunch: ReturnType<typeof vi.fn>;
     };
 
     beforeEach(() => {
@@ -3629,6 +3650,7 @@ describe("HelpSessionService", () => {
         set: vi.fn().mockResolvedValue(undefined),
         clear: vi.fn().mockResolvedValue(undefined),
         flush: vi.fn().mockResolvedValue(undefined),
+        recordResumeAtLaunch: vi.fn().mockResolvedValue(undefined),
       };
       service.setPendingHibernationStore(hibernationStore as never);
     });
@@ -3912,6 +3934,47 @@ describe("HelpSessionService", () => {
         await expect(taking).resolves.toEqual(
           expect.objectContaining({ agentSessionId: "codex-thread-captured" })
         );
+      });
+
+      it("records each lane an update quit stops, by the id its capture settled on (#16753)", async () => {
+        await launchLane("term-claude", "claude-conv-1");
+        const codex = await service.provisionSession({ ...provisionInput(), slot: 2 });
+        if (!codex) throw new Error("expected provision");
+        expect(service.markTerminalForToken(codex.token, "term-codex")).toBe(true);
+        await service.recordLaneLaunchForToken(codex.token);
+        const lanes = service.snapshotLaneTerminals();
+        await service.noteQuitCapture(lanes.get("term-codex")!, "codex-thread-1");
+
+        await service.recordLanesToResumeAtLaunch(lanes.values());
+
+        expect(hibernationStore.recordResumeAtLaunch).toHaveBeenCalledExactlyOnceWith({
+          [slotKey("proj-1", 0)]: "claude-conv-1",
+          [slotKey("proj-1", 2)]: "codex-thread-1",
+        });
+      });
+
+      it("leaves out a lane with no id to resume, one discarded during the kill, and the global assistant (#16753)", async () => {
+        await launchLane("term-no-id");
+        const discarded = await service.provisionSession({ ...provisionInput(), slot: 1 });
+        if (!discarded) throw new Error("expected provision");
+        expect(service.markTerminalForToken(discarded.token, "term-discarded")).toBe(true);
+        await service.recordLaneLaunchForToken(discarded.token, "claude-conv-2");
+        const lanes = [...service.snapshotLaneTerminals().values()];
+        await service.discardConversation("proj-1", 1);
+        const globalKey = slotKey(GLOBAL_ASSISTANT_ID, 0);
+        backing.set(globalKey, {
+          agentId: "claude",
+          agentSessionId: "global-conv",
+          cwd: "/global",
+          capturedAt: Date.now(),
+        });
+
+        await service.recordLanesToResumeAtLaunch([
+          ...lanes,
+          { slotKey: globalKey, agentSessionId: "global-conv", revision: 0 },
+        ]);
+
+        expect(hibernationStore.recordResumeAtLaunch).toHaveBeenCalledExactlyOnceWith({});
       });
 
       it("drops a quit-time capture for a lane the user discarded during the kill", async () => {
