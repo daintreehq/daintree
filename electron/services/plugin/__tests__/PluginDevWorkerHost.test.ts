@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { EventEmitter } from "events";
 import { Readable } from "node:stream";
 
@@ -14,8 +14,8 @@ const { forkMock, mockChildren, appMock, loggerMock } = vi.hoisted(() => {
   return { forkMock, mockChildren, appMock, loggerMock };
 });
 
-// Above every platform's pid ceiling (macOS 99998, Linux 2^22), so a backstop
-// that outlives its test and reaches the real `process.kill` hits nothing.
+// Distinct per child, and above every platform's pid ceiling (macOS 99998,
+// Linux 2^22) so no mock pid can ever name a real process.
 let nextMockPid = 10_000_001;
 
 class MockUtilityChild extends EventEmitter {
@@ -66,7 +66,7 @@ async function flush(): Promise<void> {
 }
 
 describe("PluginDevWorkerHost", () => {
-  let killSpy: ReturnType<typeof vi.spyOn<typeof process, "kill">>;
+  let killSpy: MockInstance<typeof process.kill>;
 
   beforeEach(() => {
     vi.resetModules();
@@ -82,6 +82,10 @@ describe("PluginDevWorkerHost", () => {
   });
 
   afterEach(() => {
+    // A dispose backstop armed under real timers outlives its test. With no pid
+    // it can only defer to a `spawn` that never comes, so it never reaches a
+    // later test's kill spy or the real `process.kill`.
+    for (const child of mockChildren) child.pid = undefined;
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -337,6 +341,7 @@ describe("PluginDevWorkerHost", () => {
 
       host.dispose();
       child.emit("exit", 0);
+      expect(vi.getTimerCount()).toBe(0);
       vi.advanceTimersByTime(5000);
 
       expect(killSpy).not.toHaveBeenCalled();
@@ -354,13 +359,41 @@ describe("PluginDevWorkerHost", () => {
 
       await vi.advanceTimersByTimeAsync(5000);
       expect(await started).toContain("did not become ready");
+      // The dispose backstop asks again while the first ask still waits.
+      host.dispose();
+      await vi.advanceTimersByTimeAsync(1000);
       expect(killSpy).not.toHaveBeenCalled();
+      expect(child.listenerCount("spawn")).toBe(1);
 
       child.pid = pid;
       child.emit("spawn");
       expect(killSpy).toHaveBeenCalledTimes(1);
       expect(killSpy).toHaveBeenCalledWith(pid, "SIGKILL");
       expect(child.kill).not.toHaveBeenCalled();
+      expect(child.listenerCount("spawn")).toBe(0);
+    });
+
+    it("notes the kill intent when the held signal goes out, not when it was asked for", async () => {
+      vi.useFakeTimers();
+      const { PluginDevWorkerHost } = await loadModule();
+      const { getTerminationIntent, resetTerminationIntentsForTesting } =
+        await import("../../processTerminationIntent.js");
+      resetTerminationIntentsForTesting();
+      const host = new PluginDevWorkerHost(OPTS);
+      host.start().catch(() => undefined);
+      const child = mockChildren[0] as MockUtilityChild;
+      const { serviceName } = forkMock.mock.calls[0][2];
+      const pid = child.pid;
+      child.pid = undefined;
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(getTerminationIntent({ serviceName })).toBeNull();
+      // Past the intent TTL: a note taken at request time would have lapsed.
+      await vi.advanceTimersByTimeAsync(15_000);
+      child.pid = pid;
+      child.emit("spawn");
+
+      expect(getTerminationIntent({ serviceName })).toBe("failed to start");
       host.dispose();
     });
 
@@ -467,6 +500,7 @@ describe("PluginDevWorkerHost", () => {
       await vi.advanceTimersByTimeAsync(60_000);
 
       expect(killSpy).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
       host.dispose();
     });
 
@@ -510,6 +544,7 @@ describe("PluginDevWorkerHost", () => {
       await vi.advanceTimersByTimeAsync(60_000);
 
       expect(killSpy).not.toHaveBeenCalled();
+      expect(second.kill).not.toHaveBeenCalled();
       host.dispose();
     });
   });
