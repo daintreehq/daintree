@@ -1321,6 +1321,9 @@ describe("BrowserToolbar back/forward history menu", () => {
     expect(onBack).not.toHaveBeenCalled();
   });
 
+  // Longer than the zero-delay task the deferred focus fallback runs on.
+  const FALLBACK_SETTLE_MS = 20;
+
   describe("closing", () => {
     async function openBackMenu() {
       const utils = renderToolbar({ canGoBack: true, navSnapshot });
@@ -1339,7 +1342,7 @@ describe("BrowserToolbar back/forward history menu", () => {
       fireEvent.pointerDown(outside, { pointerType: "mouse" });
       outside.focus();
       await waitFor(() => expect(menu.isConnected).toBe(false));
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => setTimeout(resolve, FALLBACK_SETTLE_MS));
 
       expect(document.activeElement).toBe(outside);
       expect(focusBack).not.toHaveBeenCalled();
@@ -1349,7 +1352,7 @@ describe("BrowserToolbar back/forward history menu", () => {
     it("restores focus without the focus ring after a mouse selection", async () => {
       const { back, menu } = await openBackMenu();
       const focusBack = vi.spyOn(back, "focus");
-      const item = menu.querySelector('[role="menuitem"]') as HTMLElement;
+      const item = menu.querySelector<HTMLElement>('[role="menuitem"]')!;
 
       fireEvent.pointerDown(item, { pointerType: "mouse" });
       fireEvent.click(item, { detail: 1 });
@@ -1361,7 +1364,7 @@ describe("BrowserToolbar back/forward history menu", () => {
     it("treats Radix's pointer-up fallback as a mouse selection", async () => {
       const { back, menu } = await openBackMenu();
       const focusBack = vi.spyOn(back, "focus");
-      const item = menu.querySelector('[role="menuitem"]') as HTMLElement;
+      const item = menu.querySelector<HTMLElement>('[role="menuitem"]')!;
 
       // Press on padding, release over an entry: Radix synthesizes a click with
       // detail 0, which is only told from Enter by the press inside the menu.
@@ -1386,7 +1389,7 @@ describe("BrowserToolbar back/forward history menu", () => {
     it("still restores focus visibly after a keyboard selection", async () => {
       const { back, menu } = await openBackMenu();
       const focusBack = vi.spyOn(back, "focus");
-      const item = menu.querySelector('[role="menuitem"]') as HTMLElement;
+      const item = menu.querySelector<HTMLElement>('[role="menuitem"]')!;
 
       fireEvent.click(item, { detail: 0 });
       await waitFor(() => expect(focusBack).toHaveBeenCalled());
