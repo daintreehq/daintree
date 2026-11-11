@@ -44,10 +44,11 @@ vi.mock("../../../window/canopyGoToRun.js", () => ({
   openCanopyAssistantLane,
   showCanopyGlobalAssistant,
 }));
-// The limit is per channel across this file's calls; its own tests cover it.
+// The limit is per channel across this file's calls, so each test sets its own answer.
+const checkRateLimit = vi.hoisted(() => vi.fn());
 vi.mock("../../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils.js")>()),
-  checkRateLimit: vi.fn(),
+  checkRateLimit,
 }));
 vi.mock("../canopy.js", () => ({
   ...assistants,
@@ -231,6 +232,21 @@ describe("Open in Assistant from the Canopy window (#16758)", () => {
     assistants.assistantLaneHolder.mockResolvedValue(41);
     assistants.globalAssistantInputOwner.mockReset();
     assistants.globalAssistantInputOwner.mockResolvedValue(null);
+    checkRateLimit.mockReset();
+  });
+
+  it("refuses past its rate limit before resolving anything", async () => {
+    checkRateLimit.mockImplementationOnce(() => {
+      throw new AppError({ code: "RATE_LIMITED", message: "Too many calls" });
+    });
+    await expect(open(subject)).rejects.toMatchObject({ code: "RATE_LIMITED" });
+    expect(checkRateLimit).toHaveBeenCalledWith(
+      CANOPY_WINDOW_METHOD_CHANNELS.openAssistant,
+      expect.any(Number),
+      expect.any(Number)
+    );
+    expect(assistants.resolveAssistantDestination).not.toHaveBeenCalled();
+    expect(openCanopyAssistantLane).not.toHaveBeenCalled();
   });
 
   it("lands a running lane, held by a view here, in the project main found it in", async () => {

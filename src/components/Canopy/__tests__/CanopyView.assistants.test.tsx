@@ -833,8 +833,12 @@ describe("CanopyView role filter", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("says nothing of an earlier open that settles after a newer one went through", async () => {
+  it.each([
+    ["the newer one went through", null],
+    ["the newer one was refused too", "This assistant runs without a window here."],
+  ])("shows only the newest open's answer, when %s", async (_label, newer) => {
     let refuseEarlier: (text: string) => void = () => {};
+    let answerNewer: (text: string | null) => void = () => {};
     vi.mocked(frame.openAssistant)
       .mockImplementationOnce(
         () =>
@@ -842,7 +846,51 @@ describe("CanopyView role filter", () => {
             refuseEarlier = resolve;
           })
       )
-      .mockResolvedValueOnce(null);
+      .mockImplementationOnce(
+        () =>
+          new Promise<string | null>((resolve) => {
+            answerNewer = resolve;
+          })
+      );
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const open = () =>
+      [...document.querySelectorAll("button")].find(
+        (button) => button.textContent === "Open in Assistant"
+      )!;
+    await act(async () => fireEvent.click(open()));
+    await act(async () => fireEvent.click(open()));
+    // The newer answers first, then the earlier settles over it.
+    await act(async () => answerNewer(newer));
+    await act(async () => refuseEarlier(ENDED));
+
+    expect(frame.openAssistant).toHaveBeenCalledTimes(2);
+    expect(document.body.textContent).not.toContain(ENDED);
+    if (newer === null) {
+      expect(document.body.textContent).not.toContain("Couldn't open this assistant");
+    } else {
+      expect(document.body.textContent).toContain(newer);
+    }
+  });
+
+  it("shows the newest open's refusal when the earlier one settles first", async () => {
+    const NEWER = "This assistant runs without a window here.";
+    let refuseEarlier: (text: string) => void = () => {};
+    let refuseNewer: (text: string) => void = () => {};
+    vi.mocked(frame.openAssistant)
+      .mockImplementationOnce(
+        () =>
+          new Promise<string | null>((resolve) => {
+            refuseEarlier = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<string | null>((resolve) => {
+            refuseNewer = resolve;
+          })
+      );
     useCanopyStore.setState({ roleFilter: "assistants" });
     render(<CanopyView frame={frame} />);
     await settle();
@@ -853,10 +901,10 @@ describe("CanopyView role filter", () => {
     await act(async () => fireEvent.click(open()));
     await act(async () => fireEvent.click(open()));
     await act(async () => refuseEarlier(ENDED));
+    await act(async () => refuseNewer(NEWER));
 
-    expect(frame.openAssistant).toHaveBeenCalledTimes(2);
     expect(document.body.textContent).not.toContain(ENDED);
-    expect(document.body.textContent).not.toContain("Couldn't open this assistant");
+    expect(document.body.textContent).toContain(NEWER);
   });
 
   it("marks a handback seen only for the assistant chosen, never by default", async () => {
