@@ -1203,7 +1203,12 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
-    const READ_TYPES = ["get-serialized-state", "get-terminal-info", "get-terminal", "replay-history"];
+    const READ_TYPES = [
+      "get-serialized-state",
+      "get-terminal-info",
+      "get-terminal",
+      "replay-history",
+    ];
 
     const readPreserved = (client: InstanceType<typeof PtyClientClass>, id: string) => {
       void client.getSerializedStateAsync(id);
@@ -1273,9 +1278,7 @@ describe("PtyClient fabric", () => {
 
       expect(messagesOfType(shardA.child, "dispose")).toHaveLength(0);
       readPreserved(client, "t1");
-      expect(messagesOfType(shardA.child, "get-serialized-state").map((m) => m.id)).toEqual([
-        "t1",
-      ]);
+      expect(messagesOfType(shardA.child, "get-serialized-state").map((m) => m.id)).toEqual(["t1"]);
       client.dispose();
     });
 
