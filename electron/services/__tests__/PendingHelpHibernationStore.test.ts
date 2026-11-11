@@ -466,6 +466,7 @@ describe("PendingHelpHibernationStore", () => {
       await store.load();
       await store.set(slotKey("proj-1", 0), entry("id-0"));
       await store.recordResumeAtLaunch({});
+      expect(JSON.parse(await fs.readFile(filePath, "utf-8"))).not.toHaveProperty("resumeAtLaunch");
 
       const next = new PendingHelpHibernationStore(filePath);
       await next.load();

@@ -639,7 +639,10 @@ describe("an Assistant reopening one exact conversation with no frontend (#16753
 
     await spawnHostAssistant(PROJECT, { ...spec, resumeAgentSessionId: "conv-8" }, deps);
 
-    expect(spawned(invoke)).not.toHaveProperty("exactResume");
+    const payload = spawned(invoke);
+    expect(payload).not.toHaveProperty("exactResume");
+    expect(payload.agentSessionId).toBe("conv-8");
+    expect(String(payload.command)).toContain("conv-8");
   });
 });
 

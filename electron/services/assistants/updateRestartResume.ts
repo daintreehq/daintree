@@ -9,7 +9,8 @@ const CONCURRENT_RESUMES = 3;
 export interface UpdateRestartResumeDeps {
   /**
    * Claims the lane's pointer the way a view's resume does, so no view resumes
-   * the same conversation alongside it. Null when the lane has none or a view
+   * the same conversation alongside it, and has a view's own automatic launch
+   * stand down until the lane is back. Null when the lane has none or a view
    * holds it.
    */
   claim(
@@ -18,6 +19,8 @@ export interface UpdateRestartResumeDeps {
   ): Promise<{ agentId: string; agentSessionId: string; cwd: string; claimId: string } | null>;
   /** Hands an unspent claim back; a no-op once the resumed lane's spawn has spent it. */
   release(projectId: string, slot: number, claimId: string): Promise<void>;
+  /** Whether the claim still holds the pointer: discarding the lane drops it. */
+  holdsClaim(projectId: string, slot: number, claimId: string): boolean;
   start(request: AssistantLaunchRequest): Promise<AssistantLaunchResult>;
   isShuttingDown(): boolean;
 }
@@ -91,7 +94,8 @@ async function resumeLane(
         agentId: claim.agentId,
         startedBy: { kind: "update-restart" },
         resume: { agentSessionId: claim.agentSessionId, cwd: claim.cwd },
-        stillWanted: () => !deps.isShuttingDown(),
+        stillWanted: () =>
+          !deps.isShuttingDown() && deps.holdsClaim(projectId, slot, claim.claimId),
       })
       .catch((): AssistantLaunchResult => ({ status: "refused", reason: "launch-failed" }));
     return result.status === "started"
@@ -116,11 +120,20 @@ export async function resumeLanesAfterUpdateLive(record: LaunchResume): Promise<
     import("../../utils/logger.js"),
   ]);
   const launchDeps = await liveAssistantLaunchDeps();
+  const resuming = new Map<string, () => void>();
   const outcomes = await resumeLanesAfterUpdate(record, {
-    claim: (projectId, slot) => helpSessionService.takePendingHibernation(projectId, slot),
+    claim: async (projectId, slot) => {
+      const claim = await helpSessionService.takePendingHibernation(projectId, slot);
+      if (claim) resuming.set(claim.claimId, helpSessionService.beginLaneResume(projectId, slot));
+      return claim;
+    },
     release: async (projectId, slot, claimId) => {
+      resuming.get(claimId)?.();
+      resuming.delete(claimId);
       await helpSessionService.restorePendingHibernation(projectId, slot, claimId);
     },
+    holdsClaim: (projectId, slot, claimId) =>
+      helpSessionService.holdsPendingHibernationClaim(projectId, slot, claimId),
     start: (request) => startAssistantWithoutView(request, launchDeps),
     isShuttingDown: () => getActiveShutdown() !== null,
   });

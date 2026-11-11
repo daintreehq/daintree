@@ -30,6 +30,10 @@ function harness(pointers: Record<string, Pointer>) {
       ready: true,
       notReadyReason: null,
     })),
+    holdsClaim: vi.fn(
+      (projectId: string, slot: number, claimId: string) =>
+        held.get(assistantSlotKey(projectId, slot)) === claimId
+    ),
     isShuttingDown: vi.fn(() => false),
   } satisfies UpdateRestartResumeDeps;
   return { deps, held };
@@ -56,17 +60,48 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
 
     const outcomes = await resumeLanesAfterUpdate({ recordedAt: 1, lanes }, deps);
 
-    expect(outcomes.filter((outcome) => outcome.status === "resumed")).toHaveLength(3);
-    const requests = deps.start.mock.calls.map(([request]) => request);
-    expect(requests).toHaveLength(3);
-    expect(requests).toContainEqual(
-      expect.objectContaining({
-        projectId: "p2",
-        slot: 1,
-        agentId: "codex",
-        startedBy: { kind: "update-restart" },
-        resume: { agentSessionId: "thread-1", cwd: "/sessions/codex" },
+    expect(outcomes).toEqual(
+      expect.arrayContaining([
+        { projectId: "p1", slot: 0, status: "resumed" },
+        { projectId: "p1", slot: 2, status: "resumed" },
+        { projectId: "p2", slot: 1, status: "resumed" },
+      ])
+    );
+    const requests = deps.start.mock.calls.map(
+      ([{ projectId, slot, agentId, startedBy, resume }]) => ({
+        projectId,
+        slot,
+        agentId,
+        startedBy,
+        resume,
       })
+    );
+    const update = { kind: "update-restart" };
+    expect(requests).toHaveLength(3);
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        {
+          projectId: "p1",
+          slot: 0,
+          agentId: "claude",
+          startedBy: update,
+          resume: { agentSessionId: "conv-0", cwd: "/sessions/claude" },
+        },
+        {
+          projectId: "p1",
+          slot: 2,
+          agentId: "claude",
+          startedBy: update,
+          resume: { agentSessionId: "conv-2", cwd: "/sessions/claude" },
+        },
+        {
+          projectId: "p2",
+          slot: 1,
+          agentId: "codex",
+          startedBy: update,
+          resume: { agentSessionId: "thread-1", cwd: "/sessions/codex" },
+        },
+      ])
     );
     expect(held.size).toBe(0);
   });
@@ -133,23 +168,42 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
       )
     );
     let quitting = false;
+    const wanted: Array<[before: boolean | undefined, after: boolean | undefined]> = [];
     deps.isShuttingDown.mockImplementation(() => quitting);
     deps.start.mockImplementation(async (request) => {
+      const before = request.stillWanted?.();
       quitting = true;
-      expect(request.stillWanted?.()).toBe(false);
+      wanted.push([before, request.stillWanted?.()]);
       return { status: "refused", reason: "launch-failed" };
     });
 
     const outcomes = await resumeLanesAfterUpdate({ recordedAt: 1, lanes }, deps);
 
+    // Wanted until the quit began, and not once it had.
+    expect(wanted[0]).toEqual([true, false]);
     // The lanes already under way when the quit began; none after.
-    expect(deps.start.mock.calls.length).toBeLessThanOrEqual(3);
-    expect(outcomes.filter((outcome) => outcome.status === "skipped")).not.toHaveLength(0);
-    expect(
-      outcomes.every(
-        (outcome) => outcome.status !== "skipped" || outcome.reason === "shutting-down"
-      )
-    ).toBe(true);
+    expect(deps.start.mock.calls.length).toBeGreaterThan(0);
+    expect(deps.start.mock.calls.length).toBeLessThan(4);
+    const skipped = outcomes.filter((outcome) => outcome.status === "skipped");
+    expect(skipped.length).toBe(4 - deps.start.mock.calls.length);
+    expect(skipped.every((outcome) => outcome.reason === "shutting-down")).toBe(true);
+  });
+
+  it("stops wanting a lane that's discarded while it comes back", async () => {
+    const key = assistantSlotKey("p1", 0);
+    const { deps, held } = harness({ [key]: pointer("conv-0") });
+    const wanted: Array<boolean | undefined> = [];
+    deps.start.mockImplementation(async (request) => {
+      wanted.push(request.stillWanted?.());
+      // Discarding the lane drops its claim.
+      held.delete(key);
+      wanted.push(request.stillWanted?.());
+      return { status: "refused", reason: "launch-failed" };
+    });
+
+    await resumeLanesAfterUpdate({ recordedAt: 1, lanes: { [key]: "conv-0" } }, deps);
+
+    expect(wanted).toEqual([true, false]);
   });
 
   it("runs at most three starts at once", async () => {

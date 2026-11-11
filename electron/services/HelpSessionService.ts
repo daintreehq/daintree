@@ -493,6 +493,8 @@ export class HelpSessionService {
   private onMcpSessionRevokedFn: ((token: string, sessionId: string) => void) | null = null;
   private readonly sessionEndedListeners = new Set<(event: HelpSessionEndedEvent) => void>();
   private readonly sessionReattachedListeners = new Set<(lane: RunningLane) => void>();
+  // Lanes main is resuming after a restart to install an update (#16753).
+  private readonly resumingSlotKeys = new Set<string>();
   private readonly laneDetachedListeners = new Set<(projectId: string) => void>();
   private onMcpSessionRepinnedFn: ((token: string) => void) | null = null;
   private disposed = false;
@@ -1935,6 +1937,24 @@ export class HelpSessionService {
     return store.recordResumeAtLaunch(resume);
   }
 
+  /**
+   * Marks a lane main is resuming with no view after an update restart
+   * (#16753), until the returned release runs. Until its assistant is bound, a
+   * view asking to take the lane over is told it is occupied.
+   */
+  beginLaneResume(projectId: string, slot: number): () => void {
+    const slotKey = assistantSlotKey(projectId, slot);
+    this.resumingSlotKeys.add(slotKey);
+    return () => {
+      this.resumingSlotKeys.delete(slotKey);
+    };
+  }
+
+  /** Whether `claimId` still holds the lane's pointer; a discard drops it. */
+  holdsPendingHibernationClaim(projectId: string, slot: number, claimId: string): boolean {
+    return this.claimsBySlotKey.get(assistantSlotKey(projectId, slot))?.claimId === claimId;
+  }
+
   private bumpLaneRevision(slotKey: string): void {
     this.laneRevisionBySlotKey.set(slotKey, (this.laneRevisionBySlotKey.get(slotKey) ?? 0) + 1);
   }
@@ -2271,9 +2291,14 @@ export class HelpSessionService {
     }
     const claimableBy = (record: HelpSessionRecord): boolean =>
       record.detachedAt !== undefined || record.projectViewWebContentsId === webContentsId;
-    return this.withLaneLock(assistantSlotKey(projectId, slot), async () => {
+    const slotKey = assistantSlotKey(projectId, slot);
+    return this.withLaneLock(slotKey, async () => {
       const record = this.findLaneBackend(projectId, slot);
-      if (!record) return { status: "absent" };
+      // Coming back on its own: a launch that only restores or starts itself
+      // stands down rather than start a fresh conversation over it.
+      if (!record) {
+        return this.resumingSlotKeys.has(slotKey) ? { status: "occupied" } : { status: "absent" };
+      }
       if (!claimableBy(record)) return { status: "occupied" };
       const terminalId = this.terminalBySessionId.get(record.sessionId)!;
 

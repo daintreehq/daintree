@@ -287,6 +287,16 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
         { slot: 2, agentId: "claude", resume: { ...resume, agentSessionId: "" } },
         // Not one this machine starts with no view: no other agent stands in.
         { slot: 2, agentId: "gemini" },
+        // A schedule's run starts fresh by definition.
+        {
+          slot: 2,
+          agentId: "claude",
+          scheduled: {
+            terminalId: "terminal-reserved",
+            prompt: "Run the checks.",
+            scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+          },
+        },
       ]) {
         await expect(start({ startedBy: UPDATE_RESTART, resume, ...request })).resolves.toEqual({
           status: "refused",
@@ -307,15 +317,25 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
         })
       ).resolves.toEqual({ status: "refused", reason: "launch-failed" });
 
-      await expect(
-        start({
-          slot: 2,
-          agentId: "claude",
-          startedBy: UPDATE_RESTART,
-          resume,
-          stillWanted: () => false,
-        })
-      ).resolves.toEqual({ status: "refused", reason: "launch-failed" });
+      // Still wanted when it provisioned, no longer once its flags were read.
+      let wanted = true;
+      let flagsRead: ((flags: string[]) => void) | undefined;
+      deps.launchFlags = () =>
+        new Promise<string[]>((resolve) => {
+          flagsRead = resolve;
+        });
+      const started = start({
+        slot: 2,
+        agentId: "claude",
+        startedBy: UPDATE_RESTART,
+        resume,
+        stillWanted: () => wanted,
+      });
+      await vi.waitFor(() => expect(flagsRead).toBeDefined());
+      expect(deps.provision).toHaveBeenCalledTimes(2);
+      wanted = false;
+      flagsRead!([]);
+      await expect(started).resolves.toEqual({ status: "refused", reason: "launch-failed" });
 
       expect(deps.revoke.mock.calls).toEqual([["session-1"], ["session-1"]]);
       expect(deps.spawn).not.toHaveBeenCalled();

@@ -323,7 +323,10 @@ export function useHelpSessionLanes({
     readKeptLanes(activeWorkspaceId)
       .then((kept) => {
         if (!kept || cancelled || read !== laneReadRef.current) return;
-        for (const lane of kept) if (lane.live) openDiscoveredLane(activeWorkspaceId, lane.slot);
+        // As the latest read, it also settles the lanes an older one would have.
+        const running = new Set(kept.filter((lane) => lane.live).map((lane) => lane.slot));
+        for (const slot of running) openDiscoveredLane(activeWorkspaceId, slot);
+        hideStoppedDiscoveredLanes(activeWorkspaceId, running);
       })
       .catch((err) => {
         logWarn("HelpPanel: failed to list running lanes as the panel opened", err);
@@ -331,7 +334,7 @@ export function useHelpSessionLanes({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, activeWorkspaceId, openDiscoveredLane]);
+  }, [isOpen, activeWorkspaceId, openDiscoveredLane, hideStoppedDiscoveredLanes]);
 
   // A schedule's Assistant (#16169) is started by main, with no view: as its
   // run is recorded, its lane gets a tab here too, which takes it over when

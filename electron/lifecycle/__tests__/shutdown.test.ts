@@ -2415,6 +2415,14 @@ describe("registerShutdownHandler", () => {
           ["assistant-2", gone],
         ])
       );
+      let captureLanded!: () => void;
+      helpSessionMock.noteQuitCapture.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (captureLanded = resolve))
+      );
+      let recordLanded!: () => void;
+      helpSessionMock.recordLanesToResumeAtLaunch.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (recordLanded = resolve))
+      );
       const ptyClient = makePtyClient({
         getAllTerminalsAsync: vi.fn(async () => [
           { ...agentTerminal, id: "assistant-0", isAssistantTerminal: true },
@@ -2429,19 +2437,24 @@ describe("registerShutdownHandler", () => {
       const onReadyToInstall = vi.fn();
 
       coordinator.requestGracefulShutdownForUpdate(onReadyToInstall);
-      await vi.waitFor(() => expect(onReadyToInstall).toHaveBeenCalled());
+
+      // The capture that gives a Codex lane its id lands first.
+      await vi.waitFor(() => expect(helpSessionMock.noteQuitCapture).toHaveBeenCalled());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(helpSessionMock.recordLanesToResumeAtLaunch).not.toHaveBeenCalled();
+      captureLanded();
 
       // Only the lane whose assistant was alive when the quit began.
-      expect(helpSessionMock.recordLanesToResumeAtLaunch).toHaveBeenCalledExactlyOnceWith([
-        running,
-      ]);
-      // After the capture that gives a Codex lane its id, before the install takes the process.
-      expect(helpSessionMock.noteQuitCapture.mock.invocationCallOrder[0]).toBeLessThan(
-        helpSessionMock.recordLanesToResumeAtLaunch.mock.invocationCallOrder[0]!
+      await vi.waitFor(() =>
+        expect(helpSessionMock.recordLanesToResumeAtLaunch).toHaveBeenCalledExactlyOnceWith([
+          running,
+        ])
       );
-      expect(helpSessionMock.recordLanesToResumeAtLaunch.mock.invocationCallOrder[0]).toBeLessThan(
-        onReadyToInstall.mock.invocationCallOrder[0]!
-      );
+      // And the record is on disk before the install takes the process.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(onReadyToInstall).not.toHaveBeenCalled();
+      recordLanded();
+      await vi.waitFor(() => expect(onReadyToInstall).toHaveBeenCalled());
     });
 
     it("still captures and journals when the rate-limit drain import fails", async () => {

@@ -3938,43 +3938,87 @@ describe("HelpSessionService", () => {
 
       it("records each lane an update quit stops, by the id its capture settled on (#16753)", async () => {
         await launchLane("term-claude", "claude-conv-1");
-        const codex = await service.provisionSession({ ...provisionInput(), slot: 2 });
-        if (!codex) throw new Error("expected provision");
-        expect(service.markTerminalForToken(codex.token, "term-codex")).toBe(true);
-        await service.recordLaneLaunchForToken(codex.token);
+        // Launched with no id yet, as a Codex lane is: only the quit's capture learns it.
+        const idless = await service.provisionSession({ ...provisionInput(), slot: 2 });
+        if (!idless) throw new Error("expected provision");
+        expect(service.markTerminalForToken(idless.token, "term-idless")).toBe(true);
+        await service.recordLaneLaunchForToken(idless.token);
+        expect(backing.get(slotKey("proj-1", 2))?.agentSessionId).toBe("");
         const lanes = service.snapshotLaneTerminals();
-        await service.noteQuitCapture(lanes.get("term-codex")!, "codex-thread-1");
+        await service.noteQuitCapture(lanes.get("term-idless")!, "captured-at-quit");
 
         await service.recordLanesToResumeAtLaunch(lanes.values());
 
         expect(hibernationStore.recordResumeAtLaunch).toHaveBeenCalledExactlyOnceWith({
           [slotKey("proj-1", 0)]: "claude-conv-1",
-          [slotKey("proj-1", 2)]: "codex-thread-1",
+          [slotKey("proj-1", 2)]: "captured-at-quit",
         });
       });
 
-      it("leaves out a lane with no id to resume, one discarded during the kill, and the global assistant (#16753)", async () => {
+      it("leaves out a lane with no id to resume, one restarted during the kill, an agent with no resume, and the global assistant (#16753)", async () => {
         await launchLane("term-no-id");
-        const discarded = await service.provisionSession({ ...provisionInput(), slot: 1 });
-        if (!discarded) throw new Error("expected provision");
-        expect(service.markTerminalForToken(discarded.token, "term-discarded")).toBe(true);
-        await service.recordLaneLaunchForToken(discarded.token, "claude-conv-2");
+        const restarted = await service.provisionSession({ ...provisionInput(), slot: 1 });
+        if (!restarted) throw new Error("expected provision");
+        expect(service.markTerminalForToken(restarted.token, "term-restarted")).toBe(true);
+        await service.recordLaneLaunchForToken(restarted.token, "claude-conv-2");
         const lanes = [...service.snapshotLaneTerminals().values()];
+        // Discarded and started over during the kill: it points at a conversation
+        // the quit never saw.
         await service.discardConversation("proj-1", 1);
+        const again = await service.provisionSession({ ...provisionInput(), slot: 1 });
+        if (!again) throw new Error("expected provision");
+        expect(service.markTerminalForToken(again.token, "term-again")).toBe(true);
+        await service.recordLaneLaunchForToken(again.token, "claude-conv-3");
         const globalKey = slotKey(GLOBAL_ASSISTANT_ID, 0);
-        backing.set(globalKey, {
-          agentId: "claude",
-          agentSessionId: "global-conv",
-          cwd: "/global",
-          capturedAt: Date.now(),
-        });
+        const noResumeKey = slotKey("proj-1", 3);
+        for (const [key, agentId] of [
+          [globalKey, "claude"],
+          [noResumeKey, "no-such-agent"],
+        ] as const) {
+          backing.set(key, {
+            agentId,
+            agentSessionId: `${agentId}-conv`,
+            cwd: "/elsewhere",
+            capturedAt: Date.now(),
+          });
+        }
 
         await service.recordLanesToResumeAtLaunch([
           ...lanes,
-          { slotKey: globalKey, agentSessionId: "global-conv", revision: 0 },
+          { slotKey: globalKey, agentSessionId: "claude-conv", revision: 0 },
+          { slotKey: noResumeKey, agentSessionId: "no-such-agent-conv", revision: 0 },
         ]);
 
         expect(hibernationStore.recordResumeAtLaunch).toHaveBeenCalledExactlyOnceWith({});
+      });
+
+      it("has a view's launch stand down while main resumes the lane, and a discard drop the claim (#16753)", async () => {
+        backing.set(slotKey("proj-1", 1), {
+          agentId: "claude",
+          agentSessionId: "claude-conv-9",
+          cwd: "/help",
+          capturedAt: Date.now(),
+        });
+        const probe = vi.fn(async () => ({ cwd: "/help" }));
+        const claim = await service.takePendingHibernation("proj-1", 1);
+        if (!claim) throw new Error("expected claim");
+        const end = service.beginLaneResume("proj-1", 1);
+
+        await expect(service.adoptDetachedSession("proj-1", 1, 42, probe)).resolves.toEqual({
+          status: "occupied",
+        });
+        await expect(service.adoptDetachedSession("proj-1", 0, 42, probe)).resolves.toEqual({
+          status: "absent",
+        });
+        expect(service.holdsPendingHibernationClaim("proj-1", 1, claim.claimId)).toBe(true);
+
+        await service.discardConversation("proj-1", 1);
+        expect(service.holdsPendingHibernationClaim("proj-1", 1, claim.claimId)).toBe(false);
+
+        end();
+        await expect(service.adoptDetachedSession("proj-1", 1, 42, probe)).resolves.toEqual({
+          status: "absent",
+        });
       });
 
       it("drops a quit-time capture for a lane the user discarded during the kill", async () => {
