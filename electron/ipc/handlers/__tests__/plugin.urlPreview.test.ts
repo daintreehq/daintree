@@ -149,10 +149,13 @@ import { PluginService } from "../../../services/PluginService.js";
 import * as PluginArchive from "../../../services/PluginArchive.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
 import {
+  handleCancelInstall,
   handleInstall,
   handleInstallFromCatalog,
+  handleInstallFromCatalogOp,
   handleInstallFromUrl,
   handlePreviewFromCatalog,
+  handlePreviewFromCatalogOp,
   handlePreviewFromUrl,
 } from "../plugin/install.js";
 import type {
@@ -736,6 +739,24 @@ describe("a catalog install (#16779)", () => {
     expect(record("acme.listed")).toMatchObject({ source: "url", catalog: null, originalUrl: URL });
   });
 
+  it("holds the confirm to the reviewed digest when the server swaps the bytes", async () => {
+    const { archive, entry } = await listedRelease();
+    const swapped = await makeArchive(
+      { name: "acme.listed", version: "1.2.0" },
+      { "dist/index.js": "module.exports = { swapped: true };" }
+    );
+    catalogLists(entry, entry);
+    servesInOrder(archive, swapped);
+    const preview = await catalogReview();
+
+    const result = await confirm(preview);
+
+    expect(failureCode(result)).toBe("archive_mismatch");
+    expect(await installedDir("acme.listed")).toBe(false);
+    expect(record("acme.listed")).toBeUndefined();
+    expect(await downloadsLeft()).toEqual([]);
+  });
+
   it("refuses an archive that isn't the reviewed digest", async () => {
     const { archive, entry } = await listedRelease();
     catalogLists({ ...entry, sha256: "e".repeat(64) });
@@ -849,23 +870,54 @@ describe("a catalog install (#16779)", () => {
     expect(catalogMock.lookup).not.toHaveBeenCalled();
   });
 
-  it("never starts the download for a review cancelled while the catalog is read", async () => {
-    const { entry } = await listedRelease();
-    const jobId = "7c1e0d4f-2e3b-4d6c-9f0a-1b2c3d4e5f60";
-    let answer!: (value: unknown) => void;
-    catalogMock.lookup.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
-    expect(pluginInstallJobs.begin(jobId, () => {})).toBeTruthy();
-    try {
-      const pending = handlePreviewFromCatalog({ pluginId: "acme.listed" }, jobId);
-      await vi.waitFor(() => expect(catalogMock.lookup).toHaveBeenCalled());
-      expect(pluginInstallJobs.cancel(jobId)).toBe(true);
+  it("asks the catalog for any version semver allows, however long", async () => {
+    const version = `1.2.0+${"a".repeat(200)}`;
+    catalogLists(null);
+    await handlePreviewFromCatalog({ pluginId: "acme.listed", version });
+    expect(catalogMock.lookup).toHaveBeenCalledWith("acme.listed", version);
+  });
+
+  it("never starts a download the user cancelled while the catalog was read", async () => {
+    const { archive, entry } = await listedRelease();
+    catalogLists(entry);
+    servesInOrder(archive);
+    const preview = await catalogReview();
+    netFetch.mockClear();
+    // Through the IPC entry points, so the job the cancel names is the one
+    // they register.
+    const steps: Array<[string, (jobId: string) => Promise<unknown>]> = [
+      [
+        "7c1e0d4f-2e3b-4d6c-9f0a-1b2c3d4e5f60",
+        (jobId) => handlePreviewFromCatalogOp({} as never, { pluginId: "acme.listed" }, jobId),
+      ],
+      [
+        "8d2f1e5a-3f4c-4e7d-8a1b-2c3d4e5f6071",
+        (jobId) =>
+          handleInstallFromCatalogOp(
+            {} as never,
+            {
+              pluginId: "acme.listed",
+              version: "1.2.0",
+              repo: REPO,
+              expected: approval(preview, false),
+            },
+            jobId
+          ),
+      ],
+    ];
+    for (const [jobId, start] of steps) {
+      let answer!: (value: unknown) => void;
+      catalogMock.lookup.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+      const calls = catalogMock.lookup.mock.calls.length;
+      const pending = start(jobId);
+      await vi.waitFor(() => expect(catalogMock.lookup.mock.calls.length).toBe(calls + 1));
+      expect(handleCancelInstall(jobId)).toBe(true);
       answer({ status: "listed", entry, fetchedAt: 1 });
 
       await expect(pending).resolves.toEqual({ status: "cancelled" });
-      expect(netFetch).not.toHaveBeenCalled();
-    } finally {
-      pluginInstallJobs.end(jobId);
     }
+    expect(netFetch).not.toHaveBeenCalled();
+    expect(await installedDir("acme.listed")).toBe(false);
   });
 
   it("won't let the generic install claim a catalog listing", async () => {

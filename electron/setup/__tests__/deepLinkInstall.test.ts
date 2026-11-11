@@ -177,8 +177,17 @@ describe("parseDaintreeUrl — pinned and catalog install links (#16779)", () =>
     }
   });
 
+  it("accepts a version up to semver's own length limit", async () => {
+    const version = `1.0.0+${"a".repeat(200)}`;
+    expect(await parse(`id=acme.notes&version=${encodeURIComponent(version)}`)).toEqual({
+      action: "install-catalog",
+      pluginId: "acme.notes",
+      version,
+    });
+  });
+
   it("refuses a version that isn't canonical semver", async () => {
-    for (const version of ["", "v1.2.0", "1.2", " 1.2.0", "01.2.0", `1.0.0-${"a".repeat(130)}`]) {
+    for (const version of ["", "v1.2.0", "1.2", " 1.2.0", "01.2.0", `1.0.0-${"a".repeat(260)}`]) {
       expect(await parse(`id=acme.notes&version=${encodeURIComponent(version)}`)).toEqual({
         action: "install-refused",
         reason: "malformed-version",

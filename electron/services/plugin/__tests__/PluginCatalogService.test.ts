@@ -595,6 +595,31 @@ describe("PluginCatalogService", () => {
       expect(result).toMatchObject({ status: "listed", entry: { version: "0.10.0" } });
     });
 
+    function releaseAt(version: string, tag: string) {
+      return catalogEntry({
+        version,
+        url: `https://github.com/daintreehq/plugin-continue-session/releases/download/${tag}/daintreehq.continue-session.dntr`,
+      });
+    }
+
+    it("orders prereleases by semver when only prereleases are listed", async () => {
+      const result = await service(
+        respondWith(
+          ok({ entries: [releaseAt("1.0.0-rc.2", "rc2"), releaseAt("1.0.0-rc.10", "rc10")] })
+        )
+      ).lookup("daintreehq.continue-session");
+      expect(result).toMatchObject({ status: "listed", entry: { version: "1.0.0-rc.10" } });
+    });
+
+    it("breaks an equal-precedence tie by build metadata, not by catalog order", async () => {
+      const result = await service(
+        respondWith(
+          ok({ entries: [releaseAt("1.0.0+build.2", "b2"), releaseAt("1.0.0+build.10", "b10")] })
+        )
+      ).lookup("daintreehq.continue-session");
+      expect(result).toMatchObject({ status: "listed", entry: { version: "1.0.0+build.10" } });
+    });
+
     it("resolves a prerelease only when the plugin has no stable release", async () => {
       const result = await service(respondWith(ok())).lookup("acme.linear-context");
       expect(result).toMatchObject({ status: "listed", entry: { version: "2.0.0-rc.1+build.7" } });

@@ -204,48 +204,62 @@ describe("PluginInstallConfirmDialog for a URL install", () => {
     expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
   });
 
-  it("holds the confirm when it can't tell what's installed, until a retry can", async () => {
-    list.mockRejectedValue(new Error("host unreachable"));
-    renderReview();
-    await settle();
-    elapse(60_000);
+  const DOWNLOAD_SOURCES: Array<[string, PluginInstallConfirmRequest["source"]]> = [
+    ["a URL", { kind: "url", label: "example.com/acme.dntr", installedOnDisk: false }],
+    [
+      "a catalog release",
+      { kind: "catalog", repoLabel: "github.com/acme/tool", installedOnDisk: false },
+    ],
+  ];
 
-    expect(isArmed()).toBe(false);
-    expect(screen.getByText("Couldn't check which version is installed")).toBeTruthy();
-    click(confirmButton());
-    expect(onConfirm).not.toHaveBeenCalled();
+  it.each(DOWNLOAD_SOURCES)(
+    "holds the confirm for %s when it can't tell what's installed, until a retry can",
+    async (_name, source) => {
+      list.mockRejectedValue(new Error("host unreachable"));
+      renderReview(urlRequest({ source }));
+      await settle();
+      elapse(60_000);
 
-    list.mockResolvedValue([installedRow("1.0.0")]);
-    click(screen.getByRole("button", { name: "Retry" }));
-    await settle();
-    elapse(60_000);
+      expect(isArmed()).toBe(false);
+      expect(screen.getByText("Couldn't check which version is installed")).toBeTruthy();
+      click(confirmButton());
+      expect(onConfirm).not.toHaveBeenCalled();
 
-    expect(screen.queryByText("Couldn't check which version is installed")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    click(confirmButton());
-    expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
-  });
+      list.mockResolvedValue([installedRow("1.0.0")]);
+      click(screen.getByRole("button", { name: "Retry" }));
+      await settle();
+      elapse(60_000);
 
-  it("re-arms the read-time cooldown when what it would replace changes under it", async () => {
-    renderReview();
-    await settle();
-    elapse(60_000);
-    expect(isArmed()).toBe(true);
+      expect(screen.queryByText("Couldn't check which version is installed")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      click(confirmButton());
+      expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
+    }
+  );
 
-    // Another window installs the plugin while the review is open.
-    list.mockResolvedValue([installedRow("1.0.0")]);
-    emitProvenanceChanged();
-    await settle();
+  it.each(DOWNLOAD_SOURCES)(
+    "re-arms the read-time cooldown for %s when what it would replace changes under it",
+    async (_name, source) => {
+      renderReview(urlRequest({ source }));
+      await settle();
+      elapse(60_000);
+      expect(isArmed()).toBe(true);
 
-    expect(screen.getByTestId("archive-installed-version").textContent).toContain("v1.0.0");
-    expect(isArmed()).toBe(false);
-    click(confirmButton());
-    expect(onConfirm).not.toHaveBeenCalled();
+      // Another window installs the plugin while the review is open.
+      list.mockResolvedValue([installedRow("1.0.0")]);
+      emitProvenanceChanged();
+      await settle();
 
-    elapse(60_000);
-    click(confirmButton());
-    expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
-  });
+      expect(screen.getByTestId("archive-installed-version").textContent).toContain("v1.0.0");
+      expect(isArmed()).toBe(false);
+      click(confirmButton());
+      expect(onConfirm).not.toHaveBeenCalled();
+
+      elapse(60_000);
+      click(confirmButton());
+      expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
+    }
+  );
 
   it("says it replaces an installed copy the list can't show, and approves it as one", async () => {
     // Installed, but its manifest no longer loads: the list has no row for it.

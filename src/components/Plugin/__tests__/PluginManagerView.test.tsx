@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PluginManagerView } from "../PluginManagerView";
@@ -18,6 +18,7 @@ import type {
   PluginInstallProgressEvent,
   PluginInstallResult,
   PluginUrlInstallPreviewResult,
+  PluginInstallError,
   SettingDefinition,
   PluginDeepLinkIntent,
 } from "@shared/types/plugin";
@@ -2059,10 +2060,10 @@ describe("PluginManagerView", () => {
       });
 
       it("asks for the version a catalog link names", async () => {
-        renderIntent({ action: "install-catalog", pluginId: "acme.demo", version: "1.0.0" });
+        renderIntent({ action: "install-catalog", pluginId: "acme.demo", version: "2.3.4" });
         await urlReviewDialog();
         expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
-          { pluginId: "acme.demo", version: "1.0.0" },
+          { pluginId: "acme.demo", version: "2.3.4" },
           expect.any(String)
         );
       });
@@ -2087,6 +2088,7 @@ describe("PluginManagerView", () => {
           sha256
         );
         expect(screen.queryByLabelText("Plugin URL")).toBeNull();
+        expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
 
         await approveUrlReview();
 
@@ -2097,27 +2099,62 @@ describe("PluginManagerView", () => {
             { kind: "install", pluginId: "acme.demo", archiveHash: sha256 }
           )
         );
+        expect(window.electron.plugin.installFromUrl).toHaveBeenCalledOnce();
+        expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
       });
 
-      it("says why a catalog release couldn't be previewed, and installs nothing", async () => {
-        vi.mocked(window.electron.plugin.previewFromCatalog).mockResolvedValue({
+      const LINKED_FAILURES: Array<[string, PluginDeepLinkIntent, PluginInstallError]> = [
+        [
+          "a stale catalog",
+          { action: "install-catalog", pluginId: "acme.demo" },
+          { code: "catalog_stale", message: "The plugin catalog couldn't be refreshed." },
+        ],
+        [
+          "a pinned digest mismatch",
+          { action: "install", url: "https://example.com/p.dntr", sha256: "d".repeat(64) },
+          { code: "digest_mismatch", message: "The archive's SHA-256 doesn't match the link." },
+        ],
+        [
+          "a pinned download that failed",
+          { action: "install", url: "https://example.com/p.dntr", sha256: "d".repeat(64) },
+          { code: "fetch_failed", message: "Couldn't download the plugin." },
+        ],
+      ];
+
+      it.each(LINKED_FAILURES)(
+        "says why %s stopped the preview, and leaves no URL to install unbound",
+        async (_name, intent, error) => {
+          const failed = { status: "failed" as const, errors: [error] };
+          vi.mocked(window.electron.plugin.previewFromCatalog).mockResolvedValue(failed);
+          vi.mocked(window.electron.plugin.previewFromUrl).mockResolvedValue(failed);
+          renderIntent(intent);
+
+          // A failed download reads in the URL dialog's own words; anything
+          // else carries main's message.
+          expect(
+            await screen.findByText(
+              error.code === "fetch_failed"
+                ? "Couldn't download the plugin. Check the URL and try again."
+                : error.message
+            )
+          ).toBeTruthy();
+          expect(screen.queryByLabelText("Plugin URL")).toBeNull();
+          expect(screen.queryByRole("dialog", { name: /^Install '/ })).toBeNull();
+          expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
+          expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+        }
+      );
+
+      it("sends a catalog install that no longer matches back to its link", async () => {
+        vi.mocked(window.electron.plugin.installFromCatalog).mockResolvedValue({
           status: "failed",
-          errors: [
-            {
-              code: "catalog_stale",
-              message: "The plugin catalog couldn't be refreshed, so nothing was installed.",
-            },
-          ],
+          errors: [{ code: "archive_mismatch", message: "digest" }],
         });
         renderIntent({ action: "install-catalog", pluginId: "acme.demo" });
+        await approveUrlReview();
 
-        expect(
-          await screen.findByText(
-            "The plugin catalog couldn't be refreshed, so nothing was installed."
-          )
-        ).toBeTruthy();
-        expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
-        expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+        expect(await screen.findByText(/Open the install link again to review it/)).toBeTruthy();
+        expect(screen.queryByText(/Install it from the URL again/)).toBeNull();
       });
 
       it("says why a malformed install link was refused, fetching nothing", async () => {
@@ -2150,6 +2187,71 @@ describe("PluginManagerView", () => {
         expect((screen.getByLabelText("Plugin URL") as HTMLInputElement).value).toBe(
           "https://first.example/p.dntr"
         );
+      });
+
+      it("leaves an open uninstall confirm alone, for a link and for a refusal", async () => {
+        (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+        const view = (intent: PluginDeepLinkIntent | null) => (
+          <TooltipProvider>
+            <PluginManagerView deepLinkIntent={intent} onDeepLinkConsumed={() => {}} />
+          </TooltipProvider>
+        );
+        const { rerender } = render(view(null));
+        await selectPlugin();
+        fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
+        await screen.findByText("Uninstall 'Acme Demo'?");
+
+        rerender(view({ action: "install-catalog", pluginId: "acme.demo" }));
+        expect(await screen.findByText(/Finish or cancel the current install/)).toBeTruthy();
+        rerender(view({ action: "install-refused", reason: "malformed-id" }));
+        expect(await screen.findByText(/plugin id isn't a community plugin id/)).toBeTruthy();
+
+        expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy();
+        expect(window.electron.plugin.previewFromCatalog).not.toHaveBeenCalled();
+      });
+
+      it("previews a link that opens the manager under StrictMode, consuming it once", async () => {
+        let settle!: (result: PluginUrlInstallPreviewResult) => void;
+        const preview = vi.mocked(window.electron.plugin.previewFromCatalog);
+        const resolved = await preview({ pluginId: "acme.demo" });
+        preview.mockClear();
+        preview.mockImplementation(() => new Promise((resolve) => (settle = resolve)));
+        const onConsumed = vi.fn();
+        render(
+          <StrictMode>
+            <TooltipProvider>
+              <PluginManagerView
+                deepLinkIntent={{ action: "install-catalog", pluginId: "acme.demo" }}
+                onDeepLinkConsumed={onConsumed}
+              />
+            </TooltipProvider>
+          </StrictMode>
+        );
+        await waitFor(() => expect(preview).toHaveBeenCalled());
+        await act(async () => settle(resolved));
+
+        expect(await urlReviewDialog()).toBeTruthy();
+        expect(preview).toHaveBeenCalledOnce();
+        expect(onConsumed).toHaveBeenCalledOnce();
+        expect(screen.queryByText(/Finish or cancel the current install/)).toBeNull();
+      });
+
+      it("previews a link that reopens a manager closed with its URL dialog up", async () => {
+        const view = (intent: PluginDeepLinkIntent) => (
+          <TooltipProvider>
+            <PluginManagerView deepLinkIntent={intent} onDeepLinkConsumed={() => {}} />
+          </TooltipProvider>
+        );
+        const { rerender } = render(
+          view({ action: "install", url: "https://first.example/p.dntr" })
+        );
+        await screen.findByLabelText("Plugin URL");
+        act(() => usePluginManagerStore.setState({ isOpen: false }));
+        rerender(view({ action: "install-catalog", pluginId: "acme.demo" }));
+        act(() => usePluginManagerStore.setState({ isOpen: true }));
+
+        expect(await urlReviewDialog()).toBeTruthy();
+        expect(screen.queryByText(/Finish or cancel the current install/)).toBeNull();
       });
     });
 

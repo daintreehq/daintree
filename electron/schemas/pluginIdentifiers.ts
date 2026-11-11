@@ -22,8 +22,11 @@ export const SCOPED_PLUGIN_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(
 export const CANONICAL_SEMVER_PATTERN =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/;
 
-/** Longest version a link or IPC request may name; catalog versions are far shorter. */
-export const PLUGIN_VERSION_MAX_CHARS = 128;
+/**
+ * Longest version a link or IPC request may name: semver's own limit, which the
+ * catalog's version check inherits, so any listed release can be asked for.
+ */
+export const PLUGIN_VERSION_MAX_CHARS = 256;
 
 /** A community catalog id: a scoped plugin name outside the reserved `daintree.*` namespace. */
 export function isCommunityPluginId(id: string): boolean {

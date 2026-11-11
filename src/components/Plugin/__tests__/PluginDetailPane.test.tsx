@@ -535,17 +535,29 @@ describe("PluginDetailPane capabilities", () => {
 });
 
 describe("PluginDetailPane contributors (issue #10516)", () => {
+  const catalogInstall = (overrides: Partial<LoadedPluginInfo> = {}) =>
+    makePlugin({
+      source: "catalog",
+      originalUrl:
+        "https://github.com/northwind/tools-mirror/releases/download/v1.0.0/acme.demo-1.0.0.dntr",
+      catalog: {
+        id: "acme.demo",
+        version: "1.0.0",
+        repo: "https://github.com/northwind/tools-mirror",
+      },
+      ...overrides,
+    });
+
   it("names a catalog install's repository as a community listing (#16779)", () => {
-    renderOverview(
-      makePlugin({
-        source: "catalog",
-        originalUrl: "https://github.com/acme/demo/releases/download/v1.0.0/acme.demo-1.0.0.dntr",
-        catalog: { id: "acme.demo", version: "1.0.0", repo: "https://github.com/acme/demo" },
-      })
-    );
+    renderOverview(catalogInstall());
     expect(screen.getByTestId("plugin-catalog-listing").textContent).toContain(
-      "Community listing from github.com/acme/demo"
+      "Community listing from github.com/northwind/tools-mirror"
     );
+  });
+
+  it("calls a dev instance of a catalog plugin no listing: it runs from a checkout", () => {
+    renderOverview(catalogInstall({ devMode: true }));
+    expect(screen.queryByTestId("plugin-catalog-listing")).toBeNull();
   });
 
   it("calls no other install a community listing", () => {
