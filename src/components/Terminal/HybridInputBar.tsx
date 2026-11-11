@@ -1391,7 +1391,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // file chips already in the draft attached. A restore over the draft
       // shown is made as written, so text it repeats keeps its own chips.
       const change =
-        restoring !== null && restoring.before === shown && landed === null
+        restoring !== null &&
+        restoring.draft === draft &&
+        restoring.before === shown &&
+        landed === null
           ? restoring.change
           : outsideWriteChange(shown, draft, landed);
       if (change !== null) {

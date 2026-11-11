@@ -38,10 +38,18 @@ vi.mock("@/store/projectStore", () => ({
 }));
 
 const drafts = vi.hoisted(() => new Map<string, string>());
+// Keyed as the store keys drafts, so a restore read or written outside the
+// pane's project scope misses the composer's draft.
+const draftKey = vi.hoisted(
+  () => (terminalId: string, projectId?: string) =>
+    projectId ? `${projectId}:${terminalId}` : terminalId
+);
 const inputs = vi.hoisted(() => ({
   hybridInputAutoFocus: true,
-  getDraftInput: (terminalId: string) => drafts.get(terminalId) ?? "",
-  setDraftInput: (terminalId: string, value: string) => drafts.set(terminalId, value),
+  getDraftInput: (terminalId: string, projectId?: string) =>
+    drafts.get(draftKey(terminalId, projectId)) ?? "",
+  setDraftInput: (terminalId: string, value: string, projectId?: string) =>
+    drafts.set(draftKey(terminalId, projectId), value),
   bumpExternalDraftRevision: vi.fn(),
 }));
 vi.mock("@/store/terminalInputStore", () => ({
@@ -57,8 +65,11 @@ import {
   takePendingComposerImages,
 } from "@/lib/composerPendingImages";
 
+/** The pane's draft, in the current project's scope. */
+const KEY = "project-1:t1";
+
 /** What the pane's composer is left to put back on the restored text. */
-const pendingImages = (draft: string) => takePendingComposerImages("project-1:t1", draft);
+const pendingImages = (draft: string) => takePendingComposerImages(KEY, draft);
 
 function send(overrides: Partial<HeldComposerSend> = {}): HeldComposerSend {
   return {
@@ -115,12 +126,12 @@ describe("HeldComposerSendRow", () => {
 
   it("puts the text back ahead of a newer draft once withdrawn for editing", async () => {
     withdraw.mockResolvedValue(true);
-    drafts.set("t1", "a newer thought");
+    drafts.set(KEY, "a newer thought");
     useHeldComposerSendStore.getState().noteHeld(send({ text: "held text" }));
     render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    await waitFor(() => expect(drafts.get("t1")).toBe("held text\n\na newer thought"));
+    await waitFor(() => expect(drafts.get(KEY)).toBe("held text\n\na newer thought"));
     expect(inputs.bumpExternalDraftRevision).toHaveBeenCalledTimes(1);
     expect(withdraw).toHaveBeenCalledWith("t1", "token-1");
     expect(requestPaneFocus).toHaveBeenCalledWith("t1", "hybridInput");
@@ -134,7 +145,7 @@ describe("HeldComposerSendRow", () => {
 
   it("puts a held send's images back with its text, ahead of a newer draft", async () => {
     withdraw.mockResolvedValue(true);
-    drafts.set("t1", "a newer thought");
+    drafts.set(KEY, "a newer thought");
     const text = "compare /tmp/a.png with /tmp/b.png";
     useHeldComposerSendStore
       .getState()
@@ -144,7 +155,7 @@ describe("HeldComposerSendRow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const draft = `${text}\n\na newer thought`;
-    await waitFor(() => expect(drafts.get("t1")).toBe(draft));
+    await waitFor(() => expect(drafts.get(KEY)).toBe(draft));
     expect(pendingImages(draft)?.images).toEqual([
       { from: 8, to: 18, filePath: "/tmp/a.png" },
       { from: 24, to: 34, filePath: "/tmp/b.png" },
@@ -158,7 +169,7 @@ describe("HeldComposerSendRow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(withdraw).toHaveBeenCalledTimes(1));
-    expect(drafts.has("t1")).toBe(false);
+    expect(drafts.has(KEY)).toBe(false);
   });
 
   it("withdraws without touching the draft", async () => {
@@ -168,7 +179,7 @@ describe("HeldComposerSendRow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Withdraw held message" }));
     await waitFor(() => expect(withdraw).toHaveBeenCalledWith("t1", "token-1"));
-    expect(drafts.has("t1")).toBe(false);
+    expect(drafts.has(KEY)).toBe(false);
   });
 
   it("offers nothing to press once the send is on its way", () => {
@@ -200,7 +211,7 @@ describe("HeldComposerSendRow", () => {
     expect(row.textContent).toContain("input reached the terminal first");
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    expect(drafts.get("t1")).toBe("held text");
+    expect(drafts.get(KEY)).toBe("held text");
     expect(inputs.bumpExternalDraftRevision).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("held-composer-send-dropped")).toBeNull();
     expect(pendingImages("held text")).toEqual({
@@ -212,7 +223,7 @@ describe("HeldComposerSendRow", () => {
   });
 
   it("gives a dropped send's images back with its text, over a blank draft", () => {
-    drafts.set("t1", "  ");
+    drafts.set(KEY, "  ");
     useHeldComposerSendStore.getState().applyChange({
       terminalId: "t1",
       held: null,
@@ -227,7 +238,7 @@ describe("HeldComposerSendRow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const draft = "/tmp/a.png then /tmp/a.png again";
-    expect(drafts.get("t1")).toBe(draft);
+    expect(drafts.get(KEY)).toBe(draft);
     expect(pendingImages(draft)).toEqual({
       draft,
       before: "  ",
@@ -268,7 +279,7 @@ describe("HeldComposerSendRow", () => {
   });
 
   it("sends it now, from the keyboard as well as the pointer, leaving the draft alone", async () => {
-    drafts.set("t1", "a newer thought");
+    drafts.set(KEY, "a newer thought");
     useHeldComposerSendStore.getState().noteHeld(send());
     render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
 
@@ -280,7 +291,7 @@ describe("HeldComposerSendRow", () => {
     fireEvent.click(button);
     await waitFor(() => expect(sendNow).toHaveBeenCalledWith("t1", "token-1", false));
     expect(withdraw).not.toHaveBeenCalled();
-    expect(drafts.get("t1")).toBe("a newer thought");
+    expect(drafts.get(KEY)).toBe("a newer thought");
   });
 
   it("offers Send now where the pane has no composer to edit into", () => {
@@ -313,7 +324,7 @@ describe("HeldComposerSendRow", () => {
     await waitFor(() => expect(screen.getByTestId("held-composer-send-dropped")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    expect(drafts.get("t1")).toBe("held text");
+    expect(drafts.get(KEY)).toBe("held text");
   });
 
   it("takes no second press while one is on its way, and offers them again if it fails", async () => {
@@ -378,6 +389,27 @@ describe("HeldComposerSendRow", () => {
     );
   });
 
+  it("counts a single image singly, and says nothing without one", () => {
+    useHeldComposerSendStore
+      .getState()
+      .noteHeld(send({ text: "see /tmp/a.png", imagePaths: ["/tmp/a.png"] }));
+    const { unmount } = render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+    expect(screen.getByTestId("held-composer-send").textContent).toContain(
+      "see /tmp/a.png · 1 image"
+    );
+    unmount();
+
+    useHeldComposerSendStore.setState({ held: {} });
+    useHeldComposerSendStore.getState().applyChange({
+      terminalId: "t1",
+      held: null,
+      ended: { token: "token-1", outcome: { kind: "dropped", reason: "typed" }, text: "plain" },
+    });
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+    const preview = screen.getByTestId("held-composer-send-dropped").querySelector("p.truncate");
+    expect(preview?.textContent).toBe("plain");
+  });
+
   describe("the keyboard, once the control it pressed goes", () => {
     function dropSend(): void {
       useHeldComposerSendStore.getState().applyChange({
@@ -437,13 +469,61 @@ describe("HeldComposerSendRow", () => {
       expect(screen.queryByTestId("held-composer-send")).toBeNull();
     });
 
-    it("goes back to the pane after Send now", async () => {
+    // Main's push lands before its answer, as it can: the row has already moved on.
+    it.each([
+      [
+        "sending",
+        () =>
+          useHeldComposerSendStore
+            .getState()
+            .applyChange({ terminalId: "t1", held: send({ status: "sending" }) }),
+      ],
+      [
+        "dropped",
+        () =>
+          useHeldComposerSendStore.getState().applyChange({
+            terminalId: "t1",
+            held: null,
+            ended: { token: "token-1", outcome: { kind: "dropped", reason: "input-blocked" } },
+          }),
+      ],
+      [
+        "not-held",
+        () =>
+          useHeldComposerSendStore.getState().applyChange({
+            terminalId: "t1",
+            held: null,
+            ended: { token: "token-1", outcome: { kind: "delivered" } },
+          }),
+      ],
+    ] as const)("goes back to the pane after Send now answers %s", async (outcome, push) => {
+      sendNow.mockImplementationOnce(async () => {
+        push();
+        return { outcome };
+      });
       useHeldComposerSendStore.getState().noteHeld(send());
       render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
       const button = screen.getByRole("button", { name: "Send now" });
       button.focus();
       fireEvent.click(button);
       await waitFor(() => expect(requestPaneFocus).toHaveBeenCalledWith("t1", "hybridInput"));
+      expect(requestPaneFocus).toHaveBeenCalledTimes(1);
+    });
+
+    it("goes back to the pane when Withdraw finds the send already on its way", async () => {
+      withdraw.mockImplementationOnce(async () => {
+        useHeldComposerSendStore
+          .getState()
+          .applyChange({ terminalId: "t1", held: send({ status: "sending" }) });
+        return false;
+      });
+      useHeldComposerSendStore.getState().noteHeld(send());
+      render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+      const button = screen.getByRole("button", { name: "Withdraw held message" });
+      button.focus();
+      fireEvent.click(button);
+      await waitFor(() => expect(requestPaneFocus).toHaveBeenCalledWith("t1", "hybridInput"));
+      expect(screen.getByTestId("held-composer-send").textContent).toContain("Sending");
     });
 
     it("goes back to the pane when Edit finds the send already on its way", async () => {
@@ -454,7 +534,7 @@ describe("HeldComposerSendRow", () => {
       button.focus();
       fireEvent.click(button);
       await waitFor(() => expect(requestPaneFocus).toHaveBeenCalledWith("t1", "hybridInput"));
-      expect(drafts.has("t1")).toBe(false);
+      expect(drafts.has(KEY)).toBe(false);
     });
 
     it("stays where the user took it while Send now was on its way", async () => {
@@ -513,7 +593,8 @@ describe("HeldComposerSendRow", () => {
       expect(requestPaneFocus).toHaveBeenCalledWith("t1", "hybridInput");
     });
 
-    it("stays on the row when Send now fails, so it can be pressed again", async () => {
+    // Its controls are still there to press again: nothing is asked of the pane.
+    it("asks nothing of the pane when Send now fails", async () => {
       sendNow.mockRejectedValueOnce(new Error("ipc down"));
       useHeldComposerSendStore.getState().noteHeld(send());
       render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
@@ -521,6 +602,7 @@ describe("HeldComposerSendRow", () => {
       button.focus();
       fireEvent.click(button);
       await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+      expect(screen.getByRole("button", { name: "Send now" })).toBe(button);
       expect(requestPaneFocus).not.toHaveBeenCalled();
     });
   });

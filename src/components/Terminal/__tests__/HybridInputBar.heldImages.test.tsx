@@ -34,6 +34,7 @@ const WT_ID = "/repo/wt";
 const SHOT = "/tmp/shot.png";
 const OTHER = "/tmp/other.png";
 const PREVIEW = "data:image/png;base64,x";
+const EXISTING = "data:image/png;base64,existing";
 const originalElectron = Object.getOwnPropertyDescriptor(window, "electron");
 
 // jsdom has no layout: CodeMirror measures text through Range rects it lacks.
@@ -174,7 +175,15 @@ async function mount() {
     [...(view.state.field(imageChipField, false) ?? [])]
       .sort((a, b) => a.from - b.from)
       .map((entry) => entry.thumbnailUrl);
-  return { view, onSend, settle, pressEnter, edit, previews };
+  const write = async (draft: string) => {
+    await act(async () => {
+      const inputs = useTerminalInputStore.getState();
+      inputs.setDraftInput("term-1", draft);
+      inputs.bumpExternalDraftRevision();
+    });
+    await settle();
+  };
+  return { ...result, view, onSend, settle, pressEnter, edit, previews, write };
 }
 
 describe("HybridInputBar taking back a held send's images (#16786)", () => {
@@ -253,7 +262,7 @@ describe("HybridInputBar taking back a held send's images (#16786)", () => {
           from: 0,
           to: SHOT.length,
           filePath: SHOT,
-          thumbnailUrl: PREVIEW,
+          thumbnailUrl: EXISTING,
         }),
         userEvent: "input.paste",
       });
@@ -264,12 +273,12 @@ describe("HybridInputBar taking back a held send's images (#16786)", () => {
 
     expect(view.state.doc.toString()).toBe(`${SHOT}\n\n${SHOT}`);
     expect(readImageChipPaths(view)).toEqual([SHOT, SHOT]);
-    // The draft's own chip kept its preview on its own text.
-    expect(previews()).toEqual([PREVIEW, PREVIEW]);
+    // The restored chip is the held text's; the draft's own kept its preview on its own text.
+    expect(previews()).toEqual([PREVIEW, EXISTING]);
   });
 
   it("puts no chip on text that doesn't spell the image's path", async () => {
-    const { view, settle } = await mount();
+    const { view, write } = await mount();
     const draft = "a different draft";
     setPendingComposerImages("term-1", {
       draft,
@@ -277,16 +286,89 @@ describe("HybridInputBar taking back a held send's images (#16786)", () => {
       change: { from: 0, to: 0, insert: draft },
       images: [{ from: 2, to: 11, filePath: "/tmp/x.png" }],
     });
-    await act(async () => {
-      const inputs = useTerminalInputStore.getState();
-      inputs.setDraftInput("term-1", draft);
-      inputs.bumpExternalDraftRevision();
-    });
-    await settle();
+    await write(draft);
 
     expect(view.state.doc.toString()).toBe(draft);
     expect(view.state.field(imageChipField)).toEqual([]);
     expect(thumbnailFromPath).not.toHaveBeenCalled();
+  });
+
+  it("keeps the images when the draft was added to before the composer showed it", async () => {
+    const { view, write } = await mount();
+    const restored = `look at ${SHOT}`;
+    setPendingComposerImages("term-1", {
+      draft: restored,
+      before: "",
+      change: { from: 0, to: 0, insert: restored },
+      images: [{ from: 8, to: 8 + SHOT.length, filePath: SHOT }],
+    });
+    // Dictation or a handoff landing after the restore, before the composer caught up.
+    await write(`${restored} and the logs`);
+
+    expect(view.state.doc.toString()).toBe(`${restored} and the logs`);
+    expect(readImageChipPaths(view)).toEqual([SHOT]);
+  });
+
+  it("brings the editor to the draft when it no longer shows the one the restore went over", async () => {
+    const { view, write } = await mount();
+    await write("abc");
+    const restored = `look at ${SHOT}`;
+    // Recorded over a draft this editor doesn't show: its change would run past the text here.
+    setPendingComposerImages("term-1", {
+      draft: restored,
+      before: "a draft much longer than the one shown",
+      change: { from: 0, to: 38, insert: restored },
+      images: [{ from: 8, to: 8 + SHOT.length, filePath: SHOT }],
+    });
+    await write(restored);
+
+    expect(view.state.doc.toString()).toBe(restored);
+    expect(readImageChipPaths(view)).toEqual([SHOT]);
+  });
+
+  it("gives an old preview nothing once its draft has gone out", async () => {
+    const first = deferred<{ thumbnailDataUrl: string }>();
+    const second = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    dropSend(`look at ${SHOT}`, [SHOT]);
+    const { view, edit, pressEnter, previews } = await mount();
+    await edit();
+    await pressEnter();
+
+    // The same image comes back in the next draft, its own preview still on its way.
+    await act(async () => {
+      useHeldComposerSendStore.getState().applyChange({
+        terminalId: "term-1",
+        held: null,
+        ended: {
+          token: "token-2",
+          outcome: { kind: "dropped", reason: "typed" },
+          text: `again ${SHOT}`,
+          imagePaths: [SHOT],
+        },
+      });
+    });
+    await edit();
+    expect(previews()).toEqual([""]);
+
+    await act(async () => first.resolve({ thumbnailDataUrl: "data:image/png;base64,old" }));
+    expect(previews()).toEqual([""]);
+    await act(async () => second.resolve({ thumbnailDataUrl: PREVIEW }));
+    expect(previews()).toEqual([PREVIEW]);
+  });
+
+  it("gives an editor that has gone nothing", async () => {
+    const preview = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValue(preview.promise);
+    dropSend(`look at ${SHOT}`, [SHOT]);
+    const { view, edit, unmount } = await mount();
+    await edit();
+    const dispatch = vi.spyOn(view, "dispatch");
+
+    unmount();
+    await act(async () => preview.resolve({ thumbnailDataUrl: PREVIEW }));
+
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("leaves a chip removed before its preview arrived removed", async () => {

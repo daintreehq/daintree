@@ -32,14 +32,19 @@ export function setPendingComposerImages(draftKey: string, images: PendingCompos
   pending.set(draftKey, images);
 }
 
-/** The images waiting for the composer to show `draft`; any pending ones are used up either way. */
+/**
+ * The images waiting for the composer to show `draft`, or a draft that only
+ * added to it since (dictation or a handoff landing before the composer
+ * caught up): their text is still where it was. Any pending ones are used up
+ * either way.
+ */
 export function takePendingComposerImages(
   draftKey: string,
   draft: string
 ): PendingComposerImages | null {
   const entry = pending.get(draftKey);
   pending.delete(draftKey);
-  return entry?.draft === draft ? entry : null;
+  return entry !== undefined && draft.startsWith(entry.draft) ? entry : null;
 }
 
 /**

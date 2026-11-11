@@ -18,9 +18,11 @@ describe("imageRangesIn", () => {
     ]);
   });
 
-  it("leaves out an image the text doesn't name after the one before it", () => {
-    expect(imageRangesIn("/b.png then /a.png", ["/a.png", "/b.png", "/c.png"])).toEqual([
+  it("leaves out an image the text doesn't name after the one before it, and goes on", () => {
+    const text = "/b.png then /a.png and /d.png";
+    expect(imageRangesIn(text, ["/a.png", "/b.png", "/c.png", "/d.png"])).toEqual([
       { from: 12, to: 18, filePath: "/a.png" },
+      { from: 23, to: 29, filePath: "/d.png" },
     ]);
   });
 
@@ -44,9 +46,21 @@ describe("pending composer images", () => {
     expect(takePendingComposerImages("p:t1", "/a.png")).toBeNull();
   });
 
-  it("drops images whose draft changed before the composer showed it", () => {
+  it("hands them to a draft that was only added to before the composer showed it", () => {
     setPendingComposerImages("p:t1", pending);
-    expect(takePendingComposerImages("p:t1", "/a.png and more")).toBeNull();
+    expect(takePendingComposerImages("p:t1", "/a.png and the logs")).toEqual(pending);
+  });
+
+  it("drops images whose text changed before the composer showed it", () => {
+    setPendingComposerImages("p:t1", pending);
+    expect(takePendingComposerImages("p:t1", "see /a.png")).toBeNull();
     expect(takePendingComposerImages("p:t1", "/a.png")).toBeNull();
+  });
+
+  it("keeps only the latest write's images", () => {
+    const later = { ...pending, draft: "/b.png", images: [{ from: 0, to: 6, filePath: "/b.png" }] };
+    setPendingComposerImages("p:t1", pending);
+    setPendingComposerImages("p:t1", later);
+    expect(takePendingComposerImages("p:t1", "/b.png")).toEqual(later);
   });
 });
