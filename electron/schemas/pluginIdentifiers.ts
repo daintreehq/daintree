@@ -15,6 +15,27 @@ export const SAFE_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 export const SCOPED_PLUGIN_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
+ * A semver version in its canonical spelling (the SemVer 2.0.0 grammar: no
+ * leading "v", no surrounding space), for checking a version that arrives from
+ * outside before it is matched exactly against a catalog entry.
+ */
+export const CANONICAL_SEMVER_PATTERN =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/;
+
+/** Longest version a link or IPC request may name; catalog versions are far shorter. */
+export const PLUGIN_VERSION_MAX_CHARS = 128;
+
+/** A community catalog id: a scoped plugin name outside the reserved `daintree.*` namespace. */
+export function isCommunityPluginId(id: string): boolean {
+  return id.length <= 64 && SCOPED_PLUGIN_NAME_PATTERN.test(id) && !id.startsWith("daintree.");
+}
+
+/** A version a catalog lookup can be asked for: canonical semver, bounded. */
+export function isRequestablePluginVersion(version: string): boolean {
+  return version.length <= PLUGIN_VERSION_MAX_CHARS && CANONICAL_SEMVER_PATTERN.test(version);
+}
+
+/**
  * Hostnames that resolve to private/loopback/link-local space and must not
  * appear in a plugin's `scopes.network.allowedUrls`. Literal-string matches
  * only — DNS rebinding (a public hostname that resolves to RFC1918 at

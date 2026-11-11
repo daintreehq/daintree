@@ -8,12 +8,14 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type {
   LoadedPluginInfo,
   PluginDeepLinkIntent,
+  PluginDeepLinkRefusal,
   PluginInstallError,
   PluginInstallExpectation,
   PluginInstallResult,
   PluginUpdateExpectation,
   PluginInstallProgressEvent,
   PluginUrlInstallPreview,
+  PluginUrlInstallPreviewResult,
 } from "@shared/types/plugin";
 import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
 import { pluralize } from "@/lib/pluralize";
@@ -123,8 +125,40 @@ type PendingOutcome = Omit<InstallOutcome, "nonce" | "plugins">;
  */
 type InstallIntent = "install" | "update";
 
-/** A URL install's archive under review (#16776), with a key per review. */
+/**
+ * A URL or catalog install's archive under review (#16776, #16779), with a key
+ * per review. `catalog` is set for a catalog release, whose confirm resolves
+ * the release again in main instead of installing `url`.
+ */
 export type UrlInstallReview = PluginUrlInstallPreview & { key: string };
+
+/**
+ * Why a `daintree://plugin/install` link was refused before anything was
+ * downloaded (#16779). Nothing falls back to an ordinary URL install.
+ */
+const DEEP_LINK_REFUSAL_MESSAGES: Record<PluginDeepLinkRefusal, string> = {
+  "malformed-url":
+    "The install link's archive URL is missing or isn't a web address, so nothing was installed.",
+  "insecure-url":
+    "The install link pins a SHA-256 but its archive URL isn't https://, so nothing was installed.",
+  "malformed-sha256":
+    "The install link's SHA-256 isn't 64 hex digits, so nothing was installed. Ask whoever shared it for a corrected link.",
+  "malformed-id":
+    "The install link's plugin id isn't a community plugin id, so nothing was installed.",
+  "malformed-version":
+    "The install link's version isn't a valid version number, so nothing was installed.",
+  "conflicting-params":
+    "The install link combines parameters that don't go together, so nothing was installed.",
+};
+
+/** An install link held to reviewed bytes: a pinned URL or a catalog release. */
+type LinkedInstallIntent =
+  | Extract<PluginDeepLinkIntent, { action: "install-catalog" }>
+  | (Extract<PluginDeepLinkIntent, { action: "install" }> & { sha256: string });
+
+/** An install link held to reviewed bytes arrived while another install was under way. */
+const LINKED_INSTALL_BUSY =
+  "Finish or cancel the current install, then open the install link again.";
 
 /**
  * A URL failure the user can fix by editing the URL: a malformed URL, a
@@ -275,6 +309,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // re-run the effect and fire `onConsumed` twice for one intent.
   const showUrlDialogRef = useRef(showUrlDialog);
   showUrlDialogRef.current = showUrlDialog;
+  // The preview a pinned or catalog install link starts (#16779), assigned
+  // once the review flow below is defined.
+  const linkedPreviewRef = useRef<((intent: LinkedInstallIntent) => void) | null>(null);
   // Update-check state. `checkingUpdate` drives the per-row spinner; the ref is
   // the synchronous reentrancy guard (state batches, leaving a double-click
   // window — #4703). `upToDateId` shows the transient "Already up to date" note;
@@ -557,7 +594,43 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const deepLinkIntent = deepLink?.intent ?? null;
   useEffect(() => {
     if (!isOpen || !deepLinkIntent) return;
-    if (deepLinkIntent.action === "install") {
+    const linked: LinkedInstallIntent | null =
+      deepLinkIntent.action === "install-catalog"
+        ? deepLinkIntent
+        : deepLinkIntent.action === "install" && deepLinkIntent.sha256 !== undefined
+          ? { ...deepLinkIntent, sha256: deepLinkIntent.sha256 }
+          : null;
+    if (deepLinkIntent.action === "install-refused") {
+      const message = DEEP_LINK_REFUSAL_MESSAGES[deepLinkIntent.reason];
+      // The URL dialog renders the shared error as its own failure, so a
+      // refusal arriving over it is a notice instead.
+      if (showUrlDialogRef.current) {
+        setNoticeTone("warning");
+        setNotice(message);
+      } else {
+        setPendingUninstall(null);
+        setNotice(null);
+        setError(message);
+      }
+    } else if (linked !== null) {
+      // A pinned or catalog link goes straight to its preview: there is no URL
+      // for the user to edit, so the pin can't be lost to an edit. It never
+      // replaces an install the user already has going, for the same reason an
+      // ordinary link doesn't; it says so rather than vanish.
+      const urlFlowBusy =
+        showUrlDialogRef.current ||
+        urlPreviewingRef.current ||
+        urlReviewRef.current !== null ||
+        pendingHttpUrlRef.current !== null ||
+        installJobIdRef.current !== null;
+      if (urlFlowBusy) {
+        setNoticeTone("warning");
+        setNotice(LINKED_INSTALL_BUSY);
+      } else {
+        setPendingUninstall(null);
+        linkedPreviewRef.current?.(linked);
+      }
+    } else if (deepLinkIntent.action === "install") {
       // Don't clobber an install dialog the user already has open — they may be
       // mid-edit, and silently swapping in a fresh (attacker-supplied) URL is a
       // social-engineering risk. The same goes for an install from a URL that
@@ -849,17 +922,16 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const performInstallFromUrl = async (
     url: string,
     expected: PluginInstallExpectation,
-    intent: InstallIntent
+    intent: InstallIntent,
+    install: (jobId: string) => Promise<PluginInstallResult> = (jobId) =>
+      window.electron.plugin.installFromUrl(url, jobId, expected)
   ) => {
     setIsInstalling(true);
     if (intent === "update" && expected.pluginId !== undefined) {
       setUpdatingPluginId(expected.pluginId);
     }
     try {
-      const result = await runInstallJob(
-        (jobId) => window.electron.plugin.installFromUrl(url, jobId, expected),
-        url
-      );
+      const result = await runInstallJob(install, url);
       handleInstallResult(result, intent);
       if (!isCorrectableUrlFailure(result)) {
         setShowUrlDialog(false);
@@ -875,13 +947,16 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   };
 
   /**
-   * Download a URL's archive and put what it would install up for review
-   * (#16776). Nothing is installed here: main reads the archive, deletes the
+   * Download an archive and put what it would install up for review (#16776,
+   * #16779). Nothing is installed here: main reads the archive, deletes the
    * download, and returns its disclosure and digest. A failure is reported the
    * way an install's is, keeping the URL dialog open when the URL is the
-   * problem.
+   * problem. `source` names the download in the progress banner.
    */
-  const previewInstallFromUrl = async (url: string) => {
+  const previewForReview = async (
+    preview: (jobId: string) => Promise<PluginUrlInstallPreviewResult>,
+    source: string
+  ) => {
     if (urlPreviewingRef.current) return;
     urlPreviewingRef.current = true;
     const generation = urlFlowGenerationRef.current;
@@ -889,10 +964,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     try {
       const result = await runInstallJob((jobId) => {
         previewJobIdRef.current = jobId;
-        return window.electron.plugin.previewFromUrl(url, jobId).finally(() => {
+        return preview(jobId).finally(() => {
           if (previewJobIdRef.current === jobId) previewJobIdRef.current = null;
         });
-      }, url);
+      }, source);
       if (urlFlowGenerationRef.current !== generation) return;
       if (result.status === "preview") {
         setError(null);
@@ -910,12 +985,44 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // A host too old to preview refuses the call; nothing installs unbound.
       if (urlFlowGenerationRef.current !== generation) return;
       setError(formatErrorMessage(err, "Failed to download plugin"));
-      logError("Failed to preview plugin from URL", err);
+      logError("Failed to preview plugin for install", err);
     } finally {
       urlPreviewingRef.current = false;
       setIsInstalling(false);
     }
   };
+
+  /** Preview a URL's archive, held to `sha256` when a link pinned one. */
+  const previewInstallFromUrl = (url: string, sha256?: string) =>
+    previewForReview(
+      (jobId) =>
+        sha256 === undefined
+          ? window.electron.plugin.previewFromUrl(url, jobId)
+          : window.electron.plugin.previewFromUrl(url, jobId, sha256),
+      url
+    );
+
+  /**
+   * Start the preview a pinned or catalog install link asks for (#16779). Read
+   * by the deep-link effect through a ref, so the effect doesn't re-run with
+   * every render's copy of this function.
+   */
+  const startLinkedPreview = (intent: LinkedInstallIntent) => {
+    if (intent.action === "install") {
+      void previewInstallFromUrl(intent.url, intent.sha256);
+      return;
+    }
+    const { pluginId, version } = intent;
+    void previewForReview(
+      (jobId) =>
+        window.electron.plugin.previewFromCatalog(
+          version === undefined ? { pluginId } : { pluginId, version },
+          jobId
+        ),
+      version === undefined ? pluginId : `${pluginId}@${version}`
+    );
+  };
+  linkedPreviewRef.current = startLinkedPreview;
 
   /**
    * Install the reviewed archive. The confirm downloads the URL again, so it is
@@ -932,10 +1039,23 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       pluginId: review.manifest.name,
       archiveHash: review.archiveHash,
     };
+    const expected: PluginInstallExpectation = replacesInstalled
+      ? { kind: "update", ...binding }
+      : { kind: "install", ...binding };
+    const { catalog } = review;
+    // A catalog release is installed by naming it, never by its URL: main
+    // looks it up again and fetches what the catalog lists (#16779).
     await performInstallFromUrl(
       review.url,
-      replacesInstalled ? { kind: "update", ...binding } : { kind: "install", ...binding },
-      "install"
+      expected,
+      "install",
+      catalog === undefined
+        ? undefined
+        : (jobId) =>
+            window.electron.plugin.installFromCatalog(
+              { pluginId: catalog.id, version: catalog.version, repo: catalog.repo, expected },
+              jobId
+            )
     );
   };
 

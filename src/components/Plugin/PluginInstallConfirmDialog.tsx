@@ -186,6 +186,13 @@ export type PluginInstallConfirmSource =
       label: string;
       /** The installer would find this plugin installed, listed or not. */
       installedOnDisk: boolean;
+    }
+  | {
+      /** A community catalog release (#16779), named by its repository. */
+      kind: "catalog";
+      /** The listed repository, as `github.com/{owner}/{repo}`. */
+      repoLabel: string;
+      installedOnDisk: boolean;
     };
 
 export interface PluginInstallConfirmRequest {
@@ -263,7 +270,9 @@ export function PluginInstallConfirmDialog({
     );
   }
 
-  const bindsInstalledState = request.source.kind === "url";
+  // Both download routes confirm by downloading again, so each binds its
+  // approval to what this dialog says about the installed copy.
+  const bindsInstalledState = request.source.kind !== "archive";
   const lookupFailed = bindsInstalledState && lookup.failed;
 
   const label = request.manifest.displayName || request.manifest.name;
@@ -280,7 +289,7 @@ export function PluginInstallConfirmDialog({
   // counts a folder: an install that no longer loads is in the preview's own
   // probe alone, and the review says it replaces that copy.
   const replacesUnlisted =
-    request.source.kind === "url" &&
+    request.source.kind !== "archive" &&
     request.source.installedOnDisk &&
     installedVersion === null &&
     !lookup.pending &&
@@ -449,14 +458,22 @@ function ArchiveIdentityCard({
           className="flex items-start gap-1.5 text-2xs text-text-secondary"
           data-testid="archive-install-source"
         >
-          {source.kind === "url" ? (
-            <Globe className="w-3 h-3 shrink-0 mt-[1.5px] text-text-secondary" aria-hidden />
-          ) : (
+          {source.kind === "archive" ? (
             <FileArchive className="w-3 h-3 shrink-0 mt-[1.5px] text-text-secondary" aria-hidden />
+          ) : (
+            <Globe className="w-3 h-3 shrink-0 mt-[1.5px] text-text-secondary" aria-hidden />
           )}
-          <span className="font-mono break-all min-w-0">
-            {source.kind === "url" ? source.label : source.fileName}
-          </span>
+          {source.kind === "catalog" ? (
+            <span className="break-words min-w-0">
+              Community listing from{" "}
+              <span className="font-mono break-all">{source.repoLabel}</span>. Review checked the
+              source and the bytes, not that the code is safe.
+            </span>
+          ) : (
+            <span className="font-mono break-all min-w-0">
+              {source.kind === "url" ? source.label : source.fileName}
+            </span>
+          )}
         </div>
         <div className="flex items-start gap-1.5 text-2xs text-text-secondary">
           <Users className="w-3 h-3 shrink-0 mt-[1.5px] text-text-secondary" aria-hidden />

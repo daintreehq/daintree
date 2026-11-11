@@ -1,5 +1,9 @@
 import { CHANNELS } from "../ipc/channels.js";
-import { SCOPED_PLUGIN_NAME_PATTERN } from "../schemas/pluginIdentifiers.js";
+import {
+  SCOPED_PLUGIN_NAME_PATTERN,
+  isCommunityPluginId,
+  isRequestablePluginVersion,
+} from "../schemas/pluginIdentifiers.js";
 import { getAppWebContents } from "../window/webContentsRegistry.js";
 import { watchMainFrameDocument } from "../utils/mainFrameNavigation.js";
 import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
@@ -9,7 +13,7 @@ import {
   setDaintreeUrlConsumer,
 } from "./deepLinkUrlQueue.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
-import type { PluginDeepLinkIntent } from "../../shared/types/plugin.js";
+import type { PluginDeepLinkIntent, PluginDeepLinkRefusal } from "../../shared/types/plugin.js";
 
 export const DAINTREE_DEEP_LINK_SCHEME = "daintree";
 const SCHEME_PREFIX = `${DAINTREE_DEEP_LINK_SCHEME}://`;
@@ -23,6 +27,68 @@ function truncateForLog(raw: string): string {
   return raw.length > UNTRUSTED_URL_MAX_CHARS ? `${raw.slice(0, UNTRUSTED_URL_MAX_CHARS)}…` : raw;
 }
 
+const SHA256_HEX_PATTERN = /^[0-9a-fA-F]{64}$/;
+
+/** The parameters that make an install link pinned or catalog-resolved. */
+const BINDING_PARAMS = ["sha256", "id", "version"] as const;
+
+function refuse(reason: PluginDeepLinkRefusal): PluginDeepLinkIntent {
+  return { action: "install-refused", reason };
+}
+
+/** A web URL, or `null`; the scheme is the caller's to check. */
+function parseWebUrl(value: string): URL | null {
+  let nested: URL;
+  try {
+    nested = new URL(value);
+  } catch {
+    return null;
+  }
+  return nested.protocol === "https:" || nested.protocol === "http:" ? nested : null;
+}
+
+/**
+ * The install link's intent. A link carrying `sha256`, `id` or `version` asks
+ * for an install held to reviewed bytes, so a malformed one is refused with a
+ * reason the user sees, never narrowed to an ordinary, unbound URL install.
+ * Presence decides, not truthiness: an empty `sha256=` is still a pin.
+ */
+function parseInstallLink(params: URLSearchParams): PluginDeepLinkIntent | null {
+  const bound = BINDING_PARAMS.some((name) => params.has(name));
+  if (!bound) {
+    const target = params.get("url");
+    if (!target || !parseWebUrl(target)) return null;
+    return { action: "install", url: target };
+  }
+
+  if ([...BINDING_PARAMS, "url"].some((name) => params.getAll(name).length > 1)) {
+    return refuse("conflicting-params");
+  }
+
+  if (params.has("id")) {
+    if (params.has("url") || params.has("sha256")) return refuse("conflicting-params");
+    const pluginId = params.get("id") ?? "";
+    if (!isCommunityPluginId(pluginId)) return refuse("malformed-id");
+    if (!params.has("version")) return { action: "install-catalog", pluginId };
+    const version = params.get("version") ?? "";
+    if (!isRequestablePluginVersion(version)) return refuse("malformed-version");
+    return { action: "install-catalog", pluginId, version };
+  }
+
+  // A version names a catalog release, so without an id it means nothing.
+  if (params.has("version")) return refuse("conflicting-params");
+
+  const sha256 = params.get("sha256") ?? "";
+  if (!SHA256_HEX_PATTERN.test(sha256)) return refuse("malformed-sha256");
+  const target = params.get("url");
+  const nested = target ? parseWebUrl(target) : null;
+  if (!target || !nested) return refuse("malformed-url");
+  // The digest pins the bytes but says nothing about who sent them, and a
+  // plaintext download shows everyone on the path what is being installed.
+  if (nested.protocol !== "https:") return refuse("insecure-url");
+  return { action: "install", url: target, sha256: sha256.toLowerCase() };
+}
+
 /**
  * Validate and narrow a raw `daintree://` URI to a {@link PluginDeepLinkIntent},
  * or `null` if it isn't a deep link we recognise. The URL is untrusted; every
@@ -30,13 +96,16 @@ function truncateForLog(raw: string): string {
  *
  * Accepted shapes:
  * - `daintree://plugin/install?url=<http(s) archive url>`
+ * - `daintree://plugin/install?url=<https archive url>&sha256=<64 hex>`
+ * - `daintree://plugin/install?id=<publisher.name>[&version=<semver>]`
  * - `daintree://plugin/open?id=<publisher.name>`
  *
  * The nested install `url` is only required to be `http:`/`https:` here — the
- * full SSRF / private-host / size gates live in `handleInstallFromUrl`, which
- * the renderer routes through when the user presses install. This parser's job
- * is to reject non-web schemes (`javascript:`, `file:`, `daintree:`) so a
- * hostile deep link can't pre-fill the dialog with something dangerous.
+ * full SSRF / private-host / size gates live in the main-process download,
+ * which every preview and install goes through. This parser's job is to reject
+ * non-web schemes (`javascript:`, `file:`, `daintree:`) so a hostile deep link
+ * can't pre-fill the dialog with something dangerous, and to refuse, visibly,
+ * a pinned or catalog link it can't hold to what it names.
  */
 export function parseDaintreeUrl(raw: string): PluginDeepLinkIntent | null {
   if (typeof raw !== "string" || !raw.startsWith(SCHEME_PREFIX)) return null;
@@ -53,18 +122,7 @@ export function parseDaintreeUrl(raw: string): PluginDeepLinkIntent | null {
   // hosts must opt in explicitly rather than fall through to a plugin action.
   if (url.hostname !== "plugin") return null;
 
-  if (url.pathname === "/install") {
-    const target = url.searchParams.get("url");
-    if (!target) return null;
-    let nested: URL;
-    try {
-      nested = new URL(target);
-    } catch {
-      return null;
-    }
-    if (nested.protocol !== "https:" && nested.protocol !== "http:") return null;
-    return { action: "install", url: target };
-  }
+  if (url.pathname === "/install") return parseInstallLink(url.searchParams);
 
   if (url.pathname === "/open") {
     const pluginId = url.searchParams.get("id");

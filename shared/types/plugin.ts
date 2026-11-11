@@ -4059,20 +4059,62 @@ export interface PluginDatabaseApi {
 export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
 
 /**
+ * A community catalog release a plugin was installed from (#16779): the
+ * entry's `id`, `version` and `repo`, read by main from a catalog it fetched
+ * itself, never named by the renderer.
+ */
+export interface PluginCatalogProvenance {
+  id: string;
+  version: string;
+  /** `https://github.com/{owner}/{repo}`, as the catalog lists it. */
+  repo: string;
+}
+
+/**
+ * Why a recognised `daintree://plugin/install` link was refused before
+ * anything was fetched (#16779). Each one is shown, never retried as a
+ * different, unbound kind of install.
+ *
+ * - `malformed-url` — a pinned link whose `url` is missing or not a web URL
+ * - `insecure-url` — a pinned link whose `url` isn't `https:`
+ * - `malformed-sha256` — `sha256` isn't 64 hex digits
+ * - `malformed-id` — `id` isn't a community plugin id (`publisher.name`, outside `daintree.*`)
+ * - `malformed-version` — `version` isn't a semver version
+ * - `conflicting-params` — parameters that don't belong together, or repeat
+ */
+export type PluginDeepLinkRefusal =
+  | "malformed-url"
+  | "insecure-url"
+  | "malformed-sha256"
+  | "malformed-id"
+  | "malformed-version"
+  | "conflicting-params";
+
+/**
  * Parsed intent of a `daintree://` deep link (#9559). The OS hands the raw URI
  * to the main process via `open-url` (macOS) or `second-instance` / `process.argv`
  * (Windows/Linux); `parseDaintreeUrl` validates and narrows it to one of these
- * shapes before it crosses to the renderer.
+ * shapes before it crosses to the renderer. No install link installs without
+ * the user confirming the archive's preview.
  *
- * - `install` — `daintree://plugin/install?url=<https-or-http-archive-url>`: opens
- *   the Plugin Manager with the URL pre-filled in the install dialog. The user
- *   still presses install, so the existing HTTP-warning and security gates fire;
- *   a deep link never installs silently.
+ * - `install` — `daintree://plugin/install?url=<https-or-http-archive-url>`:
+ *   opens the Plugin Manager with the URL pre-filled in the install dialog; the
+ *   user presses install, so the HTTP warning fires before the preview. With
+ *   `&sha256=<64 hex>` (https only) the archive is previewed straight away and
+ *   only an archive with that digest can be previewed or installed.
+ * - `install-catalog` — `daintree://plugin/install?id=<publisher.name>[&version=]`:
+ *   resolves the release from a freshly fetched community catalog (the newest
+ *   one when no version is named), previews it, and installs only its digest.
+ * - `install-refused` — a recognised install link that is malformed; the
+ *   Plugin Manager says why.
  * - `open` — `daintree://plugin/open?id=<publisher.name>`: opens the Plugin
  *   Manager scrolled to the named plugin.
  */
 export type PluginDeepLinkIntent =
-  { action: "install"; url: string } | { action: "open"; pluginId: string };
+  | { action: "install"; url: string; sha256?: string }
+  | { action: "install-catalog"; pluginId: string; version?: string }
+  | { action: "install-refused"; reason: PluginDeepLinkRefusal }
+  | { action: "open"; pluginId: string };
 
 /**
  * Manifest identity shown in the sideload confirmation dialog (#11280). A
@@ -4158,11 +4200,39 @@ export interface PluginUrlInstallPreview {
    */
   installedOnDisk: boolean;
   manifest: PluginArchiveManifestPreview;
+  /**
+   * Set when the archive is a community catalog release (#16779). Its confirm
+   * goes through `plugin.installFromCatalog`, which resolves the release again
+   * rather than trusting `url`.
+   */
+  catalog?: PluginCatalogProvenance;
 }
 
 /**
- * Outcome of `plugin.previewFromUrl`. Failures carry the same shapes and error
- * codes as {@link PluginInstallResult}, so one message table covers both.
+ * A catalog release to preview (#16779): `version` omitted means the newest
+ * one the catalog lists.
+ */
+export interface PluginCatalogPreviewRequest {
+  pluginId: string;
+  version?: string;
+}
+
+/**
+ * The confirm of a catalog release's preview. Main looks the release up in a
+ * fresh catalog again and refuses unless it still lists this `version` from
+ * this `repo` with the digest in `expected`, which must name `pluginId`.
+ */
+export interface PluginCatalogInstallRequest {
+  pluginId: string;
+  version: string;
+  repo: string;
+  expected: PluginInstallExpectation;
+}
+
+/**
+ * Outcome of `plugin.previewFromUrl` and `plugin.previewFromCatalog`. Failures
+ * carry the same shapes and error codes as {@link PluginInstallResult}, so one
+ * message table covers both.
  */
 export type PluginUrlInstallPreviewResult =
   | { status: "preview"; preview: PluginUrlInstallPreview }
@@ -4309,6 +4379,13 @@ export interface PluginUpdateAvailable {
  */
 export interface InstalledPluginRecord {
   source: PluginInstallSource;
+  /**
+   * The catalog release a `"catalog"` install came from (#16779). Every install
+   * writes it, `null` when the install wasn't from the catalog, so a URL or file
+   * install over a catalog one doesn't keep its listing. Absent on records
+   * written before it existed.
+   */
+  catalog?: PluginCatalogProvenance | null;
   installedAt: number;
   /**
    * When the plugin was last reinstalled over an existing install (the #9292
@@ -4360,6 +4437,16 @@ export interface InstalledPluginRecord {
  * - `extraction_timeout` — extraction ran past `PLUGIN_ARCHIVE_TOTAL_DEADLINE_MS` (#11302), distinct
  *   from `archive_invalid`: the archive may be fine and the source merely too slow, so the
  *   actionable advice is "try again", not "check the file"
+ *
+ * Pinned and catalog previews (#16779), produced before the installer runs:
+ * - `digest_invalid` — the digest a preview was asked to hold the download to is malformed
+ * - `digest_mismatch` — the download's SHA-256 isn't the pinned or catalog-reviewed one
+ * - `catalog_unavailable` — no catalog could be fetched (not published, unreachable, or invalid)
+ * - `catalog_stale` — only a cached catalog exists, and installs never use one
+ * - `catalog_not_listed` — the fresh catalog doesn't list the plugin, or that version of it
+ * - `catalog_mismatch` — the archive or the listing no longer matches the release that was
+ *   reviewed: its manifest names another plugin or version, or the confirm found the entry's
+ *   digest or repository changed since the preview
  */
 export type PluginInstallErrorCode =
   | "lock_failed"
@@ -4378,7 +4465,13 @@ export type PluginInstallErrorCode =
   | "fetch_failed"
   | "fetch_timeout"
   | "size_exceeded"
-  | "content_type_rejected";
+  | "content_type_rejected"
+  | "digest_invalid"
+  | "digest_mismatch"
+  | "catalog_unavailable"
+  | "catalog_stale"
+  | "catalog_not_listed"
+  | "catalog_mismatch";
 
 /**
  * Structured install validation error. `path` is the JSON pointer segments
@@ -4428,6 +4521,13 @@ export interface PluginInstallOptions {
   source?: PluginInstallSource;
   /** Original download URL for catalog/url installs. Never logged. */
   originalUrl?: string | null;
+  /**
+   * The catalog release a `"catalog"` install came from, recorded as
+   * {@link InstalledPluginRecord.catalog}. Main-only: set by the catalog install
+   * route from a catalog it fetched itself, and refused from the generic
+   * install IPC.
+   */
+  catalog?: PluginCatalogProvenance;
   /**
    * Correlation id for progress reporting and cancellation (#11302). Minted by
    * the caller that wants feedback; omitting it installs exactly as before, just
@@ -4551,6 +4651,11 @@ export interface LoadedPluginInfo {
   archiveHash: string | null;
   /** Original install URL. `null` for builtins and sideloads. Never logged to console. */
   originalUrl: string | null;
+  /**
+   * The community catalog release this plugin was installed from (#16779), or
+   * `null`/absent for every other install.
+   */
+  catalog?: PluginCatalogProvenance | null;
   /** Most recent activation error, or `null` if the last load succeeded. */
   loadError: PluginLoadError | null;
   /** Per-plugin disable state for non-builtins. Builtins use `disabledBuiltins` instead. */

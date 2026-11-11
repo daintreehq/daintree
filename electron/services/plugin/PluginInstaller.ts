@@ -778,6 +778,9 @@ export class PluginInstaller {
       this.records.upsertInstalledRecord(pluginId, {
         source: opts?.source ?? "sideload",
         originalUrl: opts?.originalUrl ?? null,
+        // Always written: the upsert spreads over the old record, so a URL or
+        // file install over a catalog one would otherwise keep its listing.
+        catalog: opts?.source === "catalog" ? (opts.catalog ?? null) : null,
         archiveHash: hash,
         loadError: null,
         ...(existing

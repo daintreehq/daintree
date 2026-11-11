@@ -747,6 +747,18 @@ export function PluginDetailPane({
                   — the one fact the Dev badge implies but never states. A
                   reload action would be the other half, and needs a runtime
                   operation that does not exist yet. */}
+                {plugin.catalog && !plugin.devMode && (
+                  <p
+                    className="text-2xs text-text-secondary mt-0.5 break-words"
+                    data-testid="plugin-catalog-listing"
+                  >
+                    Community listing from{" "}
+                    <span className="font-mono break-all select-text">
+                      {describeCatalogRepo(plugin.catalog.repo)}
+                    </span>
+                    , reviewed for its source and bytes, not endorsed by Daintree.
+                  </p>
+                )}
                 <p className="text-2xs text-text-secondary mt-0.5 break-all select-text font-mono">
                   {plugin.devMode ? plugin.dir : plugin.originalUrl}
                 </p>

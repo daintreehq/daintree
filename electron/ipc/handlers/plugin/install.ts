@@ -17,13 +17,18 @@ import {
 } from "../../../utils/pluginDownloadPolicy.js";
 import {
   SCOPED_PLUGIN_NAME_PATTERN,
+  isCommunityPluginId,
   isPrivateOrLoopbackHostname,
+  isRequestablePluginVersion,
 } from "../../../schemas/pluginIdentifiers.js";
 import { describePluginInstallSource } from "../../../../shared/utils/pluginInstallSource.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { displaySafeText } from "../../../../shared/utils/displaySafeText.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
-import { parseInstallExpectation } from "../../../services/plugin/installExpectation.js";
+import {
+  ARCHIVE_HASH_PATTERN,
+  parseInstallExpectation,
+} from "../../../services/plugin/installExpectation.js";
 import { sendToRendererContext } from "../../utils.js";
 import type {
   LoadedPluginInfo,
@@ -36,7 +41,11 @@ import type {
   PluginBackgroundUpdateCheckResult,
   PluginUrlInstallPreviewResult,
   PluginArchiveManifestPreview,
+  PluginCatalogPreviewRequest,
+  PluginCatalogInstallRequest,
+  PluginCatalogProvenance,
 } from "../../../../shared/types/plugin.js";
+import type { PluginCatalogEntry } from "../../../services/plugin/pluginCatalogSchema.js";
 import type { IpcContext } from "../../types.js";
 import { getPluginService } from "./service.js";
 
@@ -135,6 +144,16 @@ export async function handleInstall(
 ): Promise<PluginInstallResult> {
   const invalid = await validateDntrArchivePath(archivePath);
   if (invalid) return invalid;
+  // Catalog provenance is only ever derived here, from a catalog main fetched
+  // itself (#16779); a caller of the generic install can't claim it.
+  if (opts?.source === "catalog" || opts?.catalog !== undefined) {
+    return {
+      status: "failed",
+      errors: [
+        { code: "catalog_mismatch", message: "Only the catalog install can record a catalog listing." },
+      ],
+    };
+  }
   const service = await getPluginService();
   // Same init gate as `handleInstallFromPath` (#11280): `initialize()` assumes no
   // install overlaps it — its sweep deletes staging dirs and the blocklist is
@@ -303,9 +322,41 @@ export async function handleInstallFromUrlOp(
 export async function handlePreviewFromUrlOp(
   ctx: IpcContext,
   url: string,
+  jobId?: string,
+  expectedSha256?: string
+): Promise<PluginUrlInstallPreviewResult> {
+  return withInstallJob(ctx, jobId, url, (id) => handlePreviewFromUrl(url, id, expectedSha256));
+}
+
+/** How a catalog request is named in the progress banner: no URL exists yet. */
+function catalogJobLabel(request: unknown): string {
+  const { pluginId, version } = (request ?? {}) as { pluginId?: unknown; version?: unknown };
+  const id = typeof pluginId === "string" && isCommunityPluginId(pluginId) ? pluginId : "plugin";
+  return typeof version === "string" && isRequestablePluginVersion(version)
+    ? `${id}@${version}`
+    : id;
+}
+
+/** Namespace entry for a catalog release's preview — registers the job, then delegates. */
+export async function handlePreviewFromCatalogOp(
+  ctx: IpcContext,
+  request: PluginCatalogPreviewRequest,
   jobId?: string
 ): Promise<PluginUrlInstallPreviewResult> {
-  return withInstallJob(ctx, jobId, url, (id) => handlePreviewFromUrl(url, id));
+  return withInstallJob(ctx, jobId, catalogJobLabel(request), (id) =>
+    handlePreviewFromCatalog(request, id)
+  );
+}
+
+/** Namespace entry for a catalog release's confirm — registers the job, then delegates. */
+export async function handleInstallFromCatalogOp(
+  ctx: IpcContext,
+  request: PluginCatalogInstallRequest,
+  jobId?: string
+): Promise<PluginInstallResult> {
+  return withInstallJob(ctx, jobId, catalogJobLabel(request), (id) =>
+    handleInstallFromCatalog(request, id)
+  );
 }
 
 /** The ways a URL download can end without an archive on disk. */
@@ -524,15 +575,26 @@ export async function handleInstallFromUrl(
     );
   }
 
+  return installDownloadedArchive(target, jobId, {
+    source: "url",
+    originalUrl: target.trimmed,
+    ...(binding === undefined ? {} : { expected: binding }),
+  });
+}
+
+/** Download `target` and hand it to the installer with `opts`. */
+function installDownloadedArchive(
+  target: { trimmed: string; parsed: URL },
+  jobId: string | undefined,
+  opts: Omit<PluginInstallOptions, "jobId">
+): Promise<PluginInstallResult> {
   return withDownloadedArchive(target, jobId, async (archivePath) => {
     const service = await getPluginService();
     // See `handleInstall` — the same init gate, for the same two reasons.
     await service.waitForCatalog();
     return service.installPlugin(archivePath, {
-      source: "url",
-      originalUrl: target.trimmed,
+      ...opts,
       ...(jobId === undefined ? {} : { jobId }),
-      ...(binding === undefined ? {} : { expected: binding }),
     });
   });
 }
@@ -543,56 +605,265 @@ export async function handleInstallFromUrl(
  * from the operating system, plus the digest the confirm binds to. The download
  * is removed before this returns, whatever the outcome, so a cancelled preview
  * leaves nothing behind. Runs every guard the install's download does.
+ *
+ * `expectedSha256` holds the preview to a digest a link pinned (#16779): an
+ * https URL only, and an archive with any other digest is refused before its
+ * manifest is read. A malformed digest refuses outright rather than preview
+ * unbound.
  */
 export async function handlePreviewFromUrl(
   url: string,
-  jobId?: string
+  jobId?: string,
+  expectedSha256?: string
 ): Promise<PluginUrlInstallPreviewResult> {
   const target = parsePluginDownloadUrl(url);
   if (target === null) return { status: "invalid-url" };
-  return withDownloadedArchive(
-    target,
-    jobId,
-    async (archivePath): Promise<PluginUrlInstallPreviewResult> => {
-      pluginInstallJobs.setPhase(jobId, "validating");
-      const cancelled = () => pluginInstallJobs.signal(jobId)?.aborted === true;
-      let archiveHash: string;
-      let manifest: PluginArchiveManifestPreview;
-      try {
-        // Lazy, like the archive worker's: keeps `yauzl` and the manifest
-        // schema off the startup path (#9285).
-        const [{ computeArchiveHash }, { readArchiveManifestPreview }] = await Promise.all([
-          import("../../../services/PluginArchive.js"),
-          import("../../../services/plugin/archiveManifestPreview.js"),
-        ]);
-        archiveHash = await computeArchiveHash(archivePath);
-        manifest = await readArchiveManifestPreview(archivePath);
-      } catch (err) {
-        if (cancelled()) return { status: "cancelled" };
-        return downloadFailed(
+  if (expectedSha256 !== undefined) {
+    if (typeof expectedSha256 !== "string" || !ARCHIVE_HASH_PATTERN.test(expectedSha256)) {
+      return downloadFailed(
+        "digest_invalid",
+        "The link's SHA-256 isn't 64 hex digits, so nothing was downloaded."
+      );
+    }
+    if (target.parsed.protocol !== "https:") return { status: "invalid-url" };
+  }
+  return withDownloadedArchive(target, jobId, (archivePath) =>
+    previewArchive(archivePath, target.trimmed, jobId, {
+      sha256: expectedSha256,
+      mismatch:
+        "The downloaded archive's SHA-256 doesn't match the one in the link, so nothing was installed. Ask whoever shared the link to check it.",
+    })
+  );
+}
+
+/** What a preview must find in the archive before it shows anything. */
+interface ArchivePreviewCheck {
+  /** The digest the bytes must have; checked before the manifest is read. */
+  sha256?: string;
+  /** Why a digest mismatch was refused, in the words of whoever pinned it. */
+  mismatch: string;
+  /** The catalog release the archive must be: its `manifest.name` and version. */
+  catalog?: PluginCatalogProvenance;
+}
+
+/**
+ * Read a downloaded archive's disclosure and digest. A pinned digest is checked
+ * first, so bytes nobody reviewed are never parsed, and a catalog release must
+ * also name the plugin and version its entry lists.
+ */
+async function previewArchive(
+  archivePath: string,
+  url: string,
+  jobId: string | undefined,
+  check: ArchivePreviewCheck
+): Promise<PluginUrlInstallPreviewResult> {
+  pluginInstallJobs.setPhase(jobId, "validating");
+  const cancelled = () => pluginInstallJobs.signal(jobId)?.aborted === true;
+  const unreadable = (err: unknown): PluginUrlInstallPreviewResult =>
+    cancelled()
+      ? { status: "cancelled" }
+      : downloadFailed(
           "archive_invalid",
           `The download isn't a valid plugin archive: ${previewErrorDetail(err)}`
         );
-      }
-      // The installer counts a plugin as installed when its folder exists,
-      // while the plugin manager lists only plugins that loaded or were
-      // skipped. An install whose manifest no longer validates is in the
-      // first and not the second, so the review asks the installer's question
-      // itself rather than leave a fresh-install binding that can never land.
-      const service = await getPluginService();
-      const installedOnDisk = await access(path.join(service.getPluginsRoot(), manifest.name)).then(
-        () => true,
-        () => false
-      );
-      // Checked last, after every await: a cancel that lands while the
-      // archive is read or the probe runs still wins over the preview.
-      if (cancelled()) return { status: "cancelled" };
-      return {
-        status: "preview",
-        preview: { url: target.trimmed, archiveHash, installedOnDisk, manifest },
-      };
+  let archiveHash: string;
+  let manifest: PluginArchiveManifestPreview;
+  try {
+    // Lazy, like the archive worker's: keeps `yauzl` and the manifest
+    // schema off the startup path (#9285).
+    const [{ computeArchiveHash }, { readArchiveManifestPreview }] = await Promise.all([
+      import("../../../services/PluginArchive.js"),
+      import("../../../services/plugin/archiveManifestPreview.js"),
+    ]);
+    archiveHash = await computeArchiveHash(archivePath);
+    if (check.sha256 !== undefined && archiveHash !== check.sha256) {
+      return cancelled() ? { status: "cancelled" } : downloadFailed("digest_mismatch", check.mismatch);
     }
+    manifest = await readArchiveManifestPreview(archivePath);
+  } catch (err) {
+    return unreadable(err);
+  }
+  const { catalog } = check;
+  if (catalog && (manifest.name !== catalog.id || manifest.version !== catalog.version)) {
+    return cancelled()
+      ? { status: "cancelled" }
+      : downloadFailed(
+          "catalog_mismatch",
+          "The archive the catalog lists isn't the release it names, so nothing was installed."
+        );
+  }
+  // The installer counts a plugin as installed when its folder exists,
+  // while the plugin manager lists only plugins that loaded or were
+  // skipped. An install whose manifest no longer validates is in the
+  // first and not the second, so the review asks the installer's question
+  // itself rather than leave a fresh-install binding that can never land.
+  const service = await getPluginService();
+  const installedOnDisk = await access(path.join(service.getPluginsRoot(), manifest.name)).then(
+    () => true,
+    () => false
   );
+  // Checked last, after every await: a cancel that lands while the
+  // archive is read or the probe runs still wins over the preview.
+  if (cancelled()) return { status: "cancelled" };
+  return {
+    status: "preview",
+    preview: {
+      url,
+      archiveHash,
+      installedOnDisk,
+      manifest,
+      ...(catalog === undefined ? {} : { catalog }),
+    },
+  };
+}
+
+type CatalogFailure = Extract<PluginInstallResult, { status: "failed" }>;
+
+/**
+ * Find a release in a catalog fetched for this call, the way every catalog
+ * install reads it: a cached copy is never used, and each way it can't be
+ * found fails closed with its own reason (#16779).
+ */
+async function resolveCatalogRelease(
+  pluginId: string,
+  version: string | undefined
+): Promise<{ ok: true; entry: PluginCatalogEntry } | { ok: false; failure: CatalogFailure }> {
+  // Lazy: the catalog client and its schema cost nothing until a catalog
+  // install asks for them.
+  const { getPluginCatalogService } =
+    await import("../../../services/plugin/PluginCatalogService.js");
+  const lookup = await getPluginCatalogService().lookup(pluginId, version);
+  const fail = (code: PluginInstallError["code"], message: string) => ({
+    ok: false as const,
+    failure: { status: "failed" as const, errors: [{ code, message }] },
+  });
+  switch (lookup.status) {
+    case "listed":
+      return { ok: true, entry: lookup.entry };
+    case "not-listed":
+      return fail(
+        "catalog_not_listed",
+        version === undefined
+          ? `The plugin catalog doesn't list "${pluginId}", so nothing was installed. It may have been removed, or the link may be wrong.`
+          : `The plugin catalog doesn't list version ${version} of "${pluginId}", so nothing was installed. It may have been removed, or the link may be wrong.`
+      );
+    case "stale":
+      return fail(
+        "catalog_stale",
+        "The plugin catalog couldn't be refreshed, and an older copy isn't used for installs, so nothing was installed. Check your connection and open the link again."
+      );
+    case "unavailable":
+      return fail(
+        "catalog_unavailable",
+        lookup.failure === "not-published"
+          ? "The plugin catalog isn't published yet, so nothing can be installed from it."
+          : lookup.failure === "invalid"
+            ? "The plugin catalog couldn't be read, so nothing was installed. Try again later."
+            : "Couldn't reach the plugin catalog, so nothing was installed. Check your connection and open the link again."
+      );
+  }
+}
+
+/** A catalog id and optional version from IPC, checked before anything is fetched. */
+function parseCatalogRequest(
+  request: unknown
+): { pluginId: string; version: string | undefined } | null {
+  if (typeof request !== "object" || request === null) return null;
+  const { pluginId, version } = request as Record<string, unknown>;
+  if (typeof pluginId !== "string" || !isCommunityPluginId(pluginId)) return null;
+  if (version === undefined) return { pluginId, version: undefined };
+  if (typeof version !== "string" || !isRequestablePluginVersion(version)) return null;
+  return { pluginId, version };
+}
+
+function malformedCatalogRequest(): PluginDownloadFailure {
+  return downloadFailed(
+    "catalog_not_listed",
+    "That isn't a plugin id or version the catalog can list, so nothing was installed."
+  );
+}
+
+function provenanceOf(entry: PluginCatalogEntry): PluginCatalogProvenance {
+  return { id: entry.id, version: entry.version, repo: entry.repo };
+}
+
+/**
+ * Preview a community catalog release (#16779): resolve it from a freshly
+ * fetched catalog (the newest release when no version is given), download the
+ * entry's URL, and refuse it unless the bytes are the entry's reviewed digest
+ * and name the entry's plugin and version. Only main ever chooses what is
+ * fetched.
+ */
+export async function handlePreviewFromCatalog(
+  request: PluginCatalogPreviewRequest,
+  jobId?: string
+): Promise<PluginUrlInstallPreviewResult> {
+  const parsed = parseCatalogRequest(request);
+  if (parsed === null) return malformedCatalogRequest();
+  pluginInstallJobs.setPhase(jobId, "downloading");
+  const resolved = await resolveCatalogRelease(parsed.pluginId, parsed.version);
+  // The catalog fetch is shared with other callers, so a cancel can't abort it;
+  // it can still stop the download from starting.
+  if (pluginInstallJobs.signal(jobId)?.aborted === true) return { status: "cancelled" };
+  if (!resolved.ok) return resolved.failure;
+  const { entry } = resolved;
+  const target = parsePluginDownloadUrl(entry.url);
+  if (target === null) return { status: "invalid-url" };
+  return withDownloadedArchive(target, jobId, (archivePath) =>
+    previewArchive(archivePath, target.trimmed, jobId, {
+      sha256: entry.sha256,
+      mismatch:
+        "The downloaded archive isn't the one the plugin catalog reviewed, so nothing was installed.",
+      catalog: provenanceOf(entry),
+    })
+  );
+}
+
+/**
+ * Install a catalog release the user approved from its preview (#16779). The
+ * release is looked up again in a fresh catalog, never chosen again as "the
+ * newest", and refused unless it is still listed from the reviewed repository
+ * with the reviewed digest. The download URL and the recorded provenance come
+ * from that entry, and the installer is held to its digest.
+ */
+export async function handleInstallFromCatalog(
+  request: PluginCatalogInstallRequest,
+  jobId?: string
+): Promise<PluginInstallResult> {
+  const parsed = parseCatalogRequest(request);
+  const { repo, expected: rawExpected } = (request ?? {}) as Partial<PluginCatalogInstallRequest>;
+  const expected = rawExpected === undefined ? null : parseInstallExpectation(rawExpected);
+  if (parsed === null || parsed.version === undefined || typeof repo !== "string") {
+    return malformedCatalogRequest();
+  }
+  if (expected === null || expected.pluginId !== parsed.pluginId) {
+    return downloadFailed(
+      "archive_mismatch",
+      "The install's digest binding was malformed, so nothing was installed."
+    );
+  }
+  pluginInstallJobs.setPhase(jobId, "downloading");
+  const resolved = await resolveCatalogRelease(parsed.pluginId, parsed.version);
+  if (pluginInstallJobs.signal(jobId)?.aborted === true) return { status: "cancelled" };
+  if (!resolved.ok) return resolved.failure;
+  const { entry } = resolved;
+  if (entry.sha256 !== expected.archiveHash || entry.repo !== repo) {
+    return downloadFailed(
+      "catalog_mismatch",
+      "The catalog's listing of this release changed since you reviewed it, so nothing was installed. Open the link again to review it."
+    );
+  }
+  const target = parsePluginDownloadUrl(entry.url);
+  if (target === null) return { status: "invalid-url" };
+  return installDownloadedArchive(target, jobId, {
+    source: "catalog",
+    originalUrl: target.trimmed,
+    catalog: provenanceOf(entry),
+    expected:
+      expected.kind === "update"
+        ? { kind: "update", pluginId: entry.id, archiveHash: entry.sha256 }
+        : { kind: "install", pluginId: entry.id, archiveHash: entry.sha256 },
+  });
 }
 
 // Matches the preview's own clamp on manifest text (`archiveManifestPreview.ts`).

@@ -3106,6 +3106,10 @@ export interface GeneratedIpcInvokeMap {
     args: [archivePath: string, opts?: import("../plugin.js").PluginInstallOptions | undefined];
     result: import("../plugin.js").PluginInstallResult;
   };
+  "plugin:install-from-catalog": {
+    args: [request: import("../plugin.js").PluginCatalogInstallRequest, jobId?: string | undefined];
+    result: import("../plugin.js").PluginInstallResult;
+  };
   "plugin:install-from-file": {
     args: [jobId?: string | undefined];
     result: import("../plugin.js").PluginInstallResult;
@@ -3170,8 +3174,12 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
     result: string | null;
   };
+  "plugin:preview-from-catalog": {
+    args: [request: import("../plugin.js").PluginCatalogPreviewRequest, jobId?: string | undefined];
+    result: import("../plugin.js").PluginUrlInstallPreviewResult;
+  };
   "plugin:preview-from-url": {
-    args: [url: string, jobId?: string | undefined];
+    args: [url: string, jobId?: string | undefined, expectedSha256?: string | undefined];
     result: import("../plugin.js").PluginUrlInstallPreviewResult;
   };
   "plugin:project-activate-staged": {

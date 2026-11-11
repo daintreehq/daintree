@@ -1337,6 +1337,9 @@ export interface GeneratedElectronAPI {
     install(
       ...args: IpcInvokeMap["plugin:install"]["args"]
     ): Promise<IpcInvokeMap["plugin:install"]["result"]>;
+    installFromCatalog(
+      ...args: IpcInvokeMap["plugin:install-from-catalog"]["args"]
+    ): Promise<IpcInvokeMap["plugin:install-from-catalog"]["result"]>;
     installFromFile(
       ...args: IpcInvokeMap["plugin:install-from-file"]["args"]
     ): Promise<IpcInvokeMap["plugin:install-from-file"]["result"]>;
@@ -1370,6 +1373,9 @@ export interface GeneratedElectronAPI {
     pickPath(
       ...args: IpcInvokeMap["plugin:pick-path"]["args"]
     ): Promise<IpcInvokeMap["plugin:pick-path"]["result"]>;
+    previewFromCatalog(
+      ...args: IpcInvokeMap["plugin:preview-from-catalog"]["args"]
+    ): Promise<IpcInvokeMap["plugin:preview-from-catalog"]["result"]>;
     previewFromUrl(
       ...args: IpcInvokeMap["plugin:preview-from-url"]["args"]
     ): Promise<IpcInvokeMap["plugin:preview-from-url"]["result"]>;

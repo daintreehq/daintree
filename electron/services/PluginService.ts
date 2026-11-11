@@ -8292,6 +8292,7 @@ export class PluginService {
         updatedAt: record?.updatedAt,
         archiveHash: record?.archiveHash ?? null,
         originalUrl: record?.originalUrl ?? null,
+        catalog: record?.source === "catalog" ? (record.catalog ?? null) : null,
         // A blocklisted plugin is a policy refusal, not a technical failure —
         // suppress any stale activation error so the UI shows only "Blocked".
         //
