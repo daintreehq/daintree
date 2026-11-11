@@ -33,7 +33,12 @@ const capConsentMock = vi.hoisted(() => ({
   offerRestore: vi.fn(async () => false),
 }));
 const rateLimiterMock = vi.hoisted(() => ({ dropPlugin: vi.fn() }));
-const serviceRef = vi.hoisted(() => ({ current: null as unknown }));
+const serviceRef = vi.hoisted(() => ({
+  current: null as unknown,
+  // Holds the next service lookup, which is where the preview's probe starts.
+  gate: null as Promise<void> | null,
+  lookups: 0,
+}));
 
 // Downloads land in this test's own directory, so "the download was removed"
 // is a check on an empty folder rather than a scan of the shared temp dir.
@@ -122,6 +127,8 @@ vi.mock("../../../services/plugin-capability/instances.js", () => ({
 // here; every install still goes through the real installer.
 vi.mock("../plugin/service.js", () => ({
   getPluginService: async () => {
+    serviceRef.lookups += 1;
+    if (serviceRef.gate) await serviceRef.gate;
     const service = serviceRef.current as PluginService;
     return {
       waitForCatalog: async () => {},
@@ -166,6 +173,23 @@ async function sha256(file: string): Promise<string> {
   return createHash("sha256")
     .update(await fs.readFile(file))
     .digest("hex");
+}
+
+/** A zip whose only entry is `name`, so the manifest reader refuses it by name. */
+async function zipWithEntry(name: string): Promise<string> {
+  const out = path.join(root, `entry-${crypto.randomUUID()}.dntr`);
+  const { ZipArchive } = await import("archiver");
+  const zip = new ZipArchive({ zlib: { level: 1 } });
+  await new Promise<void>((resolve, reject) => {
+    const stream = createWriteStream(out);
+    stream.on("close", resolve);
+    stream.on("error", reject);
+    zip.on("error", reject);
+    zip.pipe(stream);
+    zip.append("x", { name });
+    void zip.finalize();
+  });
+  return out;
 }
 
 /** A response whose body is the archive's bytes, as the server would send it. */
@@ -230,6 +254,8 @@ beforeEach(async () => {
   tmpState.downloads = downloads;
   service = new PluginService(pluginsRoot, "0.0.0");
   serviceRef.current = service;
+  serviceRef.gate = null;
+  serviceRef.lookups = 0;
   netFetch.mockReset();
 });
 
@@ -408,18 +434,7 @@ describe("a URL install's review (#16776)", () => {
   it("makes an archive's own entry names safe to show when it can't be read", async () => {
     // The manifest reader quotes the first entry's name, which the author
     // picks. Astral characters check the clamp counts code points, not units.
-    const hostile = path.join(root, "hostile.dntr");
-    const { ZipArchive } = await import("archiver");
-    const zip = new ZipArchive({ zlib: { level: 1 } });
-    await new Promise<void>((resolve, reject) => {
-      const out = createWriteStream(hostile);
-      out.on("close", resolve);
-      out.on("error", reject);
-      zip.on("error", reject);
-      zip.pipe(out);
-      zip.append("x", { name: `\u202E${"\u{1F600}".repeat(300)}.txt` });
-      void zip.finalize();
-    });
+    const hostile = await zipWithEntry(`\u202E${"\u{1F600}".repeat(300)}.txt`);
     servesInOrder(hostile);
 
     const result = await handlePreviewFromUrl(URL);
@@ -435,6 +450,43 @@ describe("a URL install's review (#16776)", () => {
     expect(detail).not.toContain("\u202E");
     expect([...detail]).toHaveLength(201);
     expect(detail.endsWith("\u{1F600}…")).toBe(true);
+  });
+
+  it("keeps a short reason whole", async () => {
+    servesInOrder(await zipWithEntry("readme.txt"));
+
+    const result = await handlePreviewFromUrl(URL);
+
+    expect(result).toEqual({
+      status: "failed",
+      errors: [
+        {
+          code: "archive_invalid",
+          message:
+            'The download isn\'t a valid plugin archive: First entry must be plugin.json, got "readme.txt"',
+        },
+      ],
+    });
+  });
+
+  it("answers a cancel that lands while it checks what's installed", async () => {
+    const jobId = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+    servesInOrder(await makeArchive({ name: "acme.probed", version: "1.0.0" }));
+    let releaseProbe!: () => void;
+    serviceRef.gate = new Promise<void>((resolve) => (releaseProbe = resolve));
+    expect(pluginInstallJobs.begin(jobId, () => {})).toBeTruthy();
+
+    try {
+      const pending = handlePreviewFromUrl(URL, jobId);
+      await vi.waitFor(() => expect(serviceRef.lookups).toBe(1));
+      expect(pluginInstallJobs.cancel(jobId)).toBe(true);
+      releaseProbe();
+
+      await expect(pending).resolves.toEqual({ status: "cancelled" });
+      expect(await downloadsLeft()).toEqual([]);
+    } finally {
+      pluginInstallJobs.end(jobId);
+    }
   });
 
   it("reports a download that isn't a plugin archive, and removes it", async () => {
