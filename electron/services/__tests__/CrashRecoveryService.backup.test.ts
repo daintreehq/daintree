@@ -948,8 +948,11 @@ describe("CrashRecoveryService", () => {
         const svc = makeService();
         svc.initialize();
 
+        // Each request pushes the deadline back, so the first one's passes.
         svc.scheduleBackup();
+        await vi.advanceTimersByTimeAsync(1000);
         svc.scheduleBackup();
+        await vi.advanceTimersByTimeAsync(1000);
         svc.scheduleBackup();
 
         await vi.advanceTimersByTimeAsync(1499);

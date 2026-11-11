@@ -621,29 +621,30 @@ export class CrashRecoveryService {
       // as previous still world-readable.
       await tightenFilePermissions(this.backupPath);
 
-      const staged = tempPath;
-      let rotated = false;
-      const committed = await commitOnMain(isCurrent, (finalAttempt) => {
-        if (!rotated) {
-          try {
-            fs.renameSync(this.backupPath, this.previousBackupPath);
-          } catch (err) {
-            if (errorCode(err) !== "ENOENT") {
-              if (!finalAttempt && isTransientRenameError(err)) throw err;
-              // Best-effort, as in rotateBackup: the write still goes ahead.
-              console.warn("[CrashRecovery] Backup rotation rename failed:", err);
-            }
+      // Rotation and install each get their own retries. Between them the
+      // current file is missing, which a synchronous takeBackup handles.
+      const rotated = await commitOnMain(isCurrent, (finalAttempt) => {
+        try {
+          fs.renameSync(this.backupPath, this.previousBackupPath);
+        } catch (err) {
+          if (errorCode(err) !== "ENOENT") {
+            if (!finalAttempt && isTransientRenameError(err)) throw err;
+            // Best-effort, as in rotateBackup: the write still goes ahead.
+            console.warn("[CrashRecovery] Backup rotation rename failed:", err);
           }
-          rotated = true;
-          // Until the install lands, the current file isn't what the guard says.
-          this.lastWrittenStateJson = null;
-          this.lastWrittenFingerprint = null;
         }
+        // Until the install lands, the current file isn't what the guard says.
+        this.lastWrittenStateJson = null;
+        this.lastWrittenFingerprint = null;
+      });
+      if (!rotated) return;
+      const staged = tempPath;
+      const installed = await commitOnMain(isCurrent, () => {
         fs.renameSync(staged, this.backupPath);
         this.lastWrittenStateJson = fingerprint === null ? null : stateJson;
         this.lastWrittenFingerprint = fingerprint;
       });
-      if (!committed) return;
+      if (!installed) return;
       tempPath = null;
       await syncParentDirectory(this.backupPath);
     } catch (err) {
@@ -1821,7 +1822,8 @@ export class CrashRecoveryService {
     return snapshot;
   }
 
-  // Both stores serve reads from an in-memory snapshot of their file.
+  // Both stores serve reads from an in-memory snapshot of their file, which only
+  // a delete or reset elsewhere drops, and the next reader of any key reloads.
   private captureStoreSnapshot(): SessionSnapshot {
     return {
       capturedAt: Date.now(),

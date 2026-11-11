@@ -225,6 +225,9 @@ describe("CrashRecoveryService", () => {
         {} as Electron.BrowserWindow
       );
       getFocusHandler()();
+      // Unfocused again before the blur's deadline: only the cancel keeps it
+      // from backing up.
+      (BrowserWindow.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
       await settle(svc, 100);
 

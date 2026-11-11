@@ -1,5 +1,5 @@
-import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import fs from "node:fs";
+import { beforeEach, afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import fs, { type PathLike } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -114,6 +114,7 @@ describe("CrashRecoveryService scheduled writes (#16813)", () => {
   let previousPath: string;
   let width: number;
   let svc: CrashRecoveryService;
+  let releases: (() => void)[];
 
   const readJson = (filePath: string) => JSON.parse(fs.readFileSync(filePath, "utf-8"));
   const backupWidth = (filePath: string) => readJson(filePath).appState.sidebarWidth;
@@ -126,11 +127,13 @@ describe("CrashRecoveryService scheduled writes (#16813)", () => {
       .flatMap((dir) => fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")));
 
   // Parks the next scheduled write of `target` after its state is captured and
-  // before anything is renamed into place.
+  // before anything is renamed into place. Teardown releases it too, so a
+  // failed assertion can't leave the drain waiting forever.
   function holdPrepare(target: string): { reached: Promise<void>; release: () => void } {
     let release!: () => void;
     let entered!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
+    releases.push(release);
     const reached = new Promise<void>((resolve) => (entered = resolve));
     let held = false;
     utilsMock.prepareAtomicWriteFile.mockImplementation(async (fp: string, data: string) => {
@@ -150,10 +153,31 @@ describe("CrashRecoveryService scheduled writes (#16813)", () => {
     fs.writeFileSync(path.join(dir, "state.json"), content);
   }
 
+  // Rewrites the marker initialize() wrote, so a refreshed heartbeat is
+  // distinguishable from none and fields a heartbeat must carry are present.
+  function seedMarker(fields: Record<string, unknown>): void {
+    fs.writeFileSync(markerPath, JSON.stringify({ ...readJson(markerPath), ...fields }));
+  }
+
+  type RenameSpy = MockInstance<typeof fs.renameSync>;
+
+  function renameFailing(shouldFail: (dest: PathLike) => NodeJS.ErrnoException | null): RenameSpy {
+    const realRename = fs.renameSync.bind(fs);
+    return vi.spyOn(fs, "renameSync").mockImplementation((src, dest) => {
+      const error = shouldFail(dest);
+      if (error) throw error;
+      realRename(src, dest);
+    });
+  }
+
+  const renamesTo = (spy: RenameSpy, dest: string) =>
+    spy.mock.calls.filter((call) => call[1] === dest).length;
+
   beforeEach(() => {
     vi.clearAllMocks();
     sleepHandlers.suspend = null;
     sleepHandlers.wake = null;
+    releases = [];
     userData = fs.mkdtempSync(path.join(os.tmpdir(), "crash-recovery-scheduled-"));
     markerPath = path.join(userData, "running.lock");
     backupPath = path.join(userData, "backups", "session-state.json");
@@ -184,6 +208,7 @@ describe("CrashRecoveryService scheduled writes (#16813)", () => {
   });
 
   afterEach(async () => {
+    for (const release of releases) release();
     svc.stopBackupTimer();
     await svc.whenScheduledWorkSettled();
     vi.useRealTimers();
@@ -192,11 +217,15 @@ describe("CrashRecoveryService scheduled writes (#16813)", () => {
   });
 
   it("reads layouts and writes the backup and heartbeat without synchronous disk I/O", async () => {
-    writeProjectState(PROJECT_A, JSON.stringify({ terminals: [{ id: "t1", kind: "terminal" }] }));
+    const terminals = [
+      { id: "t1", kind: "terminal", title: "One" },
+      { id: "t2", kind: "agent", agentId: "claude" },
+    ];
+    writeProjectState(PROJECT_A, JSON.stringify({ terminals }));
     writeProjectState(PROJECT_B, "{not json");
     svc.setLiveWorkspaceIdsProvider(() => [PROJECT_A, PROJECT_B]);
     svc.initialize();
-    const initialHeartbeat = readJson(markerPath).lastHeartbeatMs;
+    seedMarker({ lastHeartbeatMs: 0, lastSuspendStart: 123, crashLogPath: "/crash.json" });
     vi.clearAllMocks();
     const underUserData = (calls: unknown[][]) =>
       calls.filter(([target]) => typeof target === "string" && target.startsWith(userData));
@@ -218,12 +247,25 @@ describe("CrashRecoveryService scheduled writes (#16813)", () => {
     expect(utilsMock.tightenFilePermissionsSync).not.toHaveBeenCalled();
     expect(utilsMock.syncParentDirectory).toHaveBeenCalledWith(backupPath);
     expect(utilsMock.syncParentDirectory).toHaveBeenCalledWith(markerPath);
+    expect(utilsMock.tightenDirPermissions).toHaveBeenCalledWith(path.dirname(backupPath));
+    expect(utilsMock.tightenFilePermissions).toHaveBeenCalledWith(backupPath);
+    for (const target of [backupPath, markerPath]) {
+      expect(utilsMock.prepareAtomicWriteFile).toHaveBeenCalledWith(
+        target,
+        expect.any(String),
+        "utf-8",
+        { mode: 0o600 }
+      );
+    }
 
     readFileSync.mockRestore();
     const backup = readJson(backupPath);
-    expect(Object.keys(backup.projectLayouts)).toEqual([PROJECT_A]);
+    expect(backup.projectLayouts).toEqual({ [PROJECT_A]: terminals });
     expect(backup.appState.sidebarWidth).toBe(1);
-    expect(readJson(markerPath).lastHeartbeatMs).toBeGreaterThanOrEqual(initialHeartbeat);
+    const marker = readJson(markerPath);
+    expect(marker.lastHeartbeatMs).toBeGreaterThan(0);
+    expect(marker.lastSuspendStart).toBe(123);
+    expect(marker.crashLogPath).toBe("/crash.json");
     expect(tempFiles()).toEqual([]);
   });
 
@@ -275,6 +317,42 @@ describe("CrashRecoveryService scheduled writes (#16813)", () => {
     expect(typeof readJson(markerPath).lastSuspendStart).toBe("number");
   });
 
+  it("installs no heartbeat when the schedule stops mid-heartbeat", async () => {
+    svc.initialize();
+    seedMarker({ lastHeartbeatMs: 0 });
+    const hold = holdPrepare(markerPath);
+    svc.startBackupTimer();
+    await hold.reached;
+
+    svc.stopBackupTimer();
+    hold.release();
+    await svc.whenScheduledWorkSettled();
+
+    expect(readJson(markerPath).lastHeartbeatMs).toBe(0);
+    await vi.waitFor(() => expect(tempFiles()).toEqual([]));
+  });
+
+  it("starts fresh work on wake while the job suspend superseded is still in flight", async () => {
+    svc.initialize();
+    seedMarker({ lastHeartbeatMs: 0 });
+    const hold = holdPrepare(backupPath);
+    svc.startBackupTimer();
+    await hold.reached;
+
+    sleepHandlers.suspend!();
+    width = 2;
+    sleepHandlers.wake!();
+    expect(readJson(markerPath).lastSuspendStart).toBeUndefined();
+    hold.release();
+    await svc.whenScheduledWorkSettled();
+
+    expect(backupsRun()).toBe(2);
+    expect(backupWidth(backupPath)).toBe(2);
+    expect(fs.existsSync(previousPath)).toBe(false);
+    expect(readJson(markerPath).lastHeartbeatMs).toBeGreaterThan(0);
+    await vi.waitFor(() => expect(tempFiles()).toEqual([]));
+  });
+
   it("never lands an older scheduled backup over a synchronous one", async () => {
     svc.initialize();
     svc.takeBackup();
@@ -304,6 +382,39 @@ describe("CrashRecoveryService scheduled writes (#16813)", () => {
     await svc.whenScheduledWorkSettled();
     expect(preparedFor(backupPath)).toBe(writes);
     expect(backupWidth(previousPath)).toBe(1);
+  });
+
+  it("is superseded by a synchronous backup that found nothing to write", async () => {
+    svc.initialize();
+    svc.takeBackup();
+    const hold = holdPrepare(backupPath);
+    width = 2;
+    svc.startBackupTimer();
+    await hold.reached;
+
+    width = 1;
+    const syncWrites = utilsMock.resilientAtomicWriteFileSync.mock.calls.length;
+    svc.takeBackup();
+    expect(utilsMock.resilientAtomicWriteFileSync.mock.calls.length).toBe(syncWrites);
+
+    hold.release();
+    await svc.whenScheduledWorkSettled();
+
+    expect(backupWidth(backupPath)).toBe(1);
+    expect(fs.existsSync(previousPath)).toBe(false);
+  });
+
+  it("rewrites unchanged state when the current backup has gone missing", async () => {
+    svc.initialize();
+    svc.startBackupTimer();
+    await svc.whenScheduledWorkSettled();
+    fs.unlinkSync(backupPath);
+
+    svc.stopBackupTimer();
+    svc.startBackupTimer();
+    await svc.whenScheduledWorkSettled();
+
+    expect(backupWidth(backupPath)).toBe(1);
   });
 
   it("coalesces requests made during a hung backup into one trailing run of the latest state", async () => {
@@ -346,35 +457,50 @@ describe("CrashRecoveryService scheduled writes (#16813)", () => {
     await vi.waitFor(() => expect(tempFiles()).toEqual([]));
   });
 
-  it("retries a locked heartbeat rename by yielding, then installs it", async () => {
+  it.each(["EPERM", "EBUSY", "EACCES"])(
+    "retries a heartbeat rename locked with %s after waiting, then installs it",
+    async (code) => {
+      svc.initialize();
+      seedMarker({ lastHeartbeatMs: 0 });
+      let failures = 2;
+      const renameSync = renameFailing((dest) =>
+        dest === markerPath && failures-- > 0 ? lockedError(code) : null
+      );
+
+      const started = Date.now();
+      svc.startBackupTimer();
+      await svc.whenScheduledWorkSettled();
+
+      // Waits of 25ms and 50ms; a retry that only yielded microtasks would
+      // finish at once.
+      expect(Date.now() - started).toBeGreaterThanOrEqual(60);
+      expect(renamesTo(renameSync, markerPath)).toBe(3);
+      expect(readJson(markerPath).lastHeartbeatMs).toBeGreaterThan(0);
+      expect(tempFiles()).toEqual([]);
+    }
+  );
+
+  it("gives up on a rename that stays locked and keeps the old marker", async () => {
     svc.initialize();
-    const realRename = fs.renameSync.bind(fs);
-    let failures = 2;
-    const renameSync = vi.spyOn(fs, "renameSync").mockImplementation((src, dest) => {
-      if (dest === markerPath && failures-- > 0) throw lockedError();
-      realRename(src, dest);
-    });
-    const before = readJson(markerPath).lastHeartbeatMs;
+    seedMarker({ lastHeartbeatMs: 0 });
+    const renameSync = renameFailing((dest) => (dest === markerPath ? lockedError() : null));
 
     svc.startBackupTimer();
     await svc.whenScheduledWorkSettled();
 
-    expect(renameSync.mock.calls.filter(([, dest]) => dest === markerPath)).toHaveLength(3);
-    expect(readJson(markerPath).lastHeartbeatMs).toBeGreaterThanOrEqual(before);
-    expect(tempFiles()).toEqual([]);
+    expect(renamesTo(renameSync, markerPath)).toBe(6);
+    expect(readJson(markerPath).lastHeartbeatMs).toBe(0);
+    await vi.waitFor(() => expect(tempFiles()).toEqual([]));
   });
 
   it("stops retrying a locked heartbeat rename once a crash supersedes it", async () => {
     svc.initialize();
     let firstFailure!: () => void;
     const failed = new Promise<void>((resolve) => (firstFailure = resolve));
-    const realRename = fs.renameSync.bind(fs);
-    const renameSync = vi.spyOn(fs, "renameSync").mockImplementation((src, dest) => {
-      if (dest === markerPath) {
-        firstFailure();
-        throw lockedError("EBUSY");
-      }
-      realRename(src, dest);
+    const renameSync = renameFailing((dest) => {
+      if (dest !== markerPath) return null;
+      firstFailure();
+      return lockedError("EBUSY");
     });
 
     svc.startBackupTimer();
@@ -382,7 +508,7 @@ describe("CrashRecoveryService scheduled writes (#16813)", () => {
     svc.recordCrash(new Error("boom"));
     await svc.whenScheduledWorkSettled();
 
-    expect(renameSync.mock.calls.filter(([, dest]) => dest === markerPath)).toHaveLength(1);
+    expect(renamesTo(renameSync, markerPath)).toBe(1);
     expect(readJson(markerPath).crashLogPath).toEqual(expect.stringContaining("crash-"));
   });
 
@@ -390,18 +516,37 @@ describe("CrashRecoveryService scheduled writes (#16813)", () => {
     svc.initialize();
     svc.takeBackup();
     width = 2;
-    const realRename = fs.renameSync.bind(fs);
     let installFailures = 1;
-    const renameSync = vi.spyOn(fs, "renameSync").mockImplementation((src, dest) => {
-      if (dest === backupPath && installFailures-- > 0) throw lockedError();
-      realRename(src, dest);
+    const renameSync = renameFailing((dest) =>
+      dest === backupPath && installFailures-- > 0 ? lockedError() : null
+    );
+
+    svc.startBackupTimer();
+    await svc.whenScheduledWorkSettled();
+
+    expect(renamesTo(renameSync, previousPath)).toBe(1);
+    expect(renamesTo(renameSync, backupPath)).toBe(2);
+    expect(backupWidth(backupPath)).toBe(2);
+    expect(backupWidth(previousPath)).toBe(1);
+  });
+
+  it("retries a locked rotation, then installs on the install's own retries", async () => {
+    svc.initialize();
+    svc.takeBackup();
+    width = 2;
+    let rotationFailures = 5;
+    let installFailures = 1;
+    const renameSync = renameFailing((dest) => {
+      if (dest === previousPath && rotationFailures-- > 0) return lockedError("EBUSY");
+      if (dest === backupPath && installFailures-- > 0) return lockedError();
+      return null;
     });
 
     svc.startBackupTimer();
     await svc.whenScheduledWorkSettled();
 
-    expect(renameSync.mock.calls.filter(([, dest]) => dest === previousPath)).toHaveLength(1);
-    expect(renameSync.mock.calls.filter(([, dest]) => dest === backupPath)).toHaveLength(2);
+    expect(renamesTo(renameSync, previousPath)).toBe(6);
+    expect(renamesTo(renameSync, backupPath)).toBe(2);
     expect(backupWidth(backupPath)).toBe(2);
     expect(backupWidth(previousPath)).toBe(1);
   });

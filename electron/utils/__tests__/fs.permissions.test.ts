@@ -14,8 +14,10 @@ import {
 import { mkdtemp, readFile, rm } from "fs/promises";
 import path from "path";
 import os from "os";
+import stubbornFs from "stubborn-fs";
 import {
   ensureOwnerOnlyDir,
+  prepareAtomicWriteFile,
   resilientAtomicWriteFile,
   resilientAtomicWriteFileSync,
   resilientDirectWriteFile,
@@ -233,6 +235,69 @@ describe("resilientAtomicWriteFile", () => {
   it("throws ENOENT when parent directory does not exist", async () => {
     const target = path.join(tmpDir, "nonexistent", "test.json");
     await expect(resilientAtomicWriteFile(target, "data")).rejects.toThrow();
+  });
+});
+
+describe("prepareAtomicWriteFile", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "daintree-prepare-test-"));
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  // Records what each stubborn-fs writeFile was asked to write, and can make
+  // it fail after the bytes landed.
+  function tapWriteFile(failAfterWrite = false) {
+    const realWriteFile = stubbornFs.retry.writeFile;
+    const writes = vi.fn();
+    vi.spyOn(stubbornFs.retry, "writeFile").mockImplementation((options) => {
+      const write = realWriteFile(options);
+      return (async (...args: Parameters<typeof write>) => {
+        writes(...args);
+        await write(...args);
+        if (failAfterWrite) throw new Error("disk went away");
+      }) as typeof write;
+    });
+    return writes;
+  }
+
+  it("writes a flushed sibling temp and leaves the destination alone", async () => {
+    const target = path.join(tmpDir, "test.json");
+    writeFileSync(target, "original");
+    const writes = tapWriteFile();
+
+    const tempPath = await prepareAtomicWriteFile(target, "updated", "utf-8");
+
+    expect(path.dirname(tempPath)).toBe(tmpDir);
+    expect(tempPath).not.toBe(target);
+    expect(readFileSync(tempPath, "utf-8")).toBe("updated");
+    expect(readFileSync(target, "utf-8")).toBe("original");
+    expect(writes).toHaveBeenCalledWith(
+      tempPath,
+      "updated",
+      expect.objectContaining({ flush: true, encoding: "utf-8" })
+    );
+  });
+
+  posixIt("creates the temp at the requested mode", async () => {
+    const tempPath = await prepareAtomicWriteFile(path.join(tmpDir, "secret.json"), "x", "utf-8", {
+      mode: 0o600,
+    });
+    expect(mode(tempPath)).toBe(0o600);
+  });
+
+  it("removes the temp when the write fails", async () => {
+    tapWriteFile(true);
+
+    await expect(prepareAtomicWriteFile(path.join(tmpDir, "test.json"), "data")).rejects.toThrow(
+      "disk went away"
+    );
+    await vi.waitFor(() => expect(readdirSync(tmpDir)).toEqual([]));
   });
 });
 
