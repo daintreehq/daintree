@@ -2693,7 +2693,8 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   describe("Antigravity help launch (#16814)", () => {
-    const settingsPath = "/data/help-sessions/abc123.antigravity-s1/.antigravity-session-settings.json";
+    const settingsPath =
+      "/data/help-sessions/abc123.antigravity-s1/.antigravity-session-settings.json";
 
     async function spawnAntigravity(token: string, command = "agy") {
       const deps = { ptyClient } as unknown as HandlerDependencies;

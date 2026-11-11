@@ -109,7 +109,8 @@ export function slotFromSlotKey(slotKey: string): number | null {
 
 /**
  * Session directory name for a project's lanes on one agent. Every lane of a
- * project on that agent shares it, so this takes no slot. A null key is the
+ * project on that agent shares it, so this takes no slot; an agent that needs
+ * a directory per lane folds the lane into its key. A null key is the
  * bare project hash — Claude's, and what an existing install's slot 0 already
  * had, so its workspace trust and resume tokens are untouched by lanes sharing
  * it. Any other agent's key qualifies the hash; see `assistantAgentDirKey` in

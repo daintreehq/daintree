@@ -1082,13 +1082,16 @@ export class HelpSessionService {
    * Claude Code's per-folder workspace-trust prompt only fires once per
    * project; the .mcp.json bearer is rotated on every provision.
    *
-   * One directory serves every lane of the project on that agent. On every call:
+   * One directory serves every lane of the project on that agent, except for
+   * Antigravity, whose lanes each get one. On every call:
    *   1. Copy the bundled assistant/ template into the dir (overwrites — picks up
    *      bundled-asset updates without losing the trust acceptance).
    *   2. Write this lane's MCP wiring: for Claude, a per-lane `--mcp-config`
    *      file under `.lanes/` carrying the fresh literal bearer, with the
    *      shared `.mcp.json` left empty; for Copilot, the shared `.mcp.json`
-   *      with an env placeholder; nothing on disk for Codex.
+   *      with an env placeholder; nothing on disk for Codex; for Antigravity,
+   *      the lane's `.agents/mcp_config.json` with its literal bearer and a
+   *      `--settings` file trusting the folder.
    *   3. Overlay .claude/settings.json with current `helpAssistant` settings.
    *   4. Stamp meta.json with the project identity for GC.
    */

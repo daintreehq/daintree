@@ -221,7 +221,10 @@ describe("AssistantSessionFiles Antigravity bearer removal (#16814)", () => {
 
   it("removes a config it can't parse rather than leave a possible bearer behind", async () => {
     await fs.mkdir(path.dirname(configPath()), { recursive: true });
-    await fs.writeFile(configPath(), '{"mcpServers": {"daintree": {"headers": {"Authorization": "Bearer t');
+    await fs.writeFile(
+      configPath(),
+      '{"mcpServers": {"daintree": {"headers": {"Authorization": "Bearer t'
+    );
     await files.stripAntigravityDaintreeEntry(sessionPath, "t");
     await expect(fs.access(configPath())).rejects.toMatchObject({ code: "ENOENT" });
   });

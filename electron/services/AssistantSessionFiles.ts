@@ -545,14 +545,8 @@ export class AssistantSessionFiles {
     // manifest, the markdown scratch addendum and the shared `.mcp.json` — all
     // of which two lanes provisioning at once would otherwise write over each
     // other.
-    const {
-      scratchPath,
-      runCheckpointPath,
-      port,
-      laneMcpConfigPath,
-      antigravitySettingsPath,
-      userConfig,
-    } = await this.withDirectoryLock(sessionDirName, async () => {
+    const { scratchPath, runCheckpointPath, port, laneMcpConfigPath, userConfig } =
+      await this.withDirectoryLock(sessionDirName, async () => {
         await fs.mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
         await fs.chmod(sessionsRoot, 0o700).catch(() => {});
         // Hash-gate the template overwrite (#7525). `fs.cp` is non-atomic — a
@@ -754,7 +748,6 @@ export class AssistantSessionFiles {
 
         const port = await input.mcpPort();
         let laneMcpConfigPath: string | undefined;
-        let antigravitySettingsPath: string | undefined;
         if (input.agentId === "claude") {
           laneMcpConfigPath = await this.writeClaudeMcpConfig(
             sessionPath,
@@ -777,11 +770,7 @@ export class AssistantSessionFiles {
           await this.writeCopilotMcpConfig(sessionPath, settings, port, userConfig.mcpServers);
         } else if (input.agentId === "antigravity") {
           await this.writeAntigravityMcpConfig(sessionPath, settings, port, token);
-          antigravitySettingsPath = await this.writeAntigravitySessionSettings(
-            sessionPath,
-            settings,
-            port
-          );
+          await this.writeAntigravitySessionSettings(sessionPath, settings, port);
           // agy never reads `.mcp.json`; the template's copy is only kept
           // free of a stale literal bearer, as for every other agent.
           await this.stripStaleDaintreeMcpEntry(sessionPath);
@@ -804,14 +793,7 @@ export class AssistantSessionFiles {
             this.stripClaudeSettingsHooks(sessionPath)
           );
         }
-        return {
-          scratchPath,
-          runCheckpointPath,
-          port,
-          laneMcpConfigPath,
-          antigravitySettingsPath,
-          userConfig,
-        };
+        return { scratchPath, runCheckpointPath, port, laneMcpConfigPath, userConfig };
       });
     // Codex doesn't read project-scoped `.codex/config.toml` from cwd —
     // its only mechanism for overriding the global config is the `-c key=value`
@@ -840,9 +822,10 @@ export class AssistantSessionFiles {
     // Claude reads its MCP wiring from the per-lane file rather than the
     // shared cwd `.mcp.json`; the flag is the only way that file reaches it.
     const claudeLaunchArgs = laneMcpConfigPath ? ["--mcp-config", laneMcpConfigPath] : undefined;
-    const antigravityLaunchArgs = antigravitySettingsPath
-      ? ["--settings", antigravitySettingsPath]
-      : undefined;
+    const antigravityLaunchArgs =
+      input.agentId === "antigravity"
+        ? ["--settings", path.join(sessionPath, ANTIGRAVITY_SESSION_SETTINGS_FILE)]
+        : undefined;
     return {
       scratchPath,
       runCheckpointPath,
@@ -1152,8 +1135,8 @@ export class AssistantSessionFiles {
   }
 
   /**
-   * Writes the settings an Antigravity lane launches with through `--settings`,
-   * and returns its path. agy applies them to that session only and never
+   * Writes the settings an Antigravity lane launches with through `--settings`.
+   * agy applies them to that session only and never
    * saves them, so `~/.gemini/` is untouched:
    *
    * - `trustedWorkspaces` names this folder, so no trust dialog stands between
@@ -1172,7 +1155,7 @@ export class AssistantSessionFiles {
     sessionPath: string,
     settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
     port: number | null
-  ): Promise<string> {
+  ): Promise<void> {
     const allow = Object.keys(this.antigravityMcpServers(settings, port, null)).map(
       (name) => `mcp(${name}/*)`
     );
@@ -1187,7 +1170,6 @@ export class AssistantSessionFiles {
       "utf-8",
       { mode: 0o600 }
     );
-    return target;
   }
 
   private async writeClaudeSettings(
