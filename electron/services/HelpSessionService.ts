@@ -395,6 +395,8 @@ interface HelpSessionRecord {
   laneMcpConfigPath?: string;
   /** Computed at provision for claude sessions; consumed by lifecycle.ts. */
   claudeLaunchArgs?: string[];
+  /** Computed at provision for antigravity sessions; consumed by lifecycle.ts. */
+  antigravityLaunchArgs?: string[];
   /**
    * The MCP server names the user's assistant folder handed this session, so
    * no plugin server is handed over under one of them.
@@ -423,6 +425,14 @@ const SAFE_AGENT_DIR_KEY = new RegExp(`^${ASSISTANT_AGENT_DIR_KEY_PATTERN}$`);
 const DIGEST_AGENT_DIR_KEY = new RegExp(`^[0-9a-f]{${PROJECT_HASH_LEN}}$`);
 
 /**
+ * Agents whose lanes can't share a directory. Antigravity reads its MCP
+ * servers only from `<cwd>/.agents/mcp_config.json` and expands no env vars
+ * there, so a lane's literal bearer has to sit in that one fixed file, and two
+ * lanes in one cwd would overwrite each other's credentials.
+ */
+const PER_LANE_DIR_AGENT_IDS: ReadonlySet<string> = new Set(["antigravity"]);
+
+/**
  * What qualifies an agent's session directory: null for Claude, which keeps
  * the bare project hash (see `shared/config/assistantSlots.ts`); the id itself
  * for an id that is already a safe, bounded directory name (every built-in);
@@ -443,8 +453,12 @@ export function assistantAgentDirKey(agentId: string): string | null {
   return createHash("sha256").update(agentId).digest("hex").slice(0, PROJECT_HASH_LEN);
 }
 
-function agentSessionDirName(pathHash: string, agentId: string): string {
-  return assistantSessionDirName(pathHash, assistantAgentDirKey(agentId));
+function agentSessionDirName(pathHash: string, agentId: string, slot: number): string {
+  return assistantSessionDirName(
+    pathHash,
+    assistantAgentDirKey(agentId),
+    PER_LANE_DIR_AGENT_IDS.has(agentId) ? slot : null
+  );
 }
 
 export class HelpSessionService {
@@ -1068,13 +1082,16 @@ export class HelpSessionService {
    * Claude Code's per-folder workspace-trust prompt only fires once per
    * project; the .mcp.json bearer is rotated on every provision.
    *
-   * One directory serves every lane of the project on that agent. On every call:
+   * One directory serves every lane of the project on that agent, except for
+   * Antigravity, whose lanes each get one. On every call:
    *   1. Copy the bundled assistant/ template into the dir (overwrites — picks up
    *      bundled-asset updates without losing the trust acceptance).
    *   2. Write this lane's MCP wiring: for Claude, a per-lane `--mcp-config`
    *      file under `.lanes/` carrying the fresh literal bearer, with the
    *      shared `.mcp.json` left empty; for Copilot, the shared `.mcp.json`
-   *      with an env placeholder; nothing on disk for Codex.
+   *      with an env placeholder; nothing on disk for Codex; for Antigravity,
+   *      the lane's `.agents/mcp_config.json` with its literal bearer and a
+   *      `--settings` file trusting the folder.
    *   3. Overlay .claude/settings.json with current `helpAssistant` settings.
    *   4. Stamp meta.json with the project identity for GC.
    */
@@ -1160,8 +1177,9 @@ export class HelpSessionService {
     // a per-lane file below. Lanes on another agent get their own directory,
     // because the files here are agent-shaped: the user-content mirror retires
     // whatever the current agent doesn't use, a non-Claude provision strips the
-    // Claude hooks, and Claude empties the `.mcp.json` Copilot reads.
-    const sessionDirName = agentSessionDirName(pathHash, input.agentId);
+    // Claude hooks, and Claude empties the `.mcp.json` Copilot reads. An agent
+    // with no per-lane file to put its bearer in gets a directory per lane.
+    const sessionDirName = agentSessionDirName(pathHash, input.agentId, slot);
     const sessionPath = path.join(sessionsRoot, sessionDirName);
 
     if (settings.daintreeControl) {
@@ -1298,6 +1316,7 @@ export class HelpSessionService {
       codexLaunchArgs,
       copilotLaunchArgs,
       claudeLaunchArgs,
+      antigravityLaunchArgs,
     } = prepared;
     for (const warning of prepared.warnings) {
       console.warn("[HelpSessionService] Assistant folder:", warning);
@@ -1334,6 +1353,7 @@ export class HelpSessionService {
       copilotLaunchArgs,
       laneMcpConfigPath,
       claudeLaunchArgs,
+      antigravityLaunchArgs,
       userMcpServerNames: prepared.userMcpServerNames,
       scratchPath,
       runCheckpointPath,
@@ -1361,10 +1381,11 @@ export class HelpSessionService {
             input.global ? { readinessTool: GLOBAL_ASSISTANT_READINESS_TOOL } : undefined
           );
         } else {
-          // Codex and Copilot both speak Streamable HTTP at /mcp. Codex
-          // reads the bearer from `DAINTREE_MCP_TOKEN` PTY env via
-          // `bearer_token_env_var`. Copilot reads the bearer from PTY env
-          // via `${DAINTREE_MCP_TOKEN}` substitution in its settings file.
+          // Everyone else speaks Streamable HTTP at /mcp. Codex reads the
+          // bearer from `DAINTREE_MCP_TOKEN` PTY env via
+          // `bearer_token_env_var`, Copilot through `$DAINTREE_MCP_TOKEN`
+          // substitution in its `.mcp.json`, and Antigravity from the literal
+          // bearer in its lane's `.agents/mcp_config.json`.
           await probeMcpServer(port, token);
         }
       } catch (err) {
@@ -1389,6 +1410,9 @@ export class HelpSessionService {
           // proved dead; a failed provision must not leave it behind.
           await this.sessionFiles.removeLaneMcpConfig(laneMcpConfigPath);
         }
+        if (input.agentId === "antigravity") {
+          await this.sessionFiles.stripAntigravityDaintreeEntry(sessionPath, token);
+        }
         const reason = formatErrorMessage(err, "assistant MCP session isn't ready");
         await this.recordMcpNotReady(sessionId, reason);
         throw new HelpSessionError(
@@ -1408,8 +1432,7 @@ export class HelpSessionService {
     port: number | null
   ): string | null {
     if (!daintreeControl || !port) return null;
-    // Claude reads SSE at /sse with a literal bearer; everyone else speaks
-    // Streamable HTTP at /mcp with env-var substitution.
+    // Claude reads SSE at /sse; everyone else speaks Streamable HTTP at /mcp.
     if (agentId === "claude") return `http://127.0.0.1:${port}/sse`;
     return `http://127.0.0.1:${port}/mcp`;
   }
@@ -1440,6 +1463,20 @@ export class HelpSessionService {
     if (!record || record.revoked) return null;
     if (record.agentId !== "copilot") return null;
     return record.copilotLaunchArgs ?? [];
+  }
+
+  /**
+   * Returns the cached `--settings` flag for an Antigravity help session,
+   * naming the lane's session-only settings file (folder trust and the
+   * Daintree MCP allow rules). Same null contract as the Codex and Copilot
+   * getters: unknown, revoked or another agent's token answers null.
+   */
+  getAntigravityLaunchArgs(token: string): string[] | null {
+    if (!token) return null;
+    const record = this.sessionsByToken.get(token);
+    if (!record || record.revoked) return null;
+    if (record.agentId !== "antigravity") return null;
+    return record.antigravityLaunchArgs ?? [];
   }
 
   /**
@@ -1762,6 +1799,12 @@ export class HelpSessionService {
     }
     if (record.agentId === "claude" || record.agentId === "copilot") {
       await this.sessionFiles.stripStaleDaintreeMcpEntry(record.sessionPath);
+    }
+    // Antigravity's literal bearer sits in its lane's `.agents/mcp_config.json`.
+    // Only this session's own bearer is removed: a same-lane re-provision may
+    // already have written its successor's there.
+    if (record.agentId === "antigravity") {
+      await this.sessionFiles.stripAntigravityDaintreeEntry(record.sessionPath, record.token);
     }
   }
 
@@ -2634,6 +2677,7 @@ export class HelpSessionService {
         if (this.isProjectHashDirName(entry)) {
           await this.sessionFiles.stripStaleDaintreeMcpEntry(entryPath);
           await this.sessionFiles.sweepStaleLaneConfigs(entryPath);
+          await this.sessionFiles.stripAntigravityDaintreeEntry(entryPath);
           return;
         }
         // Everything else goes: per-launch UUID directories from the oldest
@@ -2938,12 +2982,12 @@ export class HelpSessionService {
    * The directory `agentId`'s assistant lanes of `projectPath` run in — the
    * same path `provisionSession` derives — so a reader can find the
    * transcripts that agent filed under it (#13206). Pure: never creates the
-   * directory.
+   * directory. An agent with a directory per lane answers for `slot`.
    */
-  getSessionPathForProject(projectPath: string, agentId: string): string {
+  getSessionPathForProject(projectPath: string, agentId: string, slot = 0): string {
     return path.join(
       this.getSessionsRoot(),
-      agentSessionDirName(projectPathHash(projectPath), agentId)
+      agentSessionDirName(projectPathHash(projectPath), agentId, slot)
     );
   }
 

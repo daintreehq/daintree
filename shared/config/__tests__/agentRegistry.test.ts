@@ -1566,9 +1566,10 @@ describe("Antigravity install help (#15622)", () => {
     expect(paths.some((p) => p.startsWith("%LOCALAPPDATA%"))).toBe(true);
   });
 
-  it("stays out of the assistant until its wiring is verified against a live agy", () => {
+  it("is admitted for help sessions while the assistant picker still hides it (#16814)", () => {
+    expect(getAssistantWiredAgentIds()).toContain("antigravity");
+    expect(hasAssistantMcpImplementation("antigravity")).toBe(true);
     expect(getAssistantSupportedAgentIds()).not.toContain("antigravity");
-    expect(getAssistantWiredAgentIds()).not.toContain("antigravity");
   });
 });
 

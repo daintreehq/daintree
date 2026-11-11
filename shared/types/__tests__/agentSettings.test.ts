@@ -1191,10 +1191,10 @@ describe("global skip-permissions reaches every agent with a terminal bypass fla
   });
 
   it("injects the registry bypass flag for an agent with no assistant wiring", () => {
-    expect(isAgentBypassSupported("antigravity")).toBe(false);
-    expect(resolveEffectiveBypass({}, "antigravity", true)).toBe(true);
-    expect(generateAgentFlags({}, "antigravity", { globalSkipPermissions: true })).toContain(
-      DEFAULT_DANGEROUS_ARGS.antigravity
+    expect(isAgentBypassSupported("cursor")).toBe(false);
+    expect(resolveEffectiveBypass({}, "cursor", true)).toBe(true);
+    expect(generateAgentFlags({}, "cursor", { globalSkipPermissions: true })).toContain(
+      DEFAULT_DANGEROUS_ARGS.cursor
     );
   });
 

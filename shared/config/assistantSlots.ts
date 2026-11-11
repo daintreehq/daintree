@@ -109,17 +109,23 @@ export function slotFromSlotKey(slotKey: string): number | null {
 
 /**
  * Session directory name for a project's lanes on one agent. Every lane of a
- * project on that agent shares it, so this takes no slot. A null key is the
- * bare project hash — Claude's, and what an existing install's slot 0 already
- * had, so its workspace trust and resume tokens are untouched by lanes sharing
- * it. Any other agent's key qualifies the hash; see `assistantAgentDirKey` in
- * `HelpSessionService` for how one is derived.
+ * project on that agent shares it, unless the agent needs a directory per lane,
+ * when `laneSlot` names the lane in a `.s<slot>` suffix. No agent key can
+ * contain a dot, so that suffix can never be mistaken for another agent's key.
+ * A null key is the bare project hash — Claude's, and what an existing
+ * install's slot 0 already had, so its workspace trust and resume tokens are
+ * untouched by lanes sharing it. Any other agent's key qualifies the hash; see
+ * `assistantAgentDirKey` in `HelpSessionService` for how one is derived.
  */
 export function assistantSessionDirName(
   projectPathHash: string,
-  agentDirKey: string | null = null
+  agentDirKey: string | null = null,
+  laneSlot: number | null = null
 ): string {
-  return agentDirKey ? `${projectPathHash}.${agentDirKey}` : projectPathHash;
+  if (!agentDirKey) return projectPathHash;
+  return laneSlot === null
+    ? `${projectPathHash}.${agentDirKey}`
+    : `${projectPathHash}.${agentDirKey}.s${laneSlot}`;
 }
 
 /** What an agent key may contain: lowercase, digits and inner hyphens, bounded. */
@@ -128,7 +134,8 @@ export const ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH = 32;
 
 /**
  * Whether a name under the sessions root is a live project session directory:
- * the bare project hash, or the hash qualified by an agent key after a `.`.
+ * the bare project hash, or the hash qualified by an agent key after a `.`,
+ * itself optionally followed by a `.s<slot>` lane suffix.
  *
  * Load-bearing for GC: `gcStaleSessions` recursively deletes every directory
  * it does not recognize, so a name that fails this test is a *deleted* session
@@ -145,11 +152,12 @@ export const ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH = 32;
  */
 export function isAssistantSessionDirName(name: string, projectHashLength: number): boolean {
   const match = new RegExp(
-    `^[0-9a-f]{${projectHashLength}}(?:\\.(${ASSISTANT_AGENT_DIR_KEY_PATTERN}))?$`
+    `^[0-9a-f]{${projectHashLength}}(?:\\.(${ASSISTANT_AGENT_DIR_KEY_PATTERN})(?:\\.s(\\d{1,2}))?)?$`
   ).exec(name);
   if (!match) return false;
   const key = match[1];
-  return key === undefined || key.length <= ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH;
+  if (key !== undefined && key.length > ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH) return false;
+  return match[2] === undefined || isValidAssistantSlot(Number(match[2]));
 }
 
 /**

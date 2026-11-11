@@ -24,12 +24,23 @@ export const config: AgentConfig = {
     tier: "unverified",
     detail: "Resuming this conversation after a move isn't confirmed",
   },
-  // Antigravity's HelpSession wiring (workspace settings overlay, MCP
-  // injection key, plan/read-only approval flag) requires investigation
-  // against a running `agy` install before it can ship. Leave `supports`
-  // undefined per the AssistantSupports docs — that excludes the agent
-  // from both `getAssistantSupportedAgentIds()` and
-  // `getAssistantWiredAgentIds()` until the overlay path is verified.
+  // Help sessions, checked against a live agy 1.5.5 (#16814): agy reads MCP
+  // servers from `<cwd>/.agents/mcp_config.json` and expands no env vars in
+  // it, so each lane's folder carries its literal bearer; a session-only
+  // `--settings` file trusts that folder and allows Daintree's own servers
+  // (`--settings` refuses any key it doesn't know, `mcpServers` included).
+  // Experimental keeps it out of the picker until exposure ships.
+  supports: {
+    mcpInjection: "project-config",
+    settingsOverlay: true,
+    permissionBypass: true,
+    trustDialog: true,
+    versionProbe: true,
+    tier: "experimental",
+  },
+  // The only release verified to honour the wiring above; `--settings` isn't
+  // in agy's changelog, so no earlier floor can be shown.
+  assistantMinVersion: "1.5.5",
   tooltip: "Google's CLI",
   version: {
     args: ["--version"],
