@@ -4150,6 +4150,13 @@ export interface PluginUrlInstallPreview {
   url: string;
   /** SHA-256 of the archive the preview was read from. */
   archiveHash: string;
+  /**
+   * Whether the installer would find this plugin already installed: its folder
+   * exists, whether or not it loaded. `plugin.list()` holds only plugins that
+   * loaded or were skipped, so an install whose manifest no longer validates
+   * shows here and nowhere else.
+   */
+  installedOnDisk: boolean;
   manifest: PluginArchiveManifestPreview;
 }
 

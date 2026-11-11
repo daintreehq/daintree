@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { createWriteStream } from "node:fs";
 import path from "node:path";
 
 /**
@@ -124,6 +125,7 @@ vi.mock("../plugin/service.js", () => ({
     const service = serviceRef.current as PluginService;
     return {
       waitForCatalog: async () => {},
+      getPluginsRoot: () => service.getPluginsRoot(),
       installPlugin: (...args: Parameters<PluginService["installPlugin"]>) =>
         service.installPlugin(...args),
     };
@@ -254,6 +256,7 @@ describe("a URL install's review (#16776)", () => {
 
     expect(preview.url).toBe(URL);
     expect(preview.archiveHash).toBe(await sha256(archive));
+    expect(preview.installedOnDisk).toBe(false);
     expect(preview.manifest).toMatchObject({
       name: "acme.reviewed",
       version: "1.0.0",
@@ -341,6 +344,7 @@ describe("a URL install's review (#16776)", () => {
     expect((await service.installPlugin(v1)).status).toBe("installed");
     servesInOrder(v2, v2);
     const preview = await review();
+    expect(preview.installedOnDisk).toBe(true);
 
     const result = await handleInstallFromUrl(preview.url, undefined, approval(preview, true));
 
@@ -350,6 +354,81 @@ describe("a URL install's review (#16776)", () => {
     await expect(fs.access(path.join(pluginsRoot, "acme.upgraded", "v2.txt"))).resolves.toBe(
       undefined
     );
+  });
+
+  it("finds an install the plugin list can't show, so it can be replaced", async () => {
+    // Installed once, but its plugin.json no longer validates: it never loads,
+    // so no list row says it is there. The installer still sees its folder.
+    await fs.mkdir(path.join(pluginsRoot, "acme.broken"), { recursive: true });
+    await fs.writeFile(path.join(pluginsRoot, "acme.broken", "plugin.json"), "{ not json");
+    const fixed = await makeArchive({ name: "acme.broken", version: "1.0.1" }, { "ok.txt": "1" });
+    servesInOrder(fixed, fixed, fixed);
+    const preview = await review();
+
+    expect(preview.installedOnDisk).toBe(true);
+    // A fresh-install binding could never land on it...
+    const fresh = await handleInstallFromUrl(preview.url, undefined, approval(preview, false));
+    expect(fresh.status).toBe("failed");
+    // ...and the replacement the review offers instead does.
+    const replaced = await handleInstallFromUrl(preview.url, undefined, approval(preview, true));
+    expect(replaced).toEqual({ status: "installed", pluginId: "acme.broken" });
+    await expect(
+      fs.readFile(path.join(pluginsRoot, "acme.broken", "ok.txt"), "utf8")
+    ).resolves.toBe("1");
+  });
+
+  it("answers a cancel that lands while the download is being read", async () => {
+    const jobId = "0d6c2a1e-5b4f-4e3a-9c8d-7e6f5a4b3c2d";
+    const archive = await makeArchive({ name: "acme.slow", version: "1.0.0" });
+    servesInOrder(archive);
+    let releaseHash!: () => void;
+    const hashing = new Promise<void>((resolve) => (releaseHash = resolve));
+    const realHash = PluginArchive.computeArchiveHash;
+    const hash = vi.spyOn(PluginArchive, "computeArchiveHash").mockImplementation(async (p) => {
+      await hashing;
+      return realHash(p);
+    });
+    expect(pluginInstallJobs.begin(jobId, () => {})).toBeTruthy();
+
+    try {
+      const pending = handlePreviewFromUrl(URL, jobId);
+      await vi.waitFor(() => expect(hash).toHaveBeenCalled());
+      expect(pluginInstallJobs.cancel(jobId)).toBe(true);
+      releaseHash();
+
+      // The read finished cleanly, but the user had already said no.
+      await expect(pending).resolves.toEqual({ status: "cancelled" });
+      expect(await downloadsLeft()).toEqual([]);
+    } finally {
+      hash.mockRestore();
+      pluginInstallJobs.end(jobId);
+    }
+  });
+
+  it("makes an archive's own entry names safe to show when it can't be read", async () => {
+    // The manifest reader quotes the first entry's name, which the author picks.
+    const hostile = path.join(root, "hostile.dntr");
+    const { ZipArchive } = await import("archiver");
+    const zip = new ZipArchive({ zlib: { level: 1 } });
+    await new Promise<void>((resolve, reject) => {
+      const out = createWriteStream(hostile);
+      out.on("close", resolve);
+      out.on("error", reject);
+      zip.on("error", reject);
+      zip.pipe(out);
+      zip.append("x", { name: `\u202Eexe.${"a".repeat(400)}.txt` });
+      void zip.finalize();
+    });
+    servesInOrder(hostile);
+
+    const result = await handlePreviewFromUrl(URL);
+
+    expect(result.status).toBe("failed");
+    if (result.status !== "failed") return;
+    const message = result.errors[0]!.message;
+    expect(message).toContain("isn't a valid plugin archive");
+    expect(message).not.toContain("\u202E");
+    expect([...message].length).toBeLessThan(300);
   });
 
   it("reports a download that isn't a plugin archive, and removes it", async () => {

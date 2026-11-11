@@ -1502,7 +1502,11 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             : {
                 key: pm.urlReview.key,
                 manifest: pm.urlReview.manifest,
-                source: { kind: "url", label: describePluginInstallSource(pm.urlReview.url) },
+                source: {
+                  kind: "url",
+                  label: describePluginInstallSource(pm.urlReview.url),
+                  installedOnDisk: pm.urlReview.installedOnDisk,
+                },
               }
         }
         onConfirm={(approval) => void pm.confirmUrlReview(approval)}

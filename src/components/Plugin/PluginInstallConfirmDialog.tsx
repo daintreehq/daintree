@@ -46,6 +46,9 @@ const INSTALL_DESCRIPTION = `Installing writes this archive into Daintree's plug
 // its id (#16776), so it never replaces one that turned up meanwhile.
 const URL_INSTALL_DESCRIPTION = `Installing writes this archive into Daintree's plugins folder. ${PRIVILEGE_WARNING} ${SCOPE_WARNING}`;
 
+// An installed copy the plugin manager can't list, because it didn't load.
+const UNLISTED_REPLACEMENT_DESCRIPTION = `Installing replaces the copy of this plugin that's installed but couldn't be loaded. ${PRIVILEGE_WARNING} ${SCOPE_WARNING}`;
+
 function replacementSentence(
   kind: ArchiveReplacementKind,
   installed: string,
@@ -177,7 +180,13 @@ function useInstalledVersion(
 
 /** Where the archive under review came from, as its identity card names it. */
 export type PluginInstallConfirmSource =
-  { kind: "archive"; fileName: string } | { kind: "url"; label: string };
+  | { kind: "archive"; fileName: string }
+  | {
+      kind: "url";
+      label: string;
+      /** The installer would find this plugin installed, listed or not. */
+      installedOnDisk: boolean;
+    };
 
 export interface PluginInstallConfirmRequest {
   /** One per review: re-arms the cooldown and keys the installed-version read. */
@@ -188,8 +197,8 @@ export interface PluginInstallConfirmRequest {
 
 /** What the dialog showed when the user approved. */
 export interface PluginInstallApproval {
-  /** The installed version the dialog said this replaces, or null for a fresh install. */
-  replacesVersion: string | null;
+  /** The dialog said this replaces an installed plugin, rather than installing fresh. */
+  replacesInstalled: boolean;
 }
 
 interface PluginInstallConfirmDialogProps {
@@ -267,6 +276,15 @@ export function PluginInstallConfirmDialog({
       : label;
 
   const { installedVersion } = lookup;
+  // The list holds only plugins that loaded or were skipped, and the installer
+  // counts a folder: an install that no longer loads is in the preview's own
+  // probe alone, and the review says it replaces that copy.
+  const replacesUnlisted =
+    request.source.kind === "url" &&
+    request.source.installedOnDisk &&
+    installedVersion === null &&
+    !lookup.pending &&
+    !lookup.failed;
   const replacement: ArchiveReplacement | null =
     installedVersion === null
       ? null
@@ -275,11 +293,13 @@ export function PluginInstallConfirmDialog({
           kind: classifyArchiveReplacement(installedVersion, request.manifest.version),
         };
   const effect =
-    replacement === null
-      ? bindsInstalledState
-        ? URL_INSTALL_DESCRIPTION
-        : INSTALL_DESCRIPTION
-      : `${replacementSentence(replacement.kind, replacement.installedVersion, request.manifest.version)} ${PRIVILEGE_WARNING} ${SCOPE_WARNING}`;
+    replacement !== null
+      ? `${replacementSentence(replacement.kind, replacement.installedVersion, request.manifest.version)} ${PRIVILEGE_WARNING} ${SCOPE_WARNING}`
+      : replacesUnlisted
+        ? UNLISTED_REPLACEMENT_DESCRIPTION
+        : bindsInstalledState
+          ? URL_INSTALL_DESCRIPTION
+          : INSTALL_DESCRIPTION;
   const description = remoteTrust ? `${effect} ${remoteTrust}` : effect;
 
   return (
@@ -297,12 +317,16 @@ export function PluginInstallConfirmDialog({
       }
       confirmLabel="Install plugin"
       cancelLabel="Cancel"
-      onConfirm={() => onConfirm({ replacesVersion: installedVersion })}
+      onConfirm={() => onConfirm({ replacesInstalled: replacement !== null || replacesUnlisted })}
       isConfirmLoading={isInstalling}
       variant="destructive"
       hasPreview={true}
       confirmCooldownMs={CONFIRM_COOLDOWN_MS}
-      cooldownKey={bindsInstalledState ? `${request.key}:${installedVersion ?? ""}` : request.key}
+      cooldownKey={
+        bindsInstalledState
+          ? `${request.key}:${installedVersion ?? (replacesUnlisted ? "unlisted" : "")}`
+          : request.key
+      }
       // Held until the installed version is known, so a slow read (a cold
       // launch waits out the plugin catalog) can't let an approval land on
       // copy that's about to say this is a downgrade.
@@ -321,7 +345,11 @@ export function PluginInstallConfirmDialog({
           leaves the description closer to the card than the header is to the
           description, and the denser blocks below need the larger step. */}
       <div className="pt-3 space-y-4">
-        <ArchiveIdentityCard request={request} replacement={replacement} />
+        <ArchiveIdentityCard
+          request={request}
+          replacement={replacement}
+          replacesUnlisted={replacesUnlisted}
+        />
         <ArchivePermissions
           capabilities={request.manifest.capabilities}
           permissionBypassAgents={request.manifest.permissionBypassAgents}
@@ -362,9 +390,11 @@ interface ArchiveReplacement {
 function ArchiveIdentityCard({
   request,
   replacement,
+  replacesUnlisted,
 }: {
   request: PluginInstallConfirmRequest;
   replacement: ArchiveReplacement | null;
+  replacesUnlisted: boolean;
 }) {
   const { manifest, source } = request;
   const label = manifest.displayName || manifest.name;
@@ -402,6 +432,17 @@ function ArchiveIdentityCard({
                 {tag}
               </Badge>
             )}
+          </div>
+        )}
+        {replacesUnlisted && (
+          <div
+            className="flex items-start gap-1.5 text-2xs text-text-secondary"
+            data-testid="archive-installed-version"
+          >
+            <Package className="w-3 h-3 shrink-0 mt-[1.5px] text-text-secondary" aria-hidden />
+            <span className="break-words min-w-0">
+              Replaces an installed copy that couldn&rsquo;t be loaded
+            </span>
           </div>
         )}
         <div

@@ -151,8 +151,14 @@ function previewed(
   url: string,
   manifest: PluginArchiveManifestPreview = previewManifest()
 ): PluginUrlInstallPreviewResult {
-  return { status: "preview", preview: { url, archiveHash: PREVIEW_HASH, manifest } };
+  return {
+    status: "preview",
+    preview: { url, archiveHash: PREVIEW_HASH, installedOnDisk: false, manifest },
+  };
 }
+
+/** Long enough for a URL dialog an install link wrongly opened to mount. */
+const URL_DIALOG_OPEN_GRACE_MS = 50;
 
 /** A URL install's review, once its download has been read (#16776). */
 function urlReviewDialog(label = "Acme Demo"): Promise<HTMLElement> {
@@ -1259,9 +1265,13 @@ describe("PluginManagerView", () => {
     await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
 
+    // An update's way back is another check, not a URL install's re-review.
     await waitFor(() =>
-      expect(screen.getByText(/no longer matches what you reviewed/)).toBeTruthy()
+      expect(
+        screen.getByText(/no longer matches what you reviewed.*Check for updates again/)
+      ).toBeTruthy()
     );
+    expect(screen.queryByText(/Install it from the URL again/)).toBeNull();
   });
 
   it("guards against double-clicks while a check is in flight", async () => {
@@ -1469,11 +1479,14 @@ describe("PluginManagerView", () => {
 
     act(() => usePluginManagerStore.setState({ isOpen: false }));
     await waitFor(() => expect(window.electron.plugin.cancelInstall).toHaveBeenCalledWith(jobId));
-    await act(async () => settlePreview(previewed("https://example.com/p.dntr")));
     act(() => usePluginManagerStore.setState({ isOpen: true }));
-
     await screen.findByRole("button", { name: "Install from URL" });
+
+    // The old download answers into the reopened manager, which never asked.
+    await act(async () => settlePreview(previewed("https://example.com/p.dntr")));
+
     expect(screen.queryByRole("dialog", { name: /^Install '/ })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
   });
 
@@ -1831,7 +1844,7 @@ describe("PluginManagerView", () => {
 
       await waitFor(() => expect(onConsumed).toHaveBeenCalledOnce());
       // Give a URL dialog the chance to open, so its absence means something.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, URL_DIALOG_OPEN_GRACE_MS));
       expect(screen.queryByLabelText("Plugin URL")).toBeNull();
       expect(await urlReviewDialog()).toBeTruthy();
     });

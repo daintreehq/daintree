@@ -96,7 +96,7 @@ function urlRequest(
       projectTemplates: [],
       permissionBypassAgents: [],
     },
-    source: { kind: "url", label: "example.com/acme.dntr" },
+    source: { kind: "url", label: "example.com/acme.dntr", installedOnDisk: false },
     ...overrides,
   };
 }
@@ -189,7 +189,7 @@ describe("PluginInstallConfirmDialog for a URL install", () => {
 
     click(confirmButton());
 
-    expect(onConfirm).toHaveBeenCalledWith({ replacesVersion: null });
+    expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: false });
   });
 
   it("approves a replacement with the version it said it replaces", async () => {
@@ -201,7 +201,7 @@ describe("PluginInstallConfirmDialog for a URL install", () => {
     expect(screen.getByTestId("archive-installed-version").textContent).toContain("v1.0.0");
     click(confirmButton());
 
-    expect(onConfirm).toHaveBeenCalledWith({ replacesVersion: "1.0.0" });
+    expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
   });
 
   it("holds the confirm when it can't tell what's installed, until a retry can", async () => {
@@ -223,7 +223,7 @@ describe("PluginInstallConfirmDialog for a URL install", () => {
     expect(screen.queryByText("Couldn't check which version is installed")).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     click(confirmButton());
-    expect(onConfirm).toHaveBeenCalledWith({ replacesVersion: "1.0.0" });
+    expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
   });
 
   it("re-arms the read-time cooldown when what it would replace changes under it", async () => {
@@ -244,7 +244,26 @@ describe("PluginInstallConfirmDialog for a URL install", () => {
 
     elapse(60_000);
     click(confirmButton());
-    expect(onConfirm).toHaveBeenCalledWith({ replacesVersion: "1.0.0" });
+    expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
+  });
+
+  it("says it replaces an installed copy the list can't show, and approves it as one", async () => {
+    // Installed, but its manifest no longer loads: the list has no row for it.
+    renderReview(
+      urlRequest({
+        source: { kind: "url", label: "example.com/acme.dntr", installedOnDisk: true },
+      })
+    );
+    await settle();
+    elapse(60_000);
+
+    expect(screen.getByTestId("archive-installed-version").textContent).toContain(
+      "couldn’t be loaded"
+    );
+    expect(screen.getByText(/replaces the copy of this plugin that's installed/)).toBeTruthy();
+    click(confirmButton());
+
+    expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
   });
 
   it("keeps an opened archive's copy when the source is a file", async () => {

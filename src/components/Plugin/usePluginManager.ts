@@ -924,7 +924,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
    * turned up since, a replacement refuses when it has gone. Main refuses
    * anything else, and nothing is ever retried unbound.
    */
-  const confirmUrlReview = async ({ replacesVersion }: PluginInstallApproval) => {
+  const confirmUrlReview = async ({ replacesInstalled }: PluginInstallApproval) => {
     const review = urlReviewRef.current;
     if (review === null || isInstalling) return;
     setUrlReview(null);
@@ -934,7 +934,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     };
     await performInstallFromUrl(
       review.url,
-      replacesVersion === null ? { kind: "install", ...binding } : { kind: "update", ...binding },
+      replacesInstalled ? { kind: "update", ...binding } : { kind: "install", ...binding },
       "install"
     );
   };

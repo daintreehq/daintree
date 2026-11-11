@@ -1,5 +1,5 @@
 import { BrowserWindow, dialog, net } from "electron";
-import { stat, open, rm } from "node:fs/promises";
+import { access, stat, open, rm } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { Transform, Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -21,6 +21,7 @@ import {
 } from "../../../schemas/pluginIdentifiers.js";
 import { describePluginInstallSource } from "../../../../shared/utils/pluginInstallSource.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { displaySafeText } from "../../../../shared/utils/displaySafeText.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
 import { parseInstallExpectation } from "../../../services/plugin/installExpectation.js";
 import { sendToRendererContext } from "../../utils.js";
@@ -34,6 +35,7 @@ import type {
   PluginBackgroundUpdateCheckSettings,
   PluginBackgroundUpdateCheckResult,
   PluginUrlInstallPreviewResult,
+  PluginArchiveManifestPreview,
 } from "../../../../shared/types/plugin.js";
 import type { IpcContext } from "../../types.js";
 import { getPluginService } from "./service.js";
@@ -341,7 +343,7 @@ function parsePluginDownloadUrl(url: unknown): { trimmed: string; parsed: URL } 
 
 /**
  * Download a `.dntr` archive from a validated URL into a temp file under
- * bounded conditions, hand its path to `use`, and remove it once `use` settles
+ * bounded conditions, hand its path to `consume`, and remove it once that settles
  * (F24). Install and preview (#16776) share this, so a URL that passes one's
  * guards passes the other's.
  *
@@ -356,7 +358,7 @@ function parsePluginDownloadUrl(url: unknown): { trimmed: string; parsed: URL } 
 async function withDownloadedArchive<T>(
   target: { trimmed: string; parsed: URL },
   jobId: string | undefined,
-  use: (archivePath: string) => Promise<T>
+  consume: (archivePath: string) => Promise<T>
 ): Promise<T | PluginDownloadFailure> {
   const { trimmed, parsed } = target;
   const tempPath = path.join(os.tmpdir(), `daintree-plugin-${crypto.randomUUID()}.dntr`);
@@ -482,8 +484,8 @@ async function withDownloadedArchive<T>(
     }
 
     // Awaited, not returned bare: the `finally` below deletes the download, and
-    // a bare `return` would run it while `use` is still reading it.
-    return await use(tempPath);
+    // a bare `return` would run it while `consume` is still reading it.
+    return await consume(tempPath);
   } finally {
     if (wroteTempFile) {
       await rm(tempPath, { force: true }).catch(() => {});
@@ -554,6 +556,8 @@ export async function handlePreviewFromUrl(
     async (archivePath): Promise<PluginUrlInstallPreviewResult> => {
       pluginInstallJobs.setPhase(jobId, "validating");
       const cancelled = () => pluginInstallJobs.signal(jobId)?.aborted === true;
+      let archiveHash: string;
+      let manifest: PluginArchiveManifestPreview;
       try {
         // Lazy, like the archive worker's: keeps `yauzl` and the manifest
         // schema off the startup path (#9285).
@@ -561,19 +565,48 @@ export async function handlePreviewFromUrl(
           import("../../../services/PluginArchive.js"),
           import("../../../services/plugin/archiveManifestPreview.js"),
         ]);
-        const archiveHash = await computeArchiveHash(archivePath);
-        const manifest = await readArchiveManifestPreview(archivePath);
-        if (cancelled()) return { status: "cancelled" };
-        return { status: "preview", preview: { url: target.trimmed, archiveHash, manifest } };
+        archiveHash = await computeArchiveHash(archivePath);
+        manifest = await readArchiveManifestPreview(archivePath);
       } catch (err) {
         if (cancelled()) return { status: "cancelled" };
         return downloadFailed(
           "archive_invalid",
-          `The download isn't a valid plugin archive: ${formatErrorMessage(err, "it couldn't be read")}`
+          `The download isn't a valid plugin archive: ${previewErrorDetail(err)}`
         );
       }
+      if (cancelled()) return { status: "cancelled" };
+      // The installer counts a plugin as installed when its folder exists,
+      // while the plugin manager lists only plugins that loaded or were
+      // skipped. An install whose manifest no longer validates is in the
+      // first and not the second, so the review asks the installer's question
+      // itself rather than leave a fresh-install binding that can never land.
+      const service = await getPluginService();
+      const installedOnDisk = await access(path.join(service.getPluginsRoot(), manifest.name)).then(
+        () => true,
+        () => false
+      );
+      return {
+        status: "preview",
+        preview: { url: target.trimmed, archiveHash, installedOnDisk, manifest },
+      };
     }
   );
+}
+
+// Matches the preview's own clamp on manifest text (`archiveManifestPreview.ts`).
+const PREVIEW_ERROR_DETAIL_MAX = 200;
+
+/**
+ * Why an archive couldn't be read, made safe to show: the reason can quote the
+ * archive's own entry names, which its author picks, so bidi and control
+ * characters are dropped and the length is bounded like the rest of the
+ * preview's text.
+ */
+function previewErrorDetail(err: unknown): string {
+  const points = [...displaySafeText(formatErrorMessage(err, "it couldn't be read"))];
+  return points.length > PREVIEW_ERROR_DETAIL_MAX
+    ? `${points.slice(0, PREVIEW_ERROR_DETAIL_MAX).join("")}…`
+    : points.join("");
 }
 
 export async function handleUninstall(pluginId: string, deleteSettings?: boolean): Promise<void> {
