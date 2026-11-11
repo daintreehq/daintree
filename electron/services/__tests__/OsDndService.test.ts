@@ -157,6 +157,7 @@ describe("OsDndService — macOS", () => {
     expect(timeout).toBeGreaterThan(0);
     expect(timeout).toBeLessThanOrEqual(5000);
     expect(maxBuffer).toBeGreaterThan(0);
+    expect(maxBuffer).toBeLessThanOrEqual(1024 * 1024);
     // Unknown until the probe settles: the sync audio gate treats this as
     // "do not gate".
     expect(svc.getState()).toBeUndefined();
@@ -287,18 +288,21 @@ describe("OsDndService — macOS", () => {
       throw new Error("unsupported notification");
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const svc = getOsDndService();
-    svc.initialize();
+    try {
+      const svc = getOsDndService();
+      svc.initialize();
 
-    expect(systemPreferencesMock.subscribeNotification).toHaveBeenCalledTimes(2);
-    expect(childProcessMock.execFile).toHaveBeenCalledTimes(1);
-    await settleProbe("com.apple.focus.work\n");
-    expect(svc.getState()).toBe(true);
+      expect(systemPreferencesMock.subscribeNotification).toHaveBeenCalledTimes(2);
+      expect(childProcessMock.execFile).toHaveBeenCalledTimes(1);
+      await settleProbe("com.apple.focus.work\n");
+      expect(svc.getState()).toBe(true);
 
-    systemPreferencesMock.__fireByName("_NSDoNotDisturbDisabledNotification");
-    expect(svc.getState()).toBe(false);
-    expect(warn).toHaveBeenCalledTimes(1);
-    warn.mockRestore();
+      systemPreferencesMock.__fireByName("_NSDoNotDisturbDisabledNotification");
+      expect(svc.getState()).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("a live disabled notification during the probe is not overwritten by the older probe result", async () => {
