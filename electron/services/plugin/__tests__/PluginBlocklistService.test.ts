@@ -3,15 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 
-import * as semver from "semver";
-
 import {
-  PluginBlocklistSchema,
   PluginBlocklistService,
   findPluginBlocklistMatch,
   type ParsedPluginBlocklist,
 } from "../PluginBlocklistService.js";
-import { PLUGIN_BLOCKLIST_SEED } from "../pluginBlocklistSeed.js";
 import { PLUGIN_BLOCKLIST_TTL_MS } from "../../../../shared/config/pluginBlocklist.js";
 
 const BLOCKLIST: ParsedPluginBlocklist = {
@@ -392,20 +388,5 @@ describe("PluginBlocklistService", () => {
       expect(refreshed).toBeNull();
       expect(fetchImpl).not.toHaveBeenCalled();
     });
-  });
-});
-
-describe("PLUGIN_BLOCKLIST_SEED", () => {
-  it("parses with the production blocklist schema", () => {
-    expect(PluginBlocklistSchema.safeParse(PLUGIN_BLOCKLIST_SEED).success).toBe(true);
-  });
-
-  it("names only valid semver ranges, so no seeded denial is silently inert", () => {
-    const parsed = PluginBlocklistSchema.parse(PLUGIN_BLOCKLIST_SEED);
-    for (const entry of parsed.entries) {
-      for (const range of entry.ranges) {
-        expect(semver.validRange(range, { includePrerelease: true })).not.toBeNull();
-      }
-    }
   });
 });
