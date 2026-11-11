@@ -1417,22 +1417,22 @@
       "gzip": 440
     },
     "index.html": {
-      "file": "assets/index-ChKqu20T.js",
+      "file": "assets/index-fbK1IYs7.js",
       "raw": 17373,
       "gzip": 7059
     },
     "src/App.tsx": {
-      "file": "assets/App-B1Ewl8vd.js",
-      "raw": 1999269,
-      "gzip": 627190
+      "file": "assets/App-DLZ5fL3o.js",
+      "raw": 1999803,
+      "gzip": 627383
     }
   },
   "eagerTotals": {
-    "raw": 6507700,
-    "gzip": 2135258
+    "raw": 6508234,
+    "gzip": 2135451
   },
   "totals": {
-    "raw": 23611401,
-    "gzip": 7947361
+    "raw": 23611935,
+    "gzip": 7947554
   }
 }
