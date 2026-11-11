@@ -407,13 +407,17 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
   // sanitizing is treated as no name.
   const trimmedName = options?.name ? sanitizeTerminalName(options.name) : undefined;
 
+  // Read only when the model's label can reach the title: a caller's name
+  // replaces it, and a preset's `displayTitle` is stamped verbatim.
+  const titleNamesModel =
+    !trimmedName && !(isAgent && preset?.name?.trim() && preset.displayTitle?.trim());
   const baseTitle = modelId
     ? getAgentDisplayTitle(
         agentId,
         modelId,
-        trimmedName
-          ? undefined
-          : await loadModelTitleCatalog(agentId, modelId, input.getModelCatalog)
+        titleNamesModel
+          ? await loadModelTitleCatalog(agentId, modelId, input.getModelCatalog)
+          : undefined
       )
     : (agentConfig?.name ?? "Terminal");
 

@@ -40,15 +40,20 @@ describe("loadModelTitleCatalog (#16783)", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("stops waiting on a catalog that doesn't answer, and leaves no timer behind", async () => {
+  it("waits out the deadline for a catalog that doesn't answer, then leaves no timer behind", async () => {
     vi.useFakeTimers();
     let answer: (value: { models: typeof CODEX_MODELS }) => void = () => {};
     const pending = new Promise<{ models: typeof CODEX_MODELS }>((resolve) => {
       answer = resolve;
     });
+    let settled = false;
 
-    const result = loadModelTitleCatalog("codex", "gpt-5.5", () => pending);
-    await vi.advanceTimersByTimeAsync(MODEL_TITLE_CATALOG_WAIT_MS);
+    const result = loadModelTitleCatalog("codex", "gpt-5.5", () => pending).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(MODEL_TITLE_CATALOG_WAIT_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
 
     await expect(result).resolves.toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);

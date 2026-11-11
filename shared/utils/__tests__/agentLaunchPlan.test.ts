@@ -513,6 +513,36 @@ describe("buildAgentLaunchPlan", () => {
       expect(bundled.title).toBe(getAgentDisplayTitle("claude", "opus"));
       expect(getModelCatalog).not.toHaveBeenCalled();
     });
+    it("reads the catalog when the caller's name sanitizes to nothing", async () => {
+      const getModelCatalog = vi.fn().mockResolvedValue(CATALOG);
+
+      const plan = await codex({ modelId: "gpt-5.5", name: " \u0007 " }, { getModelCatalog });
+
+      expect(plan.title).toBe("Codex (GPT-5.5)");
+      expect(getModelCatalog).toHaveBeenCalledWith("codex");
+    });
+
+    it("never reads the catalog for a preset whose own title is stamped verbatim", async () => {
+      const getModelCatalog = vi.fn().mockResolvedValue(CATALOG);
+
+      const plan = await codex(
+        { modelId: "gpt-5.5" },
+        {
+          getModelCatalog,
+          settings: {
+            agents: {
+              codex: {
+                presetId: "review",
+                customPresets: [{ id: "review", name: "Review", displayTitle: "Code review" }],
+              },
+            },
+          } as unknown as AgentSettings,
+        }
+      );
+
+      expect(plan.title).toBe("Code review");
+      expect(getModelCatalog).not.toHaveBeenCalled();
+    });
   });
 
   it("layers the caller's environment over the agent's and the preset's", async () => {

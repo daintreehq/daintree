@@ -432,6 +432,7 @@ describe("useAgentLauncher — a model only the runtime catalog lists (#16783)",
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     Reflect.set(window, "electron", undefined);
   });
 
@@ -450,19 +451,25 @@ describe("useAgentLauncher — a model only the runtime catalog lists (#16783)",
   });
 
   it("goes quiet when the launcher unmounts while the catalog is read", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let answer: (value: unknown) => void = () => {};
-    getResolvedModelList.mockReturnValue(
-      new Promise((resolve) => {
+    let started: () => void = () => {};
+    const readStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    getResolvedModelList.mockImplementation(() => {
+      started();
+      return new Promise((resolve) => {
         answer = resolve;
-      })
-    );
+      });
+    });
     const onDecline = vi.fn();
     const { result, unmount } = renderHook(() => useAgentLauncher());
 
     let launch: Promise<unknown> = Promise.resolve();
     await act(async () => {
       launch = result.current.launchAgent("codex", { force: true, modelId: "gpt-5.5", onDecline });
-      await vi.waitFor(() => expect(getResolvedModelList).toHaveBeenCalled());
+      await readStarted;
     });
     unmount();
     await act(async () => {

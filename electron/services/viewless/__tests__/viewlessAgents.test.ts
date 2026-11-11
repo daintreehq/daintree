@@ -484,6 +484,11 @@ describe("agent.launch with no frontend", () => {
     );
 
     const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
+    expect(invoke).toHaveBeenCalledWith(
+      PROJECT.id,
+      CHANNELS.AGENT_CAPABILITIES_GET_RESOLVED_MODEL_LIST,
+      ["codex"]
+    );
     expect(spawned(invoke)).toMatchObject({ agentModelId: "gpt-5.5", title: "Codex (GPT-5.5)" });
     const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
     expect(snapshot?.title).toBe("Codex (GPT-5.5)");
