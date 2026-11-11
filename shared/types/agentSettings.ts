@@ -597,13 +597,12 @@ function managedLaunchGroups(agentId: string): string[][] {
 
 /**
  * Whether a pane's launch flags carry its agent's permission bypass (#16785):
- * every option group of one of the declarations {@link reconcileBypassFlags}
- * strips, apart from the screen-mode and decoration groups other reconcilers
- * own. So the warning reads what the CLI was handed, not today's bypass mode;
- * a flag that only means bypass to another agent never trips it; and a
- * declaration that mixes in a managed flag (`-c approval_policy=never
- * --no-alt-screen`) is told by its bypass half, which every launch doesn't
- * carry and no relaunch rewrites.
+ * an option group {@link reconcileBypassFlags} would strip, other than the
+ * screen-mode and decoration groups Daintree adds to every launch itself. So
+ * the warning reads what the CLI was handed, not today's bypass mode; a flag
+ * that only means bypass to another agent never trips it; and, like the
+ * stripping, each option of a declaration counts on its own, so cleanup that
+ * drops another part of it (a model, a conversation selector) can't hide it.
  */
 export function hasBypassFlags(
   flags: readonly string[] | undefined,
@@ -612,22 +611,19 @@ export function hasBypassFlags(
 ): boolean {
   if (!flags?.length || !agentId) return false;
   const written = settings?.agents ? ownEntry(settings.agents, agentId)?.dangerousArgs : undefined;
-  const sources = bypassArgSources(
-    agentId,
-    resolveDangerousArgs(typeof written === "string" ? written : undefined, agentId),
-    getPluginBypassArgHistory(settings, agentId)
-  );
   const managed = managedLaunchGroups(agentId).map((group) => group.join(" "));
+  const groups = bypassArgGroups(
+    bypassArgSources(
+      agentId,
+      resolveDangerousArgs(typeof written === "string" ? written : undefined, agentId),
+      getPluginBypassArgHistory(settings, agentId)
+    )
+  ).filter((group) => !managed.includes(group.join(" ")));
+  if (groups.length === 0) return false;
   const instruction = systemPromptArgPositions(flags, agentId);
-  return sources.some((tokens) => {
-    const groups = optionGroups(tokens).filter((group) => !managed.includes(group.join(" ")));
-    return (
-      groups.length > 0 &&
-      groups.every((group) =>
-        flags.some((_, index) => bypassGroupAt(flags, index, group, instruction))
-      )
-    );
-  });
+  return flags.some((_, index) =>
+    groups.some((group) => bypassGroupAt(flags, index, group, instruction))
+  );
 }
 
 /**

@@ -1539,39 +1539,32 @@ describe("hasBypassFlags (#16785)", () => {
     expect(hasBypassFlags(["--yes-to-all"], "hermes", settings)).toBe(true);
   });
 
-  // Every Codex launch carries its inline flag, so a declaration that mixes it
-  // in is told by its bypass half.
-  it("ignores a managed screen-mode flag mixed into a declaration", () => {
+  // Every Codex launch carries its inline flag and decoration pair, so a
+  // declaration that mixes them in is told by its bypass half alone.
+  it("never counts a screen-mode or decoration flag mixed into a declaration", () => {
     const settings = {
-      agents: { codex: { dangerousArgs: "-c approval_policy=never --no-alt-screen" } },
+      agents: {
+        codex: { dangerousArgs: "-c approval_policy=never --no-alt-screen -c tui.whimsy=false" },
+      },
     };
     expect(hasBypassFlags(["--no-alt-screen", "-c", "tui.whimsy=false"], "codex", settings)).toBe(
       false
     );
-    expect(
-      hasBypassFlags(["--no-alt-screen", "-c", "approval_policy=never"], "codex", settings)
-    ).toBe(true);
+    expect(hasBypassFlags(["-c", "approval_policy=never"], "codex", settings)).toBe(true);
   });
 
-  it("needs every other option of a declaration", () => {
+  it("counts each option of a declaration on its own, as relaunch stripping does", () => {
     const settings = {
-      agents: {
-        codex: { dangerousArgs: "-c approval_policy=never -c model_reasoning_effort=high" },
-      },
+      agents: { codex: { dangerousArgs: "--sandbox danger-full-access --ask-for-approval never" } },
     };
-    expect(hasBypassFlags(["-c", "model_reasoning_effort=high"], "codex", settings)).toBe(false);
-    expect(
-      hasBypassFlags(
-        ["-c", "approval_policy=never", "-c", "model_reasoning_effort=high"],
-        "codex",
-        settings
-      )
-    ).toBe(true);
+    expect(hasBypassFlags(["--sandbox", "danger-full-access"], "codex", settings)).toBe(true);
+    expect(hasBypassFlags(["--ask-for-approval", "never"], "codex", settings)).toBe(true);
+    expect(hasBypassFlags(["--sandbox", "workspace-write"], "codex", settings)).toBe(false);
   });
 
-  // Another reconciler can drop the managed half of a declaration from the
-  // flags a launch persists; the bypass half still marks the pane.
-  it("marks a launch whose declaration lost a managed group to another reconciler", () => {
+  // Other cleanup can drop part of a declaration from the flags a launch
+  // persists; what is left of the bypass still marks the pane.
+  it("marks a launch whose declaration lost another part to flag cleanup", () => {
     const codex = {
       dangerousMode: "on" as const,
       dangerousArgs: "-c approval_policy=never -c tui.whimsy=false",
@@ -1581,10 +1574,21 @@ describe("hasBypassFlags (#16785)", () => {
     expect(codexFlags).not.toContain("tui.whimsy=false");
     expect(hasBypassFlags(codexFlags, "codex", { agents: { codex } })).toBe(true);
 
-    const grok = { dangerousMode: "on" as const, dangerousArgs: "--always-approve --fullscreen" };
+    const grok = {
+      dangerousMode: "on" as const,
+      dangerousArgs: "--approve-everything --fullscreen",
+    };
     const grokFlags = reconcileInlineModeFlag(buildAgentLaunchFlags(grok, "grok"), "grok");
     expect(grokFlags).not.toContain("--fullscreen");
     expect(hasBypassFlags(grokFlags, "grok", { agents: { grok } })).toBe(true);
+
+    const mistral = {
+      dangerousMode: "on" as const,
+      dangerousArgs: "--agent auto-approve --model devstral-small",
+    };
+    const mistralFlags = buildAgentLaunchFlags(mistral, "mistral");
+    expect(mistralFlags).not.toContain("devstral-small");
+    expect(hasBypassFlags(mistralFlags, "mistral", { agents: { mistral } })).toBe(true);
   });
 
   it("leaves a launch without bypass unmarked when its declaration mixes in managed flags", () => {
@@ -1597,7 +1601,7 @@ describe("hasBypassFlags (#16785)", () => {
     ).toBe(false);
     const grok = {
       dangerousMode: "off" as const,
-      dangerousArgs: "--always-approve --no-alt-screen",
+      dangerousArgs: "--approve-everything --no-alt-screen",
     };
     expect(hasBypassFlags(buildAgentLaunchFlags(grok, "grok"), "grok", { agents: { grok } })).toBe(
       false

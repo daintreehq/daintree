@@ -55,8 +55,8 @@ describe("the terminal pane hands its launch flags to its header (#16785)", () =
     expect(missing, `${TERMINAL_PANE} lines missing agentLaunchFlags`).toEqual([]);
   });
 
-  // The value handed on has to be the pane's own prop, not a local that
-  // shadows it.
+  // The value handed on has to be the pane's own prop: destructured from the
+  // props, never declared again or reassigned.
   it("takes agentLaunchFlags from the component's props and never rebinds it", () => {
     const filePath = path.join(REPO_ROOT, TERMINAL_PANE);
     const source = ts.createSourceFile(
@@ -67,37 +67,35 @@ describe("the terminal pane hands its launch flags to its header (#16785)", () =
       ts.ScriptKind.TSX
     );
 
+    const isFlagsName = (node: ts.Node | undefined) =>
+      node !== undefined && ts.isIdentifier(node) && node.text === "agentLaunchFlags";
     let component: ts.FunctionDeclaration | undefined;
-    const bindings: string[] = [];
+    const rebinds: number[] = [];
     const visit = (node: ts.Node) => {
       if (ts.isFunctionDeclaration(node) && node.name?.text === "TerminalPaneComponent") {
         component = node;
       }
-      if (
-        (ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node)) &&
-        ts.isIdentifier(node.name) &&
-        node.name.text === "agentLaunchFlags"
-      ) {
-        bindings.push(ts.SyntaxKind[node.kind]);
-      }
+      const rebound =
+        (ts.isVariableDeclaration(node) && isFlagsName(node.name)) ||
+        (ts.isBinaryExpression(node) &&
+          node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+          node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+          isFlagsName(node.left));
+      if (rebound)
+        rebinds.push(source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1);
       ts.forEachChild(node, visit);
     };
     visit(source);
 
     const props = component?.parameters[0]?.name;
     expect(
-      props && ts.isObjectBindingPattern(props),
+      props !== undefined && ts.isObjectBindingPattern(props),
       "TerminalPaneComponent destructures its props"
     ).toBe(true);
     const destructured = (props as ts.ObjectBindingPattern).elements.some(
-      (element) =>
-        element.propertyName === undefined &&
-        ts.isIdentifier(element.name) &&
-        element.name.text === "agentLaunchFlags"
+      (element) => element.propertyName === undefined && isFlagsName(element.name)
     );
     expect(destructured, "agentLaunchFlags is destructured from the props").toBe(true);
-    expect(bindings, "agentLaunchFlags is bound once, by that destructure").toEqual([
-      "BindingElement",
-    ]);
+    expect(rebinds, `${TERMINAL_PANE} lines rebinding agentLaunchFlags`).toEqual([]);
   });
 });
