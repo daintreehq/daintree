@@ -67,12 +67,13 @@ describe("reconcileGridTabs", () => {
   });
 
   it.each(tabFieldChanges)("takes the rebuilt tab when only its %s changed", (_field, change) => {
-    const previous = [tab("a"), tab("b")];
+    const previous = [tab("a"), tab("b"), tab("c")];
     const changed = tab("b", change);
-    const next = reconcileGridTabs(previous, [tab("a"), changed]);
+    const next = reconcileGridTabs(previous, [tab("a"), changed, tab("c")]);
     expect(next).not.toBe(previous);
     expect(next[0]).toBe(previous[0]);
     expect(next[1]).toBe(changed);
+    expect(next[2]).toBe(previous[2]);
   });
 
   it.each(chromeFieldChanges)(
