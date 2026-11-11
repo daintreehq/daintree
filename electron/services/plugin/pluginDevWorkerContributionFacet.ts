@@ -42,6 +42,7 @@ import { validatePluginWorktreeDeleteNotes } from "../../../shared/utils/pluginW
 import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
+import { parsePluginActionContext } from "./pluginActionContext.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_SERVICE_MAX_RESULT_BYTES,
@@ -427,7 +428,7 @@ export class PluginDevWorkerContributionFacet {
         if (!handler) {
           throw new Error(`No action handler registered for "${msg.namespacedId}"`);
         }
-        const result = await handler(msg.args);
+        const result = await handler(msg.args, parsePluginActionContext(msg.context));
         settle({ ok: true, result });
         return;
       }
@@ -443,7 +444,7 @@ export class PluginDevWorkerContributionFacet {
         }
         let result: unknown;
         try {
-          result = await handler(msg.args);
+          result = await handler(msg.args, parsePluginActionContext(msg.context));
         } catch (err) {
           // Arity hint (#12214) applied HERE, against the plugin's real closure.
           // Main only ever sees the synthetic RPC thunk, whose arity says nothing
@@ -652,6 +653,7 @@ export class PluginDevWorkerContributionFacet {
               category: descriptor.category,
               kind: descriptor.kind,
               danger: descriptor.danger,
+              assistantReach: descriptor.assistantReach,
               keywords: descriptor.keywords,
               when: descriptor.when,
               enablement: descriptor.enablement,

@@ -1214,6 +1214,7 @@ export const CHANNELS = {
   PLUGIN_VALIDATE_ACTION_IDS: "plugin:validate-action-ids",
   PLUGIN_VALIDATE_MANIFEST: "plugin:validate-manifest",
   PLUGIN_ACTIONS_GET: "plugin:actions-get",
+  PLUGIN_ACTIONS_INVOKE: "plugin:actions-invoke",
   PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",

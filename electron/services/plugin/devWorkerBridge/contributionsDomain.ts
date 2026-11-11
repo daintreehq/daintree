@@ -119,8 +119,8 @@ export class ContributionsDomain {
       const namespacedId = `${this.ctx.pluginId}.${descriptor.id}`;
       // The host registers synchronously and resolves; await so a deep-
       // validation rejection routes to the register-error channel.
-      await this.ctx.host.registerAction(descriptor, (args) =>
-        this.ctx.invoke({ kind: "action", namespacedId, args })
+      await this.ctx.host.registerAction(descriptor, (args, context) =>
+        this.ctx.invoke({ kind: "action", namespacedId, args, context })
       );
       return;
     },

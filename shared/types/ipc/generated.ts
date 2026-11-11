@@ -2973,6 +2973,15 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../plugin.js").PluginActionDescriptor[];
   };
+  "plugin:actions-invoke": {
+    args: [
+      pluginId: string,
+      actionId: string,
+      args: unknown,
+      context: import("../plugin.js").PluginActionContext,
+    ];
+    result: import("../plugin.js").PluginActionInvokeResult;
+  };
   "plugin:actions-register": {
     args: [pluginId: string, contribution: import("../plugin.js").PluginActionContribution];
     result: void;

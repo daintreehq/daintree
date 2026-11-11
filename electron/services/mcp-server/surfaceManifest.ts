@@ -6,6 +6,7 @@ import {
   buildAnnotations,
   buildToolOutputSchema,
   callerGatedMinimumTier,
+  pluginActionMinimumTier,
   shouldExposeTool,
   UNBOUND_SESSION_SURFACE,
   type SessionSurfacePolicy,
@@ -71,7 +72,10 @@ function resolveToolTier(
 ): McpSurfaceTool["tier"] {
   if (tier === "external") return "external";
   return (
-    callerGatedMinimumTier(entry.id) ?? minimumPermittingTier(entry.id, rendererOwnedOrigin) ?? tier
+    callerGatedMinimumTier(entry.id) ??
+    minimumPermittingTier(entry.id, rendererOwnedOrigin) ??
+    pluginActionMinimumTier(entry.id, rendererOwnedOrigin) ??
+    tier
   );
 }
 

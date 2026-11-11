@@ -4,6 +4,7 @@
 // read-only views of that state, and the few operations a handler performs.
 
 import type {
+  PluginActionContext,
   PluginHostApi,
   PluginIpcContext,
   PluginMcpCaller,
@@ -17,8 +18,14 @@ import type {
 import type { PluginServiceCaller } from "../../../../shared/types/pluginServices.js";
 
 export type InvokeTarget =
-  | { kind: "action"; namespacedId: string; args: unknown }
-  | { kind: "command"; namespacedId: string; resolvedPath: string; args: unknown }
+  | { kind: "action"; namespacedId: string; args: unknown; context: PluginActionContext }
+  | {
+      kind: "command";
+      namespacedId: string;
+      resolvedPath: string;
+      args: unknown;
+      context: PluginActionContext;
+    }
   | { kind: "handler"; channel: string; ctx: PluginIpcContext; args: unknown[] }
   | { kind: "file-decoration-method"; providerId: string; method: string; args: unknown[] }
   | { kind: "worktree-delete-notes"; providerId: string; worktree: PluginWorktreeSnapshot }

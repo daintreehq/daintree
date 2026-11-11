@@ -34,6 +34,10 @@ import { ASSISTANT_CONTROL_TOOL_IDS } from "../../../shared/types/assistantContr
 import { OWNED_TWIN_TOOLS } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
 import { globalAssistantMayRelay } from "../../../shared/config/globalAssistant.js";
+import {
+  isPluginAssistantReachAction,
+  pluginAssistantReachActionIds,
+} from "../plugin/pluginAssistantReach.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -411,7 +415,12 @@ export function getTierPermittedActionIds(
   tier: McpTier,
   rendererOwnedOrigin = false
 ): ReadonlySet<string> {
-  return rendererOwnedOrigin ? TIER_ALLOWLISTS[tier] : NON_RENDERER_OWNED_TIER_ALLOWLISTS[tier];
+  const builtIn = rendererOwnedOrigin
+    ? TIER_ALLOWLISTS[tier]
+    : NON_RENDERER_OWNED_TIER_ALLOWLISTS[tier];
+  if (!reachesPluginActions(tier, rendererOwnedOrigin)) return builtIn;
+  const pluginIds = pluginAssistantReachActionIds();
+  return pluginIds.length === 0 ? builtIn : new Set([...builtIn, ...pluginIds]);
 }
 
 export function isTierPermitted(
@@ -419,7 +428,34 @@ export function isTierPermitted(
   actionId: string,
   rendererOwnedOrigin = false
 ): boolean {
-  return getTierPermittedActionIds(tier, rendererOwnedOrigin).has(actionId);
+  const builtIn = rendererOwnedOrigin
+    ? TIER_ALLOWLISTS[tier]
+    : NON_RENDERER_OWNED_TIER_ALLOWLISTS[tier];
+  return (
+    builtIn.has(actionId) ||
+    (reachesPluginActions(tier, rendererOwnedOrigin) && isPluginAssistantReachAction(actionId))
+  );
+}
+
+/**
+ * Plugin actions that opted in with `assistantReach` (#16751) join the project
+ * Assistant's surface at both in-app tiers, and nobody else's: an agent pane or
+ * an api-key client is `external` by origin, and so is another machine's
+ * assistant relaying through `host.call`. The global Assistant's gate refuses
+ * everything outside its own tools before any tier is asked.
+ */
+function reachesPluginActions(tier: McpTier, rendererOwnedOrigin: boolean): boolean {
+  return rendererOwnedOrigin && (tier === "core" || tier === "full");
+}
+
+/**
+ * The rung an opted-in plugin action is reachable from for this origin: `core`
+ * for the project Assistant, null for everyone else. Kept apart from
+ * `minimumPermittingTier`, which also decides what a grant may name, so a
+ * grant never widens a plugin action's reach.
+ */
+export function pluginActionMinimumTier(id: string, rendererOwnedOrigin: boolean): "core" | null {
+  return rendererOwnedOrigin && isPluginAssistantReachAction(id) ? "core" : null;
 }
 
 /**
@@ -759,7 +795,8 @@ export function buildTargetPolicy(
         ? TIER_ALLOWLISTS.external.has(id)
           ? "external"
           : null
-        : minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
+        : (minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true) ??
+          pluginActionMinimumTier(id, snapshot.rendererOwnedOrigin === true));
   // A ladder target with no permitting tier cannot be described honestly, and
   // cannot legitimately be granted either: both issuance paths refuse a tool
   // `minimumPermittingTier` does not place. Fail closed.

@@ -19,6 +19,7 @@
 
 import type {
   PluginAccountRef,
+  PluginActionContext,
   PluginIdentity,
   PluginIpcContext,
   PluginSettingsScope,
@@ -311,6 +312,8 @@ export type PluginHostToWorkerMessage =
       kind: "action";
       namespacedId: string;
       args: unknown;
+      /** The host-built dispatch context (#16751); the worker re-freezes it. */
+      context: PluginActionContext;
     }
   /**
    * Import (once, lazily) a manifest-declared command's handler module and call
@@ -326,6 +329,8 @@ export type PluginHostToWorkerMessage =
       namespacedId: string;
       resolvedPath: string;
       args: unknown;
+      /** The host-built dispatch context (#16751); the worker re-freezes it. */
+      context: PluginActionContext;
     }
   | {
       type: "invoke";

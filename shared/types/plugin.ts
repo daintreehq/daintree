@@ -30,6 +30,7 @@ import type { NotificationType } from "./notification.js";
 import type {
   ActionDispatchResult,
   ActionId,
+  ActionSource,
   PluginActionManifestEntry,
   PluginCanDispatchResult,
 } from "./actions.js";
@@ -5859,15 +5860,52 @@ export interface PluginConfirmOptions {
 }
 
 /**
- * Runtime handler bound to a plugin-registered action via
- * {@link PluginHostApi.registerAction}. Receives the dispatch args payload
- * (the renderer-side synthetic action forwards a single args object) and
- * returns the action's result. Unlike {@link PluginIpcHandler} it does NOT
- * receive an IPC context — action handlers are addressed by action id, not by
- * a per-invocation channel context. The closure lives only in main and never
- * crosses the IPC boundary.
+ * What the host knows about one dispatch of a plugin action, handed to its
+ * {@link ActionHandler} as the second argument. Built by the host for each
+ * dispatch and frozen; nothing in the action's args can set or change it.
+ *
+ * - `dispatchSource` is the surface that dispatched the action: `"user"` for
+ *   the command palette, `"keybinding"`, `"menu"`, `"context-menu"`, `"agent"`
+ *   for a Daintree MCP session, and `"plugin"` for a plugin (a `host.dispatch`,
+ *   a call from a panel through `plugin.invoke`, or an event route).
+ * - `origin: "assistant"` means the person's Daintree Assistant made the MCP
+ *   call. Provenance, not proof: the Assistant acts on what its pane is sent,
+ *   and that includes other agents' replies.
+ * - `approval: "person"` means someone answered the host's confirm dialog for
+ *   this very dispatch. It is never set by a standing answer: an automation
+ *   grant, "Allow for this session", or the Assistant's Never ask leave it
+ *   absent, so an action they let through runs with `origin` and no approval.
+ *
+ * Distinct from {@link PluginIpcContext}, which channel handlers receive.
  */
-export type ActionHandler = (args: unknown) => unknown | Promise<unknown>;
+export interface PluginActionContext {
+  readonly dispatchSource: ActionSource;
+  readonly origin?: "assistant";
+  readonly approval?: "person";
+}
+
+/**
+ * What the app's synthetic plugin action gets back from main: whatever the
+ * action's handler returned, after the host's size and result-schema checks.
+ * Spelled out as every value rather than `unknown`, which the IPC codegen
+ * refuses as a handler result.
+ */
+export type PluginActionInvokeResult = object | string | number | boolean | null | undefined;
+
+/**
+ * Runtime handler bound to a plugin-registered action via
+ * {@link PluginHostApi.registerAction} or a manifest command's handler module.
+ * Receives the dispatch args payload (the renderer-side synthetic action
+ * forwards a single args object) and the host-built
+ * {@link PluginActionContext}, and returns the action's result. The context is
+ * not the {@link PluginIpcContext} a channel handler receives: action handlers
+ * are addressed by action id, not by a per-invocation channel context. The
+ * closure never crosses the IPC boundary.
+ */
+export type ActionHandler = (
+  args: unknown,
+  context: PluginActionContext
+) => unknown | Promise<unknown>;
 
 /**
  * Execution backend for a managed process (#11300, #11871).
@@ -8343,6 +8381,16 @@ export interface PluginActionContribution {
   category: string;
   kind: "command" | "query";
   danger: "safe" | "confirm";
+  /**
+   * `"confirm-only"` puts the action on the project Assistant's Daintree MCP
+   * tools, at both tiers. Requires `danger: "confirm"` as declared, so every
+   * call the Assistant makes goes through the host's confirm dialog unless the
+   * person has told Daintree not to ask (an automation grant, or the
+   * Assistant's Never ask). The handler's {@link PluginActionContext} then says
+   * which: `approval: "person"` only when the dialog was answered. Agent panes
+   * and the global Assistant never reach it.
+   */
+  assistantReach?: "confirm-only";
   keywords?: string[];
   inputSchema?: Record<string, unknown>;
   /**
