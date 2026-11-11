@@ -59,6 +59,7 @@ import type {
   PluginTerminalLifecycleEvent,
   PluginAgentPane,
   PluginAllAgentsSnapshot,
+  PluginRemoteHost,
   PluginFocusedPanel,
   PluginProjectPresence,
   PluginSendToAgentOptions,
@@ -188,6 +189,8 @@ export interface AgentInputRecord {
   /** What `sendKeys` pressed, or the text `submit` sent. */
   input?: PluginAgentKeysInput | string;
   result: PluginAgentInputResult | PluginAgentInterruptResult | PluginAgentKeysResult;
+  /** The Remote Host the call named (#16767); absent for an agent on this machine. */
+  hostId?: string;
 }
 
 /** Captured `host.terminals.readScreen(terminalId, options)` calls, with what each resolved. */
@@ -839,6 +842,11 @@ export interface CreateMockHostOptions {
    * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`).
    */
   allAgents?: PluginAllAgentsSnapshot;
+  /**
+   * What `remoteHosts.list()` reports for an installed plugin that declares
+   * `host:dispatch` (#16767). Defaults to none.
+   */
+  remoteHosts?: PluginRemoteHost[];
   /**
    * The focus `onDidChangeFocusedPanel` replays on subscribe. Defaults to no
    * focused panel (`kind: null`). For a project plugin it is taken to be inside

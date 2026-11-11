@@ -5,6 +5,8 @@ export const PLUGIN_CAPABILITY_METHOD_CHANNELS = {
   acknowledgeConsent: "plugin-capability:acknowledge-consent",
   getProjectTargeting: "plugin-capability:get-project-targeting",
   setProjectTargeting: "plugin-capability:set-project-targeting",
+  getHostTargeting: "plugin-capability:get-host-targeting",
+  setHostTargeting: "plugin-capability:set-host-targeting",
   getOsNotifications: "plugin-capability:get-os-notifications",
   setOsNotifications: "plugin-capability:set-os-notifications",
   getWorktreeDeleteNotes: "plugin-capability:get-worktree-delete-notes",

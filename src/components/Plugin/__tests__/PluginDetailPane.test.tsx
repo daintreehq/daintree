@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { PluginDetailPane } from "../PluginDetailPane";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BuiltInPluginCapability, LoadedPluginInfo } from "@shared/types/plugin";
@@ -39,6 +39,10 @@ const projectTargetingMock = vi.hoisted(() => ({
   setProjectTargeting: vi.fn((input: { pluginId: string; enabled: boolean }) =>
     Promise.resolve(input.enabled)
   ),
+  getHostTargeting: vi.fn((_input: { pluginId: string }) => Promise.resolve(false)),
+  setHostTargeting: vi.fn((input: { pluginId: string; enabled: boolean }) =>
+    Promise.resolve(input.enabled)
+  ),
   getOsNotifications: vi.fn((_input: { pluginId: string }) => Promise.resolve(false)),
   setOsNotifications: vi.fn((input: { pluginId: string; enabled: boolean }) =>
     Promise.resolve(input.enabled)
@@ -62,6 +66,12 @@ beforeEach(() => {
   projectTargetingMock.getProjectTargeting.mockResolvedValue(false);
   projectTargetingMock.setProjectTargeting.mockReset();
   projectTargetingMock.setProjectTargeting.mockImplementation((input) =>
+    Promise.resolve(input.enabled)
+  );
+  projectTargetingMock.getHostTargeting.mockReset();
+  projectTargetingMock.getHostTargeting.mockResolvedValue(false);
+  projectTargetingMock.setHostTargeting.mockReset();
+  projectTargetingMock.setHostTargeting.mockImplementation((input) =>
     Promise.resolve(input.enabled)
   );
   projectTargetingMock.getOsNotifications.mockReset();
@@ -325,6 +335,48 @@ describe("PluginDetailPane project targeting switch (#13119)", () => {
       withCapabilities(["project:dispatch"], { origin: "project", projectId: "project-a" })
     );
     expect(screen.queryByTestId("plugin-project-targeting-switch")).toBeNull();
+  });
+});
+
+describe("PluginDetailPane host targeting switch (#16767)", () => {
+  const hostSwitch = () => screen.getByTestId("plugin-host-targeting-switch");
+
+  it("is off by default and turns the host grant on, apart from project targeting", async () => {
+    renderPane(withCapabilities(["host:dispatch"]));
+    await vi.waitFor(() => expect(hostSwitch().hasAttribute("disabled")).toBe(false));
+    expect(hostSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByTestId("plugin-project-targeting-switch")).toBeNull();
+
+    fireEvent.click(hostSwitch());
+    await vi.waitFor(() => expect(hostSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(projectTargetingMock.setHostTargeting).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: true,
+    });
+    expect(projectTargetingMock.setProjectTargeting).not.toHaveBeenCalled();
+  });
+
+  it("shows the host grant as it is persisted, and turns it off", async () => {
+    projectTargetingMock.getHostTargeting.mockResolvedValue(true);
+    renderPane(withCapabilities(["host:dispatch", "project:dispatch"]));
+    await vi.waitFor(() => expect(hostSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(projectTargetingMock.getHostTargeting).toHaveBeenCalledWith({ pluginId: "acme.demo" });
+
+    fireEvent.click(hostSwitch());
+    await vi.waitFor(() => expect(hostSwitch().getAttribute("aria-checked")).toBe("false"));
+    expect(projectTargetingMock.setHostTargeting).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: false,
+    });
+  });
+
+  it("is absent when undeclared, and for a project plugin, which can never target a host", () => {
+    renderPane(withCapabilities(["project:dispatch"]));
+    expect(screen.queryByTestId("plugin-host-targeting-switch")).toBeNull();
+    cleanup();
+    renderPane(withCapabilities(["host:dispatch"], { origin: "project", projectId: "project-a" }));
+    expect(screen.queryByTestId("plugin-host-targeting-switch")).toBeNull();
+    expect(projectTargetingMock.getHostTargeting).not.toHaveBeenCalled();
   });
 });
 

@@ -34,6 +34,7 @@ import type {
   PluginAgentInputResult,
   PluginAgentInterruptResult,
   PluginAgentKeysResult,
+  PluginRemoteHost,
   PluginPanelLifecycleEvent,
   PluginSystemWakeEvent,
 } from "../../types/plugin.js";
@@ -60,6 +61,7 @@ export type WorkspaceMembers = Pick<
   | "getAgentState"
   | "sendToActiveAgent"
   | "agents"
+  | "remoteHosts"
   | "terminals"
   | "sendToAgent"
   | "runRecipe"
@@ -187,12 +189,15 @@ export interface WorkspaceFacet {
   agentPanes(): readonly PluginAgentPane[];
   /** Latest simulated lifecycle event per panel id. */
   panelPhases: ReadonlyMap<string, PluginPanelLifecycleEvent>;
-  /** Records the agent a dispatched `agent.launch` started. */
+  /** Records the agent a dispatched `agent.launch` started, on a Remote Host when `hostId` is set. */
   recordMockLaunch(
     actionId: ActionId,
     args: unknown,
-    result: ActionDispatchResult
+    result: ActionDispatchResult,
+    hostId?: string
   ): ActionDispatchResult;
+  /** Throws as production does when this plugin may not reach Remote Hosts (#16767). */
+  assertMockHostTarget(what: string): void;
 }
 
 export function createWorkspaceFacet(
@@ -208,6 +213,7 @@ export function createWorkspaceFacet(
   const runRecipeCalls: RunRecipeRecord[] = [];
   let runRecipeResult: PluginRunRecipeResult = { status: "cancelled" };
   let agentPanes: PluginAgentPane[] = options.agents ?? [];
+  const remoteHosts: PluginRemoteHost[] = options.remoteHosts ?? [];
   let allAgentsSnapshot: PluginAllAgentsSnapshot = normalizePluginAllAgentsSnapshot(
     options.allAgents ?? { agents: [], degraded: false, lastSuccessfulAt: 0 }
   );
@@ -271,12 +277,39 @@ export function createWorkspaceFacet(
       );
     }
   };
+  // Production's gate on reaching Remote Hosts (#16767); the switch is taken
+  // to be on, since a test that declares `host:dispatch` means to use it.
+  const assertMockHostTarget = (what: string): void => {
+    if (mockProjectId !== null) {
+      throw new Error(
+        `PERMISSION_REQUIRED: ${what} reaches Remote Hosts, which only an installed plugin may`
+      );
+    }
+    if (!capabilities.has("host:dispatch")) {
+      throw new Error(
+        `PERMISSION_REQUIRED: ${what} requires "host:dispatch", which is not declared in manifest.capabilities`
+      );
+    }
+  };
+  /** The host an agent input call names, checked as production checks it; null for this machine. */
+  const inputHost = (op: string, inputOptions: { hostId?: unknown } | undefined): string | null => {
+    const hostId = inputOptions?.hostId;
+    if (hostId === undefined) return null;
+    if (typeof hostId !== "string" || hostId.length === 0 || hostId === "local") {
+      throw new Error(`agents.${op}: hostId must name a Remote Host`);
+    }
+    assertMockHostTarget(`agents.${op} with options.hostId`);
+    return hostId;
+  };
+  const launchKey = (terminalId: string, hostId: string | null): string =>
+    hostId === null ? terminalId : `${hostId}\0${terminalId}`;
   // The agent this plugin's own `agent.launch` started, as production records
   // it: never one whose panel id the launch named itself.
   const recordMockLaunch = (
     actionId: ActionId,
     args: unknown,
-    result: ActionDispatchResult
+    result: ActionDispatchResult,
+    hostId?: string
   ): ActionDispatchResult => {
     const launch = result.ok
       ? (result.result as { launched?: unknown; terminalId?: unknown } | null)
@@ -288,7 +321,7 @@ export function createWorkspaceFacet(
       typeof launch.terminalId === "string" &&
       launch.terminalId.length > 0
     ) {
-      launchedAgents.add(launch.terminalId);
+      launchedAgents.add(launchKey(launch.terminalId, hostId ?? null));
     }
     return result;
   };
@@ -399,16 +432,23 @@ export function createWorkspaceFacet(
       // Same order as production: capability, then argument validation, then
       // whether this plugin launched the agent. No consent prompt and no PTY —
       // a valid call on a launched agent records its intent and answers `sent`.
-      async interrupt(terminalId) {
+      async interrupt(terminalId, inputOptions) {
         assertMockAgentInput("interrupt", terminalId);
-        const result: PluginAgentInterruptResult = launchedAgents.has(terminalId)
+        const hostId = inputHost("interrupt", inputOptions);
+        const result: PluginAgentInterruptResult = launchedAgents.has(launchKey(terminalId, hostId))
           ? { status: "sent", cancelKey: "advertised" }
           : { status: "not-found" };
-        agentInputCalls.push({ method: "interrupt", terminalId, result });
+        agentInputCalls.push({
+          method: "interrupt",
+          terminalId,
+          result,
+          ...(hostId !== null ? { hostId } : {}),
+        });
         return result;
       },
-      async sendKeys(terminalId, input) {
+      async sendKeys(terminalId, input, inputOptions) {
         assertMockAgentInput("sendKeys", terminalId);
+        const hostId = inputHost("sendKeys", inputOptions);
         const { keys, choose } = (input ?? {}) as { keys?: unknown; choose?: unknown };
         const validKeys =
           Array.isArray(keys) &&
@@ -429,22 +469,46 @@ export function createWorkspaceFacet(
           );
         }
         // The mock has no screen to plan a `choose` against, so it presses nothing.
-        const result: PluginAgentKeysResult = launchedAgents.has(terminalId)
+        const result: PluginAgentKeysResult = launchedAgents.has(launchKey(terminalId, hostId))
           ? { status: "sent", keys: validKeys ? [...(keys as string[])] : [] }
           : { status: "not-found" };
-        agentInputCalls.push({ method: "sendKeys", terminalId, input, result });
+        agentInputCalls.push({
+          method: "sendKeys",
+          terminalId,
+          input,
+          result,
+          ...(hostId !== null ? { hostId } : {}),
+        });
         return result;
       },
-      async submit(terminalId, text) {
+      async submit(terminalId, text, inputOptions) {
         assertMockAgentInput("submit", terminalId);
         if (typeof text !== "string" || text.trim().length === 0) {
           throw new Error("agents.submit: text must be a non-empty, non-whitespace string");
         }
-        const result: PluginAgentInputResult = launchedAgents.has(terminalId)
+        const hostId = inputHost("submit", inputOptions);
+        const result: PluginAgentInputResult = launchedAgents.has(launchKey(terminalId, hostId))
           ? { status: "sent" }
           : { status: "not-found" };
-        agentInputCalls.push({ method: "submit", terminalId, input: text, result });
+        agentInputCalls.push({
+          method: "submit",
+          terminalId,
+          input: text,
+          result,
+          ...(hostId !== null ? { hostId } : {}),
+        });
         return result;
+      },
+    },
+    // Capability and binding as production checks them; the switch is taken to
+    // be on, since a test that declares `host:dispatch` means to use it.
+    remoteHosts: {
+      async list() {
+        assertMockHostTarget("remoteHosts.list");
+        return remoteHosts.map((host) => ({
+          ...host,
+          projects: host.projects ? host.projects.map((project) => ({ ...project })) : null,
+        }));
       },
     },
     terminals: {
@@ -833,5 +897,6 @@ export function createWorkspaceFacet(
     agentPanes: () => agentPanes,
     panelPhases,
     recordMockLaunch,
+    assertMockHostTarget,
   };
 }

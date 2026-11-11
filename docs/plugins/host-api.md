@@ -1574,6 +1574,30 @@ The plugin must declare `project:dispatch`, and the user must turn on **Allow pr
 
 A dispatch that times out is not cancelled: the action can still run after `dispatch` resolved with the timeout, so don't blindly retry a launch.
 
+### Targeting a Remote Host
+
+An installed plugin that coordinates work across machines can run actions in projects on the Remote Hosts this machine drives (#16767). `host.remoteHosts.list()` names them, never this machine itself, with each connected host's projects; a host whose link went idle is dialled first, and one the user disconnected is left alone. Pass both ids to `dispatch`:
+
+```ts
+const [studio] = await host.remoteHosts.list();
+const project = studio.projects?.find((p) => p.name === "beads");
+const launched = await host.dispatch(
+  "agent.launch",
+  { agentId: "claude", prompt },
+  { hostId: studio.hostId, projectId: project.projectId }
+);
+if (launched.ok) {
+  const { terminalId } = launched.result as { terminalId: string };
+  await host.agents.interrupt(terminalId, { hostId: studio.hostId });
+}
+```
+
+The plugin must declare `host:dispatch`, and the user must turn on **Allow host targeting** in its Permissions tab: off by default, no prompt, one switch for every host, offered back with the other switches after an update. Without either, `list()` and any call naming a `hostId` reject with `PERMISSION_REQUIRED` naming what is missing. A project plugin never can. `hostId` needs `projectId` beside it; `project:dispatch` is not needed, and `"local"` is refused, since this machine's projects are reached with `projectId` alone.
+
+The host takes the call as this plugin from this machine, never as an assistant, and holds it to the rules a plugin's dispatch gets there: built-in actions only (never one a plugin installed on the host contributes), nothing `RESTRICTED` or closed to plugins, and nothing confirm-gated, which answers `CONFIRMATION_REQUIRED` with no dialog anywhere. It also needs the host's own **Accept tools run for other machines' assistants** setting, or the call answers `HOST_REFUSED`, as it does from a host on an older Daintree. A change runs in the project's view when the view that drives it is on this machine, in the host itself when nobody drives it (the actions an orchestrator needs with no window open: launching and reading agents, terminals, worktrees and the forge), and answers `DRIVEN_ELSEWHERE` while another machine, or a window on the host, drives it; reads answer either way. `HOST_UNREACHABLE` means nothing was sent. Each call is recorded in the host's plugin audit log under the plugin's id, with this machine's name beside it.
+
+An agent the plugin launches on a host is recorded there as that plugin's from this machine, so `host.agents.interrupt`, `sendKeys` and `submit` with `{ hostId }` reach it and nothing else: another plugin's, one the user started, or one launched before the plugin was last disabled or uninstalled answers `not-found` (a reload keeps them, as it does for agents on this machine), and so does every one after this machine restarts. They also need `agent:input` as on this machine, and reject with `DRIVEN_ELSEWHERE:` while another screen drives that project.
+
 ## `actions` — built-in action catalog
 
 Discover what `dispatch` accepts and pre-flight a call, instead of hardcoding action ids and hoping. Projects Daintree's `ActionService` manifest to plugins.

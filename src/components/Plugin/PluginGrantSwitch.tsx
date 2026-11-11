@@ -21,6 +21,14 @@ const GRANT_SWITCHES = {
     write: (pluginId: string, enabled: boolean) =>
       window.electron.pluginCapability.setProjectTargeting({ pluginId, enabled }),
   },
+  "host-targeting": {
+    label: "Allow host targeting",
+    description:
+      "Lets this plugin list your Remote Hosts and run actions in their projects. Each host still decides whether it takes them, and records each one in its plugin audit log.",
+    read: (pluginId: string) => window.electron.pluginCapability.getHostTargeting({ pluginId }),
+    write: (pluginId: string, enabled: boolean) =>
+      window.electron.pluginCapability.setHostTargeting({ pluginId, enabled }),
+  },
   "os-notifications": {
     label: "Allow OS notifications",
     description:
@@ -53,8 +61,8 @@ const GRANT_SWITCHES = {
 
 /**
  * A per-plugin grant the user turns on from the Plugin Manager: "Allow project
- * targeting" (#13119), "Allow OS notifications" (#13505) and "Show in attention
- * views" (#13821). Declaring the
+ * targeting" (#13119), "Allow host targeting" (#16767), "Allow OS
+ * notifications" (#13505) and "Show in attention views" (#13821). Declaring the
  * capability only lets a plugin ask; this is the grant, off until the user
  * turns it on. Deliberately not a first-use prompt: the plugins that want them
  * orchestrate agents unattended, and a dialog at 3am would stall every launch

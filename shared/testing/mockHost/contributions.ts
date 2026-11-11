@@ -113,12 +113,15 @@ export function createContributionsFacet(
     recordMockLaunch(
       actionId: ActionId,
       args: unknown,
-      result: ActionDispatchResult
+      result: ActionDispatchResult,
+      hostId?: string
     ): ActionDispatchResult;
+    /** Throws as production does when this plugin may not reach Remote Hosts (#16767). */
+    assertMockHostTarget(what: string): void;
   }
 ): ContributionsFacet {
   const { pluginId, manifestId: mockManifestId, projectId: mockProjectId, pluginInfo } = identity;
-  const { recordMockLaunch } = collaborators;
+  const { recordMockLaunch, assertMockHostTarget } = collaborators;
   const registeredActions: RegisteredActionRecord[] = [];
   const registeredHandlers: RegisteredHandlerRecord[] = [];
   const broadcastCalls: BroadcastRecord[] = [];
@@ -587,20 +590,25 @@ export function createContributionsFacet(
       return Promise.resolve();
     },
     async dispatch(actionId, args, dispatchOptions) {
+      // A Remote Host's project (#16767): gated as production gates it, and
+      // what it launches is reachable only with the same hostId.
+      const hostId = dispatchOptions?.hostId;
+      if (hostId !== undefined) assertMockHostTarget("dispatch with options.hostId");
       dispatchedActions.push(
         dispatchOptions === undefined
           ? { actionId, args }
           : { actionId, args, options: dispatchOptions }
       );
       const override = dispatchOverrides.get(actionId);
-      if (override) return recordMockLaunch(actionId, args, override);
+      if (override) return recordMockLaunch(actionId, args, override, hostId);
       if (options.dispatch) {
         return recordMockLaunch(
           actionId,
           args,
           await (dispatchOptions === undefined
             ? options.dispatch(actionId, args)
-            : options.dispatch(actionId, args, dispatchOptions))
+            : options.dispatch(actionId, args, dispatchOptions)),
+          hostId
         );
       }
       // Match the real host's contract: dispatch ids are always fully

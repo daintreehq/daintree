@@ -1,7 +1,16 @@
 import type { PluginUIPromptDispatcher } from "./PluginUIPromptDispatcher.js";
 import { assertPluginCallerDrives } from "./pluginDriveLease.js";
 import {
+  assertMayTargetHosts,
+  getPluginHostTargets,
+  parseHostId,
+  PluginHostCallUnloaded,
+  type PluginHostAgentInput,
+  type PluginHostAgentInputAnswer,
+} from "./pluginHostTargets.js";
+import {
   interruptLaunchedAgent,
+  isRemotePluginLaunch,
   launchedAgentProject,
   type LaunchedAgentPty,
   sendKeysToLaunchedAgent,
@@ -58,7 +67,10 @@ import {
 import type {
   PluginHostApi,
   PluginWorktreesResult,
+  PluginAgentInputOptions,
   PluginAgentInputResult,
+  PluginAgentInterruptResult,
+  PluginAgentKeysResult,
   PluginAgentSnapshot,
   PluginAllAgentsSnapshot,
   PluginFocusedPanel,
@@ -304,6 +316,7 @@ export function buildObservationHostApi(
   | "getAgentState"
   | "sendToActiveAgent"
   | "agents"
+  | "remoteHosts"
   | "terminals"
   | "sendToAgent"
   | "onDidChangeActiveWorktree"
@@ -396,6 +409,67 @@ export function buildObservationHostApi(
       await assertPluginCallerDrives(pluginId, `agents.${op}`, { terminalId });
       return isBound() && owns();
     });
+  };
+  /**
+   * Input to an agent this plugin launched on a Remote Host (#16767). Checked
+   * here as a local call is: liveness, the capability, the user's host
+   * targeting switch and this plugin's own record of the launch, so a call
+   * that would answer `not-found` raises no consent prompt. The host decides
+   * from its own record of what this plugin launched there from this machine.
+   */
+  const remoteAgentInput = async <T extends { readonly status: string }>(
+    op: "interrupt" | "sendKeys" | "submit",
+    hostId: string,
+    terminalId: string,
+    input: PluginHostAgentInput
+  ): Promise<T | Exclude<PluginAgentInputResult, { readonly status: "sent" }>> => {
+    const mayTarget = (): void =>
+      assertMayTargetHosts(
+        deps.declaredCapabilities(pluginId),
+        pluginId,
+        boundProjectId,
+        `agents.${op} with options.hostId`
+      );
+    mayTarget();
+    const targets = getPluginHostTargets();
+    if (targets === null || !targets.knows(hostId)) return { status: "not-found" };
+    if (!isRemotePluginLaunch(pluginId, hostId, terminalId)) return { status: "not-found" };
+    await ensureCapabilityConsent(deps, pluginId, "agent:input");
+    // The switch may have been turned off while the prompt was open.
+    if (!isBound()) return { status: "unavailable" };
+    mayTarget();
+    if (!isRemotePluginLaunch(pluginId, hostId, terminalId)) return { status: "not-found" };
+    // And once more after the host's link is open, right before anything is sent.
+    const admit = (): void => {
+      if (!isBound()) throw new PluginHostCallUnloaded(pluginId);
+      mayTarget();
+      if (!isRemotePluginLaunch(pluginId, hostId, terminalId)) {
+        throw new PluginHostCallUnloaded(pluginId);
+      }
+    };
+    let answer: PluginHostAgentInputAnswer;
+    try {
+      answer = await targets.agentInput({ hostId, pluginId, admit }, terminalId, input);
+    } catch (err) {
+      if (err instanceof PluginHostCallUnloaded) return { status: "unavailable" };
+      throw err;
+    }
+    if (answer.status === "driven-elsewhere") {
+      const who = answer.holderName ?? "Another screen";
+      throw new Error(
+        `DRIVEN_ELSEWHERE: plugin "${pluginId}" agents.${op}: ${who} drives that agent's project on ${targets.nameOf(hostId)}`
+      );
+    }
+    return answer as unknown as T;
+  };
+  /** The host an agent input call names, or null for an agent on this machine. */
+  const inputHostOf = (op: string, options: PluginAgentInputOptions | undefined): string | null => {
+    if (options === undefined || options === null) return null;
+    if (typeof options !== "object" || Array.isArray(options)) {
+      throw new Error(`Plugin "${pluginId}" agents.${op}: options must be an object`);
+    }
+    const { hostId } = options as { hostId?: unknown };
+    return hostId === undefined ? null : parseHostId(pluginId, `agents.${op}`, hostId);
   };
   return {
     getActiveWorktree: async () => {
@@ -521,24 +595,37 @@ export function buildObservationHostApi(
       // Input to the agents this plugin launched (#14018), and nothing else.
       // NOT revoke-guarded: a plugin answers its agent's dialogs from event
       // callbacks long after activation.
-      interrupt: async (terminalId) => {
+      interrupt: async (terminalId, options) => {
         if (!isBound()) return { status: "unavailable" };
         assertDeclaresAgentInput("interrupt");
         const id = validateLaunchedAgentId(pluginId, "interrupt", terminalId);
+        const hostId = inputHostOf("interrupt", options);
+        if (hostId !== null) {
+          return remoteAgentInput<PluginAgentInterruptResult>("interrupt", hostId, id, {
+            op: "interrupt",
+          });
+        }
         return withLaunchedAgent("interrupt", id, (pty, admitWrite) =>
           interruptLaunchedAgent(pty, id, admitWrite)
         );
       },
-      sendKeys: async (terminalId, input) => {
+      sendKeys: async (terminalId, input, options) => {
         if (!isBound()) return { status: "unavailable" };
         assertDeclaresAgentInput("sendKeys");
         const id = validateLaunchedAgentId(pluginId, "sendKeys", terminalId);
         const keys = validateSendKeysCall(pluginId, id, input);
+        const hostId = inputHostOf("sendKeys", options);
+        if (hostId !== null) {
+          return remoteAgentInput<PluginAgentKeysResult>("sendKeys", hostId, id, {
+            op: "sendKeys",
+            ...keys,
+          });
+        }
         return withLaunchedAgent("sendKeys", id, (pty, admitWrite) =>
           sendKeysToLaunchedAgent(pty, id, keys, admitWrite)
         );
       },
-      submit: async (terminalId, text) => {
+      submit: async (terminalId, text, options) => {
         if (!isBound()) return { status: "unavailable" };
         assertDeclaresAgentInput("submit");
         const id = validateLaunchedAgentId(pluginId, "submit", terminalId);
@@ -549,9 +636,33 @@ export function buildObservationHostApi(
             `Plugin "${pluginId}" agents.submit: text must be a non-empty, non-whitespace string`
           );
         }
+        const hostId = inputHostOf("submit", options);
+        if (hostId !== null) {
+          return remoteAgentInput<PluginAgentInputResult>("submit", hostId, id, {
+            op: "submit",
+            text,
+          });
+        }
         return withLaunchedAgent("submit", id, (pty, admitWrite) =>
           submitToLaunchedAgent(pty, id, text, admitWrite)
         );
+      },
+    },
+    // The Remote Hosts this machine drives (#16767). NOT revoke-guarded, like
+    // dispatch: a plugin coordinating hosts lists them from timers.
+    remoteHosts: {
+      list: async () => {
+        if (!isBound()) return [];
+        assertMayTargetHosts(
+          deps.declaredCapabilities(pluginId),
+          pluginId,
+          boundProjectId,
+          "remoteHosts.list"
+        );
+        const targets = getPluginHostTargets();
+        if (targets === null) return [];
+        const hosts = await targets.listHosts();
+        return isBound() ? hosts : [];
       },
     },
     // NOT revoke-guarded: grid plugins poll screens from timers long after

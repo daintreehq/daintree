@@ -135,6 +135,12 @@ export interface PluginActionAuditRecord {
    * `restricted` records where there's no underlying exception.
    */
   errorMessage?: string;
+  /**
+   * The machine name of the Shell whose installed plugin made this call on this
+   * host (#16767): `pluginId` is that Shell's plugin, never one installed here.
+   * The name is the Shell's own word, display only.
+   */
+  remoteShell?: string;
   /** Schema version for forward-compat. New records carry the current version. */
   schemaVersion: number;
 }

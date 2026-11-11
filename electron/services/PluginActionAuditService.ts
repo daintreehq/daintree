@@ -169,6 +169,8 @@ export class PluginActionAuditService {
     contributionId?: string;
     /** Human-readable failure message — `error` records. */
     errorMessage?: string;
+    /** The Shell a remote plugin's call came from (#16767). */
+    remoteShell?: string;
   }): void {
     // Single config read per append — the same result gates the kill switch
     // and supplies the trim cap.
@@ -196,6 +198,7 @@ export class PluginActionAuditService {
     if (input.scope !== undefined) record.scope = input.scope;
     if (input.contributionId !== undefined) record.contributionId = input.contributionId;
     if (input.errorMessage !== undefined) record.errorMessage = input.errorMessage;
+    if (input.remoteShell !== undefined) record.remoteShell = input.remoteShell;
 
     this.enqueueAndTrim(record, this.normalizeMaxRecords(config.auditMaxRecords));
   }

@@ -52,6 +52,7 @@ import type {
   PluginSendToAgentOptions,
   PluginRunRecipeOptions,
   PluginTerminalReadScreenOptions,
+  PluginAgentInputOptions,
   PluginAgentKeysInput,
   PluginFsReadFilesEncoding,
   PluginFsWalkOptions,
@@ -74,6 +75,7 @@ export type PluginHostCallMethod =
   | "agents.interrupt"
   | "agents.sendKeys"
   | "agents.submit"
+  | "remoteHosts.list"
   | "terminals.readScreen"
   | "sendToAgent"
   | "runRecipe"
@@ -858,18 +860,21 @@ export interface SendToActiveAgentParams {
 /** Params for `agents.interrupt` (`host-call`). */
 export interface AgentsInterruptParams {
   terminalId: string;
+  options?: PluginAgentInputOptions;
 }
 
 /** Params for `agents.sendKeys` (`host-call`). */
 export interface AgentsSendKeysParams {
   terminalId: string;
   input: PluginAgentKeysInput;
+  options?: PluginAgentInputOptions;
 }
 
 /** Params for `agents.submit` (`host-call`). */
 export interface AgentsSubmitParams {
   terminalId: string;
   text: string;
+  options?: PluginAgentInputOptions;
 }
 
 /** Params for `terminals.readScreen` (`host-call`). */

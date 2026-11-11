@@ -272,6 +272,30 @@ describe("PluginActionAuditService", () => {
       expect(records[0]!.danger).toBeUndefined();
     });
 
+    it("keeps the Shell a remote plugin's call came from beside the plugin (#16767)", () => {
+      service.append({
+        pluginId: "acme.beads",
+        actionId: "dispatch:p1:worktree.list",
+        recordType: "ipc-invoke",
+        channel: "plugin:remote-shell",
+        remoteShell: "Greg's MacBook",
+        argsHash: "",
+        durationMs: 3,
+        result: "success",
+      });
+      service.append({
+        pluginId: "acme.local",
+        actionId: "do-thing",
+        recordType: "ipc-invoke",
+        argsHash: "",
+        durationMs: 1,
+        result: "success",
+      });
+      const [local, remote] = service.getRecords();
+      expect(remote).toMatchObject({ pluginId: "acme.beads", remoteShell: "Greg's MacBook" });
+      expect(local).not.toHaveProperty("remoteShell");
+    });
+
     it("appends a decoration-failure timeout record", () => {
       service.append({
         pluginId: "p.slow",

@@ -131,6 +131,11 @@ export const CAPABILITY_META = {
     description: "Send actions to a project you're not looking at, once you turn it on",
     severity: "warning",
   },
+  "host:dispatch": {
+    label: "Run actions on your Remote Hosts",
+    description: "Send actions to projects on the hosts this computer drives, once you turn it on",
+    severity: "warning",
+  },
   "panel:focus-read": {
     label: "See which panel you're using",
     description:

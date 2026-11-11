@@ -644,7 +644,21 @@ export type ActionErrorCode =
    * A plugin on a remote host dispatched an action while no frontend drives
    * its project: nobody is attached whose view could run it.
    */
-  | "NO_FRONTEND_ATTACHED";
+  | "NO_FRONTEND_ATTACHED"
+  /**
+   * A plugin's dispatch to a Remote Host's project (#16767) would change it
+   * while another machine, or a window on that host, drives it. Nothing ran,
+   * or the action stopped before its next change.
+   */
+  | "DRIVEN_ELSEWHERE"
+  /**
+   * A Remote Host refused a plugin's dispatch outright (#16767): it takes no
+   * actions from other machines, or runs a build from before plugins could
+   * reach it. Nothing ran; retrying won't help until that changes.
+   */
+  | "HOST_REFUSED"
+  /** The Remote Host a plugin's dispatch named couldn't be reached. Nothing was sent. */
+  | "HOST_UNREACHABLE";
 
 export interface ActionError {
   code: ActionErrorCode;

@@ -1503,6 +1503,9 @@ export interface GeneratedElectronAPI {
     acknowledgeConsent(
       ...args: IpcInvokeMap["plugin-capability:acknowledge-consent"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:acknowledge-consent"]["result"]>;
+    getHostTargeting(
+      ...args: IpcInvokeMap["plugin-capability:get-host-targeting"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:get-host-targeting"]["result"]>;
     getOsNotifications(
       ...args: IpcInvokeMap["plugin-capability:get-os-notifications"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:get-os-notifications"]["result"]>;
@@ -1527,6 +1530,9 @@ export interface GeneratedElectronAPI {
     revokePresetGrant(
       ...args: IpcInvokeMap["plugin-capability:revoke-preset-grant"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:revoke-preset-grant"]["result"]>;
+    setHostTargeting(
+      ...args: IpcInvokeMap["plugin-capability:set-host-targeting"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:set-host-targeting"]["result"]>;
     setOsNotifications(
       ...args: IpcInvokeMap["plugin-capability:set-os-notifications"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:set-os-notifications"]["result"]>;
