@@ -331,7 +331,8 @@ describe("ForgeStatsToolbarButton context menus", () => {
     statsState.rateLimitResetAt = Date.now() + 10 * 60_000;
     await renderStats();
 
-    const menu = await openMenu(screen.getByLabelText("GitHub rate limit"));
+    // The clock's name carries the countdown, as the counters' names do.
+    const menu = await openMenu(screen.getByLabelText(/^GitHub rate limit, resets in /));
 
     expect(itemLabels(menu)).toEqual(CHROME_MENU);
   });

@@ -39,6 +39,18 @@
     border-color: var(--theme-text-primary);
   }
 
+  /* The 3px ring this mode gives every focus target would overhang the
+     capsule's clip at the stats segments' 2px inset, and on an open segment
+     land on its 2px edge; both move in so ring and edge stay whole. */
+  .toolbar-stat-pill:focus-visible,
+  .toolbar-stat-status:focus-visible {
+    outline-offset: -3px;
+  }
+
+  .toolbar-stat-pill[aria-expanded="true"]:focus-visible {
+    outline-offset: -5px;
+  }
+
   :is(.toolbar-icon-button, .toolbar-agent-button):is(
       [aria-expanded="true"],
       [aria-pressed="true"],

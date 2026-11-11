@@ -213,7 +213,6 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-bg": "#FBF7F2",
     "toolbar-stats-border": "rgba(212,203,189,0.7)",
     "toolbar-stats-divider": "rgba(212,203,189,0.7)",
-    "toolbar-stats-hover-bg": "#FCF9F5",
     "welcome-mark-color": "rgba(22,112,127,0.50)",
     // Filter rail sits flush on the field; the raised search input carries it.
     "worktree-filter-bar-bg": "#F1E9D9",

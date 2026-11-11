@@ -238,7 +238,6 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-bg": "#F8F7FB",
     "toolbar-stats-border": "rgba(211,207,221,0.7)",
     "toolbar-stats-divider": "rgba(211,207,221,0.7)",
-    "toolbar-stats-hover-bg": "#FBFAFD",
     // Flat tint — a gradient here spans the whole welcome field and would band.
     "welcome-field-wash": "rgba(64,66,118,0.04)",
     "welcome-mark-color": "rgba(178,92,130,0.70)",

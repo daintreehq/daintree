@@ -214,7 +214,6 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-bg": "#FBF7F2",
     "toolbar-stats-border": "rgba(213,203,189,0.7)",
     "toolbar-stats-divider": "rgba(213,203,189,0.7)",
-    "toolbar-stats-hover-bg": "#FEFBF7",
     // No welcome-field-wash: a full-field gradient would band; the welcome
     // field stays flat and the mark keeps the engine default.
     // Filter rail sits flush on the field; the raised search input carries it.
