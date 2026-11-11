@@ -125,6 +125,7 @@ import {
   fileAttachmentEntryFromSource,
   insertFileAttachments,
   insertPreparedAttachments,
+  restoreImageChips,
 } from "./fileAttachments";
 import {
   composerUploadSurface,
@@ -225,7 +226,6 @@ import {
 } from "@/lib/composerCaret";
 import { isolatedComposerScope, makeDraftKey } from "@/lib/draftKey";
 import { restoreChange, takePendingComposerImages } from "@/lib/composerPendingImages";
-import { restoreImageChips } from "./restoredImageChips";
 import { DICTATION_OWNER_ATTR } from "@/services/canopyReplyDictation";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";

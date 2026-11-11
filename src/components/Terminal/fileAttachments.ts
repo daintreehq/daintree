@@ -1,4 +1,5 @@
 import type { RefObject } from "react";
+import { Transaction } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { basename } from "@shared/utils/path";
 import type { HostId, MaterializeOptions } from "@shared/types/remoteHosts";
@@ -16,7 +17,13 @@ import {
 } from "./uploads/pendingUploads";
 import { IMAGE_EXTENSIONS } from "./useTerminalFileTransfer";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
-import { addImageChip, addFileDropChip } from "./inputEditorExtensions";
+import type { PendingImageRange } from "@/lib/composerPendingImages";
+import {
+  addImageChip,
+  addFileDropChip,
+  restoredImageChipEffects,
+  setImageChipPreview,
+} from "./inputEditorExtensions";
 import { composerDraftGeneration } from "./inputEditorExtensions/composerDraftGeneration";
 import { userEdit } from "./inputEditorExtensions/userEdit";
 import { referenceSeparatorAt } from "./referenceSeparator";
@@ -235,5 +242,42 @@ export function insertPreparedAttachments(
   } catch {
     // Editor may have been destroyed
     return false;
+  }
+}
+
+async function readPreview(filePath: string): Promise<string | null> {
+  try {
+    const { thumbnailDataUrl } = await window.electron.clipboard.thumbnailFromPath(filePath);
+    return thumbnailDataUrl;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Puts the chips for `images` back on the text `view` shows (#16786): at once,
+ * so a send straight away attaches them, with their previews filled in as they
+ * arrive. A preview that can't be read leaves its chip without one, still
+ * attaching the image. `isCurrent` says whether `view` is still the composer's.
+ */
+export function restoreImageChips(
+  view: EditorView,
+  images: readonly PendingImageRange[],
+  isCurrent: () => boolean
+): void {
+  const effects = restoredImageChipEffects(view.state, images);
+  if (effects.length === 0) return;
+  view.dispatch({ effects });
+  const generation = composerDraftGeneration(view);
+  for (const filePath of new Set(effects.map((effect) => effect.value.filePath))) {
+    void readPreview(filePath).then((thumbnailUrl) => {
+      if (thumbnailUrl === null || !isCurrent() || composerDraftGeneration(view) !== generation) {
+        return;
+      }
+      view.dispatch({
+        effects: setImageChipPreview.of({ filePath, thumbnailUrl }),
+        annotations: Transaction.addToHistory.of(false),
+      });
+    });
   }
 }
