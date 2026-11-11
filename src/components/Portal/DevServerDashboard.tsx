@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type MouseEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { CircleStop, Play, RotateCw, ServerCog, X } from "lucide-react";
 import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
@@ -193,7 +193,11 @@ function summarize(sessions: DevPreviewSessionState[]): string {
   return parts.join(" · ");
 }
 
-export function DevServerDashboard({ onHide }: { onHide?: () => void }) {
+export function DevServerDashboard({
+  onHide,
+}: {
+  onHide?: (event: MouseEvent<HTMLButtonElement>) => void;
+}) {
   const { sessions: allSessions, hydrated, fetchError } = useAllDevSessions();
   // Select only the names this dashboard renders: the worktrees Map identity
   // changes on every polled git-status delta, but a flat Record of primitives

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type Ref,
+} from "react";
 import { LayoutGroup } from "framer-motion";
 import {
   ArrowLeft,
@@ -77,33 +85,9 @@ import {
   PANE_TOOLBAR_ICON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
 import { PortalDefaultNewTabSubmenu } from "./PortalDefaultNewTabSubmenu";
+import { useNativeViewMenu } from "./useNativeViewMenu";
 
 const noopTabAction = (_tabId: string) => {};
-
-/**
- * A menu drawn over the portal's native page view. While it is open it claims
- * an overlay so the page hides instead of painting over it, and because portal
- * actions refuse to act while any overlay is claimed, a chosen command runs only
- * once the menu has closed and released its claim.
- */
-function useNativeViewMenu(claimId: string) {
-  const [open, setOpen] = useState(false);
-  const pendingRef = useRef<(() => void) | null>(null);
-  useOverlayClaim(claimId, open);
-  useEffect(() => {
-    if (open || !pendingRef.current) return;
-    const run = pendingRef.current;
-    pendingRef.current = null;
-    run();
-  }, [open]);
-  const afterClose = useCallback(
-    (run: () => void) => () => {
-      pendingRef.current = run;
-    },
-    []
-  );
-  return { setOpen, afterClose };
-}
 
 const OVERFLOW_FADE_PX = 24;
 
@@ -329,6 +313,8 @@ interface PortalToolbarProps {
   onOpenTabExternal?: (tabId: string) => void;
   onReloadTab?: (tabId: string) => void;
   enabledLinks: PortalLink[];
+  /** The dev servers toggle, which takes focus when the dashboard hides itself. */
+  devServersButtonRef?: Ref<HTMLButtonElement>;
 }
 
 export function PortalToolbar({
@@ -354,6 +340,7 @@ export function PortalToolbar({
   onOpenTabExternal,
   onReloadTab,
   enabledLinks,
+  devServersButtonRef,
 }: PortalToolbarProps) {
   const reorderTabs = usePortalStore((s) => s.reorderTabs);
   const showDevDashboard = usePortalStore((s) => s.showDevDashboard);
@@ -635,6 +622,7 @@ export function PortalToolbar({
         <Tooltip>
           <TooltipTrigger asChild>
             <button
+              ref={devServersButtonRef}
               type="button"
               onClick={toggleDevDashboard}
               aria-label="Dev servers"
