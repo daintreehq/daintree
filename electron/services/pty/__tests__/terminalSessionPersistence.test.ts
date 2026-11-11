@@ -718,7 +718,11 @@ describe("terminalSessionPersistence", () => {
       const claim = claimSessionWrite("term-claimed")!;
       await deleteSessionFile("term-claimed");
 
-      await persistSessionSnapshotAsync("term-claimed", { data: "exit screen", cols: 80, rows: 24 }, claim);
+      await persistSessionSnapshotAsync(
+        "term-claimed",
+        { data: "exit screen", cols: 80, rows: 24 },
+        claim
+      );
 
       expect(fs.existsSync(getSessionPath("term-claimed")!)).toBe(false);
     });
@@ -763,7 +767,11 @@ describe("terminalSessionPersistence", () => {
       expect(readSession("term-drain")).toBe("DAINTREE_SESSION_v2\n100x30\nfinal screen");
       // A claim with no payload yet has nothing to land, and is void afterwards.
       expect(fs.existsSync(getSessionPath("term-unpaid")!)).toBe(false);
-      await persistSessionSnapshotAsync("term-unpaid", { data: "too late", cols: 80, rows: 24 }, unpaid);
+      await persistSessionSnapshotAsync(
+        "term-unpaid",
+        { data: "too late", cols: 80, rows: 24 },
+        unpaid
+      );
       expect(fs.existsSync(getSessionPath("term-unpaid")!)).toBe(false);
 
       await write;

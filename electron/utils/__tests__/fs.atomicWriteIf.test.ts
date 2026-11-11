@@ -64,9 +64,7 @@ describe("resilientAtomicWriteFileIf", () => {
       throw errno("EBUSY");
     });
 
-    await expect(resilientAtomicWriteFileIf(target, "payload", () => current)).resolves.toBe(
-      false
-    );
+    await expect(resilientAtomicWriteFileIf(target, "payload", () => current)).resolves.toBe(false);
 
     expect(renameTap).toHaveBeenCalledTimes(1);
     expect(existsSync(target)).toBe(false);

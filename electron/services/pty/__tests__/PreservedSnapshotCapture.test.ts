@@ -3,7 +3,10 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PreservedSnapshotCapture, type PreservedSnapshotCaptureHost } from "../PreservedSnapshotCapture.js";
+import {
+  PreservedSnapshotCapture,
+  type PreservedSnapshotCaptureHost,
+} from "../PreservedSnapshotCapture.js";
 import {
   deleteSessionFile,
   flushPendingSessionWritesSync,
