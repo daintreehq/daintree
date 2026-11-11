@@ -1375,6 +1375,21 @@ describe("BrowserToolbar back/forward history menu", () => {
       expect(focusBack).toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
     });
 
+    it("treats a long press that opens the menu and releases over an entry as a mouse selection", async () => {
+      const utils = renderToolbar({ canGoBack: true, navSnapshot });
+      const back = utils.getByTestId("browser-back");
+      const focusBack = vi.spyOn(back, "focus");
+
+      fireEvent.pointerDown(back, { button: 0, pointerType: "mouse" });
+      const menu = await utils.findByRole("menu", { name: "Back history" });
+      const item = menu.querySelector<HTMLElement>('[role="menuitem"]')!;
+      // The press began on the button, so nothing was pressed inside the menu.
+      fireEvent.click(item, { detail: 0 });
+      await waitFor(() => expect(focusBack).toHaveBeenCalled());
+
+      expect(focusBack).toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
+    });
+
     it("falls back to the toolbar, ringless, when the dismissing press took no focus", async () => {
       const { back, menu } = await openBackMenu();
       const focusBack = vi.spyOn(back, "focus");

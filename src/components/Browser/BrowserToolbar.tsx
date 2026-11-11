@@ -264,6 +264,10 @@ export function BrowserToolbar({
     forward: null,
   });
 
+  // Radix's pointer-up fallback (press on padding, release over an entry) clicks
+  // with detail 0, which only a pointer press inside the menu tells from Enter.
+  const historyPointerInsideRef = useRef(false);
+
   const clearLongPress = useCallback(() => {
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
@@ -274,6 +278,9 @@ export function BrowserToolbar({
 
   const handlePointerDown = useCallback((dir: "back" | "forward", e: React.PointerEvent) => {
     if (e.button !== 0) return;
+    // A long press opens the menu under a button still held down, and releasing
+    // over an entry is a pointer selection however the click reports it.
+    historyPointerInsideRef.current = true;
     longPressTargetRef.current = dir;
     longPressTimerRef.current = setTimeout(() => {
       if (longPressTargetRef.current === dir) {
@@ -348,9 +355,6 @@ export function BrowserToolbar({
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const zoomClosedOutsideRef = useRef(false);
   const historyCloseRef = useRef<"outside" | "select" | null>(null);
-  // Radix's pointer-up fallback (press on padding, release over an entry) clicks
-  // with detail 0, which only a pointer press inside the menu tells from Enter.
-  const historyPointerInsideRef = useRef(false);
   const errorId = useId();
   const listboxId = useId();
 
@@ -891,6 +895,7 @@ export function BrowserToolbar({
                   const entries = dir === "back" ? recentBackEntries : recentForwardEntries;
                   if (entries.length === 0) return;
                   e.preventDefault();
+                  historyPointerInsideRef.current = false;
                   setLongPressDir(dir);
                 }}
                 onContextMenu={(e) => {
@@ -898,6 +903,7 @@ export function BrowserToolbar({
                   if (entries.length === 0) return;
                   e.preventDefault();
                   clearLongPress();
+                  historyPointerInsideRef.current = false;
                   setLongPressDir(dir);
                 }}
                 onPointerUp={(e) => handlePointerUp(dir, e)}
