@@ -253,6 +253,14 @@ Every session records an explicit `origin` — `"help" | "external"` — separat
 
 Getting this wrong is not theoretical. `issueGrant` has no rank floor (`setSessionTier` is saved by `external` sitting top of the rank order); its only other check is `minimumPermittingTier(toolId) !== null`, and the call gate honours a grant over failed tier membership. A bound external session reaching that surface could hold a grant for a tool outside `MCP_EXTERNAL_TIER_TOOLS` entirely.
 
+### Session role and the Assistant binding (#16765)
+
+The handshake also settles a **role**, fixed for the session's life: `global-assistant`, `project-assistant`, `agent-pane`, `external-client`, or `relay` (another assistant's `host.call`, opened by `openRelaySession`). `resolveCredentialKind` (`tierAuth.ts`) says which kind of credential a bearer is, in `isAuthorized`'s order, because the tier can't: a pane and an Assistant both hold `core` or `full`. `HttpLifecycle.resolveSessionRole` turns that and the bearer's pin and help-session id into the role, which reaches the session as `SessionServerDeps.sessionRole` and is reported by `mcp.surface` (payload v4, and part of its hash preimage beside the tier).
+
+A bearer recognised as an Assistant's (by the help validator, or by any help resolver answering for it) is admitted only with its whole binding: its help-session id, and either its view or, with no view, its project. Missing any part, the session would fall through to another kind's tools (an api-key client's, or a project Assistant's for a global one that lost its project), and nothing after the handshake can tell it was ever an Assistant's. So both `/mcp` and `/sse` refuse it there, before any session state exists, with 400 `ASSISTANT_BINDING_INCOMPLETE` in the envelope described below.
+
+The global Assistant lists `mcp.surface` among its root tools, so it can check the `role` it was given. A session that reached another server registered under the same `daintree` name (a user's own api-key entry, say) reads `external-client` there instead, and its instructions tell it to stop and say so.
+
 ### Workspace binding (#11789)
 
 An external session can bind to one workspace at handshake and route there for its whole life, instead of following window focus. The selector is read **only** when creating a new session, on `/mcp`:
@@ -273,6 +281,7 @@ What that costs the client is decided at the handshake, and the two are delibera
 | Header and query param disagree | 400 `WORKSPACE_SELECTOR_MISMATCH` | A config that names two workspaces names none. |
 | Empty, repeated, comma-folded, or not shaped like a workspace id | 400 `WORKSPACE_SELECTOR_INVALID` | The id space is structural (64-hex project, UUIDv4 scratch — `shared/utils/workspaceIds.ts`); a value outside it names nothing that could ever exist. |
 | Selector from a help bearer, or a build with no resolver wired | 400 `WORKSPACE_SELECTOR_NOT_ALLOWED` | Neither becomes true mid-session. |
+| An Assistant's bearer missing part of its binding (#16765) | 400 `ASSISTANT_BINDING_INCOMPLETE` | Admitting it would serve another kind of session's tools. |
 | Workspace has zero live views, or more than one | **binds**, identity only | Which windows are open is user-controlled and changes minute to minute. The workspace id outlives every view. |
 | Resolver throws anything else | propagates to HTTP 500 | A host bug of unknown duration; nothing has been allocated yet, so it leaves no session behind. |
 

@@ -1086,7 +1086,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "introspection",
     danger: "safe",
     description:
-      "Report this session's tool surface as data: the kind of session the server took it for (role), its tier, a stable hash, and per-tool tier, kind, read-only and idempotency hints and deprecation. Call once at startup to check it matches what this client expects, then compare the hash to detect drift.",
+      "Report this session's tool surface as data: its tier, a stable hash, and per-tool tier, kind, read-only and idempotency hints and deprecation. Call once at startup to check it matches what this client expects, then compare the hash to detect drift.",
     enabled: true,
     id: "mcp.surface",
     kind: "query",
@@ -1114,7 +1114,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         role: {
           type: "string",
           enum: ["global-assistant", "project-assistant", "agent-pane", "external-client", "relay"],
-          description: "Which kind of session the server took this connection for",
+          description: "The kind of session the server took this for",
         },
         hash: {
           type: "string",

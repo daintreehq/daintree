@@ -301,6 +301,9 @@ describe("/mcp/decisions (#16011)", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     service = new McpServerService();
     service.setHelpTokenValidator((token) => (token === HELP_TOKEN ? "full" : false));
+    // The rest of an assistant's binding, without which the control surface refuses it.
+    service.setHelpSessionWebContentsResolver((token) => (token === HELP_TOKEN ? 1 : null));
+    service.setHelpSessionIdResolver((token) => (token === HELP_TOKEN ? "help-1" : null));
     store = new MemoryLocalStore();
     const keys = new MemoryKeyStore();
     await keys.save(identity);

@@ -584,7 +584,7 @@ describe("global assistant prompts (#14546)", () => {
     ["global/AGENTS.md", readFileSync(path.join(root, "assistant/global/AGENTS.md"), "utf8")],
   ];
 
-  it.each(GLOBAL)("%s carries the routing guidance and its six tools", (_name, body) => {
+  it.each(GLOBAL)("%s carries the routing guidance and its seven tools", (_name, body) => {
     for (const tool of [
       "host.list",
       "host.call",
@@ -592,11 +592,18 @@ describe("global assistant prompts (#14546)", () => {
       "host.settings",
       "host.watch",
       "host.bringBack",
+      "mcp.surface",
       "actions.search",
     ]) {
       expect(body).toContain(tool);
     }
     expect(body).toContain("<!-- DAINTREE_RUNBOOKS_START -->");
+  });
+
+  // #16765 — the role is how it tells its own server from another named the same.
+  it.each(GLOBAL)("%s says what a role other than its own means", (_name, body) => {
+    expect(body).toContain("`global-assistant`");
+    expect(body).toMatch(/another server named `daintree` answered/);
   });
 
   // #14995: `host.call` carries the caller's own tier and the global

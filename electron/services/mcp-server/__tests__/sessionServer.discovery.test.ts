@@ -1311,6 +1311,15 @@ describe("mcp.surface short-circuit (#11549)", () => {
     });
   });
 
+  // #16765 — the role is what the handshake settled, never read off the tier:
+  // a pane and a project's assistant both hold `core`.
+  it("reports the role its handshake settled, whatever the tier", async () => {
+    for (const sessionRole of ["agent-pane", "project-assistant"] as const) {
+      const { result } = await readSurface("core", { sessionRole });
+      expect((result.structuredContent as { role: string }).role).toBe(sessionRole);
+    }
+  });
+
   // The one invariant the whole feature rests on: a report that disagreed with
   // the listing would send clients chasing drift that does not exist, or hide
   // drift that does.

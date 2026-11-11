@@ -22,6 +22,7 @@ import { getViewlessHelpBaseManifest } from "../baseManifest.js";
 import { buildToolInputSchema, buildToolOutputSchema } from "../tierAuth.js";
 import type { AssistantControlBinding } from "../shared.js";
 import {
+  callTool,
   fakeSessionStore,
   listBaseTools,
   makeMockTransport,
@@ -49,7 +50,7 @@ function installHostRuntime(reachable: boolean): void {
   } as unknown as HostControlRuntimeHandle);
 }
 
-async function listFor(viewlessProjectId: string, tier: "core" | "full") {
+async function serverFor(viewlessProjectId: string, tier: "core" | "full") {
   const sessionStore = fakeSessionStore(tier);
   const mutable = sessionStore as unknown as { sessionHelpIdMap: Map<string, string> };
   mutable.sessionHelpIdMap = new Map([[SESSION, HELP]]);
@@ -74,9 +75,15 @@ async function listFor(viewlessProjectId: string, tier: "core" | "full") {
     getBearerInfoForSession: () => null,
     assistantControl: {} as AssistantControlBinding["control"],
   };
-  const deps = createSessionServerDeps(source, host, { sessionId: SESSION });
+  const role = viewlessProjectId === GLOBAL_ASSISTANT_ID ? "global-assistant" : "project-assistant";
+  const deps = createSessionServerDeps(source, host, { sessionId: SESSION, role });
   const server = createSessionServer(SESSION, deps);
   await server.connect(makeMockTransport());
+  return { server, source };
+}
+
+async function listFor(viewlessProjectId: string, tier: "core" | "full") {
+  const { server, source } = await serverFor(viewlessProjectId, tier);
   const tools = await listBaseTools(server);
   expect(source.requestManifest).not.toHaveBeenCalled();
   return tools;
@@ -92,7 +99,10 @@ describe("the global assistant's tool discovery (#14453)", () => {
       expect(tools.map((tool) => tool.name).sort()).toEqual([...GLOBAL_ASSISTANT_TOOL_IDS].sort());
       for (const tool of tools) {
         expect((tool.inputSchema as { type?: string } | undefined)?.type).toBe("object");
-        expect(tool.inputSchema?.properties).toBeDefined();
+        // Every host tool takes arguments; `mcp.surface` takes none.
+        if (HOST_CONTROL_TOOL_IDS.has(tool.name)) {
+          expect(tool.inputSchema?.properties).toBeDefined();
+        }
         expect(tool.outputSchema).toBeDefined();
         expect(tool.description).toBeTruthy();
       }
@@ -112,10 +122,33 @@ describe("the global assistant's tool discovery (#14453)", () => {
     }
   });
 
-  it("lists nothing when the session isn't offered its hosts", async () => {
+  it("lists only mcp.surface when the session isn't offered its hosts", async () => {
     installHostRuntime(false);
-    expect(await listFor(GLOBAL_ASSISTANT_ID, "full")).toEqual([]);
+    expect((await listFor(GLOBAL_ASSISTANT_ID, "full")).map((tool) => tool.name)).toEqual([
+      "mcp.surface",
+    ]);
   });
+
+  // #16765 — the healthy side of the comparison: a session that reached
+  // another server under the same name would read another role here.
+  it.each([true, false])(
+    "answers mcp.surface as the global assistant, listing what tools/list does (hosts reachable: %s)",
+    async (reachable) => {
+      installHostRuntime(reachable);
+      const { server, source } = await serverFor(GLOBAL_ASSISTANT_ID, "core");
+
+      const result = await callTool(server, { name: "mcp.surface" });
+      const listed = (await listBaseTools(server)).map((tool) => tool.name).sort();
+
+      expect(result.isError).not.toBe(true);
+      const report = result.structuredContent as { role: string; tools: Array<{ id: string }> };
+      expect(report.role).toBe("global-assistant");
+      expect(report.tools.map((tool) => tool.id)).toEqual(listed);
+      expect(listed).toContain("mcp.surface");
+      expect(source.requestManifest).not.toHaveBeenCalled();
+      expect(source.dispatchAction).not.toHaveBeenCalled();
+    }
+  );
 
   it("leaves a viewless project assistant's surface as it was", async () => {
     installHostRuntime(true);

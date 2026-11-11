@@ -431,8 +431,8 @@ export class HttpLifecycle {
    *
    * A help bearer with no view (#13511) pins `NO_VIEW_HANDLE` and names its
    * project, which routes it to the host's own form of each action. One whose
-   * project can't be read keeps the bare pin, which no view answers: it fails
-   * closed rather than following focus.
+   * project can't be read keeps the bare pin, which
+   * {@link resolveSessionRole} refuses at the handshake (#16765).
    */
   private resolveSessionPin(
     authHeader: string

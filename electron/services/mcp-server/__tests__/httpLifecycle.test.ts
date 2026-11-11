@@ -67,6 +67,8 @@ import type { SessionServerDeps } from "../sessionServer.js";
 import { ResourceOwnershipLedger, helpOwnershipPrincipal } from "../resourceOwnership.js";
 import { SessionBindingError, WorkspaceBindingError } from "../rendererBridge.js";
 import { NO_VIEW_HANDLE } from "../../../ipc/endpoint.js";
+import { mcpPaneConfigService } from "../../McpPaneConfigService.js";
+import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import {
   _resetMcpDriveTargetResolverForTesting,
   setMcpDriveTargetResolver,
@@ -119,6 +121,14 @@ function mockServer(port = 45454): MockServer {
   s.headersTimeout = 60000;
   s.requestTimeout = 300000;
   return s;
+}
+
+/** Has the pane service own `token` at `core`, as it does every pane bearer it minted. */
+function stubPaneToken(token: string): void {
+  vi.spyOn(mcpPaneConfigService, "isValidPaneToken").mockImplementation((t) => t === token);
+  vi.spyOn(mcpPaneConfigService, "getTierForToken").mockImplementation((t) =>
+    t === token ? "core" : undefined
+  );
 }
 
 function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
@@ -1459,9 +1469,13 @@ describe("HttpLifecycle", () => {
     ): SkillDeps =>
       (
         lc as unknown as {
-          buildSessionServerDeps: (id: string, binding?: { workspaceId: string }) => SkillDeps;
+          buildSessionServerDeps: (
+            id: string,
+            role: string,
+            binding?: { workspaceId: string }
+          ) => SkillDeps;
         }
-      ).buildSessionServerDeps(sessionId, workspaceBinding);
+      ).buildSessionServerDeps(sessionId, "external-client", workspaceBinding);
 
     const PROJECT = "c".repeat(64);
     const SCRATCH = "0b9a4c1e-6f2d-4a8b-9c3d-5e7f1a2b3c4d";
@@ -2557,6 +2571,9 @@ describe("HttpLifecycle", () => {
       const lc = new HttpLifecycle(deps);
       lc.setApiKey("test-api-key");
       lc.setHelpTokenValidator((token) => (token === "elevated-tok" ? "full" : false));
+      // The whole binding an assistant's bearer needs to be admitted (#16765).
+      lc.setHelpSessionWebContentsResolver((token) => (token === "elevated-tok" ? 7 : null));
+      lc.setHelpSessionIdResolver((token) => (token === "elevated-tok" ? "help-elevated" : null));
       (lc as unknown as { port: number }).port = 45454;
       const handle = (lc as unknown as { handleRequest: RequestHandler }).handleRequest.bind(lc);
       return { lc, handle };
@@ -3053,10 +3070,11 @@ describe("HttpLifecycle", () => {
         lc as unknown as {
           buildSessionServerDeps: (
             id: string,
+            role: string,
             b?: { workspaceId: string }
           ) => import("../sessionServer.js").SessionServerDeps;
         }
-      ).buildSessionServerDeps(sessionId, binding);
+      ).buildSessionServerDeps(sessionId, "external-client", binding);
     }
 
     function fakeReq(headers: Record<string, string | string[]>): http.IncomingMessage {
@@ -3236,6 +3254,7 @@ describe("HttpLifecycle", () => {
         const deps = bindingDeps();
         const lc = new HttpLifecycle(deps);
         lc.setHelpSessionWebContentsResolver((token) => (token === "help-tok" ? 42 : null));
+        lc.setHelpSessionIdResolver((token) => (token === "help-tok" ? "help-1" : null));
         const res = fakeRes();
 
         await handshakeHandler(lc)(
@@ -3617,9 +3636,13 @@ describe("HttpLifecycle", () => {
       const PANE_AUTH = `Bearer ${PANE_TOKEN}`;
       const LAUNCH_CONTEXT = { projectId: WS_A, activeWorktreeId: "wt-7" };
 
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
       /**
-       * A lifecycle that authenticates PANE_TOKEN at a ladder tier, as the
-       * composite validator does for every pane bearer, and binds it to WS_A.
+       * A lifecycle that authenticates PANE_TOKEN at a ladder tier, as the pane
+       * service does for every pane bearer, and binds it to WS_A.
        */
       function paneLifecycle(
         deps: HttpLifecycleDeps,
@@ -3631,7 +3654,7 @@ describe("HttpLifecycle", () => {
       ) {
         const lc = new HttpLifecycle(deps);
         lc.setApiKey("test-api-key");
-        lc.setHelpTokenValidator((token) => (token === PANE_TOKEN ? "core" : false));
+        stubPaneToken(PANE_TOKEN);
         const paneResolver = vi.fn((token: string) => (token === PANE_TOKEN ? binding : null));
         lc.setPaneWorkspaceBindingResolver(paneResolver);
         (lc as unknown as { port: number }).port = 45454;
@@ -3886,6 +3909,7 @@ describe("HttpLifecycle", () => {
         const deps = bindingDeps();
         const { lc, paneResolver } = paneLifecycle(deps);
         lc.setHelpSessionWebContentsResolver((token) => (token === PANE_TOKEN ? 77 : null));
+        lc.setHelpSessionIdResolver((token) => (token === PANE_TOKEN ? "help-1" : null));
 
         const sessionId = await openSse(lc, deps, PANE_AUTH);
 
@@ -3911,13 +3935,17 @@ describe("HttpLifecycle", () => {
       const PANE_TOKEN = "pane-token-5c1e";
       const PANE_AUTH = `Bearer ${PANE_TOKEN}`;
 
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
       function principalLifecycle(
         deps: HttpLifecycleDeps,
         principal: string | null = "principal-p"
       ) {
         const lc = new HttpLifecycle(deps);
         lc.setApiKey("test-api-key");
-        lc.setHelpTokenValidator((token) => (token === PANE_TOKEN ? "core" : false));
+        stubPaneToken(PANE_TOKEN);
         const resolver = vi.fn((token: string) => (token === PANE_TOKEN ? principal : null));
         lc.setPaneOwnershipPrincipalResolver(resolver);
         (lc as unknown as { port: number }).port = 45454;
@@ -4046,6 +4074,9 @@ describe("HttpLifecycle", () => {
           [OTHER_HELP_TOKEN, "help-session-2"],
         ]);
         lc.setHelpSessionIdResolver((token) => helpSessions.get(token) ?? null);
+        lc.setHelpSessionWebContentsResolver((token) =>
+          token === HELP_TOKEN || token === OTHER_HELP_TOKEN ? 21 : null
+        );
         (lc as unknown as { port: number }).port = 45454;
         return { lc, helpSessions };
       }
@@ -4147,19 +4178,26 @@ describe("HttpLifecycle", () => {
         expect(bind).toHaveBeenCalledExactlyOnceWith(expect.any(String), "pane-p");
       });
 
-      it("keeps a revoked help bearer and an api-key session session-scoped", async () => {
+      it("keeps an api-key session session-scoped", async () => {
         const deps = bindingDeps();
-        const { lc, helpSessions } = helpLifecycle(deps);
+        const { lc } = helpLifecycle(deps);
         const ledger = deps.sessionStore.resourceOwnership;
 
         const apiKeySession = await openSse(lc, deps, "Bearer test-api-key");
         expect(ledger.ownerOf(apiKeySession)).toBe(apiKeySession);
+      });
 
-        // Revoked between the auth gate and the handshake: the resolver no
-        // longer knows the token, so nothing binds.
+      it("binds nothing for a help bearer whose help session no longer resolves (#16765)", async () => {
+        // Revoked between the auth gate and the handshake: the bearer is
+        // refused rather than admitted with session-scoped records.
+        const deps = bindingDeps();
+        const { lc, helpSessions } = helpLifecycle(deps);
+        const bind = vi.spyOn(deps.sessionStore.resourceOwnership, "bindPrincipal");
+
         helpSessions.delete(HELP_TOKEN);
-        const revoked = await openSse(lc, deps, HELP_AUTH);
-        expect(ledger.ownerOf(revoked)).toBe(revoked);
+        await expect(openSse(lc, deps, HELP_AUTH)).rejects.toThrow(/opened no session/);
+
+        expect(bind).not.toHaveBeenCalled();
       });
     });
 
@@ -4360,6 +4398,7 @@ describe("HttpLifecycle — a help session with no view (#13511)", () => {
     lc.setHelpTokenValidator((token) => (token === TOKEN ? "core" : false));
     lc.setHelpSessionWebContentsResolver((token) => (token === TOKEN ? NO_VIEW_HANDLE : null));
     lc.setHelpSessionViewlessProjectResolver((token) => (token === TOKEN ? project : null));
+    lc.setHelpSessionIdResolver((token) => (token === TOKEN ? "help-noview" : null));
     (lc as unknown as { port: number }).port = 45454;
     return lc;
   }
@@ -4467,6 +4506,166 @@ describe("HttpLifecycle — a help session with no view (#13511)", () => {
     expect(refuseWrite(PROJECT)).toEqual({
       code: "DRIVEN_ELSEWHERE",
       message: expect.stringContaining("studio-02 has control"),
+    });
+  });
+});
+
+describe("HttpLifecycle — an assistant's binding at the handshake (#16765)", () => {
+  const TOKEN = "assistant-tok";
+  const AUTH = `Bearer ${TOKEN}`;
+
+  type Binding = { pin?: number; project?: string; helpId?: string };
+  type DepsBuilder = { buildSessionServerDeps: (...args: unknown[]) => unknown };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** An assistant's bearer, with whichever parts of its binding resolve. */
+  function assistantLifecycle(deps: HttpLifecycleDeps, binding: Binding) {
+    const lc = new HttpLifecycle(deps);
+    lc.setApiKey("test-api-key");
+    lc.setHelpTokenValidator((token) => (token === TOKEN ? "core" : false));
+    lc.setHelpSessionWebContentsResolver((token) =>
+      token === TOKEN ? (binding.pin ?? null) : null
+    );
+    lc.setHelpSessionViewlessProjectResolver((token) =>
+      token === TOKEN ? (binding.project ?? null) : null
+    );
+    lc.setHelpSessionIdResolver((token) => (token === TOKEN ? (binding.helpId ?? null) : null));
+    (lc as unknown as { port: number }).port = 45454;
+    const built = vi.spyOn(lc as unknown as DepsBuilder, "buildSessionServerDeps");
+    const touched = vi.spyOn(lc as unknown as BearerTestHandle, "touchBearer");
+    return { lc, built, touched };
+  }
+
+  function streamRes() {
+    const res = new EventEmitter() as EventEmitter & {
+      writeHead: ReturnType<typeof vi.fn>;
+      write: ReturnType<typeof vi.fn>;
+      end: ReturnType<typeof vi.fn>;
+      headersSent: boolean;
+    };
+    res.writeHead = vi.fn();
+    res.write = vi.fn(() => true);
+    res.end = vi.fn();
+    res.headersSent = false;
+    return res;
+  }
+
+  const transports = {
+    sse: async (lc: HttpLifecycle, auth: string, res: ReturnType<typeof streamRes>) =>
+      (
+        lc as unknown as {
+          handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+        }
+      ).handleRequest(
+        {
+          method: "GET",
+          url: "/sse",
+          headers: { host: "127.0.0.1:45454", authorization: auth },
+        } as unknown as http.IncomingMessage,
+        res as unknown as http.ServerResponse
+      ),
+    mcp: async (lc: HttpLifecycle, auth: string, res: ReturnType<typeof streamRes>) =>
+      (
+        lc as unknown as {
+          handleStreamableHttpRequest: (
+            req: http.IncomingMessage,
+            res: http.ServerResponse,
+            url: URL
+          ) => Promise<void>;
+        }
+      ).handleStreamableHttpRequest(
+        { method: "POST", headers: { authorization: auth } } as unknown as http.IncomingMessage,
+        res as unknown as http.ServerResponse,
+        new URL("http://127.0.0.1:45454/mcp")
+      ),
+  };
+
+  /** The role each session built here was given, in order. */
+  const rolesBuilt = (built: ReturnType<typeof vi.spyOn>) =>
+    built.mock.calls.map((args) => (args as unknown[])[1]);
+
+  const rejectionCode = (res: ReturnType<typeof streamRes>): string | undefined => {
+    const body = res.end.mock.calls[0]?.[0];
+    if (typeof body !== "string") return undefined;
+    try {
+      return (JSON.parse(body) as { error?: { data?: { code?: string } } }).error?.data?.code;
+    } catch {
+      return undefined;
+    }
+  };
+
+  describe.each(["sse", "mcp"] as const)("over /%s", (transport) => {
+    it.each<[string, Binding]>([
+      ["no view and no help session", {}],
+      ["a view but no help session", { pin: 42 }],
+      ["a help session but no view", { helpId: "help-1" }],
+      ["no view and no project to stand for one", { pin: NO_VIEW_HANDLE, helpId: "help-1" }],
+      [
+        "a global assistant's project with no help session",
+        { pin: NO_VIEW_HANDLE, project: GLOBAL_ASSISTANT_ID },
+      ],
+    ])("refuses an assistant's bearer with %s, leaving nothing behind", async (_label, binding) => {
+      const deps = fakeDeps();
+      const { lc, built, touched } = assistantLifecycle(deps, binding);
+      const bind = vi.spyOn(deps.sessionStore.resourceOwnership, "bindPrincipal");
+      const res = streamRes();
+
+      await transports[transport](lc, AUTH, res);
+
+      expect(res.writeHead).toHaveBeenCalledWith(400, { "Content-Type": "application/json" });
+      expect(rejectionCode(res)).toBe("ASSISTANT_BINDING_INCOMPLETE");
+      expect(built).not.toHaveBeenCalled();
+      expect(touched).not.toHaveBeenCalled();
+      expect(bind).not.toHaveBeenCalled();
+      expect(deps.sessionStore.registerClientMetadata).not.toHaveBeenCalled();
+      const store = deps.sessionStore;
+      for (const map of [
+        store.sessions,
+        store.httpSessions,
+        store.sessionTierMap,
+        store.sessionOriginMap,
+        store.sessionWebContentsMap,
+        store.sessionViewlessHelpMap,
+        store.sessionHelpIdMap,
+        store.sessionCredentialMap,
+      ]) {
+        expect(map.size).toBe(0);
+      }
+    });
+
+    it.each<[string, Binding, string]>([
+      ["one opened in a view", { pin: 42, helpId: "help-1" }, "project-assistant"],
+      [
+        "a project's one with no view",
+        { pin: NO_VIEW_HANDLE, project: "proj-1", helpId: "help-1" },
+        "project-assistant",
+      ],
+      [
+        "the global one",
+        { pin: NO_VIEW_HANDLE, project: GLOBAL_ASSISTANT_ID, helpId: "help-1" },
+        "global-assistant",
+      ],
+    ])("admits %s with its whole binding, as its own role", async (_label, binding, role) => {
+      const deps = fakeDeps();
+      const { lc, built } = assistantLifecycle(deps, binding);
+
+      await transports[transport](lc, AUTH, streamRes());
+
+      expect(rolesBuilt(built)).toEqual([role]);
+    });
+
+    it("admits an api-key client and a pane bearer as what they are", async () => {
+      const deps = fakeDeps();
+      const { lc, built } = assistantLifecycle(deps, {});
+      stubPaneToken("pane-tok");
+
+      await transports[transport](lc, "Bearer test-api-key", streamRes());
+      await transports[transport](lc, "Bearer pane-tok", streamRes());
+
+      expect(rolesBuilt(built)).toEqual(["external-client", "agent-pane"]);
     });
   });
 });

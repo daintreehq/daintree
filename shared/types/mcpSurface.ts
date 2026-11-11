@@ -130,9 +130,7 @@ export const McpSurfaceResultSchema = z.object({
     .describe("Payload shape version, bumped when a field changes meaning"),
   appVersion: z.string().describe("The running Daintree build"),
   tier: z.enum(TIER_VALUES).describe("The authorization tier this call was admitted at"),
-  role: z
-    .enum(SESSION_ROLE_VALUES)
-    .describe("Which kind of session the server took this connection for"),
+  role: z.enum(SESSION_ROLE_VALUES).describe("The kind of session the server took this for"),
   hash: z
     .string()
     .regex(/^[0-9a-f]{64}$/)
