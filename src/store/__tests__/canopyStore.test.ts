@@ -587,3 +587,36 @@ describe("the docked global assistant (#16214)", () => {
     expect(store.getState().globalDocked).toBe(false);
   });
 });
+
+describe("the Assistants fold (#16759)", () => {
+  const FOLDED = "daintree-canopy-assistants-folded";
+  afterEach(() => {
+    window.localStorage.removeItem(FOLDED);
+    useCanopyStore.setState({ assistantsExpanded: true });
+  });
+  const reload = async () => {
+    vi.resetModules();
+    return (await import("../canopyStore")).useCanopyStore;
+  };
+
+  it("starts open, and keeps the user's fold across launches and new windows", async () => {
+    const store = await reload();
+    expect(store.getState().assistantsExpanded).toBe(true);
+    store.getState().setAssistantsExpanded(false);
+    expect(store.getState().assistantsExpanded).toBe(false);
+    const reloaded = await reload();
+    expect(reloaded.getState().assistantsExpanded).toBe(false);
+    reloaded.getState().setAssistantsExpanded(true);
+    expect((await reload()).getState().assistantsExpanded).toBe(true);
+  });
+
+  it("follows a sibling view's fold as soon as that view sets it", async () => {
+    const store = await reload();
+    window.localStorage.setItem(FOLDED, "1");
+    window.dispatchEvent(new StorageEvent("storage", { key: FOLDED }));
+    expect(store.getState().assistantsExpanded).toBe(false);
+    window.localStorage.removeItem(FOLDED);
+    window.dispatchEvent(new StorageEvent("storage", { key: FOLDED }));
+    expect(store.getState().assistantsExpanded).toBe(true);
+  });
+});

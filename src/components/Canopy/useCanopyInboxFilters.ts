@@ -38,7 +38,7 @@ export function isOwnGlobalAssistant(item: CanopyAssistantItem): boolean {
 
 /**
  * What the inbox lists: the roles shown, the assistants and the work one of
- * them did, the Unread filter and the folded archive over the ordered runs,
+ * them did, the Unread filter and the folded sections over the ordered runs,
  * and the search's matches among them. Says what is shown to main and to the
  * toolbar badge, and a search's outcome to the screen reader once it settles.
  */
@@ -261,6 +261,17 @@ export function useCanopyInboxFilters({
     () => (workersShown ? shownAssistants.filter((item) => item.ask === null) : shownAssistants),
     [workersShown, shownAssistants]
   );
+  const assistantsExpanded = useCanopyStore((s) => s.assistantsExpanded);
+  const setAssistantsExpanded = useCanopyStore((s) => s.setAssistantsExpanded);
+  // A search shows the assistants it matches without unfolding them for good.
+  const assistantsOpen = assistantsExpanded || searching;
+  // The section's rows as drawn. Shut, it still lists every assistant asking for
+  // the user, so folding never hides a question: only the Assistants filter
+  // leaves one here, since otherwise it sits in the band.
+  const sectionAssistants = useMemo(
+    () => (assistantsOpen ? listedAssistants : listedAssistants.filter((item) => item.ask !== null)),
+    [assistantsOpen, listedAssistants]
+  );
   // Workers and assistants as one inbox: what needs the user, and the order
   // the keyboard walks.
   const projection = useMemo(
@@ -273,6 +284,7 @@ export function useCanopyInboxFilters({
         listedWorkers: listed,
         shownAssistants,
         askingAssistantsInBand: workersShown,
+        sectionAssistants,
         shownArchived: archivedShown ? shownInbox.archived : [],
         workerPlace: (item) => placeOf(item, hostId, ownHostId),
       }),
@@ -285,6 +297,7 @@ export function useCanopyInboxFilters({
       listed,
       shownAssistants,
       workersShown,
+      sectionAssistants,
       archivedShown,
       shownInbox,
     ]
@@ -364,6 +377,10 @@ export function useCanopyInboxFilters({
     shownAssistants,
     bandAssistants,
     listedAssistants,
+    assistantsExpanded,
+    setAssistantsExpanded,
+    assistantsOpen,
+    sectionAssistants,
     showWork,
     inWork,
     shownInbox,

@@ -39,6 +39,11 @@ export interface CanopyInboxProjectionInput {
   shownAssistants: readonly CanopyAssistantItem[];
   /** The assistants asking for the user sit in the Needs you band, after the workers there. */
   askingAssistantsInBand: boolean;
+  /**
+   * The assistants drawn in the Assistants section, in order: by default every
+   * one shown outside the band. A shut section draws only those asking.
+   */
+  sectionAssistants?: readonly CanopyAssistantItem[];
   /** The archived workers shown; none while their fold is shut. */
   shownArchived: readonly CanopyItem[];
   /** Where a worker really runs: its host (null for the window's own) and its id there. */
@@ -56,10 +61,12 @@ export interface CanopyInboxProjection {
   needsYou: CanopyInboxEntry[];
   /**
    * What the keyboard walks, top to bottom as drawn: the band's workers, the
-   * band's assistants, the other listed workers, the other assistants, then
-   * the shown archived workers.
+   * band's assistants, the other listed workers, the Assistants section's
+   * rows as drawn, then the shown archived workers.
    */
   navigation: CanopyInboxEntry[];
+  /** Where the Assistants section's rows start in `navigation`: its bar sits just above. */
+  sectionStart: number;
 }
 
 /**
@@ -113,18 +120,19 @@ export function projectCanopyInbox(input: CanopyInboxProjectionInput): CanopyInb
   const bandWorkers = input.listedWorkers.filter(inBand);
   const restWorkers = input.listedWorkers.filter((item) => !inBand(item));
   const asking = (item: CanopyAssistantItem) => input.askingAssistantsInBand && item.ask !== null;
+  const above = [
+    ...bandWorkers.map(worker),
+    ...input.shownAssistants.filter(asking).map(assistant),
+    ...restWorkers.map(worker),
+  ];
+  const section = input.sectionAssistants ?? input.shownAssistants.filter((item) => !asking(item));
   return {
     inbox,
     needsYou: inbox.filter(
       (entry) => entryNeedsYou(entry) && (entry.role === "assistant" || inBand(entry.item))
     ),
-    navigation: [
-      ...bandWorkers.map(worker),
-      ...input.shownAssistants.filter(asking).map(assistant),
-      ...restWorkers.map(worker),
-      ...input.shownAssistants.filter((item) => !asking(item)).map(assistant),
-      ...input.shownArchived.map(worker),
-    ],
+    navigation: [...above, ...section.map(assistant), ...input.shownArchived.map(worker)],
+    sectionStart: above.length,
   };
 }
 
