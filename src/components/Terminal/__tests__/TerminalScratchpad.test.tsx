@@ -21,6 +21,9 @@ vi.mock("@/store/panelStore", () => ({
   ),
 }));
 
+const focusMock = vi.hoisted(() => vi.fn(() => true));
+vi.mock("@/components/Panel/panelFocusRegistry", () => ({ focusPanelInput: focusMock }));
+
 const flushMock = vi.hoisted(() => vi.fn());
 vi.mock("@/store/slices", () => ({ flushPanelPersistence: flushMock }));
 
@@ -106,6 +109,38 @@ describe("TerminalScratchpad", () => {
 
     fireEvent.blur(editor);
     expect(flushMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands focus back to the pane on Escape, after flushing the notes", () => {
+    seed({ content: "notes", collapsed: false });
+    const { getByTestId } = renderPad();
+    const editor = getByTestId("terminal-scratchpad-editor");
+    editor.focus();
+    fireEvent.keyDown(editor, { key: "Escape" });
+    expect(flushMock).toHaveBeenCalled();
+    expect(focusMock).toHaveBeenCalledWith("term-1");
+  });
+
+  it("ignores Escape while an IME composition is open", () => {
+    seed({ content: "notes", collapsed: false });
+    const { getByTestId } = renderPad();
+    fireEvent.keyDown(getByTestId("terminal-scratchpad-editor"), {
+      key: "Escape",
+      isComposing: true,
+    });
+    expect(focusMock).not.toHaveBeenCalled();
+  });
+
+  it("hands focus to the pane before the hide control collapses the strip", () => {
+    seed({ content: "notes", collapsed: false });
+    const { getByTestId } = renderPad();
+    focusMock.mockImplementation(() => {
+      expect(actions.collapseScratchpad).not.toHaveBeenCalled();
+      return true;
+    });
+    fireEvent.click(getByTestId("terminal-scratchpad-collapse"));
+    expect(focusMock).toHaveBeenCalledWith("term-1");
+    expect(actions.collapseScratchpad).toHaveBeenCalledWith("term-1");
   });
 
   it("keeps one label on the hide control whether or not there are notes", () => {

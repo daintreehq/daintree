@@ -10,6 +10,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
 import { flushPanelPersistence } from "@/store/slices";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
+import { returnFocusFromScratchpad } from "./scratchpadFocus";
 import { isPtyPanel } from "@shared/types/panel";
 import {
   peek as peekTerminalService,
@@ -251,6 +253,8 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
               data-testid="terminal-scratchpad-collapse"
               onClick={(e) => {
                 e.stopPropagation();
+                // Clicking the button focuses it, and it unmounts with the strip.
+                focusPanelInput(terminalId);
                 collapseScratchpad(terminalId);
               }}
             >
@@ -278,6 +282,13 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
         // The save is debounced; leaving the editor is a natural point to
         // write the last keystrokes out rather than wait on the timer.
         onBlur={() => flushPanelPersistence()}
+        onKeyDown={(e) => {
+          if (e.key !== "Escape" || e.nativeEvent.isComposing) return;
+          e.preventDefault();
+          e.stopPropagation();
+          flushPanelPersistence();
+          focusPanelInput(terminalId);
+        }}
         data-testid="terminal-scratchpad-editor"
       />
 
