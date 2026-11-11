@@ -2158,7 +2158,21 @@ type ActionErrorCode = "NOT_FOUND" | "VALIDATION_ERROR"
  * A plugin on a remote host dispatched an action while no frontend drives
  * its project: nobody is attached whose view could run it.
  */
- | "NO_FRONTEND_ATTACHED";
+ | "NO_FRONTEND_ATTACHED"
+/**
+ * A plugin's dispatch to a Remote Host's project (#16767) would change it
+ * while another machine, or a window on that host, drives it. Nothing ran,
+ * or the action stopped before its next change.
+ */
+ | "DRIVEN_ELSEWHERE"
+/**
+ * A Remote Host refused a plugin's dispatch outright (#16767): it takes no
+ * actions from other machines, or runs a build from before plugins could
+ * reach it. Nothing ran; retrying won't help until that changes.
+ */
+ | "HOST_REFUSED"
+/** The Remote Host a plugin's dispatch named couldn't be reached. Nothing was sent. */
+ | "HOST_UNREACHABLE";
 interface ActionError {
     code: ActionErrorCode;
     message: string;
@@ -3352,7 +3366,7 @@ interface PluginPanelActivity {
 type PluginContextValue = boolean | string;
 type MenuItemLocation = "terminal" | "file" | "view" | "help";
 type ContextMenuLocation = "worktree" | "terminal" | "file" | "browser" | "project";
-declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "agent:launch-preset", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read", "notification:os", "artifact:store", "preview:inspect"];
+declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "agent:launch-preset", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "host:dispatch", "panel:focus-read", "notification:os", "artifact:store", "preview:inspect"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 type PluginCapability = BuiltInPluginCapability;
 /** Third argument to {@link PluginHostApi.dispatch} (#13119). */
@@ -3363,6 +3377,51 @@ interface PluginDispatchOptions {
      * come from `host.dispatch("project.getAll")`.
      */
     projectId?: string;
+    /**
+     * Run the action in `projectId` on this Remote Host (#16767), as this plugin
+     * from this machine. Needs the `host:dispatch` capability and the user's
+     * "Allow host targeting" switch, and `projectId` alongside it. Ids come from
+     * {@link PluginRemoteHostsApi.list}.
+     */
+    hostId?: string;
+}
+/**
+ * Last argument to the {@link PluginAgentsApi} input methods (#16767): which
+ * Remote Host the agent runs on. Absent, the agent is one on this machine.
+ */
+interface PluginAgentInputOptions {
+    hostId?: string;
+}
+/** One project on a Remote Host, as {@link PluginRemoteHostsApi.list} names it. */
+interface PluginRemoteHostProject {
+    readonly projectId: string;
+    readonly name: string;
+}
+/**
+ * One Remote Host this machine drives, as observed when listed. `projects` is
+ * null when they couldn't be read: the host isn't connected, or didn't answer
+ * in time.
+ */
+interface PluginRemoteHost {
+    readonly hostId: string;
+    readonly name: string;
+    readonly connection: "connected" | "connecting" | "disconnected";
+    readonly projects: readonly PluginRemoteHostProject[] | null;
+}
+/** `host.remoteHosts` — the Remote Hosts this machine drives (#16767). */
+interface PluginRemoteHostsApi {
+    /**
+     * The Remote Hosts this machine drives, never this machine itself, with each
+     * connected host's projects: the `hostId` and `projectId` that
+     * `host.dispatch` takes. A host whose link went idle is dialled first, as a
+     * dispatch to it would be, and one the user disconnected is left alone.
+     * Resolves `[]` once the plugin is unloaded or when no host is set up.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+     *   `host:dispatch`, the user hasn't turned on "Allow host targeting", or
+     *   it is a project plugin.
+     */
+    list(): Promise<PluginRemoteHost[]>;
 }
 interface MenuItemContribution {
     label: string;
@@ -6493,8 +6552,15 @@ interface PluginAgentsApi {
      *   doesn't drive the agent's project.
      * @throws {Error} If `terminalId` is not a non-empty string of at most 512
      *   characters.
+     *
+     * `options.hostId` reaches an agent this plugin launched on that Remote Host
+     * through `host.dispatch(..., { hostId, projectId })` (#16767): the host
+     * answers from its own record of what this plugin launched there from this
+     * machine. It also needs `host:dispatch` and "Allow host targeting", and
+     * `not-found` covers an agent this plugin didn't launch there or launched
+     * before it was last loaded.
      */
-    interrupt(terminalId: string): Promise<PluginAgentInterruptResult>;
+    interrupt(terminalId: string, options?: PluginAgentInputOptions): Promise<PluginAgentInterruptResult>;
     /**
      * Press keys in an agent this plugin launched — most often to answer its
      * CLI's own dialog (a trust or permission prompt, a list). Keys go one at a
@@ -6506,7 +6572,7 @@ interface PluginAgentsApi {
      * @throws {Error} If `input` does not hold exactly one of `keys` (1 to 16
      *   names) or `choose` (1 to 200 characters).
      */
-    sendKeys(terminalId: string, input: PluginAgentKeysInput): Promise<PluginAgentKeysResult>;
+    sendKeys(terminalId: string, input: PluginAgentKeysInput, options?: PluginAgentInputOptions): Promise<PluginAgentKeysResult>;
     /**
      * Submit `text` to an agent this plugin launched, as one submission with one
      * Enter: the agent takes it as its next prompt, or a slash command such as
@@ -6517,7 +6583,7 @@ interface PluginAgentsApi {
      *   {@link interrupt}.
      * @throws {Error} If `text` is blank.
      */
-    submit(terminalId: string, text: string): Promise<PluginAgentInputResult>;
+    submit(terminalId: string, text: string, options?: PluginAgentInputOptions): Promise<PluginAgentInputResult>;
 }
 /** Options for {@link PluginTerminalsApi.readScreen}. */
 interface PluginTerminalReadScreenOptions {
@@ -8559,6 +8625,13 @@ interface PluginHostApi extends PluginActivationApi {
      */
     readonly agents: PluginAgentsApi;
     /**
+     * The Remote Hosts this machine drives and their projects, for
+     * `host.dispatch(actionId, args, { hostId, projectId })` (#16767). Gated on
+     * `host:dispatch` and the user's "Allow host targeting" switch, and only for
+     * installed plugins. See {@link PluginRemoteHostsApi}.
+     */
+    readonly remoteHosts: PluginRemoteHostsApi;
+    /**
      * Read what a terminal's screen shows, as plain text. Gated on
      * `terminal:read`. See {@link PluginTerminalsApi}.
      */
@@ -8956,6 +9029,16 @@ interface PluginHostApi extends PluginActivationApi {
      * `PROJECT_VIEW_UNAVAILABLE` — nothing opens or wakes a closed project —
      * except an installed plugin's targeted `terminal.close`, which Daintree
      * runs itself and answers with `{ closedIds }` (#13507).
+     *
+     * `options.hostId` with `options.projectId` runs the action in that project on
+     * a Remote Host (#16767). An installed plugin must declare `host:dispatch`
+     * and the user must turn on "Allow host targeting", or the call rejects with
+     * `PERMISSION_REQUIRED`; a project plugin never can. The host admits the call
+     * as this plugin from this machine and holds it to a plugin dispatch's rules
+     * there: only built-in actions, no `RESTRICTED` or confirm-gated ones, its
+     * own "Accept tools run for other machines" setting, and its drive lease. A
+     * change runs in the view that drives the project only when that view is on
+     * this machine, and in the host itself when nobody drives it.
      */
     dispatch(actionId: ActionId, args?: unknown, options?: PluginDispatchOptions): Promise<ActionDispatchResult>;
     /**
@@ -9526,4 +9609,4 @@ declare function syncedCollectionSnapshotChannel(channel: string): string;
 declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
 
 export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
-export type { ActionDanger, ActionDispatchError, ActionDispatchResult, ActionDispatchSuccess, ActionError, ActionErrorCode, ActionExample, ActionHandler, ActionId, ActionKind, AgentContextDataTransfer, AgentContextDragData, AgentContextDragPayload, AgentContextReferenceDragPayload, AgentState, AnyForgeProviderImpl, AssistantKnowledgeContribution, AssistantKnowledgeEntry, AuthValidation, AutoMergeCapability, BuiltInActionId, BuiltInPluginCapability, CIStatus, CanopyViewContribution, CheckRun, CheckRunConclusion, CheckRunStatus, ChecksCapability, ContextMenuContribution, ContextMenuLocation, ContextProviderCallOptions, ContextProviderContent, ContextProviderContribution, ContextProviderDescriptor, ContextProviderImpl, ContextProviderItem, CreateIssueInput, CredentialImportCandidate, CredentialImportCapability, CredentialImportExpected, CredentialImportFailureReason, CredentialImportPreview, CredentialImportUnavailable, Credentials, DisableAutoMergeResult, ElementPickerDetectionKind, ElementPickerDetectionRule, ElementPickerProviderContribution, EnableAutoMergeInput, EnableAutoMergeResult, FetchOptions, FileDecoration, FileDecorationContribution, FileDecorationProviderDescriptor, FileDecorationProviderImpl, FileEditorContribution, FileEditorMode, ForgeCodeProviderImpl, ForgeIssueProviderImpl, ForgeLabel, ForgeNumberReference, ForgeProviderBaseImpl, ForgeProviderContribution, ForgeProviderDescriptor, ForgeProviderImpl, ForgeProviderKind, ForgeProviderRole, ForgeUser, Issue, KeybindingContribution, ListOptions, McpServerContribution, MenuItemContribution, MenuItemLocation, NormalizedIssueState, NormalizedPRState, PR, PRCommitSummary, PRMergeIntent, PRMergeMethod, PRMergeStatus, Page, PanelContribution, PanelMenuItemContribution, PanelReloadResult, PanelViewProps, PluginAccountAccessToken, PluginAccountApi, PluginAccountContribution, PluginAccountIdentity, PluginAccountKind, PluginAccountRef, PluginAccountState, PluginAccountTest, PluginActionContribution, PluginActionManifestEntry, PluginActionResultSchema, PluginActivate, PluginActivationApi, PluginAgentInputResult, PluginAgentInterruptResult, PluginAgentKeysInput, PluginAgentKeysResult, PluginAgentMcpContribution, PluginAgentMcpServerSource, PluginAgentMcpServerSourceTool, PluginAgentMcpToolGroup, PluginAgentMcpToolGroupAccess, PluginAgentPane, PluginAgentRun, PluginAgentSnapshot, PluginAgentsApi, PluginAllAgentsSnapshot, PluginApplicationDescriptor, PluginApplicationDestination, PluginApplicationNavigation, PluginApplicationNavigationApi, PluginApplicationNavigationParam, PluginApplicationSection, PluginApplicationTourRef, PluginArtifact, PluginArtifactApi, PluginArtifactCreateOptions, PluginArtifactDownloadOptions, PluginArtifactDownloadRequest, PluginArtifactImportSource, PluginArtifactListOptions, PluginArtifactProgress, PluginArtifactSource, PluginArtifactUploadOptions, PluginArtifactUploadRequest, PluginArtifactUploadResult, PluginAuthor, PluginCanDispatchResult, PluginCapability, PluginChannelSchema, PluginClipboardApi, PluginConfirmOptions, PluginConnectionContribution, PluginContextValue, PluginDatabase, PluginDatabaseApi, PluginDatabaseBackupResult, PluginDatabaseChangeEvent, PluginDatabaseColumn, PluginDatabaseContribution, PluginDatabaseLocation, PluginDatabaseLocationKind, PluginDatabaseOpenOptions, PluginDatabaseParams, PluginDatabaseQueryContribution, PluginDatabaseQueryParam, PluginDatabaseQueryParamFormat, PluginDatabaseQueryParamType, PluginDatabaseRunResult, PluginDatabaseStatements, PluginDispatchOptions, PluginDocumentsApi, PluginDuplexProcessHandle, PluginDuplexProcessSpawnOptions, PluginEventRoute, PluginEventRouteEvent, PluginEventRouteWake, PluginFileDocument, PluginFileDocumentChange, PluginFileDocumentReadResult, PluginFileDocumentSaveResult, PluginFocusedPanel, PluginFocusedPanelKind, PluginFsApi, PluginFsDirEntry, PluginFsReadFilesEncoding, PluginFsReadFilesEntry, PluginFsReadFilesErrorCode, PluginFsReadFilesOptions, PluginFsReadWithRevisionResult, PluginFsScope, PluginFsStat, PluginFsWalkEntry, PluginFsWalkOptions, PluginFsWalkResult, PluginFsWatchOptions, PluginGitApi, PluginGitCommitOptions, PluginGitCommitResult, PluginGitStatus, PluginGitStatusFile, PluginHandlerOptions, PluginHostActionsApi, PluginHostApi, PluginHostCallOptions, PluginHostSubscriptionOptions, PluginIdentity, PluginInputBoxOptions, PluginInvokeOrigin, PluginIpcContext, PluginIpcHandler, PluginLocalSocketScope, PluginLogger, PluginManifest, PluginManifestScopes, PluginMcpApi, PluginMcpCaller, PluginMcpJsonSchema, PluginMcpToolAnnotations, PluginMcpToolDefinition, PluginNavigationIntent, PluginNavigationLocation, PluginNavigationParamValue, PluginNavigationRefusal, PluginNavigationResult, PluginNetworkScope, PluginNotifyAction, PluginNotifyOptions, PluginNotifyResult, PluginNotifyTarget, PluginPanelActivity, PluginPanelActivityState, PluginPanelBadge, PluginPanelBadgeColor, PluginPanelLifecycleEvent, PluginPanelLifecyclePhase, PluginPanelToolbarItemState, PluginPdfMargins, PluginPdfPageSize, PluginProcessApi, PluginProcessDataChunk, PluginProcessHandle, PluginProcessMode, PluginProcessSpawnOptions, PluginProcessStreamEvent, PluginProjectPresence, PluginProjectPresenceState, PluginPromptCallOptions, PluginPtyProcessHandle, PluginPtyProcessSpawnOptions, PluginQuickPickItem, PluginQuickPickOptions, PluginRenderPdfOptions, PluginRenderPdfResult, PluginRunRecipeOptions, PluginRunRecipeRefusalReason, PluginRunRecipeResult, PluginSearchContext, PluginSearchProvider, PluginSearchProviderContribution, PluginSearchResult, PluginSearchResultTarget, PluginSendToAgentOptions, PluginSendToAgentRefusalReason, PluginSendToAgentResult, PluginServiceCallContext, PluginServiceCallOptions, PluginServiceCaller, PluginServiceContract, PluginServiceFailureReason, PluginServiceHandlers, PluginServiceProvideContribution, PluginServiceProviderInfo, PluginServiceRequireContribution, PluginServiceResult, PluginServiceStatus, PluginServicesApi, PluginServicesContribution, PluginSettingsPageContribution, PluginSettingsScope, PluginSettingsViewContext, PluginSettingsViewFocus, PluginSetupStepAction, PluginSetupStepContribution, PluginSetupStepDone, PluginStorageScope, PluginSystemApi, PluginSystemWakeEvent, PluginTaskApi, PluginTaskHandle, PluginTaskProgress, PluginTaskResult, PluginTaskStartOptions, PluginTerminalKind, PluginTerminalLifecycleEvent, PluginTerminalLifecycleEventBase, PluginTerminalLifecycleEventType, PluginTerminalReadScreenOptions, PluginTerminalScreenResult, PluginTerminalStatus, PluginTerminalsApi, PluginToastOptions, PluginToolbarButtonRuntimeState, PluginTypedIpcHandler, PluginViewHostContext, PluginViewHostKind, PluginWorktreeCardStatus, PluginWorktreeDeleteNote, PluginWorktreeFileState, PluginWorktreeGitOperation, PluginWorktreeLinked, PluginWorktreeLinkedIssue, PluginWorktreeLinkedPR, PluginWorktreeReviewCheck, PluginWorktreeSetup, PluginWorktreeSetupStage, PluginWorktreeSetupState, PluginWorktreeSetupStepContext, PluginWorktreeSetupStepHandler, PluginWorktreeSnapshot, PluginWorktreeStatus, PluginWorktreeStatusFile, PluginWorktreesChange, PluginWorktreesResult, PluginWorktreesUnavailableReason, ProjectTemplateContribution, RateLimitInfo, RepoMergeSettings, RepoMetadata, RepoRef, ResourceRef, SettingDefinition, SettingFieldType, SettingsApi, StorageApi, SyncedCollection, SyncedCollectionDelta, SyncedCollectionHost, SyncedCollectionOptions, SyncedCollectionSnapshot, TerminalLinkContribution, TerminalLinkPatternArgs, TerminalLinkSubject, TerminalLinkUrlArgs, TerminalLinkUrlContribution, ToolbarButtonContribution, ToolbarButtonPopover, ViewContribution, ViewLocation, WaitingReason, WorkerRestartResult, WorktreeDeleteNotesContribution, WorktreeDeleteNotesProviderDescriptor, WorktreeDeleteNotesProviderImpl, WorktreeSetupStepContribution };
+export type { ActionDanger, ActionDispatchError, ActionDispatchResult, ActionDispatchSuccess, ActionError, ActionErrorCode, ActionExample, ActionHandler, ActionId, ActionKind, AgentContextDataTransfer, AgentContextDragData, AgentContextDragPayload, AgentContextReferenceDragPayload, AgentState, AnyForgeProviderImpl, AssistantKnowledgeContribution, AssistantKnowledgeEntry, AuthValidation, AutoMergeCapability, BuiltInActionId, BuiltInPluginCapability, CIStatus, CanopyViewContribution, CheckRun, CheckRunConclusion, CheckRunStatus, ChecksCapability, ContextMenuContribution, ContextMenuLocation, ContextProviderCallOptions, ContextProviderContent, ContextProviderContribution, ContextProviderDescriptor, ContextProviderImpl, ContextProviderItem, CreateIssueInput, CredentialImportCandidate, CredentialImportCapability, CredentialImportExpected, CredentialImportFailureReason, CredentialImportPreview, CredentialImportUnavailable, Credentials, DisableAutoMergeResult, ElementPickerDetectionKind, ElementPickerDetectionRule, ElementPickerProviderContribution, EnableAutoMergeInput, EnableAutoMergeResult, FetchOptions, FileDecoration, FileDecorationContribution, FileDecorationProviderDescriptor, FileDecorationProviderImpl, FileEditorContribution, FileEditorMode, ForgeCodeProviderImpl, ForgeIssueProviderImpl, ForgeLabel, ForgeNumberReference, ForgeProviderBaseImpl, ForgeProviderContribution, ForgeProviderDescriptor, ForgeProviderImpl, ForgeProviderKind, ForgeProviderRole, ForgeUser, Issue, KeybindingContribution, ListOptions, McpServerContribution, MenuItemContribution, MenuItemLocation, NormalizedIssueState, NormalizedPRState, PR, PRCommitSummary, PRMergeIntent, PRMergeMethod, PRMergeStatus, Page, PanelContribution, PanelMenuItemContribution, PanelReloadResult, PanelViewProps, PluginAccountAccessToken, PluginAccountApi, PluginAccountContribution, PluginAccountIdentity, PluginAccountKind, PluginAccountRef, PluginAccountState, PluginAccountTest, PluginActionContribution, PluginActionManifestEntry, PluginActionResultSchema, PluginActivate, PluginActivationApi, PluginAgentInputOptions, PluginAgentInputResult, PluginAgentInterruptResult, PluginAgentKeysInput, PluginAgentKeysResult, PluginAgentMcpContribution, PluginAgentMcpServerSource, PluginAgentMcpServerSourceTool, PluginAgentMcpToolGroup, PluginAgentMcpToolGroupAccess, PluginAgentPane, PluginAgentRun, PluginAgentSnapshot, PluginAgentsApi, PluginAllAgentsSnapshot, PluginApplicationDescriptor, PluginApplicationDestination, PluginApplicationNavigation, PluginApplicationNavigationApi, PluginApplicationNavigationParam, PluginApplicationSection, PluginApplicationTourRef, PluginArtifact, PluginArtifactApi, PluginArtifactCreateOptions, PluginArtifactDownloadOptions, PluginArtifactDownloadRequest, PluginArtifactImportSource, PluginArtifactListOptions, PluginArtifactProgress, PluginArtifactSource, PluginArtifactUploadOptions, PluginArtifactUploadRequest, PluginArtifactUploadResult, PluginAuthor, PluginCanDispatchResult, PluginCapability, PluginChannelSchema, PluginClipboardApi, PluginConfirmOptions, PluginConnectionContribution, PluginContextValue, PluginDatabase, PluginDatabaseApi, PluginDatabaseBackupResult, PluginDatabaseChangeEvent, PluginDatabaseColumn, PluginDatabaseContribution, PluginDatabaseLocation, PluginDatabaseLocationKind, PluginDatabaseOpenOptions, PluginDatabaseParams, PluginDatabaseQueryContribution, PluginDatabaseQueryParam, PluginDatabaseQueryParamFormat, PluginDatabaseQueryParamType, PluginDatabaseRunResult, PluginDatabaseStatements, PluginDispatchOptions, PluginDocumentsApi, PluginDuplexProcessHandle, PluginDuplexProcessSpawnOptions, PluginEventRoute, PluginEventRouteEvent, PluginEventRouteWake, PluginFileDocument, PluginFileDocumentChange, PluginFileDocumentReadResult, PluginFileDocumentSaveResult, PluginFocusedPanel, PluginFocusedPanelKind, PluginFsApi, PluginFsDirEntry, PluginFsReadFilesEncoding, PluginFsReadFilesEntry, PluginFsReadFilesErrorCode, PluginFsReadFilesOptions, PluginFsReadWithRevisionResult, PluginFsScope, PluginFsStat, PluginFsWalkEntry, PluginFsWalkOptions, PluginFsWalkResult, PluginFsWatchOptions, PluginGitApi, PluginGitCommitOptions, PluginGitCommitResult, PluginGitStatus, PluginGitStatusFile, PluginHandlerOptions, PluginHostActionsApi, PluginHostApi, PluginHostCallOptions, PluginHostSubscriptionOptions, PluginIdentity, PluginInputBoxOptions, PluginInvokeOrigin, PluginIpcContext, PluginIpcHandler, PluginLocalSocketScope, PluginLogger, PluginManifest, PluginManifestScopes, PluginMcpApi, PluginMcpCaller, PluginMcpJsonSchema, PluginMcpToolAnnotations, PluginMcpToolDefinition, PluginNavigationIntent, PluginNavigationLocation, PluginNavigationParamValue, PluginNavigationRefusal, PluginNavigationResult, PluginNetworkScope, PluginNotifyAction, PluginNotifyOptions, PluginNotifyResult, PluginNotifyTarget, PluginPanelActivity, PluginPanelActivityState, PluginPanelBadge, PluginPanelBadgeColor, PluginPanelLifecycleEvent, PluginPanelLifecyclePhase, PluginPanelToolbarItemState, PluginPdfMargins, PluginPdfPageSize, PluginProcessApi, PluginProcessDataChunk, PluginProcessHandle, PluginProcessMode, PluginProcessSpawnOptions, PluginProcessStreamEvent, PluginProjectPresence, PluginProjectPresenceState, PluginPromptCallOptions, PluginPtyProcessHandle, PluginPtyProcessSpawnOptions, PluginQuickPickItem, PluginQuickPickOptions, PluginRemoteHost, PluginRemoteHostProject, PluginRemoteHostsApi, PluginRenderPdfOptions, PluginRenderPdfResult, PluginRunRecipeOptions, PluginRunRecipeRefusalReason, PluginRunRecipeResult, PluginSearchContext, PluginSearchProvider, PluginSearchProviderContribution, PluginSearchResult, PluginSearchResultTarget, PluginSendToAgentOptions, PluginSendToAgentRefusalReason, PluginSendToAgentResult, PluginServiceCallContext, PluginServiceCallOptions, PluginServiceCaller, PluginServiceContract, PluginServiceFailureReason, PluginServiceHandlers, PluginServiceProvideContribution, PluginServiceProviderInfo, PluginServiceRequireContribution, PluginServiceResult, PluginServiceStatus, PluginServicesApi, PluginServicesContribution, PluginSettingsPageContribution, PluginSettingsScope, PluginSettingsViewContext, PluginSettingsViewFocus, PluginSetupStepAction, PluginSetupStepContribution, PluginSetupStepDone, PluginStorageScope, PluginSystemApi, PluginSystemWakeEvent, PluginTaskApi, PluginTaskHandle, PluginTaskProgress, PluginTaskResult, PluginTaskStartOptions, PluginTerminalKind, PluginTerminalLifecycleEvent, PluginTerminalLifecycleEventBase, PluginTerminalLifecycleEventType, PluginTerminalReadScreenOptions, PluginTerminalScreenResult, PluginTerminalStatus, PluginTerminalsApi, PluginToastOptions, PluginToolbarButtonRuntimeState, PluginTypedIpcHandler, PluginViewHostContext, PluginViewHostKind, PluginWorktreeCardStatus, PluginWorktreeDeleteNote, PluginWorktreeFileState, PluginWorktreeGitOperation, PluginWorktreeLinked, PluginWorktreeLinkedIssue, PluginWorktreeLinkedPR, PluginWorktreeReviewCheck, PluginWorktreeSetup, PluginWorktreeSetupStage, PluginWorktreeSetupState, PluginWorktreeSetupStepContext, PluginWorktreeSetupStepHandler, PluginWorktreeSnapshot, PluginWorktreeStatus, PluginWorktreeStatusFile, PluginWorktreesChange, PluginWorktreesResult, PluginWorktreesUnavailableReason, ProjectTemplateContribution, RateLimitInfo, RepoMergeSettings, RepoMetadata, RepoRef, ResourceRef, SettingDefinition, SettingFieldType, SettingsApi, StorageApi, SyncedCollection, SyncedCollectionDelta, SyncedCollectionHost, SyncedCollectionOptions, SyncedCollectionSnapshot, TerminalLinkContribution, TerminalLinkPatternArgs, TerminalLinkSubject, TerminalLinkUrlArgs, TerminalLinkUrlContribution, ToolbarButtonContribution, ToolbarButtonPopover, ViewContribution, ViewLocation, WaitingReason, WorkerRestartResult, WorktreeDeleteNotesContribution, WorktreeDeleteNotesProviderDescriptor, WorktreeDeleteNotesProviderImpl, WorktreeSetupStepContribution };
