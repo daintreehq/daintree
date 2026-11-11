@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({ utilityProcess: { fork: vi.fn() } }));
 
@@ -260,16 +260,24 @@ describe("toCanopyReading", () => {
 });
 
 describe("CanopyLocalReader", () => {
-  /** Whether processes made from now on die on their first read. */
-  const behaviour = { dies: false };
+  /**
+   * Whether processes made from now on die on their first read, whether reads
+   * fail with the process left standing, and how long processes take to load.
+   */
+  const behaviour: { dies: boolean; fails: boolean; loading: Promise<void> | null } = {
+    dies: false,
+    fails: false,
+    loading: null,
+  };
 
   /** A stand-in reader process: each read answers, or the process dies under it. */
   function fakeProcess(dir: string, onExit: () => void, lost: () => Error) {
     const process = {
       modelDir: dir,
       live: true,
-      ready: Promise.resolve(),
-      read: vi.fn(async () => {
+      ready: behaviour.loading ?? Promise.resolve(),
+      read: vi.fn(async (): Promise<{ reading: Reading; ms: number }> => {
+        if (behaviour.fails) throw new Error("unreadable screen");
         if (!behaviour.dies) return { reading: reading(), ms: 9 };
         process.die();
         throw lost();
@@ -285,14 +293,17 @@ describe("CanopyLocalReader", () => {
     return process;
   }
 
-  async function harness(dir: string | null = "/models/light") {
+  async function harness(dir: string | null = "/models/light", idleMs?: number) {
     const { CanopyLocalReader } = await import("../canopyLocalReader.js");
     const { CanopyReaderError } = await import("../canopyReaderProcess.js");
     behaviour.dies = false;
+    behaviour.fails = false;
+    behaviour.loading = null;
     const made: Array<ReturnType<typeof fakeProcess>> = [];
     let modelDir = dir;
+    let lookup: Promise<string | null> | null = null;
     const reader = new CanopyLocalReader(
-      async () => modelDir,
+      () => lookup ?? Promise.resolve(modelDir),
       (d, onExit) => {
         const p = fakeProcess(
           d,
@@ -301,13 +312,23 @@ describe("CanopyLocalReader", () => {
         );
         made.push(p);
         return p as never;
-      }
+      },
+      idleMs
     );
     return {
       reader,
       made,
       lost: (message = "Reader process exited") => new CanopyReaderError(message, true),
       setDir: (d: string | null) => (modelDir = d),
+      /** Holds every model lookup until the returned function is called. */
+      holdLookup: () => {
+        let resolve!: (dir: string | null) => void;
+        lookup = new Promise<string | null>((r) => (resolve = r));
+        return () => {
+          lookup = null;
+          resolve(modelDir);
+        };
+      },
     };
   }
 
@@ -428,6 +449,154 @@ describe("CanopyLocalReader", () => {
     });
     await expect(h.reader.read(input({ lines }), signal())).rejects.toMatchObject({
       message: "request cancelled",
+    });
+  });
+
+  describe("idle", () => {
+    const IDLE_MS = 60_000;
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("lets the model go once nothing has been read for the idle period, and loads it again on the next read", async () => {
+      vi.useFakeTimers();
+      const h = await harness("/models/light", IDLE_MS);
+      await h.reader.read(input({ lines }), signal());
+      await vi.advanceTimersByTimeAsync(IDLE_MS - 1);
+      expect(h.made[0]!.retire).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.made[0]!.retire).toHaveBeenCalledTimes(1);
+      expect(h.reader.loaded).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+
+      await expect(h.reader.read(input({ lines }), signal())).resolves.toMatchObject({
+        classifier: { category: "approval" },
+      });
+      expect(h.made).toHaveLength(2);
+      expect(h.reader.loaded).toBe(true);
+    });
+
+    it("starts the idle period over on every read", async () => {
+      vi.useFakeTimers();
+      const h = await harness("/models/light", IDLE_MS);
+      await h.reader.read(input({ lines }), signal());
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 0.6);
+      await h.reader.read(input({ lines }), signal());
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 0.6);
+      expect(h.made[0]!.retire).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 0.4);
+      expect(h.made[0]!.retire).toHaveBeenCalledTimes(1);
+      expect(h.made).toHaveLength(1);
+    });
+
+    it("never lets the model go while a read is finding the model, loading it or reading", async () => {
+      vi.useFakeTimers();
+      const h = await harness("/models/light", IDLE_MS);
+
+      // Loading: the read that starts the process waits on it.
+      let loaded!: () => void;
+      behaviour.loading = new Promise<void>((resolve) => (loaded = resolve));
+      const first = h.reader.read(input({ lines }), signal());
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 2);
+      expect(h.made).toHaveLength(1);
+      expect(h.reader.retireIdle()).toBe(false);
+      loaded();
+      await expect(first).resolves.toMatchObject({ classifier: { category: "approval" } });
+      behaviour.loading = null;
+
+      // Finding the model: the folder lookup hasn't answered yet.
+      const release = h.holdLookup();
+      const second = h.reader.read(input({ lines }), signal());
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 2);
+      expect(h.reader.retireIdle()).toBe(false);
+      release();
+      await expect(second).resolves.toMatchObject({ classifier: { category: "approval" } });
+
+      // Reading: the model has the screen.
+      const p = h.made[0]!;
+      let answer!: () => void;
+      p.read.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = () => resolve({ reading: reading(), ms: 9 });
+          })
+      );
+      const third = h.reader.read(input({ lines }), signal());
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 2);
+      expect(h.reader.retireIdle()).toBe(false);
+      answer();
+      await expect(third).resolves.toMatchObject({ classifier: { category: "approval" } });
+
+      // One process read all three, and none of them lost it.
+      expect(h.made).toHaveLength(1);
+      expect(p.retire).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(IDLE_MS);
+      expect(p.retire).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets the model go on request only when it holds one, and only once", async () => {
+      const h = await harness();
+      expect(h.reader.retireIdle()).toBe(false);
+      await h.reader.read(input({ lines }), signal());
+      expect(h.reader.retireIdle()).toBe(true);
+      expect(h.made[0]!.retire).toHaveBeenCalledTimes(1);
+      expect(h.reader.retireIdle()).toBe(false);
+      await h.reader.read(input({ lines }), signal());
+      expect(h.made).toHaveLength(2);
+    });
+
+    it("keeps the process it started after an idle one, whenever the idle one exits", async () => {
+      const h = await harness();
+      await h.reader.read(input({ lines }), signal());
+      h.reader.retireIdle();
+      await h.reader.read(input({ lines }), signal());
+      // The retired process's exit lands after its successor has started.
+      h.made[0]!.die();
+      expect(h.reader.loaded).toBe(true);
+      await h.reader.read(input({ lines }), signal());
+      expect(h.made).toHaveLength(2);
+      expect(h.made[1]!.read).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps counting crashes across idle spells, so a model that keeps dying stops being started", async () => {
+      vi.useFakeTimers();
+      const h = await harness("/models/light", IDLE_MS);
+      const outcome = () =>
+        h.reader.read(input({ lines }), signal()).then(
+          () => "read",
+          (e: { message: string; transient: boolean }) => (e.transient ? "retried" : e.message)
+        );
+      for (let spell = 0; spell < 2; spell++) {
+        behaviour.dies = true;
+        expect(await outcome()).toBe("retried");
+        // The next process loads but reads nothing, and is let go when idle.
+        behaviour.dies = false;
+        behaviour.fails = true;
+        expect(await outcome()).toBe("the model couldn't read this screen");
+        behaviour.fails = false;
+        expect(h.reader.loaded).toBe(true);
+        await vi.advanceTimersByTimeAsync(IDLE_MS);
+        expect(h.reader.loaded).toBe(false);
+      }
+      // The third loss in a row, two idle spells later, is reported, not retried.
+      behaviour.dies = true;
+      expect(await outcome()).toBe("the model stopped");
+      const made = h.made.length;
+      expect(await outcome()).toBe("the model keeps failing to run");
+      expect(h.made).toHaveLength(made);
+    });
+
+    it("leaves no timer behind once the model is let go", async () => {
+      vi.useFakeTimers();
+      const h = await harness("/models/light", IDLE_MS);
+      await h.reader.read(input({ lines }), signal());
+      expect(vi.getTimerCount()).toBe(1);
+      h.reader.release();
+      expect(vi.getTimerCount()).toBe(0);
+      await h.reader.read(input({ lines }), signal());
+      h.reader.retireIdle();
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 });
