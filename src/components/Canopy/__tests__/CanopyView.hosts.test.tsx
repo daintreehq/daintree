@@ -1050,7 +1050,9 @@ describe("All hosts", () => {
     );
     expect(document.body.textContent!.split("assistants are listed")).toHaveLength(2);
     // The note folds away with the section, and comes back once with it.
-    const bar = document.querySelector<HTMLButtonElement>("button[aria-controls=canopy-assistants]")!;
+    const bar = document.querySelector<HTMLButtonElement>(
+      "button[aria-controls=canopy-assistants]"
+    )!;
     fireEvent.click(bar);
     expect(document.body.textContent).not.toContain("assistants are listed");
     fireEvent.click(bar);

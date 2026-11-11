@@ -591,6 +591,7 @@ describe("the docked global assistant (#16214)", () => {
 describe("the Assistants fold (#16759)", () => {
   const FOLDED = "daintree-canopy-assistants-folded";
   afterEach(() => {
+    vi.restoreAllMocks();
     window.localStorage.removeItem(FOLDED);
     useCanopyStore.setState({ assistantsExpanded: true });
   });
@@ -617,12 +618,11 @@ describe("the Assistants fold (#16759)", () => {
     const store = await reload();
     expect(store.getState().assistantsExpanded).toBe(true);
     read.mockRestore();
-    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("full");
     });
     expect(() => store.getState().setAssistantsExpanded(false)).not.toThrow();
     expect(store.getState().assistantsExpanded).toBe(false);
-    write.mockRestore();
   });
 
   it("follows a sibling view's fold as soon as that view sets it", async () => {
