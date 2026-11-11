@@ -20,6 +20,7 @@ How community plugins become discoverable, and the trust policy that comes with 
 - **Updates.** **Check for updates** re-fetches the URL the plugin was installed from and compares digests. It has no notion of a catalog or of release versions, so a catalog couldn't steer it today ([Distribution → Updating a plugin](./distribution.md#updating-a-plugin)).
 - **Disclosure.** An archive opened from the operating system shows its capabilities before anything is written. A URL install shows none.
 - **Kill-switch.** The blocklist at `updates.daintree.org/plugins/blocklist.json` matches by plugin name and version range, refuses to load a match, and unloads a running copy when a refreshed list arrives. It is the only control that reaches plugins already installed.
+- **Catalog client.** The main process can fetch `updates.daintree.org/plugins/catalog.json`, validate it and cache it under `userData` (`PluginCatalogService`), following the rules in [Reading the catalog](#reading-the-catalog). Nothing calls it yet: no fetch happens at startup, and Browse, deep links and catalog updates are still planned.
 
 ## Options compared
 
@@ -61,6 +62,16 @@ Each entry is one reviewed release:
 - `url` is a versioned asset, never a `latest/download` URL: a mutable URL can serve bytes nobody reviewed.
 - `sha256` is the digest of the bytes at `url` when the entry was reviewed.
 - `capabilities` is the manifest's list at review time, so a change shows up as a diff in the pull request.
+
+### Reading the catalog
+
+**Shipped** in the app, ahead of the catalog itself.
+
+- The file is `{ "entries": [ ... ] }`. Unknown fields are ignored, and so are capability names the reading build doesn't know: the list is shown, never granted.
+- An entry is valid when `id` is a scoped plugin name outside `daintree.*`, `version` is canonical semver, `repo` is `https://github.com/{owner}/{repo}`, `url` is a `.dntr` asset under that repository's `releases/download/{tag}/` (never `releases/latest/download`, never a tag named `latest`), and `sha256` is 64 hex digits.
+- One malformed entry or a repeated `(id, version)` rejects the whole file, and the last good copy stays cached. A partly read catalog would make a missing release ambiguous, so "not listed" always means delisted.
+- Browsing reuses a copy fetched in the last 15 minutes, and falls back to an older one, marked stale, when it can't refresh. Installing or updating always fetches again, so offline nothing installs from the catalog, and a caller can tell a stale or unavailable catalog from a release that isn't listed.
+- A 404 means the catalog isn't published, not an error.
 
 ### Review
 
@@ -104,7 +115,7 @@ Pinning only the repository is the Obsidian model, where every release after the
 | Approved bytes differ from installed bytes | An update confirm already installs only the digest its preview was read from. Binding a URL install's disclosure to the bytes installed is planned. An archive opened from the operating system is previewed and then installed from its path without a digest binding. |
 | A malformed or stripped binding | The installer re-validates every binding it is given and refuses a malformed one. The CLI sends a digest over its own method, which requires one, so a Daintree too old to check it refuses the call instead of installing. Ordinary install routes still accept no binding at all. |
 | The catalog itself is compromised | It can list any URL with any digest, so the catalog repository's review and HTTPS are trust roots. Signing alone doesn't change that while the catalog is also what names each publisher's key or identity; it would need an identity policy trusted independently of the catalog. |
-| A stale catalog (planned policy) | Browsing may show a cached catalog. A new install or update needs a fresh one, since a stale one may still list a release that was pulled. |
+| A stale catalog | Browsing may show a cached catalog. A new install or update needs a fresh one, since a stale one may still list a release that was pulled. The catalog client enforces this; no install route reads the catalog yet. |
 | Offline | Planned policy: nothing new installs from the catalog. Today: installed plugins keep running, the last cached blocklist stays enforced, and a local `.dntr` can still be installed with `--sha256`. |
 | A malicious but faithfully reviewed plugin | Not held: no sandbox. Disclosure, just-in-time consent on gated host surfaces, delisting and the blocklist are the controls. |
 | Revoked keys | Not applicable while archives are unsigned. |
