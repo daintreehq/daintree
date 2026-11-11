@@ -91,6 +91,7 @@ These are the host APIs a capability gates. Each throws an error prefixed `PERMI
 | `clipboard:read` | `host.clipboard.readText` | no |
 | `clipboard:write` | `host.clipboard.writeText`, `host.clipboard.writeImage` | no |
 | `project:dispatch` | `host.dispatch` with an explicit `options.projectId` from an installed plugin (even one naming the focused project), behind the user's **Allow project targeting** switch; a project plugin may name only its own project and needs neither | no |
+| `host:dispatch` | `host.remoteHosts.list()`, `host.dispatch` with `options.hostId`, and `host.agents.*` with `{ hostId }`, from an installed plugin, behind the user's **Allow host targeting** switch; each host then applies its own consent, built-in-only and confirm rules and its drive lease | no |
 
 `network:fetch`, `socket:connect`, `agent:invoke` and `agent:register` gate no host API: they are disclosure, plus input to the danger derivation (`agent:register` is also required by the `contributes.agents` manifest entry).
 
@@ -99,6 +100,7 @@ Three details that are easy to miss:
 - **The root class decides, not the capability's name.** A literal `allowedPaths` entry under the home directory is user-data class, so reaching a project through it needs `fs:user-data-*`. The plugin's own data directory is user-data class too: writing there through `host.fs` needs `fs:user-data-write` and the JIT grant like any other write.
 - **The JIT grant for filesystem writes is keyed on the strongest declared write capability**, `fs:project-write` if declared and otherwise `fs:user-data-write`, whichever class the target is in.
 - **`project:dispatch` has no JIT prompt.** The user's switch is the whole grant, so an unattended plugin fails fast rather than waiting on a dialog. A project plugin can restate its own project without the capability, and can never target another one even with it.
+- **`host:dispatch` has no JIT prompt either**, and a project plugin can never use it. The host admits the call as that plugin from that machine, never as an assistant, so no assistant credential, confirmations preference or approval travels with it.
 
 **Services between plugins need no capability, and carry none.** A plugin calls another plugin's service only after declaring the import in `contributes.services.requires`, and a provider answers only for services declared under its own manifest id, so neither side can impersonate the other. The provider runs under its own host and its own capabilities, consent grants and `host.account` connections; the consumer is told the provider's declared capabilities through `host.services.status` and gains none of them. Account tokens never cross: a provider that delegates work needing a connection does that work itself and returns the result. Nothing stops a provider's own code from returning what it chooses — that is a property of the provider, not a host guarantee.
 
