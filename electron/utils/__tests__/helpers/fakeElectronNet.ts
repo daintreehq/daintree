@@ -88,8 +88,14 @@ export class FakeClientRequest extends EventEmitter {
     message.push(null);
   }
 
+  /**
+   * Electron's `_die`. A request with no body is a finished, auto-destroyed
+   * writable by the time anything answers it, and on a destroyed request the
+   * error is emitted synchronously; only an unfinished one defers it.
+   */
   die(err?: Error): void {
-    if (err) process.nextTick(() => this.emit("error", err));
+    if (err && this.ended) this.emit("error", err);
+    else if (err) process.nextTick(() => this.emit("error", err));
     this.response?.destroy(err);
   }
 }

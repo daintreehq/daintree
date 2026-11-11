@@ -40,7 +40,13 @@ const capConsentMock = vi.hoisted(() => ({
 
 vi.mock("electron", () => ({
   app: appMock,
-  net: netMock,
+  // Electron's own net.fetch rejects every manual-mode redirect (#16855), so a
+  // download wired back to it fails here instead of reaching the scripted stub.
+  net: {
+    fetch: vi.fn(async () => {
+      throw new Error("Redirect was cancelled");
+    }),
+  },
   ipcMain: { on: vi.fn(), removeListener: vi.fn() },
 }));
 vi.mock("../../utils/netManualRedirectFetch.js", () => ({

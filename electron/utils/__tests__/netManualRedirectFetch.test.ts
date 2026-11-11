@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { getEventListeners } from "node:events";
 import { Readable } from "node:stream";
 import { createManualRedirectFetch } from "../netManualRedirectFetch.js";
-import { FakeElectronNet } from "./helpers/fakeElectronNet.js";
+import { FakeElectronNet, type FakeRoute } from "./helpers/fakeElectronNet.js";
 
 const START = "https://github.com/acme/plugin/releases/download/v1/p.dntr";
 const ASSET = "https://release-assets.githubusercontent.com/p.dntr?sig=x";
@@ -27,7 +27,9 @@ describe("createManualRedirectFetch", () => {
   });
 
   it("reports a relative Location as the URL Electron resolved", async () => {
-    const net = new FakeElectronNet({ [START]: { redirect: "https://github.com/next.dntr" } });
+    const net = new FakeElectronNet({
+      [START]: { redirect: "https://github.com/next.dntr", headers: { location: ["/next.dntr"] } },
+    });
 
     const response = await createManualRedirectFetch(net.request)(START, { redirect: "manual" });
 
@@ -190,17 +192,32 @@ describe("createManualRedirectFetch", () => {
     expect(net.requests).toHaveLength(0);
   });
 
-  it("leaves no abort listener on the signal once an exchange is over", async () => {
-    const controller = new AbortController();
-    const net = new FakeElectronNet({
-      [START]: { redirect: ASSET },
-      [ASSET]: { status: 200, body: "PK" },
-    });
-    const fetch = createManualRedirectFetch(net.request);
+  it("aborts the request and rejects when the response can't be built", async () => {
+    const net = new FakeElectronNet({ [START]: { status: 101 } });
 
-    await fetch(START, { redirect: "manual", signal: controller.signal });
-    const final = await fetch(ASSET, { redirect: "manual", signal: controller.signal });
-    await final.text();
+    await expect(createManualRedirectFetch(net.request)(START)).rejects.toThrow(RangeError);
+    expect(net.requests[0]!.aborted).toBe(true);
+  });
+
+  it.each<[string, FakeRoute, RequestInit?]>([
+    ["a manual redirect", { redirect: ASSET }],
+    ["a body read to its end", { status: 200, body: "PK" }],
+    ["a HEAD response", { status: 200 }, { method: "HEAD" }],
+    ["a 204", { status: 204 }],
+    ["a request error", { error: "net::ERR_CONNECTION_RESET" }],
+    ["a response that can't be built", { status: 101 }],
+  ])("leaves no abort listener on the signal after %s", async (_, route, init) => {
+    const controller = new AbortController();
+    const net = new FakeElectronNet({ [START]: route });
+
+    await createManualRedirectFetch(net.request)(START, {
+      redirect: "manual",
+      ...init,
+      signal: controller.signal,
+    }).then(
+      (response) => response.arrayBuffer(),
+      () => undefined
+    );
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);

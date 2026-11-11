@@ -56,12 +56,18 @@ vi.mock("node:dns/promises", () => ({
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: { on: vi.fn(), removeListener: vi.fn() },
-  net: { fetch: (...args: unknown[]) => netFetch(...args) },
+  // Electron's own net.fetch rejects every manual-mode redirect (#16855), so a
+  // download wired back to it fails here instead of reaching the scripted stub.
+  net: {
+    fetch: vi.fn(async () => {
+      throw new Error("Redirect was cancelled");
+    }),
+  },
   BrowserWindow: { getFocusedWindow: vi.fn(() => null) },
   dialog: { showOpenDialog: vi.fn() },
 }));
 // URL downloads fetch through the manual-redirect adapter over `net.request`;
-// route it to the same stub so each case still scripts every hop.
+// route it to the stub so each case still scripts every hop.
 vi.mock("../../../utils/netManualRedirectFetch.js", () => ({
   createManualRedirectFetch: () => (url: string, init?: RequestInit) => netFetch(url, init),
 }));
