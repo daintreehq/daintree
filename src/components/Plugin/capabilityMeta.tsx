@@ -220,7 +220,7 @@ export function CapabilityRow({
         <AlertTriangle className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${SEVERITY_TEXT_CLASS.warning}`} />
       ) : (
         <span
-          className="w-1.5 h-1.5 rounded-full bg-daintree-text/30 shrink-0 mt-[7px]"
+          className="w-1.5 h-1.5 rounded-full bg-text-primary/30 shrink-0 mt-[7px]"
           aria-hidden
         />
       )}

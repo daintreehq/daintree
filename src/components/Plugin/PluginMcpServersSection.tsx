@@ -352,7 +352,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
               )}
 
               {hasOutput && (
-                <div className="border-t border-daintree-border/60">
+                <div className="border-t border-border-default/60">
                   <button
                     type="button"
                     onClick={() => void toggleStderr(row, isOpen)}

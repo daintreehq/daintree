@@ -295,7 +295,7 @@ export function CrashRecoveryDialog({
                   </span>
                 </div>
                 <div
-                  className="max-h-48 overflow-y-auto divide-y divide-daintree-border/50"
+                  className="max-h-48 overflow-y-auto divide-y divide-border-default/50"
                   data-testid="panel-list"
                 >
                   {panels.map((panel) => (
@@ -523,7 +523,7 @@ export function CrashRecoveryDialog({
                       Recent actions ({recentActions.length})
                     </div>
                     <div
-                      className="max-h-32 overflow-y-auto rounded bg-overlay-soft divide-y divide-daintree-border/40"
+                      className="max-h-32 overflow-y-auto rounded bg-overlay-soft divide-y divide-border-default/40"
                       data-testid="actions-list"
                     >
                       {actionsNewestFirst.map((action) => (

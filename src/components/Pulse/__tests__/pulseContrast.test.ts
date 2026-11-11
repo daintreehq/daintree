@@ -166,7 +166,7 @@ describe("PulseHeatmap — accent restraint (issue #7229)", () => {
   it("most-recent-active cell uses a neutral ring, not the accent token", async () => {
     const content = await readFile(HEATMAP_PATH, "utf-8");
     expect(content).not.toContain("ring-accent-primary");
-    expect(content).toContain("ring-daintree-text/25");
+    expect(content).toContain("ring-text-primary/25");
   });
 });
 

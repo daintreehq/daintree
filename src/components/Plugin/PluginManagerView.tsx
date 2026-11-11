@@ -996,7 +996,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         onDrop={pm.handleDrop}
       >
         {pm.isDragOverFiles && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-daintree-bg/80 border-2 border-dashed border-border-default pointer-events-none">
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-surface-canvas/80 border-2 border-dashed border-border-default pointer-events-none">
             <Download className="w-6 h-6 text-text-secondary" aria-hidden="true" />
             <p className="text-sm font-medium text-text-primary">Drop a .dntr file to install</p>
           </div>
