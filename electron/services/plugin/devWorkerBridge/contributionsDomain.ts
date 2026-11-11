@@ -51,6 +51,7 @@ import { createLogger } from "../../../utils/logger.js";
 import { invokeSignalFor } from "../pluginInvokeDeadline.js";
 import { observePluginPushListeners } from "../pluginInternalApprovers.js";
 import { PluginServiceUnavailableError } from "../pluginServiceInvocation.js";
+import { UNATTESTED_PLUGIN_ACTION_CONTEXT } from "../pluginActionContext.js";
 import type {
   DevWorkerBridgeContext,
   HostNotifyHandler,
@@ -119,8 +120,15 @@ export class ContributionsDomain {
       const namespacedId = `${this.ctx.pluginId}.${descriptor.id}`;
       // The host registers synchronously and resolves; await so a deep-
       // validation rejection routes to the register-error channel.
+      // A caller that passed no context attested nothing, so the worker hears
+      // the context that claims nothing.
       await this.ctx.host.registerAction(descriptor, (args, context) =>
-        this.ctx.invoke({ kind: "action", namespacedId, args, context })
+        this.ctx.invoke({
+          kind: "action",
+          namespacedId,
+          args,
+          context: context ?? UNATTESTED_PLUGIN_ACTION_CONTEXT,
+        })
       );
       return;
     },

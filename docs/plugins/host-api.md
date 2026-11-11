@@ -515,7 +515,7 @@ Unregistered automatically on plugin unload.
 
 ### The dispatch context
 
-The second argument says what the host knows about this dispatch. The host builds it for each call and freezes it, and nothing in the action's args can set or change it.
+The second argument says what the host knows about this dispatch. The host builds it for each call and freezes it, and nothing in the action's args can set or change it. It is optional in the `ActionHandler` type only so your tests can call a handler with its args alone; the host always passes it. Read it as `context?.approval`, so a missing context counts as no approval.
 
 ```ts
 interface PluginActionContext {

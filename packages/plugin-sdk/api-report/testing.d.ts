@@ -4285,8 +4285,12 @@ interface PluginActionContext {
  * not the {@link PluginIpcContext} a channel handler receives: action handlers
  * are addressed by action id, not by a per-invocation channel context. The
  * closure never crosses the IPC boundary.
+ *
+ * The host passes the context on every dispatch. It is optional in the type so
+ * a plugin's own tests can still call a handler with its args alone; read it as
+ * `context?.approval`, so a missing one counts as no approval.
  */
-type ActionHandler = (args: unknown, context: PluginActionContext) => unknown | Promise<unknown>;
+type ActionHandler = (args: unknown, context?: PluginActionContext) => unknown | Promise<unknown>;
 /**
  * One chunk of output from a managed process, delivered to
  * {@link PluginProcessHandle.onData}.

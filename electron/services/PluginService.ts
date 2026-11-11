@@ -2824,7 +2824,7 @@ export class PluginService {
     channel: string,
     resolvedPath: string
   ): ActionHandler {
-    return async (args: unknown, context: PluginActionContext) => {
+    return async (args: unknown, context?: PluginActionContext) => {
       const entry = this.pluginWorkers.get(pluginId);
       if (!entry || entry.activation.ok === false) {
         throw new Error(`Plugin "${pluginId}" is not activated; cannot run command "${channel}"`);
@@ -2833,7 +2833,12 @@ export class PluginService {
       // which survives the worker it described: after a crash the entry and its
       // stale `ok: true` both persist while a replacement forks. The bridge's
       // own generation state is the live fact, so it makes the final call.
-      return entry.bridge.invokeCommand(channel, resolvedPath, args, context);
+      return entry.bridge.invokeCommand(
+        channel,
+        resolvedPath,
+        args,
+        context ?? UNATTESTED_PLUGIN_ACTION_CONTEXT
+      );
     };
   }
 

@@ -5901,10 +5901,14 @@ export type PluginActionInvokeResult = object | string | number | boolean | null
  * not the {@link PluginIpcContext} a channel handler receives: action handlers
  * are addressed by action id, not by a per-invocation channel context. The
  * closure never crosses the IPC boundary.
+ *
+ * The host passes the context on every dispatch. It is optional in the type so
+ * a plugin's own tests can still call a handler with its args alone; read it as
+ * `context?.approval`, so a missing one counts as no approval.
  */
 export type ActionHandler = (
   args: unknown,
-  context: PluginActionContext
+  context?: PluginActionContext
 ) => unknown | Promise<unknown>;
 
 /**
