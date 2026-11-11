@@ -334,6 +334,7 @@ describe("HybridInputBar taking back a held send's images (#16786)", () => {
     const { view, edit, pressEnter, previews } = await mount();
     await edit();
     await pressEnter();
+    expect(view.state.doc.toString()).toBe("");
 
     // The same image comes back in the next draft, its own preview still on its way.
     await act(async () => {
