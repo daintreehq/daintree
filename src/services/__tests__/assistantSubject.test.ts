@@ -389,7 +389,10 @@ describe("assistant subject adapter", () => {
       expect(remoteHosts.switchWindowHost).not.toHaveBeenCalled();
 
       canopyHost.resolveAssistant.mockResolvedValueOnce({ ...destination, hostId: "studio" });
-      remoteHosts.switchWindowHost.mockResolvedValueOnce({ outcome: "superseded", hostId: "studio" });
+      remoteHosts.switchWindowHost.mockResolvedValueOnce({
+        outcome: "superseded",
+        hostId: "studio",
+      });
       expect(await openAssistantFromCanopyWindow(remote)).toEqual({
         ok: false,
         reason: "not-switched",

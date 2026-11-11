@@ -1615,7 +1615,9 @@ export async function isAssistantLaneAttached(projectId: string, lane: number): 
   const { helpSessionService } = await import("../../services/HelpSessionService.js");
   return helpSessionService
     .listRunningLanes()
-    .some((running) => running.projectId === projectId && running.slot === lane && running.attached);
+    .some(
+      (running) => running.projectId === projectId && running.slot === lane && running.attached
+    );
 }
 
 /**
