@@ -348,6 +348,9 @@ export function BrowserToolbar({
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const zoomClosedOutsideRef = useRef(false);
   const historyCloseRef = useRef<"outside" | "select" | null>(null);
+  // Radix's pointer-up fallback (press on padding, release over an entry) clicks
+  // with detail 0, which only a pointer press inside the menu tells from Enter.
+  const historyPointerInsideRef = useRef(false);
   const errorId = useId();
   const listboxId = useId();
 
@@ -781,7 +784,12 @@ export function BrowserToolbar({
       <DropdownMenu
         open={longPressDir === dir}
         onOpenChange={(open) => {
-          if (!open) setLongPressDir(null);
+          if (open) {
+            historyCloseRef.current = null;
+            historyPointerInsideRef.current = false;
+          } else {
+            setLongPressDir(null);
+          }
         }}
       >
         {/* The button itself keeps plain click and Enter as navigation, so the
@@ -803,19 +811,25 @@ export function BrowserToolbar({
             // A vetoed interaction leaves the menu open.
             if (event.defaultPrevented) historyCloseRef.current = null;
           }}
+          onPointerDown={() => {
+            historyPointerInsideRef.current = true;
+          }}
           onClick={(event) => {
             const onItem =
               event.target instanceof Element && event.target.closest('[role="menuitem"]');
-            historyCloseRef.current = onItem && event.detail > 0 ? "select" : null;
+            historyCloseRef.current =
+              onItem && (event.detail > 0 || historyPointerInsideRef.current) ? "select" : null;
           }}
           onKeyDown={() => {
             historyCloseRef.current = null;
+            historyPointerInsideRef.current = false;
           }}
           onCloseAutoFocus={(e) => {
             // Radix would restore to the inert stand-in, so the restore is ours.
             e.preventDefault();
             const closedBy = historyCloseRef.current;
             historyCloseRef.current = null;
+            historyPointerInsideRef.current = false;
             // Jumping to the oldest or newest entry disables this direction's
             // button, so focus falls back to the other one.
             const other = dir === "back" ? "forward" : "back";

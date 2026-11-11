@@ -1358,6 +1358,31 @@ describe("BrowserToolbar back/forward history menu", () => {
       expect(focusBack).toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
     });
 
+    it("treats Radix's pointer-up fallback as a mouse selection", async () => {
+      const { back, menu } = await openBackMenu();
+      const focusBack = vi.spyOn(back, "focus");
+      const item = menu.querySelector('[role="menuitem"]') as HTMLElement;
+
+      // Press on padding, release over an entry: Radix synthesizes a click with
+      // detail 0, which is only told from Enter by the press inside the menu.
+      fireEvent.pointerDown(menu, { pointerType: "mouse" });
+      fireEvent.click(item, { detail: 0 });
+      await waitFor(() => expect(focusBack).toHaveBeenCalled());
+
+      expect(focusBack).toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
+    });
+
+    it("falls back to the toolbar, ringless, when the dismissing press took no focus", async () => {
+      const { back, menu } = await openBackMenu();
+      const focusBack = vi.spyOn(back, "focus");
+
+      fireEvent.pointerDown(document.body, { pointerType: "mouse" });
+      await waitFor(() => expect(menu.isConnected).toBe(false));
+      await waitFor(() => expect(focusBack).toHaveBeenCalled());
+
+      expect(focusBack).toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
+    });
+
     it("still restores focus visibly after a keyboard selection", async () => {
       const { back, menu } = await openBackMenu();
       const focusBack = vi.spyOn(back, "focus");
@@ -1375,6 +1400,47 @@ describe("BrowserToolbar back/forward history menu", () => {
     const event = fireEvent.contextMenu(getByTestId("browser-forward"));
     expect(event).toBe(true);
     expect(queryByRole("menu")).toBeNull();
+  });
+});
+
+describe("BrowserToolbar history menu focus after jumping to the oldest entry", () => {
+  beforeAll(async () => {
+    const { primeRadix } = await import("@/components/ui/radix-loader");
+    await primeRadix();
+  });
+
+  const entries = [
+    { index: 0, url: "http://localhost:5173/", title: "Home" },
+    { index: 1, url: "http://localhost:5173/dashboard", title: "Dashboard" },
+    { index: 2, url: "http://localhost:5173/pricing", title: "Pricing" },
+  ];
+
+  function Harness() {
+    const [activeIndex, setActiveIndex] = useState(2);
+    const canGoBack = activeIndex > 0;
+    const canGoForward = activeIndex < entries.length - 1;
+    return (
+      <BrowserToolbar
+        {...defaultProps}
+        canGoBack={canGoBack}
+        canGoForward={canGoForward}
+        navSnapshot={{ entries, activeIndex, canGoBack, canGoForward }}
+        onGoToHistoryIndex={setActiveIndex}
+      />
+    );
+  }
+
+  it("lands on Forward when Back becomes disabled after an Enter selection", async () => {
+    const { getByTestId, findByRole } = render(<Harness />);
+    fireEvent.contextMenu(getByTestId("browser-back"));
+    const menu = await findByRole("menu", { name: "Back history" });
+    const oldest = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
+      (item) => item.textContent?.includes("Home")
+    )!;
+    oldest.focus();
+    fireEvent.keyDown(oldest, { key: "Enter" });
+
+    await waitFor(() => expect(document.activeElement).toBe(getByTestId("browser-forward")));
   });
 });
 
