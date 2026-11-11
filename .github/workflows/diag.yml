@@ -6,7 +6,11 @@ permissions:
   contents: read
 jobs:
   repro:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-15-intel]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
@@ -39,12 +43,9 @@ jobs:
           run() { mkdir -p "out/$1"; OUT_DIR="$PWD/out/$1" PROBE="$RUNNER_TEMP/probe" "$E" repro.cjs || echo "variant $1 exited $?"; sleep 3; }
           VARIANT=none run none
           VARIANT=restack run restack
-          VARIANT=restack RESTACK_DELAY_MS=150 run restack-150
-          VARIANT=restack RESTACK_DELAY_MS=400 run restack-400
-          VARIANT=restack-entering RESTACK_DELAY_MS=150 run entering-150
           VARIANT=restack GAP_MS=300 PRIMARY_SETTLE_MS=300 run restack-overlap
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: diag-out
+          name: diag-out-${{ matrix.os }}
           path: out/
