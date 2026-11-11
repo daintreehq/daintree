@@ -425,12 +425,11 @@ function PanelHeaderComponent({
   const readoutClear = useReadoutClearance(readoutRef, isMaximized && activeCount > 0);
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
 
-  // Only a pane with launch flags reads settings, so the rest never re-render
-  // on a settings change.
-  const bypassSettings = useAgentSettingsStore((s) =>
-    agentId && agentLaunchFlags?.length ? s.settings : null
+  // Selected as a boolean, so a settings change re-renders only a header whose
+  // mark flips.
+  const hasDangerousFlags = useAgentSettingsStore((s) =>
+    hasBypassFlags(agentLaunchFlags, agentId, s.settings)
   );
-  const hasDangerousFlags = hasBypassFlags(agentLaunchFlags, agentId, bypassSettings);
 
   // Watch state — only relevant for agent panels
   const isWatched = usePanelStore((state) => state.watchedPanels.has(id));

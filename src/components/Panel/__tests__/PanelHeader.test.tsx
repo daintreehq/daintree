@@ -2176,11 +2176,8 @@ describe("PanelHeader", () => {
       expect(screen.queryByLabelText("Launched with dangerous permissions")).toBeNull();
     });
 
-    it("shows the mark for a configured multi-token bypass", () => {
+    it("shows the mark once a configured multi-token bypass is read from settings", () => {
       const previous = useAgentSettingsStore.getState().settings;
-      useAgentSettingsStore.setState({
-        settings: { agents: { codex: { dangerousArgs: "-c approval_policy=never" } } },
-      });
       try {
         render(
           <PanelHeader
@@ -2190,6 +2187,13 @@ describe("PanelHeader", () => {
             })}
           />
         );
+        expect(screen.queryByLabelText("Launched with dangerous permissions")).toBeNull();
+
+        act(() => {
+          useAgentSettingsStore.setState({
+            settings: { agents: { codex: { dangerousArgs: "-c approval_policy=never" } } },
+          });
+        });
         expect(screen.queryByLabelText("Launched with dangerous permissions")).not.toBe(null);
       } finally {
         useAgentSettingsStore.setState({ settings: previous });
@@ -2646,6 +2650,7 @@ describe("PanelHeader", () => {
           })}
         />
       );
+      expect(screen.queryByLabelText("Launched with dangerous permissions")).not.toBe(null);
       const header = document.querySelector("[data-pane-chrome]")!;
       // The watch bell is a membership state, and the marks are status; accent
       // is reserved for focus rings (the `focus-visible:` prefix) and nothing
