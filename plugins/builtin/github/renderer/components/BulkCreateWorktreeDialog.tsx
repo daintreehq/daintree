@@ -37,6 +37,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
+import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import {
   useRecipePicker,
   resolveEligibleDefaultRecipeId,
@@ -110,13 +111,12 @@ function exitedNonZero(panel: PanelInstance): boolean {
   return isPtyPanel(panel) && panel.exitCode !== undefined && panel.exitCode !== 0;
 }
 
-// Broader than verification's crash check: a restart the user tried by hand
-// clears the exit code even when the replacement never came up.
-function terminalIsDead(panel: PanelInstance): boolean {
-  return (
-    isPtyPanel(panel) &&
-    (exitedNonZero(panel) || panel.restartError !== undefined || panel.spawnStatus === "failed")
-  );
+// A terminal mid-restart belongs to whoever is restarting it, and a restart
+// that failed can't be told from one that left the old process running, so
+// neither counts: Retry must never trash or duplicate a live terminal.
+function terminalIsDead(panelId: string, panel: PanelInstance): boolean {
+  if (!isPtyPanel(panel) || panel.isRestarting || isTerminalRestarting(panelId)) return false;
+  return exitedNonZero(panel) || panel.spawnStatus === "failed";
 }
 
 /**
@@ -137,13 +137,11 @@ function releaseDeadTerminals(
   for (const [index, panelId] of [...tracked.terminalIdByIndex]) {
     const panel = panelsById[panelId];
     const owned =
-      panel !== undefined &&
-      panel.location !== "trash" &&
-      panel.worktreeId === tracked.worktreeId;
+      panel !== undefined && panel.location !== "trash" && panel.worktreeId === tracked.worktreeId;
     if (!owned) {
       // A healthy entry the user closed or moved stays that way.
       tracked.terminalIdByIndex.delete(index);
-    } else if (terminalIsDead(panel)) {
+    } else if (terminalIsDead(panelId, panel)) {
       trashPanel(panelId);
       tracked.terminalIdByIndex.delete(index);
       failed.add(index);

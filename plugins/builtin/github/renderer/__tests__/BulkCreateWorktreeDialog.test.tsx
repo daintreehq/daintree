@@ -176,8 +176,8 @@ let mockTerminals: Array<{
   exitCode?: number;
   worktreeId?: string;
   location?: string;
-  restartError?: unknown;
   spawnStatus?: string;
+  isRestarting?: boolean;
 }> = [];
 const mockAddPanel = vi.fn();
 const mockTrashPanel = vi.fn();
@@ -2250,7 +2250,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
       spawned: [{ index: 0, terminalId: "t-1" }],
       failed: [],
     });
-    mockTerminals = [{ id: "t-1", exitCode: undefined }];
+    mockTerminals = [{ id: "t-1", worktreeId: "wt-1", exitCode: undefined }];
 
     let assignCallCount = 0;
     mockAssignIssue.mockImplementation(() => {
@@ -2278,6 +2278,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     await advanceTimersGradually(5000);
 
     expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(1);
+    expect(mockTrashPanel).not.toHaveBeenCalled();
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
     expect(assignCallCount).toBe(2);
     expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
@@ -3013,6 +3014,12 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     onComplete: vi.fn(),
   };
 
+  // clearAllMocks keeps queued once-values, and a case that never relaunches
+  // leaves one behind for the next test to consume.
+  beforeEach(() => {
+    mockRunRecipeWithResults.mockReset();
+  });
+
   const recipeIndicesForCall = (call: number) =>
     (mockRunRecipeWithResults.mock.calls[call]?.[4] as { terminalIndices?: number[] } | undefined)
       ?.terminalIndices;
@@ -3226,21 +3233,30 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
 
   it.each([
     {
-      name: "a restart that failed is replaced",
-      atRetry: { exitCode: undefined, restartError: { message: "spawn failed" } },
+      name: "a terminal whose spawn failed is replaced",
+      atRetry: { exitCode: undefined, spawnStatus: "failed" },
       trashed: true,
+      relaunched: true,
     },
     {
       name: "a terminal moved to another worktree is relaunched but not trashed",
       atRetry: { exitCode: 1, worktreeId: "other-wt" },
       trashed: false,
+      relaunched: true,
     },
     {
       name: "a terminal already in the trash is relaunched without trashing it again",
       atRetry: { exitCode: 1, location: "trash" },
       trashed: false,
+      relaunched: true,
     },
-  ])("on retry, $name", async ({ atRetry, trashed }) => {
+    {
+      name: "a terminal mid-restart is neither trashed nor duplicated",
+      atRetry: { exitCode: 1, isRestarting: true },
+      trashed: false,
+      relaunched: false,
+    },
+  ])("on retry, $name", async ({ atRetry, trashed, relaunched }) => {
     mockSelectedRecipeId = "test-recipe";
     mockRunRecipeWithResults
       .mockResolvedValueOnce({
@@ -3273,10 +3289,14 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(recipeIndicesForCall(1)).toEqual([1]);
     if (trashed) expect(mockTrashPanel).toHaveBeenCalledWith("t-1");
     else expect(mockTrashPanel).not.toHaveBeenCalled();
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    if (relaunched) {
+      expect(recipeIndicesForCall(1)).toEqual([1]);
+      expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    } else {
+      expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("relaunches only the failed entry when a transient launch failure backs off", async () => {
