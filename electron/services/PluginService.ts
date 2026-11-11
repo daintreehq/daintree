@@ -5105,8 +5105,11 @@ export class PluginService {
       throw new Error(`No plugin handler registered for ${key}`);
     }
     // A dispatch context speaks for an action dispatch, so a call that carries
-    // one must reach an action: a channel handler would drop it unread.
-    if (actionContext !== undefined && !actionHandler) {
+    // one must reach an action this plugin registered. One whose metadata came
+    // over `plugin:actions-register` may still be served by a channel handler
+    // under its id, which runs as it always has: its `(ctx, ...args)` shape
+    // has no place for the context.
+    if (actionContext !== undefined && !actionHandler && descriptor?.pluginId !== pluginId) {
       throw new Error(`No plugin action registered for ${key}`);
     }
 

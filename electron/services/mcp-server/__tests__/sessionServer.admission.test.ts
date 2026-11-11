@@ -1598,20 +1598,32 @@ describe("plugin actions opted into the project Assistant (#16751)", () => {
     }
   );
 
-  it("keeps it from an agent pane, saying it is a plugin's rather than blaming a tier", async () => {
-    const deps = reachDeps("external", "full");
-    const server = createSessionServer("s-reach", deps);
+  it.each([
+    ["an agent pane", true],
+    ["an api-key client's ladder session", false],
+  ] as const)(
+    "keeps it from %s, saying it is a plugin's rather than blaming a tier",
+    async (_label, pane) => {
+      const deps = reachDeps("external", "full");
+      // A pane is the session that can ask for what is above its tier.
+      const requestApproval = vi.fn();
+      const server = createSessionServer(
+        "s-reach",
+        pane ? Object.assign(deps, { requestApproval }) : deps
+      );
 
-    expect((await listTools(server)).tools.map((t) => t.name)).not.toContain(REACH);
-    const result = await callTool(server, { name: REACH, arguments: { stageId: "s1" } });
+      expect((await listTools(server)).tools.map((t) => t.name)).not.toContain(REACH);
+      const result = await callTool(server, { name: REACH, arguments: { stageId: "s1" } });
 
-    expect(result.isError).toBe(true);
-    const text = JSON.stringify(result.content);
-    expect(text).toContain("TIER_NOT_PERMITTED");
-    expect(text).toContain("offered only to Daintree's own assistant");
-    expect(text).not.toContain("can reach any terminal");
-    expect(deps.dispatchAction).not.toHaveBeenCalled();
-  });
+      expect(result.isError).toBe(true);
+      const text = JSON.stringify(result.content);
+      expect(text).toContain("TIER_NOT_PERMITTED");
+      expect(text).toContain("offered only to Daintree's own assistant");
+      expect(text).not.toContain("can reach any terminal");
+      expect(requestApproval).not.toHaveBeenCalled();
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    }
+  );
 });
 
 // Picking work, triaging it and confirming an agent's PR passed CI happen in the

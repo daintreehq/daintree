@@ -1798,6 +1798,47 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
     expect(Object.isFrozen(received)).toBe(true);
   });
 
+  it.each([
+    ["an unknown field", { dispatchSource: "user", approval: "person", hostConfirmed: true }],
+    [
+      "a plugin dispatch claiming a person's approval",
+      { dispatchSource: "plugin", approval: "person" },
+    ],
+    ["no context", undefined],
+  ])(
+    "refuses a registered action's invoke with %s, without running it (#16751)",
+    async (_l, context) => {
+      const { proxy, sent } = makeProxy();
+      const handler = vi.fn(async () => "resumed");
+      proxy.host.registerAction(
+        {
+          id: "resume",
+          title: "Resume",
+          description: "Lifts a stop",
+          category: "Test",
+          kind: "command",
+          danger: "confirm",
+        },
+        handler
+      );
+
+      proxy.handleMessage({
+        type: "invoke",
+        requestId: "a1",
+        kind: "action",
+        namespacedId: "acme.demo.resume",
+        args: {},
+        context,
+      } as any);
+      await vi.waitFor(() => {
+        expect(sent.find((m) => m.type === "invoke-result" && m.requestId === "a1")).toBeDefined();
+      });
+
+      expect(sent.find((m) => m.type === "invoke-result")).toMatchObject({ ok: false });
+      expect(handler).not.toHaveBeenCalled();
+    }
+  );
+
   it("carries an action's resultSchema across the port for main to enforce", async () => {
     // Dropped here, a worker plugin's results would go unchecked and its
     // catalog entry would publish no contract, with nothing failing to say so.

@@ -212,7 +212,11 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
   PluginDevWorkerMainBridge: devWorkerMock.MockPluginDevWorkerMainBridge,
 }));
 
-import { PluginService } from "../PluginService.js";
+import { PluginService, pluginService } from "../PluginService.js";
+import {
+  isPluginAssistantReachAction,
+  pluginAssistantReachActionIds,
+} from "../plugin/pluginAssistantReach.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { type PluginIpcContext } from "../../../shared/types/plugin.js";
@@ -331,6 +335,27 @@ describe("Plugin action registry", () => {
       service.registerPluginAction("acme.my-plugin", { ...validContribution(), danger: "confirm" });
       expect(service.isAssistantReachAction("acme.my-plugin.doThing")).toBe(false);
     });
+  });
+
+  it("answers the MCP tier gate from the app's own plugin service (#16751)", () => {
+    // The gate reads reach through the source the singleton installs when its
+    // module loads; without that, no opted-in action would ever be offered.
+    const has = vi.spyOn(pluginService, "isAssistantReachAction").mockReturnValue(true);
+    const ids = vi
+      .spyOn(pluginService, "listAssistantReachActionIds")
+      .mockReturnValue(["acme.my-plugin.doThing"]);
+    try {
+      expect(isPluginAssistantReachAction("acme.my-plugin.doThing")).toBe(true);
+      expect(has).toHaveBeenCalledWith("acme.my-plugin.doThing");
+      expect(pluginAssistantReachActionIds()).toEqual(["acme.my-plugin.doThing"]);
+      has.mockReturnValue(false);
+      ids.mockReturnValue([]);
+      expect(isPluginAssistantReachAction("acme.my-plugin.doThing")).toBe(false);
+      expect(pluginAssistantReachActionIds()).toEqual([]);
+    } finally {
+      has.mockRestore();
+      ids.mockRestore();
+    }
   });
 
   it("registerPluginAction throws when the plugin is not loaded", () => {
@@ -987,6 +1012,33 @@ describe("createHost — registerAction", () => {
     const context = handler.mock.calls[0]![1];
     expect(context).toEqual({ dispatchSource: "plugin" });
     expect(Object.isFrozen(context)).toBe(true);
+  });
+
+  it("still runs an action served by a channel handler under its id when a context comes with it (#16751)", async () => {
+    // The palette's synthetic action sends a context on every dispatch, so an
+    // action registered over plugin:actions-register and answered by a channel
+    // handler must keep working.
+    const channelHandler = vi.fn().mockReturnValue("from channel");
+    service.registerPluginAction("acme.act-test", {
+      id: "acme.act-test.plan-from-issue",
+      title: "Plan from issue",
+      description: "Turn an issue into a session",
+      category: "Planner",
+      kind: "command",
+      danger: "safe",
+    });
+    service.registerHandler("acme.act-test", "acme.act-test.plan-from-issue", channelHandler);
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      [{ issue: 1 }],
+      Object.freeze({ dispatchSource: "user" as const })
+    );
+
+    expect(result).toBe("from channel");
+    expect(channelHandler).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a dispatch context aimed at a channel handler rather than an action (#16751)", async () => {

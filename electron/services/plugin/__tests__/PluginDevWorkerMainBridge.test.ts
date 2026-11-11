@@ -974,16 +974,20 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(host.registerAction).toHaveBeenCalledTimes(1);
     const wrapper = host.registerAction.mock.calls[0][1] as (
       a: unknown,
-      context: typeof USER_CONTEXT
+      context: unknown
     ) => Promise<unknown>;
-
-    const resultPromise = wrapper({ name: "world" }, USER_CONTEXT);
-    const invoke = workerHost.sent.find((m) => m.type === "invoke" && m.kind === "action");
-    expect(invoke).toMatchObject({
-      namespacedId: "acme.demo.greet",
-      args: { name: "world" },
-      context: { dispatchSource: "user" },
+    const context = Object.freeze({
+      dispatchSource: "agent" as const,
+      origin: "assistant" as const,
+      approval: "person" as const,
     });
+
+    const resultPromise = wrapper({ name: "world" }, context);
+    const invoke = workerHost.sent.find((m) => m.type === "invoke" && m.kind === "action");
+    expect(invoke).toMatchObject({ namespacedId: "acme.demo.greet", args: { name: "world" } });
+    // Every fact the host attested reaches the worker, as a fresh copy.
+    expect(invoke.context).toEqual(context);
+    expect(invoke.context).not.toBe(context);
 
     // Worker replies.
     workerHost.emit("worker-message", {
