@@ -2,8 +2,12 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { PluginCatalogBrowseResult, PluginCatalogListing } from "@shared/types/plugin";
-import { COMMUNITY_LISTING_NOTE, PluginCommunityBrowse } from "../PluginCommunityBrowse";
+import type {
+  PluginCatalogBrowseResult,
+  PluginCatalogFailure,
+  PluginCatalogListing,
+} from "@shared/types/plugin";
+import { PluginCommunityBrowse } from "../PluginCommunityBrowse";
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -30,9 +34,12 @@ const LINEAR: PluginCatalogListing = {
 
 function available(
   listings: PluginCatalogListing[] = [LINEAR, SESSION],
-  extra: Partial<Extract<PluginCatalogBrowseResult, { status: "available" }>> = {}
+  staleBecause?: PluginCatalogFailure
 ): PluginCatalogBrowseResult {
-  return { status: "available", listings, fetchedAt: Date.now(), stale: false, ...extra };
+  const fetchedAt = Date.now();
+  return staleBecause === undefined
+    ? { status: "available", listings, fetchedAt, stale: false }
+    : { status: "available", listings, fetchedAt, stale: true, failure: staleBecause };
 }
 
 function deferred<T>() {
@@ -93,9 +100,17 @@ describe("PluginCommunityBrowse", () => {
     renderBrowse();
     await screen.findByRole("list", { name: "Community plugins" });
 
+    // Every card says what its listing is and what the review didn't cover.
+    for (const id of [SESSION.id, LINEAR.id]) {
+      const text = listingCard(id).textContent ?? "";
+      expect(text).toMatch(/community listing/i);
+      expect(text).toMatch(/reviewed for its source and bytes/i);
+      expect(text).toMatch(/not a Daintree endorsement/i);
+      expect(text).toMatch(/not checked for safety/i);
+    }
+
     const card = listingCard(SESSION.id);
     expect(within(card).getByText("v0.1.1")).toBeTruthy();
-    expect(within(card).getByText(COMMUNITY_LISTING_NOTE)).toBeTruthy();
     const capabilities = within(card).getByRole("list", { name: "Capabilities" });
     expect(within(capabilities).getByText("Read app data")).toBeTruthy();
     // A capability this build doesn't know is shown as written, never dropped.
@@ -150,29 +165,38 @@ describe("PluginCommunityBrowse", () => {
     renderBrowse();
     await screen.findByRole("list", { name: "Community plugins" });
     const search = screen.getByRole("searchbox", { name: "Search community plugins" });
+    const shown = () =>
+      [SESSION.id, LINEAR.id].filter((id) => screen.queryByText(id) !== null).sort();
 
-    fireEvent.change(search, { target: { value: "linear" } });
-    expect(screen.queryByText(SESSION.id)).toBeNull();
-    expect(screen.getByText(LINEAR.id)).toBeTruthy();
+    // The id: "daintreehq.continue" appears in no repository path.
+    fireEvent.change(search, { target: { value: "daintreehq.continue" } });
+    expect(shown()).toEqual([SESSION.id]);
 
-    fireEvent.change(search, { target: { value: "run commands" } });
-    expect(screen.queryByText(LINEAR.id)).toBeNull();
-    expect(screen.getByText(SESSION.id)).toBeTruthy();
-
+    // The repository as shown.
     fireEvent.change(search, { target: { value: "github.com/acme" } });
-    expect(screen.getByText(LINEAR.id)).toBeTruthy();
-    expect(screen.queryByText(SESSION.id)).toBeNull();
+    expect(shown()).toEqual([LINEAR.id]);
 
-    fireEvent.change(search, { target: { value: "nothing-matches" } });
+    // A capability by its label, and one this build doesn't know by its name.
+    fireEvent.change(search, { target: { value: "run commands" } });
+    expect(shown()).toEqual([SESSION.id]);
+    fireEvent.change(search, { target: { value: "future:thing" } });
+    expect(shown()).toEqual([SESSION.id]);
+
+    // Every word has to match the same listing.
+    fireEvent.change(search, { target: { value: "acme future:thing" } });
+    expect(shown()).toEqual([]);
     expect(screen.getByText("Try another search")).toBeTruthy();
+
     // The empty state's button, not the field's own clear control.
     const clear = screen
       .getAllByRole("button", { name: "Clear search" })
       .find((button) => button.textContent?.includes("Clear search"));
     if (!clear) throw new Error("No Clear search action");
+    clear.focus();
     fireEvent.click(clear);
-    expect(screen.getByText(LINEAR.id)).toBeTruthy();
-    expect(screen.getByText(SESSION.id)).toBeTruthy();
+    expect(shown()).toEqual([LINEAR.id, SESSION.id].sort());
+    // The button it pressed is gone; focus goes back to the search.
+    expect(document.activeElement).toBe(search);
   });
 
   it.each([
@@ -205,18 +229,34 @@ describe("PluginCommunityBrowse", () => {
     expect(await screen.findByText("Try browsing again later")).toBeTruthy();
   });
 
-  it("keeps a stale catalog's listings, saying it couldn't be refreshed", async () => {
+  it("keeps a stale catalog's listings until a retry replaces them", async () => {
+    const refreshed = deferred<PluginCatalogBrowseResult>();
     browseCatalog
-      .mockResolvedValueOnce(available([SESSION], { stale: true, failure: "unreachable" }))
-      .mockResolvedValueOnce(available([SESSION]));
+      .mockResolvedValueOnce(available([SESSION], "unreachable"))
+      .mockReturnValueOnce(refreshed.promise);
     renderBrowse();
 
     expect(await screen.findByText(/couldn't be refreshed, so it may be out of date/)).toBeTruthy();
     expect(screen.getByText(SESSION.id)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(screen.queryByText(/couldn't be refreshed/)).toBeNull());
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
+    // While the retry is in flight the stale copy stays up, still marked.
     expect(screen.getByText(SESSION.id)).toBeTruthy();
+    expect(screen.getByText(/couldn't be refreshed/)).toBeTruthy();
+
+    await act(async () => {
+      refreshed.resolve(available([LINEAR]));
+      await refreshed.promise;
+    });
+    expect(screen.queryByText(/couldn't be refreshed/)).toBeNull();
+    expect(screen.queryByText(SESSION.id)).toBeNull();
+    expect(screen.getByText(LINEAR.id)).toBeTruthy();
+    // The Retry it pressed went with the note; focus lands on the search.
+    expect(document.activeElement).toBe(
+      screen.getByRole("searchbox", { name: "Search community plugins" })
+    );
   });
 
   it("says when the catalog lists nothing yet", async () => {

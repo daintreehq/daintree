@@ -418,6 +418,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // a render, so two drops dispatched before React flushes could both read a
   // stale `false`; the ref flips immediately and serializes them.
   const installingRef = useRef(false);
+  // An HTTP update reading its unsaved panels after the confirm closed: no
+  // confirm or job marks it busy until the read settles.
+  const httpUpdateReadingRef = useRef(false);
   // Install progress + cancellation (#11302). `installJobIdRef` is the live
   // correlation key: the push channel is already scoped to this window, but one
   // window installs several archives in sequence (a multi-file drop), so events
@@ -659,6 +662,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const isInstallFlowBusy = useCallback(
     () =>
       showUrlDialogRef.current ||
+      installingRef.current ||
+      httpUpdateReadingRef.current ||
       urlPreviewingRef.current ||
       urlReviewRef.current !== null ||
       pendingHttpUrlRef.current !== null ||
@@ -1223,7 +1228,13 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     if (review) {
       const pluginId = review.update.plugin.manifest.name;
       const generation = listGenerationRef.current;
-      const current = await readUnsavedPanels(pluginId);
+      httpUpdateReadingRef.current = true;
+      let current: PluginUnsavedPanel[] | null;
+      try {
+        current = await readUnsavedPanels(pluginId);
+      } finally {
+        httpUpdateReadingRef.current = false;
+      }
       // A reopen abandoned this update (and any batch) while it was read.
       if (!isBatchActiveRef.current && listGenerationRef.current !== generation) return;
       if (current === null) {
@@ -1280,6 +1291,13 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       return;
     }
     if (installingRef.current) return;
+    // A preview with no dialog over the manager (a Browse listing, an install
+    // link) can still be downloading; a drop would take over its install job.
+    if (urlPreviewingRef.current || urlReviewRef.current !== null) {
+      setNoticeTone("warning");
+      setNotice("Finish or cancel the current install, then drop the file again.");
+      return;
+    }
     installingRef.current = true;
     setNotice(null);
     setError(null);

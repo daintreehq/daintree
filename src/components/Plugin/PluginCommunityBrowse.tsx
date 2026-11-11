@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AlertTriangle, OctagonAlert, RefreshCw } from "lucide-react";
 import type {
   BuiltInPluginCapability,
@@ -158,7 +158,7 @@ function ListingCard({
 
 function RetryButton({ onClick, loading }: { onClick: () => void; loading: boolean }) {
   return (
-    <Button variant="outline" size="sm" onClick={onClick} loading={loading}>
+    <Button variant="outline" size="sm" onClick={onClick} loading={loading} data-browse-retry="">
       <RefreshCw />
       Retry
     </Button>
@@ -189,6 +189,34 @@ export function PluginCommunityBrowse({
 }) {
   const { answer, refreshing, retry } = usePluginCatalogBrowse();
   const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // A retry's answer can unmount the Retry the user pressed (the listings
+  // replace the empty state, a fresh copy drops the stale note), which leaves
+  // focus on the page body. Hand it to what the answer put up instead: the
+  // search, a Retry that is still there, or the heading.
+  const retriedRef = useRef(false);
+  const retryAndKeepFocus = () => {
+    retriedRef.current = true;
+    retry();
+  };
+  useEffect(() => {
+    if (!retriedRef.current || refreshing) return;
+    retriedRef.current = false;
+    const focused = document.activeElement;
+    if (focused !== null && focused !== document.body && focused.isConnected) return;
+    const root = rootRef.current;
+    const target = ['input[type="search"]', "[data-browse-retry]", "h3"]
+      .map((selector) => root?.querySelector<HTMLElement>(selector))
+      .find((element) => element != null);
+    target?.focus({ preventScroll: true });
+  }, [answer, refreshing]);
+
+  const clearSearch = () => {
+    setQuery("");
+    searchRef.current?.focus();
+  };
   const tokens = useMemo(() => query.trim().toLowerCase().split(/\s+/).filter(Boolean), [query]);
 
   const result = answer?.kind === "result" ? answer.result : null;
@@ -200,7 +228,9 @@ export function PluginCommunityBrowse({
 
   const header = (
     <div>
-      <h3 className="text-lg font-semibold text-text-primary">Community plugins</h3>
+      <h3 tabIndex={-1} className="text-lg font-semibold text-text-primary">
+        Community plugins
+      </h3>
       <p className="text-sm text-text-secondary mt-1">
         Plugins listed in the community catalog. Each one runs with full access to your machine, so
         install only what you trust.
@@ -210,7 +240,7 @@ export function PluginCommunityBrowse({
 
   if (answer === null) {
     return (
-      <div className="space-y-6">
+      <div ref={rootRef} className="space-y-6">
         {header}
         <Skeleton label="Loading community plugins" className="space-y-3">
           {[0, 1, 2].map((i) => (
@@ -226,7 +256,7 @@ export function PluginCommunityBrowse({
     // catalog that couldn't be read; the hook logged why.
     const copy = UNAVAILABLE_COPY[result?.status === "unavailable" ? result.failure : "invalid"];
     return (
-      <div className="space-y-6">
+      <div ref={rootRef} className="space-y-6">
         {header}
         <div className="flex justify-center pt-8">
           <EmptyState
@@ -234,7 +264,7 @@ export function PluginCommunityBrowse({
             scale="canvas"
             title={copy.title}
             description={copy.description}
-            action={<RetryButton onClick={retry} loading={refreshing} />}
+            action={<RetryButton onClick={retryAndKeepFocus} loading={refreshing} />}
           />
         </div>
       </div>
@@ -242,13 +272,13 @@ export function PluginCommunityBrowse({
   }
 
   return (
-    <div className="space-y-4">
+    <div ref={rootRef} className="space-y-4">
       {header}
       {result?.status === "available" && result.stale && (
         <Callout
           severity="warning"
           size="compact"
-          action={<RetryButton onClick={retry} loading={refreshing} />}
+          action={<RetryButton onClick={retryAndKeepFocus} loading={refreshing} />}
         >
           <p>
             Showing the catalog from <TimeAgo timestamp={result.fetchedAt} verbose />. It
@@ -269,6 +299,7 @@ export function PluginCommunityBrowse({
         <>
           <SearchField
             size="compact"
+            inputRef={searchRef}
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -289,7 +320,7 @@ export function PluginCommunityBrowse({
                 title="Try another search"
                 description="No community plugin matches. Clear the search to see them all."
                 action={
-                  <Button variant="outline" size="sm" onClick={() => setQuery("")}>
+                  <Button variant="outline" size="sm" onClick={clearSearch}>
                     Clear search
                   </Button>
                 }

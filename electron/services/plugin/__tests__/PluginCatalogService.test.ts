@@ -699,6 +699,14 @@ describe("PluginCatalogService", () => {
       const fetchImpl = respondWith();
       const result = await service(fetchImpl).browse();
       expect(result).toMatchObject({ status: "available", stale: false, fetchedAt });
+      expect(result.status === "available" && result.listings).toEqual([
+        expect.objectContaining({ id: "acme.linear-context", version: "2.0.0-rc.1+build.7" }),
+        expect.objectContaining({
+          id: "daintreehq.continue-session",
+          version: "0.1.1",
+          capabilities: ["fs:user-data-read", "mcp:expose"],
+        }),
+      ]);
       expect(fetchImpl).not.toHaveBeenCalled();
     });
 
@@ -712,6 +720,10 @@ describe("PluginCatalogService", () => {
         failure: "unreachable",
         fetchedAt,
       });
+      expect(result.status === "available" && result.listings.map((l) => l.id)).toEqual([
+        "acme.linear-context",
+        "daintreehq.continue-session",
+      ]);
     });
 
     it("says why when there is no catalog at all", async () => {
