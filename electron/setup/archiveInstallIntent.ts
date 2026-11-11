@@ -5,7 +5,6 @@ import { CHANNELS } from "../ipc/channels.js";
 import { appendPendingError } from "../ipc/pendingErrorsStore.js";
 import { getAllAppWebContents } from "../window/webContentsRegistry.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { resolvePluginCategory } from "../../shared/config/pluginCategoryRegistry.js";
 import { getPaintedPrimaryWebContents, registerPaintedFlushListener } from "./deepLinkInstall.js";
 import type { MainProcessToastPayload } from "../../shared/types/ipc/maps.js";
 import type { ErrorRecord } from "../../shared/types/ipc/errors.js";
@@ -89,30 +88,6 @@ function surfaceArchiveError(fileName: string, detail: string): void {
   }
 }
 
-// Manifest strings are attacker-controlled and only bounded by the archive size
-// cap, so clamp what crosses IPC into the dialog. The full value still reaches
-// the installer, which does its own validation.
-const PREVIEW_TEXT_MAX = 200;
-
-// Unicode format controls (bidi overrides, zero-widths, line/paragraph
-// separators, C0/C1) can visually reorder or overpaint the trusted text beside
-// an interpolated field — U+202E flips everything rendered after it, which
-// would let a manifest spoof the dialog's own copy. Stripped before display;
-// RTL letters themselves pass through untouched. React text-node escaping
-// handles markup, not these.
-const UNSAFE_DISPLAY_CHARS =
-  // eslint-disable-next-line no-control-regex -- deliberately strips C0/C1 controls from attacker-controlled display text
-  /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
-
-function sanitizePreviewText(value: string): string {
-  return value.replace(UNSAFE_DISPLAY_CHARS, "");
-}
-
-function clampPreviewText(value: string): string {
-  const clean = sanitizePreviewText(value);
-  return clean.length > PREVIEW_TEXT_MAX ? `${clean.slice(0, PREVIEW_TEXT_MAX)}…` : clean;
-}
-
 /**
  * Deliver previewed intents to the primary window, oldest first. Stops at the
  * head the moment there is no painted primary or a send throws, so a teardown
@@ -143,8 +118,9 @@ registerPaintedFlushListener(flushArchiveInstallIntents);
 /**
  * Read each queued archive's manifest, one at a time. Serial so a slow first
  * manifest can't be overtaken by a later archive — arrival order is what the
- * user sees in the confirmation queue. `PluginArchive` is imported lazily to
- * keep `yauzl` and the manifest schema off the startup path (#9285).
+ * user sees in the confirmation queue. The preview module (and `PluginArchive`
+ * behind it) is imported lazily to keep `yauzl` and the manifest schema off the
+ * startup path (#9285).
  */
 async function runPreviewWorker(): Promise<void> {
   try {
@@ -152,72 +128,15 @@ async function runPreviewWorker(): Promise<void> {
       const job = previewQueue.shift()!;
       const fileName = path.basename(job.archivePath);
       try {
-        const { readArchiveManifest, readArchiveTemplateProjectPlugins } =
-          await import("../services/PluginArchive.js");
-        const manifest = await readArchiveManifest(job.archivePath);
-        const recipeContributions = manifest.contributes?.recipes ?? [];
-        const templateContributions = manifest.contributes?.projectTemplates ?? [];
-        // Only archives that declare templates pay for the entry scan.
-        const templateProjectPlugins =
-          templateContributions.length > 0
-            ? await readArchiveTemplateProjectPlugins(
-                job.archivePath,
-                templateContributions.map((template) => template.id)
-              )
-            : new Map<string, string[]>();
+        const { readArchiveManifestPreview, sanitizePreviewText } =
+          await import("../services/plugin/archiveManifestPreview.js");
+        const manifest = await readArchiveManifestPreview(job.archivePath);
         pendingIntents.push({
           intentId: randomUUID(),
           archivePath: job.archivePath,
           // Display copy only — `archivePath` stays verbatim for the installer.
           archiveFileName: sanitizePreviewText(fileName),
-          manifest: {
-            name: manifest.name,
-            displayName: manifest.displayName && clampPreviewText(manifest.displayName),
-            version: manifest.version,
-            category: resolvePluginCategory(manifest),
-            authors: (manifest.authors ?? []).map((author) => ({
-              ...author,
-              name: clampPreviewText(author.name),
-              ...(author.role !== undefined ? { role: sanitizePreviewText(author.role) } : {}),
-            })),
-            capabilities: manifest.capabilities ?? [],
-            // Recipes are executable content that ships with NO capability to
-            // advertise it, so the install confirmation is the only place a
-            // user sees them before approving (#11860). Names are
-            // plugin-author-controlled and cross IPC into a dialog, so they get
-            // the same clamp/sanitize treatment as author names.
-            // Optional access even though a parsed manifest always materializes
-            // `contributes`: this whole worker fails an archive closed on any
-            // throw, so a manifest shape that surprises us must degrade to "no
-            // recipes disclosed" rather than reject an otherwise-valid plugin.
-            recipes: {
-              count: recipeContributions.length,
-              // Every name, not a readable subset. The subset existed so a
-              // large manifest couldn't push the capability rows off-screen,
-              // but truncating here made the dialog's "+N more" name executable
-              // content that nothing downstream could reach — on a D2 confirm,
-              // where a count is explicitly not a preview (#12001). The list is
-              // already bounded by the schema at 50 recipes, and each name by
-              // `clampPreviewText` at 200 characters, so the payload is capped
-              // regardless; the dialog bounds the viewport instead.
-              names: recipeContributions.map((recipe) => clampPreviewText(recipe.name)),
-            },
-            // Templates write files only after the Create project dialog lists
-            // every one, but a project plugin inside one asks for trust when
-            // that project first opens — so it is named here, before install
-            // (#13825). Folder names come from archive entry names, which are
-            // author-controlled, so they get the same clamp as titles.
-            projectTemplates: templateContributions.map((template) => ({
-              title: clampPreviewText(template.title),
-              projectPlugins: (templateProjectPlugins.get(template.id) ?? []).map(clampPreviewText),
-            })),
-            // An agent declaring its CLI's bypass flag can run without
-            // permission prompts once the person's setting allows it, so it is
-            // named at install (#16374). Names are author-controlled.
-            permissionBypassAgents: (manifest.contributes?.agents ?? [])
-              .filter((agent) => (agent.permissionBypassArgs?.length ?? 0) > 0)
-              .map((agent) => clampPreviewText(agent.name)),
-          },
+          manifest,
         });
         flushArchiveInstallIntents();
       } catch (err) {

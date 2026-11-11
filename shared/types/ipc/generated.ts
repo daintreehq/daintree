@@ -3170,6 +3170,10 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
     result: string | null;
   };
+  "plugin:preview-from-url": {
+    args: [url: string, jobId?: string | undefined];
+    result: import("../plugin.js").PluginUrlInstallPreviewResult;
+  };
   "plugin:project-activate-staged": {
     args: [pluginId: string];
     result: void;

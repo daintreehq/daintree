@@ -1191,6 +1191,7 @@ export const CHANNELS = {
   PLUGIN_INSTALL_FROM_FILE: "plugin:install-from-file",
   PLUGIN_INSTALL_FROM_PATH: "plugin:install-from-path",
   PLUGIN_INSTALL_FROM_URL: "plugin:install-from-url",
+  PLUGIN_PREVIEW_FROM_URL: "plugin:preview-from-url",
   PLUGIN_UNINSTALL: "plugin:uninstall",
   PLUGIN_CHECK_FOR_UPDATE: "plugin:check-for-update",
   PLUGIN_INVOKE: "plugin:invoke",

@@ -20,6 +20,7 @@ import {
   isPrivateOrLoopbackHostname,
 } from "../../../schemas/pluginIdentifiers.js";
 import { describePluginInstallSource } from "../../../../shared/utils/pluginInstallSource.js";
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
 import { parseInstallExpectation } from "../../../services/plugin/installExpectation.js";
 import { sendToRendererContext } from "../../utils.js";
@@ -32,6 +33,7 @@ import type {
   PluginCheckUpdateResult,
   PluginBackgroundUpdateCheckSettings,
   PluginBackgroundUpdateCheckResult,
+  PluginUrlInstallPreviewResult,
 } from "../../../../shared/types/plugin.js";
 import type { IpcContext } from "../../types.js";
 import { getPluginService } from "./service.js";
@@ -166,13 +168,16 @@ const INSTALL_JOB_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
  * would abort the other, either could commit the other's record, and progress
  * would be pushed to the wrong window. Better to install without progress than
  * to install under someone else's job.
+ *
+ * A URL preview (#16776) runs under a job too, so its download shows progress
+ * and can be cancelled like an install's.
  */
-async function withInstallJob(
+async function withInstallJob<T>(
   ctx: IpcContext,
   jobId: string | undefined,
   source: string,
-  run: (effectiveJobId: string | undefined) => Promise<PluginInstallResult>
-): Promise<PluginInstallResult> {
+  run: (effectiveJobId: string | undefined) => Promise<T>
+): Promise<T> {
   if (!jobId || !INSTALL_JOB_ID_PATTERN.test(jobId)) return run(undefined);
   // The renderer can't name a file-picker install on its own — the path only
   // exists here — so every event carries the label.
@@ -290,70 +295,70 @@ export async function handleInstallFromUrlOp(
 }
 
 /**
- * Download a `.dntr` archive from a user-supplied URL into a temp file under
- * bounded conditions, then hand the path to the atomic installer (F24).
- *
- * Guards, in order: well-formed URL + http/https scheme + no embedded
- * credentials, a private/loopback-host check revalidated on every redirect hop,
- * the shared download deadline, a MIME/`.dntr`-suffix allowlist, and a
- * mid-stream 30 MB byte cap that aborts the in-flight request. (Timeout and
- * MIME/suffix policy live in electron/utils/pluginDownloadPolicy.ts.) All
- * failures resolve as
- * structured `{ status: "failed", errors }` data so the dialog can render a
- * tailored message; the handler-owned temp file is always removed in `finally`
- * (PluginService extracts into its own temp dir and doesn't take ownership of
- * the download artifact).
- *
- * `expected` binds the download to a reviewed digest: a confirmed update to the
- * archive its preview was read from (#12612), or a fresh install to a digest
- * reviewed elsewhere (#16342, `daintree-plugin install --sha256`). The
- * installer refuses the download unless its digest, and `manifest.name` when
- * the binding names one, match. Omitted for ordinary URL installs.
+ * Namespace entry for the URL install preview — registers the job, then
+ * delegates.
  */
-export async function handleInstallFromUrl(
+export async function handlePreviewFromUrlOp(
+  ctx: IpcContext,
   url: string,
-  jobId?: string,
-  expected?: PluginInstallExpectation
-): Promise<PluginInstallResult> {
-  if (typeof url !== "string" || url.trim().length === 0) {
-    return { status: "invalid-url" };
-  }
+  jobId?: string
+): Promise<PluginUrlInstallPreviewResult> {
+  return withInstallJob(ctx, jobId, url, (id) => handlePreviewFromUrl(url, id));
+}
+
+/** The ways a URL download can end without an archive on disk. */
+type PluginDownloadFailure = Extract<
+  PluginInstallResult,
+  { status: "failed" } | { status: "cancelled" } | { status: "invalid-url" }
+>;
+
+function downloadFailed(code: PluginInstallError["code"], message: string): PluginDownloadFailure {
+  return { status: "failed", errors: [{ code, message }] };
+}
+
+/**
+ * Validate a user-supplied archive URL before anything is fetched: well-formed,
+ * http/https, a public host, and no embedded credentials. Returns the trimmed
+ * string (what is fetched and recorded as provenance) or `null`.
+ */
+function parsePluginDownloadUrl(url: unknown): { trimmed: string; parsed: URL } | null {
+  if (typeof url !== "string" || url.trim().length === 0) return null;
   const trimmed = url.trim();
   let parsed: URL;
   try {
     parsed = new URL(trimmed);
   } catch {
-    return { status: "invalid-url" };
+    return null;
   }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    return { status: "invalid-url" };
-  }
-  if (isPrivateOrLoopbackHostname(parsed.hostname)) {
-    return { status: "invalid-url" };
-  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+  if (isPrivateOrLoopbackHostname(parsed.hostname)) return null;
   // Reject `https://user:pass@host` outright — the credentials would otherwise
   // be fetched AND persisted as installer `originalUrl` provenance (re-fetched
   // on update-check, shown in Settings). Rejecting keeps the failure visible.
-  if (urlHasCredentials(parsed)) {
-    return { status: "invalid-url" };
-  }
+  if (urlHasCredentials(parsed)) return null;
+  return { trimmed, parsed };
+}
 
-  const failed = (code: PluginInstallError["code"], message: string): PluginInstallResult => ({
-    status: "failed",
-    errors: [{ code, message }],
-  });
-
-  // A binding that arrives malformed must fail closed — falling back to an
-  // unbound install would quietly drop the guarantee the caller asked for.
-  // Checked here as well as in the installer so nothing is downloaded for it.
-  const binding = expected === undefined ? undefined : parseInstallExpectation(expected);
-  if (binding === null) {
-    return failed(
-      "archive_mismatch",
-      "The install's digest binding was malformed, so nothing was installed."
-    );
-  }
-
+/**
+ * Download a `.dntr` archive from a validated URL into a temp file under
+ * bounded conditions, hand its path to `use`, and remove it once `use` settles
+ * (F24). Install and preview (#16776) share this, so a URL that passes one's
+ * guards passes the other's.
+ *
+ * Guards, in order: a private/loopback-host check revalidated on every redirect
+ * hop, the shared download deadline, a MIME/`.dntr`-suffix allowlist, and a
+ * mid-stream 30 MB byte cap that aborts the in-flight request. (Timeout and
+ * MIME/suffix policy live in electron/utils/pluginDownloadPolicy.ts.) Every
+ * failure resolves as structured data so the dialog can render a tailored
+ * message; the temp file is always removed in `finally`, and nothing else takes
+ * ownership of it (PluginService extracts into its own temp dir).
+ */
+async function withDownloadedArchive<T>(
+  target: { trimmed: string; parsed: URL },
+  jobId: string | undefined,
+  use: (archivePath: string) => Promise<T>
+): Promise<T | PluginDownloadFailure> {
+  const { trimmed, parsed } = target;
   const tempPath = path.join(os.tmpdir(), `daintree-plugin-${crypto.randomUUID()}.dntr`);
   // Redirects are followed MANUALLY so every hop's host is revalidated through
   // the private/loopback guard — the original-host check alone is bypassable by
@@ -382,7 +387,7 @@ export async function handleInstallFromUrl(
     try {
       const guarded = await fetchWithPrivateHostGuard(net.fetch, trimmed, { signal });
       if (!guarded.ok) {
-        return failed(
+        return downloadFailed(
           "fetch_failed",
           guarded.reason === "private-redirect" || guarded.reason === "private-host"
             ? "The download resolved to a private or loopback address."
@@ -397,27 +402,31 @@ export async function handleInstallFromUrl(
       // it first — otherwise cancelling would report a timeout that never happened.
       if (cancelledDuringDownload()) return { status: "cancelled" };
       if (isAbortLikeError(err)) {
-        return failed("fetch_timeout", "The download timed out before it finished.");
+        return downloadFailed("fetch_timeout", "The download timed out before it finished.");
       }
-      return failed("fetch_failed", "Couldn't download the plugin from that URL.");
+      return downloadFailed("fetch_failed", "Couldn't download the plugin from that URL.");
     }
 
     // Drop the open connection on any early return so the socket isn't held
     // until GC; the body is never consumed on these paths.
-    const abandon = async (result: PluginInstallResult): Promise<PluginInstallResult> => {
+    const abandon = async (result: PluginDownloadFailure): Promise<PluginDownloadFailure> => {
       await response.body?.cancel().catch(() => {});
       return result;
     };
 
     if (!response.ok) {
-      return abandon(failed("fetch_failed", `The server returned HTTP ${response.status}.`));
+      return abandon(
+        downloadFailed("fetch_failed", `The server returned HTTP ${response.status}.`)
+      );
     }
 
     const contentLength = response.headers.get("content-length");
     if (contentLength) {
       const declared = Number.parseInt(contentLength, 10);
       if (Number.isFinite(declared) && declared > MAX_DNTR_BYTES) {
-        return abandon(failed("size_exceeded", "The plugin file is larger than the 30 MB limit."));
+        return abandon(
+          downloadFailed("size_exceeded", "The plugin file is larger than the 30 MB limit.")
+        );
       }
     }
 
@@ -430,12 +439,12 @@ export async function handleInstallFromUrl(
     const suffixOk = dntrSuffixOk(parsed.pathname);
     if (!mimeOk && !suffixOk) {
       return abandon(
-        failed("content_type_rejected", "That URL didn't return a plugin archive (.dntr).")
+        downloadFailed("content_type_rejected", "That URL didn't return a plugin archive (.dntr).")
       );
     }
 
     if (!response.body) {
-      return failed("fetch_failed", "The server returned an empty response.");
+      return downloadFailed("fetch_failed", "The server returned an empty response.");
     }
 
     let bytesRead = 0;
@@ -461,33 +470,110 @@ export async function handleInstallFromUrl(
       );
     } catch (err) {
       if (sizeAborted) {
-        return failed("size_exceeded", "The plugin file is larger than the 30 MB limit.");
+        return downloadFailed("size_exceeded", "The plugin file is larger than the 30 MB limit.");
       }
       // The size cap sets its own flag above, so anything abort-like left here
       // is either the user's cancel or the deadline — cancel wins.
       if (cancelledDuringDownload()) return { status: "cancelled" };
       if (isAbortLikeError(err)) {
-        return failed("fetch_timeout", "The download timed out before it finished.");
+        return downloadFailed("fetch_timeout", "The download timed out before it finished.");
       }
-      return failed("fetch_failed", "Couldn't download the plugin from that URL.");
+      return downloadFailed("fetch_failed", "Couldn't download the plugin from that URL.");
     }
 
-    const service = await getPluginService();
-    // See `handleInstall` — the same init gate, for the same two reasons.
-    await service.waitForCatalog();
     // Awaited, not returned bare: the `finally` below deletes the download, and
-    // a bare `return` would run it while the installer is still reading it.
-    return await service.installPlugin(tempPath, {
-      source: "url",
-      originalUrl: trimmed,
-      ...(jobId === undefined ? {} : { jobId }),
-      ...(binding === undefined ? {} : { expected: binding }),
-    });
+    // a bare `return` would run it while `use` is still reading it.
+    return await use(tempPath);
   } finally {
     if (wroteTempFile) {
       await rm(tempPath, { force: true }).catch(() => {});
     }
   }
+}
+
+/**
+ * Download a `.dntr` archive from a user-supplied URL and hand it to the atomic
+ * installer (F24). All failures resolve as structured `{ status: "failed",
+ * errors }` data; see {@link withDownloadedArchive} for the download's guards.
+ *
+ * `expected` binds the download to a reviewed digest: a confirmed update to the
+ * archive its preview was read from (#12612), a confirmed URL install to the
+ * archive its preview showed (#16776), or a fresh install to a digest reviewed
+ * elsewhere (#16342, `daintree-plugin install --sha256`). The installer refuses
+ * the download unless its digest, and `manifest.name` when the binding names
+ * one, match. Omitted only by the preview-less CLI.
+ */
+export async function handleInstallFromUrl(
+  url: string,
+  jobId?: string,
+  expected?: PluginInstallExpectation
+): Promise<PluginInstallResult> {
+  const target = parsePluginDownloadUrl(url);
+  if (target === null) return { status: "invalid-url" };
+
+  // A binding that arrives malformed must fail closed — falling back to an
+  // unbound install would quietly drop the guarantee the caller asked for.
+  // Checked here as well as in the installer so nothing is downloaded for it.
+  const binding = expected === undefined ? undefined : parseInstallExpectation(expected);
+  if (binding === null) {
+    return downloadFailed(
+      "archive_mismatch",
+      "The install's digest binding was malformed, so nothing was installed."
+    );
+  }
+
+  return withDownloadedArchive(target, jobId, async (archivePath) => {
+    const service = await getPluginService();
+    // See `handleInstall` — the same init gate, for the same two reasons.
+    await service.waitForCatalog();
+    return service.installPlugin(archivePath, {
+      source: "url",
+      originalUrl: target.trimmed,
+      ...(jobId === undefined ? {} : { jobId }),
+      ...(binding === undefined ? {} : { expected: binding }),
+    });
+  });
+}
+
+/**
+ * Download a URL install's archive and read what it would install, without
+ * installing it (#16776): the same manifest disclosure as an archive opened
+ * from the operating system, plus the digest the confirm binds to. The download
+ * is removed before this returns, whatever the outcome, so a cancelled preview
+ * leaves nothing behind. Runs every guard the install's download does.
+ */
+export async function handlePreviewFromUrl(
+  url: string,
+  jobId?: string
+): Promise<PluginUrlInstallPreviewResult> {
+  const target = parsePluginDownloadUrl(url);
+  if (target === null) return { status: "invalid-url" };
+  return withDownloadedArchive(
+    target,
+    jobId,
+    async (archivePath): Promise<PluginUrlInstallPreviewResult> => {
+      pluginInstallJobs.setPhase(jobId, "validating");
+      const cancelled = () => pluginInstallJobs.signal(jobId)?.aborted === true;
+      try {
+        // Lazy, like the archive worker's: keeps `yauzl` and the manifest
+        // schema off the startup path (#9285).
+        const [{ computeArchiveHash }, { readArchiveManifestPreview }] = await Promise.all([
+          import("../../../services/PluginArchive.js"),
+          import("../../../services/plugin/archiveManifestPreview.js"),
+        ]);
+        const archiveHash = await computeArchiveHash(archivePath);
+        const manifest = await readArchiveManifestPreview(archivePath);
+        if (cancelled()) return { status: "cancelled" };
+        return { status: "preview", preview: { url: target.trimmed, archiveHash, manifest } };
+      } catch (err) {
+        if (cancelled()) return { status: "cancelled" };
+        return downloadFailed(
+          "archive_invalid",
+          `The download isn't a valid plugin archive: ${formatErrorMessage(err, "it couldn't be read")}`
+        );
+      }
+    }
+  );
 }
 
 export async function handleUninstall(pluginId: string, deleteSettings?: boolean): Promise<void> {
