@@ -604,7 +604,7 @@ describe("Toolbar strip — composition invariants", () => {
       // forced colours then reset it to Canvas on Canvas.
       const inks = cssRules(readIndexCss()).filter(
         (rule) =>
-          rule.selectors.includes(".toolbar-divider") &&
+          /\.toolbar-divider(?![\w-])/.test(rule.selector) &&
           /(^|[;\s])background(-color)?\s*:/.test(rule.body) &&
           rule.media.includes("(prefers-contrast: more)")
       );
@@ -709,11 +709,11 @@ describe("Toolbar strip — composition invariants", () => {
 });
 
 /**
- * Every style rule in `css`, with its selector list and the media queries around
+ * Every style rule in `css`, with its selector text and the media queries around
  * it. Comments are dropped in the same pass that skips strings: a regex strip
  * reads the `@source` globs (`"../*.md"`) as comment openers.
  */
-function cssRules(css: string): { selectors: string[]; body: string; media: string[] }[] {
+function cssRules(css: string): { selector: string; body: string; media: string[] }[] {
   let text = "";
   for (let i = 0; i < css.length; i++) {
     if (css.startsWith("/*", i)) {
@@ -729,7 +729,7 @@ function cssRules(css: string): { selectors: string[]; body: string; media: stri
       text += css[i];
     }
   }
-  const rules: { selectors: string[]; body: string; media: string[] }[] = [];
+  const rules: { selector: string; body: string; media: string[] }[] = [];
   const open: { prelude: string; from: number }[] = [];
   let start = 0;
   for (let i = 0; i < text.length; i++) {
@@ -743,7 +743,7 @@ function cssRules(css: string): { selectors: string[]; body: string; media: stri
       const block = open.pop();
       if (block && !block.prelude.startsWith("@")) {
         rules.push({
-          selectors: block.prelude.split(",").map((s) => s.replace(/\s+/g, " ").trim()),
+          selector: block.prelude,
           body: text.slice(block.from, i),
           media: open
             .filter((b) => b.prelude.startsWith("@media"))
