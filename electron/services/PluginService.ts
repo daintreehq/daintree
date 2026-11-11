@@ -5458,8 +5458,8 @@ export class PluginService {
   }
 
   /**
-   * Manual update check (#9297). Re-fetches the plugin's `originalUrl`, hashes
-   * the downloaded archive, and compares it against the installed `archiveHash`.
+   * Manual update check (#9297). Re-fetches a URL install's `originalUrl` and
+   * compares digests, or reads the catalog for a catalog install (#16781).
    * Purely informational — it never installs. Delegates to {@link PluginInstaller}.
    */
   async checkForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {

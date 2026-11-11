@@ -234,13 +234,15 @@ With `--sha256 <hex>`, the install is held to that digest: the archive is refuse
 
 ## Updating a plugin
 
-An update offered by the update check is installed only after the user confirms it. Sideloaded and file-installed plugins are updated by installing another archive through the same route, and installing an archive whose manifest name matches an installed plugin replaces it without a separate update confirmation. Plugins installed from a URL remember that URL, and Daintree can re-fetch it; installing a file over one replaces the remembered URL, after which it is no longer checked:
+An update offered by the update check is installed only after the user confirms it. Sideloaded and file-installed plugins are updated by installing another archive through the same route, and installing an archive whose manifest name matches an installed plugin replaces it without a separate update confirmation. Plugins installed from a URL remember that URL, and Daintree can re-fetch it; installing a file over one replaces the remembered URL, after which it is no longer checked. Plugins installed from the [community catalog](./catalog.md) are checked against the catalog instead:
 
-- **Check for updates** — the refresh button in a plugin's detail pane in the plugin manager re-downloads the original URL and compares its SHA-256 with the installed archive's.
-- **Update all** — the plugin manager's header button checks every URL-installed plugin, then walks through each one that has an update.
-- **Check for plugin updates in the background** — an opt-in setting in Settings → Plugins, off by default. When on, Daintree checks URL-installed plugins about once a day and posts an inbox notification when updates are available. It never installs anything.
+- **Check for updates** — the refresh button in a plugin's detail pane in the plugin manager re-downloads the original URL and compares its SHA-256 with the installed archive's. For a catalog install it reads a freshly fetched catalog and offers the newest reviewed release above the installed version (a stable install is never offered a prerelease, and an older release never is).
+- **Update all** — the plugin manager's header button checks every URL-installed and catalog-installed plugin, then walks through each one that has an update.
+- **Check for plugin updates in the background** — an opt-in setting in Settings → Plugins, off by default. When on, Daintree checks those plugins about once a day and posts an inbox notification when updates are available. It never installs anything.
 
-An available update opens a confirm showing the new version, the new display name if it changed, and the capabilities the new version declares. Confirming re-downloads the URL and installs only if the bytes match the archive that was reviewed; if the publisher replaced the file in between, nothing is installed and the user is asked to check again. Settings are kept.
+An available update opens a confirm showing the new version, the new display name if it changed, and the capabilities the new version declares; a catalog update also names the repository it is listed from, and warns when that differs from the installed release's. Confirming re-downloads the URL and installs only if the bytes match the archive that was reviewed; if the publisher replaced the file in between, nothing is installed and the user is asked to check again. A catalog update is looked up again in a fresh catalog and installs only the listed digest. Settings are kept.
+
+A catalog install's check never falls back to its install URL. If the catalog no longer lists the plugin, or lists neither the installed release nor anything newer, the check says it was delisted; the installed copy keeps running. If no fresh catalog can be read (offline, or only an older cached copy), the check says so and offers nothing.
 
 Publishers should use stable "latest" URLs where appropriate (GitHub's `releases/latest/download/`, with a fixed asset name).
 

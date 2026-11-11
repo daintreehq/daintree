@@ -7,6 +7,7 @@ import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type {
   LoadedPluginInfo,
+  PluginCheckUpdateResult,
   PluginDeepLinkIntent,
   PluginDeepLinkRefusal,
   PluginInstallError,
@@ -36,6 +37,41 @@ function sortPlugins(list: readonly LoadedPluginInfo[]): LoadedPluginInfo[] {
 }
 
 const UP_TO_DATE_NOTIFICATION_DURATION_MS = 4000;
+
+function pluginName(plugin: LoadedPluginInfo): string {
+  return plugin.manifest.displayName ?? plugin.manifest.name;
+}
+
+/**
+ * A catalog install's check found nothing newer, and the catalog no longer
+ * lists the plugin or the installed release (#16781). Said as a fact about the
+ * listing, never as a failure or as "up to date".
+ */
+function delistedMessage(
+  plugin: LoadedPluginInfo,
+  result: Extract<PluginCheckUpdateResult, { status: "delisted" }>
+): string {
+  return result.scope === "plugin"
+    ? `The plugin catalog no longer lists ${pluginName(plugin)}, so it won't get updates from it. The installed copy keeps running.`
+    : `The plugin catalog no longer lists ${pluginName(plugin)} ${result.version}, and lists no newer release. The installed copy keeps running.`;
+}
+
+/** Why a catalog install couldn't be checked: no fresh catalog to read (#16781). */
+function catalogUnavailableMessage(
+  result: Extract<PluginCheckUpdateResult, { status: "catalog-unavailable" }>
+): string {
+  if (result.catalog === "stale") {
+    return "Couldn't refresh the plugin catalog, and an older copy isn't used for updates. Check your connection and try again.";
+  }
+  switch (result.failure) {
+    case "not-published":
+      return "The plugin catalog isn't published yet, so this plugin can't be checked for updates.";
+    case "invalid":
+      return "The plugin catalog couldn't be read, so this plugin wasn't checked for updates. Try again later.";
+    case "unreachable":
+      return "Couldn't reach the plugin catalog to check for updates. Check your connection and try again.";
+  }
+}
 
 /**
  * Map a structured install failure to user-facing copy. The bounded-fetch codes
@@ -86,6 +122,24 @@ function installErrorMessage(
         : origin === "link"
           ? "This plugin no longer matches what you reviewed, so nothing was installed. Open the install link again to review it."
           : "This plugin no longer matches what you reviewed, so nothing was installed. Install it from the URL again to review it.";
+    // Main words a catalog refusal for an install link; an update's way back
+    // is another check (#16781).
+    case "catalog_not_listed":
+      if (intent === "update") {
+        return "The plugin catalog no longer lists this update, so nothing was installed. Check for updates again.";
+      }
+      break;
+    case "catalog_stale":
+    case "catalog_unavailable":
+      if (intent === "update") {
+        return "Couldn't refresh the plugin catalog, so nothing was installed. Check your connection and try again.";
+      }
+      break;
+    case "catalog_mismatch":
+      if (intent === "update") {
+        return "The catalog's listing of this update changed since you reviewed it, so nothing was installed. Check for updates again.";
+      }
+      break;
   }
   return error?.message ?? "Installation failed. Check the file and try again.";
 }
@@ -239,6 +293,11 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const [notice, setNotice] = useState<string | null>(null);
   // A notice is neutral unless it reports something that went partly wrong.
   const [noticeTone, setNoticeTone] = useState<"neutral" | "warning">("neutral");
+  // What a single update check found that isn't an update or a failure (a
+  // delisted catalog plugin, #16781). Its own slot, so the next check replaces
+  // it without touching an "Update all" summary, and a late answer can't
+  // overwrite one.
+  const [checkNotice, setCheckNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [refreshKey, setRefreshKey] = useState(0);
   // A load failure's own message, so the refresh that succeeds clears that and
@@ -399,6 +458,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // reads the live queue without a render lag.
   const [isCheckingAllUpdates, setIsCheckingAllUpdates] = useState(false);
   const isCheckingAllUpdatesRef = useRef(false);
+  // Bumped by every "Update all", so a single check that answers after one
+  // started can't put back a warning the run's own summary superseded.
+  const bulkCheckGenerationRef = useRef(0);
   const pendingQueueRef = useRef<PendingUpdate[]>([]);
   const isBatchActiveRef = useRef(false);
   // Where the confirm on screen sits in the run, for "Update 2 of 5" (#15042).
@@ -607,6 +669,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     if (!reopened) return;
     setError(null);
     setNotice(null);
+    setCheckNotice(null);
     setUpToDateId(null);
     setPendingUninstall(null);
     setDeleteSettings(false);
@@ -938,6 +1001,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
 
   /** Re-pull the list and publish what was installed or updated once it lands. */
   const settleOutcome = (outcome: PendingOutcome) => {
+    // Whatever a check said about the old install no longer describes it.
+    setCheckNotice(null);
     pendingOutcomeRef.current = outcome;
     setRefreshKey((k) => k + 1);
   };
@@ -1425,10 +1490,12 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setCheckingUpdate((prev) => new Set(prev).add(id));
     // A fresh check supersedes any lingering "up to date" note for this plugin.
     if (upToDateId === id) setUpToDateId(null);
+    setCheckNotice(null);
     // Snapshot the list generation. If the list refreshes mid-check (a reopen,
     // a mutation, or a cross-window uninstall), the response references a plugin
     // that may no longer exist — discard it rather than surface a stale confirm.
     const startKey = refreshKeyRef.current;
+    const bulkGeneration = bulkCheckGenerationRef.current;
     try {
       setError(null);
       const result = await window.electron.plugin.checkForUpdate(id);
@@ -1449,6 +1516,14 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           if (isBatchActiveRef.current) break;
           setPendingUpdate({ plugin, result });
           break;
+        case "delisted":
+          if (bulkCheckGenerationRef.current === bulkGeneration) {
+            setCheckNotice(delistedMessage(plugin, result));
+          }
+          break;
+        case "catalog-unavailable":
+          setError(catalogUnavailableMessage(result));
+          break;
         case "fetch-failed":
           setError(`Couldn't check for an update: ${result.message}`);
           break;
@@ -1457,6 +1532,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           // a user-facing state — log it without a toast.
           logError("Update check returned invalid-id", new Error(id));
           break;
+        default: {
+          const _exhaustive: never = result;
+          void _exhaustive;
+        }
       }
     } catch (err) {
       setError(formatErrorMessage(err, "Failed to check for update"));
@@ -1528,15 +1607,20 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const targets = plugins.filter((p) => !p.isBuiltin && !!p.originalUrl);
     if (targets.length === 0) return;
     isCheckingAllUpdatesRef.current = true;
+    bulkCheckGenerationRef.current += 1;
     setIsCheckingAllUpdates(true);
     setError(null);
     setNotice(null);
+    setCheckNotice(null);
     setUpToDateId(null);
     // Same staleness guard as the single check: if the list refreshes mid-run
     // (reopen, mutation, cross-window change), discard rather than surface a
     // confirm for a plugin that may no longer exist.
     const startKey = refreshKeyRef.current;
     const available: PendingUpdate[] = [];
+    // A delisted catalog plugin has no update and wasn't a failed check
+    // (#16781): it gets its own line in the summary.
+    const delisted: string[] = [];
     // A check that FAILED is not a check that found nothing. Counting only
     // `available` meant a run where every request errored still reported "All
     // plugins are up to date" — the most reassuring possible summary of a total
@@ -1549,8 +1633,16 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           if (refreshKeyRef.current !== startKey) return;
           if (result.status === "available") {
             available.push({ plugin, result });
+          } else if (result.status === "delisted") {
+            // A delisted release names its version: the plugin is still listed.
+            delisted.push(
+              result.scope === "plugin"
+                ? pluginName(plugin)
+                : `${pluginName(plugin)} ${result.version}`
+            );
           } else if (result.status !== "up-to-date") {
-            // `fetch-failed` / `invalid-id` arrive as data, not as a throw.
+            // `fetch-failed` / `catalog-unavailable` / `invalid-id` arrive as
+            // data, not as a throw.
             failed += 1;
           }
         } catch (err) {
@@ -1560,6 +1652,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         }
       }
       if (refreshKeyRef.current !== startKey) return;
+      const delistedNote =
+        delisted.length === 0 ? null : `The plugin catalog no longer lists ${delisted.join(", ")}.`;
       const [first, ...rest] = available;
       if (!first) {
         if (failed === targets.length) {
@@ -1568,9 +1662,17 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
               ? "Couldn't check for updates. Check your connection and try again."
               : `Couldn't check any of the ${failed} plugins for updates. Check your connection and try again.`
           );
-        } else if (failed > 0) {
+        } else if (failed > 0 || delistedNote !== null) {
           setNoticeTone("warning");
-          setNotice(`No updates found. ${pluralize(failed, "plugin")} couldn't be checked.`);
+          setNotice(
+            [
+              "No updates found.",
+              failed > 0 ? `${pluralize(failed, "plugin")} couldn't be checked.` : null,
+              delistedNote,
+            ]
+              .filter((part) => part !== null)
+              .join(" ")
+          );
         } else {
           setNoticeTone("neutral");
           setNotice("All plugins are up to date.");
@@ -1581,9 +1683,16 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // so say it here rather than dropping it. Nothing clears `notice` until
       // the next bulk check, so it is waiting in the column when the last
       // confirmation closes.
-      if (failed > 0) {
+      if (failed > 0 || delistedNote !== null) {
         setNoticeTone("warning");
-        setNotice(`${pluralize(failed, "plugin")} couldn't be checked for updates.`);
+        setNotice(
+          [
+            failed > 0 ? `${pluralize(failed, "plugin")} couldn't be checked for updates.` : null,
+            delistedNote,
+          ]
+            .filter((part) => part !== null)
+            .join(" ")
+        );
       }
       pendingQueueRef.current = rest;
       isBatchActiveRef.current = true;
@@ -1609,8 +1718,17 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       advanceUpdateQueue();
       return;
     }
-    const url = pendingUpdate.plugin.originalUrl;
-    if (!url) {
+    // A catalog update is installed by naming its release, never by the URL
+    // the plugin came from (#16781); a URL update re-downloads that URL.
+    const { catalog } = pendingUpdate.result;
+    const originalUrl = pendingUpdate.plugin.originalUrl;
+    const target =
+      catalog !== undefined
+        ? ({ kind: "catalog", catalog } as const)
+        : originalUrl
+          ? ({ kind: "url", url: originalUrl } as const)
+          : null;
+    if (target === null) {
       advanceUpdateQueue();
       return;
     }
@@ -1644,15 +1762,19 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     };
     // Tier D2: a plugin first installed over http:// keeps an http upstream, so
     // reinstalling re-fetches it unencrypted. Route it through the same HTTP
-    // warning gate as a manual install rather than downloading silently.
+    // warning gate as a manual install rather than downloading silently. A
+    // catalog release is always https.
     let protocol: string | null = null;
-    try {
-      protocol = new URL(url).protocol;
-    } catch {
-      // A malformed stored URL falls through to installFromUrl, which returns
-      // invalid-url and surfaces a consistent message.
+    if (target.kind === "url") {
+      try {
+        protocol = new URL(target.url).protocol;
+      } catch {
+        // A malformed stored URL falls through to installFromUrl, which returns
+        // invalid-url and surfaces a consistent message.
+      }
     }
-    if (protocol === "http:") {
+    if (target.kind === "url" && protocol === "http:") {
+      const { url } = target;
       setPendingUpdate(null);
       // Mark the origin so the HTTP confirm's cancel doesn't reopen the manual
       // install dialog and its resolution advances the batch (#10893).
@@ -1676,10 +1798,27 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     try {
       // In a batch an earlier plugin's failure stays up until the run ends.
       if (!isBatchActiveRef.current) setError(null);
-      const result = await runInstallJob(
-        (jobId) => window.electron.plugin.installFromUrl(url, jobId, expected),
-        url
-      );
+      const result =
+        target.kind === "url"
+          ? await runInstallJob(
+              (jobId) => window.electron.plugin.installFromUrl(target.url, jobId, expected),
+              target.url
+            )
+          : await runInstallJob(
+              (jobId) =>
+                window.electron.plugin.installFromCatalog(
+                  {
+                    pluginId: target.catalog.id,
+                    version: target.catalog.version,
+                    // The offered release's repository, which the user saw:
+                    // main refuses the install if the listing has moved since.
+                    repo: target.catalog.repo,
+                    expected: { kind: "update", ...expected },
+                  },
+                  jobId
+                ),
+              target.catalog.repo
+            );
       handleInstallResult(result, "update");
       advanceUpdateQueue();
     } catch (err) {
@@ -1707,6 +1846,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     error,
     notice,
     noticeTone,
+    checkNotice,
     pending,
     pendingUninstall,
     uninstallPanels,

@@ -746,4 +746,125 @@ describe("PluginCatalogService", () => {
       });
     });
   });
+
+  describe("lookupUpdate", () => {
+    const ID = "daintreehq.continue-session";
+
+    function release(version: string, overrides: Record<string, unknown> = {}) {
+      return catalogEntry({
+        version,
+        url: `https://github.com/daintreehq/plugin-continue-session/releases/download/v${version}/daintreehq.continue-session-${version}.dntr`,
+        ...overrides,
+      });
+    }
+
+    it("offers the next reviewed release above the installed one", async () => {
+      const result = await service(respondWith(ok())).lookupUpdate(ID, "0.1.0");
+      expect(result).toEqual({ status: "update", entry: VALID_CATALOG.entries[1], fetchedAt: T0 });
+    });
+
+    it("offers the newest of several newer releases, by semver", async () => {
+      const result = await service(
+        respondWith(ok({ entries: [release("0.1.0"), release("0.10.0"), release("0.9.0")] }))
+      ).lookupUpdate(ID, "0.1.0");
+      expect(result).toMatchObject({ status: "update", entry: { version: "0.10.0" } });
+    });
+
+    it("says current when the installed release is the newest listed", async () => {
+      const result = await service(respondWith(ok())).lookupUpdate(ID, "0.1.1");
+      expect(result).toEqual({ status: "current", fetchedAt: T0 });
+    });
+
+    it("never offers an older release, even when the installed one is gone", async () => {
+      const result = await service(respondWith(ok({ entries: [release("0.1.0")] }))).lookupUpdate(
+        ID,
+        "0.1.1"
+      );
+      expect(result).toEqual({ status: "delisted", scope: "release", fetchedAt: T0 });
+    });
+
+    it("says the plugin was delisted when no release of it is listed", async () => {
+      const result = await service(respondWith(ok())).lookupUpdate("acme.gone", "1.0.0");
+      expect(result).toEqual({ status: "delisted", scope: "plugin", fetchedAt: T0 });
+    });
+
+    it("still offers a newer release after the installed one was delisted", async () => {
+      const result = await service(respondWith(ok({ entries: [release("0.2.0")] }))).lookupUpdate(
+        ID,
+        "0.1.0"
+      );
+      expect(result).toMatchObject({ status: "update", entry: { version: "0.2.0" } });
+    });
+
+    it("says a stable install's release was delisted when only prereleases replaced it", async () => {
+      const result = await service(
+        respondWith(ok({ entries: [release("0.2.0-rc.1"), release("0.3.0-rc.1")] }))
+      ).lookupUpdate(ID, "0.1.0");
+      expect(result).toEqual({ status: "delisted", scope: "release", fetchedAt: T0 });
+    });
+
+    it("keeps a stable install off prereleases", async () => {
+      const result = await service(
+        respondWith(ok({ entries: [release("0.1.0"), release("0.2.0-rc.1")] }))
+      ).lookupUpdate(ID, "0.1.0");
+      expect(result).toEqual({ status: "current", fetchedAt: T0 });
+    });
+
+    it("offers a prerelease install the next prerelease when no newer stable is listed", async () => {
+      const result = await service(
+        respondWith(ok({ entries: [release("0.2.0-rc.1"), release("0.2.0-rc.2")] }))
+      ).lookupUpdate(ID, "0.2.0-rc.1");
+      expect(result).toMatchObject({ status: "update", entry: { version: "0.2.0-rc.2" } });
+    });
+
+    it("moves a prerelease install to a newer stable release over a newer prerelease", async () => {
+      const result = await service(
+        respondWith(
+          ok({ entries: [release("0.2.0-rc.1"), release("0.2.0"), release("0.3.0-rc.1")] })
+        )
+      ).lookupUpdate(ID, "0.2.0-rc.1");
+      expect(result).toMatchObject({ status: "update", entry: { version: "0.2.0" } });
+    });
+
+    it("never counts build metadata alone as newer", async () => {
+      const result = await service(
+        respondWith(ok({ entries: [release("1.0.0+build.1"), release("1.0.0+build.2")] }))
+      ).lookupUpdate(ID, "1.0.0+build.1");
+      expect(result).toEqual({ status: "current", fetchedAt: T0 });
+    });
+
+    it("matches the installed release by its exact version, build metadata included", async () => {
+      const result = await service(
+        respondWith(ok({ entries: [release("1.0.0+build.2")] }))
+      ).lookupUpdate(ID, "1.0.0+build.1");
+      expect(result).toEqual({ status: "delisted", scope: "release", fetchedAt: T0 });
+    });
+
+    it("offers an entry listed from another repository as it is", async () => {
+      const moved = release("0.2.0", {
+        repo: "https://github.com/someone-else/continue-session",
+        url: "https://github.com/someone-else/continue-session/releases/download/v0.2.0/daintreehq.continue-session-0.2.0.dntr",
+      });
+      const result = await service(
+        respondWith(ok({ entries: [release("0.1.0"), moved] }))
+      ).lookupUpdate(ID, "0.1.0");
+      expect(result).toMatchObject({
+        status: "update",
+        entry: { repo: "https://github.com/someone-else/continue-session" },
+      });
+    });
+
+    it("reports an unavailable catalog rather than an answer", async () => {
+      const result = await service(respondWith(offline)).lookupUpdate(ID, "0.1.0");
+      expect(result).toEqual({ status: "unavailable", failure: "unreachable" });
+    });
+
+    it("never answers from a cached catalog, even a young one", async () => {
+      await seedCache(T0 - 1_000);
+      const fetchImpl = respondWith(offline);
+      const result = await service(fetchImpl).lookupUpdate(ID, "0.1.0");
+      expect(result).toEqual({ status: "stale", fetchedAt: T0 - 1_000, failure: "unreachable" });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+  });
 });

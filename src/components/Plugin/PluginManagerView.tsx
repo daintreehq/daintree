@@ -1111,6 +1111,11 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 <p>{pm.notice}</p>
               </Callout>
             )}
+            {pm.checkNotice && (
+              <Callout severity="warning" size="compact" role="status">
+                <p>{pm.checkNotice}</p>
+              </Callout>
+            )}
             {/* Suppressed while a dialog is showing the same error inside
                 itself — otherwise the message renders twice, once of them
                 underneath the scrim. */}
@@ -1405,6 +1410,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         {...batchControls}
       >
         <UnsavedPanelsCallout verb="Updating" panels={pm.updatePanels} className="mt-3" />
+        {/* A catalog release listed from another repository than the installed
+            one is a different source, said before the user confirms (#16781). */}
+        {pm.pendingUpdate?.result.catalog && pm.pendingUpdate.result.previousRepo !== undefined && (
+          <Callout severity="warning" className="mt-3" data-testid="plugin-update-source-changed">
+            <p>
+              This update comes from a different repository:{" "}
+              <span className="font-mono break-all">
+                {describeCatalogRepo(pm.pendingUpdate.result.catalog.repo)}
+              </span>
+              . The installed version came from{" "}
+              <span className="font-mono break-all">
+                {describeCatalogRepo(pm.pendingUpdate.result.previousRepo)}
+              </span>
+              .
+            </p>
+          </Callout>
+        )}
         {pm.pendingUpdate && (
           <div className="mt-3 space-y-1.5 text-xs text-text-secondary">
             <div>
@@ -1420,6 +1442,14 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   </span>
                 )}
             </div>
+            {pm.pendingUpdate.result.catalog && (
+              <div>
+                <span className="text-text-secondary">Listed from</span>{" "}
+                <span className="font-mono text-text-primary break-all select-text">
+                  {describeCatalogRepo(pm.pendingUpdate.result.catalog.repo)}
+                </span>
+              </div>
+            )}
             {pm.pendingUpdate.result.capabilities.length > 0 && (
               <div className="space-y-1.5">
                 <span className="text-text-secondary">Capabilities</span>

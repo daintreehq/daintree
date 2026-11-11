@@ -263,6 +263,103 @@ describe("PluginUpdateCheckService", () => {
     expect(svc.getLatest()).not.toBeNull();
   });
 
+  // A catalog install is checked against the catalog, so it needs neither a
+  // URL nor a baseline hash to be a target (#16781).
+  const catalogPlugin = (name: string) =>
+    urlPlugin(name, { source: "catalog", originalUrl: null, archiveHash: null });
+
+  it("checks catalog installs and never offers a delisted one (#16781)", async () => {
+    storeState.value = { enabled: true, lastCheckedAt: null };
+    pluginServiceMock.listPlugins.mockReturnValue([
+      catalogPlugin("pub.listed"),
+      catalogPlugin("pub.gone"),
+    ]);
+    pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+      id === "pub.listed"
+        ? available("pub.listed", "1.0.1")
+        : { status: "delisted", scope: "plugin", version: "1.0.0" }
+    );
+
+    const svc = new PluginUpdateCheckService();
+    await svc._checkNowForTest();
+
+    const checkedIds = pluginServiceMock.checkForUpdate.mock.calls.map((c) => c[0]);
+    expect(checkedIds.sort()).toEqual(["pub.gone", "pub.listed"]);
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    expect(
+      broadcastMock.mock.calls[0][1].payload.updates.map((u: { pluginId: string }) => u.pluginId)
+    ).toEqual(["pub.listed"]);
+  });
+
+  it("reads a delisted result as a conclusive answer, clearing an obsolete cache", async () => {
+    storeState.value = { enabled: true, lastCheckedAt: null };
+    pluginServiceMock.listPlugins.mockReturnValue([catalogPlugin("pub.a")]);
+    pluginServiceMock.checkForUpdate.mockResolvedValue(available("pub.a", "2.0.0"));
+    const svc = new PluginUpdateCheckService();
+    await svc._checkNowForTest();
+    expect(svc.getLatest()).not.toBeNull();
+
+    pluginServiceMock.checkForUpdate.mockResolvedValue({
+      status: "delisted",
+      scope: "release",
+      version: "1.0.0",
+    });
+    await svc._checkNowForTest();
+    expect(svc.getLatest()).toBeNull();
+  });
+
+  it.each(["stale", "unavailable"] as const)(
+    "keeps the cache untouched when the catalog is %s",
+    async (catalog) => {
+      storeState.value = { enabled: true, lastCheckedAt: null };
+      pluginServiceMock.listPlugins.mockReturnValue([catalogPlugin("pub.a")]);
+      pluginServiceMock.checkForUpdate.mockResolvedValue(available("pub.a", "2.0.0"));
+      const svc = new PluginUpdateCheckService();
+      await svc._checkNowForTest();
+      const cached = svc.getLatest();
+      expect(cached).not.toBeNull();
+
+      pluginServiceMock.checkForUpdate.mockResolvedValue({
+        status: "catalog-unavailable",
+        catalog,
+        failure: "unreachable",
+      });
+      await svc._checkNowForTest();
+      expect(svc.getLatest()).toBe(cached);
+      expect(broadcastMock).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("drops a cached offer the next pass found delisted, even when another check failed", async () => {
+    storeState.value = { enabled: true, lastCheckedAt: null };
+    pluginServiceMock.listPlugins.mockReturnValue([catalogPlugin("pub.a"), urlPlugin("pub.b")]);
+    pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+      available(id, "2.0.0")
+    );
+    const svc = new PluginUpdateCheckService();
+    await svc._checkNowForTest();
+    expect(
+      svc
+        .getLatest()
+        ?.updates.map((u) => u.pluginId)
+        .sort()
+    ).toEqual(["pub.a", "pub.b"]);
+
+    pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+      id === "pub.a"
+        ? { status: "delisted", scope: "plugin", version: "1.0.0" }
+        : { status: "fetch-failed", message: "net" }
+    );
+    await svc._checkNowForTest();
+
+    // pub.b couldn't be checked, so its offer stands; pub.a was checked and
+    // has none.
+    expect(svc.getLatest()).toMatchObject({
+      updates: [{ pluginId: "pub.b" }],
+      signature: "pub.b@2.0.0",
+    });
+  });
+
   it("does not broadcast or cache when disabled mid-pass", async () => {
     storeState.value = { enabled: true, lastCheckedAt: null };
     pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a")]);
