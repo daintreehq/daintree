@@ -1030,8 +1030,9 @@ describe("ARIA page landmarks — issue #5416", () => {
       expect(source).toMatch(/<aside[\s\S]*?tabIndex=\{-1\}/);
     });
 
-    it("links the resize separator to the panel it controls via aria-controls", () => {
-      expect(source).toMatch(/<ResizeHandle[\s\S]*?aria-controls="portal-placeholder"/);
+    it("links the resize separator to the dock it resizes via aria-controls", () => {
+      expect(source).toMatch(/<aside[\s\S]*?id=\{PORTAL_DOCK_ID\}/);
+      expect(source).toMatch(/<ResizeHandle[\s\S]*?aria-controls=\{PORTAL_DOCK_ID\}/);
     });
   });
 });

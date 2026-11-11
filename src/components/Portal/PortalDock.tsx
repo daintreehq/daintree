@@ -6,7 +6,12 @@ import { usePortalStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { PortalToolbar } from "./PortalToolbar";
-import { PORTAL_TAB_PANEL_ID, portalTabDomId } from "./portalTabIds";
+import {
+  PORTAL_DOCK_ID,
+  PORTAL_TAB_PANEL_ID,
+  PORTAL_TOGGLE_ID,
+  portalTabDomId,
+} from "./portalTabIds";
 import { PortalDefaultNewTabSubmenu } from "./PortalDefaultNewTabSubmenu";
 import { PortalLaunchpad } from "./PortalLaunchpad";
 import { DevServerDashboard } from "./DevServerDashboard";
@@ -23,17 +28,42 @@ import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { usePanelStore } from "@/store/panelStore";
+import { enterFocusedPanel } from "@/components/Terminal/contentGridFocus";
+import { restoreFocusTo } from "@/lib/accessibility";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
+import { isProjectViewCached } from "@/lib/viewCacheState";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import {
   ContextMenu,
-  ContextMenuActionItem,
   ContextMenuContent,
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { useNativeViewMenu } from "./useNativeViewMenu";
+import { NativeViewMenuActionItem } from "./NativeViewMenuActionItem";
 import { getElementBoundsAsDip } from "@/lib/portalBounds";
 import { debounce } from "@/utils/debounce";
+
+/**
+ * The dock is closing, and closing unmounts it. When it held the keyboard (its
+ * own chrome, or the page in its native view), hand focus to the selected pane,
+ * or failing that the toolbar toggle that reopens it, rather than letting it
+ * drop to the page body. Runs while the dock is still in the DOM, so the moving
+ * focus keeps the ring state of the control that closed it.
+ */
+function returnFocusFromClosingDock(dock: HTMLElement | null, pageHadFocus: boolean): void {
+  const active = document.activeElement;
+  const dockHadFocus = dock !== null && active !== null && dock.contains(active);
+  const nothingFocused = active === null || active === document.body;
+  if (!dockHadFocus && !(pageHadFocus && nothingFocused)) return;
+  // A cached view is off screen; its keyboard is not ours to move.
+  if (isProjectViewCached()) return;
+  if (enterFocusedPanel(usePanelStore.getState().focusedId)) return;
+  armTooltipFocusSuppression();
+  restoreFocusTo(document.getElementById(PORTAL_TOGGLE_ID));
+}
 
 export function PortalDock() {
   const {
@@ -67,6 +97,8 @@ export function PortalDock() {
   );
   const contentRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLElement>(null);
+  const devServersButtonRef = useRef<HTMLButtonElement>(null);
+  const pageFocusedRef = useRef(false);
   const [isResizing, setIsResizing] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
@@ -405,9 +437,11 @@ export function PortalDock() {
     if (!window.electron.portal.onFocus || !window.electron.portal.onBlur) return;
 
     const cleanupFocus = window.electron.portal.onFocus(() => {
+      pageFocusedRef.current = true;
       setIsFocused(true);
     });
     const cleanupBlur = window.electron.portal.onBlur(() => {
+      pageFocusedRef.current = false;
       setIsFocused(false);
     });
     return () => {
@@ -416,11 +450,45 @@ export function PortalDock() {
     };
   }, []);
 
+  // Every way the dock closes (its Close button, the toggle shortcut, the
+  // assistant opening) goes through the store. The parent unmounts the dock on
+  // that change, so it is caught here, synchronously, while the dock still
+  // holds focus to give back.
+  useEffect(
+    () =>
+      usePortalStore.subscribe((state, prev) => {
+        if (prev.isOpen && !state.isOpen) {
+          returnFocusFromClosingDock(dockRef.current, pageFocusedRef.current);
+        }
+      }),
+    []
+  );
+
+  // Hiding the dashboard unmounts the button that hid it, so the toolbar toggle
+  // that shows it again takes focus first: ringless after a click, the way a
+  // pointer close restores focus everywhere else.
+  const handleHideDevDashboard = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      const toggle = devServersButtonRef.current;
+      if (toggle?.isConnected && event.currentTarget.contains(document.activeElement)) {
+        armTooltipFocusSuppression();
+        toggle.focus(
+          event.detail > 0 ? { preventScroll: true, focusVisible: false } : { preventScroll: true }
+        );
+      }
+      toggleDevDashboard();
+    },
+    [toggleDevDashboard]
+  );
+
+  const { setOpen: setMenuOpen, afterClose } = useNativeViewMenu("portal-dock-menu");
+
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={setMenuOpen}>
       <ContextMenuTrigger asChild>
         <aside
           ref={dockRef}
+          id={PORTAL_DOCK_ID}
           role="region"
           aria-label="Portal"
           data-macro-focus={isMacroFocused ? "true" : undefined}
@@ -441,7 +509,7 @@ export function PortalDock() {
             min={PORTAL_MIN_WIDTH}
             max={PORTAL_MAX_WIDTH}
             isResizing={isResizing}
-            aria-controls="portal-placeholder"
+            aria-controls={PORTAL_DOCK_ID}
             className="z-50"
             onMouseDown={handleResizeStart}
             onKeyDown={handleKeyDown}
@@ -470,6 +538,7 @@ export function PortalDock() {
             onOpenTabExternal={handleOpenTabExternal}
             onReloadTab={handleReloadTab}
             enabledLinks={enabledLinks}
+            devServersButtonRef={devServersButtonRef}
           />
           <div
             ref={contentRef}
@@ -494,35 +563,47 @@ export function PortalDock() {
               <div className="flex-1 bg-surface-sidebar" />
             )}
           </div>
-          {showDevDashboard && <DevServerDashboard onHide={toggleDevDashboard} />}
+          {showDevDashboard && <DevServerDashboard onHide={handleHideDevDashboard} />}
         </aside>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuActionItem actionId="portal.newTab">
+        <NativeViewMenuActionItem actionId="portal.newTab" afterClose={afterClose}>
           <Plus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           New tab
-        </ContextMenuActionItem>
+        </NativeViewMenuActionItem>
         <ContextMenuSeparator />
-        <ContextMenuActionItem actionId="portal.closeTab" disabled={activeTabId === null}>
+        <NativeViewMenuActionItem
+          actionId="portal.closeTab"
+          afterClose={afterClose}
+          disabled={activeTabId === null}
+        >
           <X data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Close tab
-        </ContextMenuActionItem>
-        <ContextMenuActionItem actionId="portal.closeAllTabs" disabled={tabs.length === 0}>
+        </NativeViewMenuActionItem>
+        <NativeViewMenuActionItem
+          actionId="portal.closeAllTabs"
+          afterClose={afterClose}
+          disabled={tabs.length === 0}
+        >
           <ListX data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Close all tabs
-        </ContextMenuActionItem>
+        </NativeViewMenuActionItem>
         <ContextMenuSeparator />
-        <ContextMenuActionItem actionId="portal.resetWidth">
+        <NativeViewMenuActionItem actionId="portal.resetWidth" afterClose={afterClose}>
           <Ruler data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Reset width
-        </ContextMenuActionItem>
+        </NativeViewMenuActionItem>
         <ContextMenuSeparator />
         <PortalDefaultNewTabSubmenu links={enabledLinks} defaultNewTabUrl={defaultNewTabUrl} />
         <ContextMenuSeparator />
-        <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "portal" }}>
+        <NativeViewMenuActionItem
+          actionId="app.settings.openTab"
+          args={{ tab: "portal" }}
+          afterClose={afterClose}
+        >
           <PanelRight data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Portal settings…
-        </ContextMenuActionItem>
+        </NativeViewMenuActionItem>
       </ContextMenuContent>
     </ContextMenu>
   );
