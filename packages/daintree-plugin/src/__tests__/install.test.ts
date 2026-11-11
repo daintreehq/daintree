@@ -137,6 +137,27 @@ describe("runInstall --sha256", () => {
     expect(contacted).toBe(false);
   });
 
+  it("keeps the host's own error for a verified install it rejects", async () => {
+    await serve(() => ({ error: { message: "install requires exactly one of 'path' or 'url'" } }));
+
+    await expect(runInstall("./x.dntr", { sha256: "a".repeat(64) })).rejects.toThrow(
+      /exactly one of 'path' or 'url'/
+    );
+  });
+
+  it("reports a digest mismatch from the host", async () => {
+    await serve(() => ({
+      result: {
+        status: "failed",
+        errors: [
+          { message: "The archive's SHA-256 doesn't match the digest this install was bound to" },
+        ],
+      },
+    }));
+
+    await expect(runInstall("./x.dntr", { sha256: "a".repeat(64) })).rejects.toThrow(/SHA-256/);
+  });
+
   it("fails without retrying unverified when Daintree doesn't know the method", async () => {
     const methods: string[] = [];
     await serve((req) => {

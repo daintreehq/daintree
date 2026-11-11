@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
 import {
+  verifiedInstall,
   createPluginCliServer,
   type PluginCliServer,
   type PluginCliServerHandlers,
@@ -88,6 +89,38 @@ function request(
     socket.on("error", reject);
   });
 }
+
+describe("verifiedInstall", () => {
+  const digest = "c".repeat(64);
+
+  it("binds a URL install to the digest as a fresh install", async () => {
+    const fromUrl = vi.fn(async () => ({ status: "installed" }));
+    const fromPath = vi.fn(async () => ({ status: "installed" }));
+
+    await verifiedInstall(
+      { url: "https://example.com/p.dntr", sha256: digest },
+      { fromUrl, fromPath }
+    );
+
+    expect(fromUrl).toHaveBeenCalledWith("https://example.com/p.dntr", undefined, {
+      kind: "install",
+      archiveHash: digest,
+    });
+    expect(fromPath).not.toHaveBeenCalled();
+  });
+
+  it("binds a path install to the digest as a fresh install", async () => {
+    const fromUrl = vi.fn(async () => ({ status: "installed" }));
+    const fromPath = vi.fn(async () => ({ status: "installed" }));
+
+    await verifiedInstall({ path: "/tmp/p.dntr", sha256: digest }, { fromUrl, fromPath });
+
+    expect(fromPath).toHaveBeenCalledWith("/tmp/p.dntr", {
+      expected: { kind: "install", archiveHash: digest },
+    });
+    expect(fromUrl).not.toHaveBeenCalled();
+  });
+});
 
 describe("createPluginCliServer", () => {
   it("does not bind until waitForReady resolves", async () => {

@@ -2475,6 +2475,11 @@ describe("installPlugin — digest-bound fresh install (#16342)", () => {
     ]);
 
     expect(results.map((r) => r.status).sort()).toEqual(["failed", "installed"]);
+    const refused = results.find((r) => r.status === "failed");
+    if (refused?.status === "failed") {
+      expect(refused.errors[0]?.code).toBe("archive_mismatch");
+      expect(refused.errors[0]?.message).toContain("already installed");
+    }
 
     service.dispose();
   });
@@ -2495,24 +2500,44 @@ describe("installPlugin — digest-bound fresh install (#16342)", () => {
   });
 
   it.each([
-    ["an unknown kind", { kind: "replace", archiveHash: "0".repeat(64) }],
-    ["an update with no plugin id", { kind: "update", archiveHash: "0".repeat(64) }],
-    ["a short digest", { kind: "install", archiveHash: "0".repeat(63) }],
-  ])("refuses %s rather than installing unbound", async (_label, binding) => {
+    ["an unknown kind", (hash: string) => ({ kind: "replace", archiveHash: hash })],
+    ["an update with no plugin id", (hash: string) => ({ kind: "update", archiveHash: hash })],
+    [
+      "an unscoped plugin id",
+      (hash: string) => ({ kind: "install", pluginId: "../x", archiveHash: hash }),
+    ],
+    [
+      "an uppercase digest",
+      (hash: string) => ({ kind: "install", archiveHash: hash.toUpperCase() }),
+    ],
+  ])("refuses %s before reading the archive", async (_label, bindingFor) => {
     const archive = await makeArchive({ name: "acme.malformed", version: "1.0.0" });
+    // The real digest, so only the binding's shape can be what refuses it.
+    const binding = bindingFor(await sha256(archive));
     const service = new PluginService(pluginsRoot, "0.0.0");
+    const hashSpy = vi.spyOn(PluginArchive, "computeArchiveHash");
+    const extractSpy = vi.spyOn(PluginArchive, "extractPluginArchive");
 
-    // The renderer's plain `install` channel hands `opts` straight through, so
-    // the installer can't rely on a caller having validated the binding.
-    const result = await service.installPlugin(archive, {
-      expected: binding as unknown as PluginInstallExpectation,
-    });
+    try {
+      // The renderer's plain `install` channel hands `opts` straight through, so
+      // the installer can't rely on a caller having validated the binding.
+      const result = await service.installPlugin(archive, {
+        expected: binding as unknown as PluginInstallExpectation,
+      });
 
-    expect(result.status).toBe("failed");
-    if (result.status === "failed") expect(result.errors[0]?.code).toBe("archive_mismatch");
-    expect(await exists(path.join(pluginsRoot, "acme.malformed"))).toBe(false);
-
-    service.dispose();
+      expect(result.status).toBe("failed");
+      if (result.status === "failed") {
+        expect(result.errors[0]?.code).toBe("archive_mismatch");
+        expect(result.errors[0]?.message).toContain("malformed");
+      }
+      expect(hashSpy).not.toHaveBeenCalled();
+      expect(extractSpy).not.toHaveBeenCalled();
+      expect(await exists(path.join(pluginsRoot, "acme.malformed"))).toBe(false);
+    } finally {
+      hashSpy.mockRestore();
+      extractSpy.mockRestore();
+      service.dispose();
+    }
   });
 });
 

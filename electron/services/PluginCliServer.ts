@@ -11,6 +11,7 @@ import {
   writeCliControlFile,
   removeCliControlFile,
 } from "../../shared/utils/cliSocketPath.js";
+import type { PluginInstallExpectation, PluginInstallOptions } from "../../shared/types/plugin.js";
 
 /**
  * Local control socket that lets the `daintree-plugin` CLI drive a running
@@ -114,6 +115,28 @@ export interface PluginCliServerHandlers {
    * for an offline check to read.
    */
   projectStatus: (params: { projectRoot: string }) => Promise<unknown>;
+}
+
+/**
+ * Route a verified CLI install with its digest binding attached. Kept apart from
+ * the production wiring so a test can prove the binding reaches both routes: a
+ * dropped `expected` here would install unchecked bytes with nothing to notice.
+ */
+export function verifiedInstall(
+  { path: installPath, url, sha256 }: { path?: string; url?: string; sha256: string },
+  routes: {
+    fromUrl: (
+      url: string,
+      jobId: undefined,
+      expected: PluginInstallExpectation
+    ) => Promise<unknown>;
+    fromPath: (path: string, opts: PluginInstallOptions) => Promise<unknown>;
+  }
+): Promise<unknown> {
+  const expected: PluginInstallExpectation = { kind: "install", archiveHash: sha256 };
+  if (url) return routes.fromUrl(url, undefined, expected);
+  if (installPath) return routes.fromPath(installPath, { expected });
+  return Promise.reject(new Error("install requires exactly one of 'path' or 'url'"));
 }
 
 export interface PluginCliServerConfig {
@@ -411,12 +434,8 @@ export async function startPluginCliServer(): Promise<void> {
         if (installPath) return handleInstallFromPath(installPath);
         return Promise.reject(new Error("install requires exactly one of 'path' or 'url'"));
       },
-      installVerified: ({ path: installPath, url, sha256 }) => {
-        const expected = { kind: "install", archiveHash: sha256 } as const;
-        if (url) return handleInstallFromUrl(url, undefined, expected);
-        if (installPath) return handleInstall(installPath, { expected });
-        return Promise.reject(new Error("install requires exactly one of 'path' or 'url'"));
-      },
+      installVerified: (params) =>
+        verifiedInstall(params, { fromUrl: handleInstallFromUrl, fromPath: handleInstall }),
       uninstall: ({ pluginId, deleteSettings }) => handleUninstall(pluginId, deleteSettings),
       devStart: ({ pluginId, sessionId }) => pluginService.loadDevPlugin(pluginId, sessionId),
       devStop: ({ pluginId, sessionId }) => pluginService.stopDevSession(pluginId, sessionId),

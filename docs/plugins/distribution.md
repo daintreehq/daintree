@@ -224,7 +224,7 @@ Any other `daintree://` link is ignored.
 
 `daintree-plugin install <path-or-url>` asks the running Daintree to install a local `.dntr` or an `https://` URL, with the same checks as the plugin manager's buttons, and exits non-zero on failure. See [Development loop → `install`](./dev-loop.md#daintree-plugin-install-path-or-url).
 
-With `--sha256 <hex>`, the install is held to that digest: the archive is refused before anything is extracted unless its SHA-256 matches, and the install is refused if the plugin is already installed, since moving an installed plugin to new bytes is an update with its own preview. Use it with a release's published checksum, or a [catalog](./catalog.md) entry's `sha256`.
+With `--sha256 <hex>`, the install is held to that digest: the archive is refused before anything is extracted unless its SHA-256 matches, and the install is refused if the plugin is already installed: a digest-bound install never replaces one, so it can't overwrite a plugin the user already has. Use it with a release's published checksum, or a [catalog](./catalog.md) entry's `sha256`.
 
 ## Updating a plugin
 
