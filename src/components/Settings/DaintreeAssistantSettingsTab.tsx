@@ -842,7 +842,7 @@ export function DaintreeAssistantSettingsTab() {
           />
           <SettingsSwitchCard
             title="Load my MCP servers and hooks"
-            subtitle="Starts the servers in mcp.json and runs the Claude hooks in hooks.json from ~/.daintree/assistant. A project's folder can never add these."
+            subtitle="Starts the servers in mcp.json, except for Antigravity, and runs the Claude hooks in hooks.json from ~/.daintree/assistant. A project's folder can never add these."
             isEnabled={settings.loadGlobalHooksAndServers}
             onChange={toggleLoadGlobalHooksAndServers}
             ariaLabel="Load my MCP servers and hooks"

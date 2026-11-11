@@ -77,6 +77,15 @@ describe("agentDefaults", () => {
     expect(dump.agentSettings.agents).toEqual({});
   });
 
+  it("keeps a saved Antigravity choice across a fresh load of the module (#16815)", async () => {
+    expect(setAgentDefaults({ assistantAgentId: "antigravity" })).toBe(true);
+
+    vi.resetModules();
+    const reloaded = await import("../agentDefaults.js");
+
+    expect(reloaded.readAgentDefaults()).toEqual({ assistantAgentId: "antigravity" });
+  });
+
   it("stores an explicit clear as null", () => {
     setAgentDefaults({ defaultAgent: null });
     expect(readAgentDefaults()).toEqual({ defaultAgent: null });

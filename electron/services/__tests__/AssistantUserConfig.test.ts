@@ -258,6 +258,21 @@ describe("MCP servers and hooks", () => {
     expect(Object.keys((await load(true, "copilot")).mcpServers)).toEqual(["linear", "docs"]);
   });
 
+  it("never opens mcp.json for such an agent, so a file that can't be read can't block it", async () => {
+    await fs.mkdir(globalDir, { recursive: true });
+    await fs.writeFile(
+      path.join(globalDir, "mcp.json"),
+      Buffer.concat([
+        Buffer.from('{"mcpServers":{"x":"'),
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from('"}}'),
+      ])
+    );
+
+    await expect(load(true, "antigravity")).resolves.toMatchObject({ mcpServers: {} });
+    await expect(load(true, "codex")).rejects.toThrow(/valid UTF-8/);
+  });
+
   it("warns and adds nothing when mcp.json isn't valid JSON", async () => {
     await write(globalDir, "mcp.json", "{ nope");
 

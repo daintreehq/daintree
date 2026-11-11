@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import * as semver from "semver";
 import { HUB_STARTED_ASSISTANT_GREETING } from "../../../shared/config/helpAssistantGreeting.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { planChoice } from "../../../shared/utils/terminalChoice.js";
@@ -11,6 +12,7 @@ import { MAX_ASSISTANT_SLOTS } from "../../../shared/config/assistantSlots.js";
 import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import type { HelpSessionStartedBy } from "../HelpSessionService.js";
 import type { ScheduledRunRef } from "../../../shared/types/scheduledRunRef.js";
+import type { AgentId } from "../../../shared/types/agent.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { AssistantLaunchSettings } from "../../../shared/utils/assistantLaunchFlags.js";
 import { READY_SCREEN_LINES, untilAssistantReady } from "./assistantReadiness.js";
@@ -26,6 +28,55 @@ export const VIEWLESS_START_AGENT_IDS: readonly string[] = [
   "copilot",
   "antigravity",
 ];
+
+/** One agent a start with no view could run, as `AssistantLaunchDeps.launchableAgents` lists it. */
+export interface LaunchableAssistantAgent {
+  id: string;
+  byDefault: boolean;
+}
+
+/**
+ * The agents a start with no view can run here, the machine's own pick first.
+ * Wired takes an experimental backend run by name; the picker offers stable
+ * ones only, and only those may be picked for a start that names none. A CLI
+ * definitively older than its assistant wiring needs is passed over like an
+ * uninstalled one, as the panel and `help.launchAgent` do (#16815): an `agy`
+ * before 1.5.5 would start without its lane's `--settings`. A version that
+ * can't be read doesn't hold a start back.
+ */
+export async function viewlessLaunchableAgents(input: {
+  wired: readonly string[];
+  offered: readonly string[];
+  isLaunchable(agentId: string): boolean;
+  minVersion(agentId: string): string | undefined;
+  installedVersion(agentId: string): Promise<string | null>;
+  /** The assistant's own pick, then the general default, as a view's launch reads them. */
+  preferred: readonly (string | null | undefined)[];
+}): Promise<LaunchableAssistantAgent[]> {
+  const wired = new Set(input.wired);
+  const offered = new Set(input.offered);
+  const candidates = VIEWLESS_START_AGENT_IDS.filter(
+    (id) => wired.has(id) && input.isLaunchable(id)
+  );
+  const current = await Promise.all(
+    candidates.map(async (id) => {
+      const required = input.minVersion(id);
+      if (!required) return true;
+      const installed = await input.installedVersion(id).catch(() => null);
+      if (!installed) return true;
+      try {
+        return !semver.lt(installed, required);
+      } catch {
+        return true;
+      }
+    })
+  );
+  const usable = candidates.filter((_, index) => current[index]);
+  const preferred = input.preferred.filter(
+    (id): id is string => typeof id === "string" && usable.includes(id)
+  );
+  return [...new Set([...preferred, ...usable])].map((id) => ({ id, byDefault: offered.has(id) }));
+}
 
 /** What one assistant asks of a start with no view (#13496). */
 export interface AssistantLaunchRequest {
@@ -107,7 +158,7 @@ export interface AssistantLaunchDeps {
    * first. `byDefault`: one a start that names no agent may pick, as the
    * assistant's own picker offers it; any other runs only when named.
    */
-  launchableAgents(): Promise<Array<{ id: string; byDefault: boolean }>>;
+  launchableAgents(): Promise<LaunchableAssistantAgent[]>;
   /** `HelpSessionService.provisionSession`; throws `LANE_OCCUPIED` for a lane in use. */
   provision(input: {
     projectId: string;
@@ -347,7 +398,12 @@ export async function liveAssistantLaunchDeps(): Promise<AssistantLaunchDeps> {
   const [
     { helpSessionService },
     { projectStore },
-    { getPtyClient, getCliAvailabilityServiceRef, getAgentModelCatalogService },
+    {
+      getPtyClient,
+      getCliAvailabilityServiceRef,
+      getAgentModelCatalogService,
+      getAgentVersionService,
+    },
     { spawnHostAssistantLive },
     { store },
     { getAssistantSupportedAgentIds, getAssistantWiredAgentIds, getEffectiveAgentConfig },
@@ -375,23 +431,18 @@ export async function liveAssistantLaunchDeps(): Promise<AssistantLaunchDeps> {
       const availability = service
         ? (service.getAvailability() ?? (await service.checkAvailability()))
         : null;
-      // Wired takes an experimental backend run by name; the picker offers stable ones only.
-      const wired = new Set(getAssistantWiredAgentIds());
-      const offered = new Set(getAssistantSupportedAgentIds());
-      const usable = VIEWLESS_START_AGENT_IDS.filter(
-        (id) =>
-          wired.has(id) &&
-          isAgentLaunchable(availability?.[id as keyof typeof availability] ?? undefined)
-      );
-      // The assistant's own pick first, then the general default, as a view's launch reads them.
+      const versions = getAgentVersionService();
       const { assistantAgentId, defaultAgent } = readAgentDefaults();
-      const preferred = [assistantAgentId, defaultAgent].filter(
-        (id): id is string => typeof id === "string" && usable.includes(id)
-      );
-      return [...new Set([...preferred, ...usable])].map((id) => ({
-        id,
-        byDefault: offered.has(id),
-      }));
+      return viewlessLaunchableAgents({
+        wired: getAssistantWiredAgentIds(),
+        offered: getAssistantSupportedAgentIds(),
+        isLaunchable: (id) =>
+          isAgentLaunchable(availability?.[id as keyof typeof availability] ?? undefined),
+        minVersion: (id) => getEffectiveAgentConfig(id)?.assistantMinVersion,
+        installedVersion: async (id) =>
+          versions ? ((await versions.getVersion(id as AgentId)).installedVersion ?? null) : null,
+        preferred: [assistantAgentId, defaultAgent],
+      });
     },
     occupiedSlots: (projectId) =>
       helpSessionService

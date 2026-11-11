@@ -3,8 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
 import { NO_VIEW_HANDLE } from "../../../ipc/endpoint.js";
 import {
+  getAssistantSupportedAgentIds,
+  getAssistantWiredAgentIds,
+  getEffectiveAgentConfig,
+} from "../../../../shared/config/agentRegistry.js";
+import {
   spawnAndConfirm,
   startAssistantWithoutView,
+  viewlessLaunchableAgents,
   type AssistantLaunchDeps,
   type AssistantLaunchRequest,
 } from "../assistantLaunch.js";
@@ -500,6 +506,56 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
       ).resolves.toMatchObject({ status: "started", slot: 2 });
       expect(deps.provision.mock.calls[0]![0]).not.toHaveProperty("refuseKept");
     });
+  });
+});
+
+describe("viewlessLaunchableAgents against the real registry (#16815)", () => {
+  const launchable = (
+    installed: Record<string, string | null>,
+    preferred: (string | null)[] = [null, null]
+  ) =>
+    viewlessLaunchableAgents({
+      wired: getAssistantWiredAgentIds(),
+      offered: getAssistantSupportedAgentIds(),
+      isLaunchable: (id) => id in installed,
+      minVersion: (id) => getEffectiveAgentConfig(id)?.assistantMinVersion,
+      installedVersion: async (id) => installed[id] ?? null,
+      preferred,
+    });
+
+  it("offers an installed Antigravity as a default, first when it's the assistant's pick", async () => {
+    await expect(
+      launchable({ codex: "0.130.0", antigravity: "1.5.5" }, ["antigravity", "codex"])
+    ).resolves.toEqual([
+      { id: "antigravity", byDefault: true },
+      { id: "codex", byDefault: true },
+    ]);
+    // With no pick, the order a view's fallback would read keeps Codex first.
+    await expect(launchable({ codex: "0.130.0", antigravity: "1.5.5" })).resolves.toEqual([
+      { id: "codex", byDefault: true },
+      { id: "antigravity", byDefault: true },
+    ]);
+  });
+
+  it("passes over a CLI older than its assistant floor, even as the pick", async () => {
+    await expect(
+      launchable({ codex: "0.130.0", antigravity: "1.4.12" }, ["antigravity", null])
+    ).resolves.toEqual([{ id: "codex", byDefault: true }]);
+  });
+
+  it("doesn't hold back a CLI whose version can't be read or compared", async () => {
+    await expect(launchable({ antigravity: null })).resolves.toEqual([
+      { id: "antigravity", byDefault: true },
+    ]);
+    await expect(launchable({ antigravity: "not a version" })).resolves.toEqual([
+      { id: "antigravity", byDefault: true },
+    ]);
+  });
+
+  it("keeps an experimental backend for starts that name it, and drops a picked agent with no viewless start", async () => {
+    await expect(
+      launchable({ copilot: "1.0.40", gemini: "1.0.0" }, ["gemini", null])
+    ).resolves.toEqual([{ id: "copilot", byDefault: false }]);
   });
 });
 

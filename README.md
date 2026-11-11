@@ -135,7 +135,7 @@ Outside access is off by default. Turn it on and an API-key client gets a fixed 
 
 ## Daintree Assistant
 
-The Assistant is Claude Code or Codex, signed in the way you already are, running in a terminal in Daintree's help panel on its own MCP session with a wider tier of tools. It plans the work, opens worktrees, launches agents into them and watches their terminals, then brings back the ones that need you. There's no extra subscription. [Read&nbsp;about&nbsp;the&nbsp;Assistant&nbsp;→](https://daintree.org/assistant)
+The Assistant is Claude Code, Codex or Antigravity, signed in the way you already are, running in a terminal in Daintree's help panel on its own MCP session with a wider tier of tools. It plans the work, opens worktrees, launches agents into them and watches their terminals, then brings back the ones that need you. There's no extra subscription. [Read&nbsp;about&nbsp;the&nbsp;Assistant&nbsp;→](https://daintree.org/assistant)
 
 <p align="center">
   <picture>
