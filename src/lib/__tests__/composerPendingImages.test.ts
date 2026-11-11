@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   _resetPendingComposerImagesForTesting,
   imageRangesIn,
+  restoreChange,
   setPendingComposerImages,
   takePendingComposerImages,
 } from "../composerPendingImages";
@@ -62,5 +63,44 @@ describe("pending composer images", () => {
     setPendingComposerImages("p:t1", pending);
     setPendingComposerImages("p:t1", later);
     expect(takePendingComposerImages("p:t1", "/b.png")).toEqual(later);
+  });
+});
+
+describe("restoreChange", () => {
+  const apply = (text: string, changes: { from: number; to: number; insert: string }[]) =>
+    [...changes]
+      .sort((a, b) => b.from - a.from)
+      .reduce((doc, c) => doc.slice(0, c.from) + c.insert + doc.slice(c.to), text);
+
+  const prepended = {
+    draft: "held\n\nmine",
+    before: "mine",
+    change: { from: 0, to: 0, insert: "held\n\n" },
+    images: [],
+  };
+  const replaced = {
+    draft: "held",
+    before: "  ",
+    change: { from: 0, to: 2, insert: "held" },
+    images: [],
+  };
+
+  it("is the restore itself while nothing was added", () => {
+    expect(restoreChange(prepended, prepended.draft)).toEqual([prepended.change]);
+  });
+
+  it.each([
+    ["prepended to", prepended],
+    ["replacing", replaced],
+  ])("brings the draft it was %s up to one added to since", (_how, pending) => {
+    const draft = `${pending.draft} and the logs`;
+    expect(apply(pending.before, restoreChange(pending, draft))).toBe(draft);
+  });
+
+  it("leaves the draft it went over in place, adding around it", () => {
+    expect(restoreChange(prepended, "held\n\nmine and the logs")).toEqual([
+      { from: 0, to: 0, insert: "held\n\n" },
+      { from: 4, to: 4, insert: " and the logs" },
+    ]);
   });
 });

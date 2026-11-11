@@ -224,7 +224,7 @@ import {
   takePendingComposerSelection,
 } from "@/lib/composerCaret";
 import { isolatedComposerScope, makeDraftKey } from "@/lib/draftKey";
-import { takePendingComposerImages } from "@/lib/composerPendingImages";
+import { restoreChange, takePendingComposerImages } from "@/lib/composerPendingImages";
 import { restoreImageChips } from "./restoredImageChips";
 import { DICTATION_OWNER_ATTR } from "@/services/canopyReplyDictation";
 import { useHostReparent } from "./hooks/useHostReparent";
@@ -1391,11 +1391,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // file chips already in the draft attached. A restore over the draft
       // shown is made as written, so text it repeats keeps its own chips.
       const change =
-        restoring !== null &&
-        restoring.draft === draft &&
-        restoring.before === shown &&
-        landed === null
-          ? restoring.change
+        restoring !== null && restoring.before === shown && landed === null
+          ? restoreChange(restoring, draft)
           : outsideWriteChange(shown, draft, landed);
       if (change !== null) {
         setValue(draft);

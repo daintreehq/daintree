@@ -48,6 +48,19 @@ export function takePendingComposerImages(
 }
 
 /**
+ * The change that brings a composer still showing `pending.before` to `draft`:
+ * the restore as it was made, then whatever was added to its draft since.
+ */
+export function restoreChange(pending: PendingComposerImages, draft: string): TextChange[] {
+  const added = draft.slice(pending.draft.length);
+  const { before, change } = pending;
+  if (added === "") return [change];
+  // A restore that replaced a blank draft ends where the addition goes in.
+  if (change.to === before.length) return [{ ...change, insert: change.insert + added }];
+  return [change, { from: before.length, to: before.length, insert: added }];
+}
+
+/**
  * Where each of `imagePaths` sits in `text`, in order, as a composer's chips
  * list them. A path `text` doesn't spell after the one before it is left out
  * rather than put on some other mention of it.

@@ -309,6 +309,37 @@ describe("HybridInputBar taking back a held send's images (#16786)", () => {
     expect(readImageChipPaths(view)).toEqual([SHOT]);
   });
 
+  it("keeps the draft's own chips when it was added to after the restore went over it", async () => {
+    const { view, write, previews } = await mount();
+    await act(async () => {
+      view.dispatch({
+        changes: { from: 0, insert: `see ${OTHER}` },
+        effects: addImageChip.of({
+          from: 4,
+          to: 4 + OTHER.length,
+          filePath: OTHER,
+          thumbnailUrl: EXISTING,
+        }),
+        userEvent: "input.paste",
+      });
+    });
+    const before = `see ${OTHER}`;
+    expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe(before);
+    const held = `look at ${SHOT}`;
+    setPendingComposerImages("term-1", {
+      draft: `${held}\n\n${before}`,
+      before,
+      change: { from: 0, to: 0, insert: `${held}\n\n` },
+      images: [{ from: 8, to: 8 + SHOT.length, filePath: SHOT }],
+    });
+    // A handoff appended to the restored draft before the composer caught up.
+    await write(`${held}\n\n${before} and the logs`);
+
+    expect(view.state.doc.toString()).toBe(`${held}\n\n${before} and the logs`);
+    expect(readImageChipPaths(view)).toEqual([SHOT, OTHER]);
+    expect(previews()).toEqual([PREVIEW, EXISTING]);
+  });
+
   it("brings the editor to the draft when it no longer shows the one the restore went over", async () => {
     const { view, write } = await mount();
     await write("abc");
