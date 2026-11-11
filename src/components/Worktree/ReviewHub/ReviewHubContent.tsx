@@ -569,6 +569,37 @@ export function ReviewHubContent({
     focusedRowIsMounted,
   } = cursor;
 
+  // A grid review pane moved to another worktree keeps this hub mounted and
+  // only swaps `worktreePath` (#16793). Every pick below names a relative path,
+  // so carried over it would select, diff, compare or confirm against the
+  // new worktree's same-named files. Reset during render so no effect ever pairs
+  // the old picks with the new path; the refs and request generations render
+  // can't touch reset in the layout effect. Typed drafts are keyed by worktree
+  // in their own store and stay put.
+  const [pickedForPath, setPickedForPath] = useState(worktreePath);
+  if (pickedForPath !== worktreePath) {
+    setPickedForPath(worktreePath);
+    setSelectedFile(null);
+    setSelectedBaseBranchFile(null);
+    setSelectedSinceReviewPath(null);
+    setDiffMode("working-tree");
+    setSelectedPaths(new Set());
+    setSelectionSection(null);
+    setClearConfirmOpen(false);
+    setUpdateConfirmOpen(false);
+  }
+  const resetForPathRef = useRef(worktreePath);
+  useLayoutEffect(() => {
+    if (resetForPathRef.current === worktreePath) return;
+    resetForPathRef.current = worktreePath;
+    // Bumps the comparison's request generation, so the old worktree's answer
+    // can't land as this one's, and drops its cached files.
+    resetBaseBranch();
+    selectionAnchorRef.current = null;
+    setFocusedIndex(-1);
+    writeCursorKey(null);
+  }, [worktreePath, resetBaseBranch, selectionAnchorRef, setFocusedIndex, writeCursorKey]);
+
   const sortedBaseBranchFiles = useMemo(
     () =>
       baseBranchFiles

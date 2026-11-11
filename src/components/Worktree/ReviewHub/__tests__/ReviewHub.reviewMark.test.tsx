@@ -547,6 +547,36 @@ describe("Review Hub review marks (#14585)", () => {
     await waitFor(() => expect(screen.queryByTestId("review-hub-review-mark")).toBeNull());
   });
 
+  // The confirm reads the shown mark, so carried across a move it would clear
+  // the next worktree's mark under the previous one's confirm (#16793).
+  it("drops a clear confirm opened for the previous worktree when the hub moves", async () => {
+    const other = "/home/user/other-wt";
+    worktreeStoreData.current.set(other, {
+      id: other,
+      path: other,
+      name: "other",
+      branch: "feature/other",
+      isCurrent: false,
+      worktreeChanges: null,
+      lastActivityTimestamp: null,
+    });
+    useReviewMarksStore.setState({
+      marks: { [WT]: summary(2), [other]: summary(4) },
+      revision: 4,
+      loaded: true,
+    });
+    const view = renderHub();
+    fireEvent.click(await screen.findByTestId("review-hub-review-mark-clear"));
+    await screen.findByTestId("confirm-dialog-confirm");
+
+    view.rerender(
+      <ReviewHubContent isOpen={true} worktreePath={other} panelId="review-1" onClose={vi.fn()} />
+    );
+    await screen.findByTestId("review-hub-review-mark-clear");
+    expect(screen.queryByTestId("confirm-dialog-confirm")).toBeNull();
+    expect(bridge.clear).not.toHaveBeenCalled();
+  });
+
   it("reads status twice on open: once straight away, once after the capture", async () => {
     renderHub();
     await markButtonReady();
