@@ -24,7 +24,11 @@ import {
   PLUGIN_CATALOG_MAX_BYTES,
   PLUGIN_CATALOG_URL,
 } from "../../../../shared/config/pluginCatalog.js";
-import { CATALOG_WITH_MALFORMED_ENTRY, VALID_CATALOG, catalogEntry } from "./pluginCatalogFixtures.js";
+import {
+  CATALOG_WITH_MALFORMED_ENTRY,
+  VALID_CATALOG,
+  catalogEntry,
+} from "./pluginCatalogFixtures.js";
 
 type FetchImpl = NonNullable<PluginCatalogDeps["fetchImpl"]>;
 
@@ -46,7 +50,10 @@ function respondWith(...responses: Array<() => Response | Promise<Response>>) {
   });
 }
 
-const ok = (body: unknown = VALID_CATALOG) => () => jsonResponse(body);
+const ok =
+  (body: unknown = VALID_CATALOG) =>
+  () =>
+    jsonResponse(body);
 const offline = () => {
   throw new TypeError("net::ERR_INTERNET_DISCONNECTED");
 };
@@ -211,9 +218,9 @@ describe("PluginCatalogService", () => {
     });
 
     it("reads another error status as unreachable", async () => {
-      const result = await service(
-        respondWith(() => new Response("", { status: 503 }))
-      ).getCatalog("browse");
+      const result = await service(respondWith(() => new Response("", { status: 503 }))).getCatalog(
+        "browse"
+      );
       expect(result).toEqual({ status: "unavailable", failure: "unreachable" });
     });
 
@@ -226,9 +233,7 @@ describe("PluginCatalogService", () => {
     });
 
     it("refuses a body that isn't JSON", async () => {
-      const result = await service(respondWith(() => new Response("<html>"))).getCatalog(
-        "browse"
-      );
+      const result = await service(respondWith(() => new Response("<html>"))).getCatalog("browse");
       expect(result).toEqual({ status: "unavailable", failure: "invalid" });
     });
 

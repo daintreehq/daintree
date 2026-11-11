@@ -79,8 +79,7 @@ interface CatalogSnapshot {
 }
 
 type RemoteOutcome =
-  | { ok: true; snapshot: CatalogSnapshot }
-  | { ok: false; failure: PluginCatalogFailure };
+  { ok: true; snapshot: CatalogSnapshot } | { ok: false; failure: PluginCatalogFailure };
 
 interface DiskPayload {
   fetchedAt: number;
