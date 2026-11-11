@@ -11,6 +11,7 @@ The release runbook is [`docs/release.md`](../../docs/release.md): signing, nota
 | `release-windows.yml` | App release for Windows (x64 and arm64 NSIS installers, x64 Store package, R2 publish, Microsoft Store submission) |
 | `release-packages.yml` | npm publish for the plugin-ecosystem packages, triggered by per-package tags (not `v*`) |
 | `nightly-publish.yml` | Nightly macOS and Linux builds published to the nightly update channel; no unit or E2E suites, launch smoke tests still run |
+| `publish-plugin-blocklist.yml` | Publishes `plugins/blocklist.json`, the plugin kill-switch list, to `updates.daintree.org/plugins/blocklist.json` when a change to it lands on `develop`; validates it first and verifies the CDN edge after |
 | `ci.yml` | Checks and tests on pushes and pull requests to `main` and `develop` |
 | `e2e.yml`, `e2e-single.yml` | Reusable E2E runner (core smoke and the `full-*` buckets) and the single-spec runner |
 | `stabilize.yml` | On-demand cross-platform validation, driven by the `stabilize` skill |
@@ -52,7 +53,7 @@ Manual dispatch inputs:
 
 Add these in **Settings → Secrets and variables → Actions**.
 
-R2 (read by the three per-OS release workflows and `nightly-publish.yml`):
+R2 (read by the three per-OS release workflows, `nightly-publish.yml` and `publish-plugin-blocklist.yml`):
 
 | Secret                 | Value                                           |
 | ---------------------- | ----------------------------------------------- |

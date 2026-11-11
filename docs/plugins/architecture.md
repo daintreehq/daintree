@@ -573,13 +573,30 @@ This classification is host-side UX policy on Daintree's own action system. It d
 
 **Kill-switch — shipped (#10891).** `PluginBlocklistService` (`electron/services/plugin/PluginBlocklistService.ts`) is the cheap, fast precursor to publisher identity: a small remote list of plugins Daintree refuses to load, fetched from `updates.daintree.org/plugins/blocklist.json` (`shared/config/pluginBlocklist.ts`) and cached on disk under `userData` for offline enforcement.
 
-- **Resolved before any scan, refreshed after.** `PluginService.initialize()` awaits `getStartupBlocklist()` ahead of the first discovery pass, so every load gate in the scan reads one snapshot. That call never waits on the network while a validated list is on disk: a cached list is enforced at once even when stale, and the revalidated list, when it arrives, is adopted through `applyRefreshedBlocklist`, which unloads any loaded plugin it newly blocks and moves a newly blocked disabled plugin to the blocked set. Only a first run with no usable cache waits for the fetch, so it never loads against an empty list a fetch was about to fill. A refresh that fails never drops the list already enforced.
-- **Fails open only without a list.** A network error, a timeout (8 s ceiling), or a parse failure leaves the last validated list (on disk or in memory) enforced; only when no validated list exists does every plugin load. A stale disk cache is still enforced while offline — stale-while-revalidate against a 6-hour TTL, deliberately shorter than the model-catalog TTL so an entry reaches running installs in hours, not a day.
+- **Resolved before any scan, refreshed after.** `PluginService.initialize()` awaits `getStartupBlocklist()` ahead of the first discovery pass, so every load gate in the scan reads one snapshot. That call never waits on the network while a validated list is on disk: a cached list is enforced at once even when stale, and the revalidated list, when it arrives, is adopted through `applyRefreshedBlocklist`, which unloads any loaded plugin it newly blocks and moves a newly blocked disabled plugin to the blocked set. With nothing on disk, the release-shipped seed stands in as that stale list, so a first run doesn't wait either; only a missing or malformed seed makes startup wait for the fetch, so it never loads against an empty list a fetch was about to fill. A refresh that fails never drops the list already enforced.
+- **Fails open only without a list.** A network error, a timeout (8 s ceiling), or a parse failure leaves the last validated list (on disk or in memory) enforced; only when no validated list exists does every plugin load. A stale disk cache is still enforced while offline — stale-while-revalidate against a 6-hour TTL, deliberately shorter than the model-catalog TTL. Daintree doesn't refetch on a timer while it runs, so a published entry takes effect at the first launch after that install's cached list is more than 6 hours old.
 - **Matched by `{ name, ranges }`.** Entries carry a plugin `name`, one or more semver `ranges`, a machine `reason` code, and an optional human `message`. `jti` is reserved for a future signed-identity model: an entry that declares it matches only a plugin carrying one of those ids, and no plugin carries one today.
 - **Refused before activation.** A match is checked _before_ the user-disabled gate, so a plugin that is both disabled and blocklisted still reads as blocked — the security signal wins. The plugin never enters `this.plugins` and `activate()` never runs; its name is reserved so a later directory scan can't hijack the namespace, and its manifest is retained so `listPlugins()` can surface the block. The user gets one rate-limited warning toast, and the plugin manager shows a **Blocked** badge with the reason and a disabled enable toggle (`blocklisted` / `blocklistReason` on `LoadedPluginInfo`).
 - **A project plugin never claims the global namespace.** A blocklisted project-local manifest is refused for that project without reserving its id, so one repository can't deny an id to every other project or to the user's own installed plugins.
 
 The mechanism is reserved for security responses to known-compromised plugins, not for normal version deprecation.
+
+**Where the list lives.** The list is `plugins/blocklist.json` in this repository, changed through pull requests to `develop`. A push to `develop` that changes it runs `publish-plugin-blocklist.yml` (#16774), which checks out the `develop` tip, validates it with `pluginBlocklistSeed.test.ts`, uploads it to the same key in the update bucket as `application/json` with `no-cache`, and fails unless the CDN edge then serves exactly that file. It uses the same bucket and R2 credentials that `/releases/` and `/nightly/` publish with. Runs queue one at a time and always publish the current tip, so a late or re-run job can't roll the list back; `gh workflow run publish-plugin-blocklist.yml --ref develop` republishes it. Every release also bundles the file from the commit it was built from as its seed (`pluginBlocklistSeed.ts`).
+
+**Adding an entry.** A pull request to `develop` adds one entry per affected plugin: `name` is the manifest `name` exactly, `ranges` is one or more semver ranges covering every affected version (prereleases match too), `reason` is a short machine code that goes to the log, and the optional `message` is what the toast and the **Blocked** badge show instead of `reason`. Leave `jti` out, since no plugin carries one yet. The validation fails on an invalid range, a `jti`, or any field the client's schema would silently drop, such as a misspelt `message`. Removing an entry is the same kind of pull request.
+
+```json
+{
+  "entries": [
+    {
+      "name": "acme.token-sync",
+      "ranges": ["<=1.4.2"],
+      "reason": "malware",
+      "message": "Versions up to 1.4.2 upload your agent credentials. Uninstall it."
+    }
+  ]
+}
+```
 
 ## Vanilla install and the cheap empty path
 
