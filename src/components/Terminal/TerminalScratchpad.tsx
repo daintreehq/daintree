@@ -10,7 +10,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
 import { flushPanelPersistence } from "@/store/slices";
-import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { returnFocusFromScratchpad } from "./scratchpadFocus";
 import { isPtyPanel } from "@shared/types/panel";
 import {
@@ -254,7 +253,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
               onClick={(e) => {
                 e.stopPropagation();
                 // Clicking the button focuses it, and it unmounts with the strip.
-                focusPanelInput(terminalId);
+                returnFocusFromScratchpad(terminalId, true);
                 collapseScratchpad(terminalId);
               }}
             >
@@ -287,7 +286,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
           e.preventDefault();
           e.stopPropagation();
           flushPanelPersistence();
-          focusPanelInput(terminalId);
+          returnFocusFromScratchpad(terminalId);
         }}
         data-testid="terminal-scratchpad-editor"
       />

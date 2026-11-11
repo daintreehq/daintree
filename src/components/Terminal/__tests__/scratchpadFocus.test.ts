@@ -29,6 +29,21 @@ describe("returnFocusFromScratchpad", () => {
     expect(focusMock).toHaveBeenCalledWith("term-1");
   });
 
+  it("leaves the notes before asking the pane, which refuses while they hold focus", () => {
+    const ta = mountEditor("term-1");
+    focusMock.mockImplementation(() => {
+      expect(document.activeElement).not.toBe(ta);
+      return true;
+    });
+    returnFocusFromScratchpad("term-1");
+    expect(focusMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces the handoff for the Hide button even when it did not take focus", () => {
+    returnFocusFromScratchpad("term-1", true);
+    expect(focusMock).toHaveBeenCalledWith("term-1");
+  });
+
   it("leaves focus alone when it is elsewhere or in another pane's notes", () => {
     returnFocusFromScratchpad("term-1");
     mountEditor("term-2");
