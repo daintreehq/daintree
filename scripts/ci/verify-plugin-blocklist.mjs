@@ -61,12 +61,16 @@ export async function fetchRemoteBlocklist(url, fetchImpl = fetch, timeoutMs = F
     try {
       body = await response.text();
     } catch (err) {
-      throw transient(`failed to read body from ${url}: ${err instanceof Error ? err.message : err}`);
+      throw transient(
+        `failed to read body from ${url}: ${err instanceof Error ? err.message : err}`
+      );
     }
     try {
       return JSON.parse(body);
     } catch (err) {
-      throw new Error(`failed to parse JSON from ${url}: ${err instanceof Error ? err.message : err}`);
+      throw new Error(
+        `failed to parse JSON from ${url}: ${err instanceof Error ? err.message : err}`
+      );
     }
   } finally {
     clearTimeout(timer);

@@ -11,7 +11,9 @@ import { PLUGIN_BLOCKLIST_SEED } from "../pluginBlocklistSeed.js";
 // `plugins/blocklist.json`, so a list that fails here never reaches the update
 // host, and the same file is what every release ships as its seed.
 
-const PUBLISHED_FILE = fileURLToPath(new URL("../../../../plugins/blocklist.json", import.meta.url));
+const PUBLISHED_FILE = fileURLToPath(
+  new URL("../../../../plugins/blocklist.json", import.meta.url)
+);
 const published: unknown = JSON.parse(readFileSync(PUBLISHED_FILE, "utf8"));
 
 describe("published plugin blocklist", () => {
