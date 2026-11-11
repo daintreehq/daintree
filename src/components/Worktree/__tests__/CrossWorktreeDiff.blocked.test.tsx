@@ -55,10 +55,15 @@ vi.mock("@/components/ui/AppDialog", () => {
 
 vi.mock("../DiffViewer", () => ({
   DiffFilePath: ({ path }: { path: string }) => <span>{path}</span>,
-  DiffViewer: ({ diff }: { diff: string }) => <div data-testid="diff-viewer">{diff}</div>,
+  DiffViewer: ({ diff, source }: { diff: string; source?: string | null }) => (
+    <div data-testid="diff-viewer" data-source={source ?? ""}>
+      {diff}
+    </div>
+  ),
 }));
 
 const mockCompareWorktrees = vi.fn();
+let diffText: string;
 
 const A = { path: "a.ts", status: "M", insertions: 1, deletions: 0 };
 const B = { path: "b.ts", status: "M", insertions: 2, deletions: 1 };
@@ -77,8 +82,9 @@ function deferred<T = unknown>() {
 
 beforeEach(() => {
   mockCompareWorktrees.mockReset();
+  diffText = "diff v1";
   mockCompareWorktrees.mockImplementation((_path, _b1, _b2, filePath?: string) =>
-    Promise.resolve(filePath === undefined ? listResponse() : "diff v1")
+    Promise.resolve(filePath === undefined ? listResponse() : diffText)
   );
   Object.defineProperty(window, "electron", {
     value: { git: { compareWorktrees: mockCompareWorktrees } },
@@ -121,7 +127,7 @@ function expectNothingStale() {
 }
 
 describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () => {
-  it("clears the comparison and says why when the compare worktree is deleted", async () => {
+  it("clears the comparison and says why when the compare worktree leaves the list", async () => {
     const view = await openComparison();
 
     setWorktrees(LEFT());
@@ -131,7 +137,7 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
     expectNothingStale();
   });
 
-  it("clears the comparison and says why when the base worktree is deleted", async () => {
+  it("clears the comparison and says why when the base worktree leaves the list", async () => {
     const view = await openComparison();
 
     setWorktrees(RIGHT());
@@ -150,6 +156,17 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
     expect(await screen.findByText("Choose a compare worktree on a branch")).toBeTruthy();
     expect(screen.getByText(/wt-right has a detached HEAD/)).toBeTruthy();
     expectNothingStale();
+  });
+
+  it("says why when the base leaves the list before a compare side is chosen", () => {
+    const view = render(tree());
+    expect(screen.getByText("Choose a worktree to compare")).toBeTruthy();
+
+    setWorktrees(RIGHT());
+    view.rerender(tree());
+
+    expect(screen.getByText("Choose another base worktree")).toBeTruthy();
+    expect(mockCompareWorktrees).not.toHaveBeenCalled();
   });
 
   it("names the base side when the base worktree detaches its HEAD", async () => {
@@ -209,19 +226,92 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
     expectNothingStale();
   });
 
+  it("hides a list skeleton still holding its floor when the pair breaks", async () => {
+    vi.useFakeTimers();
+    try {
+      const view = render(tree());
+      mockCompareWorktrees.mockImplementation(() => new Promise(() => {}));
+      fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-right" } });
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(screen.getByTestId("cross-worktree-file-shelf")).toBeTruthy();
+
+      setWorktrees(LEFT(), snapshot("wt-right", "main"));
+      view.rerender(tree());
+
+      expect(screen.getByText("Choose a different branch to compare")).toBeTruthy();
+      expect(screen.queryByTestId("cross-worktree-file-shelf")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts a fresh comparison once the pair is comparable again", async () => {
     const view = await openComparison();
+    fireEvent.click(fileRow("b.ts")!);
+    await waitFor(() => expect(fileRow("b.ts")?.getAttribute("aria-current")).toBe("true"));
 
     setWorktrees(LEFT(), snapshot("wt-right", undefined));
     view.rerender(tree());
     await screen.findByText("Choose a compare worktree on a branch");
+    expectNothingStale();
+    const callsWhileBlocked = mockCompareWorktrees.mock.calls.length;
+    fireEvent.keyDown(window, { key: "]" });
+    fireEvent.keyDown(window, { key: "[" });
+    expect(mockCompareWorktrees.mock.calls.length).toBe(callsWhileBlocked);
 
+    diffText = "diff v2";
     setWorktrees(LEFT(), RIGHT());
     view.rerender(tree());
 
-    await waitFor(() => expect(screen.getByTestId("diff-viewer").textContent).toBe("diff v1"));
+    // The same pair as before, but a new comparison rather than a refresh of
+    // the old one: it lands on its first file, not the one that was open.
+    await waitFor(() => expect(screen.getByTestId("diff-viewer").textContent).toBe("diff v2"));
     expect(fileRow("a.ts")?.getAttribute("aria-current")).toBe("true");
-    expect(listCalls().length).toBe(2);
+    expect(fileRow("b.ts")?.getAttribute("aria-current")).toBeNull();
+  });
+
+  it("drops the previous pair's file diff and source once another pair is chosen", async () => {
+    setWorktrees(LEFT(), RIGHT(), snapshot("wt-other", "other"));
+    const view = render(tree());
+    const stalePatch = deferred<string>();
+    const staleSource = deferred<string>();
+    mockCompareWorktrees.mockImplementation(
+      (
+        _path,
+        _b1,
+        b2: string,
+        filePath?: string,
+        _mergeBase?: boolean,
+        _ws?: boolean,
+        context?: number
+      ) => {
+        if (filePath === undefined) return Promise.resolve(listResponse());
+        if (b2 === "feature")
+          return context === undefined ? stalePatch.promise : staleSource.promise;
+        return Promise.resolve(
+          context === undefined ? "diff other" : "@@ -1 +1 @@\n-old\n+source other"
+        );
+      }
+    );
+    fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-right" } });
+    await waitFor(() =>
+      expect(
+        mockCompareWorktrees.mock.calls.filter((c) => c[2] === "feature" && c[3] !== undefined)
+          .length
+      ).toBe(2)
+    );
+
+    fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-other" } });
+    await waitFor(() => expect(screen.getByTestId("diff-viewer").textContent).toBe("diff other"));
+    expect(screen.getByTestId("diff-viewer").dataset.source).toBe("source other");
+
+    await act(async () => staleSource.resolve("@@ -1 +1 @@\n-old\n+stale source"));
+    await act(async () => stalePatch.resolve("stale diff"));
+
+    expect(screen.getByTestId("diff-viewer").textContent).toBe("diff other");
+    expect(screen.getByTestId("diff-viewer").dataset.source).toBe("source other");
   });
 });
 
@@ -232,6 +322,12 @@ describe("CrossWorktreeDiff opened from a detached worktree", () => {
 
     expect((screen.getByLabelText("Base") as HTMLSelectElement).value).toBe("wt-left");
     expect(screen.getByText("Choose a worktree to compare")).toBeTruthy();
+  });
+
+  it("keeps a branch-backed initial worktree as the base even when it isn't listed first", () => {
+    render(tree("wt-right"));
+
+    expect((screen.getByLabelText("Base") as HTMLSelectElement).value).toBe("wt-right");
   });
 
   it("defaults the base past a detached main worktree", async () => {

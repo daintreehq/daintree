@@ -39,24 +39,41 @@ describe("WorktreeSelector", () => {
     expect(trigger().textContent).toContain("Choose a worktree");
 
     view.rerender(
-      <WorktreeSelector label="Base" worktrees={WORKTREES} selectedId="wt-b" onChange={onChange} />
+      <WorktreeSelector
+        label="Base"
+        worktrees={[WORKTREES[0]!, worktree("wt-b", "feature/y")]}
+        selectedId="wt-b"
+        onChange={onChange}
+      />
     );
-    expect(trigger().textContent).toContain("feature/x");
+    expect(trigger().textContent).toContain("feature/y");
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("still names a chosen worktree that has lost its branch", () => {
-    render(
+  it("names a chosen worktree that loses its branch as detached", () => {
+    const onChange = vi.fn();
+    const view = render(
+      <WorktreeSelector
+        label="Compare"
+        worktrees={WORKTREES}
+        selectedId="wt-b"
+        onChange={onChange}
+      />
+    );
+    const trigger = () => screen.getByRole("combobox", { name: "Compare" });
+    expect(trigger().textContent).toContain("feature/x");
+
+    view.rerender(
       <WorktreeSelector
         label="Compare"
         worktrees={[WORKTREES[0]!, worktree("wt-b", undefined)]}
         selectedId="wt-b"
-        onChange={vi.fn()}
+        onChange={onChange}
       />
     );
-    expect(screen.getByRole("combobox", { name: "Compare" }).textContent).toContain(
-      "wt-b (detached)"
-    );
+    expect(trigger().textContent).toContain("wt-b (detached)");
+    expect(trigger().textContent).not.toContain("feature/x");
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("ties its visible label to the picker, so pressing the label reaches it", () => {

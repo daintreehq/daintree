@@ -326,7 +326,7 @@ function blockedCopy(
     case "missing":
       return {
         title: `Choose another ${blocker.side} worktree`,
-        description: `The ${blocker.side} worktree you chose is no longer in this project.`,
+        description: `The ${blocker.side} worktree you chose is no longer in the list.`,
       };
     case "detached":
       return {
@@ -583,18 +583,13 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     [leftPath, leftBranch, rightBranch, comparisonKey, fetchFileDiff]
   );
 
-  // A response for the pair on screen a moment ago must never land once the
-  // pair changes or stops being comparable (a side deleted, detached, or on
-  // the other side's branch). Layout, not passive: it runs before the fetch
-  // effect and before paint, so nothing stale is drawn or committed late.
+  // Once the pair can't be compared (a side gone, detached, or on the other
+  // side's branch), nothing of the last comparison may stay or land late.
+  // Layout, not passive: the stale list and diff are never painted. A change
+  // to another comparable pair is the fetch's job, which starts over.
   useLayoutEffect(() => {
-    if (canCompare) {
-      compareTokenRef.current++;
-      fileDiffTokenRef.current++;
-    } else {
-      resetComparison();
-    }
-  }, [canCompare, comparisonKey, resetComparison]);
+    if (!canCompare) resetComparison();
+  }, [canCompare, resetComparison]);
 
   // Auto-fetch when both sides are selected, and again when either branch
   // moves to a new commit. Only that second case may refresh in place.
