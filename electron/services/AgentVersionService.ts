@@ -237,6 +237,26 @@ export class AgentVersionService {
     }
   }
 
+  /**
+   * The installed CLI's version alone, for a launch that gates on it: the
+   * cached reading while it's fresh, else the CLI asked directly, and never
+   * the latest release, so no launch waits on the network. `refresh` asks the
+   * CLI past the cache. Null when it can't be told.
+   */
+  async getInstalledVersionForLaunch(agentId: AgentId, refresh = false): Promise<string | null> {
+    if (!refresh) {
+      const cached = this.cache.get(agentId);
+      if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
+        return cached.info.installedVersion;
+      }
+    }
+    try {
+      return await this.getInstalledVersion(agentId);
+    } catch {
+      return null;
+    }
+  }
+
   private async checkVersion(agentId: AgentId): Promise<AgentVersionInfo> {
     const config = getEffectiveAgentConfig(agentId);
     if (!config) {

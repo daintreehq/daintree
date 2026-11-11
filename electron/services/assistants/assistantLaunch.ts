@@ -41,15 +41,17 @@ export interface LaunchableAssistantAgent {
  * ones only, and only those may be picked for a start that names none. A CLI
  * definitively older than its assistant wiring needs is passed over like an
  * uninstalled one, as the panel and `help.launchAgent` do (#16815): an `agy`
- * before 1.5.5 would start without its lane's `--settings`. A version that
- * can't be read doesn't hold a start back.
+ * before 1.5.5 would start without its lane's `--settings`. A too-old reading
+ * is checked once more past any cache, so an upgrade counts at once, and a
+ * version that can't be read doesn't hold a start back.
  */
 export async function viewlessLaunchableAgents(input: {
   wired: readonly string[];
   offered: readonly string[];
   isLaunchable(agentId: string): boolean;
   minVersion(agentId: string): string | undefined;
-  installedVersion(agentId: string): Promise<string | null>;
+  /** `refresh` asks the CLI itself rather than a cached reading. */
+  installedVersion(agentId: string, refresh: boolean): Promise<string | null>;
   /** The assistant's own pick, then the general default, as a view's launch reads them. */
   preferred: readonly (string | null | undefined)[];
 }): Promise<LaunchableAssistantAgent[]> {
@@ -58,17 +60,20 @@ export async function viewlessLaunchableAgents(input: {
   const candidates = VIEWLESS_START_AGENT_IDS.filter(
     (id) => wired.has(id) && input.isLaunchable(id)
   );
+  const tooOld = (installed: string | null, required: string): boolean => {
+    if (!installed) return false;
+    try {
+      return semver.lt(installed, required);
+    } catch {
+      return false;
+    }
+  };
   const current = await Promise.all(
     candidates.map(async (id) => {
       const required = input.minVersion(id);
       if (!required) return true;
-      const installed = await input.installedVersion(id).catch(() => null);
-      if (!installed) return true;
-      try {
-        return !semver.lt(installed, required);
-      } catch {
-        return true;
-      }
+      if (!tooOld(await input.installedVersion(id, false).catch(() => null), required)) return true;
+      return !tooOld(await input.installedVersion(id, true).catch(() => null), required);
     })
   );
   const usable = candidates.filter((_, index) => current[index]);
@@ -439,8 +444,8 @@ export async function liveAssistantLaunchDeps(): Promise<AssistantLaunchDeps> {
         isLaunchable: (id) =>
           isAgentLaunchable(availability?.[id as keyof typeof availability] ?? undefined),
         minVersion: (id) => getEffectiveAgentConfig(id)?.assistantMinVersion,
-        installedVersion: async (id) =>
-          versions ? ((await versions.getVersion(id as AgentId)).installedVersion ?? null) : null,
+        installedVersion: async (id, refresh) =>
+          versions ? versions.getInstalledVersionForLaunch(id as AgentId, refresh) : null,
         preferred: [assistantAgentId, defaultAgent],
       });
     },

@@ -512,14 +512,15 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
 describe("viewlessLaunchableAgents against the real registry (#16815)", () => {
   const launchable = (
     installed: Record<string, string | null>,
-    preferred: (string | null)[] = [null, null]
+    preferred: (string | null)[] = [null, null],
+    reread: Record<string, string | null> = installed
   ) =>
     viewlessLaunchableAgents({
       wired: getAssistantWiredAgentIds(),
       offered: getAssistantSupportedAgentIds(),
       isLaunchable: (id) => id in installed,
       minVersion: (id) => getEffectiveAgentConfig(id)?.assistantMinVersion,
-      installedVersion: async (id) => installed[id] ?? null,
+      installedVersion: async (id, refresh) => (refresh ? reread : installed)[id] ?? null,
       preferred,
     });
 
@@ -541,6 +542,12 @@ describe("viewlessLaunchableAgents against the real registry (#16815)", () => {
     await expect(
       launchable({ codex: "0.130.0", antigravity: "1.4.12" }, ["antigravity", null])
     ).resolves.toEqual([{ id: "codex", byDefault: true }]);
+  });
+
+  it("counts an upgrade at once: a too-old cached reading is read again past the cache", async () => {
+    await expect(
+      launchable({ antigravity: "1.4.12" }, ["antigravity", null], { antigravity: "1.5.5" })
+    ).resolves.toEqual([{ id: "antigravity", byDefault: true }]);
   });
 
   it("doesn't hold back a CLI whose version can't be read or compared", async () => {

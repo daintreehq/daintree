@@ -329,6 +329,56 @@ describe("AgentVersionService resilience", () => {
     };
   }
 
+  describe("getInstalledVersionForLaunch (#16815)", () => {
+    beforeEach(() => {
+      spawnMock.mockReset();
+      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
+        id: "antigravity",
+        command: "agy",
+        version: { args: ["--version"], npmPackage: "@google/antigravity-cli" },
+      });
+    });
+
+    it("asks the CLI alone, never the network for a latest release", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      setSpawnSuccess("agy 1.5.5\n");
+      const { service } = createService(async () => ({ antigravity: "ready" }));
+
+      await expect(service.getInstalledVersionForLaunch("antigravity" as AgentId)).resolves.toBe(
+        "1.5.5"
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+    });
+
+    it("answers from a fresh cached reading, and past it when asked to refresh", async () => {
+      setSpawnSuccess("agy 1.4.12\n");
+      const { service } = createService(async () => ({ antigravity: "ready" }));
+      vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));
+      await service.getVersion("antigravity" as AgentId);
+      setSpawnSuccess("agy 1.5.5\n");
+      spawnMock.mockClear();
+
+      await expect(service.getInstalledVersionForLaunch("antigravity" as AgentId)).resolves.toBe(
+        "1.4.12"
+      );
+      expect(spawnMock).not.toHaveBeenCalled();
+      await expect(
+        service.getInstalledVersionForLaunch("antigravity" as AgentId, true)
+      ).resolves.toBe("1.5.5");
+      vi.mocked(globalThis.fetch).mockRestore();
+    });
+
+    it("answers null rather than throwing when the CLI can't be asked", async () => {
+      setSpawnError(Object.assign(new Error("denied"), { code: "EACCES" }));
+      const { service } = createService(async () => ({ antigravity: "ready" }));
+
+      await expect(service.getInstalledVersionForLaunch("antigravity" as AgentId)).resolves.toBe(
+        null
+      );
+    });
+  });
+
   it("returns error info instead of throwing when availability check fails", async () => {
     (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
       id: "claude",
