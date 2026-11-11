@@ -9,6 +9,11 @@ import {
   PLUGIN_CATALOG_FETCH_TIMEOUT_MS,
   PLUGIN_CATALOG_MAX_BYTES,
 } from "../../../shared/config/pluginCatalog.js";
+import type {
+  PluginCatalogBrowseResult,
+  PluginCatalogFailure,
+  PluginCatalogListing,
+} from "../../../shared/types/plugin.js";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import { createLogger } from "../../utils/logger.js";
 import {
@@ -19,12 +24,7 @@ import {
 
 const logger = createLogger("main:PluginCatalogService");
 
-/**
- * Why no catalog could be fetched: `not-published` is a 404 (expected until
- * the catalog repository exists), `unreachable` covers the network, a timeout
- * and any other HTTP status, and `invalid` a body that isn't a valid catalog.
- */
-export type PluginCatalogFailure = "not-published" | "unreachable" | "invalid";
+export type { PluginCatalogFailure };
 
 /**
  * `browse` may answer from a cached catalog. `install` (and update) always
@@ -137,6 +137,38 @@ export class PluginCatalogService {
     return entry
       ? { status: "listed", entry, fetchedAt: result.fetchedAt }
       : { status: "not-listed", fetchedAt: result.fetchedAt };
+  }
+
+  /**
+   * What Browse lists (#16782): each plugin's newest release, by the same rule
+   * an unversioned install link uses, in id order. Answers from the cache the
+   * way any browse read does; installing still resolves the release afresh.
+   */
+  async browse(): Promise<PluginCatalogBrowseResult> {
+    const result = await this.getCatalog("browse");
+    if (result.status !== "available") return { status: "unavailable", failure: result.failure };
+    const byId = new Map<string, PluginCatalogEntry[]>();
+    for (const entry of result.catalog.entries) {
+      const releases = byId.get(entry.id);
+      if (releases) releases.push(entry);
+      else byId.set(entry.id, [entry]);
+    }
+    const listings: PluginCatalogListing[] = [];
+    for (const releases of byId.values()) {
+      const newest = newestRelease(releases);
+      if (!newest) continue;
+      listings.push({
+        id: newest.id,
+        version: newest.version,
+        repo: newest.repo,
+        capabilities: [...newest.capabilities],
+      });
+    }
+    listings.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const { fetchedAt } = result;
+    return result.fresh
+      ? { status: "available", listings, fetchedAt, stale: false }
+      : { status: "available", listings, fetchedAt, stale: true, failure: result.failure };
   }
 
   /** A clock that went backwards must not make an old catalog look fresh. */

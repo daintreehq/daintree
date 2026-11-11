@@ -3849,4 +3849,360 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy();
     expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
   });
+
+  it("holds a Browse install while an HTTP update reads its panels, then allows it (#16782)", async () => {
+    updatablePlugin("http://example.com/p.dntr");
+    const read = deferred<PluginUnsavedPanel[]>();
+    vi.mocked(window.electron.plugin.getUnsavedPanels)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(read.promise)
+      .mockResolvedValue([]);
+    window.electron.plugin.browseCatalog = vi.fn(async () => ({
+      status: "available" as const,
+      listings: [
+        {
+          id: "acme.other",
+          version: "1.0.0",
+          repo: "https://github.com/acme/other",
+          capabilities: [],
+        },
+      ],
+      fetchedAt: Date.now(),
+      stale: false as const,
+    }));
+    window.electron.plugin.previewFromCatalog = vi.fn(async () => ({
+      status: "cancelled" as const,
+    }));
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+    await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
+    await waitFor(() => expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Install over HTTP" }));
+    await waitFor(() => expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
+
+    // The update's confirms have closed, but its read hasn't settled.
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Install acme.other" }));
+    expect(
+      await screen.findByText("Finish or cancel the current install, then install from Browse.")
+    ).toBeTruthy();
+    expect(window.electron.plugin.previewFromCatalog).not.toHaveBeenCalled();
+
+    await act(async () => {
+      read.resolve([]);
+      await read.promise;
+    });
+    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalledOnce());
+    const install = screen.getByRole("button", { name: "Install acme.other" });
+    await waitFor(() => expect(install.hasAttribute("disabled")).toBe(false));
+
+    fireEvent.click(install);
+    await waitFor(() =>
+      expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
+        { pluginId: "acme.other", version: "1.0.0" },
+        expect.any(String)
+      )
+    );
+  });
+});
+
+describe("PluginManagerView — Browse (#16782)", () => {
+  const REPO = "https://github.com/acme/demo";
+  const LISTING = {
+    id: "acme.demo",
+    version: "1.0.0",
+    repo: REPO,
+    capabilities: ["shell:exec"],
+  };
+
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+    window.electron.plugin.browseCatalog = vi.fn(async () => ({
+      status: "available" as const,
+      listings: [LISTING],
+      fetchedAt: Date.now(),
+      stale: false as const,
+    }));
+    window.electron.plugin.previewFromCatalog = vi.fn(async () => ({
+      status: "preview" as const,
+      preview: {
+        url: `${REPO}/releases/download/v1.0.0/acme.demo-1.0.0.dntr`,
+        archiveHash: PREVIEW_HASH,
+        installedOnDisk: false,
+        manifest: previewManifest(),
+        catalog: { id: "acme.demo", version: "1.0.0", repo: REPO },
+      },
+    }));
+    window.electron.plugin.installFromCatalog = vi.fn(async () => ({
+      status: "installed" as const,
+      pluginId: "acme.demo",
+    }));
+  });
+
+  function browseButton(): HTMLElement {
+    return screen.getByRole("button", { name: "Browse" });
+  }
+
+  async function openBrowse() {
+    fireEvent.click(browseButton());
+    return screen.findByRole("list", { name: "Community plugins" });
+  }
+
+  it("reads no catalog until Browse is opened, then lists it in the wide pane", async () => {
+    renderDialog();
+    await screen.findByText("No plugins installed");
+    expect(window.electron.plugin.browseCatalog).not.toHaveBeenCalled();
+
+    await openBrowse();
+
+    expect(window.electron.plugin.browseCatalog).toHaveBeenCalledOnce();
+    expect(browseButton().getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("region", { name: "Community plugins" })).toBeTruthy();
+  });
+
+  it("installs a listing through the catalog route, previewing the version on screen first", async () => {
+    // The list only holds the plugin once main has installed it.
+    vi.mocked(window.electron.plugin.list).mockImplementation(async () =>
+      vi.mocked(window.electron.plugin.installFromCatalog).mock.calls.length > 0
+        ? [makePlugin()]
+        : []
+    );
+    renderDialog();
+    await screen.findByText("No plugins installed");
+    await openBrowse();
+
+    fireEvent.click(screen.getByRole("button", { name: "Install acme.demo" }));
+
+    const dialog = await urlReviewDialog();
+    expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
+      { pluginId: "acme.demo", version: "1.0.0" },
+      expect.any(String)
+    );
+    expect(within(dialog).getByTestId("archive-install-source").textContent).toContain(
+      "Community listing from github.com/acme/demo"
+    );
+    expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
+
+    await approveUrlReview();
+
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+        {
+          pluginId: "acme.demo",
+          version: "1.0.0",
+          repo: REPO,
+          expected: { kind: "install", pluginId: "acme.demo", archiveHash: PREVIEW_HASH },
+        },
+        expect.any(String)
+      )
+    );
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+    // The installed plugin takes the pane, the way any install's does.
+    expect(await screen.findByRole("region", { name: "Details for Acme Demo" })).toBeTruthy();
+  });
+
+  it("marks an installed plugin and shows its details on request", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await findPluginRowButton("Acme Demo");
+    const list = await openBrowse();
+
+    expect(within(list).getByText("Installed")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Install acme.demo" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "View installed acme.demo" }));
+
+    expect(await screen.findByRole("region", { name: "Details for Acme Demo" })).toBeTruthy();
+    expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true");
+  });
+
+  it("returns to Browse when the selection is cleared, and to the installed home when toggled off", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await openBrowse();
+
+    await selectPlugin();
+    expect(screen.getByRole("region", { name: "Details for Acme Demo" })).toBeTruthy();
+    expect(browseButton().getAttribute("aria-pressed")).toBe("false");
+
+    await selectPlugin();
+    expect(await screen.findByRole("region", { name: "Community plugins" })).toBeTruthy();
+
+    fireEvent.click(browseButton());
+    expect(screen.getByRole("region", { name: "Installed plugins" })).toBeTruthy();
+  });
+
+  it("words a catalog refusal for Browse, not for an install link", async () => {
+    vi.mocked(window.electron.plugin.installFromCatalog).mockResolvedValue({
+      status: "failed",
+      errors: [
+        {
+          code: "catalog_not_listed",
+          message:
+            'The plugin catalog doesn\'t list version 1.0.0 of "acme.demo", so nothing was installed. It may have been removed, or the link may be wrong.',
+        },
+      ],
+    });
+    renderDialog();
+    await openBrowse();
+    fireEvent.click(screen.getByRole("button", { name: "Install acme.demo" }));
+    await approveUrlReview();
+
+    expect(await screen.findByText(/Refresh Browse to see what it lists now/)).toBeTruthy();
+    expect(screen.queryByText(/the link may be wrong/)).toBeNull();
+  });
+
+  const LINK_WORDED_FAILURES: Array<[PluginInstallError["code"], string]> = [
+    [
+      "catalog_not_listed",
+      'The plugin catalog doesn\'t list version 1.0.0 of "acme.demo", so nothing was installed. It may have been removed, or the link may be wrong.',
+    ],
+    [
+      "catalog_stale",
+      "The plugin catalog couldn't be refreshed, and an older copy isn't used for installs, so nothing was installed. Check your connection and open the link again.",
+    ],
+    [
+      "catalog_unavailable",
+      "Couldn't reach the plugin catalog, so nothing was installed. Check your connection and open the link again.",
+    ],
+    [
+      "catalog_mismatch",
+      "The catalog's listing of this release changed since you reviewed it, so nothing was installed. Open the link again to review it.",
+    ],
+    ["fetch_failed", "Couldn't download the plugin. Check the URL and try again."],
+    ["content_type_rejected", "That URL didn't return a plugin archive (.dntr)."],
+  ];
+
+  it.each(LINK_WORDED_FAILURES)(
+    "words a %s refusal of a Browse preview for Browse, with no review left open",
+    async (code, message) => {
+      vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
+        status: "available",
+        listings: [LISTING],
+        fetchedAt: Date.now() - 60 * 60 * 1000,
+        stale: true,
+        failure: "unreachable",
+      });
+      vi.mocked(window.electron.plugin.previewFromCatalog).mockResolvedValue({
+        status: "failed",
+        errors: [{ code, message }],
+      });
+      renderDialog();
+      await openBrowse();
+      fireEvent.click(screen.getByRole("button", { name: "Install acme.demo" }));
+
+      await waitFor(() => expect(document.querySelector('[data-callout="error"]')).not.toBeNull());
+      const shown = document.querySelector('[data-callout="error"]')?.textContent ?? "";
+      expect(shown).not.toContain(message);
+      expect(shown).not.toMatch(/\blink\b|\bURL\b/);
+      expect(screen.queryByRole("dialog", { name: /^Install '/ })).toBeNull();
+      expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
+      expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+    }
+  );
+
+  it("sends a Browse install whose bytes changed back to Browse to review again", async () => {
+    vi.mocked(window.electron.plugin.installFromCatalog).mockResolvedValue({
+      status: "failed",
+      errors: [{ code: "archive_mismatch", message: "digest" }],
+    });
+    renderDialog();
+    await openBrowse();
+    fireEvent.click(screen.getByRole("button", { name: "Install acme.demo" }));
+    await approveUrlReview();
+
+    expect(await screen.findByText(/Install it from Browse again to review it/)).toBeTruthy();
+    expect(screen.queryByText(/install link|from the URL/)).toBeNull();
+  });
+
+  it("won't start a Browse install over an uninstall that is waiting on its confirm", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
+      status: "available",
+      listings: [LISTING, { ...LISTING, id: "acme.other", repo: "https://github.com/acme/other" }],
+      fetchedAt: Date.now(),
+      stale: false,
+    });
+    renderDialog();
+    await selectPlugin();
+    fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
+    await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
+
+    await openBrowse();
+    fireEvent.click(screen.getByRole("button", { name: "Install acme.other" }));
+
+    expect(
+      await screen.findByText("Finish or cancel the current install, then install from Browse.")
+    ).toBeTruthy();
+    expect(window.electron.plugin.previewFromCatalog).not.toHaveBeenCalled();
+    expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy();
+  });
+
+  it("won't let a dropped archive take over a Browse preview still downloading", async () => {
+    let finishPreview!: (result: PluginUrlInstallPreviewResult) => void;
+    vi.mocked(window.electron.plugin.previewFromCatalog).mockReturnValue(
+      new Promise((resolve) => {
+        finishPreview = resolve;
+      })
+    );
+    renderDialog();
+    await openBrowse();
+    fireEvent.click(screen.getByRole("button", { name: "Install acme.demo" }));
+    await waitFor(() => expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalled());
+
+    await dropOnView([droppedFile("acme.dntr", "/Users/test/Downloads/acme.dntr")]);
+
+    expect(
+      await screen.findByText("Finish or cancel the current install, then drop the file again.")
+    ).toBeTruthy();
+    expect(window.electron.plugin.installFromPath).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishPreview({
+        status: "preview",
+        preview: {
+          url: `${REPO}/releases/download/v1.0.0/acme.demo-1.0.0.dntr`,
+          archiveHash: PREVIEW_HASH,
+          installedOnDisk: false,
+          manifest: previewManifest(),
+          catalog: { id: "acme.demo", version: "1.0.0", repo: REPO },
+        },
+      });
+    });
+    expect(await urlReviewDialog()).toBeTruthy();
+  });
+
+  it("leaves the installed list alone when the catalog can't be read", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
+      status: "unavailable",
+      failure: "unreachable",
+    });
+    renderDialog();
+    await findPluginRowButton("Acme Demo");
+    fireEvent.click(browseButton());
+
+    expect(await screen.findByText("Connect to browse community plugins")).toBeTruthy();
+    expect(pluginRowButton("Acme Demo")).toBeTruthy();
+    expect(screen.queryByText(/couldn't load plugins/i)).toBeNull();
+  });
+
+  it("leaves Browse when the manager closes, so reopening reads no catalog", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await openBrowse();
+    expect(window.electron.plugin.browseCatalog).toHaveBeenCalledOnce();
+
+    act(() => usePluginManagerStore.setState({ isOpen: false }));
+    act(() => usePluginManagerStore.setState({ isOpen: true }));
+
+    expect(await screen.findByRole("region", { name: "Installed plugins" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Community plugins" })).toBeNull();
+    expect(window.electron.plugin.browseCatalog).toHaveBeenCalledOnce();
+  });
 });

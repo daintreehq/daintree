@@ -69,6 +69,8 @@ import {
   describePluginInstallSource,
 } from "@shared/utils/pluginInstallSource";
 import { PluginCatalog } from "./PluginCatalog";
+import { PluginCommunityBrowse } from "./PluginCommunityBrowse";
+import { Store } from "@/components/icons";
 import { PluginIconTile } from "./pluginIcons";
 import { pluginSignalFor } from "./pluginStatus";
 import { ProjectPluginSection, ProjectPluginDetailPane } from "./ProjectPluginSection";
@@ -425,6 +427,18 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     [pm.plugins, projectPlugins]
   );
 
+  // The community catalog in the wide pane (#16782). A selection takes the pane
+  // over without leaving Browse, so clearing it comes back here. Closing the
+  // manager leaves Browse, so reopening it reads no catalog until asked.
+  const [browsing, setBrowsing] = useState(false);
+  const showingBrowse = browsing && selectedPlugin === null && selectedProjectPlugin === null;
+  // Installed copies by id, for Browse's markers. Project plugins are a
+  // project's own folder, not installs, so they never mark a listing.
+  const installedVersions = useMemo(
+    () => new Map(pm.plugins.map((p) => [p.manifest.name, p.manifest.version])),
+    [pm.plugins]
+  );
+
   // Row elements keyed by plugin name, so a `daintree://plugin/open` (#9559) can
   // scroll its target into view.
   const rowRefs = useRef<Map<string, HTMLLIElement>>(new Map());
@@ -537,7 +551,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // 10-item visibility threshold from #9557 went with the marketplace
   // redesign), so there's no threshold edge to reset on anymore.
   useEffect(() => {
-    if (!isOpen) setQuery("");
+    if (!isOpen) {
+      setQuery("");
+      setBrowsing(false);
+    }
   }, [isOpen]);
 
   // The install outcome, as a status message (WCAG 4.1.3). Emptied the moment
@@ -666,7 +683,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
    */
   const hiddenBySearch = (plugin: LoadedPluginInfo): boolean =>
     isQueryActive(parsePluginQuery(query)) && filterPlugins([plugin], query).length === 0;
-  const revealPlugin = useEffectEvent((plugin: LoadedPluginInfo): boolean => {
+  const showPlugin = (plugin: LoadedPluginInfo): boolean => {
     const id = plugin.manifest.name;
     const hidden = hiddenBySearch(plugin);
     if (hidden) setQuery("");
@@ -676,7 +693,8 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     setSelectedPluginId(id);
     setRevealTargetId(id);
     return hidden;
-  });
+  };
+  const revealPlugin = useEffectEvent(showPlugin);
 
   // Scroll a revealed row into view once it has rendered.
   useEffect(() => {
@@ -892,6 +910,24 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             and pushed the installed list — the thing most visits come for —
             below the fold. */}
         <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="ghost"
+            size="sm"
+            pressed={showingBrowse}
+            onClick={() => {
+              if (showingBrowse) {
+                setBrowsing(false);
+                return;
+              }
+              setSelectedPluginId(null);
+              setSelectedProjectPluginId(null);
+              setBrowsing(true);
+            }}
+            className="app-no-drag"
+          >
+            <Store />
+            Browse
+          </Button>
           {pm.hasUpdatablePlugins && (
             <Button
               variant="ghost"
@@ -1219,7 +1255,11 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         <ScrollShadow
           key={
             selectedPlugin?.manifest.name ??
-            (selectedProjectPlugin ? `project:${selectedProjectPlugin.id}` : "catalog")
+            (selectedProjectPlugin
+              ? `project:${selectedProjectPlugin.id}`
+              : showingBrowse
+                ? "browse"
+                : "catalog")
           }
           className="flex-1 min-h-0"
           // A named landmark for whatever is selected, so assistive technology
@@ -1232,7 +1272,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               ? `Details for ${pluginLabel(selectedPlugin)}`
               : selectedProjectPlugin
                 ? `Details for ${selectedProjectPlugin.displayName}`
-                : "Installed plugins"
+                : showingBrowse
+                  ? "Community plugins"
+                  : "Installed plugins"
           }
           // The readable-width caps are left-pinned, which is right for the
           // detail content and the catalog grid but would push the centered
@@ -1240,10 +1282,22 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           // drops the cap. The catalog gets the wider cap; cards auto-fill it.
           scrollClassName={cn(
             "p-6",
-            selectedPlugin || selectedProjectPlugin ? "max-w-3xl" : hasAnyPlugins && "max-w-4xl"
+            selectedPlugin || selectedProjectPlugin
+              ? "max-w-3xl"
+              : (showingBrowse || hasAnyPlugins) && "max-w-4xl"
           )}
         >
-          {selectedProjectPlugin ? (
+          {showingBrowse ? (
+            <PluginCommunityBrowse
+              installedVersions={installedVersions}
+              installDisabled={pm.isInstalling || pm.urlReview !== null}
+              onInstall={pm.previewCatalogListing}
+              onViewInstalled={(pluginId) => {
+                const plugin = pm.plugins.find((p) => p.manifest.name === pluginId);
+                if (plugin) showPlugin(plugin);
+              }}
+            />
+          ) : selectedProjectPlugin ? (
             <ProjectPluginDetailPane
               plugin={selectedProjectPlugin}
               worksWithPeers={worksWithPeers}

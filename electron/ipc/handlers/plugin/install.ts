@@ -45,6 +45,7 @@ import type {
   PluginCatalogPreviewRequest,
   PluginCatalogInstallRequest,
   PluginCatalogProvenance,
+  PluginCatalogBrowseResult,
 } from "../../../../shared/types/plugin.js";
 import type { PluginCatalogEntry } from "../../../services/plugin/pluginCatalogSchema.js";
 import type { IpcContext } from "../../types.js";
@@ -772,6 +773,16 @@ async function resolveCatalogRelease(
             : "Couldn't reach the plugin catalog, so nothing was installed. Check your connection and open the link again."
       );
   }
+}
+
+/**
+ * The catalog as the plugin manager's Browse view lists it (#16782). Only that
+ * view asks, so opening the manager or starting the app fetches nothing.
+ */
+export async function handleBrowseCatalog(): Promise<PluginCatalogBrowseResult> {
+  const { getPluginCatalogService } =
+    await import("../../../services/plugin/PluginCatalogService.js");
+  return getPluginCatalogService().browse();
 }
 
 /** A catalog id and optional version from IPC, checked before anything is fetched. */

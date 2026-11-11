@@ -1194,6 +1194,7 @@ export const CHANNELS = {
   PLUGIN_PREVIEW_FROM_URL: "plugin:preview-from-url",
   PLUGIN_PREVIEW_FROM_CATALOG: "plugin:preview-from-catalog",
   PLUGIN_INSTALL_FROM_CATALOG: "plugin:install-from-catalog",
+  PLUGIN_BROWSE_CATALOG: "plugin:browse-catalog",
   PLUGIN_UNINSTALL: "plugin:uninstall",
   PLUGIN_CHECK_FOR_UPDATE: "plugin:check-for-update",
   PLUGIN_INVOKE: "plugin:invoke",

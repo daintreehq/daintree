@@ -489,6 +489,7 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:bg-update-check-latest": "free",
   "plugin:bg-update-check-settings-get": "free",
   "plugin:bg-update-check-settings-set": "free",
+  "plugin:browse-catalog": "free",
   "plugin:cancel-install": "free",
   "plugin:check-for-update": "free",
   "plugin:clear-audit-log": "free",

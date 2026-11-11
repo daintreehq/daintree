@@ -4230,6 +4230,48 @@ export interface PluginCatalogInstallRequest {
 }
 
 /**
+ * Why no catalog could be fetched: `not-published` is a 404 (expected until
+ * the catalog repository exists), `unreachable` covers the network, a timeout
+ * and any other HTTP status, and `invalid` a body that isn't a valid catalog.
+ */
+export type PluginCatalogFailure = "not-published" | "unreachable" | "invalid";
+
+/**
+ * One catalog entry as Browse lists it (#16782): its newest reviewed release,
+ * chosen the way an install link that names no version chooses it. The
+ * download URL and digest stay in main, which resolves them again on install.
+ */
+export interface PluginCatalogListing {
+  id: string;
+  version: string;
+  /** `https://github.com/{owner}/{repo}`, as the catalog lists it. */
+  repo: string;
+  /** The manifest's list at review time. Display only: it grants nothing. */
+  capabilities: string[];
+}
+
+/**
+ * Outcome of `plugin.browseCatalog`. Browsing may answer from a copy cached in
+ * the last 15 minutes, or from an older one marked `stale` when it can't be
+ * refreshed; `unavailable` means no copy exists at all.
+ */
+export type PluginCatalogBrowseResult =
+  | {
+      status: "available";
+      listings: PluginCatalogListing[];
+      fetchedAt: number;
+      stale: false;
+    }
+  | {
+      status: "available";
+      listings: PluginCatalogListing[];
+      fetchedAt: number;
+      stale: true;
+      failure: PluginCatalogFailure;
+    }
+  | { status: "unavailable"; failure: PluginCatalogFailure };
+
+/**
  * Outcome of `plugin.previewFromUrl` and `plugin.previewFromCatalog`. Failures
  * carry the same shapes and error codes as {@link PluginInstallResult}, so one
  * message table covers both.

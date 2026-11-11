@@ -15,6 +15,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   previewFromUrl: "plugin:preview-from-url",
   previewFromCatalog: "plugin:preview-from-catalog",
   installFromCatalog: "plugin:install-from-catalog",
+  browseCatalog: "plugin:browse-catalog",
   cancelInstall: "plugin:cancel-install",
   uninstall: "plugin:uninstall",
   checkForUpdate: "plugin:check-for-update",
