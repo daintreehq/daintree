@@ -264,7 +264,11 @@ describe("viewless actions", () => {
         deps
       );
       expect(withCommand).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
-      expect(invoke).not.toHaveBeenCalledWith(PROJECT.id, CHANNELS.TERMINAL_SPAWN, expect.anything());
+      expect(invoke).not.toHaveBeenCalledWith(
+        PROJECT.id,
+        CHANNELS.TERMINAL_SPAWN,
+        expect.anything()
+      );
 
       const plain = await executeViewlessAction(
         { ...request("terminal.new", {}), source: "plugin" },

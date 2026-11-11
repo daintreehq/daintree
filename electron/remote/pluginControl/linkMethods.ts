@@ -28,7 +28,9 @@ const PLUGIN_CREDENTIAL_LABEL = "daintree/plugin-control/v1";
  * assistant's credential.
  */
 export function pluginCredentialFor(shellSecret: string): string {
-  return createHmac("sha256", shellSecret).update(PLUGIN_CREDENTIAL_LABEL, "utf8").digest("base64url");
+  return createHmac("sha256", shellSecret)
+    .update(PLUGIN_CREDENTIAL_LABEL, "utf8")
+    .digest("base64url");
 }
 
 /**
@@ -71,7 +73,13 @@ export const PluginControlAgentInputSchema = z.union([
     .strict(),
   z.object({ op: z.literal("sendKeys"), choose: z.string().min(1).max(200) }).strict(),
   z
-    .object({ op: z.literal("submit"), text: z.string().min(1).max(256 * 1024) })
+    .object({
+      op: z.literal("submit"),
+      text: z
+        .string()
+        .min(1)
+        .max(256 * 1024),
+    })
     .strict(),
 ]);
 export type PluginControlAgentInput = z.infer<typeof PluginControlAgentInputSchema>;

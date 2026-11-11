@@ -200,7 +200,10 @@ describe("host admission of a Shell plugin's dispatch (#16767)", () => {
   it("refuses a change another screen drives, but still answers a read", async () => {
     const h = harness({ standing: { kind: "elsewhere", holderName: "Laptop" } });
 
-    const change = await h.control.dispatch(CALLER, dispatch("agent.launch", { agentId: "claude" }));
+    const change = await h.control.dispatch(
+      CALLER,
+      dispatch("agent.launch", { agentId: "claude" })
+    );
     expect(change).toMatchObject({ ok: false, error: { code: "DRIVEN_ELSEWHERE" } });
     expect(change.ok ? "" : change.error.message).toContain("Laptop");
 
@@ -210,7 +213,10 @@ describe("host admission of a Shell plugin's dispatch (#16767)", () => {
 
   it("refuses an action only a view can run while another screen drives, rather than routing it there", async () => {
     const h = harness({ standing: { kind: "elsewhere", holderName: null } });
-    const result = await h.control.dispatch(CALLER, dispatch("terminal.moveToDock", { terminalId: "t" }));
+    const result = await h.control.dispatch(
+      CALLER,
+      dispatch("terminal.moveToDock", { terminalId: "t" })
+    );
     expect(result).toMatchObject({ ok: false, error: { code: "DRIVEN_ELSEWHERE" } });
   });
 
@@ -273,7 +279,10 @@ describe("agents a Shell plugin launched on a host (#16767)", () => {
   it("records the launch as that plugin's, and interrupt reaches it", async () => {
     const h = harness();
     await launched(h);
-    expect(h.control.launchedBy("remote-1")).toEqual({ pluginId: PLUGIN_ID, projectId: PROJECT.id });
+    expect(h.control.launchedBy("remote-1")).toEqual({
+      pluginId: PLUGIN_ID,
+      projectId: PROJECT.id,
+    });
 
     const answer = await h.control.agentInput(CALLER, input());
     expect(answer.status).toBe("sent");
@@ -356,7 +365,11 @@ describe("leaseStanding (#16767)", () => {
     ).toBe("own-view");
     expect(
       leaseStanding(
-        () => ({ state: "live", endpoint: endpoint("remote-view", "link-2"), holderName: "Laptop" }),
+        () => ({
+          state: "live",
+          endpoint: endpoint("remote-view", "link-2"),
+          holderName: "Laptop",
+        }),
         PROJECT.id,
         LINK,
         false

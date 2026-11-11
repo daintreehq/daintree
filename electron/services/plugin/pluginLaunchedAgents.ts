@@ -265,7 +265,11 @@ export function recordRemotePluginLaunch(
 }
 
 /** Whether `pluginId` launched `terminalId` on `hostId` while it has been loaded. */
-export function isRemotePluginLaunch(pluginId: string, hostId: string, terminalId: string): boolean {
+export function isRemotePluginLaunch(
+  pluginId: string,
+  hostId: string,
+  terminalId: string
+): boolean {
   return remoteLaunches.get(remoteLaunchKey(hostId, terminalId)) === pluginId;
 }
 

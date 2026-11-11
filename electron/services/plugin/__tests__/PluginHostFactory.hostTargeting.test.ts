@@ -68,7 +68,6 @@ const OTHER_PLUGIN_ID = "acme.other";
 const PROJECT_ID = "a".repeat(64);
 const BOUND: PluginHostBinding = { projectId: PROJECT_ID, projectRoot: "/repos/alpha" };
 
-
 function launchResult(terminalId: string | null, launched = true): ActionDispatchResult {
   return {
     ok: true,
@@ -161,8 +160,11 @@ const REMOTE_PROJECT = "c".repeat(64);
 /** A fake of the remote hosts module's client: what reached each host, and its answers. */
 function fakeTargets() {
   const dispatched: Array<{ target: PluginHostTarget; request: unknown }> = [];
-  const inputs: Array<{ target: PluginHostTarget; terminalId: string; input: PluginHostAgentInput }> =
-    [];
+  const inputs: Array<{
+    target: PluginHostTarget;
+    terminalId: string;
+    input: PluginHostAgentInput;
+  }> = [];
   let inputAnswer: PluginHostAgentInputAnswer = { status: "sent" };
   const targets: PluginHostTargets = {
     knows: (hostId) => hostId === HOST_ID,
@@ -177,12 +179,17 @@ function fakeTargets() {
     ]),
     dispatch: vi.fn(async (target: PluginHostTarget, request: unknown) => {
       dispatched.push({ target, request });
-      return { ok: true, result: { launched: true, terminalId: "remote-1" } } as ActionDispatchResult;
+      return {
+        ok: true,
+        result: { launched: true, terminalId: "remote-1" },
+      } as ActionDispatchResult;
     }),
-    agentInput: vi.fn(async (target: PluginHostTarget, terminalId: string, input: PluginHostAgentInput) => {
-      inputs.push({ target, terminalId, input });
-      return inputAnswer;
-    }),
+    agentInput: vi.fn(
+      async (target: PluginHostTarget, terminalId: string, input: PluginHostAgentInput) => {
+        inputs.push({ target, terminalId, input });
+        return inputAnswer;
+      }
+    ),
   };
   return {
     targets,
@@ -407,9 +414,9 @@ describe("host.agents input with options.hostId (#16767)", () => {
     await expect(host.agents.interrupt("remote-1", { hostId: HOST_ID })).resolves.toEqual({
       status: "not-found",
     });
-    await expect(
-      host.agents.submit("remote-1", "continue", { hostId: HOST_ID })
-    ).resolves.toEqual({ status: "not-found" });
+    await expect(host.agents.submit("remote-1", "continue", { hostId: HOST_ID })).resolves.toEqual({
+      status: "not-found",
+    });
     expect(fake.inputs).toEqual([]);
     expect(consentMock.ensureAllowed).not.toHaveBeenCalled();
   });
@@ -434,9 +441,9 @@ describe("host.agents input with options.hostId (#16767)", () => {
     fake.answerInput({ status: "driven-elsewhere", holderName: "Laptop" });
 
     const host = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING).host;
-    await expect(
-      host.agents.submit("remote-1", "continue", { hostId: HOST_ID })
-    ).rejects.toThrow(/^DRIVEN_ELSEWHERE: .*Laptop.*Studio/);
+    await expect(host.agents.submit("remote-1", "continue", { hostId: HOST_ID })).rejects.toThrow(
+      /^DRIVEN_ELSEWHERE: .*Laptop.*Studio/
+    );
   });
 
   it("needs host targeting as well as agent:input to reach a remote agent", async () => {

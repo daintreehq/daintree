@@ -636,8 +636,14 @@ export const pluginCapabilityNamespace = defineIpcNamespace({
       PLUGIN_CAPABILITY_METHOD_CHANNELS.setProjectTargeting,
       handleSetProjectTargeting
     ),
-    getHostTargeting: op(PLUGIN_CAPABILITY_METHOD_CHANNELS.getHostTargeting, handleGetHostTargeting),
-    setHostTargeting: op(PLUGIN_CAPABILITY_METHOD_CHANNELS.setHostTargeting, handleSetHostTargeting),
+    getHostTargeting: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.getHostTargeting,
+      handleGetHostTargeting
+    ),
+    setHostTargeting: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.setHostTargeting,
+      handleSetHostTargeting
+    ),
     getOsNotifications: op(
       PLUGIN_CAPABILITY_METHOD_CHANNELS.getOsNotifications,
       handleGetOsNotifications

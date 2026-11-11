@@ -41,9 +41,10 @@ function shellClient(session: LinkSession | null = links.client): HostPluginCont
 
 function installOnHost(overrides: Partial<HostPluginControlDeps> = {}) {
   const audits: HostPluginAuditEntry[] = [];
-  const runWithoutView = vi.fn(
-    async (): Promise<ActionDispatchResult | null> => ({ ok: true, result: { worktrees: [] } })
-  );
+  const runWithoutView = vi.fn(async (): Promise<ActionDispatchResult | null> => ({
+    ok: true,
+    result: { worktrees: [] },
+  }));
   const ctx = {
     session: links.host,
     sessionId: "link-1",

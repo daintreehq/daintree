@@ -36,7 +36,16 @@ import {
  * as the drive lease sees it (`relayWriteRule.ts` reads it the same way).
  */
 export type HostPluginStanding =
-  | { kind: "own-view"; endpoint: { request: (method: string, payload: unknown, options?: { timeoutMs?: number }) => Promise<unknown> } }
+  | {
+      kind: "own-view";
+      endpoint: {
+        request: (
+          method: string,
+          payload: unknown,
+          options?: { timeoutMs?: number }
+        ) => Promise<unknown>;
+      };
+    }
   | { kind: "vacant" }
   | { kind: "elsewhere"; holderName: string | null }
   | { kind: "unavailable" };
@@ -99,7 +108,9 @@ function controlOffMessage(): string {
 }
 
 function drivenElsewhereMessage(holderName: string | null, stopped: boolean): string {
-  const who = holderName ? `${holderName} drives this project` : "Another screen drives this project";
+  const who = holderName
+    ? `${holderName} drives this project`
+    : "Another screen drives this project";
   return stopped
     ? `${who} now, so the action stopped before changing anything more.`
     : `${who}, so the action wasn't run. Try again once nobody else is driving it.`;
@@ -120,7 +131,11 @@ class DrivenElsewhere extends Error {
  * of a launch that started an agent under an id the launcher chose, as
  * `recordPluginLaunch` reads a local one.
  */
-function launchedTerminal(actionId: string, args: unknown, result: ActionDispatchResult): string | null {
+function launchedTerminal(
+  actionId: string,
+  args: unknown,
+  result: ActionDispatchResult
+): string | null {
   if (actionId !== AGENT_LAUNCH_ACTION_ID || !result.ok) return null;
   if (args !== null && typeof args === "object" && "requestedId" in args) return null;
   const launched = result.result as { launched?: unknown; terminalId?: unknown } | null;
@@ -192,7 +207,10 @@ export function createHostPluginControl(deps: HostPluginControlDeps) {
           )
         : failure(
             "DRIVEN_ELSEWHERE",
-            drivenElsewhereMessage(standing.kind === "elsewhere" ? standing.holderName : null, false)
+            drivenElsewhereMessage(
+              standing.kind === "elsewhere" ? standing.holderName : null,
+              false
+            )
           );
     }
     // Asked as a change is admitted and again right before each one: a view
@@ -267,8 +285,7 @@ export function createHostPluginControl(deps: HostPluginControlDeps) {
           shellName: caller.shellName,
           actionId: `dispatch:${payload.projectId}:${payload.actionId}`,
           args: payload.args,
-          result:
-            result?.ok === true ? "success" : code === "RESTRICTED" ? "restricted" : "error",
+          result: result?.ok === true ? "success" : code === "RESTRICTED" ? "restricted" : "error",
           errorMessage: thrown === undefined ? code : "ERROR",
           durationMs: now() - startedAt,
         });
@@ -282,7 +299,11 @@ export function createHostPluginControl(deps: HostPluginControlDeps) {
       }
       const terminalId = launchedTerminal(payload.actionId, payload.args, result);
       if (terminalId !== null) {
-        remember(terminalId, { senderId, pluginId: payload.pluginId, projectId: payload.projectId });
+        remember(terminalId, {
+          senderId,
+          pluginId: payload.pluginId,
+          projectId: payload.projectId,
+        });
       }
       audit(result);
       return result;

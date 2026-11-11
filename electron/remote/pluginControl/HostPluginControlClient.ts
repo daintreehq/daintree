@@ -60,7 +60,9 @@ function withinMs<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
 }
 
 function observedConnection(state: HostConnectionState): PluginRemoteHost["connection"] {
-  return state.status === "connected" || state.status === "connecting" ? state.status : "disconnected";
+  return state.status === "connected" || state.status === "connecting"
+    ? state.status
+    : "disconnected";
 }
 
 /**
@@ -112,7 +114,9 @@ export class HostPluginControlClient implements PluginHostTargets {
         hostId: host.hostId,
         name: host.name,
         connection: observedConnection(host.connection),
-        projects: listed ? listed.map((project) => ({ projectId: project.id, name: project.name })) : null,
+        projects: listed
+          ? listed.map((project) => ({ projectId: project.id, name: project.name }))
+          : null,
       };
     });
   }

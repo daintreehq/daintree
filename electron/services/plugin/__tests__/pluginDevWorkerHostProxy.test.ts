@@ -526,7 +526,9 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
   it("relays remoteHosts.list, and answers [] once disposed (#16767)", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.remoteHosts.list();
-    expect(sent.find((m) => m.type === "host-call" && m.method === "remoteHosts.list")).toBeDefined();
+    expect(
+      sent.find((m) => m.type === "host-call" && m.method === "remoteHosts.list")
+    ).toBeDefined();
     const hosts = [{ hostId: "studio", name: "Studio", connection: "connected", projects: null }];
     resolveCall(proxy, sent, "remoteHosts.list", hosts);
     await expect(promise).resolves.toEqual(hosts);

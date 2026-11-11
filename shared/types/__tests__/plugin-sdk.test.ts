@@ -414,7 +414,10 @@ describe("plugin-sdk boundary", () => {
           options?: PluginDispatchOptions
         ) => Promise<ActionDispatchResult>
       >();
-      expectTypeOf<PluginDispatchOptions>().toEqualTypeOf<{ projectId?: string; hostId?: string }>();
+      expectTypeOf<PluginDispatchOptions>().toEqualTypeOf<{
+        projectId?: string;
+        hostId?: string;
+      }>();
       expectTypeOf<BuiltInActionId>().toMatchTypeOf<Parameters<PluginHostApi["dispatch"]>[0]>();
       expectTypeOf<string>().toMatchTypeOf<Parameters<PluginHostApi["dispatch"]>[0]>();
 
