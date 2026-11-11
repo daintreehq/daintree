@@ -96,9 +96,9 @@ Pinning only the repository is the Obsidian model, where every release after the
 
 ## One plugin's journey
 
-`daintreehq.continue-session` (`plugins/sample/continue-session`) will be the end-to-end test. It sits outside the reserved `daintree.*` namespace, so it can install as a package. It is to get a public repository of its own and two releases, `0.1.0` then `0.1.1`, so install and update both run against real GitHub Releases. Step 4's preview ships today for URL installs, and step 5's digest check ships for those and the CLI.
+`daintreehq.continue-session` is the end-to-end test. It sits outside the reserved `daintree.*` namespace, so it installs as a package. Its source moved out of this repository (`plugins/sample/continue-session`) into a public one of its own, [`daintreehq/plugin-continue-session`](https://github.com/daintreehq/plugin-continue-session), where its tests run, and it has two releases, `0.1.0` then `0.1.1`, so install and update both run against real GitHub Releases. Step 4's preview ships today for URL installs, and step 5's digest check ships for those and the CLI.
 
-1. **Publish** (planned). The author tags `v0.1.0`; CI runs `daintree-plugin package` and attaches the versioned `.dntr` to the release.
+1. **Publish** (shipped). The author tags `v0.1.0`; the repository's release workflow runs `daintree-plugin package` and attaches the versioned `.dntr` and its `SHA256SUMS` to the release ([`v0.1.0`](https://github.com/daintreehq/plugin-continue-session/releases/tag/v0.1.0), [`v0.1.1`](https://github.com/daintreehq/plugin-continue-session/releases/tag/v0.1.1)).
 2. **List** (planned). The bot opens a pull request adding the `0.1.0` entry with the asset's digest; a person reviews it as a first listing.
 3. **Discover** (planned). Browse in the plugin manager reads the catalog and shows the plugin, its repository, and that it is a community listing, not a Daintree endorsement.
 4. **Inspect and trust** (shipped for URL installs). Install downloads the archive and shows its identity and capabilities, read from the downloaded bytes, with the full-privilege warning. The user decides whether to trust the publisher.
@@ -146,4 +146,4 @@ In the order they have to land:
 4. **Deep links.** Shipped: `daintree://plugin/install` carries a catalog id, or a URL with its `sha256`.
 5. **Browse.** A Browse view in the plugin manager.
 
-Outside the app: create `daintreehq/plugins` with `catalog.json`, its validation and the release-watching bot, and give `continue-session` its public repository and two releases.
+Outside the app: create `daintreehq/plugins` with `catalog.json`, its validation and the release-watching bot. Publish the plugin packages' `0.2.0` to npm too: npm still serves `0.1.0`, which can't build a plugin that uses `host.tasks`, `host.notify` or `mcpName`, so `plugin-continue-session` builds against tarballs packed from `v0.50.0`.
