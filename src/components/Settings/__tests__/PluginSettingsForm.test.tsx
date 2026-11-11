@@ -1842,3 +1842,313 @@ describe("PluginSettingsForm setup checklist (#13824)", () => {
     expect(pluginApi.getSetupStatus).not.toHaveBeenCalled();
   });
 });
+
+describe("PluginSettingsForm field filter (#16770)", () => {
+  const WORDS = [
+    "alpha",
+    "bravo",
+    "charlie",
+    "delta",
+    "echo",
+    "foxtrot",
+    "golf",
+    "hotel",
+    "india",
+    "juliet",
+    "kilo",
+    "lima",
+    "mike",
+    "november",
+    "oscar",
+    "papa",
+  ];
+  /** `count` string fields, `alphaKey` labelled "Alpha" onwards. */
+  const fieldsOf = (count: number, extra: Partial<SettingDefinition> = {}): SettingDefinition[] =>
+    WORDS.slice(0, count).map((word) => ({
+      id: `${word}Key`,
+      type: "string",
+      label: word[0]!.toUpperCase() + word.slice(1),
+      ...extra,
+    }));
+  const row = (id: string) => document.getElementById(`plugin-setting-acme.test-${id}`)!;
+  const filterBox = () => screen.getByLabelText("Filter settings") as HTMLInputElement;
+  const typeFilter = (value: string) => fireEvent.change(filterBox(), { target: { value } });
+
+  it("offers a filter only to a home showing more than 15 fields", () => {
+    const { unmount } = render(<PluginSettingsForm plugin={makePlugin(fieldsOf(15))} />);
+    expect(screen.queryByLabelText("Filter settings")).toBeNull();
+    unmount();
+
+    render(<PluginSettingsForm plugin={makePlugin(fieldsOf(16))} />);
+    expect(filterBox()).toBeTruthy();
+  });
+
+  it("counts the fields each home shows, not every field the plugin declares", () => {
+    currentProjectId = "p1";
+    // Ten user fields and six project fields: sixteen declared, neither home past 15.
+    const plugin = makePlugin([...fieldsOf(10), ...fieldsOf(16, { scope: "project" }).slice(10)]);
+    const { unmount } = render(<PluginSettingsForm plugin={plugin} viewScope="user" />);
+    expect(row("alphaKey")).toBeTruthy();
+    expect(screen.queryByLabelText("Filter settings")).toBeNull();
+    unmount();
+
+    render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
+    expect(row("kiloKey")).toBeTruthy();
+    expect(screen.queryByLabelText("Filter settings")).toBeNull();
+  });
+
+  it("doesn't count a field the plugin's own section edits", () => {
+    const viewEdited: SettingDefinition = { id: "cadence", type: "string", editor: "view" };
+    const { unmount } = render(
+      <PluginSettingsForm plugin={makeViewPlugin([...fieldsOf(15), viewEdited], "dist/prefs.js")} />
+    );
+    expect(row("alphaKey")).toBeTruthy();
+    expect(screen.queryByLabelText("Filter settings")).toBeNull();
+    unmount();
+
+    render(
+      <PluginSettingsForm plugin={makeViewPlugin([...fieldsOf(16), viewEdited], "dist/prefs.js")} />
+    );
+    expect(filterBox()).toBeTruthy();
+  });
+
+  it("stops filtering when a reload leaves the form 15 fields or fewer", () => {
+    const { rerender } = render(<PluginSettingsForm plugin={makePlugin(fieldsOf(16))} />);
+    typeFilter("zzzz");
+    expect(row("alphaKey").hidden).toBe(true);
+
+    rerender(<PluginSettingsForm plugin={makePlugin(fieldsOf(15))} />);
+    expect(screen.queryByLabelText("Filter settings")).toBeNull();
+    expect(screen.queryByText(/No settings match/)).toBeNull();
+    expect(WORDS.slice(0, 15).every((w) => !row(`${w}Key`).hidden)).toBe(true);
+  });
+
+  it("hides the fields a query doesn't match, by label, description or key, and says how many are left", () => {
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          ...fieldsOf(16),
+          { id: "zuluKey", type: "string", label: "Zulu", description: "Sandbox targets" },
+        ])}
+      />
+    );
+    const status = () => screen.getByRole("status").textContent;
+    expect(status()).toBe("17 settings in total");
+
+    // One letter is too short to match anything: nothing is hidden yet.
+    typeFilter("k");
+    expect(WORDS.every((w) => !row(`${w}Key`).hidden)).toBe(true);
+    expect(status()).toBe("17 settings in total");
+
+    typeFilter("li");
+    expect(WORDS.filter((w) => !row(`${w}Key`).hidden)).toEqual(["charlie", "juliet", "lima"]);
+    expect(status()).toBe("3 settings");
+
+    typeFilter("sandbox");
+    expect(row("zuluKey").hidden).toBe(false);
+    expect(WORDS.every((w) => row(`${w}Key`).hidden)).toBe(true);
+
+    typeFilter("kilo");
+    expect(row("kiloKey").hidden).toBe(false);
+    expect(WORDS.filter((w) => w !== "kilo").every((w) => row(`${w}Key`).hidden)).toBe(true);
+    expect(status()).toBe("1 setting");
+
+    typeFilter("papakey");
+    expect(row("papaKey").hidden).toBe(false);
+    expect(row("kiloKey").hidden).toBe(true);
+
+    typeFilter("");
+    expect(WORDS.every((w) => !row(`${w}Key`).hidden)).toBe(true);
+    expect(status()).toBe("17 settings in total");
+  });
+
+  it("keeps a saved value on a field the filter hid and showed again", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { alphaKey: "stored" } }));
+    render(<PluginSettingsForm plugin={makePlugin(fieldsOf(16))} />);
+    const input = (await screen.findByLabelText("Alpha")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("stored"));
+    fireEvent.change(input, { target: { value: "changed" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(pluginApi.setSettingValue).toHaveBeenCalled());
+
+    typeFilter("kilo");
+    expect(row("alphaKey").hidden).toBe(true);
+    typeFilter("");
+    // The same field, not a remount re-reading the value loaded before the save.
+    expect(screen.getByLabelText("Alpha")).toBe(input);
+    expect(input.value).toBe("changed");
+  });
+
+  it("says when nothing matches, and clears the filter from there", () => {
+    render(<PluginSettingsForm plugin={makePlugin(fieldsOf(16))} />);
+    typeFilter("zzzz");
+    expect(WORDS.every((w) => row(`${w}Key`).hidden)).toBe(true);
+    expect(screen.getByText('No settings match "zzzz"')).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("0 settings");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+    expect(filterBox().value).toBe("");
+    expect(document.activeElement).toBe(filterBox());
+    expect(screen.queryByText(/No settings match/)).toBeNull();
+    expect(WORDS.every((w) => !row(`${w}Key`).hidden)).toBe(true);
+    expect(screen.getByRole("status").textContent).toBe("16 settings in total");
+  });
+
+  it("clears the filter for a deep link to a field it hides, and lands there", async () => {
+    const plugin = makePlugin(fieldsOf(16));
+    const onFocusHandled = vi.fn();
+    const { rerender } = render(
+      <PluginSettingsForm plugin={plugin} onFocusHandled={onFocusHandled} />
+    );
+    typeFilter("kilo");
+    expect(row("alphaKey").hidden).toBe(true);
+
+    rerender(
+      <PluginSettingsForm
+        plugin={plugin}
+        focusRequest={{ key: "alphaKey", nonce: 1 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(1));
+    expect(filterBox().value).toBe("");
+    expect(row("alphaKey").hidden).toBe(false);
+    expect(row("alphaKey").classList.contains("settings-highlight")).toBe(true);
+    expect(row("alphaKey").contains(document.activeElement)).toBe(true);
+
+    // Typing after the link has landed filters as usual.
+    typeFilter("kilo");
+    expect(filterBox().value).toBe("kilo");
+    expect(row("alphaKey").hidden).toBe(true);
+
+    // A new link to the same field clears it again.
+    rerender(
+      <PluginSettingsForm
+        plugin={plugin}
+        focusRequest={{ key: "alphaKey", nonce: 3 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(3));
+    expect(filterBox().value).toBe("");
+    expect(row("alphaKey").hidden).toBe(false);
+  });
+
+  it("clears a filter typed while the linked field's value was still loading", async () => {
+    let resolve!: (v: PluginSettingsUiValues) => void;
+    pluginApi.getSettingValues.mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      })
+    );
+    const onFocusHandled = vi.fn();
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin(fieldsOf(16))}
+        focusRequest={{ key: "alphaKey", nonce: 4 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+    typeFilter("kilo");
+    expect(row("alphaKey").hidden).toBe(true);
+
+    await act(async () => resolve(uiValues()));
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(4));
+    expect(filterBox().value).toBe("");
+    expect(row("alphaKey").classList.contains("settings-highlight")).toBe(true);
+  });
+
+  it("clears a filter typed while a project switch reloads the linked field", async () => {
+    currentProjectId = "p1";
+    const plugin = makePlugin(fieldsOf(16, { scope: "project" }));
+    const onFocusHandled = vi.fn();
+    // A settings tab that isn't showing yet, so the landing keeps retrying.
+    const inTab = () => (
+      <div className="hidden" data-testid="tab">
+        <PluginSettingsForm
+          plugin={plugin}
+          viewScope="project"
+          focusRequest={{ key: "alphaKey", nonce: 5 }}
+          onFocusHandled={onFocusHandled}
+        />
+      </div>
+    );
+    const { rerender, container } = render(inTab());
+    await waitFor(() =>
+      expect((screen.getByLabelText("Alpha") as HTMLInputElement).disabled).toBe(false)
+    );
+
+    let resolve!: (v: PluginSettingsUiValues) => void;
+    pluginApi.getSettingValues.mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      })
+    );
+    currentProjectId = "p2";
+    rerender(inTab());
+    typeFilter("kilo");
+    expect(row("alphaKey").hidden).toBe(true);
+
+    await act(async () => resolve(uiValues()));
+    await waitFor(() => expect(filterBox().value).toBe(""));
+    container.querySelector('[data-testid="tab"]')!.classList.remove("hidden");
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(5));
+    expect(row("alphaKey").classList.contains("settings-highlight")).toBe(true);
+  });
+
+  it("keeps the filter for a deep link to a field it still shows", async () => {
+    const plugin = makePlugin(fieldsOf(16));
+    const onFocusHandled = vi.fn();
+    const { rerender } = render(
+      <PluginSettingsForm plugin={plugin} onFocusHandled={onFocusHandled} />
+    );
+    typeFilter("kilo");
+
+    rerender(
+      <PluginSettingsForm
+        plugin={plugin}
+        focusRequest={{ key: "kiloKey", nonce: 2 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(2));
+    expect(filterBox().value).toBe("kilo");
+    expect(row("alphaKey").hidden).toBe(true);
+    expect(row("kiloKey").classList.contains("settings-highlight")).toBe(true);
+
+    // The request is spent: a filter that now hides its field stays.
+    typeFilter("papa");
+    expect(filterBox().value).toBe("papa");
+    expect(row("kiloKey").hidden).toBe(true);
+  });
+
+  it("drops an open enum list and its Escape claim when the filter hides the field", async () => {
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          ...fieldsOf(15),
+          { id: "mode", type: "enum", label: "Mode", options: ["a", "b", "c", "d", "e", "f"] },
+        ])}
+      />
+    );
+    const select = (await screen.findByRole("combobox", { name: "Mode" })) as HTMLButtonElement;
+    await waitFor(() => expect(select.disabled).toBe(false));
+    // Registered first, so an Escape claim the hidden list kept would sit above it.
+    const outer = vi.fn();
+    const outerEntry = registerEscape(outer);
+    try {
+      fireEvent.click(select);
+      await waitFor(() => expect(select.getAttribute("aria-expanded")).toBe("true"));
+
+      typeFilter("kilo");
+      expect(row("mode").hidden).toBe(true);
+      await waitFor(() => expect(select.getAttribute("aria-expanded")).toBe("false"));
+      act(() => {
+        dispatchEscape();
+      });
+      expect(outer).toHaveBeenCalledTimes(1);
+    } finally {
+      outerEntry.unregister();
+    }
+  });
+});

@@ -6,6 +6,9 @@ export type SettingsSearchResult = SettingsSearchEntry;
 
 const MODIFIED_TOKEN_RE = /(?:^|\s)@mod(?:ified)?(?=\s|$)/i;
 
+/** The shortest run of characters the matcher counts as a match. */
+export const MIN_MATCH_CHARS = 2;
+
 const FUSE_OPTIONS: IFuseOptions<SettingsSearchEntry> = {
   keys: [
     { name: "title", weight: 0.7 },
@@ -18,7 +21,7 @@ const FUSE_OPTIONS: IFuseOptions<SettingsSearchEntry> = {
   threshold: 0.3,
   location: 0,
   distance: 100,
-  minMatchCharLength: 2,
+  minMatchCharLength: MIN_MATCH_CHARS,
   includeScore: true,
   ignoreLocation: false,
   ignoreFieldNorm: false,
