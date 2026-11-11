@@ -492,6 +492,7 @@ describe("workspace-bound external sessions (#11789)", () => {
         // Executed through main's assistant control, for an assistant caller (#13496).
         "assistant.list": { args: {} },
         "assistant.start": { args: {} },
+        "assistant.resume": { args: { slot: 1 } },
         "agent.readQuota": { args: {} },
         "agent.resumeOwned": {
           args: { worktreeId: "wt-1", agentId: "claude", sessionId: "sess-1" },

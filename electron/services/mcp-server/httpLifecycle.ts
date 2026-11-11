@@ -254,6 +254,7 @@ export class HttpLifecycle {
       this.assistantControlBinding?.control.resolve(caller, terminalId) ?? null,
     list: (...args) => this.boundAssistantControl().list(...args),
     start: (...args) => this.boundAssistantControl().start(...args),
+    resume: (...args) => this.boundAssistantControl().resume(...args),
     submit: (...args) => this.boundAssistantControl().submit(...args),
     sendKeys: (...args) => this.boundAssistantControl().sendKeys(...args),
     interrupt: (...args) => this.boundAssistantControl().interrupt(...args),

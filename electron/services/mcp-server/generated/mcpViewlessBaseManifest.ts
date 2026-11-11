@@ -894,6 +894,27 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           },
           description: "Slots a start may use.",
         },
+        keptSlots: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              slot: {
+                type: "number",
+              },
+              agentId: {
+                type: "string",
+              },
+              capturedAt: {
+                type: "number",
+                description: "When its conversation was last recorded, epoch ms.",
+              },
+            },
+            required: ["slot", "agentId", "capturedAt"],
+            additionalProperties: false,
+          },
+          description: "Stopped slots keeping a conversation: resume one, never start there.",
+        },
         global: {
           anyOf: [
             {
@@ -928,11 +949,128 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description: "This machine's global Assistant: send and status only. Null if none runs.",
         },
       },
-      required: ["projectId", "assistants", "vacantSlots", "global"],
+      required: ["projectId", "assistants", "vacantSlots", "keptSlots", "global"],
       additionalProperties: false,
     },
     requiresArgs: false,
     title: "List assistants",
+  },
+  {
+    band: "reversible",
+    category: "help",
+    danger: "safe",
+    description:
+      "Reopen the conversation a stopped Daintree Assistant slot keeps, in that slot with no window, returned as the assistant listing shows it. Refused, never started fresh, when it can't be. Not ready still means it runs.",
+    enabled: true,
+    id: "assistant.resume",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        slot: {
+          type: "integer",
+          minimum: 0,
+          maximum: 5,
+          description: "A slot the assistant listing names as kept.",
+        },
+      },
+      required: ["slot"],
+    },
+    keywords: ["assistant", "resume", "kept", "lane", "host"],
+    kind: "command",
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+    name: "assistant.resume",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        assistant: {
+          type: "object",
+          properties: {
+            terminalId: {
+              type: "string",
+              description: "Its terminal: what a send, notice, read or close names.",
+            },
+            generation: {
+              type: "number",
+              description:
+                "Its run's generation. A send passes it back; a restarted run has a new one.",
+            },
+            slot: {
+              type: "number",
+            },
+            agentId: {
+              type: ["string", "null"],
+            },
+            agentState: {
+              anyOf: [
+                {
+                  type: "string",
+                  enum: ["idle", "working", "waiting", "directing", "completed", "exited"],
+                },
+                {
+                  type: "null",
+                },
+              ],
+              description: "As last observed; not proof of what it is doing.",
+            },
+            waitingReason: {
+              anyOf: [
+                {
+                  type: "string",
+                  enum: ["prompt", "question", "approval", "error"],
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
+            attached: {
+              type: "boolean",
+            },
+            startedByYou: {
+              type: "boolean",
+            },
+          },
+          required: [
+            "terminalId",
+            "generation",
+            "slot",
+            "agentId",
+            "agentState",
+            "waitingReason",
+            "attached",
+            "startedByYou",
+          ],
+          additionalProperties: false,
+        },
+        ready: {
+          type: "boolean",
+          description:
+            "At its prompt. False: it runs but is stopped short of one; don't start another.",
+        },
+        notReadyReason: {
+          anyOf: [
+            {
+              type: "string",
+              enum: ["timed-out", "agent-error"],
+            },
+            {
+              type: "null",
+            },
+          ],
+        },
+      },
+      required: ["assistant", "ready", "notReadyReason"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Resume a kept assistant",
   },
   {
     band: "reversible",
@@ -947,7 +1085,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       type: "object",
       properties: {
         slot: {
-          description: "A vacant slot. Omit for the lowest vacant one.",
+          description: "A vacant slot, not a kept one. Omit for the lowest vacant one.",
           type: "integer",
           minimum: 0,
           maximum: 5,

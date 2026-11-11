@@ -162,6 +162,18 @@ interface ProvisionInput {
    */
   vacantOnly?: boolean;
   /**
+   * Refuse with `LANE_KEPT` a lane that keeps a stopped conversation, or one
+   * claimed for a resume (#16763): a start never takes the person's
+   * conversation over, so it can't replace the lane's pointer at its spawn.
+   */
+  refuseKept?: true;
+  /**
+   * The claim a main-side resume holds on the lane (`claimLaneResume`): the
+   * one provision a lane being resumed admits, and only while the claim still
+   * holds, so a discard meanwhile refuses it.
+   */
+  resumeClaimId?: string;
+  /**
    * Snapshot of the renderer's `ActionContext` captured synchronously when
    * the user launched the assistant, before any `await`. Bound to the MCP
    * session at handshake and replayed as `contextOverride` on every tool
@@ -198,6 +210,35 @@ export type HelpSessionStartedBy =
   | { kind: "schedule"; scheduleId: string; runId: string }
   /** A lane a restart to install an update stopped, resumed by the next launch (#16753). */
   | { kind: "update-restart" };
+
+/** A stopped lane's kept conversation, as its pointer holds it (#16763). */
+export interface KeptLane {
+  slot: number;
+  agentId: string;
+  /** Empty when the lane never learned its conversation's id. */
+  agentSessionId: string;
+  capturedAt: number;
+}
+
+/** What `claimLaneResume` got: the lane's pointer, or why there is none to take. */
+export type LaneResumeClaim =
+  | {
+      status: "claimed";
+      agentId: string;
+      agentSessionId: string;
+      cwd: string;
+      claimId: string;
+      /** Whether the claim still holds the pointer: a discard drops it. */
+      holds(): boolean;
+      /** Hands an unspent claim back and ends the resume's mark; runs once. */
+      release(): Promise<void>;
+    }
+  /** No conversation kept in the lane. */
+  | { status: "none" }
+  /** An assistant runs in the lane, or is starting there. */
+  | { status: "occupied" }
+  /** Another resume of the lane is under way, main's or a view's. */
+  | { status: "resuming" };
 
 export interface ProvisionResult {
   sessionId: string;
@@ -316,6 +357,11 @@ interface HelpSessionRecord {
   outlivesView?: true;
   /** Who asked for it, when the host started it with no view (#13511). */
   startedBy?: HelpSessionStartedBy;
+  /**
+   * Provisioned to reopen its lane's kept conversation from main (#16753,
+   * #16763): until it spawns, a discard of the lane revokes it.
+   */
+  resumingLane?: true;
   /**
    * Whether the assistant panel was open when the view went, frozen at that
    * moment: the next view mounts with its panel closed and reports so before
@@ -495,7 +541,8 @@ export class HelpSessionService {
   private onMcpSessionRevokedFn: ((token: string, sessionId: string) => void) | null = null;
   private readonly sessionEndedListeners = new Set<(event: HelpSessionEndedEvent) => void>();
   private readonly sessionReattachedListeners = new Set<(lane: RunningLane) => void>();
-  // Lanes main is resuming after a restart to install an update (#16753).
+  // Lanes main is resuming with no view (#16753, #16763), from the claim to
+  // its release by `claimLaneResume`.
   private readonly resumingSlotKeys = new Set<string>();
   private readonly laneDetachedListeners = new Set<(projectId: string) => void>();
   private onMcpSessionRepinnedFn: ((token: string) => void) | null = null;
@@ -1134,31 +1181,38 @@ export class HelpSessionService {
       }
     }
 
-    // A lane coming back after an update restart (#16753) is main's until its
-    // resume settles: a view's launch that missed it at adoption would otherwise
-    // start a fresh conversation over the one being resumed.
-    if (
-      this.resumingSlotKeys.has(assistantSlotKey(input.projectId, slot)) &&
-      input.startedBy?.kind !== "update-restart"
-    ) {
+    // A lane main is resuming (#16753, #16763) is the resume's until it
+    // settles: a view's launch that missed it at adoption would otherwise start
+    // a fresh conversation over the one being resumed. The resume itself is
+    // admitted only while its claim holds, so a discard meanwhile refuses it.
+    const slotKey = assistantSlotKey(input.projectId, slot);
+    const resuming =
+      input.resumeClaimId !== undefined &&
+      this.claimsBySlotKey.get(slotKey)?.claimId === input.resumeClaimId;
+    if (input.resumeClaimId !== undefined ? !resuming : this.resumingSlotKeys.has(slotKey)) {
       throw new HelpSessionError(
         "LANE_OCCUPIED",
-        `Assistant ${slot + 1} of this project is coming back after the update; try again in a moment.`
+        `Assistant ${slot + 1} of this project is being resumed; try again in a moment.`
       );
     }
 
     // Checked inside the lane lock, so nothing can take the lane between this
     // and the provision below.
     if (input.vacantOnly) {
-      const occupant = [...this.sessionsByToken.values()].find(
-        (record) => !record.revoked && record.projectId === input.projectId && record.slot === slot
-      );
+      const occupant = this.laneOccupant(input.projectId, slot);
       if (occupant) {
         throw new HelpSessionError(
           "LANE_OCCUPIED",
           `Assistant ${slot + 1} of this project is already in use; it was left running.`
         );
       }
+    }
+
+    if (input.refuseKept && this.laneKeepsConversation(slotKey)) {
+      throw new HelpSessionError(
+        "LANE_KEPT",
+        `Assistant ${slot + 1} of this project keeps a stopped conversation; it was left for resuming.`
+      );
     }
 
     // Single-backend invariant (#7509): displace any prior unrevoked record
@@ -1265,6 +1319,7 @@ export class HelpSessionService {
       createdAt: now,
       revoked: false,
       actionContext: input.actionContext,
+      ...(resuming ? { resumingLane: true as const } : {}),
       ...(input.startedBy
         ? {
             startedBy: { ...input.startedBy },
@@ -1955,16 +2010,85 @@ export class HelpSessionService {
   }
 
   /**
-   * Marks a lane main is resuming with no view after an update restart
-   * (#16753), until the returned release runs. Until its assistant is bound, a
-   * view asking to take the lane over is told it is occupied.
+   * Claims a stopped lane's kept conversation for main to resume with no view
+   * (#16753, #16763), the way a view's resume claims it, and marks the lane as
+   * being resumed until `release` runs: a view's own launch stands down, and
+   * only a provision quoting `claimId` is admitted. One resume at a time per
+   * lane, whoever asks: a second main resume, or a lane a view is resuming, is
+   * refused rather than handed the same claim. `release` hands an unspent
+   * claim back; once the resumed spawn has spent it, it only lifts the mark.
    */
-  beginLaneResume(projectId: string, slot: number): () => void {
+  async claimLaneResume(projectId: string, slot: number): Promise<LaneResumeClaim> {
     const slotKey = assistantSlotKey(projectId, slot);
+    // Marked before the first await, so two calls can't both get past it.
+    if (this.resumingSlotKeys.has(slotKey)) return { status: "resuming" };
     this.resumingSlotKeys.add(slotKey);
-    return () => {
-      this.resumingSlotKeys.delete(slotKey);
+    let released = false;
+    const release = async (claimId: string | null): Promise<void> => {
+      if (released) return;
+      released = true;
+      try {
+        if (claimId !== null) await this.restorePendingHibernation(projectId, slot, claimId);
+      } finally {
+        this.resumingSlotKeys.delete(slotKey);
+      }
     };
+    try {
+      // Under the lane lock, so a provision already under way has registered
+      // the session it would run before the lane is read as stopped.
+      const outcome = await this.withLaneLock(slotKey, async (): Promise<LaneResumeClaim> => {
+        if (this.laneOccupant(projectId, slot)) return { status: "occupied" };
+        if (this.claimsBySlotKey.has(slotKey)) return { status: "resuming" };
+        const claim = await this.takePendingHibernation(projectId, slot);
+        if (!claim) return { status: "none" };
+        return {
+          status: "claimed",
+          ...claim,
+          holds: () => this.holdsPendingHibernationClaim(projectId, slot, claim.claimId),
+          release: () => release(claim.claimId),
+        };
+      });
+      if (outcome.status !== "claimed") await release(null);
+      return outcome;
+    } catch (err) {
+      await release(null);
+      throw err;
+    }
+  }
+
+  /**
+   * Every stopped lane of `projectId` keeping a conversation (#16763), with
+   * what its pointer holds, in slot order. A lane an assistant runs in still
+   * has its pointer, so callers leave running lanes out themselves.
+   */
+  listKeptLanes(projectId: string): KeptLane[] {
+    const store = this.pendingHibernationStore;
+    if (!projectId || !store) return [];
+    return ASSISTANT_SLOTS.flatMap((slot) => {
+      const entry = store.get(assistantSlotKey(projectId, slot));
+      return entry
+        ? [
+            {
+              slot,
+              agentId: entry.agentId,
+              agentSessionId: entry.agentSessionId,
+              capturedAt: entry.capturedAt,
+            },
+          ]
+        : [];
+    });
+  }
+
+  /** Whether a lane keeps a conversation, or a view has claimed it to resume, so a start mustn't take it. */
+  private laneKeepsConversation(slotKey: string): boolean {
+    return this.pendingHibernationStore?.get(slotKey) != null || this.claimsBySlotKey.has(slotKey);
+  }
+
+  /** The unrevoked session in the lane, running or still provisioned. */
+  private laneOccupant(projectId: string, slot: number): HelpSessionRecord | undefined {
+    return [...this.sessionsByToken.values()].find(
+      (record) => !record.revoked && record.projectId === projectId && record.slot === slot
+    );
   }
 
   /** Whether `claimId` still holds the lane's pointer; a discard drops it. */
@@ -1992,15 +2116,15 @@ export class HelpSessionService {
       }
     }
     const slotKey = assistantSlotKey(projectId, slot);
-    // A resume still on its way to its spawn (#16753) would bring the discarded
-    // conversation back: its revoked bearer is refused at the spawn instead.
+    // A resume still on its way to its spawn (#16753, #16763) would bring the
+    // discarded conversation back: its revoked bearer is refused at the spawn instead.
     if (this.resumingSlotKeys.has(slotKey)) {
       const unspawned = [...this.sessionsById.values()].filter(
         (record) =>
           record.projectId === projectId &&
           record.slot === slot &&
           !record.revoked &&
-          record.startedBy?.kind === "update-restart" &&
+          record.resumingLane === true &&
           !this.terminalBySessionId.has(record.sessionId)
       );
       await Promise.all(unspawned.map((record) => this.revokeSession(record.sessionId)));

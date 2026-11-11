@@ -1042,7 +1042,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `global` entry on the listing's closed output schema: its terminal, run
   // generation and observed state. Assistant-only, so the external ceiling does
   // not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 190_950;
+  // 190_950 → 193_000 for #16763, measured at 192_923 B (+1_986 over develop's
+  // 190_937): `assistant.resume`, so an assistant can reopen a stopped lane's
+  // kept conversation, with the same closed output schema `assistant.start`
+  // answers with, and `keptSlots` on the listing's output schema so a kept slot
+  // is never read as vacant. Assistant-only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 193_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

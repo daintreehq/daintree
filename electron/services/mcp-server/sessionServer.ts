@@ -149,8 +149,10 @@ import {
   AGENT_READ_QUOTA_TOOL,
   ASSISTANT_CONTROL_TOOL_IDS,
   ASSISTANT_LIST_TOOL,
+  ASSISTANT_RESUME_TOOL,
   ASSISTANT_START_TOOL,
   ASSISTANT_TARGET_REFUSALS,
+  AssistantResumeArgsSchema,
   AssistantStartArgsSchema,
   WORKER_STEER_REFUSALS,
   type AgentReadQuotaResult,
@@ -282,10 +284,11 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
   // A held prompt lives in main beside them (#16187).
   TERMINAL_CANCEL_QUEUED_SEND_TOOL,
-  // Assistants are found, started and quota read in main (#13496), from the
-  // caller's own session, never a view.
+  // Assistants are found, started, resumed and quota read in main (#13496,
+  // #16763), from the caller's own session, never a view.
   ASSISTANT_LIST_TOOL,
   ASSISTANT_START_TOOL,
+  ASSISTANT_RESUME_TOOL,
   AGENT_READ_QUOTA_TOOL,
   // Reopens a session from the journal main holds (#16341), with or without a
   // view: recovering after a restart can't wait for a window to open.
@@ -2702,10 +2705,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
-        // Short-circuit: finding and starting an assistant, and this machine's
-        // quota (#13496), run in main for the assistant this call came from,
-        // whatever admitted it above. A start is a change this process makes
-        // itself, so a relayed one answers to the drive rule as a check does.
+        // Short-circuit: finding, starting and resuming an assistant, and this
+        // machine's quota (#13496, #16763), run in main for the assistant this
+        // call came from, whatever admitted it above. A start or resume is a
+        // change this process makes itself, so a relayed one answers to the
+        // drive rule as a check does.
         if (ASSISTANT_CONTROL_TOOL_IDS.has(actionId)) {
           emitToolCallStarted(false, false);
           const refuseAssistant = (code: string, message: string) => {
@@ -2733,6 +2737,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               const startRefusal = assistantWriteRefusal(assistantCaller.projectId);
               if (startRefusal) return refuseAssistant(startRefusal.code, startRefusal.message);
               result = await assistantControl.start(assistantCaller, parsed.data);
+            } else if (actionId === ASSISTANT_RESUME_TOOL) {
+              const parsed = AssistantResumeArgsSchema.safeParse(args ?? {});
+              if (!parsed.success) {
+                return refuseAssistant(
+                  "VALIDATION_ERROR",
+                  "The arguments don't match this tool's schema."
+                );
+              }
+              const resumeRefusal = assistantWriteRefusal(assistantCaller.projectId);
+              if (resumeRefusal) return refuseAssistant(resumeRefusal.code, resumeRefusal.message);
+              result = await assistantControl.resume(assistantCaller, parsed.data);
             } else {
               const readQuota = deps.readCodexQuota;
               if (readQuota === undefined) {

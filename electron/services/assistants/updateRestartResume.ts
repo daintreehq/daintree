@@ -10,8 +10,8 @@ export interface UpdateRestartResumeDeps {
   /**
    * Claims the lane's pointer the way a view's resume does, so no view resumes
    * the same conversation alongside it, and has a view's own automatic launch
-   * stand down until the lane is back. Null when the lane has none or a view
-   * holds it.
+   * stand down until the lane is back. Null when the lane has none, runs an
+   * assistant, or another resume holds it.
    */
   claim(
     projectId: string,
@@ -93,7 +93,7 @@ async function resumeLane(
         slot,
         agentId: claim.agentId,
         startedBy: { kind: "update-restart" },
-        resume: { agentSessionId: claim.agentSessionId, cwd: claim.cwd },
+        resume: { agentSessionId: claim.agentSessionId, cwd: claim.cwd, claimId: claim.claimId },
         stillWanted: () =>
           !deps.isShuttingDown() && deps.holdsClaim(projectId, slot, claim.claimId),
       })
@@ -120,17 +120,19 @@ export async function resumeLanesAfterUpdateLive(record: LaunchResume): Promise<
     import("../../utils/logger.js"),
   ]);
   const launchDeps = await liveAssistantLaunchDeps();
-  const resuming = new Map<string, () => void>();
+  const releases = new Map<string, () => Promise<void>>();
   const outcomes = await resumeLanesAfterUpdate(record, {
     claim: async (projectId, slot) => {
-      const claim = await helpSessionService.takePendingHibernation(projectId, slot);
-      if (claim) resuming.set(claim.claimId, helpSessionService.beginLaneResume(projectId, slot));
-      return claim;
+      const claim = await helpSessionService.claimLaneResume(projectId, slot);
+      if (claim.status !== "claimed") return null;
+      releases.set(claim.claimId, claim.release);
+      const { agentId, agentSessionId, cwd, claimId } = claim;
+      return { agentId, agentSessionId, cwd, claimId };
     },
-    release: async (projectId, slot, claimId) => {
-      resuming.get(claimId)?.();
-      resuming.delete(claimId);
-      await helpSessionService.restorePendingHibernation(projectId, slot, claimId);
+    release: async (_projectId, _slot, claimId) => {
+      const release = releases.get(claimId);
+      releases.delete(claimId);
+      await release?.();
     },
     holdsClaim: (projectId, slot, claimId) =>
       helpSessionService.holdsPendingHibernationClaim(projectId, slot, claimId),

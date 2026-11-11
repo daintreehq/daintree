@@ -465,7 +465,7 @@ describe("shouldExposeTool", () => {
   // #13496: finding and starting assistants, and the quota, answer to their
   // caller: an assistant here or another machine's through host.call, at any
   // in-app tier; never a pane or an api-key client, whatever else it holds.
-  it.each(["assistant.list", "assistant.start", "agent.readQuota"])(
+  it.each(["assistant.list", "assistant.start", "assistant.resume", "agent.readQuota"])(
     "offers %s to an assistant caller alone",
     (id) => {
       const entry = makeEntry({ id });
@@ -2315,8 +2315,14 @@ describe("filterIntrospectionResultForSession", () => {
     // #13496: the assistant tools answer their caller too, so a relayed
     // assistant, with no ladder tier to place them on, can still read them.
     it("describes the assistant tools for an assistant caller, relayed or not", () => {
-      for (const id of ["assistant.list", "assistant.start", "agent.readQuota"]) {
-        const entry = makeEntry({ id, kind: id === "assistant.start" ? "command" : "query" });
+      for (const id of [
+        "assistant.list",
+        "assistant.start",
+        "assistant.resume",
+        "agent.readQuota",
+      ]) {
+        const kind = id === "assistant.start" || id === "assistant.resume" ? "command" : "query";
+        const entry = makeEntry({ id, kind });
         const relayed = { ...snap, tier: "full" as const, rendererOwnedOrigin: false, relay: true };
 
         expect(buildTargetPolicy(entry, { ...relayed, assistantControl: true }), id).toMatchObject({
@@ -2467,13 +2473,17 @@ describe("filterIntrospectionResultForSession", () => {
 
     // The host and assistant tools exist only for an assistant, so a session
     // is never told to raise its tier for them (#13493, #13496).
-    it.each(["host.list", "host.call", "assistant.list", "assistant.start", "agent.readQuota"])(
-      "offers no upgrade stub for %s",
-      (id) => {
-        const entry = makeEntry({ id, title: "Assistant tool", category: "help", danger: "safe" });
-        expect(buildUnavailableStub(entry, firstParty())).toBeNull();
-      }
-    );
+    it.each([
+      "host.list",
+      "host.call",
+      "assistant.list",
+      "assistant.start",
+      "assistant.resume",
+      "agent.readQuota",
+    ])("offers no upgrade stub for %s", (id) => {
+      const entry = makeEntry({ id, title: "Assistant tool", category: "help", danger: "safe" });
+      expect(buildUnavailableStub(entry, firstParty())).toBeNull();
+    });
 
     // The stub above proves nothing about the derivation: BAND_OVERRIDES pins
     // it, so a builder that passed a hard-coded `danger` into `deriveBand`

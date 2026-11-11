@@ -1060,38 +1060,6 @@ describe("HelpSessionService", () => {
       expect(service.getScheduledRunOf(resumed.sessionId)).toBeNull();
     });
 
-    it("keeps a view from provisioning into a lane while main resumes it, and a discard from bringing it back (#16753)", async () => {
-      const resumeInput = {
-        ...provisionInput(),
-        slot: 1,
-        windowId: NO_VIEW_HANDLE,
-        projectViewWebContentsId: NO_VIEW_HANDLE,
-        vacantOnly: true,
-        startedBy: { kind: "update-restart" },
-      } as const;
-      const end = service.beginLaneResume("proj-1", 1);
-
-      await expect(
-        service.provisionSession({ ...provisionInput(), slot: 1 })
-      ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
-      const resumed = await service.provisionSession(resumeInput);
-      if (!resumed) throw new Error("expected result");
-      // Another lane is untouched.
-      await expect(
-        service.provisionSession({ ...provisionInput(), slot: 2 })
-      ).resolves.toBeTruthy();
-
-      // Discarded before its spawn: the bearer the spawn would carry is dead.
-      expect(service.validateToken(resumed.token)).toBeTruthy();
-      await service.discardConversation("proj-1", 1);
-      expect(service.validateToken(resumed.token)).toBe(false);
-
-      end();
-      await expect(
-        service.provisionSession({ ...provisionInput(), slot: 1 })
-      ).resolves.toBeTruthy();
-    });
-
     it("refuses a schedule's start that names no run", async () => {
       await expect(
         service.provisionSession({
@@ -4032,9 +4000,8 @@ describe("HelpSessionService", () => {
           capturedAt: Date.now(),
         });
         const probe = vi.fn(async () => ({ cwd: "/help" }));
-        const claim = await service.takePendingHibernation("proj-1", 1);
-        if (!claim) throw new Error("expected claim");
-        const end = service.beginLaneResume("proj-1", 1);
+        const claim = await service.claimLaneResume("proj-1", 1);
+        if (claim.status !== "claimed") throw new Error("expected claim");
 
         await expect(service.adoptDetachedSession("proj-1", 1, 42, probe)).resolves.toEqual({
           status: "occupied",
@@ -4042,14 +4009,217 @@ describe("HelpSessionService", () => {
         await expect(service.adoptDetachedSession("proj-1", 0, 42, probe)).resolves.toEqual({
           status: "absent",
         });
-        expect(service.holdsPendingHibernationClaim("proj-1", 1, claim.claimId)).toBe(true);
+        expect(claim.holds()).toBe(true);
 
         await service.discardConversation("proj-1", 1);
-        expect(service.holdsPendingHibernationClaim("proj-1", 1, claim.claimId)).toBe(false);
+        expect(claim.holds()).toBe(false);
 
-        end();
+        await claim.release();
         await expect(service.adoptDetachedSession("proj-1", 1, 42, probe)).resolves.toEqual({
           status: "absent",
+        });
+      });
+
+      describe("resuming a kept lane from main (#16753, #16763)", () => {
+        const resumeInput = (claimId: string) =>
+          ({
+            ...provisionInput(),
+            slot: 1,
+            windowId: NO_VIEW_HANDLE,
+            projectViewWebContentsId: NO_VIEW_HANDLE,
+            vacantOnly: true,
+            resumeClaimId: claimId,
+            startedBy: { kind: "local", askingHelpSessionId: "asking-help-1" },
+          }) as const;
+
+        beforeEach(() => {
+          backing.set(slotKey("proj-1", 1), {
+            agentId: "claude",
+            agentSessionId: "claude-conv-9",
+            cwd: "/help",
+            capturedAt: 1_000,
+          });
+        });
+
+        it("lists every kept lane with what its pointer holds", () => {
+          backing.set(slotKey("proj-1", 3), {
+            agentId: "codex",
+            agentSessionId: "",
+            cwd: "/help-codex",
+            capturedAt: 2_000,
+          });
+          backing.set(slotKey("proj-2", 0), {
+            agentId: "claude",
+            agentSessionId: "other",
+            cwd: "/other",
+            capturedAt: 3_000,
+          });
+
+          expect(service.listKeptLanes("proj-1")).toEqual([
+            { slot: 1, agentId: "claude", agentSessionId: "claude-conv-9", capturedAt: 1_000 },
+            { slot: 3, agentId: "codex", agentSessionId: "", capturedAt: 2_000 },
+          ]);
+          expect(service.listKeptLanes("")).toEqual([]);
+        });
+
+        it("admits only the provision quoting its claim, keeps a view's out, and lets a discard revoke it", async () => {
+          const claim = await service.claimLaneResume("proj-1", 1);
+          if (claim.status !== "claimed") throw new Error("expected claim");
+          expect(claim).toMatchObject({ agentId: "claude", agentSessionId: "claude-conv-9" });
+
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+          await expect(
+            service.provisionSession(resumeInput("not-the-claim"))
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+          const resumed = await service.provisionSession(resumeInput(claim.claimId));
+          if (!resumed) throw new Error("expected result");
+          // Another lane is untouched.
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 2 })
+          ).resolves.toBeTruthy();
+
+          // Discarded before its spawn: the bearer the spawn would carry is dead,
+          // and the claim a second provision would quote is gone.
+          expect(service.validateToken(resumed.token)).toBeTruthy();
+          await service.discardConversation("proj-1", 1);
+          expect(service.validateToken(resumed.token)).toBe(false);
+          await expect(service.provisionSession(resumeInput(claim.claimId))).rejects.toMatchObject({
+            code: "LANE_OCCUPIED",
+          });
+
+          await claim.release();
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).resolves.toBeTruthy();
+        });
+
+        it("hands out one claim at a time, whoever asks, and none for a lane that runs or keeps nothing", async () => {
+          const first = await service.claimLaneResume("proj-1", 1);
+          if (first.status !== "claimed") throw new Error("expected claim");
+          await expect(service.claimLaneResume("proj-1", 1)).resolves.toEqual({
+            status: "resuming",
+          });
+          // The refused second call left the first resume's mark in place.
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+          await expect(service.claimLaneResume("proj-1", 2)).resolves.toEqual({ status: "none" });
+          // Nothing to claim leaves no mark behind.
+          const free = await service.provisionSession({ ...provisionInput(), slot: 2 });
+          if (!free) throw new Error("expected provision");
+          await service.revokeSession(free.sessionId);
+
+          await first.release();
+          expect(first.holds()).toBe(false);
+          // A late second release of the first claim never ends a newer resume's mark.
+          const second = await service.claimLaneResume("proj-1", 1);
+          if (second.status !== "claimed") throw new Error("expected claim");
+          await first.release();
+          expect(second.holds()).toBe(true);
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+          await second.release();
+          // A view's resume of the lane holds it just the same.
+          const viewClaim = await service.takePendingHibernation("proj-1", 1, 42);
+          if (!viewClaim) throw new Error("expected view claim");
+          await expect(service.claimLaneResume("proj-1", 1)).resolves.toEqual({
+            status: "resuming",
+          });
+          await service.restorePendingHibernation("proj-1", 1, viewClaim.claimId, 42);
+
+          const running = await service.provisionSession({ ...provisionInput(), slot: 1 });
+          if (!running) throw new Error("expected provision");
+          await expect(service.claimLaneResume("proj-1", 1)).resolves.toEqual({
+            status: "occupied",
+          });
+          await service.revokeSession(running.sessionId);
+          await expect(service.claimLaneResume("proj-1", 1)).resolves.toMatchObject({
+            status: "claimed",
+          });
+        });
+
+        it("spends the claim at the resumed spawn, leaving release only the lane's mark to lift", async () => {
+          const claim = await service.claimLaneResume("proj-1", 1);
+          if (claim.status !== "claimed") throw new Error("expected claim");
+          const resumed = await service.provisionSession(resumeInput(claim.claimId));
+          if (!resumed) throw new Error("expected result");
+          expect(service.markTerminalForToken(resumed.token, "term-resumed")).toBe(true);
+          await service.recordLaneLaunchForToken(resumed.token, "claude-conv-9");
+          expect(claim.holds()).toBe(false);
+
+          await claim.release();
+          expect(backing.get(slotKey("proj-1", 1))?.agentSessionId).toBe("claude-conv-9");
+          expect(service.getRunningLaneSession("proj-1", 1)).toMatchObject({
+            terminalId: "term-resumed",
+          });
+          // The lane runs: nothing is left to claim.
+          await expect(service.claimLaneResume("proj-1", 1)).resolves.toEqual({
+            status: "occupied",
+          });
+        });
+
+        it("lifts the lane's mark when the claim or its release fails", async () => {
+          hibernationStore.get.mockImplementationOnce(() => {
+            throw new Error("store unreadable");
+          });
+          await expect(service.claimLaneResume("proj-1", 1)).rejects.toThrow("store unreadable");
+          const claim = await service.claimLaneResume("proj-1", 1);
+          if (claim.status !== "claimed") throw new Error("expected claim");
+
+          hibernationStore.get.mockImplementationOnce(() => {
+            throw new Error("store unreadable");
+          });
+          await expect(claim.release()).rejects.toThrow("store unreadable");
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).resolves.toBeTruthy();
+        });
+
+        it("answers a running lane with a pointer as in use, before as kept, and leaves it running", async () => {
+          const running = await service.provisionSession({
+            ...provisionInput(),
+            slot: 1,
+            windowId: NO_VIEW_HANDLE,
+            projectViewWebContentsId: NO_VIEW_HANDLE,
+            startedBy: { kind: "local", askingHelpSessionId: "asking-help-1" },
+          });
+          if (!running) throw new Error("expected provision");
+
+          await expect(
+            service.provisionSession({
+              ...provisionInput(),
+              slot: 1,
+              windowId: NO_VIEW_HANDLE,
+              projectViewWebContentsId: NO_VIEW_HANDLE,
+              vacantOnly: true,
+              refuseKept: true,
+              startedBy: { kind: "local", askingHelpSessionId: "asking-help-2" },
+            })
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+          expect(service.validateToken(running.token)).toBeTruthy();
+        });
+
+        it("refuses a start that would take a kept lane, checked under the lane lock", async () => {
+          const start = (slot: number) =>
+            service.provisionSession({
+              ...provisionInput(),
+              slot,
+              windowId: NO_VIEW_HANDLE,
+              projectViewWebContentsId: NO_VIEW_HANDLE,
+              vacantOnly: true,
+              refuseKept: true,
+              startedBy: { kind: "local", askingHelpSessionId: "asking-help-1" },
+            });
+
+          await expect(start(1)).rejects.toMatchObject({ code: "LANE_KEPT" });
+          await expect(start(2)).resolves.toBeTruthy();
+          // Without the flag a start still takes it, as a schedule's does when nothing else is free.
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).resolves.toBeTruthy();
         });
       });
 

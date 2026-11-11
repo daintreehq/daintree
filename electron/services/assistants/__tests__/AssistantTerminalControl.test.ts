@@ -14,7 +14,12 @@ import {
 } from "../../../../shared/config/globalAssistant.js";
 import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
-import type { RunningLane, RunningLaneSession } from "../../HelpSessionService.js";
+import type {
+  KeptLane,
+  LaneResumeClaim,
+  RunningLane,
+  RunningLaneSession,
+} from "../../HelpSessionService.js";
 import { helpOwnershipPrincipal, principalOwnerKey } from "../../mcp-server/resourceOwnership.js";
 import { HoldRefusedError, type WorkerSteerQueue } from "../WorkerSteerQueue.js";
 
@@ -63,7 +68,9 @@ describe("AssistantTerminalControl (#13496)", () => {
     revoke: Mock<Deps["revoke"]>;
     launch: Mock<Deps["launch"]>;
     extractReply: Mock<Deps["extractReply"]>;
+    claimLaneResume: Mock<Deps["claimLaneResume"]>;
   };
+  let kept: KeptLane[];
   let control: AssistantTerminalControl;
 
   const addLane = (
@@ -100,7 +107,9 @@ describe("AssistantTerminalControl (#13496)", () => {
 
   beforeEach(() => {
     lanes = [];
+    kept = [];
     mocks = {
+      claimLaneResume: vi.fn<Deps["claimLaneResume"]>(async () => ({ status: "none" })),
       submit: vi.fn<Deps["submit"]>(),
       doubleEscape: vi.fn<Deps["doubleEscape"]>(),
       write: vi.fn<Deps["write"]>(),
@@ -118,6 +127,7 @@ describe("AssistantTerminalControl (#13496)", () => {
       serializedState: async () => ({ data: "screen" }),
       sleep: async () => {},
       projectName: (projectId) => (projectId === PROJECT ? "Web App" : null),
+      keptLanes: (projectId) => (projectId === PROJECT ? kept : []),
       ...mocks,
     };
     control = new AssistantTerminalControl(deps);
@@ -178,6 +188,28 @@ describe("AssistantTerminalControl (#13496)", () => {
       // The slots past the three that hold an assistant.
       expect(listed.vacantSlots).toEqual(
         Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter((slot) => slot > 2)
+      );
+      expect(listed.keptSlots).toEqual([]);
+    });
+
+    it("lists a stopped lane's kept conversation apart, and never as vacant (#16763)", async () => {
+      addLane(1, "t-one");
+      kept = [
+        // A running lane keeps its pointer too: it is listed as running, not kept.
+        { slot: 1, agentId: "codex", agentSessionId: "thread-1", capturedAt: 10 },
+        { slot: 3, agentId: "claude", agentSessionId: "conv-3", capturedAt: 30 },
+        { slot: 4, agentId: "codex", agentSessionId: "", capturedAt: 40 },
+      ];
+
+      const listed = await control.list(LOCAL);
+      expect(listed.keptSlots).toEqual([
+        { slot: 3, agentId: "claude", capturedAt: 30 },
+        { slot: 4, agentId: "codex", capturedAt: 40 },
+      ]);
+      expect(listed.vacantSlots).toEqual(
+        Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter(
+          (slot) => ![1, 3, 4].includes(slot)
+        )
       );
     });
   });
@@ -979,6 +1011,7 @@ describe("AssistantTerminalControl (#13496)", () => {
           linkSessionId: "link-a",
           askingHelpSessionId: "shell-help",
         },
+        preserveKept: true,
       });
     });
 
@@ -1147,6 +1180,208 @@ describe("AssistantTerminalControl (#13496)", () => {
         code: "ASSISTANT_START_REFUSED",
         message: expect.stringMatching(/Slot 2 already runs an assistant/),
       });
+      await expect(control.start(LOCAL, {})).rejects.toMatchObject({
+        code: "ASSISTANT_START_REFUSED",
+        message: expect.stringMatching(/No slot of this project is free.*assistant\.resume/),
+      });
+    });
+
+    it("points a start at a kept slot to the resume, never past it (#16763)", async () => {
+      mocks.launch.mockResolvedValue({ status: "refused", reason: "kept" });
+      await expect(control.start(LOCAL, { slot: 3 })).rejects.toMatchObject({
+        code: "ASSISTANT_START_REFUSED",
+        message: expect.stringMatching(/Slot 3 keeps a stopped conversation.*assistant\.resume/),
+      });
+      expect(mocks.launch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("resume (#16763)", () => {
+    let releases: number;
+    let holds: boolean;
+    const claimed = (overrides: Partial<Extract<LaneResumeClaim, { status: "claimed" }>> = {}) =>
+      ({
+        status: "claimed",
+        agentId: "claude",
+        agentSessionId: "conv-3",
+        cwd: "/sessions/claude",
+        claimId: "claim-3",
+        holds: () => holds,
+        // Released, the claim no longer holds: a launch after it would be refused.
+        release: async () => {
+          releases += 1;
+          holds = false;
+        },
+        ...overrides,
+      }) satisfies LaneResumeClaim;
+    let releasesAtLaunch: number[];
+
+    beforeEach(() => {
+      releases = 0;
+      releasesAtLaunch = [];
+      holds = true;
+      mocks.claimLaneResume.mockResolvedValue(claimed());
+      mocks.launch.mockImplementation(async (request) => {
+        releasesAtLaunch.push(releases);
+        addLane(3, "t-resumed", {
+          startedBy: request.startedBy,
+          attached: false,
+          generation: 4,
+          record: atPrompt({ detectedAgentId: "claude" }),
+        });
+        return {
+          status: "started",
+          sessionId: "session-3",
+          terminalId: "t-resumed",
+          slot: 3,
+          agentId: "claude",
+          ready: false,
+          notReadyReason: "timed-out",
+        };
+      });
+    });
+
+    it("reopens the kept conversation in its own slot, on its agent, for the caller, then lets the lane go", async () => {
+      const result = await control.resume(LOCAL, { slot: 3 });
+
+      expect(result).toEqual({
+        assistant: {
+          terminalId: "t-resumed",
+          generation: 4,
+          slot: 3,
+          agentId: "claude",
+          agentState: "waiting",
+          waitingReason: "prompt",
+          attached: false,
+          startedByYou: true,
+        },
+        ready: false,
+        notReadyReason: "timed-out",
+      });
+      expect(mocks.claimLaneResume).toHaveBeenCalledWith(PROJECT, 3);
+      // The claim holds through the launch, and is let go once, after it.
+      expect(releasesAtLaunch).toEqual([0]);
+      const request = mocks.launch.mock.calls[0]![0];
+      expect(request).toMatchObject({
+        projectId: PROJECT,
+        slot: 3,
+        agentId: "claude",
+        startedBy: { kind: "local", askingHelpSessionId: "hub-session" },
+        resume: { agentSessionId: "conv-3", cwd: "/sessions/claude", claimId: "claim-3" },
+      });
+      expect(request).not.toHaveProperty("preserveKept");
+      // Asked again before the spawn: a discard, or the release, drops the claim.
+      expect(request.stillWanted?.()).toBe(false);
+      holds = true;
+      expect(request.stillWanted?.()).toBe(true);
+      expect(releases).toBe(1);
+    });
+
+    it("reports a resume that reaches its prompt as ready, once a send would go in", async () => {
+      mocks.launch.mockImplementation(async (request) => {
+        addLane(3, "t-resumed", {
+          startedBy: request.startedBy,
+          attached: false,
+          record: atPrompt({ detectedAgentId: "claude" }),
+        });
+        return {
+          status: "started",
+          sessionId: "session-3",
+          terminalId: "t-resumed",
+          slot: 3,
+          agentId: "claude",
+          ready: true,
+          notReadyReason: null,
+        };
+      });
+      await expect(control.resume(LOCAL, { slot: 3 })).resolves.toMatchObject({
+        ready: true,
+        notReadyReason: null,
+        assistant: { terminalId: "t-resumed", agentId: "claude" },
+      });
+    });
+
+    it("reports it attached once a view of the project has taken it over", async () => {
+      mocks.launch.mockImplementation(async (request) => {
+        addLane(3, "t-resumed", { startedBy: request.startedBy, attached: true });
+        return {
+          status: "started",
+          sessionId: "session-3",
+          terminalId: "t-resumed",
+          slot: 3,
+          agentId: "claude",
+          ready: false,
+          notReadyReason: "timed-out",
+        };
+      });
+      await expect(control.resume(RELAY, { slot: 3 })).resolves.toMatchObject({
+        assistant: { attached: true, startedByYou: true },
+      });
+      // Recorded as that machine's assistant's, so its listing and close know it.
+      expect(mocks.launch.mock.calls[0]![0].startedBy).toEqual({
+        kind: "relay",
+        senderId: "sender-a",
+        linkSessionId: "link-a",
+        askingHelpSessionId: "shell-help",
+      });
+      expect((await control.list(RELAY)).assistants).toEqual([
+        expect.objectContaining({ terminalId: "t-resumed", startedByYou: true }),
+      ]);
+      expect((await control.list(LOCAL)).assistants).toEqual([
+        expect.objectContaining({ terminalId: "t-resumed", startedByYou: false }),
+      ]);
+    });
+
+    it.each([
+      ["none", /Slot 3 keeps no conversation to resume/],
+      ["occupied", /Slot 3 already runs an assistant/],
+      ["resuming", /Slot 3 is already being resumed/],
+    ] as const)(
+      "refuses a lane whose claim answered %s, starting nothing",
+      async (status, message) => {
+        mocks.claimLaneResume.mockResolvedValue({ status });
+        await expect(control.resume(LOCAL, { slot: 3 })).rejects.toMatchObject({
+          code: "ASSISTANT_RESUME_REFUSED",
+          message: expect.stringMatching(message),
+        });
+        expect(mocks.launch).not.toHaveBeenCalled();
+      }
+    );
+
+    it("refuses a conversation whose id was never recorded, and gives the claim back", async () => {
+      mocks.claimLaneResume.mockResolvedValue(claimed({ agentSessionId: "" }));
+      await expect(control.resume(LOCAL, { slot: 3 })).rejects.toMatchObject({
+        code: "ASSISTANT_RESUME_REFUSED",
+        message: expect.stringMatching(/never recorded its conversation's id/),
+      });
+      expect(mocks.launch).not.toHaveBeenCalled();
+      expect(releases).toBe(1);
+    });
+
+    it.each([
+      ["agent-unavailable", /agent, claude, can't start here/],
+      ["folder-moved", /folder its lane no longer uses/],
+      ["withdrawn", /cleared while it was being resumed/],
+      ["no-slot", /taken while it was being resumed/],
+      ["launch-failed", /couldn't be reopened/],
+    ] as const)(
+      "refuses a resume the launch answered %s, never starting fresh",
+      async (reason, message) => {
+        mocks.launch.mockResolvedValue({ status: "refused", reason });
+        await expect(control.resume(LOCAL, { slot: 3 })).rejects.toMatchObject({
+          code: "ASSISTANT_RESUME_REFUSED",
+          message: expect.stringMatching(message),
+        });
+        expect(mocks.launch).toHaveBeenCalledTimes(1);
+        expect(mocks.launch.mock.calls[0]![0].resume).toBeDefined();
+        expect(releases).toBe(1);
+      }
+    );
+
+    it("gives the claim back when the launch throws", async () => {
+      mocks.launch.mockRejectedValue(new Error("spawn queue gone"));
+      await expect(control.resume(LOCAL, { slot: 3 })).rejects.toThrow("spawn queue gone");
+      expect(releases).toBe(1);
     });
   });
 
@@ -1278,6 +1513,8 @@ describe("liveAssistantTerminalControl (#15521)", () => {
           projectViewWebContentsId: 7,
         }),
         revokeSession: async () => {},
+        listKeptLanes: () => [],
+        claimLaneResume: async () => ({ status: "none" }),
       },
       pty: () => pty as never,
       extractReply: () => ({ reply: null, reachedHandback: false }),
@@ -1320,6 +1557,8 @@ describe("liveAssistantTerminalControl (#15521)", () => {
           projectViewWebContentsId: 7,
         }),
         revokeSession: async () => {},
+        listKeptLanes: () => [],
+        claimLaneResume: async () => ({ status: "none" }),
       },
       pty: () => pty as never,
       extractReply: () => ({ reply: null, reachedHandback: false }),

@@ -85,24 +85,47 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
           slot: 0,
           agentId: "claude",
           startedBy: update,
-          resume: { agentSessionId: "conv-0", cwd: "/sessions/claude" },
+          resume: {
+            agentSessionId: "conv-0",
+            cwd: "/sessions/claude",
+            claimId: expect.stringMatching(/^claim-/),
+          },
         },
         {
           projectId: "p1",
           slot: 2,
           agentId: "claude",
           startedBy: update,
-          resume: { agentSessionId: "conv-2", cwd: "/sessions/claude" },
+          resume: {
+            agentSessionId: "conv-2",
+            cwd: "/sessions/claude",
+            claimId: expect.stringMatching(/^claim-/),
+          },
         },
         {
           projectId: "p2",
           slot: 1,
           agentId: "codex",
           startedBy: update,
-          resume: { agentSessionId: "thread-1", cwd: "/sessions/codex" },
+          resume: {
+            agentSessionId: "thread-1",
+            cwd: "/sessions/codex",
+            claimId: expect.stringMatching(/^claim-/),
+          },
         },
       ])
     );
+    // Each resume quotes the claim taken on its own lane, and no other.
+    const claimed = new Map(
+      deps.claim.mock.calls.map(([projectId, slot], index) => [
+        assistantSlotKey(projectId, slot),
+        deps.claim.mock.results[index]!.value as Promise<{ claimId: string } | null>,
+      ])
+    );
+    for (const [request] of deps.start.mock.calls) {
+      const claim = await claimed.get(assistantSlotKey(request.projectId, request.slot!));
+      expect(request.resume?.claimId).toBe(claim?.claimId);
+    }
     expect(held.size).toBe(0);
   });
 

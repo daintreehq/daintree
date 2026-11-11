@@ -589,6 +589,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- assistantControlActions --
   "assistant.list",
+  "assistant.resume",
   "assistant.start",
   "agent.readQuota",
 
@@ -724,6 +725,7 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "worktree.retireOwned",
   // Main-process only, for an assistant caller: a plugin is no assistant (#13496).
   "assistant.list",
+  "assistant.resume",
   "assistant.start",
   "agent.readQuota",
   // Main-process only, for one of this machine's own assistants (#13493).

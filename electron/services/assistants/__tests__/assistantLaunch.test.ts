@@ -164,10 +164,10 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
   it("starts only a live backend, and only one this machine can run", async () => {
     await expect(start({ agentId: "gemini" })).resolves.toEqual({
       status: "refused",
-      reason: "launch-failed",
+      reason: "agent-unavailable",
     });
     deps.launchableAgents = async () => [{ id: "gemini", byDefault: true }];
-    await expect(start()).resolves.toEqual({ status: "refused", reason: "launch-failed" });
+    await expect(start()).resolves.toEqual({ status: "refused", reason: "agent-unavailable" });
     expect(deps.provision).not.toHaveBeenCalled();
   });
 
@@ -177,7 +177,7 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
       agentId: "copilot",
     });
     deps.launchableAgents = async () => [{ id: "copilot", byDefault: false }];
-    await expect(start()).resolves.toEqual({ status: "refused", reason: "launch-failed" });
+    await expect(start()).resolves.toEqual({ status: "refused", reason: "agent-unavailable" });
   });
 
   it("refuses a slot in use without touching it, and an unknown project", async () => {
@@ -247,13 +247,19 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
   });
 
   describe("resuming a conversation by id (#16753)", () => {
-    const resume = { agentSessionId: "conv-7", cwd: SESSION_FOLDER };
+    const resume = { agentSessionId: "conv-7", cwd: SESSION_FOLDER, claimId: "claim-7" };
     const UPDATE_RESTART = { kind: "update-restart" } as const;
 
     it("reopens it in its own slot on its own agent, with no greeting, refusing a fresh one", async () => {
       // Back at its prompt with the conversation on screen: nothing to wait on.
       screens = [["› earlier work", "", "› Ask Codex to do anything"].join("\n")];
-      const result = await start({ slot: 2, agentId: "claude", startedBy: UPDATE_RESTART, resume });
+      const result = await start({
+        slot: 2,
+        agentId: "claude",
+        startedBy: UPDATE_RESTART,
+        resume,
+        stillWanted: () => true,
+      });
 
       expect(result).toMatchObject({ status: "started", slot: 2, agentId: "claude", ready: true });
       expect(clock).toBe(0);
@@ -262,8 +268,10 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
         slot: 2,
         agentId: "claude",
         vacantOnly: true,
+        resumeClaimId: "claim-7",
         startedBy: UPDATE_RESTART,
       });
+      expect(deps.provision.mock.calls[0]![0]).not.toHaveProperty("refuseKept");
       expect(deps.spawn.mock.calls[0]![1]).toMatchObject({
         prompt: "",
         resumeAgentSessionId: "conv-7",
@@ -285,8 +293,8 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
         { slot: undefined, agentId: "claude" },
         { slot: 2, agentId: undefined },
         { slot: 2, agentId: "claude", resume: { ...resume, agentSessionId: "" } },
-        // Not one this machine starts with no view: no other agent stands in.
-        { slot: 2, agentId: "gemini" },
+        // Its provision would hold no claim on the lane.
+        { slot: 2, agentId: "claude", resume: { ...resume, claimId: "" } },
         // A schedule's run starts fresh by definition.
         {
           slot: 2,
@@ -303,6 +311,10 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
           reason: "launch-failed",
         });
       }
+      // Not one this machine starts with no view: no other agent stands in.
+      await expect(
+        start({ slot: 2, agentId: "gemini", startedBy: UPDATE_RESTART, resume })
+      ).resolves.toEqual({ status: "refused", reason: "agent-unavailable" });
       expect(deps.provision).not.toHaveBeenCalled();
       expect(deps.spawn).not.toHaveBeenCalled();
     });
@@ -315,7 +327,7 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
           startedBy: UPDATE_RESTART,
           resume: { ...resume, cwd: "/elsewhere" },
         })
-      ).resolves.toEqual({ status: "refused", reason: "launch-failed" });
+      ).resolves.toEqual({ status: "refused", reason: "folder-moved" });
 
       // Still wanted when it provisioned, no longer once its flags were read.
       let wanted = true;
@@ -335,7 +347,7 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
       expect(deps.provision).toHaveBeenCalledTimes(2);
       wanted = false;
       flagsRead!([]);
-      await expect(started).resolves.toEqual({ status: "refused", reason: "launch-failed" });
+      await expect(started).resolves.toEqual({ status: "refused", reason: "withdrawn" });
 
       expect(deps.revoke.mock.calls).toEqual([["session-1"], ["session-1"]]);
       expect(deps.spawn).not.toHaveBeenCalled();
@@ -359,6 +371,105 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
     }
     await expect(start({ slot: undefined })).resolves.toMatchObject({ slot: 1 });
     expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([...fresh, 1]);
+  });
+
+  describe("preserving kept conversations (#16763)", () => {
+    const LANE_KEPT = () => Object.assign(new Error("kept"), { code: "LANE_KEPT" });
+
+    it("never tries a kept slot, and has every provision refuse one kept meanwhile", async () => {
+      occupied = [0];
+      deps.keptSlots = () => [1, 3];
+
+      await expect(start({ slot: undefined, preserveKept: true })).resolves.toMatchObject({
+        slot: 2,
+      });
+      expect(deps.provision.mock.calls[0]![0]).toMatchObject({ slot: 2, refuseKept: true });
+
+      // Kept since it was listed: passed over for the next vacant one.
+      deps.provision.mockClear();
+      deps.provision.mockRejectedValueOnce(LANE_KEPT());
+      await expect(start({ slot: undefined, preserveKept: true })).resolves.toMatchObject({
+        slot: 4,
+      });
+      expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([2, 4]);
+      // Every attempt is held to it, the retry included.
+      expect(deps.provision.mock.calls.every(([input]) => input.refuseKept === true)).toBe(true);
+    });
+
+    it("refuses with no slot rather than take a kept one once the vacant ones run out", async () => {
+      deps.keptSlots = () => [0, 1];
+      const fresh = ASSISTANT_SLOTS.filter((slot) => slot > 1);
+      for (const _slot of fresh) {
+        deps.provision.mockRejectedValueOnce(
+          Object.assign(new Error("taken"), { code: "LANE_OCCUPIED" })
+        );
+      }
+
+      await expect(start({ slot: undefined, preserveKept: true })).resolves.toEqual({
+        status: "refused",
+        reason: "no-slot",
+      });
+      expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual(fresh);
+      expect(deps.spawn).not.toHaveBeenCalled();
+    });
+
+    it("refuses a kept slot it names, as listed or as its provision finds it", async () => {
+      deps.keptSlots = () => [1];
+      await expect(start({ slot: 1, preserveKept: true })).resolves.toEqual({
+        status: "refused",
+        reason: "kept",
+      });
+      expect(deps.provision).not.toHaveBeenCalled();
+
+      deps.provision.mockRejectedValueOnce(LANE_KEPT());
+      await expect(start({ slot: 2, preserveKept: true })).resolves.toEqual({
+        status: "refused",
+        reason: "kept",
+      });
+      expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([2]);
+      expect(deps.spawn).not.toHaveBeenCalled();
+    });
+
+    it("reports a resume whose claim was dropped before its provision as withdrawn, not taken", async () => {
+      deps.provision.mockRejectedValueOnce(
+        Object.assign(new Error("being resumed"), { code: "LANE_OCCUPIED" })
+      );
+      await expect(
+        start({
+          slot: 2,
+          agentId: "claude",
+          resume: { agentSessionId: "conv-7", cwd: SESSION_FOLDER, claimId: "claim-7" },
+          stillWanted: () => false,
+        })
+      ).resolves.toEqual({ status: "refused", reason: "withdrawn" });
+      expect(deps.spawn).not.toHaveBeenCalled();
+    });
+
+    it("answers a running slot it names as in use, though its lane has a pointer too", async () => {
+      occupied = [1];
+      deps.keptSlots = () => [1];
+      deps.provision.mockRejectedValueOnce(
+        Object.assign(new Error("busy"), { code: "LANE_OCCUPIED" })
+      );
+      await expect(start({ slot: 1, preserveKept: true })).resolves.toEqual({
+        status: "refused",
+        reason: "no-slot",
+      });
+    });
+
+    it("leaves a resume in its own kept slot", async () => {
+      deps.keptSlots = () => [2];
+      screens = [["› earlier work", "", "› Ask Codex to do anything"].join("\n")];
+      await expect(
+        start({
+          slot: 2,
+          agentId: "claude",
+          preserveKept: true,
+          resume: { agentSessionId: "conv-7", cwd: SESSION_FOLDER, claimId: "claim-7" },
+        })
+      ).resolves.toMatchObject({ status: "started", slot: 2 });
+      expect(deps.provision.mock.calls[0]![0]).not.toHaveProperty("refuseKept");
+    });
   });
 });
 
