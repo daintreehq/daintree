@@ -8,6 +8,10 @@ import {
   PtyHostLifecycle,
   type PtyHostLifecycleCallbacks,
 } from "../PtyHostLifecycle.js";
+import {
+  getTerminationIntent,
+  resetTerminationIntentsForTesting,
+} from "../../processTerminationIntent.js";
 
 const shared = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1005,6 +1009,7 @@ describe("PtyHostLifecycle", () => {
 
     it("gives the host longer than the teardown probe budget before killing it", async () => {
       const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const { lifecycle } = makeLifecycle();
       lifecycle.start();
 
@@ -1020,6 +1025,7 @@ describe("PtyHostLifecycle", () => {
       expect(mockChild.kill).not.toHaveBeenCalled();
       expect(exit.settled).toBe(true);
       expect(exit.exitedOnItsOwn).toBe(false);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("sent SIGKILL"));
       // The exit event stays the authority on process death.
       expect(lifecycle.child).toBe(mockChild);
     });
@@ -1028,12 +1034,14 @@ describe("PtyHostLifecycle", () => {
       vi.spyOn(process, "kill").mockImplementation(() => {
         throw Object.assign(new Error("no such process"), { code: "ESRCH" });
       });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const { lifecycle } = makeLifecycle();
       lifecycle.start();
 
       const exit = trackSettled(lifecycle.dispose());
       await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
       expect(exit.settled).toBe(true);
+      expect(warn).not.toHaveBeenCalled();
     });
 
     it("returns the same pending wait when dispose runs again", () => {
@@ -1076,13 +1084,41 @@ describe("PtyHostLifecycle", () => {
       });
 
       const exit = trackSettled(lifecycle.dispose());
-      expect(mockChild.kill).toHaveBeenCalledTimes(1);
-      mockChild.emit("exit", 143);
+      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(killSpy).toHaveBeenCalledWith(321, "SIGKILL");
+      expect(mockChild.kill).not.toHaveBeenCalled();
+      mockChild.emit("exit", 137);
       await Promise.resolve();
       expect(exit.settled).toBe(true);
+      expect(exit.exitedOnItsOwn).toBe(false);
 
+      // The host's exit disarmed the backstop, so it is never signalled twice.
+      expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
+      expect(killSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("holds the backstop SIGKILL for a host that has not spawned until it does", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+      mockChild.pid = undefined;
+
+      const exit = trackSettled(lifecycle.dispose());
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
+      expect(exit.settled).toBe(true);
+      expect(exit.exitedOnItsOwn).toBe(false);
       expect(killSpy).not.toHaveBeenCalled();
+      // Nothing was sent yet, so nothing claims it was.
+      expect(warn).not.toHaveBeenCalled();
+
+      mockChild.pid = 654;
+      mockChild.emit("spawn");
+      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(killSpy).toHaveBeenCalledWith(654, "SIGKILL");
+      expect(mockChild.kill).not.toHaveBeenCalled();
+      expect(mockChild.listenerCount("spawn")).toBe(0);
     });
 
     it("settles at the deadline even when the SIGKILL itself fails", async () => {
@@ -1098,9 +1134,10 @@ describe("PtyHostLifecycle", () => {
       expect(exit.settled).toBe(true);
       expect(exit.exitedOnItsOwn).toBe(false);
       expect(warn).toHaveBeenCalledWith(
-        "[PtyClient] Failed to kill host during dispose:",
+        "[PtyClient] Failed to kill host (dispose backstop):",
         expect.any(Error)
       );
+      expect(warn).toHaveBeenCalledTimes(1);
     });
 
     it("does not re-signal a host that already exited before dispose", async () => {
@@ -1125,6 +1162,135 @@ describe("PtyHostLifecycle", () => {
       });
 
       await expect(lifecycle.dispose()).resolves.toBe(true);
+    });
+  });
+
+  describe("a failed send is a crash, and the host is killed without blocking main (#16808)", () => {
+    function failSends(): void {
+      mockChild.postMessage.mockImplementation(() => {
+        throw new Error("channel closed");
+      });
+    }
+
+    it("sends a raw SIGKILL and leaves the host to its own exit event", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      failSends();
+
+      lifecycle.postMessage({ type: "health-check" });
+
+      expect(killSpy).toHaveBeenCalledWith(321, "SIGKILL");
+      expect(mockChild.kill).not.toHaveBeenCalled();
+      expect(lifecycle.child).toBe(mockChild);
+
+      mockChild.emit("exit", 137);
+      expect(lifecycle.child).toBeNull();
+      expect(callbacks.log.onExitSyncCalls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(callbacks.log.onCrashClassifiedCalls).toHaveLength(1);
+    });
+
+    it("leaves alone a host that died while the send was failing", () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+      mockChild.postMessage.mockImplementation(() => {
+        mockChild.emit("exit", 1);
+        throw new Error("channel closed");
+      });
+
+      lifecycle.postMessage({ type: "health-check" });
+
+      expect(lifecycle.child).toBeNull();
+      expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    it("holds the SIGKILL for a host that has not spawned until it does", () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+      mockChild.pid = undefined;
+      failSends();
+
+      lifecycle.postMessage({ type: "health-check" });
+      expect(killSpy).not.toHaveBeenCalled();
+
+      mockChild.pid = 654;
+      mockChild.emit("spawn");
+      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(killSpy).toHaveBeenCalledWith(654, "SIGKILL");
+      expect(mockChild.kill).not.toHaveBeenCalled();
+      expect(mockChild.listenerCount("spawn")).toBe(0);
+    });
+
+    it("signals a host that has not spawned once, however many sends fail first", () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+      mockChild.pid = undefined;
+      failSends();
+
+      lifecycle.postMessage({ type: "health-check" });
+      lifecycle.postMessage({ type: "health-check" });
+      expect(mockChild.listenerCount("spawn")).toBe(1);
+      mockChild.pid = 654;
+      mockChild.emit("spawn");
+
+      expect(killSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops the held SIGKILL when the host exits without spawning", () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+      mockChild.pid = undefined;
+      failSends();
+
+      lifecycle.postMessage({ type: "health-check" });
+      expect(mockChild.listenerCount("spawn")).toBe(1);
+      mockChild.emit("exit", 1);
+
+      expect(mockChild.listenerCount("spawn")).toBe(0);
+      expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    it("notes the kill intent when the held signal goes out, not when it was asked for", async () => {
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      resetTerminationIntentsForTesting();
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+      mockChild.pid = undefined;
+      failSends();
+
+      lifecycle.postMessage({ type: "health-check" });
+      expect(getTerminationIntent({ serviceName: "daintree-pty-host" })).toBeNull();
+      // Past the intent TTL: a note taken at request time would have lapsed.
+      await vi.advanceTimersByTimeAsync(15_000);
+      mockChild.pid = 654;
+      mockChild.emit("spawn");
+
+      expect(getTerminationIntent({ serviceName: "daintree-pty-host" })).toBe("postMessage failed");
+    });
+
+    it("treats a host already gone as nothing to report", () => {
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      });
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+      failSends();
+
+      expect(() => lifecycle.postMessage({ type: "health-check" })).not.toThrow();
+      expect(warn).not.toHaveBeenCalled();
     });
   });
 
