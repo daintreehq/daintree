@@ -113,6 +113,22 @@ describe("PulseHeatmap — a quiet day is never a failure", () => {
   });
 });
 
+describe("PulseHeatmap — cells stay squares", () => {
+  it("merges every cell, the latest active one included, down to the hairline corner", () => {
+    renderHeatmap(
+      CELLS.map((c) => (c.date === "2026-01-05" ? { ...c, isMostRecentActive: true } : c))
+    );
+    expect(document.querySelector("[data-latest-active]")).not.toBeNull();
+
+    const cells = [...document.querySelectorAll<HTMLElement>(".pulse-heat-cell")];
+    expect(cells.length).toBeGreaterThanOrEqual(CELLS.length);
+    // Exactly one radius per cell after cn() has merged its arguments: a later
+    // `rounded-full` or a theme step would turn the 10px cells into dots.
+    const radii = cells.map((el) => [...el.classList].filter((c) => c.startsWith("rounded")));
+    expect(new Set(radii.map((r) => r.join(" ")))).toEqual(new Set(["rounded-2xs"]));
+  });
+});
+
 describe("PulseHeatmap — today is named, not inferred", () => {
   // Today is a quiet day here, so the latest-active ring sits elsewhere — the
   // case where "the ringed cell" and "today" would otherwise be confused.

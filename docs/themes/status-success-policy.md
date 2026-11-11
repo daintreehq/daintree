@@ -91,7 +91,7 @@ Use a real `border`, never a `ring-*` substitute. `box-shadow` — which is what
 | `text-status-success` on a label | `text-text-secondary`, then `text-text-muted` |
 | `ring-1 ring-status-success/30` | a real `border`, not another ring |
 
-Use the semantic spelling, not the legacy `daintree-*` aliases — `border-border-default`, not `border-daintree-border` — and never fade a text colour with slash-alpha. Both are ratcheted by `component-contract/*` rules that fail the build on any per-rule increase; see [component-contract.md](./component-contract.md).
+Use the semantic spelling, not the legacy `daintree-*` aliases — `border-border-default`, not `border-daintree-border` — and never fade a text colour with slash-alpha. Both are `component-contract/*` lint errors; see [component-contract.md](./component-contract.md).
 
 ## InlineStatusBanner
 

@@ -119,10 +119,13 @@ describe("plugin Tailwind adapter — the design system, enforced by the compile
   it("compiles the hairline radius steps against the theme's radius base", () => {
     // The radius block is `@theme inline`, so each step lands as its own
     // derivation from --radius; a literal here would stop tracking the theme.
+    // `build()` is cumulative, so read each step's own rule, not the sheet.
     for (const step of ["rounded-2xs", "rounded-3xs"]) {
       const css = compiler.build([step]);
-      expect(selectorIndex(css, step)).not.toBe(-1);
-      expect(css).toMatch(/border-radius: calc\(var\(--radius\)[^;]*\);/);
+      const at = selectorIndex(css, step);
+      expect(at).not.toBe(-1);
+      const rule = css.slice(at, css.indexOf("}", at));
+      expect(rule).toMatch(/border-radius: calc\(var\(--radius\)[^;]*\);/);
     }
   });
 
