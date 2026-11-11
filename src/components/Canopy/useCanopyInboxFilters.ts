@@ -269,7 +269,8 @@ export function useCanopyInboxFilters({
   // the user, so folding never hides a question: only the Assistants filter
   // leaves one here, since otherwise it sits in the band.
   const sectionAssistants = useMemo(
-    () => (assistantsOpen ? listedAssistants : listedAssistants.filter((item) => item.ask !== null)),
+    () =>
+      assistantsOpen ? listedAssistants : listedAssistants.filter((item) => item.ask !== null),
     [assistantsOpen, listedAssistants]
   );
   // Workers and assistants as one inbox: what needs the user, and the order
