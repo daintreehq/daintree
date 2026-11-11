@@ -56,6 +56,8 @@ const pane = vi.hoisted(() => ({
   } | null,
   /** The reply draws an editor that takes the keyboard; off, it draws nothing. */
   editable: false,
+  /** The reply's expanded editor: a dialog drawn into the page, outside the panel's DOM. */
+  expanded: false,
 }));
 // The pane's live terminal needs a canvas and a PTY host; the list is what is tested here.
 vi.mock("../CanopyTerminal", () => ({
@@ -76,6 +78,7 @@ vi.mock("../CanopyTerminal", () => ({
 }));
 vi.mock("@/components/Terminal/HybridInputBar", async () => {
   const { useImperativeHandle, useRef } = await import("react");
+  const { createPortal } = await import("react-dom");
   return {
     HybridInputBar: (props: NonNullable<typeof pane.reply>) => {
       pane.reply = props;
@@ -85,6 +88,7 @@ vi.mock("@/components/Terminal/HybridInputBar", async () => {
       return (
         <div className="cm-editor">
           <div ref={editor} tabIndex={-1} data-reply-editor="" />
+          {pane.expanded && createPortal(<textarea aria-label="Expanded editor" />, document.body)}
         </div>
       );
     },
@@ -1240,6 +1244,34 @@ describe("CanopyView", () => {
 
     afterEach(() => {
       pane.editable = false;
+      pane.expanded = false;
+    });
+
+    it("leaves the agent step to a dialog drawn from a card, the reply's expanded editor included", async () => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+      pane.expanded = true;
+      const { container, replyEditor } = await replyingTo();
+      expect(liveRun(container)).toBe("waiting");
+      const expanded = document.querySelector<HTMLTextAreaElement>(
+        "textarea[aria-label='Expanded editor']"
+      )!;
+      expect(container.contains(expanded)).toBe(false);
+      act(() => expanded.focus());
+
+      for (const key of ["ArrowDown", "ArrowUp"]) {
+        const press = createEvent.keyDown(expanded, { key, metaKey: true });
+        fireEvent(expanded, press);
+        expect(press.defaultPrevented).toBe(false);
+      }
+      await frames();
+      expect(liveRun(container)).toBe("waiting");
+      expect(document.activeElement).toBe(expanded);
+      expect(document.body.contains(expanded)).toBe(true);
+
+      // The same chord from the reply inside the panel still steps.
+      act(() => replyEditor().focus());
+      fireEvent.keyDown(replyEditor(), { key: "ArrowDown", metaKey: true });
+      expect(liveRun(container)).toBe("asking");
     });
 
     it("stays on the agent a reply was sent to, the keyboard in its reply", async () => {
