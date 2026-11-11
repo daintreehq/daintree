@@ -575,8 +575,9 @@ describe("PtyManager adversarial", () => {
     });
 
     it("OMITS_THE_PATH_ON_WINDOWS", () => {
-      setPlatform("win32");
+      // Spawning under win32 would start the real tree-kill helper (powershell.exe).
       const { manager } = spawnWithTty("/dev/ttys003");
+      setPlatform("win32");
 
       expect(manager.getTerminalInfo("t1")!.ptyTty).toBeUndefined();
     });
@@ -591,6 +592,7 @@ describe("PtyManager adversarial", () => {
     it("REPORTS_THE_SUCCESSOR_PATH_AFTER_A_SAME_ID_RESPAWN", () => {
       setPlatform("linux");
       const { manager, created } = spawnWithTty("/dev/pts/7");
+      expect(manager.getTerminalInfo("t1")!.ptyTty).toBe("/dev/pts/7");
       created.info.wasKilled = true;
       shared.acquirePtyProcess.mockImplementation(() => ({
         ptyProcess: { ...createPtyProcess(), ptsName: "/dev/pts/9" },
