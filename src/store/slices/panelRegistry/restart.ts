@@ -1733,11 +1733,12 @@ export const createRestartActions = (
  * launch. A rename or a caller-supplied name stays exactly as it is.
  *
  * A model only the runtime catalog lists (#16783) is named as
- * `resolvedModels` names it now. Its launch may have named it otherwise, or
- * not at all (the catalog didn't answer, or the pane predates it), so a stamp
- * on the agent's name, bare or with any one label in parentheses, is the
- * launch's own too. A preset-free title the agent's detection reset to the
- * bare name still follows.
+ * `resolvedModels` names it now. Its launch may not have named it at all (the
+ * catalog didn't answer, or the pane predates it), so a stamp on the bare
+ * agent name is the launch's own too. When the catalog can't name the model
+ * now, the label the launch read is unknown, so a stamp with any one label in
+ * parentheses is. A preset-free title the agent's detection reset to the bare
+ * name still follows.
  */
 export function presetSwitchTitle(
   current: { title: string; titleMode?: PanelTitleMode },
@@ -1759,6 +1760,7 @@ export function presetSwitchTitle(
     if (title === baseTitle) return true;
     if (!runtimeModel) return false;
     if (title === bareTitle) return true;
+    if (baseTitle !== bareTitle) return false;
     const prefix = `${bareTitle} (`;
     if (!title.startsWith(prefix) || !title.endsWith(")")) return false;
     // One label, so a duplicate's trailing " (copy)" isn't read as a model.
@@ -1886,8 +1888,9 @@ async function respawnAgentOnPreset(
     const [agentSettings, tmpDir, titleModels] = await Promise.all([
       agentSettingsClient.get(),
       resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
-      // Read before teardown: only a switch retitles the pane, never a renamed one.
-      mode.kind === "switch" && terminal.titleMode !== "user"
+      // Read before teardown: only a switch retitles the pane. A renamed one
+      // reads it too, as the rename can be cleared before the spawn.
+      mode.kind === "switch"
         ? loadModelTitleCatalog(effectiveAgentId, terminal.agentModelId, (agentId) =>
             agentCapabilitiesClient.getResolvedModelList(agentId)
           )

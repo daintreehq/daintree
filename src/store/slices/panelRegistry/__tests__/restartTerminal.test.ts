@@ -1,5 +1,6 @@
 import { beforeAll, describe, it, expect, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
 
 const mockSpawn = vi.fn().mockResolvedValue({ id: "test-1" });
 const mockKill = vi.fn().mockResolvedValue(undefined);
@@ -2420,6 +2421,9 @@ describe("restartTerminalOnPreset", () => {
 
       const switching = usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
       await readStarted;
+      // Every other await the switch makes is already settled, so a teardown
+      // that didn't wait for the catalog would run in these turns.
+      for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(mockGracefulKill).not.toHaveBeenCalled();
       expect(mockKill).not.toHaveBeenCalled();
@@ -2494,13 +2498,35 @@ describe("restartTerminalOnPreset", () => {
       expect(pane().title).toBe("Claude [Personal]");
     });
 
-    it("keeps a user's rename, and doesn't wait on the catalog for it", async () => {
+    it("keeps a user's rename", async () => {
       codexPane({ title: "Codex (GPT-5.5) [Personal]", titleMode: "user" });
 
       await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
 
       expect(pane().title).toBe("Codex (GPT-5.5) [Personal]");
       expect(pane().titleMode).toBe("user");
+    });
+
+    it("keeps a caller's name shaped like a stamp with another label while the catalog names the model", async () => {
+      codexPane({ title: "Codex (Audit) [Personal]", titleMode: "custom" });
+
+      await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+      expect(pane().title).toBe("Codex (Audit) [Personal]");
+    });
+
+    it("stamps a bundled model's preset-free pane that detection reset to the bare name", async () => {
+      seed({
+        agentModelId: "opus",
+        title: getAgentDisplayTitle("claude"),
+        titleMode: undefined,
+        agentPresetId: undefined,
+        originalPresetId: undefined,
+      });
+
+      await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+      expect(pane().title).toBe(`${getAgentDisplayTitle("claude", "opus")} [Work]`);
       expect(getResolvedModelListMock).not.toHaveBeenCalled();
     });
 
