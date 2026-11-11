@@ -94,6 +94,7 @@ export {
   SquareDashedMousePointer, // the dev preview's Element Picker — pick an element on the page to hand to an agent, on its toolbar button and its plugin tile alike
   SquareTerminal, // a terminal pane — a scheduled run's terminal still in the grid (Open brings that pane forward), or a new one an install command is typed into
   Star, // the default recipe a new worktree launches — kept apart from Pin, which means pinned to the canvas
+  Store, // the community plugin catalog — plugins listed for install, kept apart from Package, which is one plugin
   Tag, // a worktree's colour label — the identity a user pins to a card, kept apart from Pin, which is its position
   Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it
   Timer, // a scheduled run still open, timed since its terminal started — which says nothing about whether the agent is working
