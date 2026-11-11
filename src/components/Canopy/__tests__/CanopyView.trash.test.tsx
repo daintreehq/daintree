@@ -836,6 +836,14 @@ describe("CanopyView arrow order across the Archived and Trash bars", () => {
   it("walks past an open Assistants bar with nothing in it, as it walked before the fold", async () => {
     await open(TRASH, ["live"], ["done"]);
     expect(assistantsBar()!.getAttribute("aria-expanded")).toBe("true");
+    const startLine = () =>
+      document.body.textContent!.includes("Start an assistant from the Assistant panel");
+    expect(startLine()).toBe(true);
+    // Its empty line folds away with it.
+    fireEvent.click(assistantsBar()!);
+    expect(startLine()).toBe(false);
+    fireEvent.click(assistantsBar()!);
+    expect(startLine()).toBe(true);
     const last = card("live");
     act(() => last.focus());
     fireEvent.keyDown(last, { key: "ArrowDown" });

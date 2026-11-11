@@ -485,6 +485,7 @@ describe("navigation order", () => {
     const shut = project(items, helpers, { sectionAssistants: [] });
     expect(shut.navigation.map((entry) => entry.role)).toEqual(["worker", "assistant", "worker"]);
     expect(shut.sectionStart).toBe(shut.navigation.length);
+    expect(names(shut.needsYou)).toEqual([`own:${allHostsKey(OWN, "ask")}`, helpers[0]!.id]);
     expect(shut.needsYou).toEqual(open.needsYou);
     // Assistants alone: no band, and the ask it still draws under the shut bar starts the section.
     const alone = project([], helpers, {

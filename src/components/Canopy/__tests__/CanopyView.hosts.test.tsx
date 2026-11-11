@@ -1049,6 +1049,12 @@ describe("All hosts", () => {
       "Start an assistant from the Assistant panelOnly This machine's assistants are listed"
     );
     expect(document.body.textContent!.split("assistants are listed")).toHaveLength(2);
+    // The note folds away with the section, and comes back once with it.
+    const bar = document.querySelector<HTMLButtonElement>("button[aria-controls=canopy-assistants]")!;
+    fireEvent.click(bar);
+    expect(document.body.textContent).not.toContain("assistants are listed");
+    fireEvent.click(bar);
+    expect(document.body.textContent!.split("assistants are listed")).toHaveLength(2);
   });
 
   it("lets a host that can't be read outrank the all-clear in the band, as in the header", async () => {

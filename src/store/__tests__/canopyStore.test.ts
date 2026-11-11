@@ -610,6 +610,21 @@ describe("the Assistants fold (#16759)", () => {
     expect((await reload()).getState().assistantsExpanded).toBe(true);
   });
 
+  it("opens, and still folds for the session, when storage can't be read or written", async () => {
+    const read = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    const store = await reload();
+    expect(store.getState().assistantsExpanded).toBe(true);
+    read.mockRestore();
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("full");
+    });
+    expect(() => store.getState().setAssistantsExpanded(false)).not.toThrow();
+    expect(store.getState().assistantsExpanded).toBe(false);
+    write.mockRestore();
+  });
+
   it("follows a sibling view's fold as soon as that view sets it", async () => {
     const store = await reload();
     window.localStorage.setItem(FOLDED, "1");

@@ -906,7 +906,7 @@ describe("CanopyView's Assistants fold (#16759)", () => {
     document.querySelector<HTMLInputElement>("[data-canopy-standalone] input[role=combobox]")!;
   const pane = () => document.querySelector("[data-testid=canopy-assistant-pane]");
 
-  it("folds from its bar, keeping its count, and keeps the choice for the next window", async () => {
+  it("folds from its bar, keeping its count, and saves the choice", async () => {
     render(<CanopyView frame={frame} />);
     await settle();
     expect(bar()!.getAttribute("aria-expanded")).toBe("true");
@@ -974,15 +974,73 @@ describe("CanopyView's Assistants fold (#16759)", () => {
     await settle();
     await act(async () => fireEvent.click(roleSegment("assistants")));
     fireEvent.keyDown(search(), { key: "Tab" });
-    expect(document.activeElement).toBe(assistantRows()[0]);
-    expect(pane()).not.toBeNull();
+    fireEvent.keyDown(assistantRows()[0]!, { key: "ArrowDown" });
+    const second = assistantRows()[1]!;
+    expect(document.activeElement).toBe(second);
+    const paneShows = () => assistantApiMock.mock.calls.at(-1)![0].terminalId;
+    expect(paneShows()).toBe("help-1");
+    expect(search().getAttribute("aria-activedescendant")).toBe(second.id);
+    expect(search().getAttribute("aria-controls")).toContain("canopy-assistants");
     fireEvent.click(bar()!);
+    await settle();
     expect(assistantRows()).toHaveLength(0);
     expect(pane()).not.toBeNull();
+    expect(paneShows()).toBe("help-1");
+    // Nothing named for a row that isn't there.
     expect(search().hasAttribute("aria-activedescendant")).toBe(false);
+    expect(search().getAttribute("aria-controls") ?? "").not.toContain("canopy-assistants");
     act(() => search().focus());
     fireEvent.keyDown(search(), { key: "Tab" });
     expect(document.activeElement).toBe(bar());
+    fireEvent.click(bar()!);
+    expect(search().getAttribute("aria-activedescendant")).toBe(assistantRows()[1]!.id);
+  });
+
+  it("hands the keyboard to the shut bar when the ask it was on is read and folds away", async () => {
+    directory.entries = [assistant(0, { handback: { observedAt: NOW - 500 } }), assistant(1)];
+    useCanopyStore.setState({ roleFilter: "assistants", assistantsExpanded: false });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    expect(assistantRows()).toHaveLength(1);
+    act(() => bar()!.focus());
+    fireEvent.keyDown(bar()!, { key: "ArrowDown" });
+    await settle();
+    // Seen, it no longer asks: it folds away with the quiet one, and stays in the pane.
+    expect(Object.values(useCanopyStore.getState().assistantHandbacksSeen)).toEqual([NOW - 500]);
+    expect(assistantRows()).toHaveLength(0);
+    expect(pane()).not.toBeNull();
+    expect(document.activeElement).toBe(bar());
+  });
+
+  it("goes up from the Trash to the ask still listed under the shut bar, not over it", async () => {
+    directory.entries = [assistant(0, { waitingReason: "question" }), assistant(1)];
+    const trashed: CanopySnapshot = {
+      ...canopySnapshot,
+      trash: [
+        {
+          run: run("gone", { title: "Fix gone", titleMode: "user" }),
+          trashedAt: NOW - 3_000,
+          expiresAt: NOW + 17_000,
+        },
+      ],
+    };
+    canopyBridge.setActive.mockImplementation(async () => trashed);
+    useCanopyStore.setState({
+      snapshot: trashed,
+      roleFilter: "assistants",
+      assistantsExpanded: false,
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const trashBar = document.querySelector<HTMLButtonElement>(
+      "button[aria-controls=canopy-trash]"
+    )!;
+    const asking = assistantRows()[0]!;
+    act(() => trashBar.focus());
+    fireEvent.keyDown(trashBar, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(asking);
+    fireEvent.keyDown(asking, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(trashBar);
   });
 
   it("says how to choose an assistant when every one is folded away and none is chosen", async () => {
@@ -995,11 +1053,22 @@ describe("CanopyView's Assistants fold (#16759)", () => {
     expect(document.body.textContent).not.toContain("No assistant to show");
   });
 
+  it("still says none runs when the shut section has no assistant to fold", async () => {
+    directory.entries = [];
+    useCanopyStore.setState({ assistantsExpanded: false });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    await act(async () => fireEvent.click(roleSegment("assistants")));
+    expect(document.body.textContent).toContain("No assistant to show");
+    expect(document.body.textContent).not.toContain("Open the Assistants section");
+  });
+
   it("stops on the shut bar between the last worker and the Archived bar", async () => {
     useFleetSnapshotStore.setState({
       snapshot: {
         runs: [
           run("waiting", { agentState: "waiting", waitingReason: "approval", since: NOW - 60_000 }),
+          run("working", { agentState: "working", since: NOW - 30_000 }),
           run("done", { agentState: "completed", since: NOW - 90_000 }),
         ],
         changedAt: NOW,
@@ -1017,8 +1086,12 @@ describe("CanopyView's Assistants fold (#16759)", () => {
     await settle();
     const archivedBar = () =>
       document.querySelector<HTMLButtonElement>("button[aria-controls=canopy-archived]")!;
-    const worker = document.getElementById("canopy-card-waiting")!;
-    act(() => worker.focus());
+    const first = document.getElementById("canopy-card-waiting")!;
+    const worker = document.getElementById("canopy-card-working")!;
+    // Rows away from the bar step as ever.
+    act(() => first.focus());
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(worker);
     fireEvent.keyDown(worker, { key: "ArrowDown" });
     expect(document.activeElement).toBe(bar());
     fireEvent.keyDown(bar()!, { key: "ArrowDown" });
@@ -1026,6 +1099,11 @@ describe("CanopyView's Assistants fold (#16759)", () => {
     fireEvent.keyDown(archivedBar(), { key: "ArrowUp" });
     expect(document.activeElement).toBe(bar());
     fireEvent.keyDown(bar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(worker);
+    // j and k walk through the bar the same way.
+    fireEvent.keyDown(worker, { key: "j" });
+    expect(document.activeElement).toBe(bar());
+    fireEvent.keyDown(bar()!, { key: "k" });
     expect(document.activeElement).toBe(worker);
     // Archived open: the shut bar still stands between the worker and the archived row.
     fireEvent.click(archivedBar());

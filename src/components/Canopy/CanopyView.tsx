@@ -681,6 +681,7 @@ function CanopyInbox({
     revealReading === undefined
       ? fleet !== null
       : revealReading.fleet !== null || revealReading.error !== null;
+  const assistantsBarRef = useRef<HTMLButtonElement>(null);
   const {
     searchRef,
     refreshRef,
@@ -730,6 +731,7 @@ function CanopyInbox({
     roleFilter,
     seeAssistantHandback,
     pluginViewIds: pluginViews.map((view) => view.id),
+    assistantsBarRef,
   });
   const shownPluginView = pluginViews.find((view) => view.id === shownPluginViewId) ?? null;
 
@@ -913,7 +915,6 @@ function CanopyInbox({
   // Canopy's Trash: every agent run the host's trash holds, any project's.
   const trashRef = useRef<CanopyTrashSectionHandle>(null);
   const archivedBarRef = useRef<HTMLButtonElement>(null);
-  const assistantsBarRef = useRef<HTMLButtonElement>(null);
   // A run put back from the Trash comes into the inbox selected, once it is
   // back in the fleet: the same run, or the pane resuming its session. Anything
   // the user selects from the press on, another host or the panel closing, wins.
