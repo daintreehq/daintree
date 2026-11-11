@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { disabledBuiltinDirs, checkVanillaPluginBundles } from "./check-vanilla-plugin-bundles.mjs";
+import {
+  disabledBuiltinDirs,
+  checkVanillaPluginBundles,
+  PLUGIN_VIEW_LOADER_MODULES,
+} from "./check-vanilla-plugin-bundles.mjs";
 
 const DISABLED = ["plugins/builtin/markdown-editor/"];
 const STUB = "plugins/builtin/markdown-editor/renderer/index.ts";
@@ -41,6 +45,29 @@ describe("checkVanillaPluginBundles", () => {
   it("fails when the optional implementation is merged into a statically imported chunk", () => {
     const problems = checkVanillaPluginBundles(build({ sharedModules: [STUB, VIEW] }));
     expect(problems.some((p) => p.includes(VIEW))).toBe(true);
+  });
+
+  it("fails when any part of the plugin view loader is merged into a startup chunk (#16802)", () => {
+    for (const loader of [...PLUGIN_VIEW_LOADER_MODULES, "src/pluginUi/kit.tsx"]) {
+      const problems = checkVanillaPluginBundles(
+        build({ sharedModules: [STUB, "src/hooks/useRenderableSurfaceClaim.ts", loader] })
+      );
+      expect(problems.filter((p) => p.includes(loader))).toHaveLength(2);
+    }
+  });
+
+  it("passes the light plugin resolvers that stay eager beside a lazy loader", () => {
+    const problems = checkVanillaPluginBundles(
+      build({
+        sharedModules: [
+          STUB,
+          "src/hooks/useRenderableSurfaceClaim.ts",
+          "src/components/Plugin/LazyPluginHostedView.tsx",
+          "src/components/Plugin/PluginViewHost.tsx",
+        ],
+      })
+    );
+    expect(problems).toEqual([]);
   });
 
   it("fails closed on a chunk with no module list", () => {

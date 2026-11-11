@@ -42,7 +42,9 @@ export function LazyPluginHostedView(props: PluginHostedViewProps) {
     >
       {load.status === "failed" && (
         <PluginViewLoadError
-          pluginId={(source.from === "hosted" ? source.view.pluginId : source.config.extensionId) ?? ""}
+          pluginId={
+            (source.from === "hosted" ? source.view.pluginId : source.config.extensionId) ?? ""
+          }
           displayName={source.from === "hosted" ? source.view.name : source.config.name}
           message="Daintree couldn't load its plugin view host. Restart Daintree to try again."
           diagnostic={String(load.error)}

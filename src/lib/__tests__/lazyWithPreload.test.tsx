@@ -67,6 +67,42 @@ describe("lazyWithPreload", () => {
     await expect(Lazy.preload()).resolves.toEqual({ Greeting });
     expect(load).toHaveBeenCalledTimes(2);
   });
+
+  it("picks the component once per module, for the lazy path and every preload alike", async () => {
+    let resolve!: (m: { Greeting: typeof Greeting }) => void;
+    const pick = vi.fn((m: { Greeting: typeof Greeting }) => m.Greeting);
+    const Lazy = lazyWithPreload(
+      () => new Promise<{ Greeting: typeof Greeting }>((r) => (resolve = r)),
+      pick
+    );
+
+    // Rendered before the chunk lands, so this mount goes through lazy().
+    const { container } = render(
+      <Suspense fallback={<span>loading</span>}>
+        <Lazy name="factory" />
+      </Suspense>
+    );
+    await act(async () => resolve({ Greeting }));
+    await Lazy.preload();
+
+    expect(container.textContent).toBe("hello factory");
+    expect(pick).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a later preload retry when picking the component throws", async () => {
+    const pick = vi
+      .fn<(m: { Greeting: typeof Greeting }) => typeof Greeting>()
+      .mockImplementationOnce(() => {
+        throw new Error("bad module");
+      })
+      .mockImplementation((m) => m.Greeting);
+    const Lazy = lazyWithPreload(() => Promise.resolve({ Greeting }), pick);
+
+    await expect(Lazy.preload()).rejects.toThrow("bad module");
+    expect(Lazy.isLoaded()).toBe(false);
+    await expect(Lazy.preload()).resolves.toEqual({ Greeting });
+    expect(Lazy.isLoaded()).toBe(true);
+  });
 });
 
 describe("usePreloadedComponent", () => {
@@ -136,5 +172,29 @@ describe("usePreloadedComponent", () => {
     expect(Lazy.isLoaded()).toBe(true);
     expect(errors).not.toHaveBeenCalled();
     errors.mockRestore();
+  });
+
+  it("starts over for a different component instead of keeping the last one's answer", async () => {
+    const Loaded = lazyWithPreload(
+      () => Promise.resolve({ Greeting }),
+      (m) => m.Greeting
+    );
+    await Loaded.preload();
+    let resolve!: (m: { Greeting: typeof Greeting }) => void;
+    const Pending = lazyWithPreload(
+      () => new Promise<{ Greeting: typeof Greeting }>((r) => (resolve = r)),
+      (m) => m.Greeting
+    );
+
+    const { result, rerender } = renderHook(({ target }) => usePreloadedComponent(target), {
+      initialProps: { target: Loaded as typeof Pending },
+    });
+    expect(result.current.status).toBe("ready");
+
+    rerender({ target: Pending });
+    expect(result.current.status).toBe("loading");
+
+    await act(async () => resolve({ Greeting }));
+    expect(result.current.status).toBe("ready");
   });
 });

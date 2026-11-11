@@ -25,41 +25,36 @@ export function lazyWithPreload<M, P extends object>(
   load: () => Promise<M>,
   pick: (mod: M) => ComponentType<P>
 ): PreloadableComponent<P, M> {
-  let resolvedModule: M | null = null;
-  let resolved: ComponentType<P> | null = null;
-  let inFlight: Promise<M> | null = null;
+  // The module and the component picked from it land together, and `pick`
+  // runs once per module: a picker that builds a component (a factory) must
+  // not hand the lazy path a second type.
+  let loaded: { module: M; component: ComponentType<P> } | null = null;
+  let inFlight: Promise<{ module: M; component: ComponentType<P> }> | null = null;
 
-  const preload = (): Promise<M> => {
-    if (resolvedModule !== null) return Promise.resolve(resolvedModule);
-    inFlight ??= load().then(
-      (mod) => {
-        resolvedModule = mod;
-        resolved = pick(mod);
+  const settle = () => {
+    if (loaded !== null) return Promise.resolve(loaded);
+    inFlight ??= load()
+      .then((module) => (loaded = { module, component: pick(module) }))
+      .finally(() => {
         inFlight = null;
-        return mod;
-      },
-      (err: unknown) => {
-        inFlight = null;
-        throw err;
-      }
-    );
+      });
     return inFlight;
   };
 
-  const Lazy = lazy(() => preload().then((mod) => ({ default: pick(mod) })));
+  const preload = (): Promise<M> => settle().then(({ module }) => module);
+
+  const Lazy = lazy(() => settle().then(({ component }) => ({ default: component })));
 
   function Preloadable(props: P) {
-    const [Component] = useState<ComponentType<P>>(() => resolved ?? Lazy);
+    const [Component] = useState<ComponentType<P>>(() => loaded?.component ?? Lazy);
     return <Component {...props} />;
   }
 
-  return Object.assign(Preloadable, { preload, isLoaded: () => resolved !== null });
+  return Object.assign(Preloadable, { preload, isLoaded: () => loaded !== null });
 }
 
 export type PreloadStatus =
-  | { status: "loading" }
-  | { status: "ready" }
-  | { status: "failed"; error: unknown };
+  { status: "loading" } | { status: "ready" } | { status: "failed"; error: unknown };
 
 /**
  * Whether `component` can render now without suspending, loading its chunk
@@ -69,31 +64,40 @@ export type PreloadStatus =
  * going through Suspense: a plain state update commits the moment the chunk
  * lands, where a Suspense fallback holds the reveal back for React 19's
  * 300ms throttle. A failed load is reported rather than thrown, so the host
- * keeps its chrome around the failure; the next mount tries again. Pass a
- * component that lives at module or factory scope.
+ * keeps its chrome around the failure; the next mount tries again. Meant for
+ * a component that lives at module or factory scope; a different one starts
+ * over rather than inherit the last one's answer.
  */
-export function usePreloadedComponent(component: {
-  preload: () => Promise<unknown>;
-  isLoaded: () => boolean;
-}): PreloadStatus {
-  const [state, setState] = useState<PreloadStatus>(() =>
-    component.isLoaded() ? { status: "ready" } : { status: "loading" }
-  );
-  const loading = state.status === "loading";
+export function usePreloadedComponent(component: PreloadTarget): PreloadStatus {
+  const [settled, setSettled] = useState<{ target: PreloadTarget; status: PreloadStatus }>(() => ({
+    target: component,
+    status: initialPreloadStatus(component),
+  }));
+  const status = settled.target === component ? settled.status : initialPreloadStatus(component);
+  const loading = status.status === "loading";
   useEffect(() => {
     if (!loading) return;
     let live = true;
     component.preload().then(
       () => {
-        if (live) setState({ status: "ready" });
+        if (live) setSettled({ target: component, status: { status: "ready" } });
       },
       (error: unknown) => {
-        if (live) setState({ status: "failed", error });
+        if (live) setSettled({ target: component, status: { status: "failed", error } });
       }
     );
     return () => {
       live = false;
     };
   }, [component, loading]);
-  return state;
+  return status;
+}
+
+interface PreloadTarget {
+  preload: () => Promise<unknown>;
+  isLoaded: () => boolean;
+}
+
+function initialPreloadStatus(component: PreloadTarget): PreloadStatus {
+  return component.isLoaded() ? { status: "ready" } : { status: "loading" };
 }

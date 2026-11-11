@@ -4,6 +4,9 @@
 // anyone enables it. Each such plugin may register its views from a tiny entry
 // at module eval (`src/registry/builtinPluginRenderers.ts` globs those on
 // purpose), but its editor, controllers and guest code ride in lazy chunks.
+// The host's own plugin-view loader is held to the same rule (#16802): vanilla
+// Daintree draws no plugin view, so the loader and the plugin-ui runtime wait
+// for the first one, while the light resolvers around them stay eager.
 //
 // Reads what Vite actually shipped, after a production `npm run build`: chunk
 // grouping can pull a lazily imported module into a chunk the entry imports
@@ -30,6 +33,17 @@ export function disabledBuiltinDirs(defaultsSource) {
 /** What a disabled plugin may put in the startup closure: its registration stub and the ids it imports. */
 const ALLOWED_STARTUP_FILE =
   /\/(renderer\/(index\.tsx?|recoverDrafts\.ts)|shared\/ids\.[cm]?[jt]s)$/;
+
+/**
+ * What draws any plugin view, hosted or in a panel: named by module, so a
+ * chunk merge or rename can't carry them back into startup unnoticed.
+ */
+export const PLUGIN_VIEW_LOADER_MODULES = [
+  "src/components/Plugin/PluginHostedView.tsx",
+  "src/components/Plugin/PluginViewContent.tsx",
+  "src/components/Plugin/pluginViewLoader.ts",
+];
+const PLUGIN_UI_DIR = "src/pluginUi/";
 
 /**
  * @param {{
@@ -77,6 +91,9 @@ export function checkVanillaPluginBundles({ manifest, modulesByFile, seeds, disa
         if (dir && !ALLOWED_STARTUP_FILE.test(id)) {
           problems.push(`${label}: ${dir} code outside its registration stub — ${id}`);
         }
+        if (PLUGIN_VIEW_LOADER_MODULES.includes(id) || id.startsWith(PLUGIN_UI_DIR)) {
+          problems.push(`${label}: the plugin view loader in a startup chunk — ${id}`);
+        }
       }
     }
   }
@@ -101,7 +118,9 @@ function main() {
     ),
   });
   if (problems.length === 0) {
-    console.log("[vanilla-plugin-bundles] startup chunks carry no default-disabled plugin code");
+    console.log(
+      "[vanilla-plugin-bundles] startup chunks carry no default-disabled plugin code and no plugin view loader"
+    );
     return;
   }
   for (const problem of problems) console.error(`::error::${problem}`);
