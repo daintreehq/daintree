@@ -30,6 +30,15 @@ const appMock = vi.hoisted(() => {
 });
 
 const utilsMock = vi.hoisted(() => ({
+  prepareAtomicWriteFile: vi.fn(async (fp: string, data: string) => {
+    const { writeFileSync } = await import("node:fs");
+    const tempPath = `${fp}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    writeFileSync(tempPath, data, "utf-8");
+    return tempPath;
+  }),
+  syncParentDirectory: vi.fn(async () => {}),
+  tightenDirPermissions: vi.fn(async () => {}),
+  tightenFilePermissions: vi.fn(async () => {}),
   resilientAtomicWriteFileSync: vi.fn(),
   resilientRenameSync: vi.fn(),
   tightenFilePermissionsSync: vi.fn(),
@@ -466,7 +475,7 @@ describe("CrashRecoveryService", () => {
       expect(ts).toBe(previousStat.mtimeMs);
     });
 
-    it("a scheduled backup of unchanged state does not rotate the previous generation away", () => {
+    it("a scheduled backup of unchanged state does not rotate the previous generation away", async () => {
       vi.useFakeTimers();
       try {
         const backupDir = path.join(userData, "backups");
@@ -480,23 +489,25 @@ describe("CrashRecoveryService", () => {
         windowStatesStoreMock.get.mockReturnValue({});
 
         const svc = makeService();
+        const runScheduled = async () => {
+          svc.scheduleBackup();
+          await vi.advanceTimersByTimeAsync(1500);
+          await svc.whenScheduledWorkSettled();
+        };
         svc.initialize();
         svc.takeBackup();
         width = 2;
-        svc.scheduleBackup();
-        vi.advanceTimersByTime(1500);
+        await runScheduled();
         expect(JSON.parse(fs.readFileSync(currentPath, "utf8")).appState.sidebarWidth).toBe(2);
         expect(JSON.parse(fs.readFileSync(previousPath, "utf8")).appState.sidebarWidth).toBe(1);
 
-        const writes = utilsMock.resilientAtomicWriteFileSync.mock.calls.length;
-        svc.scheduleBackup();
-        vi.advanceTimersByTime(1500);
-        expect(utilsMock.resilientAtomicWriteFileSync.mock.calls.length).toBe(writes);
+        const writes = utilsMock.prepareAtomicWriteFile.mock.calls.length;
+        await runScheduled();
+        expect(utilsMock.prepareAtomicWriteFile.mock.calls.length).toBe(writes);
         expect(JSON.parse(fs.readFileSync(previousPath, "utf8")).appState.sidebarWidth).toBe(1);
 
         width = 3;
-        svc.scheduleBackup();
-        vi.advanceTimersByTime(1500);
+        await runScheduled();
         expect(JSON.parse(fs.readFileSync(currentPath, "utf8")).appState.sidebarWidth).toBe(3);
         expect(JSON.parse(fs.readFileSync(previousPath, "utf8")).appState.sidebarWidth).toBe(2);
       } finally {
@@ -921,45 +932,60 @@ describe("CrashRecoveryService", () => {
   });
 
   describe("scheduleBackup", () => {
-    it("debounces backup calls", () => {
+    const backupPath = () => path.join(userData, "backups", "session-state.json");
+    const backupWrites = () =>
+      utilsMock.prepareAtomicWriteFile.mock.calls.filter(([fp]) => fp === backupPath()).length;
+
+    it("debounces backup calls", async () => {
       vi.useFakeTimers();
-      storeMock.get.mockImplementation((key: string) => {
-        if (key === "appState") return { sidebarWidth: 400, terminals: [] };
-        return { autoRestoreOnCrash: false };
-      });
-      windowStatesStoreMock.get.mockReturnValue({});
+      try {
+        storeMock.get.mockImplementation((key: string) => {
+          if (key === "appState") return { sidebarWidth: 400, terminals: [] };
+          return { autoRestoreOnCrash: false };
+        });
+        windowStatesStoreMock.get.mockReturnValue({});
 
-      const svc = makeService();
-      svc.initialize();
+        const svc = makeService();
+        svc.initialize();
 
-      const spy = vi.spyOn(svc, "takeBackup");
-      svc.scheduleBackup();
-      svc.scheduleBackup();
-      svc.scheduleBackup();
+        // Each request pushes the deadline back, so the first one's passes.
+        svc.scheduleBackup();
+        await vi.advanceTimersByTimeAsync(1000);
+        svc.scheduleBackup();
+        await vi.advanceTimersByTimeAsync(1000);
+        svc.scheduleBackup();
 
-      expect(spy).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1499);
+        expect(windowStatesStoreMock.get).not.toHaveBeenCalled();
 
-      vi.advanceTimersByTime(1500);
-      expect(spy).toHaveBeenCalledTimes(1);
-
-      vi.useRealTimers();
+        await vi.advanceTimersByTimeAsync(1);
+        await svc.whenScheduledWorkSettled();
+        expect(windowStatesStoreMock.get).toHaveBeenCalledTimes(1);
+        expect(backupWrites()).toBe(1);
+        expect(JSON.parse(fs.readFileSync(backupPath(), "utf8")).appState.sidebarWidth).toBe(400);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
-    it("stopBackupTimer cancels pending debounce", () => {
+    it("stopBackupTimer cancels pending debounce", async () => {
       vi.useFakeTimers();
-      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+      try {
+        storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
 
-      const svc = makeService();
-      svc.initialize();
+        const svc = makeService();
+        svc.initialize();
 
-      const spy = vi.spyOn(svc, "takeBackup");
-      svc.scheduleBackup();
-      svc.stopBackupTimer();
+        svc.scheduleBackup();
+        svc.stopBackupTimer();
 
-      vi.advanceTimersByTime(2000);
-      expect(spy).not.toHaveBeenCalled();
-
-      vi.useRealTimers();
+        await vi.advanceTimersByTimeAsync(2000);
+        await svc.whenScheduledWorkSettled();
+        expect(windowStatesStoreMock.get).not.toHaveBeenCalled();
+        expect(backupWrites()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -1618,15 +1644,20 @@ describe("CrashRecoveryService adversarial", () => {
     });
   });
 
-  it("STARTBACKUPTIMER_IDEMPOTENT", () => {
+  it("STARTBACKUPTIMER_IDEMPOTENT", async () => {
     const service = makeService();
-    const takeBackup = vi.spyOn(service, "takeBackup").mockImplementation(() => {});
+    // One state capture per backup run, whether or not it writes.
+    const backupsRun = () => windowStatesStoreMock.get.mock.calls.length;
 
     service.startBackupTimer();
     service.startBackupTimer();
-    vi.advanceTimersByTime(60_000);
+    await service.whenScheduledWorkSettled();
+    expect(backupsRun()).toBe(1);
 
-    expect(takeBackup).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await service.whenScheduledWorkSettled();
+    expect(backupsRun()).toBe(2);
+    service.stopBackupTimer();
   });
 
   it("NESTED_STATE_ROUND_TRIPS", () => {

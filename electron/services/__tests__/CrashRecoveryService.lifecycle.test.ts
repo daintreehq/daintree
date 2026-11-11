@@ -30,6 +30,15 @@ const appMock = vi.hoisted(() => {
 });
 
 const utilsMock = vi.hoisted(() => ({
+  prepareAtomicWriteFile: vi.fn(async (fp: string, data: string) => {
+    const { writeFileSync } = await import("node:fs");
+    const tempPath = `${fp}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    writeFileSync(tempPath, data, "utf-8");
+    return tempPath;
+  }),
+  syncParentDirectory: vi.fn(async () => {}),
+  tightenDirPermissions: vi.fn(async () => {}),
+  tightenFilePermissions: vi.fn(async () => {}),
   resilientAtomicWriteFileSync: vi.fn(),
   resilientRenameSync: vi.fn(),
   tightenFilePermissionsSync: vi.fn(),
@@ -1256,24 +1265,27 @@ describe("CrashRecoveryService", () => {
       expect(marker.lastHeartbeatMs).toBeLessThanOrEqual(after);
     });
 
-    it("refreshes lastHeartbeatMs on each backup-timer tick", () => {
+    it("refreshes lastHeartbeatMs on each backup-timer tick", async () => {
       vi.useFakeTimers();
       try {
         const svc = makeService();
         svc.initialize();
         svc.startBackupTimer();
+        await svc.whenScheduledWorkSettled();
 
         const firstMarker = JSON.parse(
           fs.readFileSync(path.join(userData, "running.lock"), "utf8")
         );
         const firstHeartbeat = firstMarker.lastHeartbeatMs;
 
-        vi.advanceTimersByTime(60_000);
+        await vi.advanceTimersByTimeAsync(60_000);
+        await svc.whenScheduledWorkSettled();
 
         const secondMarker = JSON.parse(
           fs.readFileSync(path.join(userData, "running.lock"), "utf8")
         );
         expect(secondMarker.lastHeartbeatMs).toBeGreaterThan(firstHeartbeat);
+        svc.stopBackupTimer();
       } finally {
         vi.useRealTimers();
       }
