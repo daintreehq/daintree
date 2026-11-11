@@ -654,6 +654,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         pendingHttpUrlRef.current !== null ||
         installJobIdRef.current !== null ||
         reinstallingRef.current ||
+        isCheckingAllUpdatesRef.current ||
         isBatchActiveRef.current ||
         checkingUpdateRef.current.size > 0 ||
         pendingUpdateRef.current !== null ||

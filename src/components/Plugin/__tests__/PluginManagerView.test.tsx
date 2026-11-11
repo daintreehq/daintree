@@ -2210,6 +2210,31 @@ describe("PluginManagerView", () => {
         expect(window.electron.plugin.previewFromCatalog).not.toHaveBeenCalled();
       });
 
+      it("waits out Update all's checks rather than review beside them", async () => {
+        const updatable = makePlugin({
+          source: "url",
+          originalUrl: "https://example.com/acme.demo.dntr",
+          archiveHash: "h",
+        });
+        vi.mocked(window.electron.plugin.list).mockResolvedValue([updatable]);
+        vi.mocked(window.electron.plugin.checkForUpdate).mockImplementation(
+          () => new Promise(() => {})
+        );
+        const view = (intent: PluginDeepLinkIntent | null) => (
+          <TooltipProvider>
+            <PluginManagerView deepLinkIntent={intent} onDeepLinkConsumed={() => {}} />
+          </TooltipProvider>
+        );
+        const { rerender } = render(view(null));
+        fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+        await waitFor(() => expect(window.electron.plugin.checkForUpdate).toHaveBeenCalled());
+
+        rerender(view({ action: "install-catalog", pluginId: "acme.demo" }));
+
+        expect(await screen.findByText(/Finish or cancel the current install/)).toBeTruthy();
+        expect(window.electron.plugin.previewFromCatalog).not.toHaveBeenCalled();
+      });
+
       it("previews a link that opens the manager under StrictMode, consuming it once", async () => {
         let settle!: (result: PluginUrlInstallPreviewResult) => void;
         const preview = vi.mocked(window.electron.plugin.previewFromCatalog);
