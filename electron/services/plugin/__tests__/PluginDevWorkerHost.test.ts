@@ -308,7 +308,7 @@ describe("PluginDevWorkerHost", () => {
     for (let i = 0; i < 3; i++) {
       const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
       expect(() =>
-        child.emit("error", "FatalError", "Reached heap limit", '{"header":{}}')
+        child.emit("error", "FatalError", "Reached heap limit", "diagnostic-report-16807")
       ).not.toThrow();
       await flush();
       expect(forkMock).toHaveBeenCalledTimes(i + 1);
@@ -333,26 +333,39 @@ describe("PluginDevWorkerHost", () => {
       type: "FatalError",
       location: "Reached heap limit",
     });
+    const logged = Object.values(loggerMock).flatMap((fn) => fn.mock.calls);
+    expect(JSON.stringify(logged)).not.toContain("diagnostic-report-16807");
     host.dispose();
   });
 
-  it("survives a fatal V8 error from a retiring worker after dispose (#16807)", async () => {
+  it("logs a fatal V8 error from a retiring worker after dispose without throwing (#16807)", async () => {
     const { PluginDevWorkerHost } = await loadModule();
     const host = new PluginDevWorkerHost(OPTS);
     void host.start();
     const child = mockChildren[0] as MockUtilityChild;
+    child.pid = 4242;
     child.emit("message", { type: "ready" });
 
     // The cooperative dispose runs the plugin's own cleanup, which can still
     // blow its heap cap before the grace-period kill lands.
     host.dispose();
     expect(() =>
-      child.emit("error", "FatalError", "Reached heap limit", '{"header":{}}')
+      child.emit("error", "FatalError", "Reached heap limit", "diagnostic-report-16807")
     ).not.toThrow();
     child.emit("exit", 134);
     await flush();
 
     expect(forkMock).toHaveBeenCalledTimes(1);
+    const fatal = loggerMock.warn.mock.calls.filter(([message]) =>
+      String(message).includes("fatal error")
+    );
+    expect(fatal).toHaveLength(1);
+    expect(fatal[0][1]).toEqual({
+      pluginId: OPTS.pluginId,
+      pid: 4242,
+      type: "FatalError",
+      location: "Reached heap limit",
+    });
   });
 
   it("dispose sends a cooperative dispose then force-kills after the grace period", async () => {

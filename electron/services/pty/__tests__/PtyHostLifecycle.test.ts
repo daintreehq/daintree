@@ -663,7 +663,7 @@ describe("PtyHostLifecycle", () => {
 
     // UtilityProcess is an EventEmitter: an "error" nobody listens for throws in Main.
     expect(() =>
-      mockChild.emit("error", "FatalError", "Reached heap limit", '{"header":{}}')
+      mockChild.emit("error", "FatalError", "Reached heap limit", "diagnostic-report-16807")
     ).not.toThrow();
 
     const fatal = (callbacks.callbacks.logWarn as Mock).mock.calls
@@ -674,7 +674,6 @@ describe("PtyHostLifecycle", () => {
     expect(fatal[0]).toContain("pid=321");
     expect(fatal[0]).toContain("FatalError");
     expect(fatal[0]).toContain("Reached heap limit");
-    expect(fatal[0]).not.toContain("header");
 
     await vi.advanceTimersByTimeAsync(0);
     expect(callbacks.log.onExitSyncCalls).toHaveLength(0);
@@ -695,6 +694,12 @@ describe("PtyHostLifecycle", () => {
     expect(shared.forkMock).toHaveBeenCalledTimes(2);
     expect(callbacks.log.onBeforeRestartCalls).toBe(1);
     expect(lifecycle.child).toBe(newChild);
+    expect(callbacks.log.onMaxRestartsCalls).toHaveLength(0);
+    const logged = [
+      ...(callbacks.callbacks.logWarn as Mock).mock.calls,
+      ...(callbacks.callbacks.logInfo as Mock).mock.calls,
+    ];
+    expect(JSON.stringify(logged)).not.toContain("diagnostic-report-16807");
   });
 
   it("holds the auto-restart fork until the restart barrier settles", async () => {
