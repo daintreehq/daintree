@@ -375,15 +375,17 @@ describe("AgentVersionService resilience", () => {
 
       const answers = await Promise.all([
         service.getInstalledVersionForLaunch("antigravity" as AgentId),
-        service.getInstalledVersionForLaunch("antigravity" as AgentId, true),
         service.getInstalledVersionForLaunch("antigravity" as AgentId),
       ]);
 
-      expect(answers).toEqual(["1.5.5", "1.5.5", "1.5.5"]);
+      expect(answers).toEqual(["1.5.5", "1.5.5"]);
       expect(spawnMock).toHaveBeenCalledTimes(1);
-      // Once settled, the next launch asks the CLI again.
-      await service.getInstalledVersionForLaunch("antigravity" as AgentId);
-      expect(spawnMock).toHaveBeenCalledTimes(2);
+      // A refresh never joins a read under way, which may predate an upgrade.
+      await Promise.all([
+        service.getInstalledVersionForLaunch("antigravity" as AgentId),
+        service.getInstalledVersionForLaunch("antigravity" as AgentId, true),
+      ]);
+      expect(spawnMock).toHaveBeenCalledTimes(3);
     });
 
     it("answers null rather than throwing when the CLI can't be asked", async () => {
