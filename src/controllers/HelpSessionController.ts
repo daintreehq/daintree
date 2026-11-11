@@ -1536,7 +1536,8 @@ export class HelpSessionController {
       // show it instead of launching. Replacing launches (new session, run
       // anyway, a starter prompt, a picked conversation) don't ask: displacing
       // it is what they are for.
-      if (!reservedId && !options.seedPrompt && !options.resumeTarget) {
+      const asksAdoption = !reservedId && !options.seedPrompt && !options.resumeTarget;
+      if (asksAdoption) {
         const adoption = await this._adoptRunningLane(gen, launchProject);
         if (adoption === "bound") {
           reached = true;
@@ -1609,6 +1610,25 @@ export class HelpSessionController {
         }
         this._versionGate.setHasBlockedThisSession(false);
         this._patch({ assistantVersionTooOld: null, phase: "provisioning" });
+      }
+
+      // The lane can start running while the version probe is out: a schedule's
+      // run, or a lane an update restart brings back (#16753). A launch that only
+      // restores or starts itself asks again rather than displace it.
+      if (asksAdoption && (options.resumeOnly || options.isAutoLaunch)) {
+        const adoption = await this._adoptRunningLane(gen, launchProject);
+        if (adoption === "bound") {
+          reached = true;
+          return;
+        }
+        if (adoption === "stale") {
+          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
+          return;
+        }
+        if (adoption === "occupied") {
+          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch: false });
+          return;
+        }
       }
 
       // #10819: resume-only intent must claim the pending-hibernation entry

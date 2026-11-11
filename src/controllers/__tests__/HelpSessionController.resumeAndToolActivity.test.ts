@@ -1398,6 +1398,62 @@ describe("HelpSessionController — taking over a running host assistant (#13360
     ctrl.stop();
   });
 
+  it("asks again after the version probe, and shows a lane that came back meanwhile instead of launching over it (#16753)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    // Nothing runs when the launch first asks; an update restart's resume lands
+    // while the version probe is out.
+    help().adoptDetachedSession = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "absent" })
+      .mockResolvedValueOnce({ status: "adopted", lane });
+    panelStoreState.addPanel = commitPane;
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(help().adoptDetachedSession).toHaveBeenCalledTimes(2);
+    expect(window.electron.system.getAgentVersion).toHaveBeenCalled();
+    expect(
+      vi.mocked(window.electron.system.getAgentVersion).mock.invocationCallOrder[0]
+    ).toBeLessThan(vi.mocked(help().adoptDetachedSession).mock.invocationCallOrder[1]!);
+    expect(help().provisionSession).not.toHaveBeenCalled();
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
+      "terminal-live",
+      "claude",
+      "sess-live"
+    );
+    ctrl.stop();
+  });
+
+  it("stands an auto-launch down when the lane is taken while its version probe is out (#16753)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    ctrl["_hasAutoLaunched"] = true;
+    help().adoptDetachedSession = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "absent" })
+      .mockResolvedValueOnce({ status: "occupied" });
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(help().provisionSession).not.toHaveBeenCalled();
+    expect(ctrl["_hasAutoLaunched"]).toBe(true);
+    ctrl.stop();
+  });
+
   it("an explicit launch still replaces a lane another view holds", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
