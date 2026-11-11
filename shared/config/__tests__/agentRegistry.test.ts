@@ -951,6 +951,42 @@ describe("getAgentDisplayTitle", () => {
   it("returns plain agent name for agent without models", () => {
     expect(getAgentDisplayTitle("cursor", "some-model")).toBe("Cursor");
   });
+
+  describe("with the runtime catalog (#16783)", () => {
+    const codexName = () => getAgentConfig("codex")!.name;
+
+    it("names a model only the catalog lists, as a bundled one is named", () => {
+      expect(getAgentConfig("codex")!.models ?? []).toHaveLength(0);
+      const resolved = [{ id: "gpt-5.5", name: "GPT-5.5 (Codex)", shortLabel: "GPT-5.5" }];
+
+      expect(getAgentDisplayTitle("codex", "gpt-5.5", resolved)).toBe(`${codexName()} (GPT-5.5)`);
+    });
+
+    it("falls back to the model's name when it has no short label", () => {
+      expect(getAgentDisplayTitle("codex", "o9", [{ id: "o9", name: "o9 Preview" }])).toBe(
+        `${codexName()} (o9 Preview)`
+      );
+      expect(
+        getAgentDisplayTitle("codex", "o9", [{ id: "o9", name: "o9 Preview", shortLabel: "  " }])
+      ).toBe(`${codexName()} (o9 Preview)`);
+    });
+
+    it("prefers the bundled entry when both list the id", () => {
+      const model = getAgentConfig("qwen")!.models![1]!;
+      const resolved = [{ ...model, shortLabel: "Remote label" }];
+
+      expect(getAgentDisplayTitle("qwen", model.id, resolved)).toBe(
+        `${getAgentConfig("qwen")!.name} (${model.shortLabel})`
+      );
+    });
+
+    it("stays the bare agent name for an id neither lists", () => {
+      const resolved = [{ id: "gpt-5.5", name: "GPT-5.5", shortLabel: "GPT-5.5" }];
+
+      expect(getAgentDisplayTitle("codex", "gpt-4-retired", resolved)).toBe(codexName());
+      expect(getAgentDisplayTitle("codex", undefined, resolved)).toBe(codexName());
+    });
+  });
 });
 
 describe("getAgentPreset", () => {

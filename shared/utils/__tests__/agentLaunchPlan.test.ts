@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getEffectiveAgentConfig, setUserRegistry } from "../../config/agentRegistry.js";
+import {
+  getAgentDisplayTitle,
+  getEffectiveAgentConfig,
+  setUserRegistry,
+} from "../../config/agentRegistry.js";
 import {
   buildLaunchCommandFromFlags,
   stripAssignedSessionIdArgs,
@@ -435,6 +439,79 @@ describe("buildAgentLaunchPlan", () => {
       expect(plan.command).toContain("--model opus");
       expect(plan.launchFlags).toEqual(expect.arrayContaining(["--model", "opus"]));
       expect(plan.modelId).toBe("opus");
+    });
+  });
+
+  describe("a model only the runtime catalog lists (#16783)", () => {
+    const CATALOG = {
+      models: [{ id: "gpt-5.5", name: "GPT-5.5 (Codex)", shortLabel: "GPT-5.5" }],
+    };
+    const codex = (
+      options: AgentLaunchPlanInput["options"],
+      overrides: Partial<AgentLaunchPlanInput> = {}
+    ) =>
+      buildAgentLaunchPlan(
+        input({
+          agentId: "codex",
+          agentConfig: getEffectiveAgentConfig("codex"),
+          options,
+          ...overrides,
+        })
+      );
+
+    it("titles a Codex launch with the model's short label, left unpinned", async () => {
+      const getModelCatalog = vi.fn().mockResolvedValue(CATALOG);
+
+      const plan = await codex({ modelId: "gpt-5.5" }, { getModelCatalog });
+
+      expect(plan.title).toBe("Codex (GPT-5.5)");
+      expect(plan.titleMode).toBeUndefined();
+      expect(plan.modelId).toBe("gpt-5.5");
+      expect(getModelCatalog).toHaveBeenCalledWith("codex");
+    });
+
+    it("stamps the preset after the model, as a bundled model's title is", async () => {
+      const plan = await codex(
+        { modelId: "gpt-5.5" },
+        {
+          getModelCatalog: async () => CATALOG,
+          settings: {
+            agents: { codex: { presetId: "fast", customPresets: [{ id: "fast", name: "Fast" }] } },
+          } as unknown as AgentSettings,
+        }
+      );
+
+      expect(plan.title).toBe("Codex (GPT-5.5) [Fast]");
+      expect(plan.titleMode).toBe("custom");
+    });
+
+    it("keeps the bare agent name for an id the catalog doesn't list, or a catalog that fails", async () => {
+      expect(
+        (await codex({ modelId: "gpt-4-gone" }, { getModelCatalog: async () => CATALOG })).title
+      ).toBe("Codex");
+      expect(
+        (
+          await codex(
+            { modelId: "gpt-5.5" },
+            { getModelCatalog: () => Promise.reject(new Error("catalog unavailable")) }
+          )
+        ).title
+      ).toBe("Codex");
+      expect((await codex({ modelId: "gpt-5.5" })).title).toBe("Codex");
+    });
+
+    it("never reads the catalog when a caller's name wins or the model is bundled", async () => {
+      const getModelCatalog = vi.fn().mockResolvedValue(CATALOG);
+
+      const named = await codex({ modelId: "gpt-5.5", name: "Review API" }, { getModelCatalog });
+      const bundled = await buildAgentLaunchPlan(
+        input({ options: { modelId: "opus" }, getModelCatalog })
+      );
+
+      expect(named.title).toBe("Review API");
+      expect(named.titleMode).toBe("custom");
+      expect(bundled.title).toBe(getAgentDisplayTitle("claude", "opus"));
+      expect(getModelCatalog).not.toHaveBeenCalled();
     });
   });
 

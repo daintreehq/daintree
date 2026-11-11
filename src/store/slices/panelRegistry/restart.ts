@@ -53,7 +53,9 @@ import {
   sanitizeAgentEnv,
   type AgentPreset,
 } from "@/config/agents";
-import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
+import { getAgentDisplayTitle, type AgentModelConfig } from "@shared/config/agentRegistry";
+import { loadModelTitleCatalog } from "@shared/utils/agentModelTitle";
+import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
 import { agentPresetTitle } from "@shared/utils/agentLaunchPlan";
 import {
   keepPaneAccount,
@@ -1729,24 +1731,33 @@ export const createRestartActions = (
  * still what a launch on the preset it left would carry follows the move
  * (#13746): that preset's stamp, or the bare agent name of a preset-free
  * launch. A rename or a caller-supplied name stays exactly as it is.
+ *
+ * A model only the runtime catalog lists (`resolvedModels`) is named like a
+ * bundled one (#16783). A launch that couldn't name it carried the bare agent
+ * name, so that title is still recognized as the launch's own.
  */
 export function presetSwitchTitle(
   current: { title: string; titleMode?: PanelTitleMode },
   context: {
     agentId: string;
     modelId?: string;
+    resolvedModels?: readonly AgentModelConfig[];
     leftPresets: ReadonlyArray<Pick<AgentPreset, "name" | "displayTitle"> | undefined>;
     nextPreset: Pick<AgentPreset, "name" | "displayTitle">;
   }
 ): { title: string; titleMode?: PanelTitleMode } {
   if (current.titleMode === "user") return current;
-  const baseTitle = getAgentDisplayTitle(context.agentId, context.modelId);
+  const baseTitle = getAgentDisplayTitle(context.agentId, context.modelId, context.resolvedModels);
+  const bareTitle = getAgentDisplayTitle(context.agentId);
+  const launchTitles = baseTitle === bareTitle ? [baseTitle] : [baseTitle, bareTitle];
   const stamped =
     current.titleMode === "custom"
       ? context.leftPresets.some(
-          (preset) => preset && agentPresetTitle(baseTitle, preset) === current.title
+          (preset) =>
+            preset &&
+            launchTitles.some((title) => agentPresetTitle(title, preset) === current.title)
         )
-      : current.title === baseTitle;
+      : launchTitles.includes(current.title);
   if (!stamped) return current;
   const nextTitle = agentPresetTitle(baseTitle, context.nextPreset);
   return nextTitle ? { title: nextTitle, titleMode: "custom" } : current;
@@ -1846,9 +1857,15 @@ async function respawnAgentOnPreset(
   let resumedSessionId: string | undefined;
 
   try {
-    const [agentSettings, tmpDir] = await Promise.all([
+    const [agentSettings, tmpDir, titleModels] = await Promise.all([
       agentSettingsClient.get(),
       resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
+      // Read before teardown: only a switch retitles the pane.
+      mode.kind === "switch"
+        ? loadModelTitleCatalog(effectiveAgentId, terminal.agentModelId, (agentId) =>
+            agentCapabilitiesClient.getResolvedModelList(agentId)
+          )
+        : undefined,
     ]);
     const entry = agentSettings?.agents?.[effectiveAgentId] ?? {};
     const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
@@ -2182,6 +2199,7 @@ async function respawnAgentOnPreset(
         ? presetSwitchTitle(currentTitle, {
             agentId: effectiveAgentId,
             modelId: terminal.agentModelId,
+            resolvedModels: titleModels,
             leftPresets: [terminal.agentPresetId, terminal.originalPresetId].map((presetId) =>
               presetId
                 ? getMergedPreset(

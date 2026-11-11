@@ -383,6 +383,12 @@ export async function runAgentLaunch(
       ),
     getCliDetail: (id) => deps.agents.getCliDetail(id),
     getClipboardDirectory: async () => agentClipboardDirectory(deps.hostPlatform.tmpDir, false),
+    getModelCatalog: (id) =>
+      deps.invoke<ResolvedModelCatalog | null>(
+        project.id,
+        CHANNELS.AGENT_CAPABILITIES_GET_RESOLVED_MODEL_LIST,
+        [id]
+      ),
     // No `onStalePreset`: a saved preset that no longer exists is still fallen
     // back from here, and clearing it is left to the next launch from a view,
     // whose settings store owns that write and tells every window about it.

@@ -26,6 +26,7 @@ import {
 import { sanitizeTerminalName } from "./agentLaunchValidation.js";
 import { resolveLaunchAccount, withAccountEnv } from "./agentAccounts.js";
 import { isAbsolute, isPathInside, pathComparisonKey } from "./path.js";
+import { loadModelTitleCatalog, type AgentModelCatalogReader } from "./agentModelTitle.js";
 
 /**
  * The title a launch on `preset` is stamped with: an explicit `displayTitle`
@@ -81,6 +82,12 @@ export interface AgentLaunchPlanInput {
   getCliDetail: (agentId: string) => Promise<AgentCliDetail | undefined>;
   /** The directory Gemini is pointed at for clipboard images, when it can be found. */
   getClipboardDirectory: () => Promise<string | undefined>;
+  /**
+   * The runtime model catalog, read for the title only when the chosen model
+   * isn't in the agent's bundled list (#16783). Absent, such a model titles
+   * the pane with the bare agent name.
+   */
+  getModelCatalog?: AgentModelCatalogReader;
   /**
    * Told, as soon as it is known and before anything is awaited, which saved
    * preset slot named a preset that no longer exists, so the caller can clear
@@ -396,16 +403,23 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     }
   }
 
+  // A caller-supplied name overrides the computed title. Empty after
+  // sanitizing is treated as no name.
+  const trimmedName = options?.name ? sanitizeTerminalName(options.name) : undefined;
+
   const baseTitle = modelId
-    ? getAgentDisplayTitle(agentId, modelId)
+    ? getAgentDisplayTitle(
+        agentId,
+        modelId,
+        trimmedName
+          ? undefined
+          : await loadModelTitleCatalog(agentId, modelId, input.getModelCatalog)
+      )
     : (agentConfig?.name ?? "Terminal");
 
   const stampedPresetTitle = isAgent ? agentPresetTitle(baseTitle, preset) : undefined;
   const presetTitle = stampedPresetTitle ?? baseTitle;
   const hasPresetTitle = stampedPresetTitle !== undefined;
-  // A caller-supplied name overrides the computed title. Empty after
-  // sanitizing is treated as no name.
-  const trimmedName = options?.name ? sanitizeTerminalName(options.name) : undefined;
 
   return {
     command,
