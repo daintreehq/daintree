@@ -14,13 +14,14 @@ How community plugins become discoverable, and the trust policy that comes with 
 
 ## Where things stand
 
-- **#9305 (curated catalog), closed.** The plugin manager, URL install and `daintree://` deep links shipped. Nothing in the app fetches a list: `PluginCatalog` in the plugin manager only renders installed plugins. #9305 also covered first-party plugins only; community entries need the rules below. The `"catalog"` value of `PluginInstallSource` exists in the type but no install route records it yet.
+- **#9305 (curated catalog), closed.** The plugin manager, URL install and `daintree://` deep links shipped. Nothing in the app fetches a list: `PluginCatalog` in the plugin manager only renders installed plugins. #9305 also covered first-party plugins only; community entries need the rules below. Since #16779 a `daintree://plugin/install?id=` link installs from the catalog and records `source: "catalog"` with the entry's id, version and repository.
 - **#10524 (trust and signing), via #10551.** Only the consent half shipped. Sigstore was deferred because there was no publish pipeline and nothing signed to verify, and `.dntr` archives still carry no signature ([Trust model → Explicit non-guarantees](./trust-model.md#3-explicit-non-guarantees-the-10-contract)).
 - **Integrity.** Every archive install records the archive's SHA-256 (`archiveHash`). A confirmed update is bound to the digest its preview was read from, and so is a URL install confirmed from its preview (#16776). A fresh install can be bound to a reviewed digest too: `daintree-plugin install <url-or-path> --sha256 <hex>` installs only if the archive matches, and only if the plugin isn't installed yet ([Distribution → From the CLI](./distribution.md#from-the-cli)).
 - **Updates.** **Check for updates** re-fetches the URL the plugin was installed from and compares digests. It has no notion of a catalog or of release versions, so a catalog couldn't steer it today ([Distribution → Updating a plugin](./distribution.md#updating-a-plugin)).
-- **Disclosure.** An archive opened from the operating system shows its capabilities before anything is written. A URL install shows none.
+- **Disclosure.** An archive opened from the operating system, a URL install and a catalog install each show the archive's capabilities before anything is written.
 - **Kill-switch.** The blocklist at `updates.daintree.org/plugins/blocklist.json` matches by plugin name and version range, refuses to load a match, and unloads a running copy when a refreshed list arrives. It is the only control that reaches plugins already installed. The list is maintained in this repository as `plugins/blocklist.json` and published on every change merged to `develop` (#16774), not in `daintreehq/plugins`.
-- **Catalog client.** The main process can fetch `updates.daintree.org/plugins/catalog.json`, validate it and cache it under `userData` (`PluginCatalogService`), following the rules in [Reading the catalog](#reading-the-catalog). Nothing calls it yet: no fetch happens at startup, and Browse, deep links and catalog updates are still planned.
+- **Catalog client.** The main process can fetch `updates.daintree.org/plugins/catalog.json`, validate it and cache it under `userData` (`PluginCatalogService`), following the rules in [Reading the catalog](#reading-the-catalog). Only a catalog install link calls it: no fetch happens at startup, and Browse and catalog updates are still planned.
+- **Deep links.** `daintree://plugin/install?id=<publisher.name>[&version=]` resolves the release from a freshly fetched catalog, previews it, and installs only the entry's digest; `?url=<https url>&sha256=<hex>` previews and installs only an archive with that digest ([Distribution → Deep links](./distribution.md#deep-links)).
 
 ## Options compared
 
@@ -101,7 +102,7 @@ Pinning only the repository is the Obsidian model, where every release after the
 2. **List** (planned). The bot opens a pull request adding the `0.1.0` entry with the asset's digest; a person reviews it as a first listing.
 3. **Discover** (planned). Browse in the plugin manager reads the catalog and shows the plugin, its repository, and that it is a community listing, not a Daintree endorsement.
 4. **Inspect and trust** (shipped for URL installs). Install downloads the archive and shows its identity and capabilities, read from the downloaded bytes, with the full-privilege warning. The user decides whether to trust the publisher.
-5. **Install** (shipped). The installer refuses anything but the reviewed digest. Today that check is reached through `daintree-plugin install <url> --sha256 <hex>`, and through a URL install's preview, whose confirm installs only the digest it showed.
+5. **Install** (shipped). The installer refuses anything but the reviewed digest. That check is reached through a `daintree://plugin/install?id=daintreehq.continue-session` link, which resolves `0.1.0` from a fresh catalog and records the install as a community listing from its repository, through `daintree-plugin install <url> --sha256 <hex>`, and through a URL install's preview, whose confirm installs only the digest it showed.
 6. **Update** (planned). `v0.1.1` gets its own entry. An update check for a catalog install reads the catalog instead of re-fetching the install URL, offers `0.1.1` with its preview, and installs only its digest.
 7. **Withdraw** (planned, except the blocklist). Delisting stops new installs, and an update check says the plugin was delisted. A compromise also goes on the blocklist, which ships today and reaches installed copies.
 
@@ -115,8 +116,8 @@ Pinning only the repository is the Obsidian model, where every release after the
 | Approved bytes differ from installed bytes | An update confirm already installs only the digest its preview was read from. A URL install's confirm installs only the digest its preview showed. An archive opened from the operating system is previewed and then installed from its path without a digest binding. |
 | A malformed or stripped binding | The installer re-validates every binding it is given and refuses a malformed one. The CLI sends a digest over its own method, which requires one, so a Daintree too old to check it refuses the call instead of installing. Ordinary install routes still accept no binding at all. |
 | The catalog itself is compromised | It can list any URL with any digest, so the catalog repository's review and HTTPS are trust roots. Signing alone doesn't change that while the catalog is also what names each publisher's key or identity; it would need an identity policy trusted independently of the catalog. |
-| A stale catalog | Browsing may show a cached catalog. A new install or update needs a fresh one, since a stale one may still list a release that was pulled. The catalog client enforces this; no install route reads the catalog yet. |
-| Offline | Planned policy: nothing new installs from the catalog. Today: installed plugins keep running, the last cached blocklist stays enforced, and a local `.dntr` can still be installed with `--sha256`. |
+| A stale catalog | Browsing may show a cached catalog. A new install or update needs a fresh one, since a stale one may still list a release that was pulled. The catalog client enforces this, and a catalog install link refuses a stale catalog with its own message. |
+| Offline | Nothing new installs from the catalog: a catalog install link says the catalog couldn't be reached or refreshed. Installed plugins keep running, the last cached blocklist stays enforced, and a local `.dntr` can still be installed with `--sha256`. |
 | A malicious but faithfully reviewed plugin | Not held: no sandbox. Disclosure, just-in-time consent on gated host surfaces, delisting and the blocklist are the controls. |
 | Revoked keys | Not applicable while archives are unsigned. |
 
@@ -142,7 +143,7 @@ In the order they have to land:
 1. **A reviewed digest on a fresh install.** Shipped: the installer accepts a fresh-install binding, and the CLI exposes it as `--sha256`.
 2. **Disclosure on URL installs.** Shipped: install from URL and the `daintree://plugin/install` link show the archive dialog's capability list for the downloaded archive first, then install exactly the bytes it showed.
 3. **Catalog-driven updates.** An update check for a catalog install reads the catalog instead of the install URL, and a delisted plugin says so.
-4. **Deep links.** `daintree://plugin/install` carries a catalog id, or a URL with its `sha256`.
+4. **Deep links.** Shipped: `daintree://plugin/install` carries a catalog id, or a URL with its `sha256`.
 5. **Browse.** A Browse view in the plugin manager.
 
 Outside the app: create `daintreehq/plugins` with `catalog.json`, its validation and the release-watching bot, and give `continue-session` its public repository and two releases.

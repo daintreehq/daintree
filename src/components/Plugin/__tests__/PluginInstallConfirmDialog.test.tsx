@@ -266,6 +266,26 @@ describe("PluginInstallConfirmDialog for a URL install", () => {
     expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
   });
 
+  it("names a catalog release's repository and binds what it says is installed (#16779)", async () => {
+    renderReview(
+      urlRequest({
+        source: { kind: "catalog", repoLabel: "github.com/acme/tool", installedOnDisk: true },
+      })
+    );
+    await settle();
+    elapse(60_000);
+
+    const source = screen.getByTestId("archive-install-source").textContent;
+    expect(source).toContain("Community listing from github.com/acme/tool");
+    expect(source).toContain("not that the code is safe");
+    expect(screen.getByTestId("archive-installed-version").textContent).toContain(
+      "couldn’t be loaded"
+    );
+    click(confirmButton());
+
+    expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
+  });
+
   const onDisk = () =>
     urlRequest({ source: { kind: "url", label: "example.com/acme.dntr", installedOnDisk: true } });
 

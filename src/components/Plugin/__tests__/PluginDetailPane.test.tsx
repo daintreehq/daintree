@@ -535,6 +535,25 @@ describe("PluginDetailPane capabilities", () => {
 });
 
 describe("PluginDetailPane contributors (issue #10516)", () => {
+  it("names a catalog install's repository as a community listing (#16779)", () => {
+    renderOverview(
+      makePlugin({
+        source: "catalog",
+        originalUrl:
+          "https://github.com/acme/demo/releases/download/v1.0.0/acme.demo-1.0.0.dntr",
+        catalog: { id: "acme.demo", version: "1.0.0", repo: "https://github.com/acme/demo" },
+      })
+    );
+    expect(screen.getByTestId("plugin-catalog-listing").textContent).toContain(
+      "Community listing from github.com/acme/demo"
+    );
+  });
+
+  it("calls no other install a community listing", () => {
+    renderOverview(makePlugin({ source: "url", originalUrl: "https://example.com/p.dntr" }));
+    expect(screen.queryByTestId("plugin-catalog-listing")).toBeNull();
+  });
+
   it("does not render a Contributors section when authors are absent", () => {
     renderOverview(makePlugin());
     expect(screen.queryByText("Contributors")).toBeNull();

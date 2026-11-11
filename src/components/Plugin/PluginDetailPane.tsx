@@ -24,6 +24,7 @@ import { PluginGrantSwitch } from "./PluginGrantSwitch";
 import { PluginPresetGrants } from "./PluginPresetGrants";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { FactSeparator } from "@/components/ui/FactSeparator";
+import { describeCatalogRepo } from "@shared/utils/pluginInstallSource";
 import {
   SettingsSubtabBar,
   subtabPanelProps,
