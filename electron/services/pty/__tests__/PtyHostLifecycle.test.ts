@@ -8,6 +8,10 @@ import {
   PtyHostLifecycle,
   type PtyHostLifecycleCallbacks,
 } from "../PtyHostLifecycle.js";
+import {
+  getTerminationIntent,
+  resetTerminationIntentsForTesting,
+} from "../../processTerminationIntent.js";
 
 const shared = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1121,7 +1125,7 @@ describe("PtyHostLifecycle", () => {
       expect(exit.settled).toBe(true);
       expect(exit.exitedOnItsOwn).toBe(false);
       expect(warn).toHaveBeenCalledWith(
-        "[PtyClient] Failed to kill host during dispose:",
+        "[PtyClient] Failed to kill host (dispose backstop):",
         expect.any(Error)
       );
     });
@@ -1208,6 +1212,42 @@ describe("PtyHostLifecycle", () => {
       mockChild.emit("spawn");
 
       expect(killSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops the held SIGKILL when the host exits without spawning", () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+      mockChild.pid = undefined;
+      failSends();
+
+      lifecycle.postMessage({ type: "health-check" });
+      expect(mockChild.listenerCount("spawn")).toBe(1);
+      mockChild.emit("exit", 1);
+
+      expect(mockChild.listenerCount("spawn")).toBe(0);
+      expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    it("notes the kill intent when the held signal goes out, not when it was asked for", async () => {
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      resetTerminationIntentsForTesting();
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+      mockChild.pid = undefined;
+      failSends();
+
+      lifecycle.postMessage({ type: "health-check" });
+      // Past the intent TTL: a note taken at request time would have lapsed.
+      await vi.advanceTimersByTimeAsync(15_000);
+      mockChild.pid = 654;
+      mockChild.emit("spawn");
+
+      expect(getTerminationIntent({ serviceName: "daintree-pty-host" })).toBe(
+        "postMessage failed"
+      );
     });
 
     it("treats a host already gone as nothing to report", () => {

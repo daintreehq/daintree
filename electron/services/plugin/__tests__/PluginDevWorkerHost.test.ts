@@ -364,6 +364,23 @@ describe("PluginDevWorkerHost", () => {
       host.dispose();
     });
 
+    it("drops the held SIGKILL when the worker exits without spawning", async () => {
+      vi.useFakeTimers();
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      host.start().catch(() => undefined);
+      const child = mockChildren[0] as MockUtilityChild;
+      child.pid = undefined;
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(child.listenerCount("spawn")).toBe(1);
+      child.emit("exit", 1);
+
+      expect(child.listenerCount("spawn")).toBe(0);
+      expect(killSpy).not.toHaveBeenCalled();
+      host.dispose();
+    });
+
     it("treats a worker already gone at the backstop as nothing to report", async () => {
       vi.useFakeTimers();
       killSpy.mockImplementation(() => {
@@ -399,7 +416,7 @@ describe("PluginDevWorkerHost", () => {
       vi.advanceTimersByTime(1000);
 
       expect(loggerMock.warn).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to kill worker during dispose"),
+        expect.stringContaining("Failed to kill worker (dispose backstop)"),
         expect.anything()
       );
     });

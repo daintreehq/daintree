@@ -231,6 +231,8 @@ export class PtyHostLifecycle {
    */
   private disposeExit: Promise<boolean> | null = null;
   private resolveDisposeExit: ((exitedOnItsOwn: boolean) => void) | null = null;
+  /** A SIGKILL asked for before the host spawned, held until it has a pid to signal. */
+  private spawnKill: { child: UtilityProcess; onSpawn: () => void } | null = null;
   /**
    * Authoritative crash reason captured from `app.on("child-process-gone")`.
    * Consumed by the next `exit` handler via `setImmediate` deferral, since
@@ -441,7 +443,9 @@ export class PtyHostLifecycle {
       this.callbacks.onMessage(msg);
     });
 
-    this.child.on("exit", (code) => {
+    const child = this.child;
+    child.on("exit", (code) => {
+      this.dropSpawnKill(child);
       this.handleExit(code);
     });
   }
@@ -452,18 +456,16 @@ export class PtyHostLifecycle {
 
   /** Send one request to the host. Treats `postMessage` failure as a crash. */
   postMessage(request: PtyHostRequest): void {
-    if (!this.child) {
+    const child = this.child;
+    if (!child) {
       console.warn("[PtyClient] Cannot send - host not running");
       return;
     }
     try {
-      this.child.postMessage(request);
+      child.postMessage(request);
     } catch (error) {
       console.error("[PtyClient] postMessage failed:", error);
-      if (this.child) {
-        noteTerminationIntent({ serviceName: this.serviceName }, "postMessage failed");
-        this.child.kill();
-      }
+      if (this.child === child) this.forceKill(child, "postMessage failed");
     }
   }
 
@@ -504,27 +506,55 @@ export class PtyHostLifecycle {
     return this.disposeExit;
   }
 
+  private forceKillDisposingHost(): void {
+    const child = this.child;
+    if (!child) return;
+    if (this.forceKill(child, "dispose backstop") !== "sent") return;
+    console.warn(
+      `[PtyClient] ${this.serviceName} did not exit ${DISPOSE_EXIT_TIMEOUT_MS}ms after dispose; sent SIGKILL`
+    );
+  }
+
   /**
    * Deliberately NOT `child.kill()` (#11069): on macOS `UtilityProcess.kill()`
    * blocks main for up to 2s waiting for the child to die, and on POSIX its
    * SIGTERM would cut the host's terminal teardown short anyway. A raw SIGKILL
    * is non-blocking. `this.child` stays set — the `exit` event nulls it.
+   *
+   * A host that has not spawned has no pid yet, so the signal waits for
+   * `spawn`; repeated asks while it waits share the one listener, and an exit
+   * before spawn drops it. The intent is noted when the signal actually goes
+   * out, so a late spawn cannot outlive its TTL.
    */
-  private forceKillDisposingHost(): void {
-    const pid = this.child?.pid;
-    if (!pid) return;
-    noteTerminationIntent({ serviceName: this.serviceName }, "dispose backstop");
+  private forceKill(child: UtilityProcess, reason: string): "sent" | "deferred" | "gone" | "failed" {
+    const pid = child.pid;
+    if (pid === undefined) {
+      if (this.spawnKill?.child === child) return "deferred";
+      const onSpawn = (): void => {
+        if (this.spawnKill?.onSpawn !== onSpawn) return;
+        this.spawnKill = null;
+        this.forceKill(child, reason);
+      };
+      this.spawnKill = { child, onSpawn };
+      child.once("spawn", onSpawn);
+      return "deferred";
+    }
+    noteTerminationIntent({ serviceName: this.serviceName }, reason);
     try {
       process.kill(pid, "SIGKILL");
+      return "sent";
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-        console.warn("[PtyClient] Failed to kill host during dispose:", error);
-      }
-      return;
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return "gone";
+      console.warn(`[PtyClient] Failed to kill host (${reason}):`, error);
+      return "failed";
     }
-    console.warn(
-      `[PtyClient] ${this.serviceName} did not exit ${DISPOSE_EXIT_TIMEOUT_MS}ms after dispose; sent SIGKILL`
-    );
+  }
+
+  private dropSpawnKill(child: UtilityProcess): void {
+    const pending = this.spawnKill;
+    if (pending?.child !== child) return;
+    this.spawnKill = null;
+    child.off("spawn", pending.onSpawn);
   }
 
   private settleDisposeExit(exitedOnItsOwn: boolean): void {
