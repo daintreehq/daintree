@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { z } from "zod";
 import { MAX_RELAY_ARGS_BYTES, SenderCredentialSchema } from "../assistant/linkMethods.js";
+import { DEFAULT_ENCODING_LIMITS, LONE_SURROGATE } from "../link/encoding.js";
 import { SEND_TO_AGENT_MAX_ID_LENGTH } from "../../services/plugin/sendToAgentLimits.js";
 
 /**
@@ -47,37 +48,51 @@ const pluginId = z.string().min(1).max(256);
 const terminalId = z.string().min(1).max(SEND_TO_AGENT_MAX_ID_LENGTH);
 
 /**
- * Whether a plugin's call arguments are plain JSON within the relay's bound:
- * no Map, Set, bigint, function, class instance or non-finite number. The link
- * encoder would carry some of those whole, and an `undefined` field's key, so
- * the walk measures every key and string it would send rather than their
- * JSON. Every value it visits counts, so it stops as soon as the bound is
- * passed: a cycle (a worker's structured clone keeps them) or a shared value
- * counts each time it is reached, as JSON would write it out.
+ * How deep a plugin call's arguments may nest: the link encoder's ceiling,
+ * less the frame and payload levels they ride inside.
+ */
+const MAX_ARGS_DEPTH = DEFAULT_ENCODING_LIMITS.maxDepth - 8;
+
+/** What the link encoder writes for a string: a tag, a length, and UTF-8 or, with a lone surrogate, UTF-16. */
+function encodedStringBytes(value: string): number {
+  return 5 + (LONE_SURROGATE.test(value) ? value.length * 2 : Buffer.byteLength(value, "utf8"));
+}
+
+/**
+ * Whether a plugin's call arguments are plain JSON the link can carry within
+ * the relay's bound: no Map, Set, Date, bigint, function, class instance,
+ * non-finite number or lone-surrogate key, nested no deeper than the encoder
+ * allows. The size charged for each value is at least what the link encoder
+ * writes for it (`electron/remote/link/encoding.ts`), keys of `undefined`
+ * fields included, so what passes is what is sent. Every value visited is
+ * charged, so the walk stops as soon as the bound is passed: a cycle (a
+ * worker's structured clone keeps them) or a shared value costs each time it
+ * is reached.
  */
 export function isPluginControlArgs(args: unknown): boolean {
   let bytes = 0;
-  const pending: unknown[] = [args];
+  const charge = (n: number): boolean => (bytes += n) <= MAX_RELAY_ARGS_BYTES;
+  const pending: Array<[value: unknown, depth: number]> = [[args, 0]];
   while (pending.length > 0) {
-    const value = pending.pop();
-    bytes += 8;
-    if (bytes > MAX_RELAY_ARGS_BYTES) return false;
-    if (value === undefined || value === null || typeof value === "boolean") continue;
-    if (typeof value === "string") {
-      bytes += Buffer.byteLength(value, "utf8");
-      if (bytes > MAX_RELAY_ARGS_BYTES) return false;
+    const [value, depth] = pending.pop()!;
+    if (depth > MAX_ARGS_DEPTH) return false;
+    if (value === undefined || value === null || typeof value === "boolean") {
+      if (!charge(1)) return false;
       continue;
     }
     if (typeof value === "number") {
-      if (!Number.isFinite(value)) return false;
+      if (!Number.isFinite(value) || !charge(9)) return false;
       continue;
     }
-    if (typeof value !== "object") return false;
+    if (typeof value === "string") {
+      if (!charge(encodedStringBytes(value))) return false;
+      continue;
+    }
+    if (typeof value !== "object" || !charge(5)) return false;
     if (Array.isArray(value)) {
       for (const item of value as unknown[]) {
-        bytes += 1;
-        if (bytes > MAX_RELAY_ARGS_BYTES) return false;
-        pending.push(item);
+        if (!charge(1)) return false;
+        pending.push([item, depth + 1]);
       }
       continue;
     }
@@ -85,9 +100,9 @@ export function isPluginControlArgs(args: unknown): boolean {
     if (proto !== Object.prototype && proto !== null) return false;
     for (const key in value) {
       if (!Object.hasOwn(value, key)) continue;
-      bytes += Buffer.byteLength(key, "utf8");
-      if (bytes > MAX_RELAY_ARGS_BYTES) return false;
-      pending.push((value as Record<string, unknown>)[key]);
+      if (LONE_SURROGATE.test(key)) return false;
+      if (!charge(4 + Buffer.byteLength(key, "utf8"))) return false;
+      pending.push([(value as Record<string, unknown>)[key], depth + 1]);
     }
   }
   return true;

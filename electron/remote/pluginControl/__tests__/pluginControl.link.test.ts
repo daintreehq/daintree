@@ -10,6 +10,8 @@ import {
   type HostPluginControlDeps,
 } from "../hostPluginControl.js";
 import { isPluginControlArgs, pluginCredentialFor, PluginControlMethod } from "../linkMethods.js";
+import { MAX_RELAY_ARGS_BYTES } from "../../assistant/linkMethods.js";
+import { encodeValue } from "../../link/encoding.js";
 
 const HOST_ID = "studio";
 const PROJECT = "p".repeat(64);
@@ -217,6 +219,12 @@ describe("HostPluginControlClient before anything is sent (#16767)", () => {
   });
 });
 
+function deepNest(levels: number): unknown {
+  let value: unknown = 1;
+  for (let i = 0; i < levels; i++) value = { next: value };
+  return value;
+}
+
 describe("isPluginControlArgs (#16767)", () => {
   it("takes plain JSON, undefined fields and shared values within the bound", () => {
     const shared = { branch: "main" };
@@ -243,9 +251,27 @@ describe("isPluginControlArgs (#16767)", () => {
       { ["k".repeat(300_000)]: undefined },
       { text: "x".repeat(300_000) },
       new Array(400_000).fill(0),
+      // Small as JSON, but the encoder writes a length per key and nine bytes per float.
+      Object.fromEntries(Array.from({ length: 19_000 }, (_, i) => [`k${i}`, 0.5])),
+      // One lone surrogate makes the encoder carry the whole string as UTF-16.
+      { prompt: `${"a".repeat(200_000)}\uD800` },
+      { ["\uD800"]: 1 },
+      deepNest(80),
     ]) {
       expect(isPluginControlArgs(args)).toBe(false);
     }
+  });
+
+  it("never passes arguments the link encoder would refuse or write past the bound", () => {
+    for (const args of [
+      { prompt: "a".repeat(120_000) },
+      Object.fromEntries(Array.from({ length: 5_000 }, (_, i) => [`key${i}`, i + 0.25])),
+      deepNest(40),
+    ]) {
+      if (!isPluginControlArgs(args)) continue;
+      expect(encodeValue(args).byteLength).toBeLessThanOrEqual(MAX_RELAY_ARGS_BYTES);
+    }
+    expect(isPluginControlArgs(deepNest(40))).toBe(true);
   });
 });
 
