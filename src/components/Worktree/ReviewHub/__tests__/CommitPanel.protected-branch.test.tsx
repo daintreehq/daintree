@@ -166,10 +166,15 @@ function pushPreview(overrides: Partial<GitPushCommitPreview> = {}): GitPushComm
  */
 function previewed(
   branch: string,
-  destination: { remote: string; branch: string } = { remote: "origin", branch }
+  destination: { remote: string; branch: string } = { remote: "origin", branch },
+  reviewedHeadOid = pushPreview().headOid
 ) {
-  return { branch, destination, reviewedHeadOid: pushPreview().headOid };
+  return { branch, destination, reviewedHeadOid };
 }
+
+/** Tips told apart, so a target kept from an earlier read can't pass for the current one. */
+const EARLIER_TIP = "1".repeat(40);
+const CURRENT_TIP = "2".repeat(40);
 
 /** An opted-out push previewed nothing, so only the commit itself pins it. */
 function unpreviewed(branch: string) {
@@ -751,7 +756,7 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
     [
       "resolves",
       (read: ReturnType<typeof deferred<GitPushCommitPreview>>) =>
-        read.resolve(pushPreview({ commits: earlierCommits(3), total: 3 })),
+        read.resolve(pushPreview({ commits: earlierCommits(3), total: 3, headOid: EARLIER_TIP })),
     ],
     [
       "rejects",
@@ -771,7 +776,7 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
       await waitFor(() => expect(listPushCommits).toHaveBeenCalledTimes(2));
 
       await act(async () => {
-        second.resolve(pushPreview({ commits: earlierCommits(1), total: 1 }));
+        second.resolve(pushPreview({ commits: earlierCommits(1), total: 1, headOid: CURRENT_TIP }));
       });
       await act(async () => {
         settleLate(first);
@@ -781,7 +786,10 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
       expect(range.textContent).toContain("Also pushes 1 earlier commit");
       expect(screen.queryByTestId("commit-panel-push-confirm-unpushed-error")).toBeNull();
       await confirmWhenReady(CONFIRM);
-      expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", previewed("feature/x"));
+      expect(onCommitAndPush).toHaveBeenCalledWith(
+        "fix: bug",
+        previewed("feature/x", undefined, CURRENT_TIP)
+      );
     }
   );
 
@@ -798,7 +806,9 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
     async (_label, next) => {
       const replacement = deferred<GitPushCommitPreview>();
       listPushCommits
-        .mockResolvedValueOnce(pushPreview({ commits: earlierCommits(1), total: 1 }))
+        .mockResolvedValueOnce(
+          pushPreview({ commits: earlierCommits(1), total: 1, headOid: EARLIER_TIP })
+        )
         .mockReturnValueOnce(replacement.promise);
       const { onCommitAndPush, show } = renderIdentity(IDENTITY_A);
       await screen.findByTestId("commit-panel-push-confirm-unpushed");
@@ -819,13 +829,13 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
       );
 
       await act(async () => {
-        replacement.resolve(pushPreview({ destination: next.destination }));
+        replacement.resolve(pushPreview({ destination: next.destination, headOid: CURRENT_TIP }));
       });
       await confirmWhenReady(label);
       // Pinned to what the replacement read measured, never the first answer.
       expect(onCommitAndPush).toHaveBeenCalledWith(
         "fix: bug",
-        previewed(next.currentBranch, next.destination)
+        previewed(next.currentBranch, next.destination, CURRENT_TIP)
       );
     }
   );

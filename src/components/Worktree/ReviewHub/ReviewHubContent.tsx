@@ -1816,6 +1816,7 @@ export function ReviewHubContent({
               )
             }
             onRetryPush={() => void handleRetryPush()}
+            onReviewPush={() => void handlePushClean()}
             onPullRebase={() => void confirmPullRebase()}
             onForcePush={() => void handleForcePush()}
             onDismiss={() => setPushBannerDismissed(true)}

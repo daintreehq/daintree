@@ -13,6 +13,9 @@ const ipcMainMock = vi.hoisted(() => ({
 /** Runs once, synchronously, as the handler calls `push` — after every check. */
 const pushHook = vi.hoisted(() => ({ before: null as (() => void) | null }));
 
+/** Runs once, synchronously, the moment `git commit` returns — before anything reads it back. */
+const commitHook = vi.hoisted(() => ({ after: null as (() => void) | null }));
+
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   BrowserWindow: {
@@ -41,10 +44,22 @@ vi.mock("../../../services/getSoundService.js", () => ({
  */
 vi.mock("../../../utils/hardenedGit.js", () => ({
   validateCwd: vi.fn(),
-  createHardenedGit: vi.fn(async (cwd: string) => hermeticSimpleGit(cwd)),
+  createHardenedGit: vi.fn(async (cwd: string) => withCommitHook(hermeticSimpleGit(cwd))),
   createAuthenticatedGit: vi.fn(async (cwd: string) => withPushHook(hermeticSimpleGit(cwd))),
   createContinueGit: vi.fn(),
 }));
+
+function withCommitHook<T extends { commit: (...args: never[]) => unknown }>(client: T): T {
+  const commit = client.commit.bind(client) as (...args: never[]) => Promise<unknown>;
+  client.commit = (async (...args: never[]) => {
+    const result = await commit(...args);
+    const hook = commitHook.after;
+    commitHook.after = null;
+    hook?.();
+    return result;
+  }) as T["commit"];
+  return client;
+}
 
 function withPushHook<T extends { push: (...args: never[]) => unknown }>(client: T): T {
   const push = client.push.bind(client) as (...args: never[]) => unknown;
@@ -198,6 +213,7 @@ afterAll(() => {
 
 beforeEach(() => {
   pushHook.before = null;
+  commitHook.after = null;
   ipcMainMock.handle.mockClear();
   _resetRateLimitQueuesForTest();
   registerGitWriteHandlers({} as never);
@@ -548,13 +564,19 @@ describe("commit then push — pinned to the commit just made (#16790)", () => {
     });
   }
 
-  it("reports the full OID of the commit it made and the tip it was made on", async () => {
+  it("reports the commit it made, not one an agent lands before it is read back", async () => {
     const fixture = makeFixture();
     stage(fixture.repo, "user.txt");
+    let userCommit = "";
+    commitHook.after = () => {
+      userCommit = git(fixture.repo, ["rev-parse", "HEAD"]);
+      commit(fixture.repo, "agent.txt");
+    };
 
     const committed = await commitThroughHandler(fixture.repo, "user change");
 
-    expect(committed.oid).toBe(git(fixture.repo, ["rev-parse", "HEAD"]));
+    expect(committed.oid).toBe(userCommit);
+    expect(committed.oid).not.toBe(git(fixture.repo, ["rev-parse", "HEAD"]));
     expect(committed.oid?.startsWith(committed.hash)).toBe(true);
     expect(committed.parentOids).toEqual([fixture.reviewed]);
   });
@@ -590,6 +612,17 @@ describe("commit then push — pinned to the commit just made (#16790)", () => {
     const committed = await commitThroughHandler(fixture.repo, "user change");
     const destination = { remote: "origin", branch: "topic" };
 
+    // The first attempt fails before reaching the remote, as an outage would.
+    const away = `${fixture.bare}-away`;
+    fs.renameSync(fixture.bare, away);
+    const failed = await rejection(
+      pushCommitted(fixture.repo, "topic", committed.oid!, destination)
+    );
+    expect(failed).not.toBeNull();
+    expect(failed).not.toMatch(/push-review-stale/);
+    fs.renameSync(away, fixture.bare);
+
+    // An agent commits while the user deals with it, then Retry runs the same push.
     commit(fixture.repo, "agent.txt");
     const error = await rejection(
       pushCommitted(fixture.repo, "topic", committed.oid!, destination)

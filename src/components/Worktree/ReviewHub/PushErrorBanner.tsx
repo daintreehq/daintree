@@ -15,6 +15,7 @@ interface PushErrorBannerProps {
   pullRebasing: boolean;
   onOpenForgeSettings: (providerId: string) => void;
   onRetryPush: () => void;
+  onReviewPush: () => void;
   onPullRebase: () => void;
   onForcePush: () => void;
   onDismiss: () => void;
@@ -40,6 +41,7 @@ export function PushErrorBanner({
   pullRebasing,
   onOpenForgeSettings,
   onRetryPush,
+  onReviewPush,
   onPullRebase,
   onForcePush,
   onDismiss,
@@ -60,6 +62,9 @@ export function PushErrorBanner({
         return;
       case "retry":
         onRetryPush();
+        return;
+      case "review-push":
+        onReviewPush();
         return;
       case "pull-rebase":
         onPullRebase();

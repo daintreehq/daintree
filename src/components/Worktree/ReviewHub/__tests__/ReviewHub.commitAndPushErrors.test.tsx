@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
+import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { StagingStatus } from "@shared/types";
@@ -1256,8 +1257,7 @@ describe("ReviewHub", () => {
         headOid: COMMITTED.oid,
         destination: { remote: "origin", branch: "feature/test" },
       };
-      expect(pushMock.mock.calls[0][0]).toBe(WORKTREE_PATH);
-      expect(pushMock.mock.calls[0][3]).toEqual(pinned);
+      expect(pushMock).toHaveBeenNthCalledWith(1, WORKTREE_PATH, undefined, undefined, pinned);
 
       // Main refuses the retry once the branch has moved past the commit.
       pushMock.mockRejectedValueOnce(
@@ -1272,15 +1272,100 @@ describe("ReviewHub", () => {
       });
 
       await waitFor(() => expect(pushMock).toHaveBeenCalledTimes(2));
-      expect(pushMock.mock.calls[1][3]).toEqual(pinned);
+      expect(pushMock).toHaveBeenNthCalledWith(2, WORKTREE_PATH, undefined, undefined, pinned);
       await waitFor(() =>
         expect(screen.getByTestId("review-hub-push-error").getAttribute("data-reason")).toBe(
           "push-review-stale"
         )
       );
       // No approval is left to retry under: the next step is a fresh review.
-      expect(screen.queryByTestId("review-hub-push-error-cta")).toBeNull();
+      expect(screen.getByTestId("review-hub-push-error-cta").textContent?.trim()).toBe(
+        "Review push"
+      );
       expect(commitMock).toHaveBeenCalledTimes(1);
+    });
+
+    describe("a confirmed Commit & push (#16790)", () => {
+      const DESTINATION = { remote: "origin", branch: "feature/test" };
+      const listPushCommitsMock = vi.fn();
+
+      beforeEach(() => {
+        // The tip the confirm shows is the one the default commit is made on.
+        listPushCommitsMock.mockReset().mockResolvedValue({
+          destination: DESTINATION,
+          rangeBasis: "tracked",
+          commits: [],
+          total: 0,
+          behind: 0,
+          headOid: COMMITTED.parentOids[0],
+        });
+        Object.assign(window.electron.git, { listPushCommits: listPushCommitsMock });
+      });
+
+      afterEach(() => {
+        useGitPushConfirmStore.getState().resolveConfirmation(null);
+      });
+
+      async function confirmCommitAndPush() {
+        getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByLabelText("Commit message"));
+        fireEvent.change(screen.getByLabelText("Commit message"), {
+          target: { value: "feat: reviewed" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Commit & push/i }));
+        await waitFor(() => expect(listPushCommitsMock).toHaveBeenCalledTimes(1));
+        await act(async () => {});
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Push to origin/feature/test" }));
+        });
+      }
+
+      it("pushes the commit it made on the tip the confirm showed", async () => {
+        await confirmCommitAndPush();
+
+        await waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
+        expect(pushMock).toHaveBeenCalledWith(WORKTREE_PATH, undefined, undefined, {
+          branch: "feature/test",
+          headOid: COMMITTED.oid,
+          destination: DESTINATION,
+        });
+      });
+
+      it("keeps the commit but pushes nothing when it landed on a tip the confirm never showed", async () => {
+        // An agent committed while the confirm was open, so the user's commit
+        // sits on top of history the preview never listed.
+        commitMock.mockResolvedValueOnce({ ...COMMITTED, parentOids: ["e".repeat(40)] });
+
+        await confirmCommitAndPush();
+
+        const banner = await screen.findByTestId("review-hub-push-error");
+        expect(banner.getAttribute("data-reason")).toBe("push-review-stale");
+        expect(commitMock).toHaveBeenCalledTimes(1);
+        expect(pushMock).not.toHaveBeenCalled();
+        await waitFor(() =>
+          expect((screen.getByLabelText("Commit message") as HTMLTextAreaElement).value).toBe("")
+        );
+
+        // The way on is a fresh review of what the push would publish now.
+        const reviewPush = screen.getByTestId("review-hub-push-error-cta");
+        expect(reviewPush.textContent?.trim()).toBe("Review push");
+        await act(async () => {
+          fireEvent.click(reviewPush);
+        });
+        expect(useGitPushConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH);
+        const fresh = {
+          branch: "feature/test",
+          headOid: COMMITTED.oid,
+          destination: DESTINATION,
+        };
+        await act(async () => {
+          useGitPushConfirmStore.getState().resolveConfirmation(fresh);
+        });
+        await waitFor(() =>
+          expect(pushMock).toHaveBeenCalledWith(WORKTREE_PATH, undefined, undefined, fresh)
+        );
+      });
     });
 
     it("keeps the commit but pushes nothing when the commit can't be read back", async () => {
@@ -1290,7 +1375,9 @@ describe("ReviewHub", () => {
 
       const banner = await screen.findByTestId("review-hub-push-error");
       expect(banner.getAttribute("data-reason")).toBe("push-review-stale");
-      expect(screen.queryByTestId("review-hub-push-error-cta")).toBeNull();
+      expect(screen.getByTestId("review-hub-push-error-cta").textContent?.trim()).toBe(
+        "Review push"
+      );
       expect(commitMock).toHaveBeenCalledTimes(1);
       expect(pushMock).not.toHaveBeenCalled();
       // The commit landed, so its message is no longer an unsent draft.

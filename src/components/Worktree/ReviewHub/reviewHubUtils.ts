@@ -63,6 +63,8 @@ export type PushBannerCta =
    */
   | { kind: "settings-forge"; label: string; providerId: string }
   | { kind: "retry"; label: string }
+  /** A fresh push confirm: the approval the failed push ran under no longer holds. */
+  | { kind: "review-push"; label: string }
   | { kind: "pull-rebase"; label: string }
   | { kind: "force-push"; label: string };
 
@@ -90,6 +92,7 @@ export interface PushBannerConfig {
  * CTAs are limited to actions the renderer can actually dispatch:
  *  - `app.settings.openTab` (real BuiltInActionId) for `auth-failed`
  *  - inline `handleRetryPush` for `network-unavailable` / `system-io-error`
+ *  - inline `handlePushClean` (a fresh push confirm) for `push-review-stale`
  *  - inline `handlePullRebase` / force-push dialog for `push-rejected-outdated`
  * `RECOVERY_ACTIONS` in `shared/utils/gitOperationErrors.ts` references several
  * actionIds that aren't registered (`git.pull`, `github.auth`,
@@ -151,6 +154,10 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
       getGitRecoveryHint("push-review-stale") ??
       "The branch changed since the push was reviewed. Nothing was pushed.",
     detailPolicy: "hide",
+    // Not Retry: the approval it would retry under is exactly what went stale.
+    // A push error also blocks readiness, which hides the clean-tree Push
+    // button, so without this the banner asks for a review nothing offers.
+    cta: { kind: "review-push", label: "Review push" },
   },
   "hook-rejected": {
     message: getGitRecoveryHint("hook-rejected") ?? "A server-side hook rejected the push.",
