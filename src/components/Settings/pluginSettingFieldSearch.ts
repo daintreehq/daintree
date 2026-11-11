@@ -34,14 +34,16 @@ export function pluginSettingFilterIndex(
 
 /**
  * The keys of the fields `query` matches, through the Settings dialog's matcher,
- * or `null` when there is nothing to filter by yet. A single character finds a
- * field only by chance (a doubled letter makes a two-character match), so the
- * form keeps every field rather than emptying on the first keystroke.
+ * or `null` when there is nothing to filter by yet. Every word has to match, and
+ * a single character finds a field only by chance (a doubled letter makes a
+ * two-character match), so a word that short is left out until it grows rather
+ * than emptying the form on the keystroke that starts it.
  */
 export function matchPluginSettingFields(
   index: readonly SettingsSearchEntry[],
   query: string
 ): ReadonlySet<string> | null {
-  if (query.trim().length < MIN_MATCH_CHARS) return null;
-  return new Set(filterSettings(index, query).map((entry) => entry.id));
+  const words = query.split(/\s+/).filter((word) => word.length >= MIN_MATCH_CHARS);
+  if (words.length === 0) return null;
+  return new Set(filterSettings(index, words.join(" ")).map((entry) => entry.id));
 }

@@ -2058,6 +2058,44 @@ describe("PluginSettingsForm field filter (#16770)", () => {
     expect(row("alphaKey").classList.contains("settings-highlight")).toBe(true);
   });
 
+  it("clears a filter typed while a project switch reloads the linked field", async () => {
+    currentProjectId = "p1";
+    const plugin = makePlugin(fieldsOf(16, { scope: "project" }));
+    const onFocusHandled = vi.fn();
+    // A settings tab that isn't showing yet, so the landing keeps retrying.
+    const inTab = () => (
+      <div className="hidden" data-testid="tab">
+        <PluginSettingsForm
+          plugin={plugin}
+          viewScope="project"
+          focusRequest={{ key: "alphaKey", nonce: 5 }}
+          onFocusHandled={onFocusHandled}
+        />
+      </div>
+    );
+    const { rerender, container } = render(inTab());
+    await waitFor(() =>
+      expect((screen.getByLabelText("Alpha") as HTMLInputElement).disabled).toBe(false)
+    );
+
+    let resolve!: (v: PluginSettingsUiValues) => void;
+    pluginApi.getSettingValues.mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      })
+    );
+    currentProjectId = "p2";
+    rerender(inTab());
+    typeFilter("kilo");
+    expect(row("alphaKey").hidden).toBe(true);
+
+    await act(async () => resolve(uiValues()));
+    await waitFor(() => expect(filterBox().value).toBe(""));
+    container.querySelector('[data-testid="tab"]')!.classList.remove("hidden");
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(5));
+    expect(row("alphaKey").classList.contains("settings-highlight")).toBe(true);
+  });
+
   it("keeps the filter for a deep link to a field it still shows", async () => {
     const plugin = makePlugin(fieldsOf(16));
     const onFocusHandled = vi.fn();

@@ -1043,6 +1043,9 @@ export function PluginSettingsForm({
   // answers or the host stops waiting.
   const [viewFocus, setViewFocus] = useState<{ key: string; nonce: number } | null>(null);
   const viewAckRef = useRef<{ nonce: number; settle: (landed: boolean) => void } | null>(null);
+  // The last deep link reported handled, landed or not. Until then the link
+  // owns the filter (below).
+  const focusHandledRef = useRef<number | undefined>(undefined);
   const acknowledgeViewFocus = useCallback((nonce: number, landed: boolean) => {
     const pending = viewAckRef.current;
     if (pending !== null && pending.nonce === nonce) pending.settle(landed);
@@ -1087,6 +1090,7 @@ export function PluginSettingsForm({
     let settled = false;
     const finish = () => {
       settled = true;
+      focusHandledRef.current = focusNonce;
       onFocusHandled?.(focusNonce);
     };
     const attempt = () => {
@@ -1170,19 +1174,15 @@ export function PluginSettingsForm({
   const filterRef = useRef<HTMLInputElement>(null);
   const filterIndex = pluginSettingFilterIndex(fields);
   const matched = showFilter ? matchPluginSettingFields(filterIndex, filterQuery) : null;
-  // A deep link to a field the filter hides clears the filter, so the landing
-  // finds its row on a retry; a field the filter still shows leaves it be. Checked
-  // when the landing starts, so a filter typed while the values load is caught
-  // too, and once per request, so typing after a link has landed never clears it.
+  // Until a deep link is handled, a filter hiding its field is cleared, so the
+  // landing finds the row on a retry: a filter already set when the link
+  // arrives, or typed while its values load or reload. A field the filter still
+  // shows leaves it be, and once the link is handled typing filters freely.
   const focusHiddenByFilter =
     focusDef !== undefined && !focusInView && matched !== null && !matched.has(focusDef.id);
-  const filterCheckedForRef = useRef<number | undefined>(undefined);
   useEffect(() => {
-    if (focusNonce === undefined || !focusReady || filterCheckedForRef.current === focusNonce) {
-      return;
-    }
-    filterCheckedForRef.current = focusNonce;
-    if (focusHiddenByFilter) setFilterQuery("");
+    if (focusNonce === undefined || !focusReady || !focusHiddenByFilter) return;
+    if (focusHandledRef.current !== focusNonce) setFilterQuery("");
   }, [focusNonce, focusReady, focusHiddenByFilter]);
 
   if (

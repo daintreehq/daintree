@@ -34,6 +34,9 @@ describe("matchPluginSettingFields", () => {
     expect(match("k")).toBeNull();
     expect(match(" l ")).toBeNull();
     expect(match("ll")).toEqual(["openPrCap", "pollSeconds"]);
+    // A one-letter word beside a longer one waits too, rather than failing the whole query.
+    expect(match("k proxy")).toEqual(match("proxy"));
+    expect(match("proxy k")).toEqual(["hostForward", "proxyUrl"]);
   });
 
   it("matches a field by its label, its description or its key", () => {
