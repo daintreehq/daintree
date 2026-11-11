@@ -180,6 +180,36 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
     await expect(start()).resolves.toEqual({ status: "refused", reason: "agent-unavailable" });
   });
 
+  it("starts Antigravity by name or as the default, ready at its own prompt with no keys typed (#16815)", async () => {
+    // agy's `--settings` trusts the lane folder, so its first screen is the prompt.
+    screens = [
+      ["  Antigravity CLI", "", ">", "", "? for shortcuts          Gemini 4 Carbon · high"].join(
+        "\n"
+      ),
+    ];
+    deps.launchableAgents = async () => [
+      { id: "codex", byDefault: true },
+      { id: "antigravity", byDefault: true },
+    ];
+    await expect(start({ agentId: "antigravity" })).resolves.toMatchObject({
+      status: "started",
+      agentId: "antigravity",
+      ready: true,
+    });
+    expect(deps.provision).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agentId: "antigravity" })
+    );
+    expect(deps.spawn.mock.calls.at(-1)![1]).toMatchObject({ agentId: "antigravity" });
+    expect(writes).toEqual([]);
+
+    // The machine's own pick comes first in the list the deps answer with.
+    deps.launchableAgents = async () => [
+      { id: "antigravity", byDefault: true },
+      { id: "codex", byDefault: true },
+    ];
+    await expect(start()).resolves.toMatchObject({ status: "started", agentId: "antigravity" });
+  });
+
   it("refuses a slot in use without touching it, and an unknown project", async () => {
     deps.provision.mockRejectedValueOnce(
       Object.assign(new Error("busy"), { code: "LANE_OCCUPIED" })

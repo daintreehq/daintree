@@ -157,7 +157,10 @@ vi.mock("../../store.js", () => ({
 vi.mock("../AssistantContentMirror.js", () => ({
   syncAssistantContent: (input: unknown) => mockSyncAssistantContent(input),
   agentSupportsAssistantContent: (agentId: string) =>
-    agentId === "claude" || agentId === "codex" || agentId === "copilot",
+    agentId === "claude" ||
+    agentId === "codex" ||
+    agentId === "copilot" ||
+    agentId === "antigravity",
 }));
 
 vi.mock("../AssistantPluginKnowledge.js", () => ({
@@ -5705,6 +5708,40 @@ describe("HelpSessionService", () => {
       expect((await readAgyConfig(live.sessionPath)).mcpServers.daintree?.headers).toEqual({
         Authorization: `Bearer ${live.token}`,
       });
+    });
+
+    it("mirrors the lane's skills but describes no plugin, whose tools agy is never handed (#16815)", async () => {
+      mockResolveAssistantPluginKnowledge.mockResolvedValue([
+        {
+          key: "daintree-ledger",
+          pluginId: "acme.ledger",
+          displayName: "Ledger",
+          version: "1.2.0",
+          instructions: "Call month_total before listing transactions.",
+          instructionsFile: null,
+          skills: ["daintree-ledger-reconcile"],
+          references: [],
+          content: { key: "daintree-ledger", skills: new Map(), references: new Map() },
+        },
+      ]);
+
+      const lane = await service.provisionSession(agyInput());
+      if (!lane) throw new Error("expected result");
+
+      expect(mockResolveAssistantPluginKnowledge).not.toHaveBeenCalled();
+      expect(mockSyncAssistantContent).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          sessionPath: lane.sessionPath,
+          agentId: "antigravity",
+          pluginContent: [],
+        })
+      );
+      const agents = await fs.readFile(path.join(lane.sessionPath, "AGENTS.md"), "utf-8");
+      expect(agents).not.toContain("Notes on Plugin Tools");
+
+      // A Claude lane of the same project is still handed the plugin's notes.
+      await service.provisionSession(provisionInput());
+      expect(mockResolveAssistantPluginKnowledge).toHaveBeenCalledTimes(1);
     });
   });
 

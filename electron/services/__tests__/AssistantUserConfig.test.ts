@@ -242,6 +242,22 @@ describe("MCP servers and hooks", () => {
     expect(config.warnings[0]).toContain("codex sessions don't load it");
   });
 
+  it("reads no mcp.json servers for an agent whose launch can't carry them", async () => {
+    await write(globalDir, "mcp.json", mcpJson);
+    await write(globalDir, "hooks.json", hooksJson);
+
+    const agy = await load(true, "antigravity");
+
+    expect(agy.mcpServers).toEqual({});
+    expect(agy.claudeHooks).toBeNull();
+    expect(agy.warnings).toEqual([
+      "mcp.json servers aren't passed to antigravity sessions",
+      "hooks.json is for Claude Code; antigravity sessions don't load it",
+    ]);
+    // The backends that do carry them still get them from the same folder.
+    expect(Object.keys((await load(true, "copilot")).mcpServers)).toEqual(["linear", "docs"]);
+  });
+
   it("warns and adds nothing when mcp.json isn't valid JSON", async () => {
     await write(globalDir, "mcp.json", "{ nope");
 
