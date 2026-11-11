@@ -1428,6 +1428,7 @@ const NATIVE_MCP_IMPLEMENTATIONS: Readonly<Record<string, AssistantSupports["mcp
   claude: "project-config",
   copilot: "project-config",
   codex: "cli-flags",
+  antigravity: "project-config",
 };
 
 function supportsImplementedMcpInjection(

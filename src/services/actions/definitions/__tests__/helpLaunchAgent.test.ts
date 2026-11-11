@@ -184,6 +184,11 @@ describe("help.launchAgent", () => {
           agentCapabilities: {
             getResolvedModelList: vi.fn().mockResolvedValue(null),
           },
+          // No installed version reported: the assistant version gate lets the
+          // launch through, as it does for a CLI it can't probe.
+          system: {
+            getAgentVersion: vi.fn().mockResolvedValue(null),
+          },
         },
       },
       writable: true,
@@ -291,6 +296,64 @@ describe("help.launchAgent", () => {
       }),
       { source: "user" }
     );
+  });
+
+  describe("assistant version gate for a named agent (#16814)", () => {
+    const agyVersion = (installedVersion: string) =>
+      vi.mocked(window.electron.system.getAgentVersion).mockResolvedValue({
+        installedVersion,
+      } as Awaited<ReturnType<typeof window.electron.system.getAgentVersion>>);
+
+    beforeEach(() => {
+      vi.mocked(window.electron.help.getFolderPath).mockResolvedValue("/mock/help");
+    });
+
+    it("refuses an Antigravity CLI older than the assistant needs before minting a session", async () => {
+      agyVersion("1.4.12");
+
+      await action.run({ agentId: "antigravity" }, stubCtx);
+
+      expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+      expect(mockDispatch).not.toHaveBeenCalledWith(
+        "agent.launch",
+        expect.anything(),
+        expect.anything()
+      );
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          message: expect.stringMatching(/Antigravity.*1\.4\.12.*1\.5\.5/),
+        })
+      );
+    });
+
+    it("refuses silently for a caller that asked for a vacant lane", async () => {
+      agyVersion("1.0.0");
+
+      const result = await action.run(
+        { agentId: "antigravity", slot: 1, vacantOnly: true },
+        stubCtx
+      );
+
+      expect(result).toBeUndefined();
+      expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+      expect(mockNotify).not.toHaveBeenCalled();
+    });
+
+    it("launches Antigravity once its CLI meets the floor", async () => {
+      agyVersion("1.5.5");
+
+      await action.run({ agentId: "antigravity" }, stubCtx);
+
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "antigravity" })
+      );
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "agent.launch",
+        expect.objectContaining({ agentId: "antigravity", cwd: "/mock/help" }),
+        { source: "user" }
+      );
+    });
   });
 
   it("adds no launch flags for an explicit CLI default", async () => {

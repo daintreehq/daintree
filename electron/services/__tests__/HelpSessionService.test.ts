@@ -185,6 +185,7 @@ import {
 } from "../HelpSessionService.js";
 import { pluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
 import { parse as parseToml } from "smol-toml";
+import { HELP_MCP_TOOL_TIMEOUT_MS } from "../../../shared/types/replyWait.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
   const helpDir = path.join(root, "assistant");
@@ -5408,6 +5409,226 @@ describe("HelpSessionService", () => {
       );
       expect(mcp.mcpServers.daintree).toBeUndefined();
       expect(mcp.mcpServers["daintree-docs"]).toBeDefined();
+    });
+  });
+
+  describe("Antigravity (#16814)", () => {
+    function agyInput(slot = 0) {
+      return { ...provisionInput(), agentId: "antigravity", slot };
+    }
+
+    type AgyConfig = {
+      mcpServers: Record<
+        string,
+        { url?: string; headers?: Record<string, string>; timeoutSeconds?: number }
+      >;
+    };
+
+    async function readAgyConfig(sessionPath: string): Promise<AgyConfig> {
+      return JSON.parse(
+        await fs.readFile(path.join(sessionPath, ".agents", "mcp_config.json"), "utf-8")
+      ) as AgyConfig;
+    }
+
+    async function readAgySettings(token: string): Promise<{
+      trustedWorkspaces: string[];
+      permissions?: { allow: string[] };
+    }> {
+      const args = service.getAntigravityLaunchArgs(token);
+      expect(args?.[0]).toBe("--settings");
+      return JSON.parse(await fs.readFile(args![1]!, "utf-8"));
+    }
+
+    async function exists(target: string): Promise<boolean> {
+      return fs.access(target).then(
+        () => true,
+        () => false
+      );
+    }
+
+    it("is admitted by the provision gate and gets a Streamable HTTP URL", async () => {
+      const result = await service.provisionSession(agyInput());
+      if (!result) throw new Error("expected result");
+      expect(result.mcpUrl).toBe("http://127.0.0.1:45454/mcp");
+    });
+
+    it("gives each lane its own directory, apart from the project's other agents", async () => {
+      const claude = await service.provisionSession(provisionInput());
+      const lane0 = await service.provisionSession(agyInput(0));
+      const lane1 = await service.provisionSession(agyInput(1));
+      if (!claude || !lane0 || !lane1) throw new Error("expected results");
+
+      const hash = path.basename(claude.sessionPath);
+      expect(path.basename(lane0.sessionPath)).toBe(`${hash}.antigravity-s0`);
+      expect(path.basename(lane1.sessionPath)).toBe(`${hash}.antigravity-s1`);
+      // Both lanes stay live, each with its own bearer in its own folder.
+      expect(service.validateToken(lane0.token)).not.toBe(false);
+      expect(service.validateToken(lane1.token)).not.toBe(false);
+      expect((await readAgyConfig(lane0.sessionPath)).mcpServers.daintree?.headers).toEqual({
+        Authorization: `Bearer ${lane0.token}`,
+      });
+      expect((await readAgyConfig(lane1.sessionPath)).mcpServers.daintree?.headers).toEqual({
+        Authorization: `Bearer ${lane1.token}`,
+      });
+      // The Claude lane's folder has no `.agents/` for agy to find.
+      expect(await exists(path.join(claude.sessionPath, ".agents"))).toBe(false);
+    });
+
+    it("writes .agents/mcp_config.json in agy's dialect, with the reply-wait timeout", async () => {
+      const result = await service.provisionSession(agyInput());
+      if (!result) throw new Error("expected result");
+
+      const { mcpServers } = await readAgyConfig(result.sessionPath);
+      expect(mcpServers.daintree).toEqual({
+        url: "http://127.0.0.1:45454/mcp",
+        headers: { Authorization: `Bearer ${result.token}` },
+        timeoutSeconds: HELP_MCP_TOOL_TIMEOUT_MS / 1_000,
+      });
+      expect(mcpServers["daintree-docs"]).toEqual({ url: "https://daintree.org/api/mcp" });
+      expect(mcpServers["daintree-runbooks"]).toEqual({
+        url: "https://assistant.daintree.org/v1/daintree/mcp",
+        headers: { "Daintree-Host-Control": "1" },
+      });
+      // agy reads no `type`; Claude's SSE dialect would be refused.
+      expect(JSON.stringify(mcpServers)).not.toContain('"type"');
+      if (process.platform !== "win32") {
+        const stat = await fs.stat(path.join(result.sessionPath, ".agents", "mcp_config.json"));
+        expect(stat.mode & 0o777).toBe(0o600);
+      }
+      // The template's `.mcp.json` is Claude's and Copilot's; agy's bearer never lands there.
+      const shared = await fs.readFile(path.join(result.sessionPath, ".mcp.json"), "utf-8");
+      expect(shared).not.toContain(result.token);
+    });
+
+    it("hands agy a --settings file trusting the lane folder and allowing Daintree's servers", async () => {
+      const result = await service.provisionSession(agyInput());
+      if (!result) throw new Error("expected result");
+
+      const settings = await readAgySettings(result.token);
+      expect(settings.trustedWorkspaces).toContain(result.sessionPath);
+      expect(settings.trustedWorkspaces).toContain(await fs.realpath(result.sessionPath));
+      expect([...settings.permissions!.allow].sort()).toEqual([
+        "mcp(daintree-docs/*)",
+        "mcp(daintree-runbooks/*)",
+        "mcp(daintree/*)",
+      ]);
+      // Only keys agy's `--settings` accepts; an unknown one aborts its launch.
+      expect(Object.keys(settings).sort()).toEqual(["permissions", "trustedWorkspaces"]);
+      expect(JSON.stringify(settings)).not.toContain(result.token);
+    });
+
+    it("allows only the servers it wired, and no allow list at all when none are on", async () => {
+      mockStoreGet.mockReturnValue({ daintreeControl: false, docSearch: true });
+      const docsOnly = await service.provisionSession(agyInput());
+      if (!docsOnly) throw new Error("expected result");
+      expect((await readAgySettings(docsOnly.token)).permissions?.allow).toEqual([
+        "mcp(daintree-docs/*)",
+      ]);
+      expect(Object.keys((await readAgyConfig(docsOnly.sessionPath)).mcpServers)).toEqual([
+        "daintree-docs",
+      ]);
+
+      mockStoreGet.mockReturnValue({ daintreeControl: false, docSearch: false });
+      const none = await service.provisionSession(agyInput());
+      if (!none) throw new Error("expected result");
+      const settings = await readAgySettings(none.token);
+      // An allow list replaces the user's own for the session, so none is sent.
+      expect(settings.permissions).toBeUndefined();
+      expect(settings.trustedWorkspaces).toContain(none.sessionPath);
+      expect((await readAgyConfig(none.sessionPath)).mcpServers).toEqual({});
+    });
+
+    it("getAntigravityLaunchArgs answers null for other agents' sessions and dead tokens", async () => {
+      const claude = await service.provisionSession(provisionInput());
+      const codex = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+      const agy = await service.provisionSession(agyInput(1));
+      if (!claude || !codex || !agy) throw new Error("expected results");
+
+      expect(service.getAntigravityLaunchArgs(claude.token)).toBeNull();
+      expect(service.getAntigravityLaunchArgs(codex.token)).toBeNull();
+      expect(service.getAntigravityLaunchArgs("not-a-real-token")).toBeNull();
+      expect(service.getAntigravityLaunchArgs("")).toBeNull();
+      // And the reverse: an Antigravity token wires no other agent.
+      expect(service.getCodexLaunchArgs(agy.token)).toBeNull();
+      expect(service.getCopilotLaunchArgs(agy.token)).toBeNull();
+      expect(service.getClaudeLaunchArgs(agy.token)).toBeNull();
+
+      await service.revokeSession(agy.sessionId);
+      expect(service.getAntigravityLaunchArgs(agy.token)).toBeNull();
+    });
+
+    it("revokeSession leaves no bearer in the lane folder and keeps the docs server", async () => {
+      const result = await service.provisionSession(agyInput());
+      if (!result) throw new Error("expected result");
+
+      await service.revokeSession(result.sessionId);
+
+      const config = await readAgyConfig(result.sessionPath);
+      expect(config.mcpServers.daintree).toBeUndefined();
+      expect(config.mcpServers["daintree-docs"]).toBeDefined();
+      const onDisk = await fs.readdir(result.sessionPath, { recursive: true });
+      for (const entry of onDisk) {
+        const file = path.join(result.sessionPath, entry);
+        if (!(await fs.stat(file)).isFile()) continue;
+        expect(await fs.readFile(file, "utf-8"), entry).not.toContain(result.token);
+      }
+    });
+
+    it("a same-lane re-provision rewrites the lane's bearer and the old one stops validating", async () => {
+      const first = await service.provisionSession(agyInput());
+      const second = await service.provisionSession(agyInput());
+      if (!first || !second) throw new Error("expected results");
+
+      expect(second.sessionPath).toBe(first.sessionPath);
+      expect(service.validateToken(first.token)).toBe(false);
+      expect((await readAgyConfig(second.sessionPath)).mcpServers.daintree?.headers).toEqual({
+        Authorization: `Bearer ${second.token}`,
+      });
+    });
+
+    it("throws MCP_PROBE_FAILED and removes the bearer it just wrote when the /mcp probe fails", async () => {
+      mockProbeMcpServer.mockResolvedValueOnce(undefined); // ensureMcpServerReady
+      mockProbeMcpServer.mockRejectedValueOnce(new Error("/mcp returned status 401"));
+
+      await expect(service.provisionSession(agyInput())).rejects.toMatchObject({
+        name: "HelpSessionError",
+        code: "MCP_PROBE_FAILED",
+      });
+
+      const sessionsRoot = path.join(userData, "help-sessions");
+      const [dir] = await fs.readdir(sessionsRoot);
+      expect(dir).toMatch(/\.antigravity-s0$/);
+      const config = await readAgyConfig(path.join(sessionsRoot, dir!));
+      expect(config.mcpServers.daintree).toBeUndefined();
+    });
+
+    it("gcStaleSessions keeps a lane folder but strips a bearer left by a previous run", async () => {
+      const live = await service.provisionSession(agyInput(0));
+      if (!live) throw new Error("expected result");
+      const staleDir = path.join(userData, "help-sessions", "deadbeefdeadbeef.antigravity-s2");
+      const staleConfig = path.join(staleDir, ".agents", "mcp_config.json");
+      await fs.mkdir(path.dirname(staleConfig), { recursive: true });
+      await fs.writeFile(
+        staleConfig,
+        JSON.stringify({
+          mcpServers: {
+            daintree: {
+              url: "http://127.0.0.1:45454/mcp",
+              headers: { Authorization: "Bearer dead-token-from-prior-boot" },
+            },
+          },
+        })
+      );
+      const beforeBoot = new Date(Date.now() - (process.uptime() + 3600) * 1000);
+      await fs.utimes(staleConfig, beforeBoot, beforeBoot);
+
+      await service.gcStaleSessions();
+
+      expect(await exists(staleDir)).toBe(true);
+      expect((await readAgyConfig(staleDir)).mcpServers.daintree).toBeUndefined();
+      expect((await readAgyConfig(live.sessionPath)).mcpServers.daintree?.headers).toEqual({
+        Authorization: `Bearer ${live.token}`,
+      });
     });
   });
 

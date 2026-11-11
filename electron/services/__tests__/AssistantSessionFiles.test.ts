@@ -153,3 +153,81 @@ describe("AssistantSessionFiles owners lookup", () => {
     expect(await fs.readdir(laneDir)).toEqual([names[0]]);
   });
 });
+
+describe("AssistantSessionFiles Antigravity bearer removal (#16814)", () => {
+  let sessionPath: string;
+  const files = new AssistantSessionFiles(ownersFrom(new Map(), new Map()));
+
+  function configPath(): string {
+    return path.join(sessionPath, ".agents", "mcp_config.json");
+  }
+
+  async function writeAgyConfig(token: string, writtenBeforeBoot = false): Promise<void> {
+    await fs.mkdir(path.dirname(configPath()), { recursive: true });
+    await fs.writeFile(
+      configPath(),
+      JSON.stringify({
+        mcpServers: {
+          "daintree-docs": { url: "https://docs" },
+          daintree: {
+            url: "http://127.0.0.1:1/mcp",
+            headers: { Authorization: `Bearer ${token}` },
+            timeoutSeconds: 60,
+          },
+        },
+      })
+    );
+    if (writtenBeforeBoot) {
+      const past = new Date(Date.now() - (process.uptime() + 3600) * 1000);
+      await fs.utimes(configPath(), past, past);
+    }
+  }
+
+  async function readAgyServers(): Promise<Record<string, unknown>> {
+    const raw = await fs.readFile(configPath(), "utf-8");
+    return (JSON.parse(raw) as { mcpServers: Record<string, unknown> }).mcpServers;
+  }
+
+  beforeEach(async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-session-files-agy-"));
+    sessionPath = path.join(root, "abc.antigravity-s0");
+    await fs.mkdir(sessionPath, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(path.dirname(sessionPath), { recursive: true, force: true });
+  });
+
+  it("removes only the ending session's own bearer, never a successor's", async () => {
+    await writeAgyConfig("successor");
+    await files.stripAntigravityDaintreeEntry(sessionPath, "predecessor");
+    expect(Object.keys(await readAgyServers())).toContain("daintree");
+
+    await files.stripAntigravityDaintreeEntry(sessionPath, "successor");
+    const servers = await readAgyServers();
+    expect(servers.daintree).toBeUndefined();
+    expect(servers["daintree-docs"]).toBeDefined();
+  });
+
+  it("on boot GC, removes a bearer written before this process started and keeps a fresh one", async () => {
+    await writeAgyConfig("fresh");
+    await files.stripAntigravityDaintreeEntry(sessionPath);
+    expect(Object.keys(await readAgyServers())).toContain("daintree");
+
+    await writeAgyConfig("prior-boot", true);
+    await files.stripAntigravityDaintreeEntry(sessionPath);
+    expect((await readAgyServers()).daintree).toBeUndefined();
+  });
+
+  it("removes a config it can't parse rather than leave a possible bearer behind", async () => {
+    await fs.mkdir(path.dirname(configPath()), { recursive: true });
+    await fs.writeFile(configPath(), '{"mcpServers": {"daintree": {"headers": {"Authorization": "Bearer t');
+    await files.stripAntigravityDaintreeEntry(sessionPath, "t");
+    await expect(fs.access(configPath())).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("is a no-op for a lane with no Antigravity config", async () => {
+    await expect(files.stripAntigravityDaintreeEntry(sessionPath, "t")).resolves.toBeUndefined();
+    await expect(files.stripAntigravityDaintreeEntry(sessionPath)).resolves.toBeUndefined();
+  });
+});

@@ -65,6 +65,16 @@ const META_FILE_NAME = "meta.json";
 // Copilot substitutes this from PTY env at spawn rather than baking a literal
 // bearer into `.mcp.json`, so the stale-entry sweep has to recognize it.
 const COPILOT_BEARER_PLACEHOLDER = "$DAINTREE_MCP_TOKEN";
+// Where agy discovers a workspace's MCP servers: its `.agents/` customization
+// root at the cwd. Nothing else reads that file, so no other agent's lane can
+// pick up an Antigravity bearer.
+const ANTIGRAVITY_MCP_CONFIG_SEGMENTS = [".agents", "mcp_config.json"] as const;
+// Handed to agy with `--settings`, which applies it to that session only and
+// never saves it. Outside `.agents/`, which is agy's to interpret.
+const ANTIGRAVITY_SESSION_SETTINGS_FILE = ".antigravity-session-settings.json";
+// Session bearers never outlive the process that minted them, so an
+// Antigravity config written before this one started holds a dead bearer.
+const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
 // Stamp file written into the per-project session dir after a successful
 // `fs.cp` of the bundled help template. Lives inside the session dir (not
 // inside `helpFolder`), so it's never part of the source being hashed and
@@ -113,6 +123,14 @@ function userInstructionsSidecarName(content: string): string {
  * A path that cannot sit in a TOML literal string is left to the dialog.
  */
 export async function codexTrustArgs(sessionPath: string): Promise<string[]> {
+  const entries = (await sessionPathTrustKeys(sessionPath))
+    .filter((p) => !/['\r\n]/.test(p))
+    .map((p) => `'${p}' = { trust_level = "trusted" }`);
+  return entries.length > 0 ? ["-c", `projects={ ${entries.join(", ")} }`] : [];
+}
+
+/** The session folder as given and as its canonical path: CLIs key folder trust by either. */
+async function sessionPathTrustKeys(sessionPath: string): Promise<string[]> {
   const paths = new Set([sessionPath]);
   try {
     paths.add(await fs.realpath(sessionPath));
@@ -120,10 +138,7 @@ export async function codexTrustArgs(sessionPath: string): Promise<string[]> {
     // The folder is created before launch; if it cannot be resolved, the
     // path as given is the best key there is.
   }
-  const entries = [...paths]
-    .filter((p) => !/['\r\n]/.test(p))
-    .map((p) => `'${p}' = { trust_level = "trusted" }`);
-  return entries.length > 0 ? ["-c", `projects={ ${entries.join(", ")} }`] : [];
+  return [...paths];
 }
 
 export function runbooksEnabled(settings: {
@@ -471,6 +486,7 @@ export interface PreparedSessionDirectory {
   codexLaunchArgs: string[] | undefined;
   copilotLaunchArgs: string[] | undefined;
   claudeLaunchArgs: string[] | undefined;
+  antigravityLaunchArgs: string[] | undefined;
   userMcpServerNames: string[];
   warnings: string[];
 }
@@ -529,8 +545,14 @@ export class AssistantSessionFiles {
     // manifest, the markdown scratch addendum and the shared `.mcp.json` — all
     // of which two lanes provisioning at once would otherwise write over each
     // other.
-    const { scratchPath, runCheckpointPath, port, laneMcpConfigPath, userConfig } =
-      await this.withDirectoryLock(sessionDirName, async () => {
+    const {
+      scratchPath,
+      runCheckpointPath,
+      port,
+      laneMcpConfigPath,
+      antigravitySettingsPath,
+      userConfig,
+    } = await this.withDirectoryLock(sessionDirName, async () => {
         await fs.mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
         await fs.chmod(sessionsRoot, 0o700).catch(() => {});
         // Hash-gate the template overwrite (#7525). `fs.cp` is non-atomic — a
@@ -732,6 +754,7 @@ export class AssistantSessionFiles {
 
         const port = await input.mcpPort();
         let laneMcpConfigPath: string | undefined;
+        let antigravitySettingsPath: string | undefined;
         if (input.agentId === "claude") {
           laneMcpConfigPath = await this.writeClaudeMcpConfig(
             sessionPath,
@@ -752,6 +775,16 @@ export class AssistantSessionFiles {
           );
         } else if (input.agentId === "copilot") {
           await this.writeCopilotMcpConfig(sessionPath, settings, port, userConfig.mcpServers);
+        } else if (input.agentId === "antigravity") {
+          await this.writeAntigravityMcpConfig(sessionPath, settings, port, token);
+          antigravitySettingsPath = await this.writeAntigravitySessionSettings(
+            sessionPath,
+            settings,
+            port
+          );
+          // agy never reads `.mcp.json`; the template's copy is only kept
+          // free of a stale literal bearer, as for every other agent.
+          await this.stripStaleDaintreeMcpEntry(sessionPath);
         } else {
           // Codex and any other agent skip `writeMcpConfig`, so when the
           // template hash gate (#7525) also skips `fs.cp`, a `.mcp.json` from a
@@ -771,7 +804,14 @@ export class AssistantSessionFiles {
             this.stripClaudeSettingsHooks(sessionPath)
           );
         }
-        return { scratchPath, runCheckpointPath, port, laneMcpConfigPath, userConfig };
+        return {
+          scratchPath,
+          runCheckpointPath,
+          port,
+          laneMcpConfigPath,
+          antigravitySettingsPath,
+          userConfig,
+        };
       });
     // Codex doesn't read project-scoped `.codex/config.toml` from cwd —
     // its only mechanism for overriding the global config is the `-c key=value`
@@ -800,6 +840,9 @@ export class AssistantSessionFiles {
     // Claude reads its MCP wiring from the per-lane file rather than the
     // shared cwd `.mcp.json`; the flag is the only way that file reaches it.
     const claudeLaunchArgs = laneMcpConfigPath ? ["--mcp-config", laneMcpConfigPath] : undefined;
+    const antigravityLaunchArgs = antigravitySettingsPath
+      ? ["--settings", antigravitySettingsPath]
+      : undefined;
     return {
       scratchPath,
       runCheckpointPath,
@@ -808,6 +851,7 @@ export class AssistantSessionFiles {
       codexLaunchArgs,
       copilotLaunchArgs,
       claudeLaunchArgs,
+      antigravityLaunchArgs,
       userMcpServerNames: Object.keys(userConfig.mcpServers),
       warnings: userConfig.warnings,
     };
@@ -1047,6 +1091,103 @@ export class AssistantSessionFiles {
       "utf-8",
       { mode: 0o600 }
     );
+  }
+
+  /**
+   * Daintree's MCP servers as agy reads them for an Antigravity session. agy
+   * picks the transport from the fields, so an HTTP server is its `url` alone
+   * (the legacy SSE transport, Claude's `type: "sse"`, isn't accepted).
+   */
+  private antigravityMcpServers(
+    settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
+    port: number | null,
+    token: string | null
+  ): Record<string, Record<string, unknown>> {
+    const mcpServers: Record<string, Record<string, unknown>> = {};
+    if (settings.docSearch) {
+      mcpServers["daintree-docs"] = { url: DAINTREE_DOCS_MCP_URL };
+    }
+    if (runbooksEnabled(settings)) {
+      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = {
+        url: resolveRunbooksMcpUrl(),
+        headers: buildRunbooksHeaders(),
+      };
+    }
+    if (settings.daintreeControl && port) {
+      mcpServers["daintree"] = {
+        url: `http://127.0.0.1:${port}/mcp`,
+        ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+        // A `waitForReply` call stays open until the agent answers; agy's own
+        // per-call default is three minutes.
+        timeoutSeconds: HELP_MCP_TOOL_TIMEOUT_MS / 1_000,
+      };
+    }
+    return mcpServers;
+  }
+
+  /**
+   * Writes an Antigravity lane's `<sessionPath>/.agents/mcp_config.json`, the
+   * only place agy discovers a workspace's MCP servers. agy passes MCP config
+   * values through as is, with no env-var expansion, so the bearer is literal,
+   * like Claude's lane file; the directory is this lane's alone (see
+   * `PER_LANE_DIR_AGENT_IDS`), so no sibling can read or overwrite it. The
+   * whole file is Daintree's: the template ships no `.agents/`.
+   */
+  private async writeAntigravityMcpConfig(
+    sessionPath: string,
+    settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
+    port: number | null,
+    token: string
+  ): Promise<void> {
+    const target = path.join(sessionPath, ...ANTIGRAVITY_MCP_CONFIG_SEGMENTS);
+    await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    await fs.chmod(path.dirname(target), 0o700).catch(() => {});
+    await resilientAtomicWriteFile(
+      target,
+      JSON.stringify({ mcpServers: this.antigravityMcpServers(settings, port, token) }, null, 2) +
+        "\n",
+      "utf-8",
+      { mode: 0o600 }
+    );
+  }
+
+  /**
+   * Writes the settings an Antigravity lane launches with through `--settings`,
+   * and returns its path. agy applies them to that session only and never
+   * saves them, so `~/.gemini/` is untouched:
+   *
+   * - `trustedWorkspaces` names this folder, so no trust dialog stands between
+   *   a fresh lane and its prompt (agy keys trust by the canonical path).
+   * - `permissions.allow` lets Daintree's own servers run without a prompt per
+   *   call, as Claude's and Codex's lanes do: the `daintree` tier and its
+   *   confirmation dialogs are the gate, and docs and runbooks only read. agy
+   *   lets a session's `allow` list stand in for the user's own one, while
+   *   the user's `ask` and `deny` rules still apply, so it is left out
+   *   entirely when there is nothing to allow.
+   *
+   * Holds no credential, and every provision of the lane writes the same path,
+   * so nothing has to remove it.
+   */
+  private async writeAntigravitySessionSettings(
+    sessionPath: string,
+    settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
+    port: number | null
+  ): Promise<string> {
+    const allow = Object.keys(this.antigravityMcpServers(settings, port, null)).map(
+      (name) => `mcp(${name}/*)`
+    );
+    const sessionSettings = {
+      trustedWorkspaces: await sessionPathTrustKeys(sessionPath),
+      ...(allow.length > 0 ? { permissions: { allow } } : {}),
+    };
+    const target = path.join(sessionPath, ANTIGRAVITY_SESSION_SETTINGS_FILE);
+    await resilientAtomicWriteFile(
+      target,
+      JSON.stringify(sessionSettings, null, 2) + "\n",
+      "utf-8",
+      { mode: 0o600 }
+    );
+    return target;
   }
 
   private async writeClaudeSettings(
@@ -1545,5 +1686,65 @@ export class AssistantSessionFiles {
         err
       );
     }
+  }
+
+  /**
+   * Removes the `daintree` entry, and with it a literal bearer, from an
+   * Antigravity lane's `.agents/mcp_config.json`.
+   *
+   * With `ownToken`, only that session's bearer is removed: the ending session
+   * knows its own, and a same-lane re-provision may already have written its
+   * successor's, which isn't in `sessionsByToken` until after its files are
+   * ready, so "not live" would strip it. Without one (boot GC), a bearer is
+   * dead exactly when its file was written before this process started.
+   *
+   * Takes the directory lock, so the read-modify-write can't land between a
+   * provision's write and its launch and put the old content back.
+   */
+  async stripAntigravityDaintreeEntry(sessionPath: string, ownToken?: string): Promise<void> {
+    const target = path.join(sessionPath, ...ANTIGRAVITY_MCP_CONFIG_SEGMENTS);
+    await this.withDirectoryLock(path.basename(sessionPath), async () => {
+      let raw: string;
+      let writtenAt: number;
+      try {
+        [raw, writtenAt] = await Promise.all([
+          fs.readFile(target, "utf-8"),
+          fs.stat(target).then((stats) => stats.mtimeMs),
+        ]);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+        console.warn("[HelpSessionService] Failed to read Antigravity MCP config:", target, err);
+        return;
+      }
+      if (ownToken === undefined && writtenAt >= PROCESS_STARTED_AT_MS) return;
+
+      try {
+        let parsed: { mcpServers?: Record<string, unknown> };
+        try {
+          parsed = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
+        } catch {
+          // Only Daintree writes this file, and always whole. One it can't
+          // read may still carry a bearer, so it goes rather than stays.
+          await fs.rm(target, { force: true });
+          return;
+        }
+        const servers = parsed.mcpServers;
+        if (!servers || typeof servers !== "object") return;
+        const entry = servers["daintree"] as { headers?: { Authorization?: string } } | undefined;
+        if (!entry) return;
+        const bearer = /^Bearer\s+(.+)$/.exec(entry.headers?.Authorization ?? "")?.[1]?.trim();
+        if (ownToken !== undefined && bearer !== ownToken) return;
+        delete servers["daintree"];
+        await resilientAtomicWriteFile(target, JSON.stringify(parsed, null, 2) + "\n", "utf-8", {
+          mode: 0o600,
+        });
+      } catch (err) {
+        console.warn(
+          "[HelpSessionService] Failed to remove the daintree entry from Antigravity MCP config:",
+          target,
+          err
+        );
+      }
+    });
   }
 }

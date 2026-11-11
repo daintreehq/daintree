@@ -36,6 +36,7 @@ import {
   projectIdFromSlotKey,
 } from "@shared/config/assistantSlots";
 import {
+  getEffectiveAgentConfig,
   getAssistantSupportedAgentIds,
   getAssistantWiredAgentIds,
 } from "@shared/config/agentRegistry";
@@ -48,6 +49,7 @@ import { buildResumeCommand } from "@shared/types";
 import { isPtyPanel } from "@shared/types/panel";
 import { usePaletteStore } from "@/store/paletteStore";
 import type { HelpSessionController } from "@/controllers/HelpSessionController";
+import { checkAssistantVersion } from "@/controllers/HelpVersionGate";
 import type { HelpLaunchSnapshot } from "./helpLaunchSnapshot";
 import {
   canStartOverKeptLane,
@@ -624,6 +626,27 @@ async function launchHelpAgent(
       isProjectStateSettled ? LAUNCH_BLOCKED_NO_WORKSPACE : LAUNCH_BLOCKED_LOADING
     );
     return;
+  }
+
+  // The panel's own launches pass the assistant version gate before they
+  // provision. A launch that names its agent comes straight here, and is the
+  // only way in for an agent the picker still hides, so it is gated the same
+  // way: a CLI older than the wiring needs would start without it (#16814).
+  if (parsed?.agentId) {
+    const tooOld = await checkAssistantVersion(
+      agentId,
+      getEffectiveAgentConfig(agentId)?.name ?? agentId
+    );
+    if (tooOld) {
+      if (parsed.vacantOnly) return undefined;
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title: "Assistant couldn't start",
+        message: `Update ${tooOld.agentName} to use Daintree Assistant. Version ${tooOld.installedVersion} is installed; version ${tooOld.requiredVersion} or later is required.`,
+      });
+      return;
+    }
   }
 
   // Name the lane explicitly (#12108) rather than letting main default it.

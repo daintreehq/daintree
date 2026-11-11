@@ -235,6 +235,10 @@ const mockGetCopilotLaunchArgs = vi.hoisted(() =>
   vi.fn<(token: string) => string[] | null>(() => null)
 );
 
+const mockGetAntigravityLaunchArgs = vi.hoisted(() =>
+  vi.fn<(token: string) => string[] | null>(() => null)
+);
+
 // Defaults to "a Claude session with nothing to append", so the many existing
 // Claude help-launch cases keep their commands byte-for-byte.
 const mockGetClaudeLaunchArgs = vi.hoisted(() =>
@@ -264,6 +268,7 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
     validateToken: (token: string) => mockValidateToken(token),
     getCodexLaunchArgs: (token: string) => mockGetCodexLaunchArgs(token),
     getCopilotLaunchArgs: (token: string) => mockGetCopilotLaunchArgs(token),
+    getAntigravityLaunchArgs: (token: string) => mockGetAntigravityLaunchArgs(token),
     getClaudeLaunchArgs: (token: string) => mockGetClaudeLaunchArgs(token),
     getAssistantScratchEnv: (token: string) => mockGetAssistantScratchEnv(token),
     getBypassPermissions: (token: string) => mockGetBypassPermissions(token),
@@ -1761,6 +1766,8 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     mockGetCodexLaunchArgs.mockReturnValue(null);
     mockGetClaudeLaunchArgs.mockReset();
     mockGetClaudeLaunchArgs.mockReturnValue([]);
+    mockGetAntigravityLaunchArgs.mockReset();
+    mockGetAntigravityLaunchArgs.mockReturnValue(null);
     mockGetBypassPermissions.mockReset();
     mockGetBypassPermissions.mockReturnValue(false);
     mockMarkTerminalForToken.mockReset();
@@ -2683,6 +2690,97 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     );
 
     expect(mockGetCopilotLaunchArgs).not.toHaveBeenCalled();
+  });
+
+  describe("Antigravity help launch (#16814)", () => {
+    const settingsPath = "/data/help-sessions/abc123.antigravity-s1/.antigravity-session-settings.json";
+
+    async function spawnAntigravity(token: string, command = "agy") {
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalLifecycleHandlers(deps);
+      const handler = getSpawnHandler();
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          cwd: tmpDir,
+          command,
+          launchAgentId: "antigravity",
+          env: { DAINTREE_MCP_TOKEN: token },
+        } as unknown as Parameters<typeof handler>[1]
+      );
+      return ptyClient.spawn.mock.calls[0][1].command as string;
+    }
+
+    it("appends the lane's --settings file, shell-quoted, and no bearer", async () => {
+      mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+      mockGetAntigravityLaunchArgs.mockImplementation((token) =>
+        token === "help-token" ? ["--settings", settingsPath] : null
+      );
+
+      const command = await spawnAntigravity("help-token");
+
+      expect(command).toMatch(/^agy /);
+      expect(command).toContain(`'--settings' '${settingsPath}'`);
+      expect(command).not.toContain("help-token");
+      expect(command).not.toContain("--dangerously-skip-permissions");
+      expect(mockPreparePaneConfig).not.toHaveBeenCalled();
+    });
+
+    it("appends --dangerously-skip-permissions only when the session's bypass is on", async () => {
+      mockValidateToken.mockImplementation((token) => (token === "full-token" ? "full" : false));
+      mockGetBypassPermissions.mockImplementation((token) => token === "full-token");
+      mockGetAntigravityLaunchArgs.mockReturnValue(["--settings", settingsPath]);
+
+      const command = await spawnAntigravity("full-token");
+
+      expect(command.match(/--dangerously-skip-permissions/g)).toHaveLength(1);
+    });
+
+    it("strips a bypass flag smuggled in through custom args when the session's bypass is off", async () => {
+      mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+      mockGetAntigravityLaunchArgs.mockReturnValue(["--settings", settingsPath]);
+
+      const command = await spawnAntigravity(
+        "help-token",
+        "agy --dangerously-skip-permissions=true --model x"
+      );
+
+      expect(command).not.toContain("--dangerously-skip-permissions");
+      expect(command).toContain("--model x");
+    });
+
+    it("refuses to spawn when the help token belongs to another agent's session", async () => {
+      mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+      mockGetAntigravityLaunchArgs.mockReturnValue(null);
+
+      await expect(spawnAntigravity("help-token")).rejects.toThrow(
+        /does not belong to an Antigravity session/
+      );
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+    });
+
+    it("does not query Antigravity launch args for an ordinary agy launch", async () => {
+      mockValidateToken.mockReturnValue(false);
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalLifecycleHandlers(deps);
+      const handler = getSpawnHandler();
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          cwd: tmpDir,
+          command: "agy",
+          launchAgentId: "antigravity",
+        } as unknown as Parameters<typeof handler>[1]
+      );
+
+      expect(mockGetAntigravityLaunchArgs).not.toHaveBeenCalled();
+      expect(ptyClient.spawn.mock.calls[0][1].command).not.toContain("--settings");
+    });
   });
 
   it("binds terminalId to the help session before spawn so HelpSessionService can kill it on displacement (#7509)", async () => {
