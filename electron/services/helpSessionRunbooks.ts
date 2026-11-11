@@ -1,4 +1,5 @@
 import { WORKER_STEER_SLASH_FORMS } from "../../shared/config/workerSteerCommands.js";
+import { DELEGABLE_ASSISTANT_CONFIRMATIONS } from "../../shared/config/assistantConfirmationDelegation.js";
 
 // What a steer runs as a slash command (#16101), read off the policy that enforces it.
 const STEER_SLASH_FORMS = Object.entries(WORKER_STEER_SLASH_FORMS)
@@ -122,6 +123,27 @@ export function buildConfirmationsAddendum(): string {
     "## Daintree Confirmations",
     "",
     "The user has told Daintree not to ask before your actions. Confirm-gated Daintree actions run as soon as you call them: deleting a worktree, closing a panel you didn't open or whose agent is mid-task, and closing panels in bulk included. No dialog, no typed-name check, so don't tell the user to watch for one. This overrides anything above about those actions waiting for the user. It doesn't change what you should do: close and remove only what the user asked for. Refusals still apply, and so does asking for a tool outside your tool set. The user can turn asking back on at any time, so if a call does wait for a dialog, tell them it is waiting for them.",
+    "",
+  ].join("\n");
+}
+
+/**
+ * The session-start correction for calls the user handed over one by one
+ * (#16752): only these run without a dialog, and everything else still waits.
+ * Like the blanket note it can go stale mid-session.
+ */
+export function buildDelegatedConfirmationsAddendum(delegated: readonly string[]): string {
+  const calls = DELEGABLE_ASSISTANT_CONFIRMATIONS.filter((entry) =>
+    delegated.includes(entry.id)
+  ).map((entry) => `- \`${entry.id}\`: ${entry.label.toLowerCase()}. ${entry.detail}.`);
+  return [
+    "## Daintree Confirmations",
+    "",
+    "The user has told Daintree not to ask before these calls of yours, here or through `host.call`. They run as soon as you call them, with no dialog, so don't tell the user to watch for one:",
+    "",
+    ...calls,
+    "",
+    "Every other confirm-gated Daintree action still waits for the user. This doesn't change what you should do: delete or change only what the user asked for, and refusals still apply. The user can take any of these back at any time, so if one of them does wait for a dialog, tell them it is waiting for them.",
     "",
   ].join("\n");
 }

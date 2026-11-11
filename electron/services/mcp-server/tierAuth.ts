@@ -23,6 +23,10 @@ import {
   ACTIONS_SEARCH_MAX_LIMIT,
 } from "../../../shared/config/mcpIntrospection.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
+import {
+  assistantPolicySkips,
+  type AssistantConfirmationPolicy,
+} from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { canonicalJson, toCompatibilityShape } from "./compatibilityHash.js";
 import type { McpTargetPolicy, McpTargetTier } from "../../../shared/types/mcpTargetPolicy.js";
 import type { McpUnavailableActionStub } from "../../../shared/types/mcpIntrospection.js";
@@ -619,11 +623,11 @@ export interface TargetPolicySessionSnapshot {
   /** Live native automation grants' `allowedTools`, unioned. */
   nativeGrantedActionIds: ReadonlySet<string>;
   /**
-   * Whether this help session's confirm-gated calls skip the host dialog under
-   * the "Skip permission prompts" preference (#12874), read live. Optional and
-   * read as `=== true`.
+   * Which of this help session's confirm-gated calls skip the host dialog
+   * under its Daintree confirmations (#12874): all, or the ids handed over
+   * one by one (#16752), read live. Absent, every one asks.
    */
-  confirmationsSkipped?: boolean;
+  confirmationPolicy?: AssistantConfirmationPolicy;
 }
 
 /** Swept by an agent, every panel in the worktree: always confirmed (#12881). */
@@ -787,8 +791,10 @@ export function buildTargetPolicy(
   // (#12881), and every caller here is an agent.
   const effectiveDanger = id === CLOSE_ALL_TOOL_ID ? "confirm" : danger;
   // Mirrors the dispatch gate's skip preference (#12874), which covers every
-  // confirm-gated tool, target-picking ones included (#12989).
-  const skipConfirmWaived = snapshot.confirmationsSkipped === true;
+  // confirm-gated tool, target-picking ones included (#12989), or only the
+  // ids handed over one by one (#16752).
+  const skipConfirmWaived =
+    snapshot.confirmationPolicy !== undefined && assistantPolicySkips(snapshot.confirmationPolicy, id);
   const requiresConfirmation =
     authorizedBy === "approval" ||
     (effectiveDanger === "confirm" && !nativeGranted && !paneConfirmWaived && !skipConfirmWaived);

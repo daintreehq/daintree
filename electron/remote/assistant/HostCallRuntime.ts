@@ -27,6 +27,7 @@ import {
   type HostListArgs,
   type HostListEntry,
   type HostListResult,
+  HOST_SETTINGS_TOOL,
   type HostSettingsArgs,
   type HostSettingsResult,
   type HostStatusArgs,
@@ -71,6 +72,7 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import type {
   HostCallContext,
+  HostSettingsContext,
   HostControlRuntimeHandle,
 } from "../../services/mcp-server/hostControlTools.js";
 import type {
@@ -266,12 +268,12 @@ export interface HostCallRuntimeDeps {
    */
   askApproval?(ask: RelayApprovalQuestion): Promise<McpConfirmationDecision | null>;
   /**
-   * Whether a help session's assistant runs with Daintree's confirmations
-   * skipped here (#15698): the person's own preference on this machine, read
-   * at each ask, never anything a host says. Absent, or throwing, every
-   * relayed call that would ask still asks.
+   * Whether a help session's assistant runs its call to `calledActionId`
+   * with Daintree's confirmations skipped here (#15698, #16752): the person's
+   * own preference on this machine, read at each ask, never anything a host
+   * says. Absent, or throwing, every relayed call that would ask still asks.
    */
-  confirmationsSkipped?(helpSessionId: string): boolean;
+  confirmationsSkipped?(helpSessionId: string, calledActionId: string): boolean;
   /**
    * Makes sure one of this machine's projects is on a host, with no window
    * (#14140): the Shell's switch service. Absent, no project is ever brought.
@@ -978,6 +980,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       hostName: (hostId) => deps.hosts().find((host) => host.hostId === hostId)?.name ?? null,
       controlOn: (hostId) => this.controlOn(hostId),
       ...(deps.askSettingsApproval ? { askApproval: deps.askSettingsApproval } : {}),
+      // Handed over only by its own tick (#16752), never by "Never ask".
+      skipsApproval: (helpSessionId) => {
+        try {
+          return deps.confirmationsSkipped?.(helpSessionId, HOST_SETTINGS_TOOL) === true;
+        } catch (error) {
+          logger.warn("Couldn't read the assistant's confirmations preference", { error });
+          return false;
+        }
+      },
       now: () => this.now(),
       newId: () => this.newId(),
     });
@@ -1153,14 +1164,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   }
 
   /**
-   * Whether the assistant that made a call runs with Daintree's
+   * Whether the assistant that made a call runs it with Daintree's
    * confirmations skipped, for an action that may skip at all: one that would
-   * move this window always asks. A failed read keeps the dialog.
+   * move this window always asks. Settled on the tool the assistant called,
+   * never the action the host dispatched for it (#16752): an owned delete
+   * reaches here as `worktree.delete`, and handing over the owned one mustn't
+   * hand over that. Callers have already matched the dispatch to the call. A
+   * failed read keeps the dialog.
    */
   private skipsConfirmations(call: CallInFlight, actionId: string): boolean {
     if (HOST_ALWAYS_ASKS_ACTION_IDS.has(actionId)) return false;
     try {
-      return this.deps.confirmationsSkipped?.(call.helpSessionId) === true;
+      return this.deps.confirmationsSkipped?.(call.helpSessionId, call.tool) === true;
     } catch (error) {
       logger.warn("Couldn't read the assistant's confirmations preference", { error });
       return false;
@@ -2082,10 +2097,16 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    */
   settings(
     helpSessionId: string,
-    args: HostSettingsArgs
+    args: HostSettingsArgs,
+    context?: HostSettingsContext
   ): Promise<HostControlOutcome<HostSettingsResult>> {
     return this.settle(helpSessionId, (caller) =>
-      this.settingsRequests.run(helpSessionId, () => this.stillRunning(caller), args)
+      this.settingsRequests.run(
+        helpSessionId,
+        () => this.stillRunning(caller),
+        args,
+        context?.noteSkipPreference
+      )
     );
   }
 

@@ -20,6 +20,11 @@ import {
   type TerminalCloseManyArgs,
 } from "../../../shared/types/mcpBatch.js";
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
+import {
+  ASKS_FOR_EVERYTHING,
+  assistantPolicySkips,
+  type AssistantConfirmationPolicy,
+} from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { SendKeysArgsSchema } from "../../../shared/utils/terminalKeys.js";
@@ -153,6 +158,7 @@ import {
 import {
   HOST_CALL_TOOL,
   HOST_CONTROL_TOOL_IDS,
+  HOST_SETTINGS_TOOL,
   HOST_STATUS_TOOL,
 } from "../../../shared/types/hostControl.js";
 import { auditCodeForHostControlRefusal, runHostControlTool } from "./hostControlTools.js";
@@ -803,7 +809,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifySessionRevoked,
     clearDenialState,
     getCurrentTurnId,
-    readAssistantConfirmationsSkipped,
+    readAssistantConfirmationPolicy,
     notifyToolCallStarted,
     notifyToolCallSettled,
     notifyDisplayImage,
@@ -871,7 +877,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // A batch item whose reply the batch waits for: its notice holds on this.
     // `closeApproved` marks a close the batch already put to the user (#12881),
     // so the item does not ask a second time; `confirmationsSkipped` carries the
-    // batch's skip decision so every item runs under the one the batch read.
+    // batch's blanket skip so every item runs under the one the batch read.
     // Never reachable from a client.
     batchItem?: {
       noticeHold?: NoticeHold;
@@ -1160,18 +1166,25 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       return steer.interrupt(target);
     };
     // Daintree's own assistant only (#12874): not agent panes, not api-key
-    // clients. Read live per call, and a
-    // failed read keeps the dialog. A batch item inherits its batch's answer.
-    let confirmationsSkipped = false;
+    // clients. Read live per call, and a failed read keeps the dialog. A
+    // batch item inherits its batch's blanket skip; an action handed over on
+    // its own (#16752) covers the id it names and never the items of a call,
+    // so each item settles its own.
+    let confirmationPolicy: AssistantConfirmationPolicy = ASKS_FOR_EVERYTHING;
     if (batchItem?.confirmationsSkipped !== undefined) {
-      confirmationsSkipped = batchItem.confirmationsSkipped;
+      confirmationPolicy = {
+        skipsAll: batchItem.confirmationsSkipped,
+        delegated: ASKS_FOR_EVERYTHING.delegated,
+      };
     } else if (sessionStore.getOrigin(sessionId) === "help") {
       try {
-        confirmationsSkipped = readAssistantConfirmationsSkipped?.() === true;
+        confirmationPolicy = readAssistantConfirmationPolicy?.() ?? ASKS_FOR_EVERYTHING;
       } catch (err) {
         console.error("[MCP] Failed to read the assistant confirmation preference:", err);
       }
     }
+    const confirmationsSkipped = assistantPolicySkips(confirmationPolicy, actionId);
+    const itemsSkipConfirmations = confirmationPolicy.skipsAll;
     // Whose ownership records this call reads and writes (#12487): the
     // bearer's principal for a pane session, else the session itself. Captured
     // at admission so the ownership gate, an `owned` listing and the
@@ -1229,7 +1242,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           facts,
           {
             ...callers,
-            confirmationsSkipped,
+            confirmationPolicy,
             searchLimit,
             listPaging,
           }
@@ -2084,9 +2097,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           emitToolCallStarted(false, false);
           const stepOptions =
-            confirmationsSkipped || relayCallId !== undefined
+            itemsSkipConfirmations || relayCallId !== undefined
               ? {
-                  ...(confirmationsSkipped ? { confirmationsSkipped: true } : {}),
+                  ...(itemsSkipConfirmations ? { confirmationsSkipped: true } : {}),
                   ...(relayCallId !== undefined ? { relayCallId } : {}),
                 }
               : undefined;
@@ -2252,12 +2265,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 extra,
                 noticeHold !== undefined ||
                   closeApproved !== undefined ||
-                  confirmationsSkipped ||
+                  itemsSkipConfirmations ||
                   relayCallId !== undefined
                   ? {
                       ...(noticeHold !== undefined ? { noticeHold } : {}),
                       ...(closeApproved !== undefined ? { closeApproved: true } : {}),
-                      ...(confirmationsSkipped ? { confirmationsSkipped: true } : {}),
+                      ...(itemsSkipConfirmations ? { confirmationsSkipped: true } : {}),
                       ...(relayCallId !== undefined ? { relayCallId } : {}),
                     }
                   : undefined
@@ -2637,11 +2650,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           try {
             // `host.call` carries the tier it was admitted at here: all it may have on the host.
             // Its record says when what it ran there ran under this machine's
-            // own skip preference (#15698), which only this machine decides.
+            // own skip preference (#15698), which only this machine decides;
+            // so does a `host.settings` apply the person handed over (#16752).
             // `host.status` reads each project at that tier too (#16191), and asks nobody.
             const callContext =
               tier === "core" || tier === "full"
-                ? actionId === HOST_CALL_TOOL
+                ? actionId === HOST_CALL_TOOL || actionId === HOST_SETTINGS_TOOL
                   ? {
                       tier,
                       noteSkipPreference: () => {

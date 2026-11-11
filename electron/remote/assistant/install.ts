@@ -332,9 +332,13 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       const { askHostApprovalInWindow } = await import("../client/viewRequests.js");
       return askHostApprovalInWindow(webContentsId, ask);
     },
-    // This machine's own preference for the assistant that made the call, never the host's (#15698).
-    confirmationsSkipped: (helpSessionId) =>
-      readAssistantConfirmationsSkipped(helpSessionService.getSessionAgent(helpSessionId)),
+    // This machine's own preference for the assistant that made the call, never
+    // the host's (#15698), for the tool it called (#16752).
+    confirmationsSkipped: (helpSessionId, calledActionId) =>
+      readAssistantConfirmationsSkipped(
+        helpSessionService.getSessionAgent(helpSessionId),
+        calledActionId
+      ),
     // A host's settings, read and changed by name with no view there (#14167).
     settingsClient: () => getRemoteService("settingsControlClient") ?? null,
     askSettingsApproval: async ({ helpSessionId, ...ask }) => {

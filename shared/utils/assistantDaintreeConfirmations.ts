@@ -1,5 +1,9 @@
 import type { HelpAssistantDaintreeConfirmations } from "../types/ipc/api.js";
 import {
+  ASSISTANT_HOST_SETTINGS_CONFIRMATION,
+  sanitizeDelegatedConfirmations,
+} from "../config/assistantConfirmationDelegation.js";
+import {
   isAgentBypassSupported,
   resolveDangerousMode,
   type AgentSettings,
@@ -8,7 +12,9 @@ import {
 export function isHelpAssistantDaintreeConfirmations(
   value: unknown
 ): value is HelpAssistantDaintreeConfirmations {
-  return value === "inherit" || value === "always-ask" || value === "never-ask";
+  return (
+    value === "inherit" || value === "always-ask" || value === "never-ask" || value === "ask-except"
+  );
 }
 
 /**
@@ -44,10 +50,11 @@ export function resolveAssistantAgentSkip(
 }
 
 /**
- * Whether the assistant's Daintree confirmations are skipped (#12874, #12989).
- * `never-ask` skips whatever the agent's skip setting says, `always-ask` never
- * skips, and `inherit` follows the assistant agent's effective skip setting
- * (see {@link resolveAssistantAgentSkip}). An absent or unrecognised preference
+ * Whether every one of the assistant's Daintree confirmations is skipped
+ * (#12874, #12989). `never-ask` skips whatever the agent's skip setting says,
+ * `always-ask` and `ask-except` (#16752) don't, and `inherit` follows the
+ * assistant agent's effective skip setting (see
+ * {@link resolveAssistantAgentSkip}). An absent or unrecognised preference
  * reads as the default, `inherit`.
  */
 export function assistantSkipsDaintreeConfirmations(
@@ -55,6 +62,51 @@ export function assistantSkipsDaintreeConfirmations(
   agentSkipsPermissions: boolean | undefined
 ): boolean {
   if (preference === "never-ask") return true;
-  if (preference === "always-ask") return false;
+  if (preference === "always-ask" || preference === "ask-except") return false;
   return agentSkipsPermissions === true;
+}
+
+/**
+ * The assistant's Daintree confirmations, read once: whether everything is
+ * skipped, and which called ids are handed over one by one (#16752). The ids
+ * count only under `ask-except`, and only those still delegable.
+ */
+export interface AssistantConfirmationPolicy {
+  readonly skipsAll: boolean;
+  readonly delegated: ReadonlySet<string>;
+}
+
+const NOTHING_DELEGATED: ReadonlySet<string> = new Set();
+
+/** No preference read, or none that skips: every confirm-gated call asks. */
+export const ASKS_FOR_EVERYTHING: AssistantConfirmationPolicy = {
+  skipsAll: false,
+  delegated: NOTHING_DELEGATED,
+};
+
+export function resolveAssistantConfirmationPolicy(
+  preference: HelpAssistantDaintreeConfirmations | undefined,
+  except: unknown,
+  agentSkipsPermissions: boolean | undefined
+): AssistantConfirmationPolicy {
+  return {
+    skipsAll: assistantSkipsDaintreeConfirmations(preference, agentSkipsPermissions),
+    delegated:
+      preference === "ask-except"
+        ? new Set(sanitizeDelegatedConfirmations(except))
+        : NOTHING_DELEGATED,
+  };
+}
+
+/**
+ * Whether the assistant's call to `calledActionId` runs without asking. A
+ * `host.settings` change never asked before it could be delegated, so the
+ * blanket skip doesn't reach it: only its own tick does.
+ */
+export function assistantPolicySkips(
+  policy: AssistantConfirmationPolicy,
+  calledActionId: string
+): boolean {
+  if (policy.delegated.has(calledActionId)) return true;
+  return policy.skipsAll && calledActionId !== ASSISTANT_HOST_SETTINGS_CONFIRMATION;
 }

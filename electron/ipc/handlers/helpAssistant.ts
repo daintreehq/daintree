@@ -18,6 +18,7 @@ import {
 import { hasShellMetachar } from "../../../shared/utils/shellEscape.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { isHelpAssistantDaintreeConfirmations as isValidDaintreeConfirmations } from "../../../shared/utils/assistantDaintreeConfirmations.js";
+import { sanitizeDelegatedConfirmations } from "../../../shared/config/assistantConfirmationDelegation.js";
 import { applyModelIdPatch, sanitizeModelIdMap } from "../../utils/helpAssistantModels.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
 import type {
@@ -58,6 +59,7 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   idleHibernateMinutes: 5,
   loadGlobalHooksAndServers: false,
   daintreeConfirmations: "inherit",
+  daintreeConfirmationsExcept: [],
   acceptRemoteControl: true,
 };
 
@@ -73,6 +75,7 @@ const HELP_ASSISTANT_KEYS = [
   "idleHibernateMinutes",
   "loadGlobalHooksAndServers",
   "daintreeConfirmations",
+  "daintreeConfirmationsExcept",
   "acceptRemoteControl",
 ] as const satisfies ReadonlyArray<keyof HelpAssistantSettings>;
 
@@ -153,6 +156,11 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   if (isValidDaintreeConfirmations(record.daintreeConfirmations)) {
     out.daintreeConfirmations = record.daintreeConfirmations;
   }
+  if (Array.isArray(record.daintreeConfirmationsExcept)) {
+    out.daintreeConfirmationsExcept = sanitizeDelegatedConfirmations(
+      record.daintreeConfirmationsExcept
+    );
+  }
   if (isValidIdleHibernateMinutes(record.idleHibernateMinutes)) {
     out.idleHibernateMinutes = record.idleHibernateMinutes;
   }
@@ -219,6 +227,7 @@ export const helpAssistantNamespace = defineIpcNamespace({
           if (field === "idleHibernateMinutes" && !isValidIdleHibernateMinutes(value)) continue;
           if (field === "tier" && !isValidHelpAssistantTier(value)) continue;
           if (field === "daintreeConfirmations" && !isValidDaintreeConfirmations(value)) continue;
+          if (field === "daintreeConfirmationsExcept" && !Array.isArray(value)) continue;
           if (
             (field === "docSearch" ||
               field === "daintreeControl" ||
@@ -234,6 +243,10 @@ export const helpAssistantNamespace = defineIpcNamespace({
           if (field === "customArgs") {
             if (sanitizedCustomArgs === undefined) continue;
             storedValue = sanitizedCustomArgs;
+          }
+          // Only ids that may be handed over are ever stored (#16752).
+          if (field === "daintreeConfirmationsExcept") {
+            storedValue = sanitizeDelegatedConfirmations(value);
           }
           if (field === "modelIds") {
             // Merged per agent against what's stored, never a whole-map

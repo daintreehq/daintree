@@ -3353,9 +3353,14 @@ export type HelpAssistantIdleHibernateMinutes = 0 | 5 | 15 | 30 | 60 | 120;
  * `inherit` follows the assistant agent's effective "Skip permission prompts"
  * setting, its own if it has one, else the global (#14141); `always-ask` keeps
  * Daintree's dialog regardless; `never-ask` skips it whatever the agent's
- * setting says (#12989).
+ * setting says (#12989); `ask-except` asks for everything but the calls listed
+ * in `daintreeConfirmationsExcept` (#16752).
  */
-export type HelpAssistantDaintreeConfirmations = "inherit" | "always-ask" | "never-ask";
+export type HelpAssistantDaintreeConfirmations =
+  | "inherit"
+  | "always-ask"
+  | "never-ask"
+  | "ask-except";
 
 export interface HelpAssistantSettings {
   /** Allow the help assistant to search Daintree documentation. Defaults to true. */
@@ -3424,6 +3429,13 @@ export interface HelpAssistantSettings {
    * `"inherit"`.
    */
   daintreeConfirmations: HelpAssistantDaintreeConfirmations;
+  /**
+   * The tool ids the assistant may call without asking while
+   * `daintreeConfirmations` is `ask-except` (#16752), kept to the delegable
+   * ones in `shared/config/assistantConfirmationDelegation.ts`. Ignored in
+   * every other mode. Defaults to none.
+   */
+  daintreeConfirmationsExcept: string[];
   /**
    * Whether this machine, as a host, takes another machine's assistant's
    * `host.call` (#13493): runs its own Daintree tools for it, including

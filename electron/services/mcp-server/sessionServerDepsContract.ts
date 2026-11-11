@@ -2,6 +2,7 @@ import type { AgentState } from "../../../shared/types/agent.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { AuditOutcome } from "./auditLog.js";
 import type { McpDispatchAuthorization } from "../../../shared/types/ipc/mcpServer.js";
+import type { AssistantConfirmationPolicy } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import type { HelpAssistantTier, McpTier, DispatchEnvelope } from "./shared.js";
 import type { McpWorkspaceBinding } from "./shared.js";
 import type { OwnPane, TerminalNotifyHandlers } from "./terminalNotify.js";
@@ -478,12 +479,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   getCurrentTurnId?: () => string | null;
   /**
-   * Whether the assistant's confirm-gated Daintree actions currently skip the
-   * host dialog (#12874) — the global "Skip permission prompts" unless the
-   * assistant is set to always ask. Read on every call so a change takes effect
-   * on the next one. Only consulted for `help` sessions; absent reads as false.
+   * Which of the assistant's confirm-gated Daintree actions skip the host
+   * dialog (#12874): all of them, or the called ids handed over one by one
+   * (#16752). Read on every call so a change takes effect on the next one.
+   * Only consulted for `help` sessions; absent reads as asking for everything.
    */
-  readAssistantConfirmationsSkipped?: () => boolean;
+  readAssistantConfirmationPolicy?: () => AssistantConfirmationPolicy;
   /**
    * Optional renderer notifier fired when an MCP tool dispatch enters the call
    * path (after tier/rate/dedup guards pass and the manifest entry resolves).

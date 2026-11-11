@@ -60,7 +60,8 @@ export interface HostControlRuntimeHandle {
   /** Reads, previews and applies a host's named settings, asking the person before any change (#14167). */
   settings(
     helpSessionId: string,
-    args: HostSettingsArgs
+    args: HostSettingsArgs,
+    context?: HostSettingsContext
   ): Promise<HostControlOutcome<HostSettingsResult>>;
   /**
    * Arms, cancels or lists the calling run's one-shot watches on a host's link
@@ -89,6 +90,15 @@ export interface HostCallContext {
   /**
    * Told when the call ran on the host under this machine's own skip
    * preference (#15698), never anything the host said: for its audit record.
+   */
+  noteSkipPreference?: () => void;
+}
+
+/** What a `host.settings` call carries from the calling session beyond its arguments. */
+export interface HostSettingsContext {
+  /**
+   * Told when an apply went ahead without asking, because the person handed
+   * host settings changes to their assistant here (#16752): for its audit record.
    */
   noteSkipPreference?: () => void;
 }
@@ -237,7 +247,7 @@ async function dispatch(
     case HOST_SETTINGS_TOOL: {
       const parsed = HostSettingsArgsSchema.safeParse(raw);
       return parsed.success && settingsArgsFit(parsed.data)
-        ? runtime.settings(helpSessionId, parsed.data)
+        ? runtime.settings(helpSessionId, parsed.data, context)
         : invalidArgs();
     }
     case HOST_WATCH_TOOL: {
