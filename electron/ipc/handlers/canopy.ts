@@ -1579,6 +1579,46 @@ async function liveAssistantSources() {
 }
 
 /**
+ * Where "Open in Assistant" goes for one of this machine's assistants, if main
+ * still runs it. Passive: nothing is attached, switched, started or resumed to
+ * answer; null when the session has ended or been replaced.
+ */
+export async function resolveAssistantDestination(
+  subject: AgentDirectorySubject
+): Promise<AssistantOpenDestination | null> {
+  const binding = await resolveLiveAssistant(subject, await liveAssistantSources()).catch(
+    (error: unknown) => {
+      // Only a session that has ended or been replaced answers "nothing to open";
+      // a bad subject, another host or a failure is said as itself.
+      if (
+        error instanceof AppError &&
+        (error.code === "NOT_FOUND" || error.code === "STALE_GENERATION")
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  );
+  if (!binding) return null;
+  const { hostId, scope, terminalId, incarnation, lane } = binding.subject;
+  return scope.kind === "project" && lane !== undefined
+    ? { scope: "project", hostId, projectId: scope.projectId, lane, terminalId, incarnation }
+    : { scope: "global", hostId, terminalId, incarnation };
+}
+
+/**
+ * Whether a view holds the lane's running assistant. A detached one runs with
+ * no window to show it in until someone takes it over from its project's
+ * Assistant panel.
+ */
+export async function isAssistantLaneAttached(projectId: string, lane: number): Promise<boolean> {
+  const { helpSessionService } = await import("../../services/HelpSessionService.js");
+  return helpSessionService
+    .listRunningLanes()
+    .some((running) => running.projectId === projectId && running.slot === lane && running.attached);
+}
+
+/**
  * A card answer presses keys with no input ownership behind it, so it never
  * reaches the global assistant, whose input one window holds at a time (#14454).
  */
@@ -1806,24 +1846,7 @@ export const canopyNamespace = defineIpcNamespace({
       async (ctx, subject: AgentDirectorySubject): Promise<AssistantOpenDestination | null> => {
         checkRateLimit(CANOPY_METHOD_CHANNELS.resolveAssistant, 60, 10_000);
         assertViewsThisMachine(ctx);
-        const binding = await resolveLiveAssistant(subject, await liveAssistantSources()).catch(
-          (error: unknown) => {
-            // Only a session that has ended or been replaced answers "nothing to open";
-            // a bad subject, another host or a failure is said as itself.
-            if (
-              error instanceof AppError &&
-              (error.code === "NOT_FOUND" || error.code === "STALE_GENERATION")
-            ) {
-              return null;
-            }
-            throw error;
-          }
-        );
-        if (!binding) return null;
-        const { hostId, scope, terminalId, incarnation, lane } = binding.subject;
-        return scope.kind === "project" && lane !== undefined
-          ? { scope: "project", hostId, projectId: scope.projectId, lane, terminalId, incarnation }
-          : { scope: "global", hostId, terminalId, incarnation };
+        return resolveAssistantDestination(subject);
       },
       { withContext: true }
     ),

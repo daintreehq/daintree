@@ -1810,6 +1810,7 @@ export const CHANNELS = {
   CANOPY_WINDOW_FOCUS: "canopy-window:focus",
   CANOPY_WINDOW_FOCUS_LAST_PROJECT_WINDOW: "canopy-window:focus-last-project-window",
   CANOPY_WINDOW_GO_TO_RUN: "canopy-window:go-to-run",
+  CANOPY_WINDOW_OPEN_ASSISTANT: "canopy-window:open-assistant",
 
   // Remote Hosts: portForwards (shell).
   PORT_FORWARDS_LIST: "port-forwards:list",

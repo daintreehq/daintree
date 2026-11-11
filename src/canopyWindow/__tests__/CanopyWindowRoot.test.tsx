@@ -22,6 +22,16 @@ const projectShell = vi.hoisted(() => vi.fn());
 const hydrateNotifications = vi.hoisted(() => vi.fn(async () => {}));
 const toasterProps = vi.hoisted(() => [] as Array<{ standalone: boolean | undefined }>);
 const switchToHost = vi.hoisted(() => vi.fn(async () => {}));
+const openAssistantFromCanopyWindow = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _subject: unknown
+    ): Promise<
+      | { ok: true }
+      | { ok: false; reason: "ended" | "unsupported" | "not-attached" | "not-switched" }
+    > => ({ ok: true })
+  )
+);
 
 vi.mock("@/components/Canopy/CanopyView", () => ({
   CanopyView: ({ frame }: { frame: CanopyFrame }) => {
@@ -42,6 +52,10 @@ vi.mock("@/hooks/useAppThemeConfig", () => ({ useAppThemeConfig: vi.fn() }));
 vi.mock("@/hooks/useTerminalConfig", () => ({ useTerminalConfig: vi.fn() }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 vi.mock("@/components/Hosts/hostSwitching", () => ({ switchToHost }));
+vi.mock("@/services/assistantSubject", () => ({
+  openAssistantFromCanopyWindow,
+  openInAssistant: vi.fn(),
+}));
 vi.mock("@/services/terminalConfigSync", () => ({
   initTerminalConfigSync: () => stops.terminalConfig,
 }));
@@ -77,6 +91,8 @@ import {
   _resetPluginHostedViewsStoreForTest,
   usePluginHostedViewsStore,
 } from "@/store/pluginHostedViewsStore";
+import type { CanopyAssistantItem } from "@/components/Canopy/canopyAssistants";
+import { assistantOpenRefusal } from "@/components/Canopy/openAssistantItem";
 import { CanopyWindowRoot } from "../CanopyWindowRoot";
 import { CANOPY_WINDOW_FRAME } from "../canopyWindowFrame";
 
@@ -326,6 +342,53 @@ describe("the Canopy window's frame", () => {
       const toast = notifyMock.mock.calls[0]![0] as { message: string; actions?: unknown };
       expect(toast.message).toBe("Its project or scratch has been removed.");
       expect(toast.actions).toBeUndefined();
+    });
+  });
+
+  describe("Open in Assistant (#16758)", () => {
+    const subject = {
+      hostId: "local",
+      scope: { kind: "project" as const, projectId: "project-a" },
+      terminalId: "assistant-1",
+      incarnation: 2,
+      lane: 1,
+    };
+    const item = { id: "a1", subject } as unknown as CanopyAssistantItem;
+    const open = () => CANOPY_WINDOW_FRAME.openAssistant(item, () => true);
+
+    it("opens the assistant where it runs, says nothing in the pane, and stays open", async () => {
+      expect(await open()).toBeNull();
+      expect(openAssistantFromCanopyWindow).toHaveBeenCalledWith(subject);
+      expect(closeWindow).not.toHaveBeenCalled();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it.each(["ended", "not-attached", "unsupported"] as const)(
+      "says in the pane why it opened nothing, in the shared wording (%s)",
+      async (reason) => {
+        openAssistantFromCanopyWindow.mockResolvedValueOnce({ ok: false, reason });
+        expect(await open()).toBe(assistantOpenRefusal(reason));
+      }
+    );
+
+    it("never says this window couldn't move, since it never does", async () => {
+      openAssistantFromCanopyWindow.mockResolvedValueOnce({ ok: false, reason: "not-switched" });
+      const text = await open();
+      expect(text).toMatch(/another host/);
+      expect(text).not.toBe(assistantOpenRefusal("not-switched"));
+    });
+
+    it("says in the pane, not a toast, why its window didn't come forward", async () => {
+      openAssistantFromCanopyWindow.mockRejectedValueOnce(
+        new Error(
+          `[AppError|PROJECT_OPEN_FAILED|${encodeURIComponent("A window for its project didn't open.")}] no window`
+        )
+      );
+      expect(await open()).toBe("A window for its project didn't open.");
+
+      openAssistantFromCanopyWindow.mockRejectedValueOnce(new Error("socket hang up"));
+      expect(await open()).toEqual(expect.any(String));
+      expect(notifyMock).not.toHaveBeenCalled();
     });
   });
 });

@@ -60,6 +60,10 @@ const remoteHosts = vi.hoisted(() => ({
   ),
 }));
 
+const canopyWindow = vi.hoisted(() => ({
+  openAssistant: vi.fn(async (_subject: unknown): Promise<string | null> => null),
+}));
+
 vi.mock("@/hooks/useHostConnection", () => ({ getViewHostId: () => viewHost.id }));
 vi.mock("@/store/viewWorkspaceId", () => ({ getViewWorkspaceId: () => view.workspaceId }));
 vi.mock("@/store/helpPanelStore", () => ({
@@ -75,7 +79,12 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: { getState: () => ({ switchProject }) },
 }));
 
-import { activateAssistantLane, assistantTerminalApi, openInAssistant } from "../assistantSubject";
+import {
+  activateAssistantLane,
+  assistantTerminalApi,
+  openAssistantFromCanopyWindow,
+  openInAssistant,
+} from "../assistantSubject";
 
 const subject = {
   hostId: "local",
@@ -109,7 +118,7 @@ describe("assistant subject adapter", () => {
     panel.listeners.clear();
     viewHost.id = null;
     hostEvents.clear();
-    Object.assign(window, { electron: { canopy, canopyHost, remoteHosts } });
+    Object.assign(window, { electron: { canopy, canopyHost, remoteHosts, canopyWindow } });
   });
 
   it("watches by the exact subject, never by terminal id", async () => {
@@ -328,6 +337,78 @@ describe("assistant subject adapter", () => {
       expect(await activateAssistantLane(remote)).toEqual({ ok: true });
       expect(panel.setActiveSlot).toHaveBeenCalledWith(2);
       expect(canopy.resolveAssistant).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("from the Canopy window (#16758)", () => {
+    const remote = { ...subject, hostId: "studio" };
+
+    beforeEach(() => {
+      view.workspaceId = null;
+    });
+
+    it.each([subject, globalSubject])(
+      "hands one of this machine's assistants to main whole, moving nothing here",
+      async (target) => {
+        expect(await openAssistantFromCanopyWindow(target)).toEqual({ ok: true });
+        expect(canopyWindow.openAssistant).toHaveBeenCalledWith(target);
+        expect(canopy.resolveAssistant).not.toHaveBeenCalled();
+        expect(switchProject).not.toHaveBeenCalled();
+        expect(remoteHosts.switchWindowHost).not.toHaveBeenCalled();
+        expect(panel.setOpen).not.toHaveBeenCalled();
+        expect(panel.selectGlobal).not.toHaveBeenCalled();
+      }
+    );
+
+    it("passes on main's refusal, and its failure to bring a window forward", async () => {
+      canopyWindow.openAssistant.mockResolvedValueOnce("not-attached");
+      expect(await openAssistantFromCanopyWindow(subject)).toEqual({
+        ok: false,
+        reason: "not-attached",
+      });
+      canopyWindow.openAssistant.mockRejectedValueOnce(new Error("no window"));
+      await expect(openAssistantFromCanopyWindow(subject)).rejects.toThrow("no window");
+    });
+
+    it("opens another host's lane in a new window there, never moving this one", async () => {
+      canopyHost.resolveAssistant.mockResolvedValue({ ...destination, hostId: "studio" });
+      expect(await openAssistantFromCanopyWindow(remote)).toEqual({ ok: true });
+      expect(remoteHosts.switchWindowHost).toHaveBeenCalledWith({
+        hostId: "studio",
+        newWindow: true,
+        projectId: "p2",
+        focusIntent: { intent: "open-assistant", subject: remote },
+      });
+      expect(canopyWindow.openAssistant).not.toHaveBeenCalled();
+      expect(canopyHost.releaseAssistant).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses another host's lane that ended, or whose window there didn't open", async () => {
+      canopyHost.resolveAssistant.mockResolvedValueOnce(null);
+      expect(await openAssistantFromCanopyWindow(remote)).toEqual({ ok: false, reason: "ended" });
+      expect(remoteHosts.switchWindowHost).not.toHaveBeenCalled();
+
+      canopyHost.resolveAssistant.mockResolvedValueOnce({ ...destination, hostId: "studio" });
+      remoteHosts.switchWindowHost.mockResolvedValueOnce({ outcome: "superseded", hostId: "studio" });
+      expect(await openAssistantFromCanopyWindow(remote)).toEqual({
+        ok: false,
+        reason: "not-switched",
+      });
+    });
+
+    it("refuses another host's global session, which only that machine's windows hold", async () => {
+      const remoteGlobal = { ...globalSubject, hostId: "studio" };
+      canopyHost.resolveAssistant.mockResolvedValue({
+        scope: "global",
+        hostId: "studio",
+        terminalId: "g1",
+        incarnation: 2,
+      });
+      expect(await openAssistantFromCanopyWindow(remoteGlobal)).toEqual({
+        ok: false,
+        reason: "unsupported",
+      });
+      expect(remoteHosts.switchWindowHost).not.toHaveBeenCalled();
     });
   });
 });

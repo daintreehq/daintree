@@ -41,6 +41,13 @@ const OPEN_REFUSED: Record<Extract<OpenInAssistantResult, { ok: false }>["reason
   "not-switched": "This assistant runs on another host, and this window couldn't move there.",
 };
 
+/** Why an assistant didn't open, in the words its surface shows. */
+export function assistantOpenRefusal(
+  reason: Extract<OpenInAssistantResult, { ok: false }>["reason"]
+): string {
+  return OPEN_REFUSED[reason];
+}
+
 /**
  * Open the assistant's own lane in its project's Assistant panel. Nothing is
  * launched or resumed; a refusal is said in words, for the surface to show.
@@ -48,7 +55,7 @@ const OPEN_REFUSED: Record<Extract<OpenInAssistantResult, { ok: false }>["reason
 export async function openAssistantItem(item: CanopyAssistantItem): Promise<string | null> {
   try {
     const result = await openInAssistant(item.subject);
-    return result.ok ? null : OPEN_REFUSED[result.reason];
+    return result.ok ? null : assistantOpenRefusal(result.reason);
   } catch {
     return "Daintree couldn't open this assistant. Try again from its project's Assistant panel.";
   }
