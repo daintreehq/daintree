@@ -110,6 +110,8 @@ Artifacts are uploaded to Cloudflare R2 via AWS CLI:
 - Binaries (dmg, zip, exe, AppImage, deb, blockmap) → `s3://<bucket>/releases/` with immutable caching
 - Metadata (latest\*.yml) → `s3://<bucket>/releases/` with no-cache headers
 
+The same bucket also serves the plugin blocklist: `publish-plugin-blocklist.yml` uploads `plugins/blocklist.json` to `s3://<bucket>/plugins/blocklist.json` with no-cache headers on every change merged to `develop`, independent of releases (see [Plugin architecture → Signing and kill-switch](plugins/architecture.md#signing-and-kill-switch)).
+
 ### R2 Secrets
 
 | Secret                 | Description                      |
