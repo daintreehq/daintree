@@ -112,7 +112,8 @@ describe("ProjectPluginWatcher sentinel recovery", () => {
       const calls = vi.mocked(watch).mock.calls.filter(([watched]) => watched === dir);
       const call = calls[calls.length - 1];
       if (!call) throw new Error(`no sentinel was opened on ${dir}`);
-      return call[2] as unknown as SentinelListener;
+      // `mock.calls` is typed from the two-argument overload of `fs.watch`.
+      return (call as unknown[])[2] as SentinelListener;
     }
 
     function watchCount(dir: string): number {
@@ -185,6 +186,62 @@ describe("ProjectPluginWatcher sentinel recovery", () => {
         expect(watchCount(root)).toBe(1);
       }
     );
+
+    it("moves back out when a symlinked .daintree reports its target's removal", async () => {
+      // FSEvents names the self event after the resolved directory.
+      const target = path.join(root, "SharedConfig");
+      await fsp.mkdir(target);
+      const daintreeDir = path.join(root, ".daintree");
+      await fsp.symlink(target, daintreeDir, "junction");
+      await watcher.ensure("project", root);
+      const onDaintreeEvent = sentinelListener(daintreeDir);
+      expect(watchCount(root)).toBe(0);
+
+      await fsp.rm(target, { recursive: true });
+      onDaintreeEvent("rename", "SharedConfig");
+      expect(watchCount(root)).toBe(1);
+    });
+
+    it("checks every event once the resolved plugins root lies outside the watched directory", async () => {
+      const external = await fsp.mkdtemp(path.join(os.tmpdir(), "dt-ppw-external-"));
+      try {
+        await fsp.mkdir(path.join(external, "plugins"));
+        await fsp.mkdir(path.join(root, ".daintree"));
+        await fsp.symlink(
+          path.join(external, "plugins"),
+          path.join(root, ".daintree", "plugins"),
+          "junction"
+        );
+        watcher.dispose();
+        watcher = new ProjectPluginWatcher({
+          discover: discoverProjectPlugins,
+          loadedManifestIds: () => [],
+          reload,
+          viewGenerationsAllocated: () => 0,
+          resolveGitDir: async () => null,
+          timings: { debounceMs: 1, rearmDelayMs: 1 },
+        });
+        await watcher.ensure("project", root);
+        expect(watcher.isWatching("project")).toBe(true);
+
+        // The resolved root goes away under a live subscription, so the
+        // sentinel falls back to a project root the plugins root is not under.
+        await fsp.rm(external, { recursive: true, force: true });
+        const onSubscriptionEvent = vi.mocked(subscribeParcelWatcher).mock.calls[0]![1];
+        onSubscriptionEvent(new Error("watch failed"), []);
+        await vi.waitFor(() => expect(watchCount(root)).toBe(1));
+
+        const statSpy = vi.spyOn(fsModule, "existsSync");
+        try {
+          sentinelListener(root)("change", "README.md");
+          expect(statSpy).toHaveBeenCalled();
+        } finally {
+          statSpy.mockRestore();
+        }
+      } finally {
+        await fsp.rm(external, { recursive: true, force: true });
+      }
+    });
   });
 
   it.each(["stop", "dispose"] as const)(

@@ -1,5 +1,5 @@
 import path from "path";
-import { existsSync, promises as fsp, watch as fsWatch, type FSWatcher } from "fs";
+import { existsSync, promises as fsp, realpathSync, watch as fsWatch, type FSWatcher } from "fs";
 
 import type { AsyncSubscription } from "@parcel/watcher";
 
@@ -208,9 +208,10 @@ export function attributeProjectPluginEvent(pluginsRoot: string, eventPath: stri
 /**
  * The lowercased entry names a non-recursive sentinel on `watchedDir` has to
  * act on: the next directory down towards the plugins root, and the watched
- * directory's own name, which inotify reports when that directory is deleted
- * or moved (Windows reports its full path, hence the caller's basename).
- * Lowercased because the macOS and Windows defaults are
+ * directory's own name, which is how a deletion or move of that directory is
+ * reported. inotify uses the name as watched, Windows its full path (hence the
+ * caller's basename), and FSEvents the resolved one, which differs for a
+ * symlinked `.daintree`. Lowercased because the macOS and Windows defaults are
  * case-insensitive, so `.Daintree` satisfies the existence check. Null when
  * the plugins root does not live under `watchedDir`, as after `arm()` resolved
  * a symlinked root, and no name can be ruled out.
@@ -220,8 +221,13 @@ function sentinelRelevantNames(watchedDir: string, pluginsRoot: string): Set<str
   if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
     return null;
   }
-  const next = rel.split(path.sep)[0];
-  return new Set([next.toLowerCase(), path.basename(watchedDir).toLowerCase()]);
+  const names = new Set([rel.split(path.sep)[0], path.basename(watchedDir)]);
+  try {
+    names.add(path.basename(realpathSync(watchedDir)));
+  } catch {
+    // Already gone: the watch about to be opened fails too, and polls instead.
+  }
+  return new Set([...names].map((name) => name.toLowerCase()));
 }
 
 /**
