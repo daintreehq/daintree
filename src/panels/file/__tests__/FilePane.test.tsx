@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { render, act, cleanup, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContextMenuItem } from "@/components/ui/context-menu";
@@ -316,6 +316,7 @@ vi.mock("@/components/Html/HtmlViewer", () => ({
 const fileEditorState = vi.hoisted(() => ({
   resolved: null as null | { maxBytes: number },
   renderedProps: [] as Array<Record<string, unknown>>,
+  mounts: 0,
   // View-backed plugin editors on offer, by mode (#13809).
   plugin: { edit: [], view: [] } as Record<"edit" | "view", unknown[]>,
   pluginHostProps: [] as Array<Record<string, unknown>>,
@@ -362,6 +363,9 @@ vi.mock("@/registry/fileEditorRegistry", async (importOriginal) => ({
 // render would remount the editor each time the pane re-renders.
 function FileEditorMock(props: Record<string, unknown>) {
   fileEditorState.renderedProps.push(props);
+  useEffect(() => {
+    fileEditorState.mounts += 1;
+  }, []);
   return <div data-testid="file-editor-mock" />;
 }
 
@@ -4142,6 +4146,23 @@ describe("FilePane edit mode (#12323)", () => {
     // Source and Rendered stay out of the tree while Edit owns the body.
     expect(screen.queryByTestId("code-viewer-mock")).toBeNull();
     expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
+  });
+
+  it("remounts the built-in editor when the pane navigates to another file", async () => {
+    seedWorktree();
+    const view = await renderPane({ fileViewMode: "edit" });
+    expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+    const before = fileEditorState.mounts;
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/docs/other.md",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: "edit",
+    };
+    view.rerender(paneElement());
+    await act(async () => {});
+    expect(fileEditorState.mounts).toBe(before + 1);
   });
 
   it("hands focus to the Rendered segment, not the first one, when leaving Edit for Rendered", async () => {
