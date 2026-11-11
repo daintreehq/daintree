@@ -5,6 +5,7 @@ import {
   fireEvent,
   screen,
   act,
+  waitFor,
   type RenderOptions,
 } from "@testing-library/react";
 
@@ -271,6 +272,41 @@ describe("SaveFleetDialog", () => {
     render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={2} />);
     await submitNamed("   ");
     expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("starts from the rule it is given and reports each change with the other half kept", async () => {
+    const onRuleChange = vi.fn();
+    render(
+      <SaveFleetDialog
+        isOpen
+        onClose={vi.fn()}
+        armedCount={2}
+        initialRule={{ state: "finished", scope: "all" }}
+        onRuleChange={onRuleChange}
+      />
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Live rule" }));
+    const ruleState = () => screen.getByTestId("fleet-save-rule-state").textContent;
+    const ruleScope = () => screen.getByTestId("fleet-save-rule-scope").textContent;
+    expect(ruleState()).toContain("Finished");
+    expect(ruleScope()).toContain("All worktrees");
+
+    fireEvent.keyDown(screen.getByTestId("fleet-save-rule-state"), { key: "ArrowDown" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: "Working" }), { key: "Enter" });
+    await waitFor(() =>
+      expect(onRuleChange).toHaveBeenLastCalledWith({ state: "working", scope: "all" })
+    );
+
+    fireEvent.keyDown(screen.getByTestId("fleet-save-rule-scope"), { key: "ArrowDown" });
+    fireEvent.keyDown(
+      await screen.findByRole("option", { name: "This worktree (whichever is active)" }),
+      { key: "Enter" }
+    );
+    await waitFor(() =>
+      expect(onRuleChange).toHaveBeenLastCalledWith({ state: "working", scope: "current" })
+    );
+    expect(ruleState()).toContain("Working");
+    expect(ruleScope()).toContain("This worktree");
   });
 
   function armRemote(terminalId: string, hostName: string) {

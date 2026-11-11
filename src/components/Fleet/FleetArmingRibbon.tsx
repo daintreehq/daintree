@@ -463,6 +463,16 @@ export function FleetArmingRibbon(): ReactElement | null {
     openSaveDialog();
   }, [openSaveDialog]);
 
+  // A fleet dialog that failed to load or render closes. It never took focus,
+  // or took it down with it, and the menu skipped its restore for the
+  // hand-off, so focus goes back to the menu's trigger if nothing holds it.
+  const failFleetDialog = (reset: () => void) => {
+    reset();
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    selectionTriggerRef.current?.focus({ preventScroll: true });
+  };
+
   const handleRequestManageFleets = useCallback(() => {
     dialogHandoffRef.current = true;
     setSelectionMenuOpen(false);
@@ -577,15 +587,15 @@ export function FleetArmingRibbon(): ReactElement | null {
   // snapshot can no longer be saved.
   // Each is mounted only while open or closing: a closed dialog left mounted
   // re-ran its panel-store selectors on every status flush in every view.
-  // A dialog that can't load closes, so Escape isn't left held by a dialog
-  // that never appeared.
+  // A dialog that can't load closes (failFleetDialog), so Escape isn't left
+  // held by a dialog that never appeared.
   const fleetDialogs = (
     <>
       <ErrorBoundary
         variant="component"
         componentName="SaveFleetDialog"
         resetKeys={[Number(saveDialog.isMounted)]}
-        onError={saveDialog.reset}
+        onError={() => failFleetDialog(saveDialog.reset)}
       >
         {saveDialog.isMounted && (
           <Suspense fallback={null}>
@@ -605,7 +615,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         variant="component"
         componentName="SavedFleetsDialog"
         resetKeys={[Number(manageDialog.isMounted)]}
-        onError={manageDialog.reset}
+        onError={() => failFleetDialog(manageDialog.reset)}
       >
         {manageDialog.isMounted && (
           <Suspense fallback={null}>

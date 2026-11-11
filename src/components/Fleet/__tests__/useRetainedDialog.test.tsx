@@ -23,13 +23,17 @@ describe("useRetainedDialog", () => {
     expect(result.current.isMounted).toBe(false);
   });
 
-  it("keeps a dialog reopened during its exit mounted after the next close", () => {
+  it("reopens during its exit and retains again through the next close", () => {
     const { result } = renderHook(() => useRetainedDialog());
     act(() => result.current.open());
     act(() => result.current.close());
     act(() => result.current.open());
+    expect(result.current.isOpen).toBe(true);
+
     act(() => result.current.close());
     expect(result.current.isMounted).toBe(true);
+    act(() => result.current.onCloseComplete());
+    expect(result.current.isMounted).toBe(false);
   });
 
   it("reset closes and unmounts in one step", () => {
