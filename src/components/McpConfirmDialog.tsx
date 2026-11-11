@@ -914,8 +914,9 @@ function SessionApprovalOption({
  */
 function AssistantConfirmationPreference() {
   const [preference, setPreference] = useState<HelpAssistantDaintreeConfirmations | null>(null);
-  // How many actions "Ask, except for…" hands over (#16752); they're chosen in Settings.
-  const [exceptCount, setExceptCount] = useState(0);
+  // How many actions "Ask, except for…" hands over (#16752); they're chosen in
+  // Settings. Null when the answer has no list: a Daintree that old drops the mode.
+  const [exceptCount, setExceptCount] = useState<number | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "load-failed" | "save-failed">(
     "loading"
   );
@@ -963,7 +964,7 @@ function AssistantConfirmationPreference() {
         setExceptCount(
           Array.isArray(settings.daintreeConfirmationsExcept)
             ? settings.daintreeConfirmationsExcept.length
-            : 0
+            : null
         );
         setStatus("ready");
       })
@@ -1017,7 +1018,7 @@ function AssistantConfirmationPreference() {
     summary = "Couldn't read";
   } else if (status === "save-failed") {
     summary = `Couldn't save · ${preferenceLabel}`;
-  } else if (preference === "ask-except" && exceptCount > 0) {
+  } else if (preference === "ask-except" && exceptCount !== null && exceptCount > 0) {
     summary = `Ask, except for ${pluralize(exceptCount, "action")}`;
   } else {
     summary = `${preferenceLabel} · ${asks ? "asks" : "doesn't ask"}`;
@@ -1062,7 +1063,11 @@ function AssistantConfirmationPreference() {
       </span>
       <div id={panelId} hidden={!expanded} className="space-y-2 pt-2 pl-[1.125rem]">
         <SegmentedRadioGroup<string>
-          options={SEGMENT_OPTIONS}
+          options={
+            exceptCount !== null || preference === "ask-except"
+              ? SEGMENT_OPTIONS
+              : SEGMENT_OPTIONS.filter((option) => option.value !== "ask-except")
+          }
           value={preference ?? ""}
           onChange={handleChange}
           aria-label="Daintree confirmations for the assistant"

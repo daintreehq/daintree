@@ -678,6 +678,30 @@ describe("DaintreeAssistantSettingsTab", () => {
       );
     });
 
+    it("doesn't offer ask-except to a host whose answer has no list (#16752)", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: false,
+          auditRetention: 7,
+          customArgs: "",
+          daintreeConfirmations: "always-ask",
+        }),
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Daintree confirmations");
+      const select = within(screen.getByRole("combobox", { name: "Daintree confirmations" }));
+      await waitFor(() => expect(select.queryByRole("option", { name: "Never ask" })).toBeTruthy());
+      expect(select.queryByRole("option", { name: "Ask, except for…" })).toBeNull();
+    });
+
     it("keeps the dialog copy while the assistant is set to always ask", async () => {
       helpPanelState.preferredAgentId = "claude";
       useAgentSettingsStore.setState({

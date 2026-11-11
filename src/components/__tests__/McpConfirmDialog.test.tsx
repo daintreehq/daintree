@@ -2124,6 +2124,31 @@ describe("McpConfirmDialog", () => {
       expect(text).toContain("Choose the actions that don't ask in Settings > Daintree Assistant");
     });
 
+    it("saves ask-except when chosen, and offers it only when the answer carries the list", async () => {
+      helpAssistantApi.getSettings.mockResolvedValue({
+        daintreeConfirmations: "never-ask",
+        daintreeConfirmationsExcept: [],
+      });
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      await act(async () => {
+        fireEvent.click(segment("Ask, except for…"));
+      });
+      expect(helpAssistantApi.setSettings).toHaveBeenCalledWith({
+        daintreeConfirmations: "ask-except",
+      });
+    });
+
+    it("leaves ask-except out for a Daintree too old to keep it", async () => {
+      helpAssistantApi.getSettings.mockResolvedValue({ daintreeConfirmations: "never-ask" });
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      expect(screen.queryByRole("radio", { name: "Ask, except for…" })).toBeNull();
+      expect(segment("Never ask").getAttribute("aria-checked")).toBe("true");
+    });
+
     it.each([
       ["inherit", true, "Follow agent setting · doesn't ask"],
       ["always-ask", true, "Always ask · asks"],
@@ -2213,7 +2238,7 @@ describe("McpConfirmDialog", () => {
       await renderLoaded();
 
       expect(document.body.textContent ?? "").toContain("Couldn't read the current setting");
-      for (const label of ["Follow agent setting", "Always ask", "Never ask", "Ask, except for…"]) {
+      for (const label of ["Follow agent setting", "Always ask", "Never ask"]) {
         expect(segment(label).hasAttribute("disabled")).toBe(true);
       }
     });

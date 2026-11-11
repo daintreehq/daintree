@@ -282,13 +282,23 @@ export function DaintreeAssistantSettingsTab() {
     agents: agentEntries ?? {},
     globalSkipPermissions,
   });
+  // A host whose Daintree predates #16752 answers without the list and would
+  // silently drop "Ask, except for…", so it isn't offered there.
+  const delegatedConfirmations: readonly string[] | null = Array.isArray(
+    settings.daintreeConfirmationsExcept
+  )
+    ? settings.daintreeConfirmationsExcept
+    : null;
+  const confirmationOptions =
+    delegatedConfirmations === null
+      ? DAINTREE_CONFIRMATION_OPTIONS.filter((option) => option.value !== "ask-except")
+      : DAINTREE_CONFIRMATION_OPTIONS;
   const confirmationsSkipped: ConfirmationsSkipped = assistantSkipsDaintreeConfirmations(
     settings.daintreeConfirmations,
     assistantAgentSkip.skips
   )
     ? "all"
-    : settings.daintreeConfirmations === "ask-except" &&
-        settings.daintreeConfirmationsExcept.length > 0
+    : settings.daintreeConfirmations === "ask-except" && (delegatedConfirmations?.length ?? 0) > 0
       ? "some"
       : "none";
   const bypassCopy = useMemo(
@@ -709,14 +719,14 @@ export function DaintreeAssistantSettingsTab() {
             }
             value={settings.daintreeConfirmations}
             onValueChange={setDaintreeConfirmations}
-            options={DAINTREE_CONFIRMATION_OPTIONS}
+            options={confirmationOptions}
             disabled={settingsUnavailable}
             isModified={settings.daintreeConfirmations !== DEFAULT_SETTINGS.daintreeConfirmations}
             onReset={() => setDaintreeConfirmations(DEFAULT_SETTINGS.daintreeConfirmations)}
           />
-          {settings.daintreeConfirmations === "ask-except" && (
+          {settings.daintreeConfirmations === "ask-except" && delegatedConfirmations !== null && (
             <AssistantConfirmationExceptions
-              selected={settings.daintreeConfirmationsExcept}
+              selected={delegatedConfirmations}
               onChange={setDaintreeConfirmationsExcept}
               disabled={settingsUnavailable}
             />

@@ -10,6 +10,7 @@ describe("assistantSettingsModel", () => {
   it("files a patch under the group of its first key", () => {
     expect(saveGroupOf({ customArgs: "--x" })).toBe("launch");
     expect(saveGroupOf({ tier: "full" })).toBe("security");
+    expect(saveGroupOf({ daintreeConfirmationsExcept: ["worktree.deleteOwned"] })).toBe("security");
     expect(saveGroupOf({ auditRetention: 30 })).toBe("privacy");
     expect(saveGroupOf({})).toBe("agent");
   });

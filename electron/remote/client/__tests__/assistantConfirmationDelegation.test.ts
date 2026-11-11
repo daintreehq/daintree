@@ -16,6 +16,12 @@ import { HOST_ALWAYS_ASKS_ACTION_IDS } from "../hostDispatchableActions.js";
 describe("assistant confirmation delegation (#16752)", () => {
   const undelegableIds = UNDELEGABLE_ASSISTANT_CONFIRMATIONS.flatMap((entry) => entry.ids);
 
+  it("offers exactly the cleanup and settings calls an assistant makes", () => {
+    for (const id of ["worktree.deleteOwned", "worktree.retireOwned", HOST_SETTINGS_TOOL]) {
+      expect(isDelegableAssistantConfirmation(id)).toBe(true);
+    }
+  });
+
   it("never offers an action that moves this window", () => {
     for (const id of HOST_ALWAYS_ASKS_ACTION_IDS) {
       expect(isDelegableAssistantConfirmation(id)).toBe(false);
