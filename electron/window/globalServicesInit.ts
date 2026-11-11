@@ -76,6 +76,7 @@ import { countResumableAgentPanels } from "../services/projectStateRestore.js";
 import type { Project, ProjectState } from "../../shared/types/project.js";
 import type { Scratch } from "../../shared/types/scratch.js";
 import { sendToRenderer } from "../ipc/handlers.js";
+import { retireIdleCanopyReader } from "../ipc/handlers/canopy.js";
 import { wireUpdateMenuState } from "../menu.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
@@ -900,6 +901,7 @@ export async function initGlobalServices(
             if (!windowRegistry) return;
             reduceHiddenRendererScrollback(windowRegistry.all().map((wCtx) => wCtx.browserWindow));
           },
+          retireIdleCanopyReader,
           sampleBlinkMemory: () => {
             if (windowRegistry) sampleBlinkMemory(windowRegistry.all());
           },

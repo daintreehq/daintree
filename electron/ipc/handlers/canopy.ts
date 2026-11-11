@@ -223,6 +223,15 @@ function getReader(): CanopyLocalReader {
   return reader;
 }
 
+/**
+ * Lets the reader's model go, when no screen is being read, under memory
+ * pressure or as the machine sleeps; the next screen loads it again. Never
+ * makes a reader. Returns how many reader processes went.
+ */
+export function retireIdleCanopyReader(): number {
+  return reader?.retireIdle() ? 1 : 0;
+}
+
 function modelReady(): boolean {
   return models?.state()?.status === "ready";
 }

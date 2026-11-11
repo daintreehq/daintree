@@ -1345,6 +1345,21 @@ describe("ProcessMemoryMonitor", () => {
       );
     });
 
+    it("lets Canopy's idle reader go at tier 1, before the settle window (#16816)", async () => {
+      const retireIdleCanopyReader = vi.fn(() => 1);
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor({ ...mockActions, retireIdleCanopyReader });
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(retireIdleCanopyReader).toHaveBeenCalledTimes(1);
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({ canopyReadersRetired: 1, canopyReaderRetireFailed: false })
+      );
+    });
+
     it("awaits the pty-host trim before opening the settle window (#11674)", async () => {
       // Fire-and-forget left the host still processing the trim while the
       // sampler was already reading the "after" footprint, so the bracket
@@ -1759,6 +1774,40 @@ describe("ProcessMemoryMonitor", () => {
       await advanceMinutes(20);
 
       expect(gapsInMinutes(passes[1])).toEqual([5, 5, 5]);
+    });
+
+    it("counts a retired Canopy reader as productive whatever the sampler saw (#16816)", async () => {
+      mockActions.retireIdleCanopyReader = vi.fn(() => 1);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advanceMinutes(20);
+
+      expect(gapsInMinutes(passes[1])).toEqual([5, 5, 5]);
+    });
+
+    it("neither grows nor forgets the backoff when the Canopy reader lever throws (#16816)", async () => {
+      let throws = false;
+      mockActions.retireIdleCanopyReader = vi.fn(() => {
+        if (throws) throw new Error("reader gone");
+        return 0;
+      });
+      stop = startAppMetricsMonitor(mockActions);
+
+      // A reader with nothing to let go finds nothing: 10 minutes, then 20.
+      await advanceMinutes(15);
+      expect(passes[1]).toHaveLength(2);
+
+      throws = true;
+      await advanceMinutes(20);
+      expect(passes[1]).toHaveLength(3);
+      throws = false;
+      await advanceMinutes(20);
+
+      expect(gapsInMinutes(passes[1])).toEqual([10, 20, 20]);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({ outcome: "unknown", canopyReaderRetireFailed: true })
+      );
     });
 
     it("never counts the renderer scrollback request as productive (#14215)", async () => {

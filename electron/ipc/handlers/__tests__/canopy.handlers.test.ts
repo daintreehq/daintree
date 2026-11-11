@@ -256,7 +256,11 @@ const gitBranch = vi.hoisted(() =>
   vi.fn(async (_path: string) => "feature/login" as string | null)
 );
 vi.mock("../../../utils/gitUtils.js", () => ({ getGitBranch: gitBranch }));
-const localReader = vi.hoisted(() => ({ read: vi.fn(), release: vi.fn() }));
+const localReader = vi.hoisted(() => ({
+  read: vi.fn(),
+  release: vi.fn(),
+  retireIdle: vi.fn(() => false),
+}));
 vi.mock("../../../services/canopy/canopyLocalReader.js", () => ({
   CanopyLocalReader: vi.fn(function CanopyLocalReader() {
     return localReader;
@@ -311,10 +315,11 @@ import {
   canopyPanelsListing,
   globalAssistantInputOwner,
   registerCanopyHandlers,
+  retireIdleCanopyReader,
 } from "../canopy.js";
 import type { CanopySnapshot, CanopyTerminalView } from "../../../../shared/types/ipc/canopy.js";
 import { CanopyModels } from "../../../services/canopy/canopyModels.js";
-import { tryReaderModel } from "../../../services/canopy/canopyLocalReader.js";
+import { CanopyLocalReader, tryReaderModel } from "../../../services/canopy/canopyLocalReader.js";
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
 import { activeTerminalWatches, sizeHolds } from "../canopyTerminalWatch.js";
 import { markProjectlessView } from "../../../window/projectlessViews.js";
@@ -950,6 +955,26 @@ describe("canopy IPC", () => {
       "/tmp/canopy/reader-updates/x.download",
       stop.signal
     );
+  });
+
+  it("lets an idle reader go on request, never making one to do it (#16816)", async () => {
+    expect(retireIdleCanopyReader()).toBe(0);
+    expect(CanopyLocalReader).not.toHaveBeenCalled();
+
+    state.mode = "on";
+    await invoke(CANOPY_METHOD_CHANNELS.setActive, fakeSender(9), true);
+    await vi.waitFor(() => expect(localReader.read).toHaveBeenCalled());
+    localReader.retireIdle.mockReturnValueOnce(true).mockReturnValueOnce(false);
+    expect(retireIdleCanopyReader()).toBe(1);
+    // Busy, or already let go: nothing went.
+    expect(retireIdleCanopyReader()).toBe(0);
+
+    // Canopy's teardown drops the reader with the rest.
+    cleanup();
+    cleanup = registerCanopyHandlers();
+    localReader.retireIdle.mockClear();
+    expect(retireIdleCanopyReader()).toBe(0);
+    expect(localReader.retireIdle).not.toHaveBeenCalled();
   });
 
   it.each(["unset", "hidden"] as const)(

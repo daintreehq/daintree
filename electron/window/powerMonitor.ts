@@ -112,6 +112,8 @@ export interface PowerMonitorDeps {
   getPtyClient: () => PtyClient | null;
   getWorkspaceClient: () => WorkspaceClient | null;
   getMainProcessWatchdogClient?: () => MainProcessWatchdogClient | null;
+  /** Lets Canopy's reader process go if no screen is being read; the next read loads it again. */
+  retireIdleCanopyReader?: () => void;
 }
 
 export function setupPowerMonitor(deps: PowerMonitorDeps): void {
@@ -169,6 +171,13 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
       watchdog.pause();
     }
     suspendTime = Date.now();
+    // Last, so a throw costs nothing above: the reader is a convenience to
+    // drop, and a sleeping machine reads no screens.
+    try {
+      deps.retireIdleCanopyReader?.();
+    } catch (error) {
+      console.error("[MAIN] Canopy reader retirement threw during suspend:", error);
+    }
   });
 
   powerMonitor.on("resume", () => {

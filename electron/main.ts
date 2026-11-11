@@ -91,6 +91,7 @@ import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { setCanopyBrowserWindowFactory } from "./window/canopyWindow.js";
 import { restoreCanopyWindow } from "./ipc/handlers/canopyWindow.js";
+import { retireIdleCanopyReader } from "./ipc/handlers/canopy.js";
 import { createWindowRecreation } from "./window/windowRecreation.js";
 import { hasPendingOpen, isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView, getRemoteViewHooks } from "./window/portDistribution.js";
@@ -598,6 +599,7 @@ if (!gotTheLock) {
       getPtyClient,
       getWorkspaceClient: getWorkspaceClientRef,
       getMainProcessWatchdogClient: getMainProcessWatchdogClientRef,
+      retireIdleCanopyReader,
     });
   }
 

@@ -293,6 +293,13 @@ describe("CanopyLocalReader", () => {
     return process;
   }
 
+  /** Every reader a test made, let go after it so no idle timer outlives the test. */
+  const readers: Array<{ release(): void }> = [];
+
+  afterEach(() => {
+    for (const made of readers.splice(0)) made.release();
+  });
+
   async function harness(dir: string | null = "/models/light", idleMs?: number) {
     const { CanopyLocalReader } = await import("../canopyLocalReader.js");
     const { CanopyReaderError } = await import("../canopyReaderProcess.js");
@@ -315,6 +322,7 @@ describe("CanopyLocalReader", () => {
       },
       idleMs
     );
+    readers.push(reader);
     return {
       reader,
       made,
@@ -533,6 +541,40 @@ describe("CanopyLocalReader", () => {
       expect(p.retire).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(IDLE_MS);
       expect(p.retire).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits for the last of overlapping reads before the idle period starts", async () => {
+      vi.useFakeTimers();
+      const h = await harness("/models/light", IDLE_MS);
+      await h.reader.read(input({ lines }), signal());
+      const p = h.made[0]!;
+      let answer!: () => void;
+      p.read.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = () => resolve({ reading: reading(), ms: 9 });
+          })
+      );
+      const slow = h.reader.read(input({ lines }), signal());
+      await h.reader.read(input({ lines }), signal());
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 2);
+      expect(p.retire).not.toHaveBeenCalled();
+      answer();
+      await slow;
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(IDLE_MS);
+      expect(p.retire).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops the idle period with a process that exits on its own", async () => {
+      vi.useFakeTimers();
+      const h = await harness("/models/light", IDLE_MS);
+      await h.reader.read(input({ lines }), signal());
+      expect(vi.getTimerCount()).toBe(1);
+      h.made[0]!.die();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(h.reader.retireIdle()).toBe(false);
     });
 
     it("lets the model go on request only when it holds one, and only once", async () => {

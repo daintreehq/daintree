@@ -164,6 +164,26 @@ describe("setupPowerMonitor", () => {
     );
   });
 
+  it("lets Canopy's idle reader go on suspend, a throw from it costing the suspend nothing", () => {
+    const ptyClient = createMockPtyClient();
+    const workspaceClient = createMockWorkspaceClient();
+    const retireIdleCanopyReader = vi.fn(() => {
+      throw new Error("reader gone");
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    setupPowerMonitor({
+      getPtyClient: () => ptyClient,
+      getWorkspaceClient: () => workspaceClient,
+      retireIdleCanopyReader,
+    });
+
+    expect(() => powerHandlers.get("suspend")!()).not.toThrow();
+    expect(retireIdleCanopyReader).toHaveBeenCalledTimes(1);
+    expect(ptyClient.pauseAll).toHaveBeenCalledTimes(1);
+    expect(workspaceClient.pauseHealthCheck).toHaveBeenCalledTimes(1);
+  });
+
   it("does not trigger refresh before the 2s resume debounce elapses", async () => {
     const workspaceClient = createMockWorkspaceClient();
     setupPowerMonitor({

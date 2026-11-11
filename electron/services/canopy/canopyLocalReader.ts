@@ -259,7 +259,9 @@ export class CanopyLocalReader {
     if (process === null || !process.live || process.modelDir !== dir) {
       process?.retire();
       const made: CanopyReaderProcess = this.spawn(dir, () => {
-        if (this.process === made) this.process = null;
+        if (this.process !== made) return;
+        this.process = null;
+        this.clearIdleTimer();
       });
       process = made;
       this.process = made;
