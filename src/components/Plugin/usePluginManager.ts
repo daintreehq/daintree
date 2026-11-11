@@ -458,6 +458,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // reads the live queue without a render lag.
   const [isCheckingAllUpdates, setIsCheckingAllUpdates] = useState(false);
   const isCheckingAllUpdatesRef = useRef(false);
+  // Bumped by every "Update all", so a single check that answers after one
+  // started can't put back a warning the run's own summary superseded.
+  const bulkCheckGenerationRef = useRef(0);
   const pendingQueueRef = useRef<PendingUpdate[]>([]);
   const isBatchActiveRef = useRef(false);
   // Where the confirm on screen sits in the run, for "Update 2 of 5" (#15042).
@@ -998,6 +1001,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
 
   /** Re-pull the list and publish what was installed or updated once it lands. */
   const settleOutcome = (outcome: PendingOutcome) => {
+    // Whatever a check said about the old install no longer describes it.
+    setCheckNotice(null);
     pendingOutcomeRef.current = outcome;
     setRefreshKey((k) => k + 1);
   };
@@ -1012,7 +1017,6 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     if (intent === "update" && result.status !== "installed") setUpdatingPluginId(null);
     switch (result.status) {
       case "installed":
-        setCheckNotice(null);
         // An update leaves the notice and error alone, here and on failure:
         // during "Update all" they hold the run's warning and any earlier
         // plugin's failure.
@@ -1491,6 +1495,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     // a mutation, or a cross-window uninstall), the response references a plugin
     // that may no longer exist — discard it rather than surface a stale confirm.
     const startKey = refreshKeyRef.current;
+    const bulkGeneration = bulkCheckGenerationRef.current;
     try {
       setError(null);
       const result = await window.electron.plugin.checkForUpdate(id);
@@ -1512,7 +1517,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           setPendingUpdate({ plugin, result });
           break;
         case "delisted":
-          setCheckNotice(delistedMessage(plugin, result));
+          if (bulkCheckGenerationRef.current === bulkGeneration) {
+            setCheckNotice(delistedMessage(plugin, result));
+          }
           break;
         case "catalog-unavailable":
           setError(catalogUnavailableMessage(result));
@@ -1600,6 +1607,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const targets = plugins.filter((p) => !p.isBuiltin && !!p.originalUrl);
     if (targets.length === 0) return;
     isCheckingAllUpdatesRef.current = true;
+    bulkCheckGenerationRef.current += 1;
     setIsCheckingAllUpdates(true);
     setError(null);
     setNotice(null);

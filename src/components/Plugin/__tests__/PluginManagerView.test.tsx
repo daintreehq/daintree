@@ -1395,6 +1395,68 @@ describe("PluginManagerView", () => {
       expect(screen.queryByText(DELISTED)).toBeNull();
     });
 
+    describe("the delisted warning", () => {
+      const DELISTED =
+        "The plugin catalog no longer lists Acme Demo, so it won't get updates from it. The installed copy keeps running.";
+      const delisted = {
+        status: "delisted" as const,
+        scope: "plugin" as const,
+        version: "1.0.0",
+      };
+
+      async function showDelisted() {
+        vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+        vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValueOnce(delisted);
+        await checkSelected();
+        await waitFor(() => expect(screen.getByText(DELISTED)).toBeTruthy());
+      }
+
+      it("gives way to an Update all run's own summary", async () => {
+        await showDelisted();
+        vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+          status: "up-to-date",
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "Update all" }));
+
+        await waitFor(() => expect(screen.getByText("All plugins are up to date.")).toBeTruthy());
+        expect(screen.queryByText(DELISTED)).toBeNull();
+      });
+
+      it("isn't put back by a single check that answers after Update all started", async () => {
+        vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+        let answer!: (value: typeof delisted) => void;
+        vi.mocked(window.electron.plugin.checkForUpdate)
+          .mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+          .mockResolvedValue({ status: "up-to-date" });
+        await checkSelected();
+
+        fireEvent.click(screen.getByRole("button", { name: "Update all" }));
+        await waitFor(() => expect(screen.getByText("All plugins are up to date.")).toBeTruthy());
+        await act(async () => answer(delisted));
+
+        expect(screen.queryByText(DELISTED)).toBeNull();
+      });
+
+      it("goes once an archive dropped over the plugin installs", async () => {
+        await showDelisted();
+        vi.mocked(window.electron.plugin.installFromPath).mockResolvedValue({
+          status: "installed",
+          pluginId: "acme.demo",
+        });
+
+        fireEvent.drop(pluginList(), {
+          dataTransfer: {
+            types: ["Files"],
+            files: [droppedFile("acme.demo.dntr", "/Users/test/acme.demo.dntr")],
+          },
+        });
+
+        await waitFor(() => expect(window.electron.plugin.installFromPath).toHaveBeenCalled());
+        await waitFor(() => expect(screen.queryByText(DELISTED)).toBeNull());
+      });
+    });
+
     it("names the installed release, as main reports it, when only it was delisted", async () => {
       vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
       vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
