@@ -583,22 +583,32 @@ function bypassGroupAt(
 }
 
 /**
- * The option groups other reconcilers own: the screen-mode flags and the
- * decorations opt-out, which every launch may carry and any relaunch may
- * rewrite whatever a bypass declaration says.
+ * The option groups Daintree adds to the agent's launches itself (the
+ * registry's fixed args, the screen-mode flags, the decorations opt-out), which
+ * a launch carries whatever its bypass. A registry arg that is the agent's own
+ * declared bypass still counts as one.
  */
-function managedLaunchGroups(agentId: string): string[][] {
-  const capabilities = getEffectiveAgentConfig(agentId)?.capabilities;
-  const groups = [capabilities?.inlineModeFlag, capabilities?.altScreenFlag]
-    .filter((flag): flag is string => !!flag)
-    .map((flag) => [flag]);
-  return [...groups, ...optionGroups(capabilities?.decorations?.offArgs ?? [])];
+function managedLaunchGroups(agentId: string): string[] {
+  const config = getEffectiveAgentConfig(agentId);
+  const capabilities = config?.capabilities;
+  const declared = optionGroups(getDefaultDangerousArgs(agentId).split(/\s+/).filter(Boolean)).map(
+    (group) => group.join(" ")
+  );
+  return [
+    ...optionGroups(config?.args ?? [])
+      .map((group) => group.join(" "))
+      .filter((group) => !declared.includes(group)),
+    ...[capabilities?.inlineModeFlag, capabilities?.altScreenFlag].filter(
+      (flag): flag is string => !!flag
+    ),
+    ...optionGroups(capabilities?.decorations?.offArgs ?? []).map((group) => group.join(" ")),
+  ];
 }
 
 /**
  * Whether a pane's launch flags carry its agent's permission bypass (#16785):
  * an option group {@link reconcileBypassFlags} would strip, other than the
- * screen-mode and decoration groups Daintree adds to every launch itself. So
+ * groups Daintree adds to every launch itself. So
  * the warning reads what the CLI was handed, not today's bypass mode; a flag
  * that only means bypass to another agent never trips it; and, like the
  * stripping, each option of a declaration counts on its own, so cleanup that
@@ -611,7 +621,7 @@ export function hasBypassFlags(
 ): boolean {
   if (!flags?.length || !agentId) return false;
   const written = settings?.agents ? ownEntry(settings.agents, agentId)?.dangerousArgs : undefined;
-  const managed = managedLaunchGroups(agentId).map((group) => group.join(" "));
+  const managed = managedLaunchGroups(agentId);
   const groups = bypassArgGroups(
     bypassArgSources(
       agentId,

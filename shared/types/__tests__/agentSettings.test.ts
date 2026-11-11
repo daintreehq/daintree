@@ -1591,6 +1591,34 @@ describe("hasBypassFlags (#16785)", () => {
     expect(hasBypassFlags(mistralFlags, "mistral", { agents: { mistral } })).toBe(true);
   });
 
+  it("never counts a fixed registry arg mixed into a declaration", () => {
+    const mistral = {
+      dangerousMode: "off" as const,
+      dangerousArgs: "--trust --agent auto-approve",
+    };
+    const flags = buildAgentLaunchFlags(mistral, "mistral");
+    expect(flags).toContain("--trust");
+    expect(hasBypassFlags(flags, "mistral", { agents: { mistral } })).toBe(false);
+    expect(
+      hasBypassFlags(["--trust", "--agent", "auto-approve"], "mistral", { agents: { mistral } })
+    ).toBe(true);
+  });
+
+  it("still counts a plugin's bypass that its fixed args always carry", () => {
+    registerPluginAgents("me.extra-agents", [
+      {
+        id: "hermes",
+        name: "Hermes",
+        color: "#3366ff",
+        iconId: "terminal",
+        command: "hermes",
+        args: ["--yes-to-all"],
+        permissionBypassArgs: ["--yes-to-all"],
+      },
+    ]);
+    expect(hasBypassFlags(["--yes-to-all"], "hermes", null)).toBe(true);
+  });
+
   it("leaves a launch without bypass unmarked when its declaration mixes in managed flags", () => {
     const codex = {
       dangerousMode: "off" as const,
