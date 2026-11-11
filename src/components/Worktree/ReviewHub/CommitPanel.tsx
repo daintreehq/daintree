@@ -222,6 +222,16 @@ export function CommitPanel({
     ? `${pushDestination.remote}/${pushDestination.branch}`
     : null;
   const [dontAskChecked, setDontAskChecked] = useState(false);
+  // A review pane moved to another worktree keeps this composer mounted
+  // (#16793). The confirm holds the message copied when it opened, the old
+  // worktree's draft, and its "don't ask again" choice, so confirming after the
+  // move would commit that draft into the new worktree and set its opt-out.
+  const [confirmForPath, setConfirmForPath] = useState(worktreePath);
+  if (confirmForPath !== worktreePath) {
+    setConfirmForPath(worktreePath);
+    setPushConfirmOpen(false);
+    setDontAskChecked(false);
+  }
   // The commits already on this branch that the push will publish alongside
   // the new one, read for the open confirm from the same range main measures
   // for every other push preview. The push can't be approved until it lands

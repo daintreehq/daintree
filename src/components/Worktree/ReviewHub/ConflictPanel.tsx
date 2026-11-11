@@ -288,15 +288,22 @@ export function ConflictPanel({
     setIsAborting(false);
     setIsContinuing(false);
   }
-  const currentPathRef = useRef(worktreePath);
+  // Counts moves rather than comparing paths, so work started before a move
+  // away and back stays stale when the panel returns to its worktree.
+  const shownPathRef = useRef(worktreePath);
+  const moveCountRef = useRef(0);
   useLayoutEffect(() => {
-    if (currentPathRef.current === worktreePath) return;
-    currentPathRef.current = worktreePath;
+    if (shownPathRef.current === worktreePath) return;
+    shownPathRef.current = worktreePath;
+    moveCountRef.current += 1;
     pendingFocusRef.current = undefined;
   }, [worktreePath]);
-  // Read after an await: whether the worktree a handler started in is still the
-  // one this panel shows.
-  const isStillOn = (path: string): boolean => currentPathRef.current === path;
+  // Called as a handler starts; the check it returns answers, after an await,
+  // whether the panel has moved since.
+  const startUnmoved = (): (() => boolean) => {
+    const moveCount = moveCountRef.current;
+    return () => moveCountRef.current === moveCount;
+  };
 
   const operationState = status.repoState;
   const operationKey: RepoOperationState | null = useMemo(
@@ -423,25 +430,27 @@ export function ConflictPanel({
   }, [worktreePath, conflictedFiles, scanNonce]);
 
   const handleAbort = useCallback(async () => {
+    const unmoved = startUnmoved();
     setIsAborting(true);
     try {
       await onAbort();
-      if (isStillOn(worktreePath)) setIsAbortOpen(false);
+      if (unmoved()) setIsAbortOpen(false);
     } finally {
-      if (isStillOn(worktreePath)) setIsAborting(false);
+      if (unmoved()) setIsAborting(false);
     }
-  }, [onAbort, worktreePath]);
+  }, [onAbort]);
 
   const handleContinue = useCallback(async () => {
     // `aria-disabled` keeps Continue focusable, so the veto lives here.
     if (continueBlocked) return;
+    const unmoved = startUnmoved();
     setIsContinuing(true);
     try {
       await onContinue();
     } finally {
-      if (isStillOn(worktreePath)) setIsContinuing(false);
+      if (unmoved()) setIsContinuing(false);
     }
-  }, [continueBlocked, onContinue, worktreePath]);
+  }, [continueBlocked, onContinue]);
 
   // Read at the moment of intent: by the time a resolve starts, the busy row
   // has disabled the control that held focus, or a dialog holds it.
@@ -453,6 +462,7 @@ export function ConflictPanel({
 
   const resolveOptimistically = useCallback(
     async (filePath: string, handOffFocus: boolean, run: () => Promise<void> | void) => {
+      const unmoved = startUnmoved();
       if (handOffFocus) {
         const idx = liveConflicts.findIndex((c) => c.path === filePath);
         const neighbour = liveConflicts[idx + 1] ?? liveConflicts[idx - 1];
@@ -470,7 +480,7 @@ export function ConflictPanel({
       } catch (err) {
         // Roll back optimistic resolution if the operation failed — the row
         // should reappear so the user can retry.
-        if (isStillOn(worktreePath)) {
+        if (unmoved()) {
           pendingFocusRef.current = undefined;
           setOptimisticResolved((prev) => {
             if (!prev.has(filePath)) return prev;
@@ -481,12 +491,12 @@ export function ConflictPanel({
         }
         throw err;
       } finally {
-        if (isStillOn(worktreePath)) {
+        if (unmoved()) {
           setBusyFile((current) => (current === filePath ? null : current));
         }
       }
     },
-    [liveConflicts, worktreePath]
+    [liveConflicts]
   );
 
   const markResolved = useCallback(
@@ -509,6 +519,7 @@ export function ConflictPanel({
   const handleMarkResolvedClick = useCallback(
     async (filePath: string) => {
       const handOffFocus = rowHasFocus(filePath);
+      const unmoved = startUnmoved();
       setBusyFile(filePath);
       let hunkCount: number | null;
       try {
@@ -522,7 +533,7 @@ export function ConflictPanel({
       }
       // The re-read answered for a worktree this panel no longer shows: its
       // file is not the row on screen, so neither ask nor resolve.
-      if (!isStillOn(worktreePath)) return;
+      if (!unmoved()) return;
       setBusyFile((current) => (current === filePath ? null : current));
       if (hunkCount !== 0) {
         setPendingMarkerConfirm({ filePath, hunkCount });

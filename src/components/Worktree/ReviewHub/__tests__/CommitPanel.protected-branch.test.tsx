@@ -751,7 +751,6 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
       { ...IDENTITY_A, destination: { remote: "origin", branch: "release/x" } },
     ],
     ["local branch", { ...IDENTITY_A, currentBranch: "feature/y" }],
-    ["worktree", { ...IDENTITY_A, worktreePath: "/other" }],
   ])(
     "does not approve a range read before the %s changed while the dialog was open",
     async (_label, next) => {
@@ -784,6 +783,26 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
       expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
     }
   );
+
+  // A review pane moved to another worktree keeps the composer mounted
+  // (#16793). The confirm closes rather than re-reading: the draft it previews
+  // and its opt-out choice belong to the worktree it opened for.
+  it("closes when the worktree changes while the dialog is open, and pushes nothing", async () => {
+    const { onCommitAndPush, show } = renderIdentity(IDENTITY_A);
+    await waitFor(() => expect(confirmButton(CONFIRM).getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(screen.getByTestId("commit-panel-push-confirm-dont-ask"));
+
+    show({ ...IDENTITY_A, worktreePath: "/other" });
+    expect(screen.queryByTestId("push-confirm-dialog")).toBeNull();
+    await flushReadStart();
+    expect(listPushCommits).toHaveBeenCalledTimes(1);
+    expect(onCommitAndPush).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    expect(
+      screen.getByTestId("commit-panel-push-confirm-dont-ask").getAttribute("aria-checked")
+    ).toBe("false");
+  });
 
   it("does not revive the first answer when the destination changes and changes back", async () => {
     listPushCommits

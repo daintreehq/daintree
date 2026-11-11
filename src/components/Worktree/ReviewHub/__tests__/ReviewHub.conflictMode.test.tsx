@@ -977,11 +977,32 @@ describe("ReviewHub", () => {
         const view = render(
           <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
         );
-        const moveToOther = () =>
+        const moveTo = (worktreePath: string) => () =>
           view.rerender(
-            <ReviewHubContent isOpen={true} worktreePath={OTHER_PATH} onClose={vi.fn()} />
+            <ReviewHubContent isOpen={true} worktreePath={worktreePath} onClose={vi.fn()} />
           );
-        return moveToOther;
+        return Object.assign(moveTo(OTHER_PATH), { moveBack: moveTo(WORKTREE_PATH) });
+      }
+
+      function deferred<T>() {
+        let resolve!: (value: T) => void;
+        let reject!: (reason: unknown) => void;
+        const promise = new Promise<T>((res, rej) => {
+          resolve = res;
+          reject = rej;
+        });
+        return { promise, resolve, reject };
+      }
+
+      /** Holds the next click-time marker re-read until the test answers it. */
+      async function holdNextReread() {
+        await waitFor(() =>
+          expect(scanConflictMarkersMock).toHaveBeenCalledWith(WORKTREE_PATH, ["src/app.ts"])
+        );
+        await act(async () => {});
+        const reread = deferred<ConflictMarkerScanEntry[]>();
+        scanConflictMarkersMock.mockImplementationOnce(() => reread.promise);
+        return reread;
       }
 
       it("closes an abort confirm opened for the previous worktree", async () => {
@@ -1024,35 +1045,100 @@ describe("ReviewHub", () => {
 
       it("never asks about leftover markers the previous worktree's re-read found after the move", async () => {
         const moveToOther = renderMergingHub();
-        await waitFor(() =>
-          expect(scanConflictMarkersMock).toHaveBeenCalledWith(WORKTREE_PATH, ["src/app.ts"])
-        );
-        await act(async () => {});
-
-        let resolveReread: ((entries: ConflictMarkerScanEntry[]) => void) | undefined;
-        scanConflictMarkersMock.mockImplementationOnce(
-          () =>
-            new Promise<ConflictMarkerScanEntry[]>((resolve) => {
-              resolveReread = resolve;
-            })
-        );
+        const reread = await holdNextReread();
         fireEvent.click(screen.getByRole("button", { name: /Mark src\/app\.ts as resolved/i }));
-        await waitFor(() => expect(resolveReread).toBeDefined());
 
         moveToOther();
         await waitFor(() =>
           expect(scanConflictMarkersMock).toHaveBeenCalledWith(OTHER_PATH, ["src/app.ts"])
         );
         await act(async () => {
-          resolveReread?.([{ path: "src/app.ts", hunkCount: 2, firstMarkerLine: 4 }]);
+          reread.resolve([{ path: "src/app.ts", hunkCount: 2, firstMarkerLine: 4 }]);
         });
 
         expect(screen.queryByRole("alertdialog")).toBeNull();
         expect(stageFileMock).not.toHaveBeenCalled();
       });
 
-      it("lists a same-named conflict the previous worktree had just marked resolved", async () => {
-        stageFileMock.mockImplementationOnce(() => new Promise<void>(() => {}));
+      // Back on the worktree it was asked for, the re-read is still a leftover
+      // of an earlier visit: the row it confirmed was reset by the move away.
+      it("never acts on that re-read once the hub has moved back", async () => {
+        const moveToOther = renderMergingHub();
+        const reread = await holdNextReread();
+        fireEvent.click(screen.getByRole("button", { name: /Mark src\/app\.ts as resolved/i }));
+
+        moveToOther();
+        moveToOther.moveBack();
+        await act(async () => {
+          reread.resolve([{ path: "src/app.ts", hunkCount: 0, firstMarkerLine: null }]);
+        });
+
+        expect(screen.queryByRole("alertdialog")).toBeNull();
+        expect(stageFileMock).not.toHaveBeenCalled();
+        expect(screen.getByRole("button", { name: /Mark src\/app\.ts as resolved/i })).toBeTruthy();
+      });
+
+      it("frees Abort, and keeps the new worktree's abort confirm when the old abort lands", async () => {
+        const oldAbort = deferred<void>();
+        abortRepositoryOperationMock.mockImplementationOnce(() => oldAbort.promise);
+        const moveToOther = renderMergingHub();
+        fireEvent.click(await screen.findByRole("button", { name: /^Abort /i }));
+        const dialog = await screen.findByRole("alertdialog");
+        fireEvent.click(within(dialog).getByRole("button", { name: /Abort merge/i }));
+        await waitFor(() =>
+          expect(abortRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH)
+        );
+
+        moveToOther();
+        const abortButton = screen.getByRole("button", { name: /^Abort /i }) as HTMLButtonElement;
+        expect(abortButton.disabled).toBe(false);
+        fireEvent.click(abortButton);
+        await screen.findByRole("alertdialog");
+
+        await act(async () => {
+          oldAbort.resolve();
+        });
+        expect(screen.getByRole("alertdialog")).toBeTruthy();
+        expect(abortRepositoryOperationMock).toHaveBeenCalledTimes(1);
+      });
+
+      it("keeps the new worktree's own resolve when the old worktree's same-named resolve fails", async () => {
+        const oldStage = deferred<void>();
+        const newStage = deferred<void>();
+        stageFileMock
+          .mockImplementationOnce(() => oldStage.promise)
+          .mockImplementationOnce(() => newStage.promise);
+        const moveToOther = renderMergingHub();
+        fireEvent.click(
+          await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+        );
+        await waitFor(() =>
+          expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts")
+        );
+
+        moveToOther();
+        fireEvent.click(
+          await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+        );
+        await waitFor(() => expect(stageFileMock).toHaveBeenCalledWith(OTHER_PATH, "src/app.ts"));
+        expect(screen.queryByRole("button", { name: /Mark src\/app\.ts as resolved/i })).toBeNull();
+
+        await act(async () => {
+          oldStage.reject(new Error("index.lock exists"));
+        });
+        // Neither the old rollback nor its cleanup reaches the new resolve: the
+        // row stays resolved and Continue waits on the stage still in flight.
+        expect(screen.queryByRole("button", { name: /Mark src\/app\.ts as resolved/i })).toBeNull();
+        expect(screen.getByTestId("conflict-continue").getAttribute("aria-disabled")).toBe("true");
+
+        await act(async () => {
+          newStage.resolve();
+        });
+      });
+
+      it("lists, and frees, a same-named conflict the previous worktree had just marked resolved", async () => {
+        const oldStage = deferred<void>();
+        stageFileMock.mockImplementationOnce(() => oldStage.promise);
         const moveToOther = renderMergingHub();
         fireEvent.click(
           await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
@@ -1066,6 +1152,14 @@ describe("ReviewHub", () => {
         expect(
           await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
         ).toBeTruthy();
+        const open = screen.getByRole("button", {
+          name: /Open src\/app\.ts in external editor/i,
+        }) as HTMLButtonElement;
+        expect(open.disabled).toBe(false);
+
+        await act(async () => {
+          oldStage.resolve();
+        });
       });
     });
 
