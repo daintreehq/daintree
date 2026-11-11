@@ -26,8 +26,17 @@ function headersFrom(raw: Record<string, string | string[] | undefined>): Header
   return headers;
 }
 
-/** The fetch {@link createManualRedirectFetch} returns: a URL and init, never a `Request`. */
-export type ManualRedirectFetch = (url: string, init?: RequestInit) => Promise<Response>;
+declare const manualRedirect: unique symbol;
+
+/**
+ * A fetch whose `redirect: "manual"` answers a 3xx instead of rejecting, made by
+ * {@link createManualRedirectFetch}. Branded because Electron's `net.fetch` has
+ * the same shape but rejects every manual-mode redirect, so it must not be
+ * accepted where one of these is needed.
+ */
+export type ManualRedirectFetch = ((url: string, init?: RequestInit) => Promise<Response>) & {
+  readonly [manualRedirect]: true;
+};
 
 /**
  * A fetch on Electron's network stack whose `redirect: "manual"` works. Electron's
@@ -43,11 +52,15 @@ export type ManualRedirectFetch = (url: string, init?: RequestInit) => Promise<R
  * Everything else follows `net.fetch`: the same request options and defaults,
  * the `credentials` mapping, the abort reason and the response it builds. It
  * listens on the caller's signal directly rather than through a `Request`, so
- * its listener leaves once the exchange is over. A request body is refused,
- * since no redirect-following caller could resend one.
+ * its listener leaves once the exchange is over. Unlike `net.fetch`, an abort
+ * after the headers errors the body with the signal's reason, and a body
+ * cancelled or destroyed before its end cancels the request: Electron's
+ * `IncomingMessage` can't do that itself, so the connection would otherwise
+ * stay open. A request body is refused, since no redirect-following caller
+ * could resend one.
  */
 export function createManualRedirectFetch(netRequest: NetRequest): ManualRedirectFetch {
-  return (url, init = {}) =>
+  const manualFetch = (url: string, init: RequestInit = {}) =>
     new Promise<Response>((resolve, reject) => {
       if (init.body != null) {
         reject(new TypeError("A request body can't be sent through the manual-redirect fetch"));
@@ -84,10 +97,12 @@ export function createManualRedirectFetch(netRequest: NetRequest): ManualRedirec
       }
 
       let settled = false;
+      let message: Readable | null = null;
       // Stays attached while a body streams, so a late abort still tears it down.
       const onAbort = () => {
         settled = true;
         reject(signal!.reason);
+        message?.destroy(signal!.reason);
         clientRequest.abort();
       };
       const release = () => signal?.removeEventListener("abort", onAbort);
@@ -109,21 +124,32 @@ export function createManualRedirectFetch(netRequest: NetRequest): ManualRedirec
         }
       });
 
-      clientRequest.on("response", (message: IncomingMessage) => {
-        if (settled) return;
+      clientRequest.on("response", (incoming: IncomingMessage) => {
+        const stream = incoming as unknown as Readable;
+        if (settled) {
+          stream.destroy();
+          return;
+        }
         settled = true;
         try {
           const body =
-            NULL_BODY_STATUSES.has(message.statusCode) || method === "HEAD"
+            NULL_BODY_STATUSES.has(incoming.statusCode) || method === "HEAD"
               ? null
-              : (Readable.toWeb(message as unknown as Readable) as ReadableStream<Uint8Array>);
+              : (Readable.toWeb(stream) as ReadableStream<Uint8Array>);
           const response = new Response(body, {
-            headers: headersFrom(message.headers),
-            status: message.statusCode,
-            statusText: message.statusMessage,
+            headers: headersFrom(incoming.headers),
+            status: incoming.statusCode,
+            statusText: incoming.statusMessage,
           });
-          if (body) (message as unknown as Readable).once("close", release);
-          else release();
+          if (body) {
+            message = stream;
+            stream.once("close", () => {
+              release();
+              if (!stream.readableEnded) clientRequest.abort();
+            });
+          } else {
+            release();
+          }
           resolve(response);
         } catch (err) {
           release();
@@ -140,4 +166,5 @@ export function createManualRedirectFetch(netRequest: NetRequest): ManualRedirec
       });
       clientRequest.end();
     });
+  return manualFetch as ManualRedirectFetch;
 }

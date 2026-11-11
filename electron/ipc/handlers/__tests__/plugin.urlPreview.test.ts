@@ -60,6 +60,11 @@ vi.mock("electron", () => ({
   BrowserWindow: { getFocusedWindow: vi.fn(() => null) },
   dialog: { showOpenDialog: vi.fn() },
 }));
+// URL downloads fetch through the manual-redirect adapter over `net.request`;
+// route it to the same stub so each case still scripts every hop.
+vi.mock("../../../utils/netManualRedirectFetch.js", () => ({
+  createManualRedirectFetch: () => (url: string, init?: RequestInit) => netFetch(url, init),
+}));
 vi.mock("../../../window/windowRef.js", () => ({
   getWindowRegistry: vi.fn(() => null),
   getProjectViewManager: vi.fn(() => null),

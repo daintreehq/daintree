@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { getEventListeners } from "node:events";
+import { Readable } from "node:stream";
 import { createManualRedirectFetch } from "../netManualRedirectFetch.js";
 import { FakeElectronNet } from "./helpers/fakeElectronNet.js";
 
@@ -124,27 +125,52 @@ describe("createManualRedirectFetch", () => {
     expect(net.requests[0]!.aborted).toBe(true);
   });
 
-  it("tears the body down when the signal fires mid-stream", async () => {
+  /** A 200 whose body has sent "partial" and is still open. */
+  async function openBody(signal?: AbortSignal) {
     const net = new FakeElectronNet({ [START]: { hang: true } });
-    const controller = new AbortController();
-    const pending = createManualRedirectFetch(net.request)(START, { signal: controller.signal });
+    const pending = createManualRedirectFetch(net.request)(START, { signal });
     await new Promise((resolve) => setImmediate(resolve));
     const request = net.requests[0]!;
-    const message = Object.assign(
-      new (await import("node:stream")).Readable({ read() {} }),
-      { statusCode: 200, statusMessage: "", headers: {} }
-    );
+    const message = Object.assign(new Readable({ read() {} }), {
+      statusCode: 200,
+      statusMessage: "",
+      headers: {},
+    });
     request.response = message;
     request.emit("response", message);
     message.push(Buffer.from("partial"));
-    const response = await pending;
-    const reader = response.body!.getReader();
+    const reader = (await pending).body!.getReader();
     await reader.read();
+    return { request, reader };
+  }
 
-    controller.abort(new Error("cancelled"));
+  it("errors the body with the signal's reason and aborts the request when it fires mid-stream", async () => {
+    const controller = new AbortController();
+    const { request, reader } = await openBody(controller.signal);
+    const reason = new Error("cancelled");
 
-    await expect(reader.read()).rejects.toBeDefined();
+    controller.abort(reason);
+
+    await expect(reader.read()).rejects.toBe(reason);
     expect(request.aborted).toBe(true);
+  });
+
+  it("aborts the request when the body is cancelled before its end", async () => {
+    const { request, reader } = await openBody();
+
+    await reader.cancel();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(request.aborted).toBe(true);
+  });
+
+  it("leaves a request whose body finished alone", async () => {
+    const net = new FakeElectronNet({ [START]: { status: 200, body: "PK" } });
+
+    await (await createManualRedirectFetch(net.request)(START)).text();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(net.requests[0]!.aborted).toBe(false);
   });
 
   it("rejects with the request's error", async () => {
@@ -178,5 +204,32 @@ describe("createManualRedirectFetch", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  });
+});
+
+describe("FakeElectronNet", () => {
+  // The fake must hold to Electron's rule, or the tests above prove nothing.
+  it("follows a manual redirect only when followRedirect() is called inside the event", async () => {
+    const net = new FakeElectronNet({
+      [START]: { redirect: ASSET },
+      [ASSET]: { status: 200 },
+    });
+    const sync = net.request({ url: START, redirect: "manual" });
+    sync.on("redirect", () => sync.followRedirect());
+    const answered = new Promise((resolve) => sync.on("response", resolve));
+    sync.end();
+    await answered;
+
+    const late = net.request({ url: START, redirect: "manual" });
+    const errored = new Promise<Error>((resolve) => late.on("error", resolve));
+    let followLater: () => void = () => {};
+    late.on("redirect", () => {
+      followLater = () => late.followRedirect();
+    });
+    late.end();
+
+    expect((await errored).message).toBe("Redirect was cancelled");
+    expect(followLater).toThrow("not waiting for a redirect");
+    expect(net.connected).toEqual([START, ASSET, START]);
   });
 });

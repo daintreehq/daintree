@@ -272,6 +272,11 @@ vi.mock("electron", () => ({
     fetch: (...args: unknown[]) => mockNetFetch(...args),
   },
 }));
+// URL downloads fetch through the manual-redirect adapter over `net.request`;
+// route it to the same stub so each case still scripts every hop.
+vi.mock("../../../utils/netManualRedirectFetch.js", () => ({
+  createManualRedirectFetch: () => (url: string, init?: RequestInit) => mockNetFetch(url, init),
+}));
 
 import { registerPluginHandlers } from "../plugin.js";
 import { notifyIpcEnvelopeRejected } from "../../envelopeRejections.js";

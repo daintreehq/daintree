@@ -730,6 +730,46 @@ describe("fetchWithPrivateHostGuard — over Electron's net stack (#16855)", () 
     expect(net.connected).toEqual([RELEASE]);
   });
 
+  it("has dropped the redirecting request while the next hop's DNS check runs", async () => {
+    let answer: (records: Array<{ address: string; family: number }>) => void = () => {};
+    mockLookup.mockImplementation((host: string) =>
+      host === "github.com"
+        ? Promise.resolve([{ address: "140.82.112.3", family: 4 }])
+        : new Promise((resolve) => {
+            answer = resolve;
+          })
+    );
+    const net = new FakeElectronNet({
+      [RELEASE]: { redirect: ASSET },
+      [ASSET]: { status: 200, body: "PK" },
+    });
+
+    const pending = fetchWithPrivateHostGuard(createManualRedirectFetch(net.request), RELEASE, {});
+    await vi.waitFor(() => expect(mockLookup).toHaveBeenCalledTimes(2));
+
+    expect(net.requests.map((r) => r.aborted)).toEqual([true]);
+    answer([{ address: "185.199.108.133", family: 4 }]);
+    expect((await pending).ok).toBe(true);
+    expect(net.connected).toEqual([RELEASE, ASSET]);
+  });
+
+  it("still caps the redirect chain", async () => {
+    const routes: Record<string, { redirect: string }> = {};
+    for (let i = 0; i <= 5; i++) {
+      routes[`https://hop${i}.example/p.dntr`] = { redirect: `https://hop${i + 1}.example/p.dntr` };
+    }
+    const net = new FakeElectronNet(routes);
+
+    const result = await fetchWithPrivateHostGuard(
+      createManualRedirectFetch(net.request),
+      "https://hop0.example/p.dntr",
+      {}
+    );
+
+    expect(result).toEqual({ ok: false, reason: "too-many-redirects" });
+    expect(net.requests.every((r) => r.aborted)).toBe(true);
+  });
+
   it("refuses a redirect to a host that resolves privately, without connecting to it", async () => {
     mockLookup.mockImplementation(async (host: string) => [
       { address: host === "github.com" ? "140.82.112.3" : "10.0.0.7", family: 4 },

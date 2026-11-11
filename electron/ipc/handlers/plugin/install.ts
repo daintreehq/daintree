@@ -15,6 +15,7 @@ import {
   acceptedMime,
   dntrSuffixOk,
 } from "../../../utils/pluginDownloadPolicy.js";
+import { createManualRedirectFetch } from "../../../utils/netManualRedirectFetch.js";
 import {
   SCOPED_PLUGIN_NAME_PATTERN,
   isCommunityPluginId,
@@ -441,7 +442,11 @@ async function withDownloadedArchive<T>(
 
     let response: Response;
     try {
-      const guarded = await fetchWithPrivateHostGuard(net.fetch, trimmed, { signal });
+      const guarded = await fetchWithPrivateHostGuard(
+        createManualRedirectFetch((options) => net.request(options)),
+        trimmed,
+        { signal }
+      );
       if (!guarded.ok) {
         return downloadFailed(
           "fetch_failed",

@@ -23,6 +23,7 @@ import {
   dntrSuffixOk,
   fetchWithPrivateHostGuard,
 } from "../../utils/pluginDownloadPolicy.js";
+import { createManualRedirectFetch } from "../../utils/netManualRedirectFetch.js";
 import { resilientRename } from "../../utils/fs.js";
 import { getPluginMcpSupervisor } from "../PluginMcpSupervisor.js";
 import { getPluginMcpConsentService, getPluginMcpRateLimiter } from "../plugin-mcp/instances.js";
@@ -1185,12 +1186,14 @@ export class PluginInstaller {
       // a public URL that 30x-redirects to loopback/link-local/RFC1918 (SSRF).
       // The guard also re-resolves each hop's DNS and rejects a private resolved
       // IP, closing the DNS-rebinding TOCTOU (#10518); a sub-ms residual remains
-      // because net.fetch re-resolves independently (see pluginDownloadPolicy).
-      let response: Awaited<ReturnType<typeof net.fetch>>;
+      // because the request re-resolves independently (see pluginDownloadPolicy).
+      let response: Response;
       try {
-        const guarded = await fetchWithPrivateHostGuard(net.fetch, url, {
-          signal: AbortSignal.timeout(PLUGIN_DOWNLOAD_TIMEOUT_MS),
-        });
+        const guarded = await fetchWithPrivateHostGuard(
+          createManualRedirectFetch((options) => net.request(options)),
+          url,
+          { signal: AbortSignal.timeout(PLUGIN_DOWNLOAD_TIMEOUT_MS) }
+        );
         if (!guarded.ok) {
           return {
             status: "fetch-failed",
@@ -1202,7 +1205,7 @@ export class PluginInstaller {
                   : "The update URL followed too many redirects",
           };
         }
-        response = guarded.response as Awaited<ReturnType<typeof net.fetch>>;
+        response = guarded.response;
       } catch (err) {
         return {
           status: "fetch-failed",
