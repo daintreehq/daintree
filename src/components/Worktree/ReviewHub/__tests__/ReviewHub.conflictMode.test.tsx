@@ -1057,7 +1057,9 @@ describe("ReviewHub", () => {
         fireEvent.click(
           await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
         );
-        await waitFor(() => expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts"));
+        await waitFor(() =>
+          expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts")
+        );
         expect(screen.queryByRole("button", { name: /Mark src\/app\.ts as resolved/i })).toBeNull();
 
         moveToOther();

@@ -1692,9 +1692,9 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledWith(OTHER_PATH));
       await waitFor(() => screen.getByTestId("file-stage-row-src/app.ts"));
 
-      expect(screen.getByTestId("file-stage-row-src/app.ts").getAttribute("aria-selected")).not.toBe(
-        "true"
-      );
+      expect(
+        screen.getByTestId("file-stage-row-src/app.ts").getAttribute("aria-selected")
+      ).not.toBe("true");
       const stageButton = screen.getByTestId("review-hub-stage-section-button");
       expect(stageButton.textContent).not.toMatch(/selection/i);
       fireEvent.click(stageButton);
@@ -1769,15 +1769,15 @@ describe("ReviewHub", () => {
 
       rerender(<ReviewHubContent isOpen={true} worktreePath={OTHER_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByTestId("file-stage-row-src/app.ts"));
-      expect((screen.getByPlaceholderText(/Summary on the first line/i) as HTMLTextAreaElement).value).toBe(
-        ""
-      );
+      expect(
+        (screen.getByPlaceholderText(/Summary on the first line/i) as HTMLTextAreaElement).value
+      ).toBe("");
 
       rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() =>
-        expect((screen.getByPlaceholderText(/Summary on the first line/i) as HTMLTextAreaElement).value).toBe(
-          "first worktree draft"
-        )
+        expect(
+          (screen.getByPlaceholderText(/Summary on the first line/i) as HTMLTextAreaElement).value
+        ).toBe("first worktree draft")
       );
     });
   });
