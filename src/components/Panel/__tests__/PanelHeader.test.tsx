@@ -7,6 +7,7 @@ import type { PanelHeaderProps } from "../PanelHeader";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { NoDndMouseSensor, NoDndTouchSensor } from "@/components/DragDrop/DndProvider";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -2128,7 +2129,12 @@ describe("PanelHeader", () => {
       // filled dot — whichever way round, they are told apart without colour.
       useFleetFailureStore.getState().recordFailure("payload", ["test-panel"]);
       render(
-        <PanelHeader {...makeProps({ agentLaunchFlags: ["--dangerously-skip-permissions"] })} />
+        <PanelHeader
+          {...makeProps({
+            agentId: "claude",
+            agentLaunchFlags: ["--dangerously-skip-permissions"],
+          })}
+        />
       );
       const dangerous = screen.getByLabelText("Launched with dangerous permissions");
       const failure = screen.getByTestId("panel-fleet-failure-dot");
@@ -2140,19 +2146,53 @@ describe("PanelHeader", () => {
       useFleetFailureStore.getState().clear();
     });
 
-    it("shows the mark for all dangerous flag types", () => {
-      const dangerousFlags = [
-        ["--dangerously-skip-permissions"],
-        ["--yolo"],
-        ["--dangerously-bypass-approvals-and-sandbox"],
-        ["--force"],
+    // Every built-in's own bypass flag, not just the four the header used to
+    // hardcode (#16785).
+    it("shows the mark for each agent's own bypass flag", () => {
+      const launches: [string, string[]][] = [
+        ["claude", ["--dangerously-skip-permissions"]],
+        ["gemini", ["--yolo"]],
+        ["codex", ["--dangerously-bypass-approvals-and-sandbox"]],
+        ["cursor", ["--force"]],
+        ["grok", ["--always-approve"]],
+        ["amp", ["--dangerously-allow-all"]],
+        ["aider", ["--yes-always"]],
+        ["kiro", ["--trust-all-tools"]],
       ];
 
-      for (const flags of dangerousFlags) {
-        const { unmount } = render(<PanelHeader {...makeProps({ agentLaunchFlags: flags })} />);
-        const indicator = screen.getByLabelText("Launched with dangerous permissions");
-        expect(indicator).toBeDefined();
+      for (const [agentId, flags] of launches) {
+        const { unmount } = render(
+          <PanelHeader {...makeProps({ agentId, agentLaunchFlags: flags })} />
+        );
+        expect(screen.queryByLabelText("Launched with dangerous permissions"), agentId).not.toBe(
+          null
+        );
         unmount();
+      }
+    });
+
+    it("ignores a flag that is only another agent's bypass", () => {
+      render(<PanelHeader {...makeProps({ agentId: "claude", agentLaunchFlags: ["--force"] })} />);
+      expect(screen.queryByLabelText("Launched with dangerous permissions")).toBeNull();
+    });
+
+    it("shows the mark for a configured multi-token bypass", () => {
+      const previous = useAgentSettingsStore.getState().settings;
+      useAgentSettingsStore.setState({
+        settings: { agents: { codex: { dangerousArgs: "-c approval_policy=never" } } },
+      });
+      try {
+        render(
+          <PanelHeader
+            {...makeProps({
+              agentId: "codex",
+              agentLaunchFlags: ["-c", "tui.whimsy=false", "-c", "approval_policy=never"],
+            })}
+          />
+        );
+        expect(screen.queryByLabelText("Launched with dangerous permissions")).not.toBe(null);
+      } finally {
+        useAgentSettingsStore.setState({ settings: previous });
       }
     });
 
@@ -2598,7 +2638,13 @@ describe("PanelHeader", () => {
       mockStoreState = { ...mockStoreState, watchedPanels: new Set(["test-panel"]) };
       const chrome = deriveTerminalChrome({ kind: "terminal", launchAgentId: "claude" });
       render(
-        <PanelHeader {...makeProps({ chrome, agentId: "claude", agentLaunchFlags: ["--yolo"] })} />
+        <PanelHeader
+          {...makeProps({
+            chrome,
+            agentId: "claude",
+            agentLaunchFlags: ["--dangerously-skip-permissions"],
+          })}
+        />
       );
       const header = document.querySelector("[data-pane-chrome]")!;
       // The watch bell is a membership state, and the marks are status; accent
