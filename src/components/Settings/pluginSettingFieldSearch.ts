@@ -1,6 +1,6 @@
 import type { SettingDefinition } from "@shared/types/plugin";
 import type { SettingsSearchEntry } from "./settingsSearchIndex";
-import { filterSettings } from "./settingsSearchUtils";
+import { filterSettings, MIN_MATCH_CHARS } from "./settingsSearchUtils";
 
 /**
  * What a declared plugin setting is found by, in the Settings dialog and in the
@@ -34,12 +34,14 @@ export function pluginSettingFilterIndex(
 
 /**
  * The keys of the fields `query` matches, through the Settings dialog's matcher,
- * or `null` when there is nothing to filter by.
+ * or `null` when there is nothing to filter by yet. A single character finds a
+ * field only by chance (a doubled letter makes a two-character match), so the
+ * form keeps every field rather than emptying on the first keystroke.
  */
 export function matchPluginSettingFields(
   index: readonly SettingsSearchEntry[],
   query: string
 ): ReadonlySet<string> | null {
-  if (query.trim() === "") return null;
+  if (query.trim().length < MIN_MATCH_CHARS) return null;
   return new Set(filterSettings(index, query).map((entry) => entry.id));
 }

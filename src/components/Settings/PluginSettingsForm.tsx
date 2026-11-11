@@ -1171,16 +1171,19 @@ export function PluginSettingsForm({
   const filterIndex = pluginSettingFilterIndex(fields);
   const matched = showFilter ? matchPluginSettingFields(filterIndex, filterQuery) : null;
   // A deep link to a field the filter hides clears the filter, so the landing
-  // finds its row on a retry; a field the filter still shows leaves it be. Once
-  // per request, so typing after a link has landed never clears the filter.
+  // finds its row on a retry; a field the filter still shows leaves it be. Checked
+  // when the landing starts, so a filter typed while the values load is caught
+  // too, and once per request, so typing after a link has landed never clears it.
   const focusHiddenByFilter =
     focusDef !== undefined && !focusInView && matched !== null && !matched.has(focusDef.id);
-  const filterClearedForRef = useRef<number | undefined>(undefined);
+  const filterCheckedForRef = useRef<number | undefined>(undefined);
   useEffect(() => {
-    if (focusNonce === undefined || filterClearedForRef.current === focusNonce) return;
-    filterClearedForRef.current = focusNonce;
+    if (focusNonce === undefined || !focusReady || filterCheckedForRef.current === focusNonce) {
+      return;
+    }
+    filterCheckedForRef.current = focusNonce;
     if (focusHiddenByFilter) setFilterQuery("");
-  }, [focusNonce, focusHiddenByFilter]);
+  }, [focusNonce, focusReady, focusHiddenByFilter]);
 
   if (
     settings.length === 0 &&

@@ -15,6 +15,7 @@ const DEFS: SettingDefinition[] = [
   { id: "pollSeconds", type: "number", label: "Poll interval" },
   { id: "proxyUrl", type: "string" },
   { id: "theme", type: "string", label: "Board theme", description: "Colours of the driver board" },
+  { id: "relayName", type: "string", label: "Prosy relay" },
 ];
 
 const match = (query: string) => {
@@ -26,6 +27,13 @@ describe("matchPluginSettingFields", () => {
   it("filters nothing for a blank query", () => {
     expect(match("")).toBeNull();
     expect(match("   ")).toBeNull();
+  });
+
+  it("filters nothing until the query is long enough to match", () => {
+    // One letter would hide every field, or keep one with that letter doubled.
+    expect(match("k")).toBeNull();
+    expect(match(" l ")).toBeNull();
+    expect(match("ll")).toEqual(["openPrCap", "pollSeconds"]);
   });
 
   it("matches a field by its label, its description or its key", () => {
@@ -42,13 +50,14 @@ describe("matchPluginSettingFields", () => {
   });
 
   it("prefers literal hits and still forgives a typo when there are none", () => {
-    // "proxy" is literally in one field's key and another's description: the
-    // fuzzy near-misses that contain it nowhere are dropped.
+    // "proxy" is literally in one field's key and another's description, so
+    // "Prosy relay", a near miss, is dropped; with no literal hit it stays.
     expect(match("proxy")).toEqual(["hostForward", "proxyUrl"]);
+    expect(match("prozy")).toEqual(["hostForward", "proxyUrl", "relayName"]);
     expect(match("intervl")).toEqual(["pollSeconds"]);
   });
 
-  it("is narrower than the dialog: the plugin's name finds no field there", () => {
+  it("is narrower than the dialog: the plugin's name finds only the fields that say it", () => {
     const plugin = {
       instanceId: "acme.driver",
       origin: "global",
