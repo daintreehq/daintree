@@ -327,7 +327,9 @@ export function admitToolCall(
     // A plugin's opted-in action is offered to the project Assistant alone
     // (#16751); it reaches no terminal, so the reasons below don't fit it.
     const pluginAssistantOnly =
-      !rendererOwnedOrigin && tier !== "external" && pluginActionMinimumTier(actionId, true) !== null;
+      !rendererOwnedOrigin &&
+      tier !== "external" &&
+      pluginActionMinimumTier(actionId, true) !== null;
     const withheldByOrigin =
       !pluginAssistantOnly &&
       !rendererOwnedOrigin &&

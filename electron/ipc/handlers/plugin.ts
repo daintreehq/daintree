@@ -671,7 +671,14 @@ export async function handleActionInvoke(
   }
   const result =
     ctx.event !== null
-      ? await invokeFromLocalSender(ctx.event.sender, start, pluginId, actionId, [args], actionContext)
+      ? await invokeFromLocalSender(
+          ctx.event.sender,
+          start,
+          pluginId,
+          actionId,
+          [args],
+          actionContext
+        )
       : await invokeFromEndpoint(ctx, start, pluginId, actionId, [args], actionContext);
   return result as PluginActionInvokeResult;
 }
