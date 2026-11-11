@@ -820,6 +820,44 @@ describe("PluginManifestSchema worksWith (#13817)", () => {
   });
 });
 
+describe("PluginManifestSchema command assistantReach (#16751)", () => {
+  const parse = (command: Record<string, unknown>) =>
+    getPluginManifestSchema("user").safeParse({
+      name: "acme.stages",
+      version: "1.0.0",
+      contributes: {
+        commands: [
+          {
+            id: "resume",
+            title: "Resume stage",
+            description: "",
+            category: "Stages",
+            kind: "command",
+            danger: "confirm",
+            ...command,
+          },
+        ],
+      },
+    });
+
+  it("keeps the opt-in on a command declared confirm", () => {
+    const result = parse({ assistantReach: "confirm-only" });
+    expect(result.success && result.data.contributes.commands[0]?.assistantReach).toBe(
+      "confirm-only"
+    );
+  });
+
+  it("refuses the opt-in on a command declared safe, naming the field", () => {
+    const result = parse({ danger: "safe", assistantReach: "confirm-only" });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path.at(-1)).toBe("assistantReach");
+  });
+
+  it.each([["always"], [true], [null]])("refuses the value %j", (assistantReach) => {
+    expect(parse({ assistantReach }).success).toBe(false);
+  });
+});
+
 describe("PluginManifestSchema command resultSchema (#13817)", () => {
   const parse = (resultSchema: unknown) =>
     getPluginManifestSchema("user").safeParse({

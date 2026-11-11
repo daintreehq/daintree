@@ -1270,11 +1270,13 @@ describe("PluginService manifest command contributions (#9281)", () => {
     const runImport = vi.spyOn(service as unknown as { runImport: () => unknown }, "runImport");
     await service.initialize();
 
+    const context = Object.freeze({ dispatchSource: "user" as const, approval: "person" as const });
     const result = await service.dispatchHandler(
       "acme.cmd-dispatch",
       "acme.cmd-dispatch.plan",
       ctx("acme.cmd-dispatch"),
-      [{ issue: 42 }]
+      [{ issue: 42 }],
+      context
     );
     expect(result).toEqual({ ok: true, args: { issue: 42 } });
     expect(runImport).not.toHaveBeenCalled();
@@ -1286,12 +1288,13 @@ describe("PluginService manifest command contributions (#9281)", () => {
     expect(devWorkerMock.instances[0].opts.pluginId).toBe("acme.cmd-dispatch");
     expect(devWorkerMock.instances[0].opts.bundlePath).toBeUndefined();
 
-    // Main hands the worker the id, the absolute path it already resolved, and
-    // the args — and imports nothing itself.
+    // Main hands the worker the id, the absolute path it already resolved, the
+    // args and the dispatch context — and imports nothing itself.
     expect(devWorkerMock.bridges[0].invokeCommand).toHaveBeenCalledWith(
       "acme.cmd-dispatch.plan",
       path.join(tmpDir, "cmd-dispatch", "src", "plan.js"),
-      { issue: 42 }
+      { issue: 42 },
+      context
     );
   });
 

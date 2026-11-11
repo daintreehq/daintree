@@ -12,6 +12,7 @@ import type {
   PluginCanDispatchResult,
 } from "../../types/actions.js";
 import type {
+  PluginActionContext,
   PluginChannelSchema,
   PluginHostApi,
   PluginIpcHandler,
@@ -37,6 +38,8 @@ import type {
   CreateMockHostOptions,
   MockHost,
 } from "./types.js";
+
+const PLUGIN_DISPATCH_CONTEXT: PluginActionContext = Object.freeze({ dispatchSource: "plugin" });
 
 export type ContributionsMembers = Pick<
   MockHost,
@@ -223,6 +226,15 @@ export function createContributionsFacet(
             ...PLUGIN_ACTION_DANGERS,
           ].join(", ")})`
         );
+      }
+      const assistantReach: unknown = descriptor.assistantReach;
+      if (assistantReach !== undefined && assistantReach !== "confirm-only") {
+        throw new Error(
+          `registerAction: descriptor.assistantReach "${String(assistantReach)}" is invalid (the only value is "confirm-only")`
+        );
+      }
+      if (assistantReach !== undefined && descriptor.danger !== "confirm") {
+        throw new Error('registerAction: descriptor.assistantReach needs danger "confirm"');
       }
       const existing = registeredActions.findIndex((r) => r.descriptor.id === descriptor.id);
       if (existing >= 0) {
@@ -625,7 +637,9 @@ export function createContributionsFacet(
         };
       }
       try {
-        const result = await reg.handler(args);
+        // A plugin's own dispatch, as the host would describe it: nothing on it
+        // speaks for a person or an assistant.
+        const result = await reg.handler(args, PLUGIN_DISPATCH_CONTEXT);
         return { ok: true, result };
       } catch (err) {
         return {

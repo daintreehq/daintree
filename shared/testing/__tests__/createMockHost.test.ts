@@ -98,6 +98,40 @@ describe("createMockHost", () => {
     expect(h1).not.toHaveBeenCalled();
   });
 
+  it("dispatches to a registered handler with a frozen plugin-source context (#16751)", async () => {
+    const host = createMockHost({ pluginId: "daintree.hello" });
+    const handler = vi.fn(async () => "hi");
+    await host.registerAction(sampleAction, handler);
+
+    await host.dispatch("daintree.hello.greet", { name: "x" });
+
+    const [args, context] = handler.mock.calls[0] as unknown as [unknown, unknown];
+    expect(args).toEqual({ name: "x" });
+    // A plugin's own dispatch says nothing about a person or an assistant.
+    expect(context).toEqual({ dispatchSource: "plugin" });
+    expect(Object.isFrozen(context)).toBe(true);
+  });
+
+  it("validates assistantReach as the host does (#16751)", () => {
+    const host = createMockHost();
+    const handler = vi.fn() as unknown as Parameters<typeof host.registerAction>[1];
+    expect(() =>
+      host.registerAction({ ...sampleAction, assistantReach: "confirm-only" }, handler)
+    ).toThrow(/needs danger "confirm"/);
+    expect(() =>
+      host.registerAction(
+        { ...sampleAction, danger: "confirm", assistantReach: "always" as "confirm-only" },
+        handler
+      )
+    ).toThrow(/assistantReach "always" is invalid/);
+    expect(() =>
+      host.registerAction(
+        { ...sampleAction, danger: "confirm", assistantReach: "confirm-only" },
+        handler
+      )
+    ).not.toThrow();
+  });
+
   describe("registerAction validation", () => {
     it("rejects null/undefined/non-object descriptors", () => {
       const host = createMockHost();

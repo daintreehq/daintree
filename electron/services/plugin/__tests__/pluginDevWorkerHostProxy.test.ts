@@ -1739,6 +1739,65 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
     expect(notify.params.descriptor.requires).toBeUndefined();
   });
 
+  it("carries an action's assistantReach across the port (#16751)", async () => {
+    // Rebuilt field by field like `requires`: dropped here, a worker plugin's
+    // opt-in would vanish and the Assistant would never be offered the action.
+    const { proxy, sent } = makeProxy();
+    proxy.host.registerAction(
+      {
+        id: "resume",
+        title: "Resume",
+        description: "Lifts a stop",
+        category: "Test",
+        kind: "command",
+        danger: "confirm",
+        assistantReach: "confirm-only",
+      },
+      async () => undefined
+    );
+
+    const notify = sent.find((m) => m.type === "host-notify" && m.method === "registerAction");
+    expect(notify.params.descriptor.assistantReach).toBe("confirm-only");
+  });
+
+  it("hands a registered action's handler a frozen copy of the context (#16751)", async () => {
+    const { proxy, sent } = makeProxy();
+    const handler = vi.fn(async () => "resumed");
+    proxy.host.registerAction(
+      {
+        id: "resume",
+        title: "Resume",
+        description: "Lifts a stop",
+        category: "Test",
+        kind: "command",
+        danger: "confirm",
+      },
+      handler
+    );
+    const context = { dispatchSource: "user", approval: "person" };
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "a1",
+      kind: "action",
+      namespacedId: "acme.demo.resume",
+      args: { id: 7 },
+      context,
+    } as any);
+    await vi.waitFor(() => {
+      expect(sent.find((m) => m.type === "invoke-result" && m.requestId === "a1")).toBeDefined();
+    });
+
+    expect(sent.find((m) => m.type === "invoke-result")).toMatchObject({
+      ok: true,
+      result: "resumed",
+    });
+    const received = (handler.mock.calls[0] as unknown[])[1];
+    expect(received).toEqual(context);
+    expect(received).not.toBe(context);
+    expect(Object.isFrozen(received)).toBe(true);
+  });
+
   it("carries an action's resultSchema across the port for main to enforce", async () => {
     // Dropped here, a worker plugin's results would go unchecked and its
     // catalog entry would publish no contract, with nothing failing to say so.
@@ -1791,7 +1850,8 @@ describe("PluginDevWorkerHostProxy manifest commands (#12274)", () => {
     proxy: PluginDevWorkerHostProxy,
     requestId: string,
     resolvedPath: string,
-    args: unknown
+    args: unknown,
+    context: unknown = { dispatchSource: "user" }
   ): void {
     proxy.handleMessage({
       type: "invoke",
@@ -1800,6 +1860,7 @@ describe("PluginDevWorkerHostProxy manifest commands (#12274)", () => {
       namespacedId: "acme.demo.run",
       resolvedPath,
       args,
+      context,
     } as any);
   }
 
@@ -1837,6 +1898,32 @@ describe("PluginDevWorkerHostProxy manifest commands (#12274)", () => {
       ok: true,
       result: { echoed: { n: 1 } },
     });
+  });
+
+  it("hands the handler a frozen dispatch context rebuilt from the message (#16751)", async () => {
+    const { proxy, resultOf } = makeCommandProxy();
+    const file = await writeHandler(
+      "context",
+      `export default async (_args, context) => ({ context, frozen: Object.isFrozen(context) })`
+    );
+
+    dispatch(proxy, "c1", file, {}, { dispatchSource: "agent", origin: "assistant" });
+
+    expect(await resultOf("c1")).toMatchObject({
+      ok: true,
+      result: { context: { dispatchSource: "agent", origin: "assistant" }, frozen: true },
+    });
+  });
+
+  it("refuses a command whose context carries more than the contract names (#16751)", async () => {
+    const { proxy, resultOf } = makeCommandProxy();
+    const file = await writeHandler("context-extra", `export default async () => "ran"`);
+
+    dispatch(proxy, "c1", file, {}, { dispatchSource: "user", approval: "person", extra: 1 });
+
+    const result = await resultOf("c1");
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/unknown field "extra"/);
   });
 
   it("replies with an error when the module has no callable default export", async () => {
@@ -1916,14 +2003,14 @@ describe("PluginDevWorkerHostProxy manifest commands (#12274)", () => {
     // Main only ever sees the synthetic RPC thunk, so the hint has to be
     // applied here, where the author's real closure is.
     const { proxy, resultOf } = makeCommandProxy();
-    const file = await writeHandler("arity", `export default (ctx, args) => args.value`);
+    const file = await writeHandler("arity", `export default (ctx, args) => args.payload.value`);
 
-    dispatch(proxy, "c1", file, { value: 1 });
+    dispatch(proxy, "c1", file, { payload: { value: 1 } });
 
     const result = await resultOf("c1");
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/Daintree hint:/);
-    expect(result.error).toMatch(/only parameter/);
+    expect(result.error).toMatch(/called as \(args, context\)/);
   });
 });
 

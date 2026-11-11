@@ -37,14 +37,14 @@ function isPropertyOfUndefined(error: unknown): boolean {
 
 /**
  * The hint an action handler earns, or null. `handler(args, context)` is the
- * contract, so a handler declaring two parameters that then reads through an
- * undefined value has most likely swapped them: the context holds only
- * `dispatchSource`, `origin` and `approval`.
+ * contract, and a two-parameter handler is now as likely to be right as wrong,
+ * so the hint says what the order is and leaves the author to check which one
+ * they wrote: the context holds only `dispatchSource`, `origin` and `approval`.
  */
 export function actionHandlerArityHint(handler: unknown, error: unknown): string | null {
   if (typeof handler !== "function" || handler.length < 2) return null;
   if (!isPropertyOfUndefined(error)) return null;
-  return `${HINT_MARKER} an action handler is called with the arguments object first and the dispatch context ({ dispatchSource, origin, approval }) second, so a handler written as (ctx, args) reads its payload from the context. Read the payload from the first parameter.`;
+  return `${HINT_MARKER} an action handler is called as (args, context): the arguments object first, then the dispatch context ({ dispatchSource, origin, approval }). A handler written as (ctx, args) reads its payload from the context, where none of its fields exist.`;
 }
 
 /**

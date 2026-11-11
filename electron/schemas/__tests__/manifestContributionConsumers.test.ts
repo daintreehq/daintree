@@ -1345,6 +1345,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Advisory input to the host-authoritative effectiveDanger; raised, never trusted verbatim (#8331).",
     },
+    assistantReach: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" },
+        { file: PLUGIN_SERVICE, symbol: "isAssistantReachAction" },
+      ],
+      note: "Checked against the declared danger, copied onto the descriptor, and read live by the MCP tier gate to put the action on the project Assistant's tools (#16751).",
+    },
     keywords: {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" }],
