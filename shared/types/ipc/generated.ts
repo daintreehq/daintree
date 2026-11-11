@@ -294,6 +294,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "canopy-window:open-assistant": {
+    args: [
+      subject: {
+        hostId: string;
+        scope: { kind: "project"; projectId: string } | { kind: "global" };
+        terminalId: string;
+        incarnation: number;
+        lane?: number | undefined;
+      },
+    ];
+    result: import("./canopy.js").CanopyAssistantOpenRefusal | null;
+  };
   "canopy:answer": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, label: string];
     result: void;

@@ -144,7 +144,15 @@ vi.mock("../../../services/pty/agentSessionHistory.js", async (importOriginal) =
 }));
 /** The lanes main holds an assistant for, and who hears one end. */
 const assistants = vi.hoisted(() => ({
-  lane: null as { sessionId: string; terminalId: string } | null,
+  lane: null as {
+    sessionId: string;
+    terminalId: string;
+    projectViewWebContentsId?: number;
+  } | null,
+  /** Whether a view holds the running lane, as `listRunningLanes` reports it. */
+  laneAttached: true,
+  /** Other projects' and lanes' running assistants, listed beside it. */
+  otherLanes: [] as Array<{ projectId: string; slot: number; agentId: string; attached: boolean }>,
   ended: new Set<(event: { projectId: string; slot: number; sessionId: string }) => void>(),
   /** The global session, when one runs, and the view holding its input. */
   global: null as null | {
@@ -159,6 +167,19 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     getRunningLaneSession: (projectId: string, slot: number) =>
       projectId === "project-1" && slot === 1 ? assistants.lane : null,
+    listRunningLanes: () => [
+      ...(assistants.lane
+        ? [
+            {
+              projectId: "project-1",
+              slot: 1,
+              agentId: "claude",
+              attached: assistants.laneAttached,
+            },
+          ]
+        : []),
+      ...assistants.otherLanes,
+    ],
     addSessionEndedListener: (
       listener: (event: { projectId: string; slot: number; sessionId: string }) => void
     ) => {
@@ -285,7 +306,12 @@ import { wrapError, wrapSuccess } from "../../../../shared/utils/ipcErrorSeriali
 import { _resetRateLimitQueuesForTest, getProjectPushTargets } from "../../utils.js";
 import { events } from "../../../services/events.js";
 import { getDefaultPanelTitle } from "../../../../shared/config/panelKindRegistry.js";
-import { canopyPanelsListing, registerCanopyHandlers } from "../canopy.js";
+import {
+  assistantLaneHolder,
+  canopyPanelsListing,
+  globalAssistantInputOwner,
+  registerCanopyHandlers,
+} from "../canopy.js";
 import type { CanopySnapshot, CanopyTerminalView } from "../../../../shared/types/ipc/canopy.js";
 import { CanopyModels } from "../../../services/canopy/canopyModels.js";
 import { tryReaderModel } from "../../../services/canopy/canopyLocalReader.js";
@@ -3821,5 +3847,52 @@ describe("canopy IPC", () => {
       expect(undone.ok).toBe(false);
       expect(ptyClient.restore).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("where Open in Assistant from the Canopy window finds a lane's view (#16758)", () => {
+  beforeEach(() => {
+    assistants.lane = {
+      sessionId: "session-1",
+      terminalId: "assistant-1",
+      projectViewWebContentsId: 41,
+    };
+    assistants.laneAttached = true;
+    assistants.global = null;
+  });
+
+  afterEach(() => {
+    assistants.lane = null;
+    assistants.laneAttached = true;
+    assistants.otherLanes = [];
+  });
+
+  it("names the view holding a running lane", async () => {
+    expect(await assistantLaneHolder("project-1", 1)).toBe(41);
+  });
+
+  it("names none for a lane that runs detached, or that isn't running", async () => {
+    assistants.laneAttached = false;
+    expect(await assistantLaneHolder("project-1", 1)).toBeNull();
+    assistants.laneAttached = true;
+    expect(await assistantLaneHolder("project-1", 2)).toBeNull();
+    expect(await assistantLaneHolder("project-2", 1)).toBeNull();
+  });
+
+  it("names none for a detached lane though other lanes beside it are held", async () => {
+    assistants.laneAttached = false;
+    assistants.otherLanes = [
+      { projectId: "project-1", slot: 2, agentId: "claude", attached: true },
+      { projectId: "project-2", slot: 1, agentId: "claude", attached: true },
+    ];
+    expect(await assistantLaneHolder("project-1", 1)).toBeNull();
+  });
+
+  it("names the view with the global session's input, and none without one", async () => {
+    expect(await globalAssistantInputOwner()).toBeNull();
+    assistants.global = { terminalId: "g", generation: 1, owner: 9 };
+    expect(await globalAssistantInputOwner()).toBe(9);
+    assistants.global = { terminalId: "g", generation: 1, owner: null };
+    expect(await globalAssistantInputOwner()).toBeNull();
   });
 });

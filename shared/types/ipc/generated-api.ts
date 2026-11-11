@@ -261,6 +261,9 @@ export interface GeneratedElectronAPI {
     open(
       ...args: IpcInvokeMap["canopy-window:open"]["args"]
     ): Promise<IpcInvokeMap["canopy-window:open"]["result"]>;
+    openAssistant(
+      ...args: IpcInvokeMap["canopy-window:open-assistant"]["args"]
+    ): Promise<IpcInvokeMap["canopy-window:open-assistant"]["result"]>;
   };
   claude: {
     findReplySpan(
