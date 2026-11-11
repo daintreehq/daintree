@@ -1,0 +1,35 @@
+name: diag macOS fullscreen restack
+on:
+  push:
+    branches: [diag/macos-fullscreen-restack]
+permissions:
+  contents: read
+jobs:
+  repro:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Install Electron 45.2.3
+        run: |
+          mkdir -p "$RUNNER_TEMP/e" && cd "$RUNNER_TEMP/e"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund electron@45.2.3
+      - name: Build probe
+        run: swiftc -O probe.swift -o "$RUNNER_TEMP/probe"
+      - name: Run variants
+        run: |
+          E="$RUNNER_TEMP/e/node_modules/.bin/electron"
+          for v in none restack; do
+            mkdir -p "out/$v"
+            VARIANT=$v OUT_DIR="$PWD/out/$v" PROBE="$RUNNER_TEMP/probe" "$E" repro.cjs || echo "variant $v exited $?"
+            sleep 3
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diag-out
+          path: out/
