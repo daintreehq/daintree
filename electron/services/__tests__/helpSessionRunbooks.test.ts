@@ -99,6 +99,9 @@ describe("buildRunbooksAddendum", () => {
         expect(name).toMatch(/Owned$/);
       }
       expect(global).toContain("`actions.search` through `host.call`");
+      // #16765 — what a role other than its own asks of it.
+      expect(global).toContain("With `host.list` missing, call `mcp.surface`");
+      expect(global).toContain("tell the person the `role` you got and use none of its tools");
       expect(global).not.toContain("yours is");
       expect(buildRunbooksAddendum()).not.toContain("through `host.call`,");
     });

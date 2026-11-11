@@ -4516,16 +4516,29 @@ describe("HttpLifecycle — an assistant's binding at the handshake (#16765)", (
 
   type Binding = { pin?: number; project?: string; helpId?: string };
   type DepsBuilder = { buildSessionServerDeps: (...args: unknown[]) => unknown };
+  type BuiltDeps = { mock: { calls: unknown[][]; results: Array<{ value: unknown }> } };
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  /** An assistant's bearer, with whichever parts of its binding resolve. */
-  function assistantLifecycle(deps: HttpLifecycleDeps, binding: Binding) {
+  /**
+   * An assistant's bearer, with whichever parts of its binding resolve. With
+   * `validator: false` the help validator doesn't know it, so only a resolver
+   * answering for it marks it as an assistant's.
+   */
+  function assistantLifecycle(
+    deps: HttpLifecycleDeps,
+    binding: Binding,
+    { validator = true }: { validator?: boolean } = {}
+  ) {
     const lc = new HttpLifecycle(deps);
     lc.setApiKey("test-api-key");
-    lc.setHelpTokenValidator((token) => (token === TOKEN ? "core" : false));
+    lc.setHelpTokenValidator((token) => (validator && token === TOKEN ? "core" : false));
+    // A launch context, so a context row written before the refusal would show.
+    lc.setHelpSessionActionContextResolver((token) =>
+      token === TOKEN ? { projectId: "proj-1" } : null
+    );
     lc.setHelpSessionWebContentsResolver((token) =>
       token === TOKEN ? (binding.pin ?? null) : null
     );
@@ -4583,9 +4596,15 @@ describe("HttpLifecycle — an assistant's binding at the handshake (#16765)", (
       ),
   };
 
-  /** The role each session built here was given, in order. */
-  const rolesBuilt = (built: ReturnType<typeof vi.spyOn>) =>
-    built.mock.calls.map((args) => (args as unknown[])[1]);
+  /** The role each session built here was given and its deps carry, in order. */
+  const rolesBuilt = (built: BuiltDeps) => {
+    const given = built.mock.calls.map((args) => args[1]);
+    const carried = built.mock.results.map(
+      (result) => (result.value as { sessionRole?: unknown }).sessionRole
+    );
+    expect(carried).toEqual(given);
+    return given;
+  };
 
   const rejectionCode = (res: ReturnType<typeof streamRes>): string | undefined => {
     const body = res.end.mock.calls[0]?.[0];
@@ -4630,6 +4649,8 @@ describe("HttpLifecycle — an assistant's binding at the handshake (#16765)", (
         store.sessionWebContentsMap,
         store.sessionViewlessHelpMap,
         store.sessionHelpIdMap,
+        store.sessionContextMap,
+        store.sessionWorkspaceMap,
         store.sessionCredentialMap,
       ]) {
         expect(map.size).toBe(0);
@@ -4648,6 +4669,12 @@ describe("HttpLifecycle — an assistant's binding at the handshake (#16765)", (
         { pin: NO_VIEW_HANDLE, project: GLOBAL_ASSISTANT_ID, helpId: "help-1" },
         "global-assistant",
       ],
+      ["one opened in a remote view", { pin: -4, helpId: "help-1" }, "project-assistant"],
+      [
+        "one with a view, whatever project its record names",
+        { pin: 42, project: GLOBAL_ASSISTANT_ID, helpId: "help-1" },
+        "project-assistant",
+      ],
     ])("admits %s with its whole binding, as its own role", async (_label, binding, role) => {
       const deps = fakeDeps();
       const { lc, built } = assistantLifecycle(deps, binding);
@@ -4655,6 +4682,41 @@ describe("HttpLifecycle — an assistant's binding at the handshake (#16765)", (
       await transports[transport](lc, AUTH, streamRes());
 
       expect(rolesBuilt(built)).toEqual([role]);
+    });
+
+    it.each<[string, Binding]>([
+      ["a help view", { pin: 42 }],
+      ["a help session", { helpId: "help-1" }],
+      ["no view and a help session, but no project", { pin: NO_VIEW_HANDLE, helpId: "help-1" }],
+    ])(
+      "refuses a bearer the validator doesn't know when only %s resolves for it",
+      async (_label, binding) => {
+        const deps = fakeDeps();
+        const { lc, built } = assistantLifecycle(deps, binding, { validator: false });
+        // A pane token, so the bearer is authorized without the help validator.
+        stubPaneToken(TOKEN);
+        const res = streamRes();
+
+        await transports[transport](lc, AUTH, res);
+
+        expect(rejectionCode(res)).toBe("ASSISTANT_BINDING_INCOMPLETE");
+        expect(built).not.toHaveBeenCalled();
+        expect(deps.sessionStore.sessionTierMap.size).toBe(0);
+      }
+    );
+
+    it("admits that bearer as a project's assistant once its whole binding resolves", async () => {
+      const deps = fakeDeps();
+      const { lc, built } = assistantLifecycle(
+        deps,
+        { pin: 42, helpId: "help-1" },
+        { validator: false }
+      );
+      stubPaneToken(TOKEN);
+
+      await transports[transport](lc, AUTH, streamRes());
+
+      expect(rolesBuilt(built)).toEqual(["project-assistant"]);
     });
 
     it("admits an api-key client and a pane bearer as what they are", async () => {

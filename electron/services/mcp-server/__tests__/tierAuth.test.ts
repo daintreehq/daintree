@@ -239,6 +239,17 @@ describe("resolveCredentialKind", () => {
     expect(resolveCredentialKind("Bearer\thelp-tok", null, helpValidator)).toBe("assistant");
   });
 
+  it("reads the api key as an external client before asking anything else", () => {
+    const hash = precomputeApiKeyBearerHash("secret");
+    mockPaneConfigService.isValidPaneToken.mockClear();
+    mockPaneConfigService.isValidPaneToken.mockImplementation(() => true);
+    const validator = vi.fn(() => "core" as const);
+
+    expect(resolveCredentialKind("Bearer secret", hash, validator)).toBe("external-client");
+    expect(mockPaneConfigService.isValidPaneToken).not.toHaveBeenCalled();
+    expect(validator).not.toHaveBeenCalled();
+  });
+
   it("checks the pane service before the help validator, as isAuthorized does", () => {
     expect(resolveCredentialKind("Bearer pane-tok", null, () => "full")).toBe("agent-pane");
   });

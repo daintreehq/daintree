@@ -203,6 +203,7 @@ export interface ActionModules {
   buildSurfaceManifest: (
     manifest: readonly ActionManifestRow[],
     tier: string,
+    role: string,
     appVersion: string,
     session?: unknown
   ) => { hash: string; tools: unknown[] };

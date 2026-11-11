@@ -553,6 +553,13 @@ export async function openSession(
 
   const deps: SessionServerDeps = {
     sessionStore: store,
+    // The kind of session the handshake would have taken this for (#16765).
+    sessionRole:
+      options.helpSessionId !== undefined
+        ? "project-assistant"
+        : options.tier === "external"
+          ? "external-client"
+          : "agent-pane",
     ...(options.workspaceBinding ? { workspaceBinding: options.workspaceBinding } : {}),
     requestManifest: async () => manifest.entries,
     dispatchAction: async (actionId, args, confirmed) => {

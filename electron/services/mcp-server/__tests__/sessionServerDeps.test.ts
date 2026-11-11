@@ -78,6 +78,8 @@ function registryShowing(webContentsId: number, workspaceId: string): WindowRegi
   } as unknown as WindowRegistry;
 }
 
+/** Which kind of session the capture stands for; nothing here reads it but the deps it is copied to. */
+const ROLE = "external-client" as const;
 describe("a session in a view reopening a saved session (#16341)", () => {
   let restore: (() => void) | undefined;
 
@@ -93,7 +95,10 @@ describe("a session in a view reopening a saved session (#16341)", () => {
     webContentsById.set(7, { isDestroyed: () => false });
     const { state, host } = mutableHost();
     state.registry = registryShowing(7, WS_A);
-    return { deps, sessionDeps: createSessionServerDeps(deps, host, { sessionId: "s" }) };
+    return {
+      deps,
+      sessionDeps: createSessionServerDeps(deps, host, { sessionId: "s", role: ROLE }),
+    };
   }
 
   /** The lease's answer for the view's project; every other project is vacant. */
@@ -173,7 +178,7 @@ describe("createSessionServerDeps", () => {
     webContentsById.set(7, { isDestroyed: () => false });
     const { state, host } = mutableHost();
 
-    const sessionDeps = createSessionServerDeps(deps, host, { sessionId: "s" });
+    const sessionDeps = createSessionServerDeps(deps, host, { sessionId: "s", role: ROLE });
 
     expect(sessionDeps.assistantControl).toBe(host.assistantControl);
     expect(sessionDeps.assistantCaller?.()).toBeNull();
@@ -224,6 +229,7 @@ describe("createSessionServerDeps", () => {
 
     const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
       sessionId: "s",
+      role: ROLE,
       ...capture,
     });
 
@@ -252,6 +258,7 @@ describe("createSessionServerDeps", () => {
     ]) {
       const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
         sessionId: "s",
+        role: ROLE,
         ...capture,
       });
       expect(sessionDeps.readTerminalProcesses).toBe(readTerminalProcesses);
@@ -266,6 +273,7 @@ describe("createSessionServerDeps", () => {
   ])("hands %s relay session its caller's classification", (_label, caller, expected) => {
     const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
       sessionId: "s",
+      role: ROLE,
       relay: {
         linkSessionId: "link-1",
         senderId: "shell-1",
@@ -289,6 +297,7 @@ describe("createSessionServerDeps", () => {
         dispatchActionForWorkspace;
       const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
         sessionId: "s",
+        role: ROLE,
         workspaceBinding: { workspaceId: WS_A },
         ...(relay ? { relay: relay as never } : {}),
       });
@@ -347,6 +356,7 @@ describe("createSessionServerDeps", () => {
       const { state, host } = mutableHost();
       const sessionDeps = createSessionServerDeps(fakeSource(), host, {
         sessionId: "s",
+        role: ROLE,
         relay: { ...relay, global: true },
       });
       expect(sessionDeps.relay?.global).toBe(true);
@@ -417,6 +427,7 @@ describe("createSessionServerDeps", () => {
   ])("hands %s no steer", (_label, capture) => {
     const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
       sessionId: "s",
+      role: ROLE,
       ...capture,
     });
     expect(sessionDeps.globalSteer).toBeUndefined();
@@ -439,6 +450,7 @@ describe("createSessionServerDeps", () => {
     (deps as { workerSteerQueue?: unknown }).workerSteerQueue = workerSteerQueue;
     const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
       sessionId: "s",
+      role: ROLE,
       ...capture,
     });
     expect(sessionDeps.workerSteerQueue).toBe(expected ? workerSteerQueue : undefined);
@@ -448,7 +460,7 @@ describe("createSessionServerDeps", () => {
     const deps = fakeSource();
     const { state, host } = mutableHost();
 
-    const sessionDeps = createSessionServerDeps(deps, host, { sessionId: "x" });
+    const sessionDeps = createSessionServerDeps(deps, host, { sessionId: "x", role: ROLE });
     state.bearer = { token4LastChars: "wxyz", userAgent: "client/1.0" };
     await sessionDeps.dispatchAction("agent.launch", {}, false);
 
@@ -467,7 +479,10 @@ describe("createSessionServerDeps", () => {
     deps.sessionStore.sessionWebContentsMap.set("s", 7);
     deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
 
-    const sessionDeps = createSessionServerDeps(deps, mutableHost().host, { sessionId: "s" });
+    const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+      sessionId: "s",
+      role: ROLE,
+    });
 
     deps.sessionStore.sessionOriginMap.clear();
     deps.sessionStore.sessionWebContentsMap.clear();
@@ -498,6 +513,7 @@ describe("createSessionServerDeps", () => {
         dispatchActionForWorkspace;
       const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
         sessionId: "s",
+        role: ROLE,
         workspaceBinding: { workspaceId: WS_A },
         paneBinding: {
           workspaceId: WS_A,
@@ -562,7 +578,10 @@ describe("createSessionServerDeps", () => {
       deps.sessionStore.sessionOriginMap.set("s", "help");
       deps.sessionStore.sessionWebContentsMap.set("s", 7);
       deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
-      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, { sessionId: "s" });
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        role: ROLE,
+      });
 
       await sessionDeps.dispatchAction("worktree.delete", {}, false);
       await sessionDeps.dispatchAction("worktree.delete", {}, true, "skip-preference");
@@ -602,6 +621,7 @@ describe("createSessionServerDeps", () => {
       if (helpId !== null) deps.sessionStore.sessionHelpIdMap.set("s", helpId);
       const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
         sessionId: "s",
+        role: ROLE,
         ...capture,
       });
 
@@ -628,6 +648,7 @@ describe("createSessionServerDeps", () => {
       deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
       const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
         sessionId: "s",
+        role: ROLE,
         workspaceBinding: { workspaceId: WS_A },
         ownPane: null,
         relay,

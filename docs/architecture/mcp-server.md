@@ -259,7 +259,7 @@ The handshake also settles a **role**, fixed for the session's life: `global-ass
 
 A bearer recognised as an Assistant's (by the help validator, or by any help resolver answering for it) is admitted only with its whole binding: its help-session id, and either its view or, with no view, its project. Missing any part, the session would fall through to another kind's tools (an api-key client's, or a project Assistant's for a global one that lost its project), and nothing after the handshake can tell it was ever an Assistant's. So both `/mcp` and `/sse` refuse it there, before any session state exists, with 400 `ASSISTANT_BINDING_INCOMPLETE` in the envelope described below.
 
-The global Assistant lists `mcp.surface` among its root tools, so it can check the `role` it was given. A session that reached another server registered under the same `daintree` name (a user's own api-key entry, say) reads `external-client` there instead, and its instructions tell it to stop and say so.
+The global Assistant lists `mcp.surface` among its root tools, so it can check the `role` it was given. A session that reached the server under another credential (a user's own api-key entry also named `daintree`, say) reads `external-client` there instead, and its instructions tell it to report the role it got and use none of that connection's tools.
 
 ### Workspace binding (#11789)
 

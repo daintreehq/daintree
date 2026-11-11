@@ -23,8 +23,10 @@ import { buildToolInputSchema, buildToolOutputSchema } from "../tierAuth.js";
 import type { AssistantControlBinding } from "../shared.js";
 import {
   callTool,
+  fakeDeps,
   fakeSessionStore,
   listBaseTools,
+  makeManifestEntry,
   makeMockTransport,
 } from "./helpers/sessionServerFixture.js";
 
@@ -149,6 +151,35 @@ describe("the global assistant's tool discovery (#14453)", () => {
       expect(source.dispatchAction).not.toHaveBeenCalled();
     }
   );
+
+  // #16765 — whichever manifest answers, its report keeps to its own set as
+  // its listing does.
+  it("keeps a project's tools out of both its listing and its report", async () => {
+    installHostRuntime(true);
+    const sessionStore = fakeSessionStore("core");
+    sessionStore.sessionOriginMap.set(SESSION, "help");
+    sessionStore.sessionViewlessHelpMap.set(SESSION, GLOBAL_ASSISTANT_ID);
+    const server = createSessionServer(
+      SESSION,
+      fakeDeps({
+        sessionStore,
+        sessionRole: "global-assistant",
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue(
+            ["mcp.surface", "terminal.list", "actions.list"].map(makeManifestEntry)
+          ),
+      })
+    );
+    await server.connect(makeMockTransport());
+
+    const listed = (await listBaseTools(server)).map((tool) => tool.name);
+    const result = await callTool(server, { name: "mcp.surface" });
+    const reported = (result.structuredContent as { tools: Array<{ id: string }> }).tools;
+
+    expect(listed).toEqual(["mcp.surface"]);
+    expect(reported.map((tool) => tool.id)).toEqual(["mcp.surface"]);
+  });
 
   it("leaves a viewless project assistant's surface as it was", async () => {
     installHostRuntime(true);

@@ -600,10 +600,14 @@ describe("global assistant prompts (#14546)", () => {
     expect(body).toContain("<!-- DAINTREE_RUNBOOKS_START -->");
   });
 
-  // #16765 — the role is how it tells its own server from another named the same.
-  it.each(GLOBAL)("%s says what a role other than its own means", (_name, body) => {
-    expect(body).toContain("`global-assistant`");
-    expect(body).toMatch(/another server named `daintree` answered/);
+  // #16765 — the role is how it sees it reached the server as something else.
+  it.each(GLOBAL)("%s says what to do with a role other than its own", (_name, body) => {
+    const line = body.split("\n").find((text) => text.startsWith("- **`mcp.surface`**"));
+    expect(line).toBeDefined();
+    expect(line).toContain("If `host.list` is missing");
+    expect(line).toContain('`role: "global-assistant"`');
+    expect(line).toContain("Tell the user which `role` you got");
+    expect(line).toContain("use none of them");
   });
 
   // #14995: `host.call` carries the caller's own tier and the global

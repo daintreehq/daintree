@@ -86,15 +86,20 @@ describe("buildSurfaceManifest", () => {
   });
 
   it("reports the role it was given, which the published schema holds to its values", () => {
-    const result = buildSurfaceManifest(
-      realisticManifest(),
-      "core",
+    const roles: McpSessionRole[] = [
       "global-assistant",
-      APP_VERSION
-    );
+      "project-assistant",
+      "agent-pane",
+      "external-client",
+      "relay",
+    ];
+    for (const role of roles) {
+      const report = buildSurfaceManifest(realisticManifest(), "core", role, APP_VERSION);
+      expect(report.role).toBe(role);
+      expect(McpSurfaceResultSchema.safeParse(report).success).toBe(true);
+    }
 
-    expect(result.role).toBe("global-assistant");
-    expect(McpSurfaceResultSchema.safeParse(result).success).toBe(true);
+    const result = buildSurfaceManifest(realisticManifest(), "core", "relay", APP_VERSION);
     const { role: _role, ...withoutRole } = result;
     expect(McpSurfaceResultSchema.safeParse(withoutRole).success).toBe(false);
     expect(McpSurfaceResultSchema.safeParse({ ...result, role: "assistant" }).success).toBe(false);
