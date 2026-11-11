@@ -611,13 +611,21 @@ describe("formatChipLabel", () => {
       formatChipLabel(
         "/var/folders/x/T/daintree-inbox/clipboard/clipboard-20261012-022831-f6a4458a26c8.png"
       )
-    ).toBe("Screenshot 02:28");
+    ).toBe("Image 02:28");
   });
 
   it("labels this machine's pasted image by its epoch timestamp", () => {
     const at = new Date(2026, 9, 12, 14, 5, 0).getTime();
-    expect(formatChipLabel(`/tmp/daintree-clipboard/clipboard-${at}-abcd.png`)).toBe(
-      "Screenshot 14:05"
+    expect(formatChipLabel(`/tmp/daintree-clipboard/clipboard-${at}-abcd.png`)).toBe("Image 14:05");
+  });
+
+  it("drops the time when the file name carries none", () => {
+    expect(formatChipLabel("/Users/me/Pictures/diagram.png")).toBe("Image");
+  });
+
+  it("drops the time when the pasted name's timestamp is not a real date", () => {
+    expect(formatChipLabel("/tmp/daintree-clipboard/clipboard-99999999999999999-abcd.png")).toBe(
+      "Image"
     );
   });
 });
