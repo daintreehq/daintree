@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LoadedPluginInfo, SettingDefinition } from "@shared/types/plugin";
-import {
-  matchPluginSettingFields,
-  pluginSettingFilterIndex,
-} from "../pluginSettingFieldSearch";
+import { matchPluginSettingFields, pluginSettingFilterIndex } from "../pluginSettingFieldSearch";
 import { buildPluginSettingsSearchEntries } from "../pluginSettingsSearch";
 import { filterSettings } from "../settingsSearchUtils";
 

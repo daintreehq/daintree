@@ -1886,10 +1886,7 @@ describe("PluginSettingsForm field filter (#16770)", () => {
   it("counts the fields each home shows, not every field the plugin declares", () => {
     currentProjectId = "p1";
     // Ten user fields and six project fields: sixteen declared, neither home past 15.
-    const plugin = makePlugin([
-      ...fieldsOf(10),
-      ...fieldsOf(16, { scope: "project" }).slice(10),
-    ]);
+    const plugin = makePlugin([...fieldsOf(10), ...fieldsOf(16, { scope: "project" }).slice(10)]);
     const { unmount } = render(<PluginSettingsForm plugin={plugin} viewScope="user" />);
     expect(row("alphaKey")).toBeTruthy();
     expect(screen.queryByLabelText("Filter settings")).toBeNull();
