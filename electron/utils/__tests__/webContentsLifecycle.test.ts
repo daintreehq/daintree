@@ -122,6 +122,23 @@ describe("webContentsLifecycle", () => {
       return pending;
     }
 
+    /** Hold every CDP command until the test answers it; `commands` is in dispatch order. */
+    function holdCommands(wc: MockWebContents) {
+      const commands: Array<
+        { method: string; state: string | undefined } & ReturnType<typeof deferred>
+      > = [];
+      onCommand(wc, (method, state) => {
+        const d = deferred();
+        commands.push({ method, state, ...d });
+        return d.promise;
+      });
+      const sent = async (count: number) => {
+        await vi.waitFor(() => expect(commands).toHaveLength(count));
+        return commands;
+      };
+      return { commands, sent };
+    }
+
     it("holds from the freeze request until the thaw succeeds", async () => {
       const wc = createMockWc();
       expect(isWebContentsFrozen(asWc(wc))).toBe(false);
@@ -215,26 +232,60 @@ describe("webContentsLifecycle", () => {
     it("a freeze that never went out puts back the hold before it, for its thaw to release", async () => {
       const wc = createMockWc({ attached: true });
       await freezeWebContents(asWc(wc));
-      const thaw = deferred();
-      onCommand(wc, (method, state) => {
-        if (method === "Page.setWebLifecycleState" && state === "active") return thaw.promise;
-      });
-      const thawing = unfreezeWebContents(asWc(wc));
-      await vi.waitFor(() =>
-        expect(wc.debugger.sendCommand).toHaveBeenCalledWith("Page.setWebLifecycleState", {
-          state: "active",
-        })
-      );
+      const { sent } = holdCommands(wc);
 
-      onCommand(wc, (method) => {
-        if (method === "Page.enable") throw new Error("Target closed");
-      });
-      await freezeWebContents(asWc(wc));
+      const thawing = unfreezeWebContents(asWc(wc));
+      const refreezing = freezeWebContents(asWc(wc));
+      // In dispatch order: the thaw's enable, then the refreeze's (rejected),
+      // then the thaw's lifecycle command, which only goes out after its enable.
+      const [thawEnable, refreezeEnable] = await sent(2);
+      thawEnable!.resolve();
+      refreezeEnable!.reject();
+      await refreezing;
       expect(isWebContentsFrozen(asWc(wc))).toBe(true);
 
-      thaw.resolve();
+      const [, , thawLifecycle] = await sent(3);
+      expect(thawLifecycle!.state).toBe("active");
+      thawLifecycle!.resolve();
       await thawing;
       expect(isWebContentsFrozen(asWc(wc))).toBe(false);
+    });
+
+    it.each([
+      ["in the order they went out", [0, 1]],
+      ["in reverse", [1, 0]],
+    ] as const)(
+      "two overlapping freezes that never went out leave a running page unheld, settling %s",
+      async (_, order) => {
+        const wc = createMockWc({ attached: true });
+        const { sent } = holdCommands(wc);
+
+        const freezes = [freezeWebContents(asWc(wc)), freezeWebContents(asWc(wc))];
+        const enables = await sent(2);
+        for (const i of order) {
+          enables[i]!.reject();
+          await freezes[i];
+        }
+
+        expect(isWebContentsFrozen(asWc(wc))).toBe(false);
+      }
+    );
+
+    it("an unsent freeze on top of a sent one keeps the sent one's hold", async () => {
+      const wc = createMockWc({ attached: true });
+      const { sent } = holdCommands(wc);
+
+      const first = freezeWebContents(asWc(wc));
+      const second = freezeWebContents(asWc(wc));
+      const [firstEnable, secondEnable] = await sent(2);
+      firstEnable!.resolve();
+      secondEnable!.reject();
+      await second;
+      const [, , firstLifecycle] = await sent(3);
+      firstLifecycle!.resolve();
+      await first;
+
+      expect(isWebContentsFrozen(asWc(wc))).toBe(true);
     });
 
     it("a thaw that lands after a newer freeze leaves that freeze's hold", async () => {

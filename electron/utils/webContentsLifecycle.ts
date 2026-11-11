@@ -70,10 +70,17 @@ export function ensureAttached(wc: Electron.WebContents): void {
  * failed after its command went out, or a failed thaw, proves nothing about
  * the page (Chromium also keeps a page's frozen state on its host across a
  * reload), so the hold stays; a freeze whose command never went out puts back
- * whatever was held before it. Holding too long costs a skipped periodic push,
- * and every activation thaws.
+ * the latest earlier hold that still stands. Holding too long costs a skipped
+ * periodic push, and every activation thaws.
  */
-const lifecycleHolds = new WeakMap<Electron.WebContents, object>();
+const lifecycleHolds = new WeakMap<Electron.WebContents, FreezeHold>();
+
+interface FreezeHold {
+  /** The hold this one replaced, kept only until this freeze's command goes out. */
+  prior: FreezeHold | undefined;
+  /** This freeze's command never went out, so it froze nothing. */
+  unsent: boolean;
+}
 
 type LifecycleOutcome = "applied" | "unsent" | "failed";
 
@@ -100,12 +107,17 @@ async function setLifecycleState(
 
 export async function freezeWebContents(wc: Electron.WebContents): Promise<void> {
   if (wc.isDestroyed()) return;
-  const prior = lifecycleHolds.get(wc);
-  const hold = {};
+  const hold: FreezeHold = { prior: lifecycleHolds.get(wc), unsent: false };
   lifecycleHolds.set(wc, hold);
-  const outcome = await setLifecycleState(wc, "frozen");
-  if (outcome !== "unsent" || lifecycleHolds.get(wc) !== hold) return;
-  if (prior) lifecycleHolds.set(wc, prior);
+  if ((await setLifecycleState(wc, "frozen")) !== "unsent") {
+    hold.prior = undefined;
+    return;
+  }
+  hold.unsent = true;
+  if (lifecycleHolds.get(wc) !== hold) return;
+  let standing = hold.prior;
+  while (standing?.unsent) standing = standing.prior;
+  if (standing) lifecycleHolds.set(wc, standing);
   else lifecycleHolds.delete(wc);
 }
 
