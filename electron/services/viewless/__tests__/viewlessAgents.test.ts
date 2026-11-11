@@ -460,6 +460,40 @@ describe("agent.launch with no frontend", () => {
     expect(snapshot?.agentModelId).toBe("devstral-small");
   });
 
+  it("titles the pane with a model only the host's catalog lists (#16783)", async () => {
+    const { deps, invoke, store } = launchDeps();
+    const answer = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (projectId, channel, args) =>
+      channel === CHANNELS.AGENT_CAPABILITIES_GET_RESOLVED_MODEL_LIST
+        ? {
+            agentId: args[0],
+            models: [{ id: "gpt-5.5", name: "GPT-5.5 (Codex)", shortLabel: "GPT-5.5" }],
+            contextWindow: null,
+            source: "remote",
+          }
+        : answer(projectId, channel, args)
+    );
+
+    const result = await executeViewlessAction(
+      request("agent.launch", {
+        agentId: "codex",
+        worktreeId: "/repo-wt/feature",
+        model: "gpt-5.5",
+      }),
+      deps
+    );
+
+    const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
+    expect(invoke).toHaveBeenCalledWith(
+      PROJECT.id,
+      CHANNELS.AGENT_CAPABILITIES_GET_RESOLVED_MODEL_LIST,
+      ["codex"]
+    );
+    expect(spawned(invoke)).toMatchObject({ agentModelId: "gpt-5.5", title: "Codex (GPT-5.5)" });
+    const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
+    expect(snapshot?.title).toBe("Codex (GPT-5.5)");
+  });
+
   it("records the prompt as the caller wrote it, without the handback instruction (#14592)", async () => {
     const { deps, invoke, store } = launchDeps();
 

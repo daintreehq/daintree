@@ -1618,12 +1618,24 @@ export function isRetiredAgentModel(
   return retired !== undefined && Object.hasOwn(retired, modelId);
 }
 
-export function getAgentDisplayTitle(agentId: string, modelId?: string): string {
+/**
+ * The agent's name, with the model's short label when `modelId` is one it
+ * knows: its bundled list first, then `resolvedModels`, the runtime catalog
+ * that is the only list some agents have (Codex) (#16783). An id neither
+ * names stays the bare agent name.
+ */
+export function getAgentDisplayTitle(
+  agentId: string,
+  modelId?: string,
+  resolvedModels?: ReadonlyArray<Pick<AgentModelConfig, "id" | "name"> & { shortLabel?: string }>
+): string {
   const config = getEffectiveAgentConfig(agentId);
   const baseName = config?.name ?? agentId;
   if (!modelId) return baseName;
-  const model = config?.models?.find((m) => m.id === modelId);
-  return model ? `${baseName} (${model.shortLabel})` : baseName;
+  const model =
+    config?.models?.find((m) => m.id === modelId) ?? resolvedModels?.find((m) => m.id === modelId);
+  const label = model ? model.shortLabel?.trim() || model.name.trim() : "";
+  return label ? `${baseName} (${label})` : baseName;
 }
 
 export function getAgentPreset(agentId: string, presetId?: string): AgentPreset | undefined {
