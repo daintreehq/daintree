@@ -5,13 +5,15 @@ import { Callout } from "@/components/ui/Callout";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { composerHoldClient } from "@/clients/composerHoldClient";
+import { imageRangesIn, setPendingComposerImages } from "@/lib/composerPendingImages";
+import { makeDraftKey } from "@/lib/draftKey";
 import { pluralize } from "@/lib/pluralize";
 import { logWarn } from "@/utils/logger";
 import { useHeldComposerSendStore } from "@/store/heldComposerSendStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { selectHomeFocusTarget, useTerminalInputStore } from "@/store/terminalInputStore";
-import { requestPaneFocus } from "./paneFocusRequest";
+import { captureFocusEpoch, isFocusEpochCurrent, requestPaneFocus } from "./paneFocusRequest";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { ComposerHoldDropReason } from "@shared/types/ipc/composerHold";
 import { isPtyPanel } from "@shared/types/panel";
@@ -49,30 +51,59 @@ function imageCountOf(imagePaths: readonly string[]): string {
   return imagePaths.length > 0 ? ` · ${pluralize(imagePaths.length, "image")}` : "";
 }
 
-/** Whether the keyboard is inside `row`, read before the control pressed there acts and goes. */
-function holdsFocus(row: HTMLElement | null): boolean {
+/** Where the keyboard was when a row control was pressed, read before it acts and goes. */
+interface PressedControl {
+  control: Element;
+  epoch: number;
+}
+
+/** The control inside `row` holding the keyboard, or null when the keyboard is elsewhere. */
+function pressedIn(row: HTMLElement | null): PressedControl | null {
   const active = document.activeElement;
-  return row !== null && active !== null && row.contains(active);
+  if (row === null || active === null || !row.contains(active)) return null;
+  return { control: active, epoch: captureFocusEpoch() };
 }
 
 /**
- * The control pressed in `row` is gone or going: the keyboard goes back to the
- * pane rather than the page, unless it has already moved on somewhere else.
+ * The control pressed is gone or going: the keyboard goes back to the pane
+ * rather than the page, unless the user has taken it somewhere since.
  */
-function returnFocusToPane(terminalId: string, row: HTMLElement | null): void {
+function returnFocusToPane(terminalId: string, pressed: PressedControl | null): void {
+  if (pressed === null || !isFocusEpochCurrent(pressed.epoch)) return;
   const active = document.activeElement;
-  if (active !== null && active !== document.body && !(row?.contains(active) ?? false)) return;
+  const stranded =
+    active === null ||
+    active === document.body ||
+    active === document.documentElement ||
+    active === pressed.control;
+  if (!stranded) return;
   requestPaneFocus(terminalId, selectHomeFocusTarget(useTerminalInputStore.getState()));
 }
 
 /**
- * Put a held send's text back in the pane's composer, ahead of anything typed
- * since, and hand the composer the keyboard.
+ * Put a held send's text and images back in the pane's composer, ahead of
+ * anything typed since, and hand the composer the keyboard.
  */
-function restoreToDraft(terminalId: string, projectId: string | undefined, text: string): void {
+function restoreToDraft(
+  terminalId: string,
+  projectId: string | undefined,
+  text: string,
+  imagePaths: readonly string[]
+): void {
   const inputs = useTerminalInputStore.getState();
-  const draft = inputs.getDraftInput(terminalId, projectId);
-  inputs.setDraftInput(terminalId, draft.trim() === "" ? text : `${text}\n\n${draft}`, projectId);
+  const before = inputs.getDraftInput(terminalId, projectId);
+  const replaces = before.trim() === "";
+  const draft = replaces ? text : `${text}\n\n${before}`;
+  // The draft store holds text: the composer takes the images from here.
+  setPendingComposerImages(makeDraftKey(terminalId, projectId), {
+    draft,
+    before,
+    change: replaces
+      ? { from: 0, to: before.length, insert: text }
+      : { from: 0, to: 0, insert: `${text}\n\n` },
+    images: imageRangesIn(text, imagePaths),
+  });
+  inputs.setDraftInput(terminalId, draft, projectId);
   inputs.bumpExternalDraftRevision();
   requestPaneFocus(terminalId, "hybridInput");
 }
@@ -118,14 +149,13 @@ export function HeldComposerSendRow({
 
   const withdraw = async (thenEdit: boolean): Promise<void> => {
     if (held === undefined || busy) return;
-    const row = rowRef.current;
-    const hadFocus = holdsFocus(row);
+    const pressed = pressedIn(rowRef.current);
     setBusy(true);
     try {
       const withdrawn = await composerHoldClient.withdraw(terminalId, held.token);
-      if (withdrawn && thenEdit) restoreToDraft(terminalId, projectId, held.text);
+      if (withdrawn && thenEdit) restoreToDraft(terminalId, projectId, held.text, held.imagePaths);
       // Withdrawn, or already on its way: either way the row's controls go.
-      else if (hadFocus) returnFocusToPane(terminalId, row);
+      else returnFocusToPane(terminalId, pressed);
     } catch (err) {
       logWarn("[HeldComposerSend] withdraw failed", { terminalId, error: err });
     } finally {
@@ -136,13 +166,12 @@ export function HeldComposerSendRow({
   // Main types it, or drops it saying why, and its push moves the row on.
   const sendNow = async (): Promise<void> => {
     if (held === undefined || busy) return;
-    const row = rowRef.current;
-    const hadFocus = holdsFocus(row);
+    const pressed = pressedIn(rowRef.current);
     setBusy(true);
     try {
       // Whatever main answers, the held row's controls go: it is sending, dropped or gone.
       await composerHoldClient.sendNow(terminalId, held.token, inputBlocked);
-      if (hadFocus) returnFocusToPane(terminalId, row);
+      returnFocusToPane(terminalId, pressed);
     } catch (err) {
       logWarn("[HeldComposerSend] send now failed", { terminalId, error: err });
     } finally {
@@ -227,10 +256,9 @@ export function HeldComposerSendRow({
 
   if (dropped === undefined) return null;
   const dismissDropped = (): void => {
-    const row = rowRef.current;
-    const hadFocus = holdsFocus(row);
+    const pressed = pressedIn(rowRef.current);
     useHeldComposerSendStore.getState().clearDropped(terminalId);
-    if (hadFocus) returnFocusToPane(terminalId, row);
+    returnFocusToPane(terminalId, pressed);
   };
   return (
     <Callout
@@ -247,7 +275,7 @@ export function HeldComposerSendRow({
             size="xs"
             onClick={() => {
               useHeldComposerSendStore.getState().clearDropped(terminalId);
-              restoreToDraft(terminalId, projectId, dropped.text);
+              restoreToDraft(terminalId, projectId, dropped.text, dropped.imagePaths);
             }}
           >
             Edit
