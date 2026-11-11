@@ -1,6 +1,5 @@
 import { EventEmitter } from "events";
-import { execFileSync } from "child_process";
-import fs from "fs";
+import type { IPty } from "node-pty";
 import type { AgentEvent } from "./AgentStateMachine.js";
 import type { AgentStateChangeTrigger } from "../schemas/agent.js";
 import type { PtyPool } from "./PtyPool.js";
@@ -1222,21 +1221,12 @@ export class PtyManager extends EventEmitter {
     return terminal.getSerializedStateAsync(options);
   }
 
-  private resolveTtyPath(pid: number): string | undefined {
-    try {
-      if (process.platform === "win32") return undefined;
-      if (process.platform === "linux") {
-        return fs.readlinkSync(`/proc/${pid}/fd/0`);
-      }
-      // macOS
-      const tty = execFileSync("ps", ["-p", String(pid), "-o", "tty="], { timeout: 500 })
-        .toString()
-        .trim();
-      if (!tty || tty === "??" || tty === "?") return undefined;
-      return `/dev/${tty}`;
-    } catch {
-      return undefined;
-    }
+  // node-pty records the slave device path at spawn, so this is a property read; probing
+  // `ps` or /proc here would block the pty-host loop on every getTerminalInfo poll.
+  private resolveTtyPath(ptyProcess: IPty): string | undefined {
+    if (process.platform === "win32") return undefined;
+    const ptsName = (ptyProcess as unknown as { ptsName?: unknown }).ptsName;
+    return typeof ptsName === "string" && ptsName.length > 0 ? ptsName : undefined;
   }
 
   /**
@@ -1281,7 +1271,7 @@ export class PtyManager extends EventEmitter {
       ptyCols: ptyProcess?.cols,
       ptyRows: ptyProcess?.rows,
       ptyForegroundProcess: ptyProcess?.process,
-      ptyTty: ptyProcess ? this.resolveTtyPath(ptyProcess.pid) : undefined,
+      ptyTty: ptyProcess ? this.resolveTtyPath(ptyProcess) : undefined,
       spawnArgs: terminalInfo.spawnArgs,
       agentLaunchFlags: terminalInfo.agentLaunchFlags,
       agentModelId: terminalInfo.agentModelId,

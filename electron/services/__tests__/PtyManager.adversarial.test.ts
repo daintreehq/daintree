@@ -14,6 +14,8 @@ const shared = vi.hoisted(() => ({
   disposeSerializer: vi.fn(),
   deleteSessionFile: vi.fn(),
   persistAgentSession: vi.fn(),
+  execFileSync: vi.fn(),
+  readlinkSync: vi.fn(),
 }));
 
 interface SpawnOptionsShape extends PtyHostSpawnOptions {
@@ -30,7 +32,9 @@ interface TerminalCallbacks {
   onFirstPromptWritten?: (id: string, firstPrompt: TerminalFirstPrompt) => void;
 }
 
-type MockPtyProcess = Pick<IPty, "kill" | "pid" | "cols" | "rows" | "process">;
+type MockPtyProcess = Pick<IPty, "kill" | "pid" | "cols" | "rows" | "process"> & {
+  ptsName?: string;
+};
 
 interface TerminalInfoShape {
   id: string;
@@ -203,6 +207,17 @@ class MockAgentStateService {
   transitionState = shared.agentTransitionState;
   emitAgentKilled = shared.agentEmitKilled;
 }
+
+vi.mock("child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("child_process")>()),
+  execFileSync: shared.execFileSync,
+}));
+
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  const patched = { ...actual, readlinkSync: shared.readlinkSync };
+  return { ...patched, default: patched };
+});
 
 vi.mock("../pty/terminalSpawn.js", () => ({
   computeSpawnContext: shared.computeSpawnContext,
@@ -502,6 +517,91 @@ describe("PtyManager adversarial", () => {
     created.isBracketedPasteMode.mockReturnValue(true);
     created.info.isExited = true;
     expect(manager.getTerminalInfo("agent-1")!.bracketedPasteMode).toBe(false);
+  });
+
+  describe("GET_TERMINAL_INFO_TTY", () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const setPlatform = (value: NodeJS.Platform) =>
+      Object.defineProperty(process, "platform", { ...realPlatform, value });
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", realPlatform);
+    });
+
+    function spawnWithTty(ptsName: string | undefined) {
+      shared.acquirePtyProcess.mockImplementation(() => ({
+        ptyProcess: { ...createPtyProcess(), ptsName },
+      }));
+      const manager = new PtyManager();
+      manager.spawn("t1", spawnOptions({ kind: "terminal" }));
+      return { manager, created: shared.created[0]! };
+    }
+
+    it.each([
+      ["darwin", "/dev/ttys003"],
+      ["linux", "/dev/pts/7"],
+    ] as const)("REPORTS_THE_SPAWN_TIME_DEVICE_PATH_ON_%s", (platform, ptsName) => {
+      setPlatform(platform);
+      const { manager } = spawnWithTty(ptsName);
+
+      expect(manager.getTerminalInfo("t1")!.ptyTty).toBe(ptsName);
+    });
+
+    it.each(["darwin", "linux"] as const)(
+      "NEVER_PROBES_PS_OR_PROC_ACROSS_REPEATED_QUERIES_ON_%s",
+      (platform) => {
+        setPlatform(platform);
+        const { manager } = spawnWithTty("/dev/ttys003");
+
+        for (let i = 0; i < 50; i++) {
+          expect(manager.getTerminalInfo("t1")!.ptyTty).toBe("/dev/ttys003");
+        }
+
+        expect(shared.execFileSync).not.toHaveBeenCalled();
+        expect(shared.readlinkSync).not.toHaveBeenCalled();
+      }
+    );
+
+    it("OMITS_THE_PATH_ONCE_THE_PTY_HAS_EXITED_OR_BEEN_KILLED", () => {
+      setPlatform("linux");
+      const { manager, created } = spawnWithTty("/dev/pts/7");
+
+      created.info.isExited = true;
+      expect(manager.getTerminalInfo("t1")!.ptyTty).toBeUndefined();
+
+      created.info.isExited = false;
+      created.info.wasKilled = true;
+      expect(manager.getTerminalInfo("t1")!.ptyTty).toBeUndefined();
+    });
+
+    it("OMITS_THE_PATH_ON_WINDOWS", () => {
+      // Spawning under win32 would start the real tree-kill helper (powershell.exe).
+      const { manager } = spawnWithTty("/dev/ttys003");
+      setPlatform("win32");
+
+      expect(manager.getTerminalInfo("t1")!.ptyTty).toBeUndefined();
+    });
+
+    it.each([undefined, "", 7, null])("OMITS_THE_PATH_WHEN_THE_PTY_REPORTS_%j", (ptsName) => {
+      setPlatform("darwin");
+      const { manager } = spawnWithTty(ptsName as string | undefined);
+
+      expect(manager.getTerminalInfo("t1")!.ptyTty).toBeUndefined();
+    });
+
+    it("REPORTS_THE_SUCCESSOR_PATH_AFTER_A_SAME_ID_RESPAWN", () => {
+      setPlatform("linux");
+      const { manager, created } = spawnWithTty("/dev/pts/7");
+      expect(manager.getTerminalInfo("t1")!.ptyTty).toBe("/dev/pts/7");
+      created.info.wasKilled = true;
+      shared.acquirePtyProcess.mockImplementation(() => ({
+        ptyProcess: { ...createPtyProcess(), ptsName: "/dev/pts/9" },
+      }));
+
+      manager.spawn("t1", spawnOptions({ kind: "terminal" }));
+
+      expect(manager.getTerminalInfo("t1")!.ptyTty).toBe("/dev/pts/9");
+    });
   });
 
   it("DISPOSE_EMITS_AGENT_KILLED_ONLY_FOR_AGENTS", () => {
