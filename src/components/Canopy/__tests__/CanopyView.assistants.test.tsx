@@ -901,6 +901,9 @@ describe("CanopyView role filter", () => {
     await act(async () => fireEvent.click(open()));
     await act(async () => fireEvent.click(open()));
     await act(async () => refuseEarlier(ENDED));
+    // The newer is still on its way: the earlier's refusal never shows meanwhile.
+    expect(document.body.textContent).not.toContain(ENDED);
+    expect(document.body.textContent).not.toContain("Couldn't open this assistant");
     await act(async () => refuseNewer(NEWER));
 
     expect(document.body.textContent).not.toContain(ENDED);

@@ -151,6 +151,8 @@ const assistants = vi.hoisted(() => ({
   } | null,
   /** Whether a view holds the running lane, as `listRunningLanes` reports it. */
   laneAttached: true,
+  /** Other projects' and lanes' running assistants, listed beside it. */
+  otherLanes: [] as Array<{ projectId: string; slot: number; agentId: string; attached: boolean }>,
   ended: new Set<(event: { projectId: string; slot: number; sessionId: string }) => void>(),
   /** The global session, when one runs, and the view holding its input. */
   global: null as null | {
@@ -165,8 +167,8 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     getRunningLaneSession: (projectId: string, slot: number) =>
       projectId === "project-1" && slot === 1 ? assistants.lane : null,
-    listRunningLanes: () =>
-      assistants.lane
+    listRunningLanes: () => [
+      ...(assistants.lane
         ? [
             {
               projectId: "project-1",
@@ -175,7 +177,9 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
               attached: assistants.laneAttached,
             },
           ]
-        : [],
+        : []),
+      ...assistants.otherLanes,
+    ],
     addSessionEndedListener: (
       listener: (event: { projectId: string; slot: number; sessionId: string }) => void
     ) => {
@@ -3860,6 +3864,7 @@ describe("where Open in Assistant from the Canopy window finds a lane's view (#1
   afterEach(() => {
     assistants.lane = null;
     assistants.laneAttached = true;
+    assistants.otherLanes = [];
   });
 
   it("names the view holding a running lane", async () => {
@@ -3872,6 +3877,15 @@ describe("where Open in Assistant from the Canopy window finds a lane's view (#1
     assistants.laneAttached = true;
     expect(await assistantLaneHolder("project-1", 2)).toBeNull();
     expect(await assistantLaneHolder("project-2", 1)).toBeNull();
+  });
+
+  it("names none for a detached lane though other lanes beside it are held", async () => {
+    assistants.laneAttached = false;
+    assistants.otherLanes = [
+      { projectId: "project-1", slot: 2, agentId: "claude", attached: true },
+      { projectId: "project-2", slot: 1, agentId: "claude", attached: true },
+    ];
+    expect(await assistantLaneHolder("project-1", 1)).toBeNull();
   });
 
   it("names the view with the global session's input, and none without one", async () => {
