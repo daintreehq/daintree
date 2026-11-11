@@ -262,16 +262,16 @@ describe("isPluginControlArgs (#16767)", () => {
     }
   });
 
-  it("never passes arguments the link encoder would refuse or write past the bound", () => {
-    for (const args of [
-      { prompt: "a".repeat(120_000) },
-      Object.fromEntries(Array.from({ length: 5_000 }, (_, i) => [`key${i}`, i + 0.25])),
-      deepNest(40),
-    ]) {
-      if (!isPluginControlArgs(args)) continue;
+  it("passes what the link encoder writes within the bound, and nothing it writes past it", () => {
+    const floats = (count: number) =>
+      Object.fromEntries(Array.from({ length: count }, (_, i) => [`k${i}`, 0.5]));
+    for (const args of [{ prompt: "a".repeat(120_000) }, floats(14_381), deepNest(40)]) {
+      expect(isPluginControlArgs(args)).toBe(true);
       expect(encodeValue(args).byteLength).toBeLessThanOrEqual(MAX_RELAY_ARGS_BYTES);
     }
-    expect(isPluginControlArgs(deepNest(40))).toBe(true);
+    // One entry more and the encoder writes past the bound.
+    expect(encodeValue(floats(14_382)).byteLength).toBeGreaterThan(MAX_RELAY_ARGS_BYTES);
+    expect(isPluginControlArgs(floats(14_382))).toBe(false);
   });
 });
 
