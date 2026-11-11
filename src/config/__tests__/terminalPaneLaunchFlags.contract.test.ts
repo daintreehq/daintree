@@ -39,18 +39,23 @@ describe("the terminal pane hands its launch flags to its header (#16785)", () =
     visit(source);
     expect(elements.length, `${TERMINAL_PANE} renders ContentPanel`).toBeGreaterThan(0);
 
+    // After every spread, which would otherwise override it.
     const missing = elements
-      .filter(
-        (element) =>
-          !element.attributes.properties.some(
-            (attribute) =>
-              ts.isJsxAttribute(attribute) &&
-              attribute.name.getText(source) === "agentLaunchFlags" &&
-              attribute.initializer !== undefined &&
-              ts.isJsxExpression(attribute.initializer) &&
-              attribute.initializer.expression?.getText(source) === "agentLaunchFlags"
-          )
-      )
+      .filter((element) => {
+        const attributes = element.attributes.properties;
+        const forwarded = attributes.findIndex(
+          (attribute) =>
+            ts.isJsxAttribute(attribute) &&
+            attribute.name.getText(source) === "agentLaunchFlags" &&
+            attribute.initializer !== undefined &&
+            ts.isJsxExpression(attribute.initializer) &&
+            attribute.initializer.expression?.getText(source) === "agentLaunchFlags"
+        );
+        return (
+          forwarded === -1 ||
+          attributes.slice(forwarded + 1).some((attribute) => ts.isJsxSpreadAttribute(attribute))
+        );
+      })
       .map((element) => source.getLineAndCharacterOfPosition(element.getStart(source)).line + 1);
     expect(missing, `${TERMINAL_PANE} lines missing agentLaunchFlags`).toEqual([]);
   });
