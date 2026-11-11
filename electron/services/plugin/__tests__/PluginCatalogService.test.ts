@@ -19,8 +19,10 @@ const electronMock = vi.hoisted(() => {
   };
 });
 
-/** Holds every cache write until released, to widen the window after a fetch. */
-const writeGate = vi.hoisted(() => ({ hold: null as Promise<void> | null }));
+/** Each queued hold pauses the next cache write until released. */
+const writeGate = vi.hoisted(() => ({
+  holds: [] as Array<{ started: () => void; release: Promise<void> }>,
+}));
 
 vi.mock("../../../utils/logger.js", () => ({
   createLogger: () => logger,
@@ -37,7 +39,11 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
     ...actual,
     resilientAtomicWriteFile: vi.fn(
       async (...args: Parameters<typeof actual.resilientAtomicWriteFile>) => {
-        if (writeGate.hold) await writeGate.hold;
+        const hold = writeGate.holds.shift();
+        if (hold) {
+          hold.started();
+          await hold.release;
+        }
         return actual.resilientAtomicWriteFile(...args);
       }
     ),
@@ -126,6 +132,13 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+function holdNextWrite(): { started: Promise<void>; release: () => void } {
+  const started = deferred();
+  const release = deferred();
+  writeGate.holds.push({ started: started.resolve, release: release.promise });
+  return { started: started.promise, release: release.resolve };
+}
+
 describe("PluginCatalogService", () => {
   let tmpDir: string;
   let cachePath: string;
@@ -135,7 +148,7 @@ describe("PluginCatalogService", () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-catalog-"));
     cachePath = path.join(tmpDir, PLUGIN_CATALOG_CACHE_FILENAME);
     now = T0;
-    writeGate.hold = null;
+    writeGate.holds = [];
     electronMock.state.userData = tmpDir;
     vi.clearAllMocks();
   });
@@ -326,19 +339,40 @@ describe("PluginCatalogService", () => {
     });
 
     it("never reuses a fetch that finished before it asked, even while its write is pending", async () => {
-      const write = deferred();
-      writeGate.hold = write.promise;
+      const write = holdNextWrite();
       const fetchImpl = respondWith(ok(), offline);
       const svc = service(fetchImpl);
 
       const browse = svc.getCatalog("browse");
-      await vi.waitFor(() => expect(resilientAtomicWriteFile).toHaveBeenCalled());
+      await write.started;
       const install = svc.getCatalog("install");
-      write.resolve();
+      write.release();
 
       expect(await browse).toMatchObject({ status: "available", fresh: true });
       expect(await install).toEqual({ status: "stale", fetchedAt: T0, failure: "unreachable" });
       expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it("writes overlapping fetches to disk in order, so the newer catalog lands last", async () => {
+      const first = holdNextWrite();
+      const newer = { entries: [catalogEntry()] };
+      const fetchImpl = respondWith(ok(), ok(newer));
+      const svc = service(fetchImpl);
+
+      const browse = svc.getCatalog("browse");
+      await first.started;
+      const install = svc.getCatalog("install");
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+      // Time for an unordered write of the newer catalog to start; an ordered
+      // one waits behind the held write whatever the delay.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(resilientAtomicWriteFile).toHaveBeenCalledTimes(1);
+
+      first.release();
+      await Promise.all([browse, install]);
+      expect(resilientAtomicWriteFile).toHaveBeenCalledTimes(2);
+      const persisted = JSON.parse(await fs.readFile(cachePath, "utf-8"));
+      expect(persisted.catalog).toEqual(newer);
     });
   });
 

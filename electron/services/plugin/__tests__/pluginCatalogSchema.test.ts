@@ -129,10 +129,15 @@ describe("parsePluginCatalog", () => {
       ["with a trailing slash", "https://github.com/daintreehq/plugin-continue-session/"],
       ["naming only an owner", "https://github.com/daintreehq"],
       ["with a deeper path", "https://github.com/daintreehq/plugin-continue-session/tree/main"],
-      ["with a character GitHub doesn't allow", "https://github.com/daintreehq/plugin%20session"],
       ["that isn't a URL", "daintreehq/plugin-continue-session"],
     ])("refuses a repo %s", (_label, repo) => {
       expect(rejects(catalogEntry({ repo }))).toBe(true);
+    });
+
+    it("refuses a repo name GitHub doesn't allow, even when the url agrees with it", () => {
+      const repo = "https://github.com/daintreehq/plugin%20session";
+      const url = `${repo}/releases/download/v0.1.1/daintreehq.continue-session-0.1.1.dntr`;
+      expect(rejects(catalogEntry({ repo, url }))).toBe(true);
     });
   });
 
