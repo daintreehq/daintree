@@ -2693,8 +2693,10 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   describe("Antigravity help launch (#16814)", () => {
+    // A user-data folder with a space and an apostrophe in it, as a home
+    // folder can have, so the quoting is what keeps the path one argument.
     const settingsPath =
-      "/data/help-sessions/abc123.antigravity-s1/.antigravity-session-settings.json";
+      "/data/O'Brien Help/help-sessions/abc123.antigravity-s1/.antigravity-session-settings.json";
 
     async function spawnAntigravity(token: string, command = "agy") {
       const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -2723,7 +2725,11 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       const command = await spawnAntigravity("help-token");
 
       expect(command).toMatch(/^agy /);
-      expect(command).toContain(`'--settings' '${settingsPath}'`);
+      if (process.platform !== "win32") {
+        expect(command).toContain(
+          `'--settings' '/data/O'\\''Brien Help/help-sessions/abc123.antigravity-s1/.antigravity-session-settings.json'`
+        );
+      }
       expect(command).not.toContain("help-token");
       expect(command).not.toContain("--dangerously-skip-permissions");
       expect(mockPreparePaneConfig).not.toHaveBeenCalled();

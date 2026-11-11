@@ -5474,6 +5474,15 @@ describe("HelpSessionService", () => {
       expect(await exists(path.join(claude.sessionPath, ".agents"))).toBe(false);
     });
 
+    it("never shares a lane folder with a custom agent whose id reads like a lane key", async () => {
+      expect(assistantAgentDirKey("antigravity")).toBe("antigravity");
+      expect(assistantAgentDirKey("antigravity-s0")).toMatch(/^[0-9a-f]{16}$/);
+      expect(assistantAgentDirKey("antigravity-s12")).toMatch(/^[0-9a-f]{16}$/);
+      // Only the generated shape is reserved.
+      expect(assistantAgentDirKey("antigravity-sx")).toBe("antigravity-sx");
+      expect(assistantAgentDirKey("codex-s0")).toBe("codex-s0");
+    });
+
     it("writes .agents/mcp_config.json in agy's dialect, with the reply-wait timeout", async () => {
       const result = await service.provisionSession(agyInput());
       if (!result) throw new Error("expected result");
@@ -5501,12 +5510,18 @@ describe("HelpSessionService", () => {
     });
 
     it("hands agy a --settings file trusting the lane folder and allowing Daintree's servers", async () => {
+      // Reached through a symlink, so the folder as given and its canonical
+      // path differ, and agy keys trust by the canonical one.
+      const linkedUserData = path.join(tmpRoot, "userData-link");
+      await fs.symlink(userData, linkedUserData, process.platform === "win32" ? "junction" : "dir");
+      mockUserDataDir.mockReturnValue(linkedUserData);
       const result = await service.provisionSession(agyInput());
       if (!result) throw new Error("expected result");
 
       const settings = await readAgySettings(result.token);
-      expect(settings.trustedWorkspaces).toContain(result.sessionPath);
-      expect(settings.trustedWorkspaces).toContain(await fs.realpath(result.sessionPath));
+      const canonical = await fs.realpath(result.sessionPath);
+      expect(canonical).not.toBe(result.sessionPath);
+      expect(settings.trustedWorkspaces).toEqual([result.sessionPath, canonical]);
       expect([...settings.permissions!.allow].sort()).toEqual([
         "mcp(daintree-docs/*)",
         "mcp(daintree-runbooks/*)",
@@ -5515,6 +5530,25 @@ describe("HelpSessionService", () => {
       // Only keys agy's `--settings` accepts; an unknown one aborts its launch.
       expect(Object.keys(settings).sort()).toEqual(["permissions", "trustedWorkspaces"]);
       expect(JSON.stringify(settings)).not.toContain(result.token);
+    });
+
+    it("wires Daintree control alone when docs search is off", async () => {
+      mockStoreGet.mockReturnValue({
+        daintreeControl: true,
+        docSearch: false,
+        runbookSearch: false,
+      });
+      const result = await service.provisionSession(agyInput());
+      if (!result) throw new Error("expected result");
+
+      const { mcpServers } = await readAgyConfig(result.sessionPath);
+      expect(Object.keys(mcpServers)).toEqual(["daintree"]);
+      expect(mcpServers.daintree).toEqual({
+        url: "http://127.0.0.1:45454/mcp",
+        headers: { Authorization: `Bearer ${result.token}` },
+        timeoutSeconds: HELP_MCP_TOOL_TIMEOUT_MS / 1_000,
+      });
+      expect((await readAgySettings(result.token)).permissions?.allow).toEqual(["mcp(daintree/*)"]);
     });
 
     it("allows only the servers it wired, and no allow list at all when none are on", async () => {
@@ -5539,13 +5573,27 @@ describe("HelpSessionService", () => {
     });
 
     it("getAntigravityLaunchArgs answers null for other agents' sessions and dead tokens", async () => {
-      const claude = await service.provisionSession(provisionInput());
-      const codex = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
-      const agy = await service.provisionSession(agyInput(1));
-      if (!claude || !codex || !agy) throw new Error("expected results");
+      // Every session in a lane of its own, so each token is still live.
+      const claude = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const codex = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "codex",
+        slot: 1,
+      });
+      const copilot = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "copilot",
+        slot: 2,
+      });
+      const agy = await service.provisionSession(agyInput(3));
+      if (!claude || !codex || !copilot || !agy) throw new Error("expected results");
+      for (const live of [claude, codex, copilot, agy]) {
+        expect(service.validateToken(live.token)).not.toBe(false);
+      }
 
       expect(service.getAntigravityLaunchArgs(claude.token)).toBeNull();
       expect(service.getAntigravityLaunchArgs(codex.token)).toBeNull();
+      expect(service.getAntigravityLaunchArgs(copilot.token)).toBeNull();
       expect(service.getAntigravityLaunchArgs("not-a-real-token")).toBeNull();
       expect(service.getAntigravityLaunchArgs("")).toBeNull();
       // And the reverse: an Antigravity token wires no other agent.

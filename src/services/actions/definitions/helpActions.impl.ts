@@ -565,6 +565,11 @@ async function startHelpSessionWithAgent(
   }
 }
 
+// Agents a launch here last refused as too old. Version probes are cached for
+// hours, so the next launch of one reads the CLI afresh and sees an update
+// made since, as the panel's "Check again" does.
+const versionRefusedAgentIds = new Set<string>();
+
 interface HelpLaunchArgs {
   agentId?: string;
   slot?: number;
@@ -626,27 +631,6 @@ async function launchHelpAgent(
       isProjectStateSettled ? LAUNCH_BLOCKED_NO_WORKSPACE : LAUNCH_BLOCKED_LOADING
     );
     return;
-  }
-
-  // The panel's own launches pass the assistant version gate before they
-  // provision. A launch that names its agent comes straight here, and is the
-  // only way in for an agent the picker still hides, so it is gated the same
-  // way: a CLI older than the wiring needs would start without it (#16814).
-  if (parsed?.agentId) {
-    const tooOld = await checkAssistantVersion(
-      agentId,
-      getEffectiveAgentConfig(agentId)?.name ?? agentId
-    );
-    if (tooOld) {
-      if (parsed.vacantOnly) return undefined;
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        title: "Assistant couldn't start",
-        message: `Update ${tooOld.agentName} to use Daintree Assistant. Version ${tooOld.installedVersion} is installed; version ${tooOld.requiredVersion} or later is required.`,
-      });
-      return;
-    }
   }
 
   // Name the lane explicitly (#12108) rather than letting main default it.
@@ -719,6 +703,29 @@ async function launchHelpAgent(
         keptLaneAgentId(keptAgents, targetSlot, canLaunch) ??
         agentId;
     }
+
+    // The panel's own launches pass the assistant version gate before they
+    // provision; this one gates the agent it settled on the same way, since a
+    // CLI older than its wiring needs would start without it (#16814). It is
+    // the only way in for an agent the picker still hides. The lane stays
+    // claimed meanwhile, and the `finally` below releases it on a refusal.
+    const tooOld = await checkAssistantVersion(
+      agentId,
+      getEffectiveAgentConfig(agentId)?.name ?? agentId,
+      versionRefusedAgentIds.has(agentId)
+    );
+    if (tooOld) {
+      versionRefusedAgentIds.add(agentId);
+      if (parsed?.vacantOnly) return undefined;
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title: "Assistant couldn't start",
+        message: `Update ${tooOld.agentName} to use Daintree Assistant. Version ${tooOld.installedVersion} is installed; version ${tooOld.requiredVersion} or later is required.`,
+      });
+      return;
+    }
+    versionRefusedAgentIds.delete(agentId);
 
     try {
       session = await window.electron.help.provisionSession({
