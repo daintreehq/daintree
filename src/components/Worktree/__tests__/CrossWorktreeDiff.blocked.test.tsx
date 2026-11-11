@@ -147,8 +147,19 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
     setWorktrees(LEFT(), snapshot("wt-right", undefined));
     view.rerender(tree());
 
-    expect(await screen.findByText("Choose a worktree on a branch")).toBeTruthy();
+    expect(await screen.findByText("Choose a compare worktree on a branch")).toBeTruthy();
     expect(screen.getByText(/wt-right has a detached HEAD/)).toBeTruthy();
+    expectNothingStale();
+  });
+
+  it("names the base side when the base worktree detaches its HEAD", async () => {
+    const view = await openComparison();
+
+    setWorktrees(snapshot("wt-left", undefined, true), RIGHT());
+    view.rerender(tree());
+
+    expect(await screen.findByText("Choose a base worktree on a branch")).toBeTruthy();
+    expect(screen.getByText(/wt-left has a detached HEAD/)).toBeTruthy();
     expectNothingStale();
   });
 
@@ -194,7 +205,7 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
     view.rerender(tree());
     await act(async () => diff.resolve("late diff"));
 
-    expect(screen.getByText("Choose a worktree on a branch")).toBeTruthy();
+    expect(screen.getByText("Choose a compare worktree on a branch")).toBeTruthy();
     expectNothingStale();
   });
 
@@ -203,7 +214,7 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
 
     setWorktrees(LEFT(), snapshot("wt-right", undefined));
     view.rerender(tree());
-    await screen.findByText("Choose a worktree on a branch");
+    await screen.findByText("Choose a compare worktree on a branch");
 
     setWorktrees(LEFT(), RIGHT());
     view.rerender(tree());
@@ -223,11 +234,19 @@ describe("CrossWorktreeDiff opened from a detached worktree", () => {
     expect(screen.getByText("Choose a worktree to compare")).toBeTruthy();
   });
 
-  it("leaves the base unchosen when no worktree is on a branch", async () => {
+  it("defaults the base past a detached main worktree", async () => {
+    setWorktrees(snapshot("wt-left", undefined, true), RIGHT());
+    render(tree("wt-left"));
+
+    expect((screen.getByLabelText("Base") as HTMLSelectElement).value).toBe("wt-right");
+  });
+
+  it("leaves the base unchosen and says why when no worktree is on a branch", async () => {
     setWorktrees(snapshot("wt-detached", undefined), snapshot("wt-other", undefined));
     render(tree("wt-detached"));
 
     expect((screen.getByLabelText("Base") as HTMLSelectElement).value).toBe("");
-    expect(screen.getByText("Choose two worktrees to compare")).toBeTruthy();
+    expect(screen.getByText("Check out a branch to compare")).toBeTruthy();
+    expect(mockCompareWorktrees).not.toHaveBeenCalled();
   });
 });

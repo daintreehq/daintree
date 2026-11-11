@@ -45,13 +45,16 @@ export function WorktreeSelector({
   onChange,
 }: WorktreeSelectorProps) {
   const triggerId = useId();
+  // A chosen worktree that has since left the list matches no option, which
+  // Radix draws as a blank trigger; it reads as unset instead.
+  const value = worktrees.some((wt) => wt.id === selectedId) ? (selectedId ?? "") : "";
   return (
     <div className="flex flex-col gap-1.5 min-w-0">
       <label htmlFor={triggerId} className={SECTION_LABEL_CLASS}>
         {label}
       </label>
       {/* "" is Radix's unset value: the trigger shows the placeholder. */}
-      <Select value={selectedId ?? ""} onValueChange={onChange}>
+      <Select value={value} onValueChange={onChange}>
         <SelectTrigger id={triggerId} className="justify-start">
           {/* A chosen option brings its own glyph into the trigger. */}
           {!worktrees.some((wt) => wt.id === selectedId && wt.branch) && (
