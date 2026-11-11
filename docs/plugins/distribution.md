@@ -224,6 +224,8 @@ Any other `daintree://` link is ignored.
 
 `daintree-plugin install <path-or-url>` asks the running Daintree to install a local `.dntr` or an `https://` URL, with the same checks as the plugin manager's buttons, and exits non-zero on failure. See [Development loop → `install`](./dev-loop.md#daintree-plugin-install-path-or-url).
 
+With `--sha256 <hex>`, the install is held to that digest: the archive is refused before anything is extracted unless its SHA-256 matches, and the install is refused if the plugin is already installed: a digest-bound install never replaces one, so it can't overwrite a plugin the user already has. Use it with a release's published checksum, or a [catalog](./catalog.md) entry's `sha256`.
+
 ## Updating a plugin
 
 An update offered by the update check is installed only after the user confirms it. Sideloaded and file-installed plugins are updated by installing another archive through the same route, and installing an archive whose manifest name matches an installed plugin replaces it without a separate update confirmation. Plugins installed from a URL remember that URL, and Daintree can re-fetch it; installing a file over one replaces the remembered URL, after which it is no longer checked:
@@ -281,6 +283,7 @@ For authors who want to share plugins publicly:
 
 - **GitHub Releases** is the default recommendation. `.dntr` files are small; releases are free; versioning maps cleanly to git tags.
 - **README with install instructions.** Include the literal URL to paste into Daintree.
+- **Publish the archive's SHA-256** beside it (a `SHA256SUMS` asset works), so users can install with `daintree-plugin install <url> --sha256 <hex>` and a [catalog](./catalog.md) entry can pin it. Use versioned asset URLs for this; a `latest/download` URL changes bytes with every release.
 - **Semver your releases.** Update detection doesn't read the version: "Check for updates" re-fetches the original URL and compares the SHA-256 archive hash against the installed one, so a new build is detected by content change regardless of its version string. The version still matters elsewhere — the update confirm shows it, the plugin blocklist matches against it, and a remote host is offered **Update on _host_** only when this machine's version is newer.
 - **Set `engines.daintree` honestly** — an open-ended lower bound at the version you tested against (`">=0.34.0"`), never a caret. Under semver's 0.x rule `"^0.34.0"` means `>=0.34.0 <0.35.0`, so a caret flags the plugin as possibly incompatible from the very next Daintree minor. Don't set `*` either — you'll get bug reports from users on versions you never supported. See [Manifest → `engines.daintree`](./manifest.md#enginesdaintree).
 - **Don't commit `.dntr` files to the source repo.** Build them in CI on release-tag.

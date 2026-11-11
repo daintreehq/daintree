@@ -296,6 +296,12 @@ npx daintree-plugin install https://github.com/acme/my-plugin/releases/latest/do
 
 The second form needs a release asset with a fixed name; `package` writes a versioned one, so see [CI integration](#ci-integration). Useful in CI scripts and setup automation.
 
+`--sha256 <hex>` holds a fresh install to a known digest: Daintree refuses the archive unless its SHA-256 matches, and refuses if the plugin is already installed. A Daintree too old to check the digest refuses the call rather than installing unchecked.
+
+```bash
+npx daintree-plugin install https://github.com/acme/my-plugin/releases/download/v0.2.0/acme.my-plugin-0.2.0.dntr --sha256 "$SHA256"
+```
+
 ### `daintree-plugin uninstall <pluginId>`
 
 ```bash

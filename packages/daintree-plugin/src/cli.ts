@@ -155,9 +155,13 @@ program
   .command("install")
   .argument("<path-or-url>", "a .dntr file path or URL")
   .description("Install a plugin into the running Daintree")
-  .action(async (target: string) => {
+  .option(
+    "--sha256 <hex>",
+    "install only if the archive's SHA-256 matches this digest, and only if the plugin isn't installed yet"
+  )
+  .action(async (target: string, opts: { sha256?: string }) => {
     try {
-      await runInstall(target);
+      await runInstall(target, { sha256: opts.sha256 });
     } catch (err) {
       fail((err as Error).message);
     }

@@ -150,7 +150,12 @@ import { getPluginService } from "./plugin/service.js";
 import { remoteUnsupportedError } from "./plugin/senderScope.js";
 
 // The plugin CLI server routes install/uninstall through the same trust gates.
-export { handleInstallFromPath, handleInstallFromUrl, handleUninstall } from "./plugin/install.js";
+export {
+  handleInstall,
+  handleInstallFromPath,
+  handleInstallFromUrl,
+  handleUninstall,
+} from "./plugin/install.js";
 
 export const pluginNamespace = defineIpcNamespace({
   name: "plugin",

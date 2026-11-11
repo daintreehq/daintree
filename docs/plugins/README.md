@@ -73,6 +73,7 @@ The two entry points are at the top of this page. Everything below is reference 
 | --- | --- |
 | [Trust model](./trust-model.md) | What declared capabilities do and don't buy: disclosure, danger derivation, just-in-time consent, agent MCP credentials, the kill-switch, the non-guarantees |
 | [Distribution](./distribution.md) | The `.dntr` format, packaging, sideload, file and URL install, updates, uninstall |
+| [Community catalog](./catalog.md) | The decision for discovering community plugins: a reviewed GitHub list pinning each release's digest, the options compared, the threat model and the next steps |
 | [Architecture](./architecture.md) | Lifecycle, the worker model, project-local plugin internals, the renderer host, plugin transport, per-plugin metrics, the MCP supervisor, agent MCP endpoints, worktree observability, capability disclosure and host-derived classification, signing and the kill-switch, the SDK boundary |
 
 ## Stability

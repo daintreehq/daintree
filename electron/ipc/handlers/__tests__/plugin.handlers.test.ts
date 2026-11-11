@@ -620,10 +620,36 @@ describe("registerPluginHandlers", () => {
       { ...REVIEWED, smuggled: true }
     );
     const [, opts] = mockInstallPlugin.mock.calls[0] as [string, unknown];
+    // A binding with no `kind` is an update, and reaches the installer saying so.
     expect(opts).toEqual({
       source: "url",
       originalUrl: "https://example.com/p.dntr",
-      expected: REVIEWED,
+      expected: { kind: "update", ...REVIEWED },
+    });
+  });
+
+  // #16342: a fresh install can be held to a digest reviewed elsewhere, with or
+  // without the plugin id it should carry.
+  it.each([
+    [
+      "with a plugin id",
+      { kind: "install", pluginId: "acme.my-plugin", archiveHash: "b".repeat(64) },
+    ],
+    ["with only a digest", { kind: "install", archiveHash: "b".repeat(64) }],
+  ])("PLUGIN_INSTALL_FROM_URL forwards a fresh-install binding %s", async (_label, binding) => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zip" } })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    await handler({ sender: { id: 1 } }, "https://example.com/p.dntr", undefined, {
+      ...binding,
+      smuggled: true,
+    });
+    const [, opts] = mockInstallPlugin.mock.calls[0] as [string, unknown];
+    expect(opts).toEqual({
+      source: "url",
+      originalUrl: "https://example.com/p.dntr",
+      expected: binding,
     });
   });
 
@@ -640,6 +666,19 @@ describe("registerPluginHandlers", () => {
     ["an array", ["acme.my-plugin", "a".repeat(64)]],
     ["an uppercase hash", { pluginId: "acme.my-plugin", archiveHash: "A".repeat(64) }],
     ["an unscoped plugin id", { pluginId: "../victim", archiveHash: "a".repeat(64) }],
+    [
+      "an unknown kind",
+      { kind: "replace", pluginId: "acme.my-plugin", archiveHash: "a".repeat(64) },
+    ],
+    ["a fresh install with no hash", { kind: "install", pluginId: "acme.my-plugin" }],
+    [
+      "a fresh install with an unscoped id",
+      { kind: "install", pluginId: "../victim", archiveHash: "a".repeat(64) },
+    ],
+    [
+      "a fresh install with a null id",
+      { kind: "install", pluginId: null, archiveHash: "a".repeat(64) },
+    ],
   ])(
     "PLUGIN_INSTALL_FROM_URL refuses %s expectation without downloading",
     async (_label, expected) => {

@@ -4305,9 +4305,11 @@ export interface InstalledPluginRecord {
  * - `name_collision` — the id matches a built-in or a launch-reserved plugin name; rejected before the swap so no broken dir is left
  * - `hash_failed` — couldn't compute the archive SHA-256
  * - `archive_mismatch` — the install carried an {@link PluginInstallExpectation} (a
- *   reviewed update) and the archive's digest or `manifest.name` differs from it;
- *   refused before extraction (digest) or before the swap (name), so nothing runs
- *   or is replaced
+ *   reviewed update or a digest-bound fresh install) and the archive's digest or
+ *   `manifest.name` differs from it, the binding was malformed, or the plugin's
+ *   installed state no longer fits it (an update for a plugin since uninstalled, a
+ *   fresh install for one already installed); refused before extraction (digest)
+ *   or before the swap (name, installed state), so nothing runs or is replaced
  * - `instance_mode_changed` — the update switches `instanceMode` between a singleton
  *   and per-project instances; refused before the swap because nothing carries
  *   settings, grants or enablements across, so the user uninstalls first
@@ -4400,9 +4402,10 @@ export interface PluginInstallOptions {
    */
   jobId?: string;
   /**
-   * The archive a user approved from an update preview. When set, the install
-   * is refused unless the archive's SHA-256 and `manifest.name` both match it.
-   * Transient: checked, never persisted.
+   * The archive the install is held to: an update a user approved from its
+   * preview, or a fresh install pinned to a reviewed digest. The install is
+   * refused unless the archive's SHA-256 (and `manifest.name`, when the binding
+   * names one) match it. Transient: checked, never persisted.
    */
   expected?: PluginInstallExpectation;
 }
@@ -4412,12 +4415,31 @@ export interface PluginInstallOptions {
  * The confirm re-downloads the URL, so without this the server could answer the
  * check with one archive and the install with another. Both fields come from the
  * `available` {@link PluginCheckUpdateResult}: `pluginId` is the installed
- * plugin's `manifest.name`, `archiveHash` the reviewed archive's digest.
+ * plugin's `manifest.name`, `archiveHash` the reviewed archive's digest. It only
+ * replaces an installed plugin. `kind` is optional so a binding without one stays
+ * an update, the stricter reading.
  */
-export interface PluginInstallExpectation {
+export interface PluginUpdateExpectation {
+  kind?: "update";
   pluginId: string;
   archiveHash: string;
 }
+
+/**
+ * Binds a fresh install to a digest reviewed somewhere else, such as a catalog
+ * entry or a release's published checksum (#16342). It never replaces an
+ * installed plugin: moving an installed plugin to new bytes is an update, with
+ * its own preview. `pluginId`, when given, must also match `manifest.name`; a
+ * bare digest already pins the bytes, so a URL carrying only its `sha256` can be
+ * held to it.
+ */
+export interface PluginFreshInstallExpectation {
+  kind: "install";
+  pluginId?: string;
+  archiveHash: string;
+}
+
+export type PluginInstallExpectation = PluginUpdateExpectation | PluginFreshInstallExpectation;
 
 /**
  * Coarse stage of an in-flight install (#11302). Deliberately a small fixed

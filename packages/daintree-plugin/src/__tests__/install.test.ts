@@ -110,6 +110,68 @@ describe("runInstall", () => {
   });
 });
 
+describe("runInstall --sha256", () => {
+  it("sends the digest, lowercased, over the verified method", async () => {
+    let received: { method: string; params?: unknown } | null = null;
+    await serve((req) => {
+      received = req;
+      return { result: { status: "installed", pluginId: "acme.demo" } };
+    });
+
+    await runInstall("https://example.com/p.dntr", { sha256: ` ${"AB".repeat(32)} ` });
+    expect(received!.method).toBe("plugin.install.verified");
+    expect(received!.params).toEqual({
+      url: "https://example.com/p.dntr",
+      sha256: "ab".repeat(32),
+    });
+  });
+
+  it("refuses a malformed digest without contacting Daintree", async () => {
+    let contacted = false;
+    await serve(() => {
+      contacted = true;
+      return { result: { status: "installed" } };
+    });
+
+    await expect(runInstall("./x.dntr", { sha256: "abc" })).rejects.toThrow(/64 hex/);
+    expect(contacted).toBe(false);
+  });
+
+  it("keeps the host's own error for a verified install it rejects", async () => {
+    await serve(() => ({ error: { message: "install requires exactly one of 'path' or 'url'" } }));
+
+    await expect(runInstall("./x.dntr", { sha256: "a".repeat(64) })).rejects.toThrow(
+      /exactly one of 'path' or 'url'/
+    );
+  });
+
+  it("reports a digest mismatch from the host", async () => {
+    await serve(() => ({
+      result: {
+        status: "failed",
+        errors: [
+          { message: "The archive's SHA-256 doesn't match the digest this install was bound to" },
+        ],
+      },
+    }));
+
+    await expect(runInstall("./x.dntr", { sha256: "a".repeat(64) })).rejects.toThrow(/SHA-256/);
+  });
+
+  it("fails without retrying unverified when Daintree doesn't know the method", async () => {
+    const methods: string[] = [];
+    await serve((req) => {
+      methods.push(req.method);
+      return { error: { message: `Unknown method: ${req.method}` } };
+    });
+
+    await expect(runInstall("./x.dntr", { sha256: "a".repeat(64) })).rejects.toThrow(
+      /can't check a --sha256 digest/
+    );
+    expect(methods).toEqual(["plugin.install.verified"]);
+  });
+});
+
 describe("runUninstall", () => {
   it("sends the pluginId and resolves on ok", async () => {
     let received: { method: string; params?: unknown } | null = null;
