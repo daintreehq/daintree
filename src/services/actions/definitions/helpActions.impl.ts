@@ -48,7 +48,7 @@ import {
 import { buildResumeCommand } from "@shared/types";
 import { isPtyPanel } from "@shared/types/panel";
 import { usePaletteStore } from "@/store/paletteStore";
-import type { HelpSessionController } from "@/controllers/HelpSessionController";
+import type { HelpSessionController, VersionTooOld } from "@/controllers/HelpSessionController";
 import { checkAssistantVersion } from "@/controllers/HelpVersionGate";
 import type { HelpLaunchSnapshot } from "./helpLaunchSnapshot";
 import {
@@ -242,6 +242,24 @@ async function readKeptLaneAgents(workspaceId: string): Promise<Map<number, stri
     logError("Couldn't read the agents kept for this project's assistant lanes", err);
   }
   return kept;
+}
+
+/**
+ * Every agent a launch that names none could settle on from the panel: the
+ * assistant's default and the agents of this project's live and hibernated
+ * lanes. Probed for their versions before a lane is claimed.
+ */
+function implicitLaneAgentCandidates(state: HelpPanelState, workspaceId: string): string[] {
+  const candidates: string[] = [];
+  if (state.preferredAgentId) candidates.push(state.preferredAgentId);
+  for (const n of ASSISTANT_SLOTS) {
+    const agentId = state.sessions[n]?.agentId;
+    if (agentId) candidates.push(agentId);
+  }
+  for (const [key, entry] of Object.entries(state.hibernateSessions)) {
+    if (projectIdFromSlotKey(key) === workspaceId && entry.agentId) candidates.push(entry.agentId);
+  }
+  return candidates;
 }
 
 /** The lane's own kept agent, else another lane's: like a hibernated sibling's, only one the assistant can still run. */
@@ -570,6 +588,44 @@ async function startHelpSessionWithAgent(
 // made since, as the panel's "Check again" does.
 const versionRefusedAgentIds = new Set<string>();
 
+/**
+ * Which of `candidates` have an installed CLI definitively older than the
+ * assistant needs (#16814), by the same probe the panel's own launches pass.
+ * Only an agent with a floor costs a round trip.
+ */
+async function tooOldAssistantAgents(
+  candidates: Iterable<string | null | undefined>
+): Promise<Map<string, VersionTooOld>> {
+  const ids = new Set<string>();
+  for (const id of candidates) if (id) ids.add(id);
+  const tooOld = new Map<string, VersionTooOld>();
+  await Promise.all(
+    [...ids].map(async (id) => {
+      const block = await checkAssistantVersion(
+        id,
+        getEffectiveAgentConfig(id)?.name ?? id,
+        versionRefusedAgentIds.has(id)
+      );
+      if (block) {
+        versionRefusedAgentIds.add(id);
+        tooOld.set(id, block);
+      } else {
+        versionRefusedAgentIds.delete(id);
+      }
+    })
+  );
+  return tooOld;
+}
+
+function notifyAssistantTooOld(block: VersionTooOld): void {
+  // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+  notify({
+    type: "error",
+    title: "Assistant couldn't start",
+    message: `Update ${block.agentName} to use Daintree Assistant. Version ${block.installedVersion} is installed; version ${block.requiredVersion} or later is required.`,
+  });
+}
+
 interface HelpLaunchArgs {
   agentId?: string;
   slot?: number;
@@ -638,26 +694,14 @@ async function launchHelpAgent(
   // only way in for an agent the picker still hides, so it is gated the same
   // way: a CLI older than its wiring needs would start without it (#16814).
   // Checked before a lane is chosen, so nothing is awaited between the claim
-  // and the provision. An agent this launch settles on by itself comes from a
-  // lane that already ran it, or is one the picker offers.
+  // and the provision.
   if (parsed?.agentId) {
-    const tooOld = await checkAssistantVersion(
-      agentId,
-      getEffectiveAgentConfig(agentId)?.name ?? agentId,
-      versionRefusedAgentIds.has(agentId)
-    );
+    const tooOld = (await tooOldAssistantAgents([agentId])).get(agentId);
     if (tooOld) {
-      versionRefusedAgentIds.add(agentId);
       if (parsed.vacantOnly) return undefined;
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        title: "Assistant couldn't start",
-        message: `Update ${tooOld.agentName} to use Daintree Assistant. Version ${tooOld.installedVersion} is installed; version ${tooOld.requiredVersion} or later is required.`,
-      });
+      notifyAssistantTooOld(tooOld);
       return;
     }
-    versionRefusedAgentIds.delete(agentId);
   }
 
   // Name the lane explicitly (#12108) rather than letting main default it.
@@ -672,6 +716,17 @@ async function launchHelpAgent(
   const keptAgents = parsed?.agentId
     ? new Map<number, string>()
     : await readKeptLaneAgents(workspace.id);
+  // An agent this launch settles on by itself is gated as well, and also
+  // before the claim: whatever it could settle on is probed here, and one too
+  // old is passed over the way a CLI that isn't installed is. A kept
+  // conversation outlives a restart, and the CLI may have changed since.
+  const tooOldCandidates = parsed?.agentId
+    ? new Map<string, VersionTooOld>()
+    : await tooOldAssistantAgents([
+        ...keptAgents.values(),
+        ...implicitLaneAgentCandidates(useHelpPanelStore.getState(), workspace.id),
+        resolvedDefault,
+      ]);
   const panelState = useHelpPanelStore.getState();
   const lane: {
     slot: number;
@@ -709,6 +764,7 @@ async function launchHelpAgent(
       const wired = getAssistantWiredAgentIds();
       const canLaunch = (id: string) =>
         wired.includes(id) &&
+        !tooOldCandidates.has(id) &&
         (!isInitialized || !isBuiltInAgentId(id) || isAgentLaunchable(availability[id]));
       // The lane's own kept conversation first: its agent is what resumes
       // there. Then the default — a sibling tab on another agent is no
@@ -729,6 +785,14 @@ async function launchHelpAgent(
         siblingLaneAgentId(panelState, workspace.id, targetSlot, canLaunch) ??
         keptLaneAgentId(keptAgents, targetSlot, canLaunch) ??
         agentId;
+    }
+    // A live sibling and the last-resort default aren't asked `canLaunch`, so
+    // the agent settled on is checked against the same probe once more.
+    const tooOld = tooOldCandidates.get(agentId);
+    if (tooOld) {
+      if (parsed?.vacantOnly) return undefined;
+      notifyAssistantTooOld(tooOld);
+      return;
     }
 
     try {

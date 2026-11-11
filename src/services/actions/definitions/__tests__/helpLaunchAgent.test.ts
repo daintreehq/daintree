@@ -334,6 +334,50 @@ describe("help.launchAgent", () => {
       expect(claimedHelpLaneKeys.size).toBe(0);
     });
 
+    it("passes over a kept Antigravity lane whose CLI is now too old, before claiming it", async () => {
+      // The conversation was kept across a restart; agy was downgraded since.
+      Object.assign(window.electron.help, {
+        listPendingHibernationSlots: vi.fn().mockResolvedValue([0]),
+        peekPendingHibernation: vi.fn(async () => ({
+          agentId: "antigravity",
+          agentSessionId: "s",
+          cwd: "/repo",
+        })),
+      });
+      vi.mocked(window.electron.system.getAgentVersion).mockImplementation(async (agentId) => ({
+        agentId,
+        installedVersion: agentId === "antigravity" ? "1.4.12" : null,
+        latestVersion: null,
+        updateAvailable: false,
+        lastChecked: null,
+      }));
+
+      await action.run(undefined, stubCtx);
+
+      expect(window.electron.help.provisionSession).toHaveBeenCalledTimes(1);
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "claude", slot: 0 })
+      );
+    });
+
+    it("refuses a too-old agent a live sibling lane would hand an unnamed launch", async () => {
+      agyVersion("1.4.12");
+      useHelpPanelStore.getState().ensureSlot(1);
+      useHelpPanelStore.getState().setTerminal(1, "term-sibling", "antigravity", "sess-sibling");
+      mockGetCliAvailabilityState.mockReturnValue({
+        availability: allAvailability({ antigravity: "ready" }),
+        isInitialized: false,
+      });
+
+      await action.run({ slot: 0 }, stubCtx);
+
+      expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", message: expect.stringContaining("1.5.5") })
+      );
+      expect(claimedHelpLaneKeys.size).toBe(0);
+    });
+
     it("refuses silently for a caller that asked for a vacant lane", async () => {
       agyVersion("1.0.0");
 
