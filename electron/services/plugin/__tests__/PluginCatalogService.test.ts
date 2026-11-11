@@ -578,6 +578,58 @@ describe("PluginCatalogService", () => {
       expect(result).toEqual({ status: "unavailable", failure: "not-published" });
     });
 
+    it("resolves the newest stable release when no version is named", async () => {
+      const result = await service(respondWith(ok())).lookup("daintreehq.continue-session");
+      expect(result).toEqual({ status: "listed", entry: VALID_CATALOG.entries[1], fetchedAt: T0 });
+    });
+
+    it("orders by semver, not by catalog order or by string", async () => {
+      const release = (version: string) =>
+        catalogEntry({
+          version,
+          url: `https://github.com/daintreehq/plugin-continue-session/releases/download/v${version}/daintreehq.continue-session-${version}.dntr`,
+        });
+      const result = await service(
+        respondWith(ok({ entries: [release("0.10.0"), release("0.9.0"), release("1.0.0-rc.1")] }))
+      ).lookup("daintreehq.continue-session");
+      expect(result).toMatchObject({ status: "listed", entry: { version: "0.10.0" } });
+    });
+
+    function releaseAt(version: string, tag: string) {
+      return catalogEntry({
+        version,
+        url: `https://github.com/daintreehq/plugin-continue-session/releases/download/${tag}/daintreehq.continue-session.dntr`,
+      });
+    }
+
+    it("orders prereleases by semver when only prereleases are listed", async () => {
+      const result = await service(
+        respondWith(
+          ok({ entries: [releaseAt("1.0.0-rc.2", "rc2"), releaseAt("1.0.0-rc.10", "rc10")] })
+        )
+      ).lookup("daintreehq.continue-session");
+      expect(result).toMatchObject({ status: "listed", entry: { version: "1.0.0-rc.10" } });
+    });
+
+    it("breaks an equal-precedence tie by build metadata, not by catalog order", async () => {
+      const result = await service(
+        respondWith(
+          ok({ entries: [releaseAt("1.0.0+build.2", "b2"), releaseAt("1.0.0+build.10", "b10")] })
+        )
+      ).lookup("daintreehq.continue-session");
+      expect(result).toMatchObject({ status: "listed", entry: { version: "1.0.0+build.10" } });
+    });
+
+    it("resolves a prerelease only when the plugin has no stable release", async () => {
+      const result = await service(respondWith(ok())).lookup("acme.linear-context");
+      expect(result).toMatchObject({ status: "listed", entry: { version: "2.0.0-rc.1+build.7" } });
+    });
+
+    it("says not listed for an unknown id with no version", async () => {
+      const result = await service(respondWith(ok())).lookup("acme.unknown");
+      expect(result).toEqual({ status: "not-listed", fetchedAt: T0 });
+    });
+
     it("forgets a release the next catalog delisted", async () => {
       const fetchImpl = respondWith(ok(), ok({ entries: [catalogEntry()] }));
       const svc = service(fetchImpl);

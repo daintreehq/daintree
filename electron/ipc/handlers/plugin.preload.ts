@@ -13,6 +13,8 @@ export const PLUGIN_METHOD_CHANNELS = {
   installFromPath: "plugin:install-from-path",
   installFromUrl: "plugin:install-from-url",
   previewFromUrl: "plugin:preview-from-url",
+  previewFromCatalog: "plugin:preview-from-catalog",
+  installFromCatalog: "plugin:install-from-catalog",
   cancelInstall: "plugin:cancel-install",
   uninstall: "plugin:uninstall",
   checkForUpdate: "plugin:check-for-update",

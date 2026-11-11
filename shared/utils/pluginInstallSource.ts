@@ -16,3 +16,11 @@ export function describePluginInstallSource(pathOrUrl: string): string {
   const trimmed = pathOrUrl.replace(/[\\/]+$/, "");
   return trimmed.slice(Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\")) + 1);
 }
+
+/**
+ * A catalog entry's repository as the plugin manager names it (#16779):
+ * `github.com/{owner}/{repo}`, the scheme dropped like the banner's URLs.
+ */
+export function describeCatalogRepo(repo: string): string {
+  return repo.replace(/^https:\/\//i, "");
+}

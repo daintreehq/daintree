@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import * as semver from "semver";
 
 import {
   PLUGIN_CATALOG_URL,
@@ -122,13 +123,17 @@ export class PluginCatalogService {
   }
 
   /**
-   * One exact release, read the way an install reads: `not-listed` only ever
-   * comes from a catalog fetched for this call.
+   * One release, read the way an install reads: `not-listed` only ever comes
+   * from a catalog fetched for this call. With a `version` the match is exact;
+   * without one it is the plugin's newest release (see {@link newestRelease}).
    */
-  async lookup(id: string, version: string): Promise<PluginCatalogLookup> {
+  async lookup(id: string, version?: string): Promise<PluginCatalogLookup> {
     const result = await this.getCatalog("install");
     if (result.status !== "available") return result;
-    const entry = result.catalog.entries.find((e) => e.id === id && e.version === version);
+    const entry =
+      version === undefined
+        ? newestRelease(result.catalog.entries.filter((e) => e.id === id))
+        : result.catalog.entries.find((e) => e.id === id && e.version === version);
     return entry
       ? { status: "listed", entry, fetchedAt: result.fetchedAt }
       : { status: "not-listed", fetchedAt: result.fetchedAt };
@@ -269,6 +274,19 @@ export class PluginCatalogService {
     })();
     return this.cachePath;
   }
+}
+
+/**
+ * The release an unversioned install gets: the highest stable version, or the
+ * highest prerelease when the plugin has no stable one, so a link that names no
+ * version never moves someone onto a prerelease they didn't ask for. Ordered by
+ * semver precedence, never by catalog order, with build metadata breaking ties
+ * so the choice is deterministic.
+ */
+function newestRelease(releases: readonly PluginCatalogEntry[]): PluginCatalogEntry | undefined {
+  const stable = releases.filter((e) => semver.prerelease(e.version) === null);
+  const pool = stable.length > 0 ? stable : releases;
+  return [...pool].sort((a, b) => semver.compareBuild(b.version, a.version))[0];
 }
 
 let sharedService: PluginCatalogService | null = null;

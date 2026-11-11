@@ -33,6 +33,9 @@ const capConsentMock = vi.hoisted(() => ({
   offerRestore: vi.fn(async () => false),
 }));
 const rateLimiterMock = vi.hoisted(() => ({ dropPlugin: vi.fn() }));
+// The catalog client is exercised in its own suite; here it answers whatever
+// each case says the freshly fetched catalog holds.
+const catalogMock = vi.hoisted(() => ({ lookup: vi.fn() }));
 const serviceRef = vi.hoisted(() => ({
   current: null as unknown,
   // Holds the next service lookup, which is where the preview's probe starts.
@@ -120,6 +123,9 @@ vi.mock("../../../services/plugin-mcp/instances.js", () => ({
   getPluginMcpConsentService: () => consentMock,
   getPluginMcpRateLimiter: () => rateLimiterMock,
 }));
+vi.mock("../../../services/plugin/PluginCatalogService.js", () => ({
+  getPluginCatalogService: () => catalogMock,
+}));
 vi.mock("../../../services/plugin-capability/instances.js", () => ({
   getPluginCapabilityConsentService: () => capConsentMock,
 }));
@@ -142,10 +148,22 @@ vi.mock("../plugin/service.js", () => ({
 import { PluginService } from "../../../services/PluginService.js";
 import * as PluginArchive from "../../../services/PluginArchive.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
-import { handleInstallFromUrl, handlePreviewFromUrl } from "../plugin/install.js";
+import {
+  handleCancelInstall,
+  handleInstall,
+  handleInstallFromCatalog,
+  handleInstallFromCatalogOp,
+  handleInstallFromUrl,
+  handlePreviewFromCatalog,
+  handlePreviewFromCatalogOp,
+  handlePreviewFromUrl,
+} from "../plugin/install.js";
 import type {
+  InstalledPluginRecord,
   PluginInstallExpectation,
+  PluginInstallResult,
   PluginUrlInstallPreview,
+  PluginUrlInstallPreviewResult,
 } from "../../../../shared/types/plugin.js";
 
 const URL = "https://example.com/acme.dntr";
@@ -553,5 +571,363 @@ describe("a URL install's review (#16776)", () => {
       await expect(handlePreviewFromUrl(url)).resolves.toEqual({ status: "invalid-url" });
     }
     expect(netFetch).not.toHaveBeenCalled();
+  });
+});
+
+function record(pluginId: string): InstalledPluginRecord | undefined {
+  const plugins = storeMock._state.get("plugins") as
+    { installed: Record<string, InstalledPluginRecord> } | undefined;
+  return plugins?.installed[pluginId];
+}
+
+function failureCode(result: PluginInstallResult | PluginUrlInstallPreviewResult) {
+  return result.status === "failed" ? result.errors[0]?.code : result.status;
+}
+
+function failureMessage(result: PluginInstallResult | PluginUrlInstallPreviewResult) {
+  return result.status === "failed" ? result.errors[0]?.message : undefined;
+}
+
+describe("a URL install pinned to a digest (#16779)", () => {
+  it("previews an archive with the pinned digest, and installs it", async () => {
+    const archive = await makeArchive({ name: "acme.pinned", version: "1.0.0" });
+    servesInOrder(archive, archive);
+    const digest = await sha256(archive);
+
+    const result = await handlePreviewFromUrl(URL, undefined, digest);
+    if (result.status !== "preview") throw new Error(JSON.stringify(result));
+    expect(result.preview.archiveHash).toBe(digest);
+    expect(result.preview.catalog).toBeUndefined();
+
+    const installed = await handleInstallFromUrl(URL, undefined, approval(result.preview, false));
+    expect(installed).toEqual({ status: "installed", pluginId: "acme.pinned" });
+    expect(record("acme.pinned")).toMatchObject({ source: "url", catalog: null });
+  });
+
+  it("refuses other bytes before reading them as an archive", async () => {
+    // Not a zip at all: an unpinned preview reports archive_invalid, so a
+    // digest_mismatch here shows the digest was checked before the manifest.
+    netFetch.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/zip" },
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("not the reviewed bytes"));
+          controller.close();
+        },
+      }),
+    }));
+
+    const result = await handlePreviewFromUrl(URL, undefined, "f".repeat(64));
+
+    expect(failureCode(result)).toBe("digest_mismatch");
+    expect(failureMessage(result)).toMatch(/SHA-256 doesn't match the one in the link/);
+    expect(await downloadsLeft()).toEqual([]);
+  });
+
+  it("refuses a malformed digest or a plaintext URL before fetching anything", async () => {
+    for (const digest of ["", "abc", "F".repeat(64), `${"a".repeat(63)}g`]) {
+      expect(failureCode(await handlePreviewFromUrl(URL, undefined, digest))).toBe(
+        "digest_invalid"
+      );
+    }
+    await expect(
+      handlePreviewFromUrl("http://example.com/acme.dntr", undefined, "a".repeat(64))
+    ).resolves.toEqual({ status: "invalid-url" });
+    expect(netFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("a catalog install (#16779)", () => {
+  const REPO = "https://github.com/acme/listed";
+  const ENTRY_URL = `${REPO}/releases/download/v1.2.0/acme.listed-1.2.0.dntr`;
+
+  async function listedRelease(manifest: Record<string, unknown> = {}) {
+    const archive = await makeArchive({ name: "acme.listed", version: "1.2.0", ...manifest });
+    const entry = {
+      id: "acme.listed",
+      repo: REPO,
+      version: "1.2.0",
+      url: ENTRY_URL,
+      sha256: await sha256(archive),
+      capabilities: [],
+    };
+    return { archive, entry };
+  }
+
+  function catalogLists(...entries: Array<Record<string, unknown> | null>) {
+    for (const entry of entries) {
+      catalogMock.lookup.mockResolvedValueOnce(
+        entry === null
+          ? { status: "not-listed", fetchedAt: 1 }
+          : { status: "listed", entry, fetchedAt: 1 }
+      );
+    }
+  }
+
+  async function catalogReview(version?: string): Promise<PluginUrlInstallPreview> {
+    const result = await handlePreviewFromCatalog(
+      version === undefined ? { pluginId: "acme.listed" } : { pluginId: "acme.listed", version }
+    );
+    if (result.status !== "preview") throw new Error(JSON.stringify(result));
+    return result.preview;
+  }
+
+  function confirm(preview: PluginUrlInstallPreview, overrides: Record<string, unknown> = {}) {
+    return handleInstallFromCatalog({
+      pluginId: preview.catalog!.id,
+      version: preview.catalog!.version,
+      repo: preview.catalog!.repo,
+      expected: approval(preview, false),
+      ...overrides,
+    });
+  }
+
+  it("previews the newest release the catalog resolves, fetching only the entry's URL", async () => {
+    const { archive, entry } = await listedRelease({ capabilities: ["shell:exec"] });
+    catalogLists(entry);
+    servesInOrder(archive);
+
+    const preview = await catalogReview();
+
+    expect(catalogMock.lookup).toHaveBeenCalledWith("acme.listed", undefined);
+    expect(netFetch.mock.calls[0]?.[0]).toBe(ENTRY_URL);
+    expect(preview).toMatchObject({
+      url: ENTRY_URL,
+      archiveHash: entry.sha256,
+      catalog: { id: "acme.listed", version: "1.2.0", repo: REPO },
+      manifest: { name: "acme.listed", version: "1.2.0", capabilities: ["shell:exec"] },
+    });
+    expect(await installedDir("acme.listed")).toBe(false);
+    expect(await downloadsLeft()).toEqual([]);
+  });
+
+  it("installs the reviewed release from a fresh lookup, recording its listing", async () => {
+    const { archive, entry } = await listedRelease();
+    catalogLists(entry, entry);
+    servesInOrder(archive, archive);
+    const preview = await catalogReview("1.2.0");
+
+    const result = await confirm(preview);
+
+    expect(result).toEqual({ status: "installed", pluginId: "acme.listed" });
+    expect(catalogMock.lookup).toHaveBeenLastCalledWith("acme.listed", "1.2.0");
+    expect(record("acme.listed")).toMatchObject({
+      source: "catalog",
+      catalog: { id: "acme.listed", version: "1.2.0", repo: REPO },
+      originalUrl: ENTRY_URL,
+      archiveHash: entry.sha256,
+    });
+  });
+
+  it("drops the listing when a URL install replaces a catalog install", async () => {
+    const { archive, entry } = await listedRelease();
+    catalogLists(entry, entry);
+    servesInOrder(archive, archive);
+    await confirm(await catalogReview());
+    const replacement = await makeArchive({ name: "acme.listed", version: "1.3.0" });
+    servesInOrder(replacement);
+
+    const result = await handleInstallFromUrl(URL, undefined, {
+      kind: "update",
+      pluginId: "acme.listed",
+      archiveHash: await sha256(replacement),
+    });
+
+    expect(result).toEqual({ status: "installed", pluginId: "acme.listed" });
+    expect(record("acme.listed")).toMatchObject({ source: "url", catalog: null, originalUrl: URL });
+  });
+
+  it("holds the confirm to the reviewed digest when the server swaps the bytes", async () => {
+    const { archive, entry } = await listedRelease();
+    const swapped = await makeArchive(
+      { name: "acme.listed", version: "1.2.0" },
+      { "dist/index.js": "module.exports = { swapped: true };" }
+    );
+    catalogLists(entry, entry);
+    servesInOrder(archive, swapped);
+    const preview = await catalogReview();
+
+    const result = await confirm(preview);
+
+    expect(failureCode(result)).toBe("archive_mismatch");
+    expect(await installedDir("acme.listed")).toBe(false);
+    expect(record("acme.listed")).toBeUndefined();
+    expect(await downloadsLeft()).toEqual([]);
+  });
+
+  it("refuses an archive that isn't the reviewed digest", async () => {
+    const { archive, entry } = await listedRelease();
+    catalogLists({ ...entry, sha256: "e".repeat(64) });
+    servesInOrder(archive);
+
+    const result = await handlePreviewFromCatalog({ pluginId: "acme.listed" });
+
+    expect(failureCode(result)).toBe("digest_mismatch");
+    expect(failureMessage(result)).toMatch(/isn't the one the plugin catalog reviewed/);
+    expect(await downloadsLeft()).toEqual([]);
+  });
+
+  it("refuses an archive that names another version than its entry", async () => {
+    const { archive, entry } = await listedRelease({ version: "1.1.9" });
+    catalogLists(entry);
+    servesInOrder(archive);
+
+    const result = await handlePreviewFromCatalog({ pluginId: "acme.listed" });
+
+    expect(failureCode(result)).toBe("catalog_mismatch");
+  });
+
+  it("says which way the catalog failed, and downloads nothing", async () => {
+    const cases: Array<[unknown, string, RegExp]> = [
+      [{ status: "not-listed", fetchedAt: 1 }, "catalog_not_listed", /doesn't list "acme\.listed"/],
+      [
+        { status: "stale", fetchedAt: 1, failure: "unreachable" },
+        "catalog_stale",
+        /couldn't be refreshed/,
+      ],
+      [
+        { status: "unavailable", failure: "not-published" },
+        "catalog_unavailable",
+        /isn't published yet/,
+      ],
+      [{ status: "unavailable", failure: "unreachable" }, "catalog_unavailable", /Couldn't reach/],
+      [{ status: "unavailable", failure: "invalid" }, "catalog_unavailable", /couldn't be read/],
+    ];
+    for (const [lookup, code, message] of cases) {
+      catalogMock.lookup.mockResolvedValueOnce(lookup);
+      const result = await handlePreviewFromCatalog({ pluginId: "acme.listed" });
+      expect(failureCode(result)).toBe(code);
+      expect(failureMessage(result)).toMatch(message);
+    }
+    expect(netFetch).not.toHaveBeenCalled();
+  });
+
+  it("names the version a link asked for when it isn't listed", async () => {
+    catalogLists(null);
+    const result = await handlePreviewFromCatalog({ pluginId: "acme.listed", version: "9.0.0" });
+    expect(failureMessage(result)).toMatch(/doesn't list version 9\.0\.0 of "acme\.listed"/);
+  });
+
+  it("refuses the confirm when the release was delisted since the review", async () => {
+    const { archive, entry } = await listedRelease();
+    catalogLists(entry, null);
+    servesInOrder(archive);
+    const preview = await catalogReview();
+
+    const result = await confirm(preview);
+
+    expect(failureCode(result)).toBe("catalog_not_listed");
+    expect(netFetch).toHaveBeenCalledTimes(1);
+    expect(await installedDir("acme.listed")).toBe(false);
+  });
+
+  it("refuses the confirm when the listing's digest or repository changed", async () => {
+    const { archive, entry } = await listedRelease();
+    catalogLists(
+      entry,
+      { ...entry, sha256: "d".repeat(64) },
+      { ...entry, repo: "https://github.com/acme/elsewhere" }
+    );
+    servesInOrder(archive);
+    const preview = await catalogReview();
+
+    expect(failureCode(await confirm(preview))).toBe("catalog_mismatch");
+    expect(failureCode(await confirm(preview))).toBe("catalog_mismatch");
+    expect(netFetch).toHaveBeenCalledTimes(1);
+    expect(await installedDir("acme.listed")).toBe(false);
+  });
+
+  it("refuses a confirm whose binding doesn't name the release", async () => {
+    const { archive, entry } = await listedRelease();
+    catalogLists(entry);
+    servesInOrder(archive);
+    const preview = await catalogReview();
+
+    for (const expected of [
+      undefined,
+      { kind: "install", archiveHash: entry.sha256 },
+      { kind: "install", pluginId: "acme.other", archiveHash: entry.sha256 },
+      { kind: "install", pluginId: "acme.listed", archiveHash: "nope" },
+    ]) {
+      expect(failureCode(await confirm(preview, { expected }))).toBe("archive_mismatch");
+    }
+    expect(catalogMock.lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a malformed request before asking the catalog", async () => {
+    for (const request of [
+      { pluginId: "daintree.builtin" },
+      { pluginId: "Not Valid" },
+      { pluginId: "acme.listed", version: "v1.2.0" },
+      null,
+    ]) {
+      expect(failureCode(await handlePreviewFromCatalog(request as never))).toBe(
+        "catalog_not_listed"
+      );
+    }
+    expect(catalogMock.lookup).not.toHaveBeenCalled();
+  });
+
+  it("asks the catalog for any version semver allows, however long", async () => {
+    const version = `1.2.0+${"a".repeat(200)}`;
+    catalogLists(null);
+    await handlePreviewFromCatalog({ pluginId: "acme.listed", version });
+    expect(catalogMock.lookup).toHaveBeenCalledWith("acme.listed", version);
+  });
+
+  it("never starts a download the user cancelled while the catalog was read", async () => {
+    const { archive, entry } = await listedRelease();
+    catalogLists(entry);
+    servesInOrder(archive);
+    const preview = await catalogReview();
+    netFetch.mockClear();
+    // Through the IPC entry points, so the job the cancel names is the one
+    // they register.
+    const steps: Array<[string, (jobId: string) => Promise<unknown>]> = [
+      [
+        "7c1e0d4f-2e3b-4d6c-9f0a-1b2c3d4e5f60",
+        (jobId) => handlePreviewFromCatalogOp({} as never, { pluginId: "acme.listed" }, jobId),
+      ],
+      [
+        "8d2f1e5a-3f4c-4e7d-8a1b-2c3d4e5f6071",
+        (jobId) =>
+          handleInstallFromCatalogOp(
+            {} as never,
+            {
+              pluginId: "acme.listed",
+              version: "1.2.0",
+              repo: REPO,
+              expected: approval(preview, false),
+            },
+            jobId
+          ),
+      ],
+    ];
+    for (const [jobId, start] of steps) {
+      let answer!: (value: unknown) => void;
+      catalogMock.lookup.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+      const calls = catalogMock.lookup.mock.calls.length;
+      const pending = start(jobId);
+      await vi.waitFor(() => expect(catalogMock.lookup.mock.calls.length).toBe(calls + 1));
+      expect(handleCancelInstall(jobId)).toBe(true);
+      answer({ status: "listed", entry, fetchedAt: 1 });
+
+      await expect(pending).resolves.toEqual({ status: "cancelled" });
+    }
+    expect(netFetch).not.toHaveBeenCalled();
+    expect(await installedDir("acme.listed")).toBe(false);
+  });
+
+  it("won't let the generic install claim a catalog listing", async () => {
+    const archive = await makeArchive({ name: "acme.forged", version: "1.0.0" });
+    for (const opts of [
+      { source: "catalog" as const },
+      { source: "url" as const, catalog: { id: "acme.forged", version: "1.0.0", repo: REPO } },
+    ]) {
+      expect(failureCode(await handleInstall(archive, opts))).toBe("catalog_mismatch");
+    }
+    expect(await installedDir("acme.forged")).toBe(false);
   });
 });

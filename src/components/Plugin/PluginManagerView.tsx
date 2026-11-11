@@ -64,7 +64,10 @@ import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDeta
 import { UnsavedPanelsCallout } from "./UnsavedPanelsCallout";
 import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
 import { PluginInstallConfirmDialog } from "./PluginInstallConfirmDialog";
-import { describePluginInstallSource } from "@shared/utils/pluginInstallSource";
+import {
+  describeCatalogRepo,
+  describePluginInstallSource,
+} from "@shared/utils/pluginInstallSource";
 import { PluginCatalog } from "./PluginCatalog";
 import { PluginIconTile } from "./pluginIcons";
 import { pluginSignalFor } from "./pluginStatus";
@@ -1502,11 +1505,18 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             : {
                 key: pm.urlReview.key,
                 manifest: pm.urlReview.manifest,
-                source: {
-                  kind: "url",
-                  label: describePluginInstallSource(pm.urlReview.url),
-                  installedOnDisk: pm.urlReview.installedOnDisk,
-                },
+                source:
+                  pm.urlReview.catalog === undefined
+                    ? {
+                        kind: "url",
+                        label: describePluginInstallSource(pm.urlReview.url),
+                        installedOnDisk: pm.urlReview.installedOnDisk,
+                      }
+                    : {
+                        kind: "catalog",
+                        repoLabel: describeCatalogRepo(pm.urlReview.catalog.repo),
+                        installedOnDisk: pm.urlReview.installedOnDisk,
+                      },
               }
         }
         onConfirm={(approval) => void pm.confirmUrlReview(approval)}

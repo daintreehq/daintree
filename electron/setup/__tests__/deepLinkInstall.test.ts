@@ -120,6 +120,106 @@ describe("parseDaintreeUrl", () => {
   });
 });
 
+describe("parseDaintreeUrl — pinned and catalog install links (#16779)", () => {
+  const DIGEST = "0123456789abcdef".repeat(4);
+  const ARCHIVE = "https%3A%2F%2Fexample.com%2Fp.dntr";
+
+  async function parse(query: string) {
+    const { parseDaintreeUrl } = await import("../deepLinkInstall.js");
+    return parseDaintreeUrl(`daintree://plugin/install?${query}`);
+  }
+
+  it("parses a catalog id, with and without a version", async () => {
+    expect(await parse("id=acme.notes")).toEqual({
+      action: "install-catalog",
+      pluginId: "acme.notes",
+    });
+    expect(await parse("id=acme.notes&version=1.2.0-rc.1%2Bbuild.7")).toEqual({
+      action: "install-catalog",
+      pluginId: "acme.notes",
+      version: "1.2.0-rc.1+build.7",
+    });
+  });
+
+  it("parses a pinned https URL, normalizing the digest to lowercase", async () => {
+    expect(await parse(`url=${ARCHIVE}&sha256=${DIGEST.toUpperCase()}`)).toEqual({
+      action: "install",
+      url: "https://example.com/p.dntr",
+      sha256: DIGEST,
+    });
+  });
+
+  it("refuses a malformed digest instead of installing the URL unbound", async () => {
+    for (const sha256 of ["", "abc", "g".repeat(64), `${DIGEST}0`]) {
+      expect(await parse(`url=${ARCHIVE}&sha256=${sha256}`)).toEqual({
+        action: "install-refused",
+        reason: "malformed-sha256",
+      });
+    }
+  });
+
+  it("refuses a pinned link whose URL is plaintext, missing, or not a web URL", async () => {
+    expect(await parse(`url=http%3A%2F%2Fexample.com%2Fp.dntr&sha256=${DIGEST}`)).toEqual({
+      action: "install-refused",
+      reason: "insecure-url",
+    });
+    for (const query of [`sha256=${DIGEST}`, `url=file%3A%2F%2F%2Fetc%2Fpasswd&sha256=${DIGEST}`]) {
+      expect(await parse(query)).toEqual({ action: "install-refused", reason: "malformed-url" });
+    }
+  });
+
+  it("refuses an id that isn't a community plugin id", async () => {
+    for (const id of ["", "Not Valid", "daintree.github", "noscope"]) {
+      expect(await parse(`id=${encodeURIComponent(id)}`)).toEqual({
+        action: "install-refused",
+        reason: "malformed-id",
+      });
+    }
+  });
+
+  it("accepts a version up to semver's own length limit", async () => {
+    const version = `1.0.0+${"a".repeat(200)}`;
+    expect(await parse(`id=acme.notes&version=${encodeURIComponent(version)}`)).toEqual({
+      action: "install-catalog",
+      pluginId: "acme.notes",
+      version,
+    });
+  });
+
+  it("refuses a version that isn't canonical semver", async () => {
+    for (const version of ["", "v1.2.0", "1.2", " 1.2.0", "01.2.0", `1.0.0-${"a".repeat(260)}`]) {
+      expect(await parse(`id=acme.notes&version=${encodeURIComponent(version)}`)).toEqual({
+        action: "install-refused",
+        reason: "malformed-version",
+      });
+    }
+  });
+
+  it("refuses parameters that don't go together, or repeat", async () => {
+    for (const query of [
+      `id=acme.notes&url=${ARCHIVE}`,
+      `id=acme.notes&sha256=${DIGEST}`,
+      `url=${ARCHIVE}&version=1.0.0`,
+      "version=1.0.0",
+      "id=acme.notes&id=acme.other",
+      `url=${ARCHIVE}&sha256=${DIGEST}&sha256=${DIGEST}`,
+      `url=${ARCHIVE}&url=${ARCHIVE}&sha256=${DIGEST}`,
+    ]) {
+      expect(await parse(query)).toEqual({
+        action: "install-refused",
+        reason: "conflicting-params",
+      });
+    }
+  });
+
+  it("keeps an unpinned link exactly as it was", async () => {
+    expect(await parse(`url=${ARCHIVE}&utm_source=web`)).toEqual({
+      action: "install",
+      url: "https://example.com/p.dntr",
+    });
+  });
+});
+
 describe("extractDaintreeUrl", () => {
   it("returns the first daintree:// argv entry", async () => {
     const { extractDaintreeUrl } = await import("../deepLinkInstall.js");
@@ -192,6 +292,21 @@ describe("handleDaintreeUrl / notifyAppViewPainted", () => {
 
     mod.handleDaintreeUrl("daintree://plugin/install?url=javascript:alert(1)");
     expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("delivers a refused pinned link, so the Plugin Manager can say why", async () => {
+    const mod = await import("../deepLinkInstall.js");
+    mod._resetDeepLinkStateForTest();
+    const wc = makeWebContents(12);
+    registryMock.getAppWebContents.mockReturnValue(wc);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
+    mod.notifyAppViewPainted(wc as never);
+
+    mod.handleDaintreeUrl("daintree://plugin/install?url=https://example.com/p.dntr&sha256=nope");
+    expect(wc.send).toHaveBeenCalledWith("events:push", {
+      name: "plugin:deep-link",
+      payload: { action: "install-refused", reason: "malformed-sha256" },
+    });
   });
 
   it("drains macOS pending open-url URLs on activation", async () => {

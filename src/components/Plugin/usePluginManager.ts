@@ -8,12 +8,14 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type {
   LoadedPluginInfo,
   PluginDeepLinkIntent,
+  PluginDeepLinkRefusal,
   PluginInstallError,
   PluginInstallExpectation,
   PluginInstallResult,
   PluginUpdateExpectation,
   PluginInstallProgressEvent,
   PluginUrlInstallPreview,
+  PluginUrlInstallPreviewResult,
 } from "@shared/types/plugin";
 import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
 import { pluralize } from "@/lib/pluralize";
@@ -42,7 +44,8 @@ const UP_TO_DATE_NOTIFICATION_DURATION_MS = 4000;
  */
 function installErrorMessage(
   error: PluginInstallError | undefined,
-  intent: InstallIntent = "install"
+  intent: InstallIntent = "install",
+  fromLink = false
 ): string {
   switch (error?.code) {
     case "fetch_timeout":
@@ -73,9 +76,13 @@ function installErrorMessage(
       // The install no longer matches the preview the user approved — the
       // server sent different bytes, or the plugin was installed or removed
       // since (#12612, #16776). Reviewing again shows what's there now.
+      // An install link's pin or catalog listing lives in the link, so
+      // reviewing again means opening the link, not pasting its URL (#16779).
       return intent === "update"
         ? "This update no longer matches what you reviewed, so nothing was installed. Check for updates again."
-        : "This plugin no longer matches what you reviewed, so nothing was installed. Install it from the URL again to review it.";
+        : fromLink
+          ? "This plugin no longer matches what you reviewed, so nothing was installed. Open the install link again to review it."
+          : "This plugin no longer matches what you reviewed, so nothing was installed. Install it from the URL again to review it.";
   }
   return error?.message ?? "Installation failed. Check the file and try again.";
 }
@@ -123,8 +130,41 @@ type PendingOutcome = Omit<InstallOutcome, "nonce" | "plugins">;
  */
 type InstallIntent = "install" | "update";
 
-/** A URL install's archive under review (#16776), with a key per review. */
-export type UrlInstallReview = PluginUrlInstallPreview & { key: string };
+/**
+ * A URL or catalog install's archive under review (#16776, #16779), with a key
+ * per review. `catalog` is set for a catalog release, whose confirm resolves
+ * the release again in main instead of installing `url`. `fromLink` marks a
+ * review a pinned or catalog install link started.
+ */
+export type UrlInstallReview = PluginUrlInstallPreview & { key: string; fromLink: boolean };
+
+/**
+ * Why a `daintree://plugin/install` link was refused before anything was
+ * downloaded (#16779). Nothing falls back to an ordinary URL install.
+ */
+const DEEP_LINK_REFUSAL_MESSAGES: Record<PluginDeepLinkRefusal, string> = {
+  "malformed-url":
+    "The install link's archive URL is missing or isn't a web address, so nothing was installed.",
+  "insecure-url":
+    "The install link pins a SHA-256 but its archive URL isn't https://, so nothing was installed.",
+  "malformed-sha256":
+    "The install link's SHA-256 isn't 64 hex digits, so nothing was installed. Ask whoever shared it for a corrected link.",
+  "malformed-id":
+    "The install link's plugin id isn't a community plugin id, so nothing was installed.",
+  "malformed-version":
+    "The install link's version isn't a valid version number, so nothing was installed.",
+  "conflicting-params":
+    "The install link combines parameters that don't go together, so nothing was installed.",
+};
+
+/** An install link held to reviewed bytes: a pinned URL or a catalog release. */
+type LinkedInstallIntent =
+  | Extract<PluginDeepLinkIntent, { action: "install-catalog" }>
+  | (Extract<PluginDeepLinkIntent, { action: "install" }> & { sha256: string });
+
+/** An install link held to reviewed bytes arrived while another install was under way. */
+const LINKED_INSTALL_BUSY =
+  "Finish or cancel the current install, then open the install link again.";
 
 /**
  * A URL failure the user can fix by editing the URL: a malformed URL, a
@@ -275,6 +315,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // re-run the effect and fire `onConsumed` twice for one intent.
   const showUrlDialogRef = useRef(showUrlDialog);
   showUrlDialogRef.current = showUrlDialog;
+  // The preview a pinned or catalog install link starts (#16779), assigned
+  // once the review flow below is defined.
+  const linkedPreviewRef = useRef<((intent: LinkedInstallIntent) => void) | null>(null);
   // Update-check state. `checkingUpdate` drives the per-row spinner; the ref is
   // the synchronous reentrancy guard (state batches, leaving a double-click
   // window — #4703). `upToDateId` shows the transient "Already up to date" note;
@@ -284,6 +327,14 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const [upToDateId, setUpToDateId] = useState<string | null>(null);
   const upToDateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pendingUpdate, setPendingUpdate] = useState<PendingUpdate | null>(null);
+  // Render mirrors the deep-link effect reads without taking them as
+  // dependencies, which would re-run it and consume one intent twice.
+  const pendingUpdateRef = useRef(pendingUpdate);
+  pendingUpdateRef.current = pendingUpdate;
+  const pendingUninstallRef = useRef(pendingUninstall);
+  pendingUninstallRef.current = pendingUninstall;
+  const isUninstallingRef = useRef(isUninstalling);
+  isUninstallingRef.current = isUninstalling;
   const [isReinstalling, setIsReinstalling] = useState(false);
   // Synchronous reentrancy guard for the reinstall — `isReinstalling` state lags
   // a render, leaving a double-click window that would fire two installs and
@@ -491,12 +542,17 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   }, [refreshKey]);
 
   // Reopening the dialog clears transient surfaces (errors, notices, open
-  // confirms) and re-pulls the authoritative list. The very first mount already
+  // confirms) and re-pulls the authoritative list. The very first open already
   // loads via the `refreshKey` effect, so skip the bump then to avoid a
   // duplicate fetch. This is the single reset path — it only bumps the counter,
   // never fetches directly, so it can't cross-cancel the load effect (#4958).
-  const initialMountRef = useRef(true);
+  // It runs on a real reopen only: StrictMode replaying the mount's effects is
+  // no reopen, and resetting there dropped a preview a deep link had started.
+  const hasOpenedRef = useRef(false);
+  const lastOpenRef = useRef<boolean | null>(null);
   useEffect(() => {
+    const reopened = isOpen && lastOpenRef.current === false && hasOpenedRef.current;
+    lastOpenRef.current = isOpen;
     if (!isOpen) {
       // Closing abandons a URL install's review: one still downloading is
       // cancelled, and whatever it returns is dropped (#16776).
@@ -511,10 +567,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       }
       return;
     }
-    if (initialMountRef.current) {
-      initialMountRef.current = false;
-      return;
-    }
+    hasOpenedRef.current = true;
+    if (!reopened) return;
     setError(null);
     setNotice(null);
     setUpToDateId(null);
@@ -538,6 +592,11 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setUpdateBatch(null);
     httpFromReinstallRef.current = false;
     setShowUrlDialog(false);
+    // The deep-link effect runs after this one in the same commit and reads
+    // these mirrors, which still hold the closed session's last render.
+    showUrlDialogRef.current = false;
+    pendingUninstallRef.current = null;
+    pendingUpdateRef.current = null;
     setUrlInput("");
     // Reset the drop overlay so a drag-enter that was interrupted by a
     // close (leaving the depth counter non-zero) doesn't suppress the overlay
@@ -555,9 +614,60 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // an open the target row is flagged for scroll/highlight. `onConsumed` clears
   // the source intent so it can't re-fire on the next reopen.
   const deepLinkIntent = deepLink?.intent ?? null;
+  // The intent last applied, so StrictMode replaying this effect doesn't apply
+  // it twice: a second pass would find the first one's preview in flight and
+  // turn the link away as busy.
+  const appliedIntentRef = useRef<PluginDeepLinkIntent | null>(null);
   useEffect(() => {
     if (!isOpen || !deepLinkIntent) return;
-    if (deepLinkIntent.action === "install") {
+    if (appliedIntentRef.current === deepLinkIntent) return;
+    appliedIntentRef.current = deepLinkIntent;
+    const linked: LinkedInstallIntent | null =
+      deepLinkIntent.action === "install-catalog"
+        ? deepLinkIntent
+        : deepLinkIntent.action === "install" && deepLinkIntent.sha256 !== undefined
+          ? { ...deepLinkIntent, sha256: deepLinkIntent.sha256 }
+          : null;
+    if (deepLinkIntent.action === "install-refused") {
+      const message = DEEP_LINK_REFUSAL_MESSAGES[deepLinkIntent.reason];
+      // The URL dialog and the uninstall confirm render the shared error as
+      // their own failure, so a refusal arriving over either is a notice, and
+      // neither is closed for it.
+      if (showUrlDialogRef.current || pendingUninstallRef.current !== null) {
+        setNoticeTone("warning");
+        setNotice(message);
+      } else {
+        setNotice(null);
+        setError(message);
+      }
+    } else if (linked !== null) {
+      // A pinned or catalog link goes straight to its preview: there is no URL
+      // for the user to edit, so the pin can't be lost to an edit. It never
+      // replaces an install the user already has going, for the same reason an
+      // ordinary link doesn't; it says so rather than vanish.
+      // Anything that installs, updates, uninstalls, or holds a confirm open
+      // counts: an update still reading unsaved panels has no install job yet.
+      const busy =
+        showUrlDialogRef.current ||
+        urlPreviewingRef.current ||
+        urlReviewRef.current !== null ||
+        pendingHttpUrlRef.current !== null ||
+        installJobIdRef.current !== null ||
+        reinstallingRef.current ||
+        isCheckingAllUpdatesRef.current ||
+        isBatchActiveRef.current ||
+        checkingUpdateRef.current.size > 0 ||
+        pendingUpdateRef.current !== null ||
+        pendingUninstallRef.current !== null ||
+        isUninstallingRef.current ||
+        pendingDiscardRef.current !== null;
+      if (busy) {
+        setNoticeTone("warning");
+        setNotice(LINKED_INSTALL_BUSY);
+      } else {
+        linkedPreviewRef.current?.(linked);
+      }
+    } else if (deepLinkIntent.action === "install") {
       // Don't clobber an install dialog the user already has open — they may be
       // mid-edit, and silently swapping in a fresh (attacker-supplied) URL is a
       // social-engineering risk. The same goes for an install from a URL that
@@ -790,7 +900,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
 
   const handleInstallResult = (
     result: Awaited<ReturnType<typeof window.electron.plugin.installFromFile>>,
-    intent: InstallIntent
+    intent: InstallIntent,
+    fromLink = false
   ) => {
     // An update that didn't install has nothing left to carry the selection
     // across; one that did hands it to its outcome.
@@ -821,7 +932,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         return;
       case "failed": {
         if (intent === "install") setNotice(null);
-        setError(installErrorMessage(result.errors[0], intent));
+        setError(installErrorMessage(result.errors[0], intent, fromLink));
         return;
       }
     }
@@ -849,18 +960,18 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const performInstallFromUrl = async (
     url: string,
     expected: PluginInstallExpectation,
-    intent: InstallIntent
+    intent: InstallIntent,
+    install: (jobId: string) => Promise<PluginInstallResult> = (jobId) =>
+      window.electron.plugin.installFromUrl(url, jobId, expected),
+    fromLink = false
   ) => {
     setIsInstalling(true);
     if (intent === "update" && expected.pluginId !== undefined) {
       setUpdatingPluginId(expected.pluginId);
     }
     try {
-      const result = await runInstallJob(
-        (jobId) => window.electron.plugin.installFromUrl(url, jobId, expected),
-        url
-      );
-      handleInstallResult(result, intent);
+      const result = await runInstallJob(install, url);
+      handleInstallResult(result, intent, fromLink);
       if (!isCorrectableUrlFailure(result)) {
         setShowUrlDialog(false);
         setUrlInput("");
@@ -875,13 +986,17 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   };
 
   /**
-   * Download a URL's archive and put what it would install up for review
-   * (#16776). Nothing is installed here: main reads the archive, deletes the
+   * Download an archive and put what it would install up for review (#16776,
+   * #16779). Nothing is installed here: main reads the archive, deletes the
    * download, and returns its disclosure and digest. A failure is reported the
    * way an install's is, keeping the URL dialog open when the URL is the
-   * problem.
+   * problem. `source` names the download in the progress banner.
    */
-  const previewInstallFromUrl = async (url: string) => {
+  const previewForReview = async (
+    preview: (jobId: string) => Promise<PluginUrlInstallPreviewResult>,
+    source: string,
+    fromLink = false
+  ) => {
     if (urlPreviewingRef.current) return;
     urlPreviewingRef.current = true;
     const generation = urlFlowGenerationRef.current;
@@ -889,19 +1004,19 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     try {
       const result = await runInstallJob((jobId) => {
         previewJobIdRef.current = jobId;
-        return window.electron.plugin.previewFromUrl(url, jobId).finally(() => {
+        return preview(jobId).finally(() => {
           if (previewJobIdRef.current === jobId) previewJobIdRef.current = null;
         });
-      }, url);
+      }, source);
       if (urlFlowGenerationRef.current !== generation) return;
       if (result.status === "preview") {
         setError(null);
         setShowUrlDialog(false);
         setUrlInput("");
-        setUrlReview({ ...result.preview, key: crypto.randomUUID() });
+        setUrlReview({ ...result.preview, key: crypto.randomUUID(), fromLink });
         return;
       }
-      handleInstallResult(result, "install");
+      handleInstallResult(result, "install", fromLink);
       if (!isCorrectableUrlFailure(result)) {
         setShowUrlDialog(false);
         setUrlInput("");
@@ -910,12 +1025,46 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // A host too old to preview refuses the call; nothing installs unbound.
       if (urlFlowGenerationRef.current !== generation) return;
       setError(formatErrorMessage(err, "Failed to download plugin"));
-      logError("Failed to preview plugin from URL", err);
+      logError("Failed to preview plugin for install", err);
     } finally {
       urlPreviewingRef.current = false;
       setIsInstalling(false);
     }
   };
+
+  /** Preview a URL's archive, held to `sha256` when a link pinned one. */
+  const previewInstallFromUrl = (url: string, sha256?: string) =>
+    previewForReview(
+      (jobId) =>
+        sha256 === undefined
+          ? window.electron.plugin.previewFromUrl(url, jobId)
+          : window.electron.plugin.previewFromUrl(url, jobId, sha256),
+      url,
+      sha256 !== undefined
+    );
+
+  /**
+   * Start the preview a pinned or catalog install link asks for (#16779). Read
+   * by the deep-link effect through a ref, so the effect doesn't re-run with
+   * every render's copy of this function.
+   */
+  const startLinkedPreview = (intent: LinkedInstallIntent) => {
+    if (intent.action === "install") {
+      void previewInstallFromUrl(intent.url, intent.sha256);
+      return;
+    }
+    const { pluginId, version } = intent;
+    void previewForReview(
+      (jobId) =>
+        window.electron.plugin.previewFromCatalog(
+          version === undefined ? { pluginId } : { pluginId, version },
+          jobId
+        ),
+      version === undefined ? pluginId : `${pluginId}@${version}`,
+      true
+    );
+  };
+  linkedPreviewRef.current = startLinkedPreview;
 
   /**
    * Install the reviewed archive. The confirm downloads the URL again, so it is
@@ -932,10 +1081,24 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       pluginId: review.manifest.name,
       archiveHash: review.archiveHash,
     };
+    const expected: PluginInstallExpectation = replacesInstalled
+      ? { kind: "update", ...binding }
+      : { kind: "install", ...binding };
+    const { catalog } = review;
+    // A catalog release is installed by naming it, never by its URL: main
+    // looks it up again and fetches what the catalog lists (#16779).
     await performInstallFromUrl(
       review.url,
-      replacesInstalled ? { kind: "update", ...binding } : { kind: "install", ...binding },
-      "install"
+      expected,
+      "install",
+      catalog === undefined
+        ? undefined
+        : (jobId) =>
+            window.electron.plugin.installFromCatalog(
+              { pluginId: catalog.id, version: catalog.version, repo: catalog.repo, expected },
+              jobId
+            ),
+      review.fromLink
     );
   };
 
