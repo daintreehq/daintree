@@ -322,6 +322,43 @@ describe("createMockHost", () => {
 
     const undeclared = createMockHost({ pluginId: "acme.demo", remoteHosts });
     await expect(undeclared.remoteHosts.list()).rejects.toThrow(/"host:dispatch"/);
+
+    const projectPlugin = createMockHost({
+      pluginId: "project__b6700c7a__acme.demo",
+      capabilities: ["host:dispatch"],
+      remoteHosts,
+    });
+    await expect(projectPlugin.remoteHosts.list()).rejects.toThrow(/only an installed plugin/);
+  });
+
+  it("keeps a host's launched agents apart from this machine's (#16767)", async () => {
+    const host = createMockHost({
+      pluginId: "acme.demo",
+      capabilities: ["host:dispatch", "agent:input"],
+      dispatch: async () => ({ ok: true, result: { launched: true, terminalId: "t-1" } }),
+    });
+    await host.dispatch(
+      "agent.launch",
+      { agentId: "claude" },
+      { hostId: "studio", projectId: "p" }
+    );
+
+    await expect(host.agents.interrupt("t-1")).resolves.toEqual({ status: "not-found" });
+    await expect(host.agents.interrupt("t-1", { hostId: "other" })).resolves.toEqual({
+      status: "not-found",
+    });
+    await expect(host.agents.interrupt("t-1", { hostId: "studio" })).resolves.toMatchObject({
+      status: "sent",
+    });
+    expect(host.agentInputCalls.at(-1)).toMatchObject({ terminalId: "t-1", hostId: "studio" });
+
+    const undeclared = createMockHost({ pluginId: "acme.demo", capabilities: ["agent:input"] });
+    await expect(
+      undeclared.dispatch("worktree.list", {}, { hostId: "studio", projectId: "p" })
+    ).rejects.toThrow(/"host:dispatch"/);
+    await expect(undeclared.agents.submit("t-1", "go", { hostId: "studio" })).rejects.toThrow(
+      /"host:dispatch"/
+    );
   });
 
   it("records notify calls with a fresh id each (#13505)", async () => {

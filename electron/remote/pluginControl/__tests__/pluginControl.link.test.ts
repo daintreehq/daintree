@@ -131,8 +131,25 @@ describe("a Shell plugin's call over a real link (#16767)", () => {
   });
 
   it("carries every input shape to the host, which checks its own record of the launch", async () => {
+    const pty = {
+      write: vi.fn(),
+      submit: vi.fn(),
+      batchDoubleEscape: vi.fn(),
+      getTerminalAsync: vi.fn(async (id: string) => ({
+        id,
+        cwd: "/srv",
+        spawnedAt: 1,
+        kind: "terminal",
+        hasPty: true,
+        detectedAgentId: "claude",
+        agentState: "working",
+      })),
+      getSerializedStateAsync: vi.fn(async () => ({ data: "" })),
+      getTerminalProjectId: () => PROJECT,
+    };
     const host = installOnHost({
       runWithoutView: async () => ({ ok: true, result: { launched: true, terminalId: "t-9" } }),
+      pty: () => pty as unknown as ReturnType<HostPluginControlDeps["pty"]>,
     });
     const client = shellClient();
     const target = { hostId: HOST_ID, pluginId: "acme.beads" };
@@ -142,18 +159,60 @@ describe("a Shell plugin's call over a real link (#16767)", () => {
       args: { agentId: "claude" },
     });
 
-    // The host has no terminal service here, so a call it admits answers unavailable.
-    for (const input of [
-      { op: "interrupt" as const },
-      { op: "sendKeys" as const, keys: ["Escape"] },
-      { op: "sendKeys" as const, choose: "Yes" },
-      { op: "submit" as const, text: "continue" },
-    ]) {
-      expect(await client.agentInput(target, "t-9", input)).toEqual({ status: "unavailable" });
-    }
+    expect((await client.agentInput(target, "t-9", { op: "interrupt" })).status).toBe("sent");
+    expect(pty.batchDoubleEscape).toHaveBeenCalledWith(["t-9"]);
+    expect(await client.agentInput(target, "t-9", { op: "sendKeys", keys: ["Escape"] })).toEqual({
+      status: "sent",
+      keys: ["Escape"],
+    });
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    // A choice reads the screen to find its label; this one shows none.
+    expect((await client.agentInput(target, "t-9", { op: "sendKeys", choose: "Yes" })).status).toBe(
+      "refused"
+    );
+    expect(pty.getSerializedStateAsync).toHaveBeenCalled();
+    expect(await client.agentInput(target, "t-9", { op: "submit", text: "continue" })).toEqual({
+      status: "sent",
+    });
+    expect(pty.submit).toHaveBeenCalledWith("t-9", "continue");
     expect(
       await client.agentInput({ ...target, pluginId: "acme.other" }, "t-9", { op: "interrupt" })
     ).toEqual({ status: "not-found" });
+    host.dispose();
+  });
+});
+
+describe("HostPluginControlClient before anything is sent (#16767)", () => {
+  it("refuses arguments that aren't plain JSON within the bound, sending nothing", async () => {
+    const call = vi.spyOn(links.client, "call");
+    const client = shellClient();
+    for (const args of [{ ids: new Map([["a", 1]]) }, { big: 1n }, { text: "x".repeat(300_000) }]) {
+      expect(
+        await client.dispatch(
+          { hostId: HOST_ID, pluginId: "acme.beads" },
+          { projectId: PROJECT, actionId: "worktree.list", args }
+        )
+      ).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    }
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing when the plugin's admission fails once the link is open", async () => {
+    const host = installOnHost();
+    await expect(
+      shellClient().dispatch(
+        {
+          hostId: HOST_ID,
+          pluginId: "acme.beads",
+          admit: () => {
+            throw new Error("PERMISSION_REQUIRED: switched off");
+          },
+        },
+        { projectId: PROJECT, actionId: "worktree.list", args: {} }
+      )
+    ).rejects.toThrow(/switched off/);
+    expect(host.runWithoutView).not.toHaveBeenCalled();
+    expect(host.audits).toEqual([]);
     host.dispose();
   });
 });

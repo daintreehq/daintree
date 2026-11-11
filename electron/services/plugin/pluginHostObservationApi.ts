@@ -4,7 +4,9 @@ import {
   assertMayTargetHosts,
   getPluginHostTargets,
   parseHostId,
+  PluginHostCallUnloaded,
   type PluginHostAgentInput,
+  type PluginHostAgentInputAnswer,
 } from "./pluginHostTargets.js";
 import {
   interruptLaunchedAgent,
@@ -421,19 +423,37 @@ export function buildObservationHostApi(
     terminalId: string,
     input: PluginHostAgentInput
   ): Promise<T | Exclude<PluginAgentInputResult, { readonly status: "sent" }>> => {
-    assertMayTargetHosts(
-      deps.declaredCapabilities(pluginId),
-      pluginId,
-      boundProjectId,
-      `agents.${op} with options.hostId`
-    );
+    const mayTarget = (): void =>
+      assertMayTargetHosts(
+        deps.declaredCapabilities(pluginId),
+        pluginId,
+        boundProjectId,
+        `agents.${op} with options.hostId`
+      );
+    mayTarget();
     const targets = getPluginHostTargets();
     if (targets === null || !targets.knows(hostId)) return { status: "not-found" };
     if (!isRemotePluginLaunch(pluginId, hostId, terminalId)) return { status: "not-found" };
     await ensureCapabilityConsent(deps, pluginId, "agent:input");
+    // The switch may have been turned off while the prompt was open.
     if (!isBound()) return { status: "unavailable" };
+    mayTarget();
     if (!isRemotePluginLaunch(pluginId, hostId, terminalId)) return { status: "not-found" };
-    const answer = await targets.agentInput({ hostId, pluginId }, terminalId, input);
+    // And once more after the host's link is open, right before anything is sent.
+    const admit = (): void => {
+      if (!isBound()) throw new PluginHostCallUnloaded(pluginId);
+      mayTarget();
+      if (!isRemotePluginLaunch(pluginId, hostId, terminalId)) {
+        throw new PluginHostCallUnloaded(pluginId);
+      }
+    };
+    let answer: PluginHostAgentInputAnswer;
+    try {
+      answer = await targets.agentInput({ hostId, pluginId, admit }, terminalId, input);
+    } catch (err) {
+      if (err instanceof PluginHostCallUnloaded) return { status: "unavailable" };
+      throw err;
+    }
     if (answer.status === "driven-elsewhere") {
       const who = answer.holderName ?? "Another screen";
       throw new Error(

@@ -5370,8 +5370,9 @@ export interface PluginAgentsApi {
    * through `host.dispatch(..., { hostId, projectId })` (#16767): the host
    * answers from its own record of what this plugin launched there from this
    * machine. It also needs `host:dispatch` and "Allow host targeting", and
-   * `not-found` covers an agent this plugin didn't launch there or launched
-   * before it was last loaded.
+   * `not-found` covers an agent this plugin didn't launch there, launched
+   * before it was last disabled or uninstalled, or launched before this
+   * machine restarted.
    */
   interrupt(
     terminalId: string,

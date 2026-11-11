@@ -25,6 +25,20 @@ export type PluginHostAgentInputAnswer =
 export interface PluginHostTarget {
   hostId: string;
   pluginId: string;
+  /**
+   * Asked once the host's link is open, right before anything is sent: throws
+   * to stop the call when the plugin unloaded or lost its grant while the
+   * link was dialled.
+   */
+  admit?: () => void;
+}
+
+/** Thrown by an `admit` whose plugin unloaded: the call answers as unloaded, sending nothing. */
+export class PluginHostCallUnloaded extends Error {
+  constructor(pluginId: string) {
+    super(`Plugin "${pluginId}" is no longer loaded`);
+    this.name = "PluginHostCallUnloaded";
+  }
 }
 
 /**

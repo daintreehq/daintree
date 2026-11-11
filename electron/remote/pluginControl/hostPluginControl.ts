@@ -5,6 +5,8 @@ import {
   DENY_PLUGIN_DISPATCH_ACTION_IDS,
 } from "../../../shared/config/actionIds.js";
 import { AGENT_LAUNCH_ACTION_ID } from "../../../shared/utils/dispatchAgentLaunch.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { isHostPluginDispatchable } from "../plugins/pluginDispatchAllowlist.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import {
   PluginFrontendMethod,
@@ -262,6 +264,15 @@ export function createHostPluginControl(deps: HostPluginControlDeps) {
         `Action "${payload.actionId}" is not available to plugin dispatch; use the corresponding capability-gated host API instead.`
       );
     }
+    // The audited, default-deny set a host's own plugins may run in a Shell's
+    // view, held on every route: what runs here with no view is never wider,
+    // and the MCP-session reads that would list this host's own surface stay out.
+    if (!isHostPluginDispatchable(payload.actionId)) {
+      return failure(
+        "RESTRICTED",
+        `Action "${payload.actionId}" can't be run by a plugin from another machine.`
+      );
+    }
     if (!(await deps.hasProject(payload.projectId))) {
       return failure("NOT_FOUND", `This host has no project "${payload.projectId}".`);
     }
@@ -354,7 +365,7 @@ export function createHostPluginControl(deps: HostPluginControlDeps) {
               } catch (error) {
                 return {
                   status: "refused",
-                  reason: error instanceof Error ? error.message : "Those keys can't be pressed.",
+                  reason: formatErrorMessage(error, "Those keys can't be pressed."),
                 };
               }
               result = await sendKeysToLaunchedAgent(pty, terminalId, keys, admitWrite);

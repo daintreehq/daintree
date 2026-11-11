@@ -866,8 +866,15 @@ describe("startRemoteHosts", () => {
     ];
     await expect(deps.session("unknown-host")).resolves.toBeNull();
     expect(m.client.manager.touch).not.toHaveBeenCalledWith("unknown-host");
-    // The link client that keeps the Shell's secret isn't registered in this fake.
+    // No link client keeping the Shell's secret: nothing to prove a plugin with.
     expect(deps.credential("control-on")).toBeNull();
+    // With one, the plugins' own credential for that host, never the assistant's.
+    const pluginCredential = vi.fn((hostId: string) => `plugin-credential-for-${hostId}`);
+    const unregister = registerRemoteService("hostControlLinkClient", {
+      pluginCredential,
+    } as never);
+    expect(deps.credential("control-on")).toBe("plugin-credential-for-control-on");
+    unregister();
     await stopRemoteHosts();
     expect(pluginControl.uninstallClient).toHaveBeenCalledTimes(1);
   });

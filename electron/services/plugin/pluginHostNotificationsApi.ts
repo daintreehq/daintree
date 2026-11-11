@@ -5,7 +5,12 @@ import { admitPluginToast } from "./pluginToastBudget.js";
 import type { PluginUIPromptDispatcher, PromptRequestOptions } from "./PluginUIPromptDispatcher.js";
 import { resolvePluginFrontend } from "./pluginFrontendRouting.js";
 import { recordPluginLaunch, recordRemotePluginLaunch } from "./pluginLaunchedAgents.js";
-import { assertMayTargetHosts, getPluginHostTargets, parseHostId } from "./pluginHostTargets.js";
+import {
+  assertMayTargetHosts,
+  getPluginHostTargets,
+  parseHostId,
+  PluginHostCallUnloaded,
+} from "./pluginHostTargets.js";
 import { PluginFrontendMethod } from "./pluginFrontendRequests.js";
 import { type PluginTaskApi } from "../../../shared/types/plugin.js";
 import {
@@ -512,15 +517,29 @@ export function buildNotificationsHostApi(
         durationMs: Date.now() - startedAt,
       });
     };
+    // Asked again once the host's link is open: an unload or a switch turned
+    // off while it was dialled sends nothing.
+    const admit = (): void => {
+      if (!isBound()) throw new PluginHostCallUnloaded(pluginId);
+      assertMayTargetHosts(
+        deps.declaredCapabilities(pluginId),
+        pluginId,
+        boundProjectId,
+        "dispatch with options.hostId"
+      );
+    };
     try {
-      const result = await targets.dispatch({ hostId, pluginId }, { projectId, actionId, args });
-      // An unload while the host ran it reaches nothing it launched.
-      if (deps.plugins.has(pluginId)) {
-        recordRemotePluginLaunch(pluginId, hostId, actionId, args, result);
-      }
+      const result = await targets.dispatch(
+        { hostId, pluginId, admit },
+        { projectId, actionId, args }
+      );
+      // This instance only: one unloaded while the host ran it reaches
+      // nothing it launched, even if the plugin has loaded again since.
+      if (isBound()) recordRemotePluginLaunch(pluginId, hostId, actionId, args, result);
       audit(result.ok ? "success" : "error", result.ok ? "" : result.error.code);
       return result;
     } catch (err) {
+      if (err instanceof PluginHostCallUnloaded) return pluginUnloaded();
       audit("error", "ERROR");
       throw err;
     }

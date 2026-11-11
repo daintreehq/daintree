@@ -189,6 +189,8 @@ export interface AgentInputRecord {
   /** What `sendKeys` pressed, or the text `submit` sent. */
   input?: PluginAgentKeysInput | string;
   result: PluginAgentInputResult | PluginAgentInterruptResult | PluginAgentKeysResult;
+  /** The Remote Host the call named (#16767); absent for an agent on this machine. */
+  hostId?: string;
 }
 
 /** Captured `host.terminals.readScreen(terminalId, options)` calls, with what each resolved. */

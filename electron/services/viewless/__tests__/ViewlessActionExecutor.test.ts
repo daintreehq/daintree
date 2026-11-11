@@ -276,6 +276,64 @@ describe("viewless actions", () => {
       );
       expect(plain).toMatchObject({ ok: true });
     });
+
+    it("refuses a launch a plugin configures, which an agent's call may make", async () => {
+      const { deps, invoke } = makeDeps();
+      const configured = request("agent.launch", { agentId: "claude", env: { DEBUG: "1" } });
+
+      const result = await executeViewlessAction({ ...configured, source: "plugin" }, deps);
+
+      expect(result).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+      expect(invoke).not.toHaveBeenCalledWith(
+        PROJECT.id,
+        CHANNELS.TERMINAL_SPAWN,
+        expect.anything()
+      );
+    });
+
+    it("reads status for it but never terminal text", async () => {
+      const readTerminalStatus = vi.fn(async () => ({
+        terminals: [
+          {
+            terminalId: "t-1",
+            submission: { token: "s-1", phase: "submitted", output: "secret text" },
+          },
+        ],
+        source: "pty",
+        unavailableFields: [],
+      }));
+      const { deps } = makeDeps({ readTerminalStatus } as never);
+
+      const withOutput = await executeViewlessAction(
+        {
+          ...request("terminal.getStatus", { terminalIds: ["t-1"], includeOutput: true }),
+          source: "plugin",
+        },
+        deps
+      );
+      expect(withOutput).toMatchObject({ ok: false, error: { code: "RESTRICTED" } });
+      expect(readTerminalStatus).not.toHaveBeenCalled();
+
+      const status = await executeViewlessAction(
+        {
+          ...request("terminal.getStatus", { terminalIds: ["t-1"], submissionToken: "s-1" }),
+          source: "plugin",
+        },
+        deps
+      );
+      expect(status).toMatchObject({
+        ok: true,
+        result: { terminals: [{ terminalId: "t-1", submission: { token: "s-1" } }] },
+      });
+      expect(JSON.stringify(status)).not.toContain("secret text");
+
+      // An agent's read keeps the captured output.
+      const agentRead = await executeViewlessAction(
+        request("terminal.getStatus", { terminalIds: ["t-1"], submissionToken: "s-1" }),
+        deps
+      );
+      expect(JSON.stringify(agentRead)).toContain("secret text");
+    });
   });
 
   describe("a confirm-gated call put to someone else (#13501)", () => {

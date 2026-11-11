@@ -509,9 +509,19 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     ],
     // A Remote Host's agent (#16767).
     [
+      "agents.interrupt",
+      (p: Proxy) => p.host.agents.interrupt("t-1", { hostId: "studio" }),
+      { terminalId: "t-1", options: { hostId: "studio" } },
+    ],
+    [
       "agents.sendKeys",
       (p: Proxy) => p.host.agents.sendKeys("t-1", { keys: ["Enter"] }, { hostId: "studio" }),
       { terminalId: "t-1", input: { keys: ["Enter"] }, options: { hostId: "studio" } },
+    ],
+    [
+      "agents.submit",
+      (p: Proxy) => p.host.agents.submit("t-1", "continue", { hostId: "studio" }),
+      { terminalId: "t-1", text: "continue", options: { hostId: "studio" } },
     ],
   ] as const)("relays %s to main and resolves its answer", async (method, invoke, params) => {
     const { proxy, sent } = makeProxy();

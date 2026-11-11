@@ -381,6 +381,34 @@ export async function runTerminalGetStatus(
   project: Project,
   deps: ViewlessDeps
 ): Promise<ActionDispatchResult> {
+  if (request.source !== "plugin") return readTerminalGetStatus(request, project, deps);
+  // A Shell plugin's read (#16767) gets what a view gives a plugin: status,
+  // never terminal text, which is behind `terminal:read` (#13155).
+  const asked = request.args as { includeOutput?: unknown } | null | undefined;
+  if (asked?.includeOutput !== undefined && asked.includeOutput !== false) {
+    return failure(
+      "RESTRICTED",
+      "terminal.getStatus `includeOutput` is not available to plugin dispatch; use host.terminals.readScreen with the terminal:read capability."
+    );
+  }
+  const answer = await readTerminalGetStatus(request, project, deps);
+  if (!answer.ok) return answer;
+  const status = answer.result as TerminalStatusResult;
+  return success({
+    ...status,
+    terminals: status.terminals.map((entry) => {
+      if (entry.submission?.output === undefined) return entry;
+      const { output: _withheld, ...submission } = entry.submission;
+      return { ...entry, submission };
+    }),
+  });
+}
+
+async function readTerminalGetStatus(
+  request: ViewlessActionRequest,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<ActionDispatchResult> {
   const args = request.args;
   const named =
     args !== null &&

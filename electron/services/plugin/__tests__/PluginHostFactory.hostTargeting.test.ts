@@ -155,6 +155,7 @@ function makeHarness(): Harness {
 }
 
 const HOST_ID = "studio";
+const SECOND_HOST_ID = "build-box";
 const REMOTE_PROJECT = "c".repeat(64);
 
 /** A fake of the remote hosts module's client: what reached each host, and its answers. */
@@ -166,8 +167,14 @@ function fakeTargets() {
     input: PluginHostAgentInput;
   }> = [];
   let inputAnswer: PluginHostAgentInputAnswer = { status: "sent" };
+  /** Runs while the host's link is being dialled, before the client admits the call. */
+  let whileDialling: () => void = () => {};
+  let dispatchAnswer: () => Promise<ActionDispatchResult> = async () => ({
+    ok: true,
+    result: { launched: true, terminalId: "remote-1" },
+  });
   const targets: PluginHostTargets = {
-    knows: (hostId) => hostId === HOST_ID,
+    knows: (hostId) => hostId === HOST_ID || hostId === SECOND_HOST_ID,
     nameOf: (hostId) => (hostId === HOST_ID ? "Studio" : hostId),
     listHosts: vi.fn(async () => [
       {
@@ -177,16 +184,22 @@ function fakeTargets() {
         projects: [{ projectId: REMOTE_PROJECT, name: "beads" }],
       },
     ]),
+    // As the real client does: the link opens, the call is admitted, then sent.
     dispatch: vi.fn(async (target: PluginHostTarget, request: unknown) => {
-      dispatched.push({ target, request });
-      return {
-        ok: true,
-        result: { launched: true, terminalId: "remote-1" },
-      } as ActionDispatchResult;
+      whileDialling();
+      target.admit?.();
+      dispatched.push({ target: { hostId: target.hostId, pluginId: target.pluginId }, request });
+      return dispatchAnswer();
     }),
     agentInput: vi.fn(
       async (target: PluginHostTarget, terminalId: string, input: PluginHostAgentInput) => {
-        inputs.push({ target, terminalId, input });
+        whileDialling();
+        target.admit?.();
+        inputs.push({
+          target: { hostId: target.hostId, pluginId: target.pluginId },
+          terminalId,
+          input,
+        });
         return inputAnswer;
       }
     ),
@@ -197,6 +210,12 @@ function fakeTargets() {
     inputs,
     answerInput: (answer: PluginHostAgentInputAnswer) => {
       inputAnswer = answer;
+    },
+    duringDial: (run: () => void) => {
+      whileDialling = run;
+    },
+    answerDispatchWith: (answer: () => Promise<ActionDispatchResult>) => {
+      dispatchAnswer = answer;
     },
   };
 }
@@ -326,6 +345,43 @@ describe("host.dispatch with options.hostId (#16767)", () => {
     );
   });
 
+  it("lets one switch reach every host this machine drives", async () => {
+    const h = makeHarness();
+    grantHosts(h);
+    const host = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING).host;
+
+    for (const hostId of [HOST_ID, SECOND_HOST_ID]) {
+      await host.dispatch("worktree.list", {}, { hostId, projectId: REMOTE_PROJECT });
+    }
+    expect(fake.dispatched.map((call) => call.target.hostId)).toEqual([HOST_ID, SECOND_HOST_ID]);
+  });
+
+  it("sends nothing when the switch is turned off while the host is dialled", async () => {
+    const h = makeHarness();
+    grantHosts(h);
+    const host = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING).host;
+    fake.duringDial(() => {
+      hostTargetingOn = false;
+    });
+
+    await expect(
+      host.dispatch("worktree.list", {}, { hostId: HOST_ID, projectId: REMOTE_PROJECT })
+    ).rejects.toThrow(/^PERMISSION_REQUIRED: .*"Allow host targeting"/);
+    expect(fake.dispatched).toEqual([]);
+  });
+
+  it("answers PLUGIN_UNLOADED, sending nothing, when the plugin unloads while the host is dialled", async () => {
+    const h = makeHarness();
+    grantHosts(h);
+    const host = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING).host;
+    fake.duringDial(() => h.plugins.delete(PLUGIN_ID));
+
+    await expect(
+      host.dispatch("worktree.list", {}, { hostId: HOST_ID, projectId: REMOTE_PROJECT })
+    ).resolves.toMatchObject({ ok: false, error: { code: "PLUGIN_UNLOADED" } });
+    expect(fake.dispatched).toEqual([]);
+  });
+
   it("answers NOT_FOUND for a host this machine doesn't drive, sending nothing", async () => {
     const h = makeHarness();
     grantHosts(h);
@@ -419,6 +475,60 @@ describe("host.agents input with options.hostId (#16767)", () => {
     });
     expect(fake.inputs).toEqual([]);
     expect(consentMock.ensureAllowed).not.toHaveBeenCalled();
+  });
+
+  it("gives a reloaded instance nothing a launch answered after the old one unloaded", async () => {
+    const h = makeHarness();
+    grantHosts(h);
+    let answer: (result: ActionDispatchResult) => void = () => {};
+    fake.answerDispatchWith(
+      () =>
+        new Promise<ActionDispatchResult>((resolve) => {
+          answer = resolve;
+        })
+    );
+    const { host: first } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const launching = first.dispatch(
+      "agent.launch",
+      { agentId: "claude" },
+      { hostId: HOST_ID, projectId: REMOTE_PROJECT }
+    );
+    await vi.waitFor(() => expect(fake.dispatched).toHaveLength(1));
+
+    // Disabled and enabled again while the host was still launching.
+    forgetPluginLaunches(PLUGIN_ID);
+    h.plugins.set(PLUGIN_ID, loaded(PLUGIN_ID));
+    answer({ ok: true, result: { launched: true, terminalId: "remote-1" } });
+    await launching;
+
+    const reloaded = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING).host;
+    await expect(reloaded.agents.interrupt("remote-1", { hostId: HOST_ID })).resolves.toEqual({
+      status: "not-found",
+    });
+    expect(fake.inputs).toEqual([]);
+  });
+
+  it("asks consent before anything is sent, and sends nothing if the switch goes off meanwhile", async () => {
+    const h = makeHarness();
+    grantHosts(h);
+    await launchOnHost(h);
+    let approve: () => void = () => {};
+    consentMock.ensureAllowed.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          approve = () => resolve(undefined);
+        })
+    );
+
+    const host = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING).host;
+    const submitting = host.agents.submit("remote-1", "continue", { hostId: HOST_ID });
+    await vi.waitFor(() => expect(consentMock.ensureAllowed).toHaveBeenCalledTimes(1));
+    expect(fake.inputs).toEqual([]);
+
+    hostTargetingOn = false;
+    approve();
+    await expect(submitting).rejects.toThrow(/^PERMISSION_REQUIRED: .*"Allow host targeting"/);
+    expect(fake.inputs).toEqual([]);
   });
 
   it("reaches nothing it launched once the plugin unloads", async () => {

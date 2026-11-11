@@ -1334,6 +1334,27 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
     service.dispose();
   });
 
+  it("offers Allow host targeting back with the other switches after an update (#16767)", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const ID = "acme.host-offer";
+    const hostTargeting = { pluginId: ID, capability: "host:dispatch", scopeKey: "global" };
+
+    const v1 = await makeArchive({ name: ID, version: "1.0.0", capabilities: ["host:dispatch"] });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+    capConsentMock.listGrantsForPlugin.mockImplementation(() =>
+      capConsentMock.revokeAllForPlugin.mock.calls.length === 0 ? [hostTargeting] : []
+    );
+    capConsentMock.revokeAllForPlugin.mockClear();
+
+    const v2 = await makeArchive({ name: ID, version: "2.0.0", capabilities: ["host:dispatch"] });
+    expect((await service.installPlugin(v2)).status).toBe("installed");
+
+    expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith(ID);
+    expect(onlyOffer().grants).toEqual([hostTargeting]);
+
+    service.dispose();
+  });
+
   it("offers nothing back on a fresh install or a byte-identical reinstall (#14019)", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
     capConsentMock.listGrantsForPlugin.mockReturnValue([

@@ -64,6 +64,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const workspace = createWorkspaceFacet(identity, options);
   const contributions = createContributionsFacet(identity, options, {
     recordMockLaunch: workspace.recordMockLaunch,
+    assertMockHostTarget: workspace.assertMockHostTarget,
   });
   const settings = createSettingsFacet(identity, options, {
     activeWorktreePath: workspace.activeWorktreePath,

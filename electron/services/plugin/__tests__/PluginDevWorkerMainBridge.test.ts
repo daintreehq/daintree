@@ -3128,6 +3128,13 @@ describe("PluginDevWorkerMainBridge input to launched agents (#14018)", () => {
       { status: "sent", cancelKey: "advertised" },
     ],
     [
+      "agents.sendKeys",
+      { terminalId: "t-1", input: { keys: ["Escape"] }, options: { hostId: "studio" } },
+      "sendKeys",
+      ["t-1", { keys: ["Escape"] }, { hostId: "studio" }],
+      { status: "sent", keys: ["Enter"] },
+    ],
+    [
       "agents.submit",
       { terminalId: "t-1", text: "/compact", options: { hostId: "studio" } },
       "submit",

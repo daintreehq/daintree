@@ -10,7 +10,9 @@ import {
   PROJECT,
 } from "../../../services/viewless/__tests__/viewlessTestDeps.js";
 import {
+  auditRecordFor,
   createHostPluginControl,
+  HOST_PLUGIN_AUDIT_CHANNEL,
   leaseStanding,
   type HostPluginAuditEntry,
   type HostPluginControlDeps,
@@ -155,6 +157,24 @@ describe("host admission of a Shell plugin's dispatch (#16767)", () => {
     expect(h.runWithoutView).not.toHaveBeenCalled();
   });
 
+  it("holds every route to the audited set a host's plugins may run, built-in or not", async () => {
+    const endpoint = { request: vi.fn() };
+    const h = harness({
+      standing: { kind: "own-view", endpoint },
+      viewlessForms: ["actions.list"],
+    });
+    // Built in, and readable with no view, but it would list this host's own surface.
+    const result = await h.control.dispatch(CALLER, dispatch("actions.list"));
+    expect(result).toMatchObject({ ok: false, error: { code: "RESTRICTED" } });
+    expect(endpoint.request).not.toHaveBeenCalled();
+    h.setStanding({ kind: "vacant" });
+    expect(await h.control.dispatch(CALLER, dispatch("actions.list"))).toMatchObject({
+      ok: false,
+      error: { code: "RESTRICTED" },
+    });
+    expect(h.runWithoutView).not.toHaveBeenCalled();
+  });
+
   it("answers NOT_FOUND for a project the host doesn't have", async () => {
     const h = harness();
     const result = await h.control.dispatch(
@@ -215,7 +235,7 @@ describe("host admission of a Shell plugin's dispatch (#16767)", () => {
     const h = harness({ standing: { kind: "elsewhere", holderName: null } });
     const result = await h.control.dispatch(
       CALLER,
-      dispatch("terminal.moveToDock", { terminalId: "t" })
+      dispatch("terminal.rename", { terminalId: "t", title: "x" })
     );
     expect(result).toMatchObject({ ok: false, error: { code: "DRIVEN_ELSEWHERE" } });
   });
@@ -347,6 +367,30 @@ describe("agents a Shell plugin launched on a host (#16767)", () => {
     ).toEqual({ status: "sent" });
     expect(h.pty.write).toHaveBeenCalledTimes(1);
     expect(h.pty.submit).toHaveBeenCalledWith("remote-1", "/compact");
+  });
+});
+
+describe("auditRecordFor (#16767)", () => {
+  it("files the call under the Shell's plugin with the Shell beside it, never as a plugin here", () => {
+    const record = auditRecordFor(
+      {
+        pluginId: PLUGIN_ID,
+        shellName: CALLER.shellName,
+        actionId: `dispatch:${PROJECT.id}:worktree.list`,
+        args: {},
+        result: "success",
+        errorMessage: "",
+        durationMs: 4,
+      },
+      "hash"
+    );
+    expect(record).toMatchObject({
+      pluginId: PLUGIN_ID,
+      remoteShell: CALLER.shellName,
+      channel: HOST_PLUGIN_AUDIT_CHANNEL,
+      recordType: "ipc-invoke",
+      argsHash: "hash",
+    });
   });
 });
 

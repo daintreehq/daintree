@@ -46,6 +46,41 @@ const id = z.string().min(1).max(256);
 const pluginId = z.string().min(1).max(256);
 const terminalId = z.string().min(1).max(SEND_TO_AGENT_MAX_ID_LENGTH);
 
+/**
+ * Whether a value is plain JSON: no Map, Set, bigint, function, class instance
+ * or non-finite number. The link would carry some of those whole, so a JSON
+ * measure of them would not be a measure of what is sent. An `undefined` field
+ * is let through, as JSON drops it.
+ */
+function isPlainJson(root: unknown): boolean {
+  const pending: unknown[] = [root];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" || typeof value === "boolean") continue;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return false;
+      continue;
+    }
+    if (Array.isArray(value)) {
+      pending.push(...(value as unknown[]));
+      continue;
+    }
+    if (typeof value !== "object") return false;
+    const proto: unknown = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return false;
+    pending.push(...Object.values(value as Record<string, unknown>));
+  }
+  return true;
+}
+
+/** Whether a plugin's call arguments are plain JSON within the relay's bound. */
+export function isPluginControlArgs(args: unknown): boolean {
+  if (args === undefined) return true;
+  if (!isPlainJson(args)) return false;
+  return Buffer.byteLength(JSON.stringify(args), "utf8") <= MAX_RELAY_ARGS_BYTES;
+}
+
 /** Longest a plugin's call may run on a host before the Shell stops waiting. */
 export const PLUGIN_CONTROL_CALL_MS = 60_000;
 
@@ -55,12 +90,8 @@ export const PluginControlDispatchPayloadSchema = z
     pluginId,
     projectId: id,
     actionId: z.string().min(1).max(256),
-    args: z
-      .unknown()
-      .optional()
-      .refine(
-        (args) => Buffer.byteLength(JSON.stringify(args ?? null), "utf8") <= MAX_RELAY_ARGS_BYTES
-      ),
+    // The Shell sends only plain JSON; anything else is refused, never thrown.
+    args: z.unknown().optional().refine(isPluginControlArgs),
   })
   .strict();
 export type PluginControlDispatchPayload = z.infer<typeof PluginControlDispatchPayloadSchema>;

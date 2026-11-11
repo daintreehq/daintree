@@ -356,6 +356,20 @@ describe("PluginDetailPane host targeting switch (#16767)", () => {
     expect(projectTargetingMock.setProjectTargeting).not.toHaveBeenCalled();
   });
 
+  it("shows the host grant as it is persisted, and turns it off", async () => {
+    projectTargetingMock.getHostTargeting.mockResolvedValue(true);
+    renderPane(withCapabilities(["host:dispatch", "project:dispatch"]));
+    await vi.waitFor(() => expect(hostSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(projectTargetingMock.getHostTargeting).toHaveBeenCalledWith({ pluginId: "acme.demo" });
+
+    fireEvent.click(hostSwitch());
+    await vi.waitFor(() => expect(hostSwitch().getAttribute("aria-checked")).toBe("false"));
+    expect(projectTargetingMock.setHostTargeting).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: false,
+    });
+  });
+
   it("is absent when undeclared, and for a project plugin, which can never target a host", () => {
     renderPane(withCapabilities(["project:dispatch"]));
     expect(screen.queryByTestId("plugin-host-targeting-switch")).toBeNull();

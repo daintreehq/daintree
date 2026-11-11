@@ -817,6 +817,7 @@ describe("pluginCapability host targeting switch (#16767)", () => {
     expect(await handleSetHostTargeting({ pluginId: "acme.orchestrator", enabled: true })).toBe(
       true
     );
+    expect(await handleGetHostTargeting({ pluginId: "acme.orchestrator" })).toBe(true);
     expect(
       getPluginCapabilityConsentStore().hasGrant({
         pluginId: "acme.orchestrator",

@@ -14,6 +14,7 @@ import {
   PLUGIN_CONTROL_CALL_MS,
   PluginControlAgentInputAnswerSchema,
   PluginControlMethod,
+  isPluginControlArgs,
 } from "./linkMethods.js";
 
 /** A host as this Shell last observed it. */
@@ -125,8 +126,19 @@ export class HostPluginControlClient implements PluginHostTargets {
     target: PluginHostTarget,
     request: { projectId: string; actionId: string; args: unknown }
   ): Promise<ActionDispatchResult> {
+    // What crosses the link is plain JSON, measured as it is sent.
+    if (!isPluginControlArgs(request.args)) {
+      return {
+        ok: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: `The arguments to ${request.actionId} must be plain JSON of at most 256 KiB to reach another machine.`,
+        },
+      };
+    }
     const opened = await this.open(target.hostId);
     if (!opened.ok) return opened.result;
+    target.admit?.();
     let answer: unknown;
     try {
       answer = await opened.session.call(
@@ -167,6 +179,7 @@ export class HostPluginControlClient implements PluginHostTargets {
   ): Promise<PluginHostAgentInputAnswer> {
     const opened = await this.open(target.hostId);
     if (!opened.ok) return { status: "unavailable" };
+    target.admit?.();
     let answer: unknown;
     try {
       answer = await opened.session.call(
