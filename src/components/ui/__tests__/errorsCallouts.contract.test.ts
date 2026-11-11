@@ -37,6 +37,7 @@ const MIGRATED_FILES = [
   "src/components/Plugin/ProjectPluginSection.tsx",
   "src/components/Plugin/PluginLogsSection.tsx",
   "src/components/Plugin/PluginArchiveInstallConfirmDialog.tsx",
+  "src/components/Plugin/PluginInstallConfirmDialog.tsx",
   "src/components/Plugin/PluginDetailPane.tsx",
   "src/components/McpConfirmDialog.tsx",
   "src/components/Settings/SettingsLoadErrorBanner.tsx",
