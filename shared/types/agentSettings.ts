@@ -583,13 +583,27 @@ function bypassGroupAt(
 }
 
 /**
+ * The option groups other reconcilers own: the screen-mode flags and the
+ * decorations opt-out, which every launch may carry and any relaunch may
+ * rewrite whatever a bypass declaration says.
+ */
+function managedLaunchGroups(agentId: string): string[][] {
+  const capabilities = getEffectiveAgentConfig(agentId)?.capabilities;
+  const groups = [capabilities?.inlineModeFlag, capabilities?.altScreenFlag]
+    .filter((flag): flag is string => !!flag)
+    .map((flag) => [flag]);
+  return [...groups, ...optionGroups(capabilities?.decorations?.offArgs ?? [])];
+}
+
+/**
  * Whether a pane's launch flags carry its agent's permission bypass (#16785):
  * every option group of one of the declarations {@link reconcileBypassFlags}
- * strips. So the warning reads what the CLI was handed, not today's bypass
- * mode; a flag that only means bypass to another agent never trips it; and a
- * declaration that mixes in an ordinary flag (`-c approval_policy=never
- * --no-alt-screen`) needs its bypass half too, since every launch carries the
- * other.
+ * strips, apart from the screen-mode and decoration groups other reconcilers
+ * own. So the warning reads what the CLI was handed, not today's bypass mode;
+ * a flag that only means bypass to another agent never trips it; and a
+ * declaration that mixes in a managed flag (`-c approval_policy=never
+ * --no-alt-screen`) is told by its bypass half, which every launch doesn't
+ * carry and no relaunch rewrites.
  */
 export function hasBypassFlags(
   flags: readonly string[] | undefined,
@@ -603,9 +617,10 @@ export function hasBypassFlags(
     resolveDangerousArgs(typeof written === "string" ? written : undefined, agentId),
     getPluginBypassArgHistory(settings, agentId)
   );
+  const managed = managedLaunchGroups(agentId).map((group) => group.join(" "));
   const instruction = systemPromptArgPositions(flags, agentId);
   return sources.some((tokens) => {
-    const groups = optionGroups(tokens);
+    const groups = optionGroups(tokens).filter((group) => !managed.includes(group.join(" ")));
     return (
       groups.length > 0 &&
       groups.every((group) =>

@@ -1539,9 +1539,9 @@ describe("hasBypassFlags (#16785)", () => {
     expect(hasBypassFlags(["--yes-to-all"], "hermes", settings)).toBe(true);
   });
 
-  // Codex launches always carry these (its inline flag and decoration pair),
-  // so a declaration that mixes one in needs its bypass half as well.
-  it("needs every option of a declaration that mixes in an ordinary flag", () => {
+  // Every Codex launch carries its inline flag, so a declaration that mixes it
+  // in is told by its bypass half.
+  it("ignores a managed screen-mode flag mixed into a declaration", () => {
     const settings = {
       agents: { codex: { dangerousArgs: "-c approval_policy=never --no-alt-screen" } },
     };
@@ -1549,12 +1549,59 @@ describe("hasBypassFlags (#16785)", () => {
       false
     );
     expect(
+      hasBypassFlags(["--no-alt-screen", "-c", "approval_policy=never"], "codex", settings)
+    ).toBe(true);
+  });
+
+  it("needs every other option of a declaration", () => {
+    const settings = {
+      agents: {
+        codex: { dangerousArgs: "-c approval_policy=never -c model_reasoning_effort=high" },
+      },
+    };
+    expect(hasBypassFlags(["-c", "model_reasoning_effort=high"], "codex", settings)).toBe(false);
+    expect(
       hasBypassFlags(
-        ["--no-alt-screen", "-c", "tui.whimsy=false", "-c", "approval_policy=never"],
+        ["-c", "approval_policy=never", "-c", "model_reasoning_effort=high"],
         "codex",
         settings
       )
     ).toBe(true);
+  });
+
+  // Another reconciler can drop the managed half of a declaration from the
+  // flags a launch persists; the bypass half still marks the pane.
+  it("marks a launch whose declaration lost a managed group to another reconciler", () => {
+    const codex = {
+      dangerousMode: "on" as const,
+      dangerousArgs: "-c approval_policy=never -c tui.whimsy=false",
+      decorativeEffects: true,
+    };
+    const codexFlags = buildAgentLaunchFlags(codex, "codex");
+    expect(codexFlags).not.toContain("tui.whimsy=false");
+    expect(hasBypassFlags(codexFlags, "codex", { agents: { codex } })).toBe(true);
+
+    const grok = { dangerousMode: "on" as const, dangerousArgs: "--always-approve --fullscreen" };
+    const grokFlags = reconcileInlineModeFlag(buildAgentLaunchFlags(grok, "grok"), "grok");
+    expect(grokFlags).not.toContain("--fullscreen");
+    expect(hasBypassFlags(grokFlags, "grok", { agents: { grok } })).toBe(true);
+  });
+
+  it("leaves a launch without bypass unmarked when its declaration mixes in managed flags", () => {
+    const codex = {
+      dangerousMode: "off" as const,
+      dangerousArgs: "-c approval_policy=never --no-alt-screen -c tui.whimsy=false",
+    };
+    expect(
+      hasBypassFlags(buildAgentLaunchFlags(codex, "codex"), "codex", { agents: { codex } })
+    ).toBe(false);
+    const grok = {
+      dangerousMode: "off" as const,
+      dangerousArgs: "--always-approve --no-alt-screen",
+    };
+    expect(hasBypassFlags(buildAgentLaunchFlags(grok, "grok"), "grok", { agents: { grok } })).toBe(
+      false
+    );
   });
 
   it("reads only an agent's own settings entry, never an inherited one", () => {
