@@ -13,6 +13,7 @@ export const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> =
   tier: "security",
   bypassPermissions: "security",
   daintreeConfirmations: "security",
+  daintreeConfirmationsExcept: "security",
   auditRetention: "privacy",
   loadGlobalHooksAndServers: "content",
   acceptRemoteControl: "security",
@@ -28,6 +29,7 @@ const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "tier",
   "bypassPermissions",
   "daintreeConfirmations",
+  "daintreeConfirmationsExcept",
   "auditRetention",
   "loadGlobalHooksAndServers",
   "acceptRemoteControl",
@@ -110,6 +112,7 @@ export const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   auditRetention: "Audit log retention",
   loadGlobalHooksAndServers: "Load my MCP servers and hooks",
   daintreeConfirmations: "Daintree confirmations",
+  daintreeConfirmationsExcept: "Actions that don't ask",
   acceptRemoteControl: "Let other machines' assistants work here",
 };
 
@@ -133,5 +136,6 @@ export const DEFAULT_SETTINGS: HelpAssistantSettings = {
   idleHibernateMinutes: 5,
   loadGlobalHooksAndServers: false,
   daintreeConfirmations: "inherit",
+  daintreeConfirmationsExcept: [],
   acceptRemoteControl: true,
 };

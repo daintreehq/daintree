@@ -805,6 +805,76 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
     expect(asked).toMatchObject({ toolId: "host.call" });
     expect(asked).not.toHaveProperty("authorization");
   });
+
+  it("records a host.settings apply the person handed over as the skip preference (#16752)", async () => {
+    const store = new SessionStore(() => {});
+    const sessionId = "help-settings";
+    store.sessionTierMap.set(sessionId, "full");
+    store.sessionOriginMap.set(sessionId, "help");
+    store.sessionHelpIdMap.set(sessionId, "help-1");
+    let skipOnCall = true;
+    const run = vi.fn(async (_tool: string, _args: unknown, context?: HostCallContext) => {
+      if (skipOnCall) context?.noteSkipPreference?.();
+      return {
+        ok: true as const,
+        value: {
+          outcome: "ok" as const,
+          detail: null,
+          retryAfterMs: null,
+          ticket: null,
+          hosts: [],
+        },
+      };
+    });
+    const appendAuditRecord = vi.fn();
+    const manifest = [...MANIFEST, entry("host.settings", "command")];
+    const server = createSessionServer(sessionId, {
+      sessionStore: store,
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      dispatchAction: vi.fn(),
+      handleWaitUntilIdle: vi.fn(),
+      handleWaitUntilIdleBatch: vi.fn(),
+      handleSkillsSearch: vi.fn(() => ({ skills: [] })),
+      handleSkillsLoad: vi.fn(),
+      handleProjectRunCheck: vi.fn(),
+      handleProjectRunCommand: vi.fn(),
+      handleAgentResumeOwned: vi.fn(),
+      handleTerminalGetStatusViewless: vi.fn(),
+      handleTerminalReadLastMessageOwned: vi.fn(),
+      isTerminalIdInUse: vi.fn(() => false),
+      appendAuditRecord,
+      getCachedManifest: vi.fn(() => manifest),
+      hostControl: { isCallReachable: () => true, run },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    store.relaySessions.set(sessionId, { transport: serverTransport, server });
+    const client = new Client({ name: "test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    open.push({
+      client,
+      store,
+      deps: {} as SessionServerDeps,
+      close: async () => {
+        await client.close();
+        store.drain();
+        store.grantCache.dispose();
+      },
+    });
+
+    const args = { operation: "apply", ticket: "t-1" };
+    await client.callTool({ name: "host.settings", arguments: args });
+    skipOnCall = false;
+    await client.callTool({ name: "host.settings", arguments: args });
+
+    expect(run).toHaveBeenCalledWith("host.settings", args, {
+      tier: "full",
+      noteSkipPreference: expect.any(Function),
+    });
+    const [skipped, asked] = appendAuditRecord.mock.calls.map(([record]) => record);
+    expect(skipped).toMatchObject({ toolId: "host.settings", authorization: "skip-preference" });
+    expect(asked).toMatchObject({ toolId: "host.settings" });
+    expect(asked).not.toHaveProperty("authorization");
+  });
 });
 
 // #14552: the global Assistant's runtime refuses what it may not relay, so the target never names it.

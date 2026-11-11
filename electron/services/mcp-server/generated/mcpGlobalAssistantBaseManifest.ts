@@ -61,6 +61,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             "rate_limited",
             "too_large",
             "conflict",
+            "confirmation_timeout",
           ],
         },
         detail: {
@@ -208,6 +209,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             "rate_limited",
             "too_large",
             "conflict",
+            "confirmation_timeout",
           ],
         },
         detail: {
@@ -1185,6 +1187,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             "rate_limited",
             "too_large",
             "conflict",
+            "confirmation_timeout",
           ],
         },
         detail: {
@@ -1221,6 +1224,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                   "rate_limited",
                   "too_large",
                   "conflict",
+                  "confirmation_timeout",
                 ],
               },
               detail: {
@@ -1396,6 +1400,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                   "rate_limited",
                   "too_large",
                   "conflict",
+                  "confirmation_timeout",
                 ],
               },
               detail: {
@@ -1759,6 +1764,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             "rate_limited",
             "too_large",
             "conflict",
+            "confirmation_timeout",
           ],
         },
         detail: {

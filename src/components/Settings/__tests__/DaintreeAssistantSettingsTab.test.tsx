@@ -633,6 +633,51 @@ describe("DaintreeAssistantSettingsTab", () => {
       expect(container.textContent).not.toContain("unless an automation grant covers them");
     });
 
+    it("lists the actions it can hand over under ask-except, the rest greyed with the reason (#16752)", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      const setSettings = vi.fn().mockResolvedValue(undefined);
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: true,
+          auditRetention: 7,
+          customArgs: "",
+          daintreeConfirmations: "ask-except",
+          daintreeConfirmationsExcept: ["worktree.deleteOwned"],
+        }),
+        setSettings,
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Delete a worktree it created");
+      expect(container.textContent).toContain(
+        "except those ticked under Daintree confirmations below"
+      );
+
+      const box = (label: string) => {
+        const found = Array.from(container.querySelectorAll('[role="checkbox"]')).find((el) =>
+          el.closest("[data-settings-reset-scope]")?.textContent?.includes(label)
+        );
+        if (!found) throw new Error(`expected a checkbox for ${label}`);
+        return found as HTMLElement;
+      };
+      expect(box("Delete a worktree it created").getAttribute("aria-checked")).toBe("true");
+      expect(box("Delete any worktree").hasAttribute("disabled")).toBe(true);
+      expect(container.textContent).toContain("Always asks: it moves the window you're using");
+
+      fireEvent.click(box("Change a host's settings"));
+      await waitFor(() =>
+        expect(setSettings).toHaveBeenCalledWith({
+          daintreeConfirmationsExcept: ["worktree.deleteOwned", "host.settings"],
+        })
+      );
+    });
+
     it("keeps the dialog copy while the assistant is set to always ask", async () => {
       helpPanelState.preferredAgentId = "claude";
       useAgentSettingsStore.setState({

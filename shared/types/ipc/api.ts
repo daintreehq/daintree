@@ -3357,10 +3357,7 @@ export type HelpAssistantIdleHibernateMinutes = 0 | 5 | 15 | 30 | 60 | 120;
  * in `daintreeConfirmationsExcept` (#16752).
  */
 export type HelpAssistantDaintreeConfirmations =
-  | "inherit"
-  | "always-ask"
-  | "never-ask"
-  | "ask-except";
+  "inherit" | "always-ask" | "never-ask" | "ask-except";
 
 export interface HelpAssistantSettings {
   /** Allow the help assistant to search Daintree documentation. Defaults to true. */

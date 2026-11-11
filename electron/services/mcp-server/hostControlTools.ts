@@ -247,7 +247,9 @@ async function dispatch(
     case HOST_SETTINGS_TOOL: {
       const parsed = HostSettingsArgsSchema.safeParse(raw);
       return parsed.success && settingsArgsFit(parsed.data)
-        ? runtime.settings(helpSessionId, parsed.data, context)
+        ? context === undefined
+          ? runtime.settings(helpSessionId, parsed.data)
+          : runtime.settings(helpSessionId, parsed.data, context)
         : invalidArgs();
     }
     case HOST_WATCH_TOOL: {

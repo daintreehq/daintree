@@ -17,6 +17,7 @@ import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { AssistantIdentitySection } from "./Assistant/AssistantIdentitySection";
+import { AssistantConfirmationExceptions } from "./Assistant/AssistantConfirmationExceptions";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { resolveAssistantModelId } from "@shared/config/agentRegistry";
@@ -126,12 +127,20 @@ interface BypassCopy {
 // provision-time snapshots — a session already running keeps the tier it was
 // minted with, which the live-status card reports.
 // While Daintree confirmations skips them (#12874, #12989) those
-// confirmations are skipped too, so the second sentence says that instead.
-const tierBoundsNewSessions = (tier: HelpAssistantTier, confirmationsSkipped: boolean): string =>
+// confirmations are skipped too, so the second sentence says that instead,
+// or names the ones handed over one by one (#16752).
+type ConfirmationsSkipped = "all" | "some" | "none";
+
+const tierBoundsNewSessions = (
+  tier: HelpAssistantTier,
+  confirmationsSkipped: ConfirmationsSkipped
+): string =>
   `New sessions are limited to the Daintree actions in the ${TIER_SHORT_LABEL[tier]} tool set. ${
-    confirmationsSkipped
+    confirmationsSkipped === "all"
       ? "Daintree's own confirmations, closing panels included, are skipped as well, as set by Daintree confirmations below."
-      : "Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them."
+      : confirmationsSkipped === "some"
+        ? "Actions that need confirmation still open Daintree's own prompt, except those ticked under Daintree confirmations below or covered by an automation grant."
+        : "Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them."
   }`;
 
 /**
@@ -171,7 +180,7 @@ const BYPASS_COPY: Record<string, Omit<BypassCopy, "subtitle"> & { effect: strin
 function getBypassCopy(
   agentId: string | null,
   tier: HelpAssistantTier,
-  confirmationsSkipped: boolean
+  confirmationsSkipped: ConfirmationsSkipped
 ): BypassCopy | null {
   if (!agentId) return null;
 
@@ -273,10 +282,15 @@ export function DaintreeAssistantSettingsTab() {
     agents: agentEntries ?? {},
     globalSkipPermissions,
   });
-  const confirmationsSkipped = assistantSkipsDaintreeConfirmations(
+  const confirmationsSkipped: ConfirmationsSkipped = assistantSkipsDaintreeConfirmations(
     settings.daintreeConfirmations,
     assistantAgentSkip.skips
-  );
+  )
+    ? "all"
+    : settings.daintreeConfirmations === "ask-except" &&
+        settings.daintreeConfirmationsExcept.length > 0
+      ? "some"
+      : "none";
   const bypassCopy = useMemo(
     () => getBypassCopy(effectiveAgentId, settings.tier, confirmationsSkipped),
     [effectiveAgentId, settings.tier, confirmationsSkipped]
@@ -325,6 +339,10 @@ export function DaintreeAssistantSettingsTab() {
   const setDaintreeConfirmations = (value: string) => {
     if (!isHelpAssistantDaintreeConfirmations(value)) return;
     void persist({ daintreeConfirmations: value });
+  };
+
+  const setDaintreeConfirmationsExcept = (next: string[]) => {
+    void persist({ daintreeConfirmationsExcept: next });
   };
 
   const toggleAcceptRemoteControl = () => {
@@ -696,6 +714,13 @@ export function DaintreeAssistantSettingsTab() {
             isModified={settings.daintreeConfirmations !== DEFAULT_SETTINGS.daintreeConfirmations}
             onReset={() => setDaintreeConfirmations(DEFAULT_SETTINGS.daintreeConfirmations)}
           />
+          {settings.daintreeConfirmations === "ask-except" && (
+            <AssistantConfirmationExceptions
+              selected={settings.daintreeConfirmationsExcept}
+              onChange={setDaintreeConfirmationsExcept}
+              disabled={settingsUnavailable}
+            />
+          )}
 
           {/* The inventory comes last so opening it never pushes the bypass switch away
               from the tier it works with. */}

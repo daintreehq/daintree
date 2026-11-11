@@ -15,6 +15,10 @@ import {
   USER_REJECTED_CODE,
 } from "../shared.js";
 import { PANE_APPROVAL_CEILING } from "../tierAuth.js";
+import {
+  ASKS_FOR_EVERYTHING,
+  type AssistantConfirmationPolicy,
+} from "../../../../shared/utils/assistantDaintreeConfirmations.js";
 import { RendererBridgeUnavailableError, NoFrontendAttachedError } from "../rendererBridge.js";
 import type { AgentState } from "../../../../shared/types/agent.js";
 import { NATIVE_GRANT_USE_POLICY_OVERRIDES } from "../../../../shared/config/nativeGrantUsePolicies.js";
@@ -874,6 +878,7 @@ describe("assistant skip preference (#12874)", () => {
   function skipServer(options: {
     origin: string;
     skipped: boolean;
+    delegated?: string[];
     tier?: "core" | "full";
     entries?: ActionManifestEntry[];
     extraDeps?: Partial<SessionServerDeps>;
@@ -883,13 +888,16 @@ describe("assistant skip preference (#12874)", () => {
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
     const appendAuditRecord = vi.fn();
     const notifyToolCallStarted = vi.fn();
-    const readAssistantConfirmationsSkipped = vi.fn(() => options.skipped);
+    const readAssistantConfirmationPolicy = vi.fn((): AssistantConfirmationPolicy => ({
+      skipsAll: options.skipped,
+      delegated: new Set(options.delegated ?? []),
+    }));
     const deps = fakeDeps({
       sessionStore,
       dispatchAction,
       appendAuditRecord,
       notifyToolCallStarted,
-      readAssistantConfirmationsSkipped,
+      readAssistantConfirmationPolicy,
       getCachedManifest: vi.fn(
         () =>
           options.entries ?? [confirmEntry("worktree.delete"), makeManifestEntry("worktree.list")]
@@ -903,7 +911,7 @@ describe("assistant skip preference (#12874)", () => {
       dispatchAction,
       appendAuditRecord,
       notifyToolCallStarted,
-      readAssistantConfirmationsSkipped,
+      readAssistantConfirmationPolicy,
     };
   }
 
@@ -1014,6 +1022,26 @@ describe("assistant skip preference (#12874)", () => {
     }
   );
 
+  // #16752: handing over one called id skips that call alone.
+  it("skips only a call whose own id is handed over", async () => {
+    const help = skipServer({
+      origin: "help",
+      skipped: false,
+      delegated: ["terminal.kill"],
+      entries: [confirmEntry("worktree.delete"), confirmEntry("terminal.kill")],
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "terminal.kill", arguments: { terminalId: "t-1" } });
+    await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+
+    expect(help.dispatchAction.mock.calls[0]?.slice(0, 1)).toEqual(["terminal.kill"]);
+    expect(help.dispatchAction.mock.calls[0]?.slice(2)).toEqual([true, "skip-preference"]);
+    expect(help.dispatchAction.mock.calls[1]?.[2]).toBe(false);
+    expect(help.dispatchAction.mock.calls[1]?.[3]).toBeUndefined();
+    help.sessionStore.grantCache.dispose();
+  });
+
   it("keeps the dialog while the preference resolves to ask", async () => {
     const help = skipServer({ origin: "help", skipped: false });
     await help.server.connect(makeMockTransport());
@@ -1035,7 +1063,7 @@ describe("assistant skip preference (#12874)", () => {
     await help.server.connect(makeMockTransport());
 
     await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
-    help.readAssistantConfirmationsSkipped.mockReturnValue(false);
+    help.readAssistantConfirmationPolicy.mockReturnValue(ASKS_FOR_EVERYTHING);
     await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-2" } });
 
     expect(help.dispatchAction.mock.calls[0][2]).toBe(true);
@@ -1053,7 +1081,7 @@ describe("assistant skip preference (#12874)", () => {
       arguments: { worktreeId: "wt-1" },
     });
 
-    expect(other.readAssistantConfirmationsSkipped).not.toHaveBeenCalled();
+    expect(other.readAssistantConfirmationPolicy).not.toHaveBeenCalled();
     for (const call of other.dispatchAction.mock.calls) {
       expect(call[3]).not.toBe("skip-preference");
     }
@@ -1156,7 +1184,7 @@ describe("assistant skip preference (#12874)", () => {
 
   it("fails closed to the dialog when the preference cannot be read", async () => {
     const help = skipServer({ origin: "help", skipped: true });
-    help.readAssistantConfirmationsSkipped.mockImplementation(() => {
+    help.readAssistantConfirmationPolicy.mockImplementation(() => {
       throw new Error("store unavailable");
     });
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});

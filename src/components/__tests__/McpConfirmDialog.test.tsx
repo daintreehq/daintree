@@ -2108,10 +2108,27 @@ describe("McpConfirmDialog", () => {
       expect(text).toContain("Follows Claude's skip permission prompts setting (off)");
     });
 
+    // The fourth mode's actions are chosen in Settings (#16752); the dialog
+    // names it in full to a screen reader and says how many it hands over.
+    it("shows ask-except with the number of actions it hands over", async () => {
+      helpAssistantApi.getSettings.mockResolvedValue({
+        daintreeConfirmations: "ask-except",
+        daintreeConfirmationsExcept: ["worktree.deleteOwned", "host.settings"],
+      });
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      expect(segment("Ask, except for…").getAttribute("aria-checked")).toBe("true");
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Ask, except for 2 actions");
+      expect(text).toContain("Choose the actions that don't ask in Settings > Daintree Assistant");
+    });
+
     it.each([
       ["inherit", true, "Follow agent setting · doesn't ask"],
       ["always-ask", true, "Always ask · asks"],
       ["never-ask", false, "Never ask · doesn't ask"],
+      ["ask-except", true, "Ask, except for… · asks"],
     ] as const)(
       "states what %s resolves to with the global setting %s",
       async (preference, globalSkip, expected) => {
@@ -2196,7 +2213,7 @@ describe("McpConfirmDialog", () => {
       await renderLoaded();
 
       expect(document.body.textContent ?? "").toContain("Couldn't read the current setting");
-      for (const label of ["Follow agent setting", "Always ask", "Never ask"]) {
+      for (const label of ["Follow agent setting", "Always ask", "Never ask", "Ask, except for…"]) {
         expect(segment(label).hasAttribute("disabled")).toBe(true);
       }
     });

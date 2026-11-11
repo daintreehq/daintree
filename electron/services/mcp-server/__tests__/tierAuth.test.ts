@@ -58,6 +58,12 @@ import {
   McpGetSchemaWireResultSchema,
   McpTargetPolicySchema,
 } from "../../../../shared/types/mcpTargetPolicy.js";
+import {
+  ASKS_FOR_EVERYTHING,
+  type AssistantConfirmationPolicy,
+} from "../../../../shared/utils/assistantDaintreeConfirmations.js";
+
+const SKIPS_ALL: AssistantConfirmationPolicy = { skipsAll: true, delegated: new Set() };
 
 beforeEach(() => {
   mockPaneConfigService.isValidPaneToken.mockReset();
@@ -1809,14 +1815,14 @@ describe("filterIntrospectionResultForSession", () => {
       it("clears requiresConfirmation under the skip preference, per-resolved-target tools included (#12989)", () => {
         const skipped = policyOf(
           lookup(makeEntry({ id: "worktree.list", danger: "confirm" }), {
-            policySnapshot: snapshot({ confirmationsSkipped: true }),
+            policySnapshot: snapshot({ confirmationPolicy: SKIPS_ALL }),
           })
         );
         expect(skipped.requiresConfirmation).toBe(false);
 
         const asking = policyOf(
           lookup(makeEntry({ id: "worktree.list", danger: "confirm" }), {
-            policySnapshot: snapshot({ confirmationsSkipped: false }),
+            policySnapshot: snapshot({ confirmationPolicy: ASKS_FOR_EVERYTHING }),
           })
         );
         expect(asking.requiresConfirmation).toBe(true);
@@ -1824,10 +1830,32 @@ describe("filterIntrospectionResultForSession", () => {
         const fanOut = policyOf(
           lookup(makeEntry({ id: "terminal.closeAll", danger: "confirm" }), {
             permittedActionIds: new Set([...permitted, "terminal.closeAll"]),
-            policySnapshot: snapshot({ tier: "full", confirmationsSkipped: true }),
+            policySnapshot: snapshot({ tier: "full", confirmationPolicy: SKIPS_ALL }),
           })
         );
         expect(fanOut.requiresConfirmation).toBe(false);
+      });
+
+      // Handed over one by one (#16752): only the called id it names stops asking.
+      it("clears requiresConfirmation only for an id handed over", () => {
+        const policySnapshot = snapshot({
+          confirmationPolicy: { skipsAll: false, delegated: new Set(["worktree.deleteOwned"]) },
+        });
+        const permittedIds = new Set([...permitted, "worktree.deleteOwned", "worktree.delete"]);
+        const owned = policyOf(
+          lookup(makeEntry({ id: "worktree.deleteOwned", danger: "confirm" }), {
+            permittedActionIds: permittedIds,
+            policySnapshot,
+          })
+        );
+        const plain = policyOf(
+          lookup(makeEntry({ id: "worktree.delete", danger: "confirm" }), {
+            permittedActionIds: permittedIds,
+            policySnapshot,
+          })
+        );
+        expect(owned.requiresConfirmation).toBe(false);
+        expect(plain.requiresConfirmation).toBe(true);
       });
 
       it("keeps requiresConfirmation set for a per-resolved-target tool (#12121)", () => {
@@ -2033,11 +2061,11 @@ describe("filterIntrospectionResultForSession", () => {
         ]);
         const skipping = {
           permittedActionIds: permittedIds,
-          policySnapshot: snapshot({ tier: "full", confirmationsSkipped: true }),
+          policySnapshot: snapshot({ tier: "full", confirmationPolicy: SKIPS_ALL }),
         };
         const asking = {
           permittedActionIds: permittedIds,
-          policySnapshot: snapshot({ tier: "full", confirmationsSkipped: false }),
+          policySnapshot: snapshot({ tier: "full", confirmationPolicy: ASKS_FOR_EVERYTHING }),
         };
         for (const id of ["terminal.close", "terminal.closeMany"]) {
           const skipped = policyOf(lookup(makeEntry({ id }), skipping));

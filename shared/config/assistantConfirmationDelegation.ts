@@ -11,7 +11,7 @@ export interface DelegableAssistantConfirmation {
   /** The tool id the assistant calls. */
   id: string;
   label: string;
-  /** What still holds, or what the tick doesn't cover. */
+  /** What still holds, or what the tick doesn't cover: one sentence, no period. */
   detail: string;
 }
 
@@ -28,13 +28,13 @@ export const DELEGABLE_ASSISTANT_CONFIRMATIONS: readonly DelegableAssistantConfi
     id: "worktree.retireOwned",
     label: "Retire a worktree it created",
     detail:
-      "Only once it's clean and every commit is on a remote. Closes the assistant's own panels there first",
+      "Only once it's clean and every commit is on a remote, after closing the assistant's own panels there",
   },
   {
     id: ASSISTANT_HOST_SETTINGS_CONFIRMATION,
     label: "Change a host's settings",
     detail:
-      "Only the settings an assistant may change, exactly as it previewed them. Never ask doesn't cover this",
+      "Only the settings an assistant may change, exactly as it previewed them; Never ask doesn't cover this",
   },
 ];
 
@@ -52,22 +52,23 @@ export const UNDELEGABLE_ASSISTANT_CONFIRMATIONS: readonly UndelegableAssistantC
   {
     ids: ["worktree.delete"],
     label: "Delete any worktree",
-    reason: "It reaches worktrees the assistant didn't create, and can force past changes",
+    reason:
+      "Always asks: it reaches worktrees the assistant didn't create, and can force past changes",
   },
   {
     ids: ["terminal.closeAll", "terminal.killAll", "terminal.killBatch"],
     label: "Close or end panels in bulk",
-    reason: "One tick would cover every panel a call names",
+    reason: "Always asks: one tick would cover every panel a call names",
   },
   {
     ids: ["recipe.run", "worktree.createWithRecipe", "terminal.new"],
     label: "Run a recipe or a command",
-    reason: "What runs depends on what the assistant sends",
+    reason: "Always asks: what runs depends on what the assistant sends",
   },
   {
     ids: ["host.switch", "project.openOnHost"],
     label: "Move this window to a host",
-    reason: "Moving the window you're using always asks",
+    reason: "Always asks: it moves the window you're using",
   },
 ];
 

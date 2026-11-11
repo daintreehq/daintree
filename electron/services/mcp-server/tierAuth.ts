@@ -794,7 +794,8 @@ export function buildTargetPolicy(
   // confirm-gated tool, target-picking ones included (#12989), or only the
   // ids handed over one by one (#16752).
   const skipConfirmWaived =
-    snapshot.confirmationPolicy !== undefined && assistantPolicySkips(snapshot.confirmationPolicy, id);
+    snapshot.confirmationPolicy !== undefined &&
+    assistantPolicySkips(snapshot.confirmationPolicy, id);
   const requiresConfirmation =
     authorizedBy === "approval" ||
     (effectiveDanger === "confirm" && !nativeGranted && !paneConfirmWaived && !skipConfirmWaived);
