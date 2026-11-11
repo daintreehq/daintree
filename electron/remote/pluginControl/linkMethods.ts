@@ -63,7 +63,8 @@ export const PluginControlDispatchPayloadSchema = z
   .strict();
 export type PluginControlDispatchPayload = z.infer<typeof PluginControlDispatchPayloadSchema>;
 
-export const PluginControlAgentInputSchema = z.discriminatedUnion("op", [
+// A union, not a discriminated one: `sendKeys` comes in two shapes.
+export const PluginControlAgentInputSchema = z.union([
   z.object({ op: z.literal("interrupt") }).strict(),
   z
     .object({ op: z.literal("sendKeys"), keys: z.array(z.string().min(1).max(64)).min(1).max(16) })

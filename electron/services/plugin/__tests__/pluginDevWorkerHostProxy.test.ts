@@ -507,6 +507,12 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
       (p: Proxy) => p.host.agents.submit("t-1", "continue"),
       { terminalId: "t-1", text: "continue" },
     ],
+    // A Remote Host's agent (#16767).
+    [
+      "agents.sendKeys",
+      (p: Proxy) => p.host.agents.sendKeys("t-1", { keys: ["Enter"] }, { hostId: "studio" }),
+      { terminalId: "t-1", input: { keys: ["Enter"] }, options: { hostId: "studio" } },
+    ],
   ] as const)("relays %s to main and resolves its answer", async (method, invoke, params) => {
     const { proxy, sent } = makeProxy();
     const promise = invoke(proxy);
@@ -515,6 +521,18 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     });
     resolveCall(proxy, sent, method, { status: "sent" });
     await expect(promise).resolves.toEqual({ status: "sent" });
+  });
+
+  it("relays remoteHosts.list, and answers [] once disposed (#16767)", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.remoteHosts.list();
+    expect(sent.find((m) => m.type === "host-call" && m.method === "remoteHosts.list")).toBeDefined();
+    const hosts = [{ hostId: "studio", name: "Studio", connection: "connected", projects: null }];
+    resolveCall(proxy, sent, "remoteHosts.list", hosts);
+    await expect(promise).resolves.toEqual(hosts);
+
+    proxy.dispose();
+    await expect(proxy.host.remoteHosts.list()).resolves.toEqual([]);
   });
 
   it("never reports an input call cut off by disposal as unavailable (#14018)", async () => {

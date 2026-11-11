@@ -304,6 +304,26 @@ describe("createMockHost", () => {
     await expect(host.showToast({ message: "" })).rejects.toThrow(/non-empty/);
   });
 
+  it("lists the Remote Hosts it was given, held to host:dispatch and an installed plugin (#16767)", async () => {
+    const remoteHosts = [
+      {
+        hostId: "studio",
+        name: "Studio",
+        connection: "connected" as const,
+        projects: [{ projectId: "p1", name: "beads" }],
+      },
+    ];
+    const allowed = createMockHost({
+      pluginId: "acme.demo",
+      capabilities: ["host:dispatch"],
+      remoteHosts,
+    });
+    await expect(allowed.remoteHosts.list()).resolves.toEqual(remoteHosts);
+
+    const undeclared = createMockHost({ pluginId: "acme.demo", remoteHosts });
+    await expect(undeclared.remoteHosts.list()).rejects.toThrow(/"host:dispatch"/);
+  });
+
   it("records notify calls with a fresh id each (#13505)", async () => {
     const host = createMockHost({ pluginId: "acme.demo" });
     const options = {

@@ -228,6 +228,52 @@ describe("viewless actions", () => {
     });
   });
 
+  describe("a Shell plugin's call (#16767)", () => {
+    it("refuses a confirm-gated action outright: no approval stands in and nobody is asked", async () => {
+      const hosts = makeHosts();
+      const { deps, invoke } = makeDeps({ getWorkspaceHosts: () => hosts });
+      const requestApproval = vi.fn(async () => ({
+        decision: "approved" as const,
+        deadline: Date.now() + 60_000,
+      }));
+
+      const result = await executeViewlessAction(
+        {
+          ...request("worktree.delete", { worktreeId: "/repo-wt/feature" }, { confirmed: true }),
+          source: "plugin",
+          requestApproval,
+        },
+        deps
+      );
+
+      expect(result).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+      expect(requestApproval).not.toHaveBeenCalled();
+      expect(hosts.getDeletePreview).not.toHaveBeenCalled();
+      expect(invoke).not.toHaveBeenCalledWith(
+        PROJECT.id,
+        CHANNELS.WORKTREE_DELETE,
+        expect.anything()
+      );
+    });
+
+    it("holds it to a plugin's tiers: a shell with a command is refused, a plain one opens", async () => {
+      const { deps, invoke } = makeDeps();
+
+      const withCommand = await executeViewlessAction(
+        { ...request("terminal.new", { command: "make deploy" }), source: "plugin" },
+        deps
+      );
+      expect(withCommand).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+      expect(invoke).not.toHaveBeenCalledWith(PROJECT.id, CHANNELS.TERMINAL_SPAWN, expect.anything());
+
+      const plain = await executeViewlessAction(
+        { ...request("terminal.new", {}), source: "plugin" },
+        deps
+      );
+      expect(plain).toMatchObject({ ok: true });
+    });
+  });
+
   describe("a confirm-gated call put to someone else (#13501)", () => {
     const deleteArgs = { worktreeId: "/repo-wt/feature" };
 

@@ -113,6 +113,11 @@ function makeHost() {
       sendKeys: vi.fn(async () => ({ status: "sent", keys: ["Enter"] })),
       submit: vi.fn(async () => ({ status: "not-found" })),
     },
+    remoteHosts: {
+      list: vi.fn(async () => [
+        { hostId: "studio", name: "Studio", connection: "connected", projects: [] },
+      ]),
+    },
     terminals: {
       readScreen: vi.fn(async (): Promise<unknown> => ({
         status: "ok",
@@ -3114,6 +3119,21 @@ describe("PluginDevWorkerMainBridge input to launched agents (#14018)", () => {
       ["t-1", "/compact"],
       { status: "not-found" },
     ],
+    // A Remote Host's agent (#16767): the host it runs on crosses with the call.
+    [
+      "agents.interrupt",
+      { terminalId: "t-1", options: { hostId: "studio" } },
+      "interrupt",
+      ["t-1", { hostId: "studio" }],
+      { status: "sent", cancelKey: "advertised" },
+    ],
+    [
+      "agents.submit",
+      { terminalId: "t-1", text: "/compact", options: { hostId: "studio" } },
+      "submit",
+      ["t-1", "/compact", { hostId: "studio" }],
+      { status: "not-found" },
+    ],
   ] as const)("routes %s to the real host", async (method, params, hostMethod, args, result) => {
     const { host, workerHost } = makeBridge();
     workerHost.emit("worker-message", {
@@ -3128,6 +3148,24 @@ describe("PluginDevWorkerMainBridge input to launched agents (#14018)", () => {
     expect(workerHost.sent.find((m) => m.requestId === `in-${hostMethod}`)).toMatchObject({
       ok: true,
       result,
+    });
+  });
+});
+
+describe("PluginDevWorkerMainBridge Remote Hosts (#16767)", () => {
+  it("routes remoteHosts.list to the real host, which owns the gate", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "hosts-1",
+      method: "remoteHosts.list",
+    });
+    await flush();
+
+    expect(host.remoteHosts.list).toHaveBeenCalledTimes(1);
+    expect(workerHost.sent.find((m) => m.requestId === "hosts-1")).toMatchObject({
+      ok: true,
+      result: [{ hostId: "studio" }],
     });
   });
 });
