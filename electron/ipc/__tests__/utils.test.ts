@@ -272,14 +272,14 @@ describe("broadcastToRenderer", () => {
   it("leaves out only the views the skip predicate names", () => {
     const keptSend = vi.fn();
     const skippedSend = vi.fn();
-    const kept = { isDestroyed: () => false, send: keptSend };
-    const skipped = { isDestroyed: () => false, send: skippedSend };
+    const kept = { id: 1, isDestroyed: () => false, send: keptSend };
+    const skipped = { id: 2, isDestroyed: () => false, send: skippedSend };
     browserWindowGetAllWindowsMock.mockReturnValue([
       { isDestroyed: () => false, webContents: kept },
       { isDestroyed: () => false, webContents: skipped },
     ]);
 
-    broadcastToRendererExcept((wc) => wc === skipped, "channel:test", { payload: true });
+    broadcastToRendererExcept((wc) => wc.id === skipped.id, "channel:test", { payload: true });
 
     expect(keptSend).toHaveBeenCalledWith("channel:test", { payload: true });
     expect(skippedSend).not.toHaveBeenCalled();

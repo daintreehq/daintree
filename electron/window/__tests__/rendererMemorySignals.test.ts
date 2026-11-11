@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { BrowserWindow, WebContents } from "electron";
 
 const broadcastMock = vi.hoisted(() => vi.fn());
@@ -82,11 +82,61 @@ function reclaimSkip(): (wc: WebContents) => boolean {
   return skip as (wc: WebContents) => boolean;
 }
 
+function blinkSampleCount(fake: FakeWebContents): number {
+  return fake.send.mock.calls.filter(
+    ([, envelope]) => (envelope as { name?: string })?.name === "window:sample-blink-memory"
+  ).length;
+}
+
 describe("rendererMemorySignals (#16810)", () => {
+  let warnSpy: MockInstance;
+
   beforeEach(() => {
     broadcastMock.mockReset();
     appWebContentsByWindow.clear();
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it("stops both signals for a view frozen between polls, in any window, until it thaws", async () => {
+    const first = makeWebContents();
+    const second = makeWebContents();
+    const secondLoading = makeWebContents();
+    const windows = [
+      makeWindow([{ fake: first, state: "active" }]),
+      makeWindow([
+        { fake: second, state: "cached" },
+        { fake: secondLoading, state: "loading" },
+      ]),
+    ];
+    sampleBlinkMemory(windows);
+    expect(blinkSampleCount(first)).toBe(1);
+    expect(blinkSampleCount(second)).toBe(1);
+
+    await freezeWebContents(second.wc);
+    for (let poll = 0; poll < 4; poll++) {
+      sampleBlinkMemory(windows);
+      releaseRendererMemory(windows);
+    }
+
+    expect(blinkSampleCount(first)).toBe(5);
+    expect(blinkSampleCount(second)).toBe(1);
+    expect(secondLoading.send).not.toHaveBeenCalled();
+    expect(broadcastMock).toHaveBeenCalledTimes(4);
+    for (const [skip] of broadcastMock.mock.calls) {
+      expect(skip(first.wc)).toBe(false);
+      expect(skip(second.wc)).toBe(true);
+      expect(skip(secondLoading.wc)).toBe(true);
+    }
+
+    await unfreezeWebContents(second.wc);
+    sampleBlinkMemory(windows);
+    releaseRendererMemory(windows);
+    expect(blinkSampleCount(second)).toBe(2);
+    expect(broadcastMock.mock.calls.at(-1)![0](second.wc)).toBe(false);
   });
 
   describe("sampleBlinkMemory", () => {
@@ -167,6 +217,28 @@ describe("rendererMemorySignals (#16810)", () => {
       sampleBlinkMemory([win]);
 
       expect(sentBlinkSample(app)).toBe(true);
+    });
+
+    it("a view whose send throws doesn't stop the rest, in its window or another", () => {
+      const broken = makeWebContents();
+      broken.send.mockImplementation(() => {
+        throw new Error("Render frame was disposed");
+      });
+      const sameWindow = makeWebContents();
+      const otherWindow = makeWebContents();
+
+      expect(() =>
+        sampleBlinkMemory([
+          makeWindow([
+            { fake: broken, state: "active" },
+            { fake: sameWindow, state: "cached" },
+          ]),
+          makeWindow([{ fake: otherWindow, state: "active" }]),
+        ])
+      ).not.toThrow();
+
+      expect(sentBlinkSample(sameWindow)).toBe(true);
+      expect(sentBlinkSample(otherWindow)).toBe(true);
     });
 
     it("never sends to a destroyed view or one in a destroyed window", () => {

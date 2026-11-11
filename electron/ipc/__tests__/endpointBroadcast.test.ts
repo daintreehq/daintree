@@ -182,15 +182,19 @@ describe("broadcast helpers with remote endpoints", () => {
     const skipped = localView(1);
     const withheld = localView(2);
     const kept = localView(3);
-    localViews.push(skipped, withheld, kept);
+    const destroyed = { ...localView(4), isDestroyed: () => true };
+    localViews.push(skipped, withheld, destroyed, kept);
     const remote = endpoint(-1, "proj-1");
     getEndpointRegistry().add(remote);
     const uninstall = setRemoteBoundViewFilter((webContentsId) => webContentsId !== 2);
+    const skip = vi.fn((wc: { id: number }) => wc.id === 1);
 
-    broadcastToRendererExcept((wc) => wc.id === 1, "a:b", 1);
+    broadcastToRendererExcept(skip, "a:b", 1);
     broadcastToRendererExcept(() => true, "a:c", 2);
     uninstall();
 
+    expect(skip.mock.calls.map(([wc]) => wc.id)).toEqual([1, 3]);
+    expect(destroyed.send).not.toHaveBeenCalled();
     expect(skipped.send).not.toHaveBeenCalled();
     expect(withheld.send).not.toHaveBeenCalled();
     expect(kept.send.mock.calls).toEqual([["a:b", 1]]);

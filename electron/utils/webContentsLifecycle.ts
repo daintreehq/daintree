@@ -63,46 +63,58 @@ export function ensureAttached(wc: Electron.WebContents): void {
 }
 
 /**
- * Renderers that may be frozen, each mapped to its latest lifecycle request.
+ * Renderers that may be frozen, each mapped to the latest freeze asked of it.
  * Held from the moment a freeze is asked for, not when CDP acks it, since a
- * push sent before the ack lands in the freeze anyway. Released only when a
- * thaw that is still the latest request succeeds: a failed freeze or thaw
- * proves nothing about the page (an earlier freeze still applies, and Chromium
- * keeps a page's frozen state on its host across a reload). Holding too long
- * costs a skipped periodic push, and every activation thaws.
+ * push sent before the ack lands in the freeze anyway. Released by a thaw that
+ * succeeds with no newer freeze asked for since it started. A freeze that
+ * failed after its command went out, or a failed thaw, proves nothing about
+ * the page (Chromium also keeps a page's frozen state on its host across a
+ * reload), so the hold stays; a freeze whose command never went out puts back
+ * whatever was held before it. Holding too long costs a skipped periodic push,
+ * and every activation thaws.
  */
 const lifecycleHolds = new WeakMap<Electron.WebContents, object>();
+
+type LifecycleOutcome = "applied" | "unsent" | "failed";
 
 async function setLifecycleState(
   wc: Electron.WebContents,
   state: "frozen" | "active"
-): Promise<boolean> {
-  if (wc.isDestroyed()) return false;
+): Promise<LifecycleOutcome> {
+  if (wc.isDestroyed()) return "unsent";
+  let sent = false;
   try {
     ensureAttached(wc);
     await wc.debugger.sendCommand("Page.enable");
+    sent = true;
     await wc.debugger.sendCommand("Page.setWebLifecycleState", { state });
-    return true;
+    return "applied";
   } catch (err) {
     const message = formatErrorMessage(err, "CDP lifecycle state failed");
     if (!EXPECTED_CDP_ERRORS.some((s) => message.includes(s))) {
       console.warn(`[webContentsLifecycle] setWebLifecycleState(${state}) failed:`, message);
     }
-    return false;
+    return sent ? "failed" : "unsent";
   }
 }
 
 export async function freezeWebContents(wc: Electron.WebContents): Promise<void> {
   if (wc.isDestroyed()) return;
-  lifecycleHolds.set(wc, {});
-  await setLifecycleState(wc, "frozen");
+  const prior = lifecycleHolds.get(wc);
+  const hold = {};
+  lifecycleHolds.set(wc, hold);
+  const outcome = await setLifecycleState(wc, "frozen");
+  if (outcome !== "unsent" || lifecycleHolds.get(wc) !== hold) return;
+  if (prior) lifecycleHolds.set(wc, prior);
+  else lifecycleHolds.delete(wc);
 }
 
 export async function unfreezeWebContents(wc: Electron.WebContents): Promise<void> {
-  const request = {};
-  if (lifecycleHolds.has(wc)) lifecycleHolds.set(wc, request);
-  const thawed = await setLifecycleState(wc, "active");
-  if (thawed && lifecycleHolds.get(wc) === request) lifecycleHolds.delete(wc);
+  const hold = lifecycleHolds.get(wc);
+  const outcome = await setLifecycleState(wc, "active");
+  if (outcome === "applied" && hold && lifecycleHolds.get(wc) === hold) {
+    lifecycleHolds.delete(wc);
+  }
 }
 
 /**
