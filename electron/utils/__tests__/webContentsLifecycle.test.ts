@@ -350,6 +350,47 @@ describe("webContentsLifecycle", () => {
       }
     );
 
+    it("a thaw sent after a freeze whose answer never comes still releases it", async () => {
+      const wc = createMockWc({ attached: true });
+      const { sent } = holdCommands(wc);
+
+      void freezeWebContents(asWc(wc));
+      (await sent(1))[0]!.resolve();
+      await sent(2);
+      const thawing = unfreezeWebContents(asWc(wc));
+      (await sent(3))[2]!.resolve();
+      (await sent(4))[3]!.resolve();
+      await thawing;
+
+      expect(isWebContentsFrozen(asWc(wc))).toBe(false);
+    });
+
+    it.each([
+      ["a freeze asked first but sent last", "freeze-first", true],
+      ["a thaw asked first but sent last", "thaw-first", false],
+    ] as const)("%s decides: send order, not request order", async (_, first, held) => {
+      const wc = createMockWc({ attached: true });
+      await freezeWebContents(asWc(wc));
+      const { commands, sent } = holdCommands(wc);
+
+      const ops =
+        first === "freeze-first"
+          ? [freezeWebContents(asWc(wc)), unfreezeWebContents(asWc(wc))]
+          : [unfreezeWebContents(asWc(wc)), freezeWebContents(asWc(wc))];
+      const [firstEnable, secondEnable] = await sent(2);
+      secondEnable!.resolve();
+      await sent(3);
+      firstEnable!.resolve();
+      await sent(4);
+      expect(commands.slice(2).map((c) => c.state)).toEqual(
+        first === "freeze-first" ? ["active", "frozen"] : ["frozen", "active"]
+      );
+      for (const command of commands.slice(2)) command.resolve();
+      await Promise.all(ops);
+
+      expect(isWebContentsFrozen(asWc(wc))).toBe(held);
+    });
+
     it("a thaw that lands after a newer freeze leaves that freeze's hold", async () => {
       const wc = createMockWc();
       await freezeWebContents(asWc(wc));

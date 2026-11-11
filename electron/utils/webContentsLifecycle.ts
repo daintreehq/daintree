@@ -74,7 +74,7 @@ export function ensureAttached(wc: Electron.WebContents): void {
  * costs a skipped periodic push, and every activation thaws.
  */
 interface LifecycleTrack {
-  /** Freezes asked for that haven't yet sent their command or failed to. */
+  /** Freezes asked for that haven't yet sent their command, nor failed to. */
   freezesInFlight: number;
   /** Send order of the latest freeze command that went out; 0 for none. */
   lastFreezeSent: number;
@@ -89,7 +89,8 @@ type LifecycleResult = { sent: false } | { sent: true; order: number; applied: b
 
 async function setLifecycleState(
   wc: Electron.WebContents,
-  state: "frozen" | "active"
+  state: "frozen" | "active",
+  onSend?: (order: number) => void
 ): Promise<LifecycleResult> {
   if (wc.isDestroyed()) return { sent: false };
   let order = 0;
@@ -97,6 +98,7 @@ async function setLifecycleState(
     ensureAttached(wc);
     await wc.debugger.sendCommand("Page.enable");
     order = ++lifecycleSendOrder;
+    onSend?.(order);
     await wc.debugger.sendCommand("Page.setWebLifecycleState", { state });
     return { sent: true, order, applied: true };
   } catch (err) {
@@ -110,15 +112,20 @@ async function setLifecycleState(
 
 export async function freezeWebContents(wc: Electron.WebContents): Promise<void> {
   if (wc.isDestroyed()) return;
-  let track = lifecycleTracks.get(wc);
-  if (!track) {
-    track = { freezesInFlight: 0, lastFreezeSent: 0, lastThawApplied: 0 };
-    lifecycleTracks.set(wc, track);
-  }
+  const track = lifecycleTracks.get(wc) ?? {
+    freezesInFlight: 0,
+    lastFreezeSent: 0,
+    lastThawApplied: 0,
+  };
+  lifecycleTracks.set(wc, track);
   track.freezesInFlight++;
-  const result = await setLifecycleState(wc, "frozen");
-  track.freezesInFlight--;
-  if (result.sent) track.lastFreezeSent = Math.max(track.lastFreezeSent, result.order);
+  // Settled the moment the command goes out, not when it is answered, so a
+  // later thaw that succeeds still outranks a freeze whose answer never comes.
+  const result = await setLifecycleState(wc, "frozen", (order) => {
+    track.freezesInFlight--;
+    track.lastFreezeSent = Math.max(track.lastFreezeSent, order);
+  });
+  if (!result.sent) track.freezesInFlight--;
 }
 
 export async function unfreezeWebContents(wc: Electron.WebContents): Promise<void> {
