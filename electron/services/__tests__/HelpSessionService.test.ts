@@ -4101,11 +4101,27 @@ describe("HelpSessionService", () => {
           await expect(service.claimLaneResume("proj-1", 1)).resolves.toEqual({
             status: "resuming",
           });
+          // The refused second call left the first resume's mark in place.
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
           await expect(service.claimLaneResume("proj-1", 2)).resolves.toEqual({ status: "none" });
+          // Nothing to claim leaves no mark behind.
+          const free = await service.provisionSession({ ...provisionInput(), slot: 2 });
+          if (!free) throw new Error("expected provision");
+          await service.revokeSession(free.sessionId);
 
           await first.release();
-          await first.release();
           expect(first.holds()).toBe(false);
+          // A late second release of the first claim never ends a newer resume's mark.
+          const second = await service.claimLaneResume("proj-1", 1);
+          if (second.status !== "claimed") throw new Error("expected claim");
+          await first.release();
+          expect(second.holds()).toBe(true);
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+          await second.release();
           // A view's resume of the lane holds it just the same.
           const viewClaim = await service.takePendingHibernation("proj-1", 1, 42);
           if (!viewClaim) throw new Error("expected view claim");
@@ -4143,6 +4159,47 @@ describe("HelpSessionService", () => {
           await expect(service.claimLaneResume("proj-1", 1)).resolves.toEqual({
             status: "occupied",
           });
+        });
+
+        it("lifts the lane's mark when the claim or its release fails", async () => {
+          hibernationStore.get.mockImplementationOnce(() => {
+            throw new Error("store unreadable");
+          });
+          await expect(service.claimLaneResume("proj-1", 1)).rejects.toThrow("store unreadable");
+          const claim = await service.claimLaneResume("proj-1", 1);
+          if (claim.status !== "claimed") throw new Error("expected claim");
+
+          hibernationStore.get.mockImplementationOnce(() => {
+            throw new Error("store unreadable");
+          });
+          await expect(claim.release()).rejects.toThrow("store unreadable");
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).resolves.toBeTruthy();
+        });
+
+        it("answers a running lane with a pointer as in use, before as kept, and leaves it running", async () => {
+          const running = await service.provisionSession({
+            ...provisionInput(),
+            slot: 1,
+            windowId: NO_VIEW_HANDLE,
+            projectViewWebContentsId: NO_VIEW_HANDLE,
+            startedBy: { kind: "local", askingHelpSessionId: "asking-help-1" },
+          });
+          if (!running) throw new Error("expected provision");
+
+          await expect(
+            service.provisionSession({
+              ...provisionInput(),
+              slot: 1,
+              windowId: NO_VIEW_HANDLE,
+              projectViewWebContentsId: NO_VIEW_HANDLE,
+              vacantOnly: true,
+              refuseKept: true,
+              startedBy: { kind: "local", askingHelpSessionId: "asking-help-2" },
+            })
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+          expect(service.validateToken(running.token)).toBeTruthy();
         });
 
         it("refuses a start that would take a kept lane, checked under the lane lock", async () => {

@@ -26,7 +26,14 @@ describe("AssistantResumeArgsSchema (#16763)", () => {
     for (const slot of ASSISTANT_SLOTS) {
       expect(AssistantResumeArgsSchema.safeParse({ slot }).success).toBe(true);
     }
-    for (const args of [{}, { slot: MAX_ASSISTANT_SLOTS }, { slot: -1 }, { slot: [0, 1] }]) {
+    for (const args of [
+      {},
+      { slot: MAX_ASSISTANT_SLOTS },
+      { slot: -1 },
+      { slot: 2.5 },
+      { slot: "1" },
+      { slot: [0, 1] },
+    ]) {
       expect(AssistantResumeArgsSchema.safeParse(args).success).toBe(false);
     }
   });
@@ -48,8 +55,19 @@ describe("AssistantListResultSchema keptSlots (#16763)", () => {
         keptSlots: [{ slot: 1, agentId: "claude", capturedAt: 1_000 }],
       }).success
     ).toBe(true);
+    const kept = { slot: 1, agentId: "claude", capturedAt: 1_000 };
+    for (const field of ["slot", "agentId", "capturedAt"] as const) {
+      const { [field]: _dropped, ...rest } = kept;
+      expect(
+        AssistantListResultSchema.safeParse({ ...listing, keptSlots: [rest] }).success,
+        field
+      ).toBe(false);
+    }
     expect(
-      AssistantListResultSchema.safeParse({ ...listing, keptSlots: [{ slot: 1 }] }).success
+      AssistantListResultSchema.safeParse({
+        ...listing,
+        keptSlots: [{ ...kept, capturedAt: "yesterday" }],
+      }).success
     ).toBe(false);
   });
 });

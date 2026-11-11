@@ -115,6 +115,17 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
         },
       ])
     );
+    // Each resume quotes the claim taken on its own lane, and no other.
+    const claimed = new Map(
+      deps.claim.mock.calls.map(([projectId, slot], index) => [
+        assistantSlotKey(projectId, slot),
+        deps.claim.mock.results[index]!.value as Promise<{ claimId: string } | null>,
+      ])
+    );
+    for (const [request] of deps.start.mock.calls) {
+      const claim = await claimed.get(assistantSlotKey(request.projectId, request.slot!));
+      expect(request.resume?.claimId).toBe(claim?.claimId);
+    }
     expect(held.size).toBe(0);
   });
 

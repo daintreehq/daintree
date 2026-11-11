@@ -253,7 +253,13 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
     it("reopens it in its own slot on its own agent, with no greeting, refusing a fresh one", async () => {
       // Back at its prompt with the conversation on screen: nothing to wait on.
       screens = [["› earlier work", "", "› Ask Codex to do anything"].join("\n")];
-      const result = await start({ slot: 2, agentId: "claude", startedBy: UPDATE_RESTART, resume });
+      const result = await start({
+        slot: 2,
+        agentId: "claude",
+        startedBy: UPDATE_RESTART,
+        resume,
+        stillWanted: () => true,
+      });
 
       expect(result).toMatchObject({ status: "started", slot: 2, agentId: "claude", ready: true });
       expect(clock).toBe(0);
@@ -386,6 +392,8 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
         slot: 4,
       });
       expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([2, 4]);
+      // Every attempt is held to it, the retry included.
+      expect(deps.provision.mock.calls.every(([input]) => input.refuseKept === true)).toBe(true);
     });
 
     it("refuses with no slot rather than take a kept one once the vacant ones run out", async () => {
@@ -419,6 +427,21 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
         reason: "kept",
       });
       expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([2]);
+      expect(deps.spawn).not.toHaveBeenCalled();
+    });
+
+    it("reports a resume whose claim was dropped before its provision as withdrawn, not taken", async () => {
+      deps.provision.mockRejectedValueOnce(
+        Object.assign(new Error("being resumed"), { code: "LANE_OCCUPIED" })
+      );
+      await expect(
+        start({
+          slot: 2,
+          agentId: "claude",
+          resume: { agentSessionId: "conv-7", cwd: SESSION_FOLDER, claimId: "claim-7" },
+          stillWanted: () => false,
+        })
+      ).resolves.toEqual({ status: "refused", reason: "withdrawn" });
       expect(deps.spawn).not.toHaveBeenCalled();
     });
 

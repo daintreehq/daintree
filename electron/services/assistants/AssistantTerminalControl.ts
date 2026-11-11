@@ -341,13 +341,13 @@ function resumeRefusalMessage(
     case "no-slot":
       return `Slot ${slot} was taken while it was being resumed. Nothing more was started; 'assistant.list' shows what runs there.`;
     case "agent-unavailable":
-      return `Slot ${slot}'s agent, ${agentId}, can't start here with no window. Nothing was started; its conversation stays kept.`;
+      return `Slot ${slot}'s agent, ${agentId}, can't start here with no window. Nothing was started, and its conversation was left as it was.`;
     case "folder-moved":
-      return `Slot ${slot}'s conversation ran in a folder its lane no longer uses, so it can't be reopened there. Nothing was started; its conversation stays kept.`;
+      return `Slot ${slot}'s conversation ran in a folder its lane no longer uses, so it can't be reopened there. Nothing was started, and its conversation was left as it was.`;
     case "withdrawn":
       return `Slot ${slot}'s conversation was cleared while it was being resumed. Nothing is running for it.`;
     default:
-      return `Slot ${slot}'s conversation couldn't be reopened. Nothing is running for it; its conversation stays kept.`;
+      return `Slot ${slot}'s conversation couldn't be reopened. Nothing is running for it.`;
   }
 }
 

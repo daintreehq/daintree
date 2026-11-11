@@ -1207,21 +1207,27 @@ describe("AssistantTerminalControl (#13496)", () => {
         cwd: "/sessions/claude",
         claimId: "claim-3",
         holds: () => holds,
+        // Released, the claim no longer holds: a launch after it would be refused.
         release: async () => {
           releases += 1;
+          holds = false;
         },
         ...overrides,
       }) satisfies LaneResumeClaim;
+    let releasesAtLaunch: number[];
 
     beforeEach(() => {
       releases = 0;
+      releasesAtLaunch = [];
       holds = true;
       mocks.claimLaneResume.mockResolvedValue(claimed());
       mocks.launch.mockImplementation(async (request) => {
+        releasesAtLaunch.push(releases);
         addLane(3, "t-resumed", {
           startedBy: request.startedBy,
           attached: false,
           generation: 4,
+          record: atPrompt({ detectedAgentId: "claude" }),
         });
         return {
           status: "started",
@@ -1243,7 +1249,7 @@ describe("AssistantTerminalControl (#13496)", () => {
           terminalId: "t-resumed",
           generation: 4,
           slot: 3,
-          agentId: "codex",
+          agentId: "claude",
           agentState: "waiting",
           waitingReason: "prompt",
           attached: false,
@@ -1253,6 +1259,8 @@ describe("AssistantTerminalControl (#13496)", () => {
         notReadyReason: "timed-out",
       });
       expect(mocks.claimLaneResume).toHaveBeenCalledWith(PROJECT, 3);
+      // The claim holds through the launch, and is let go once, after it.
+      expect(releasesAtLaunch).toEqual([0]);
       const request = mocks.launch.mock.calls[0]![0];
       expect(request).toMatchObject({
         projectId: PROJECT,
@@ -1262,11 +1270,35 @@ describe("AssistantTerminalControl (#13496)", () => {
         resume: { agentSessionId: "conv-3", cwd: "/sessions/claude", claimId: "claim-3" },
       });
       expect(request).not.toHaveProperty("preserveKept");
-      // Asked again before the spawn: a discard meanwhile drops the claim.
-      expect(request.stillWanted?.()).toBe(true);
-      holds = false;
+      // Asked again before the spawn: a discard, or the release, drops the claim.
       expect(request.stillWanted?.()).toBe(false);
+      holds = true;
+      expect(request.stillWanted?.()).toBe(true);
       expect(releases).toBe(1);
+    });
+
+    it("reports a resume that reaches its prompt as ready, once a send would go in", async () => {
+      mocks.launch.mockImplementation(async (request) => {
+        addLane(3, "t-resumed", {
+          startedBy: request.startedBy,
+          attached: false,
+          record: atPrompt({ detectedAgentId: "claude" }),
+        });
+        return {
+          status: "started",
+          sessionId: "session-3",
+          terminalId: "t-resumed",
+          slot: 3,
+          agentId: "claude",
+          ready: true,
+          notReadyReason: null,
+        };
+      });
+      await expect(control.resume(LOCAL, { slot: 3 })).resolves.toMatchObject({
+        ready: true,
+        notReadyReason: null,
+        assistant: { terminalId: "t-resumed", agentId: "claude" },
+      });
     });
 
     it("reports it attached once a view of the project has taken it over", async () => {
@@ -1285,6 +1317,19 @@ describe("AssistantTerminalControl (#13496)", () => {
       await expect(control.resume(RELAY, { slot: 3 })).resolves.toMatchObject({
         assistant: { attached: true, startedByYou: true },
       });
+      // Recorded as that machine's assistant's, so its listing and close know it.
+      expect(mocks.launch.mock.calls[0]![0].startedBy).toEqual({
+        kind: "relay",
+        senderId: "sender-a",
+        linkSessionId: "link-a",
+        askingHelpSessionId: "shell-help",
+      });
+      expect((await control.list(RELAY)).assistants).toEqual([
+        expect.objectContaining({ terminalId: "t-resumed", startedByYou: true }),
+      ]);
+      expect((await control.list(LOCAL)).assistants).toEqual([
+        expect.objectContaining({ terminalId: "t-resumed", startedByYou: false }),
+      ]);
     });
 
     it.each([

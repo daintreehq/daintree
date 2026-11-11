@@ -231,6 +231,9 @@ export async function startAssistantWithoutView(
       });
     } catch (err) {
       const code = (err as { code?: unknown } | null)?.code;
+      // A resume whose claim was dropped meanwhile (a discard) is refused as
+      // the lane in use; it was withdrawn, not taken.
+      if (resume && request.stillWanted?.() === false) return refused("withdrawn");
       // Taken or kept since it was read: the next one may still be vacant.
       if (code === "LANE_OCCUPIED") continue;
       if (code === "LANE_KEPT") {

@@ -13,7 +13,10 @@ import type { TerminalNotifyHandlers } from "../terminalNotify.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
 import type { McpSessionOrigin } from "../../../../shared/types/ipc/mcpServer.js";
-import { AgentReadQuotaResultSchema } from "../../../../shared/types/assistantControl.js";
+import {
+  AgentReadQuotaResultSchema,
+  AssistantStartResultSchema,
+} from "../../../../shared/types/assistantControl.js";
 import {
   AssistantTargetError,
   type AssistantCaller,
@@ -664,7 +667,27 @@ describe("one assistant addressing another (#13496)", () => {
     terminalId: GLOBAL_TERMINAL,
     attached: false,
   };
-  const LISTED = { projectId: "proj-1", assistants: [], vacantSlots: [2, 3], global: null };
+  const LISTED = {
+    projectId: "proj-1",
+    assistants: [],
+    vacantSlots: [2, 3],
+    keptSlots: [{ slot: 1, agentId: "claude", capturedAt: 1_000 }],
+    global: null,
+  };
+  const RESUMED = {
+    assistant: {
+      terminalId: "t-resumed",
+      generation: 2,
+      slot: 2,
+      agentId: "claude",
+      agentState: "waiting" as const,
+      waitingReason: "prompt" as const,
+      attached: false,
+      startedByYou: true,
+    },
+    ready: true,
+    notReadyReason: null,
+  };
   const RECEIPT = {
     terminalId: ASSISTANT_TERMINAL,
     submissionToken: "tok-1",
@@ -699,7 +722,7 @@ describe("one assistant addressing another (#13496)", () => {
       ),
       list: vi.fn(async () => LISTED),
       start: vi.fn(async () => ({ assistant: {}, ready: true, notReadyReason: null })),
-      resume: vi.fn(async () => ({ assistant: {}, ready: false, notReadyReason: "timed-out" })),
+      resume: vi.fn(async () => RESUMED),
       submit: vi.fn(async () => RECEIPT),
       sendKeys: vi.fn(async () => ({ terminalId: ASSISTANT_TERMINAL, keys: ["Enter"] })),
       interrupt: vi.fn(async () => ({
@@ -815,6 +838,8 @@ describe("one assistant addressing another (#13496)", () => {
 
     const resumed = await callTool(server, { name: "assistant.resume", arguments: { slot: 2 } });
     expect(resumed.isError).toBeFalsy();
+    expect(resumed.structuredContent).toEqual(RESUMED);
+    expect(AssistantStartResultSchema.safeParse(resumed.structuredContent).success).toBe(true);
     expect(control.resume).toHaveBeenCalledExactlyOnceWith(CALLER, { slot: 2 });
 
     for (const args of [{}, { slot: 99 }, { slot: "2" }]) {
