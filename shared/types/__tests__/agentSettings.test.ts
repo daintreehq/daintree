@@ -1502,11 +1502,7 @@ describe("hasBypassFlags (#16785)", () => {
   it("recognises a configured multi-token bypass as a whole option and value", () => {
     const settings = { agents: { codex: { dangerousArgs: "-c approval_policy=never" } } };
     expect(
-      hasBypassFlags(
-        ["-c", "tui.whimsy=false", "-c", "approval_policy=never"],
-        "codex",
-        settings
-      )
+      hasBypassFlags(["-c", "tui.whimsy=false", "-c", "approval_policy=never"], "codex", settings)
     ).toBe(true);
     expect(hasBypassFlags(["-c", "tui.whimsy=false"], "codex", settings)).toBe(false);
     expect(hasBypassFlags(["approval_policy=never"], "codex", settings)).toBe(false);
@@ -1514,9 +1510,9 @@ describe("hasBypassFlags (#16785)", () => {
 
   it("still recognises the registry default after dangerousArgs is customised", () => {
     const settings = { agents: { codex: { dangerousArgs: "-c approval_policy=never" } } };
-    expect(
-      hasBypassFlags(["--dangerously-bypass-approvals-and-sandbox"], "codex", settings)
-    ).toBe(true);
+    expect(hasBypassFlags(["--dangerously-bypass-approvals-and-sandbox"], "codex", settings)).toBe(
+      true
+    );
   });
 
   it("recognises a retired default the pane was launched with", () => {
