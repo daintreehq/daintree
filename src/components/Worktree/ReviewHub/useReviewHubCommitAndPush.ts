@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
-import type { GitPushReview } from "@shared/types/git";
+import type { GitCommitResult, GitPushReview } from "@shared/types/git";
 import { isClientAppError } from "@/utils/clientAppError";
 import type { debounce } from "@/utils/debounce";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -14,7 +14,12 @@ import { runHostOperation } from "@/hooks/useHostConnection";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { classifyGitError } from "@shared/utils/gitOperationErrors";
-import { type PushErrorState, readGitErrorFields } from "./reviewHubUtils";
+import {
+  type CommitPushTarget,
+  type PushErrorState,
+  readGitErrorFields,
+  reviewForCommittedPush,
+} from "./reviewHubUtils";
 import type { ReviewHubActionFailure } from "./useReviewHubStagingActions";
 
 interface UseReviewHubCommitAndPushArgs {
@@ -132,13 +137,22 @@ export function useReviewHubCommitAndPush({
   const isPushingRef = useRef(false);
   /**
    * The review the last push ran under, so Retry pushes what was approved
-   * rather than whatever the branch holds by then (#15646). `null` for the
-   * commit-and-push path, whose confirm pins nothing.
+   * rather than whatever the branch holds by then (#15646, #16790). `null` when
+   * there is no approved push to retry.
    */
   const lastPushReviewRef = useRef<GitPushReview | null>(null);
 
+  // Nothing reaches the network: the banner reads like main's own refusal of a
+  // reviewed push that moved, and offers no Retry, because there is no approval
+  // left to retry under. The next step is a fresh review of the push.
+  const withholdPush = useCallback((detail: string, branchName?: string) => {
+    lastPushReviewRef.current = null;
+    const rawMessage = `${detail} Nothing was pushed. Review the push again to see what it would publish now.`;
+    setPushError({ reason: "push-review-stale", rawMessage, branchName });
+  }, []);
+
   const runPush = useCallback(
-    async (review: GitPushReview | null) => {
+    async (review: GitPushReview) => {
       if (isPushingRef.current) return;
       isPushingRef.current = true;
       lastPushReviewRef.current = review;
@@ -173,12 +187,7 @@ export function useReviewHubCommitAndPush({
         const opId = mintRemoteOperationId();
         await runHostOperation(
           opId,
-          () =>
-            review
-              ? window.electron.git.push(worktreePath, undefined, opId, review)
-              : opId
-                ? window.electron.git.push(worktreePath, undefined, opId)
-                : window.electron.git.push(worktreePath),
+          () => window.electron.git.push(worktreePath, undefined, opId, review),
           { fromResult: () => undefined }
         );
         setPushError(null);
@@ -220,14 +229,15 @@ export function useReviewHubCommitAndPush({
   );
 
   const handleCommitAndPush = useCallback(
-    async (message: string) => {
+    async (message: string, target: CommitPushTarget) => {
       setActionError(null);
       setPushError(null);
       debouncedBgRefreshRef.current?.cancel();
       setIsCommitPushInFlight(true);
       try {
+        let committed: GitCommitResult;
         try {
-          await window.electron.git.commit(worktreePath, message);
+          committed = await window.electron.git.commit(worktreePath, message);
         } catch (err) {
           setActionError({
             title: "Couldn't commit changes",
@@ -239,19 +249,42 @@ export function useReviewHubCommitAndPush({
         // Same review reset as handleCommit — the changeset starts over.
         useDiffViewedStore.getState().clearWorktree(worktreePath);
         await refresh();
-        await runPush(null);
+        const review = reviewForCommittedPush(committed, target);
+        if (!review) {
+          withholdPush(
+            committed.oid
+              ? "The branch moved while the push was being reviewed, so the commit sits on history the review didn't show."
+              : "The commit was made, but couldn't be read back to pin the push to it.",
+            target.branch
+          );
+          return;
+        }
+        await runPush(review);
       } finally {
         setIsCommitPushInFlight(false);
       }
     },
-    [worktreePath, refresh, runPush, setActionError, debouncedBgRefreshRef, onCommitted]
+    [
+      worktreePath,
+      refresh,
+      runPush,
+      withholdPush,
+      setActionError,
+      debouncedBgRefreshRef,
+      onCommitted,
+    ]
   );
 
   const handleRetryPush = useCallback(async () => {
     setPushError(null);
     debouncedBgRefreshRef.current?.cancel();
-    await runPush(lastPushReviewRef.current);
-  }, [runPush, debouncedBgRefreshRef]);
+    const review = lastPushReviewRef.current;
+    if (!review) {
+      withholdPush("There is no reviewed push to retry.");
+      return;
+    }
+    await runPush(review);
+  }, [runPush, withholdPush, debouncedBgRefreshRef]);
 
   // Push from the clean-tree state, where no CommitPanel (and thus no local
   // push confirm) is mounted. Routes through the same D2 preview dialog the
@@ -344,6 +377,7 @@ export function useReviewHubCommitAndPush({
 
   const reset = useCallback(() => {
     setPushError(null);
+    lastPushReviewRef.current = null;
     setPullRebasing(false);
     isPullRebasingRef.current = false;
   }, []);
