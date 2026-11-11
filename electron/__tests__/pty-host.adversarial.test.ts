@@ -2911,7 +2911,7 @@ describe("pty-host adversarial", () => {
     const relayed = parentPort.postMessage.mock.calls
       .map((c: unknown[]) => c[0] as { type?: string } | null)
       .filter((m) => m?.type === "exit" || m?.type === "terminal-removed");
-    expect(relayed).toEqual([
+    expect(relayed).toStrictEqual([
       {
         type: "exit",
         id: "kept",

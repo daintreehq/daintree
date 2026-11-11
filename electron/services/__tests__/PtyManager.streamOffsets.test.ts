@@ -9,6 +9,7 @@ type Callbacks = {
 
 const constructed: Callbacks[] = [];
 let preserveOnExit = false;
+let gracefulShutdownGate: Promise<void> = Promise.resolve();
 let infoState = { wasKilled: false, isExited: true };
 
 vi.mock("node-pty", () => ({ spawn: vi.fn() }));
@@ -45,6 +46,10 @@ vi.mock("../pty/index.js", async (importOriginal) => {
       setSabModeEnabled() {}
       shouldPreserveOnExit() {
         return preserveOnExit;
+      }
+      async gracefulShutdown() {
+        await gracefulShutdownGate;
+        return null;
       }
     },
   };
@@ -209,6 +214,7 @@ describe("PtyManager registry retention reporting (#16811)", () => {
   beforeEach(() => {
     constructed.length = 0;
     preserveOnExit = false;
+    gracefulShutdownGate = Promise.resolve();
     infoState = { wasKilled: false, isExited: true };
     vi.mocked(acquirePtyProcess).mockReturnValue({ ptyProcess: createMockPty(), prelude: "" });
     manager = new PtyManager();
@@ -246,6 +252,48 @@ describe("PtyManager registry retention reporting (#16811)", () => {
 
     manager.kill("t1");
 
+    expect(events).toEqual([
+      ["exit", "t1", true],
+      ["removed", "t1"],
+    ]);
+  });
+
+  it("removes a preserved entry when a closing pane's graceful kill finds it exited", async () => {
+    preserveOnExit = true;
+    manager.spawn("t1", spawnOptions);
+    constructed[0].onExit("t1", 0);
+
+    await manager.gracefulKill("t1");
+
+    expect(events).toEqual([
+      ["exit", "t1", true],
+      ["removed", "t1"],
+    ]);
+  });
+
+  it("keeps a preserved entry through a session-preserving graceful kill", async () => {
+    preserveOnExit = true;
+    manager.spawn("t1", spawnOptions);
+    constructed[0].onExit("t1", 0);
+
+    await manager.gracefulKill("t1", { preserveSession: true });
+
+    expect(events).toEqual([["exit", "t1", true]]);
+  });
+
+  it("leaves a respawn alone that replaced the entry while the graceful kill ran", async () => {
+    preserveOnExit = true;
+    manager.spawn("t1", spawnOptions);
+    constructed[0].onExit("t1", 0);
+    let open!: () => void;
+    gracefulShutdownGate = new Promise((resolve) => (open = resolve));
+
+    const closing = manager.gracefulKill("t1");
+    manager.spawn("t1", spawnOptions);
+    open();
+    await closing;
+
+    // The one removal is the respawn replacing the preserved entry.
     expect(events).toEqual([
       ["exit", "t1", true],
       ["removed", "t1"],

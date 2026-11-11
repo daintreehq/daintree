@@ -314,7 +314,7 @@ describe("routeHostEvent", () => {
     expect(state.pendingSpawns.has("t1")).toBe(false);
   });
 
-  it("reports whether the host kept the entry, after the pending maps settle and before the public exit (#16811)", () => {
+  it("reports whether the host kept the entry, after the pending spawn settles and before the public exit (#16811)", () => {
     const { deps, emitter, state } = makeDeps();
     const order: string[] = [];
     deps.callbacks.onCurrentExit = (id, preserved) =>
@@ -423,6 +423,8 @@ describe("routeHostEvent", () => {
     emitter.on("exit", onExit);
     emitter.on("incarnation-exit", facts);
     deps.callbacks.onTerminalExit = recordExit;
+    const onCurrentExit = vi.fn();
+    deps.callbacks.onCurrentExit = onCurrentExit;
 
     routeHostEvent(
       {
@@ -445,6 +447,7 @@ describe("routeHostEvent", () => {
     });
     expect(onExit).not.toHaveBeenCalled();
     expect(recordExit).not.toHaveBeenCalled();
+    expect(onCurrentExit).not.toHaveBeenCalled();
     expect(state.pendingSpawns.get("t1")).toBe(successor);
     expect(state.pendingKillCount.get("t1")).toBe(1);
     expect(state.terminalPids.get("t1")).toBe(999);

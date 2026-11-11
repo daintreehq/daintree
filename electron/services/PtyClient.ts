@@ -878,7 +878,12 @@ export class PtyClient extends EventEmitter {
         terminalPids: this.terminalPids,
       },
       callbacks: {
-        onReady: () => this.recovery.handleShardReady(shard),
+        onReady: () => {
+          this.recovery.handleShardReady(shard);
+          // A restart drops the owners of preserved entries that died with the
+          // old process, which can leave the shard holding nothing (#16811).
+          this.scheduleIdleSweep();
+        },
         onPong: () => shard.watchdog.recordPong(),
         onTerminalRemovedFromTrash: (id) => getTrashedPidTracker().removeTrashed(id),
         // #13176: every PTY joins the crash-safe tier (Job Object / POSIX
@@ -920,7 +925,9 @@ export class PtyClient extends EventEmitter {
         // screen and the pane's eventual kill must still reach it there, and
         // the shard must outlive it, until the host reports it removed (#16811).
         onCurrentExit: (id, preserved) => {
-          if (preserved && this.terminalOwners.get(id) === shard.key) return;
+          // Only the owning shard's exit speaks for the owner: another shard's
+          // is an incarnation the id has already moved away from.
+          if (preserved || this.terminalOwners.get(id) !== shard.key) return;
           this.releaseTerminalOwner(id);
         },
         onTerminalRemoved: (id) => {
@@ -1587,6 +1594,8 @@ export class PtyClient extends EventEmitter {
     // pinned by cap overflow / crash migration). Ownership is recorded before
     // the send so events and per-terminal requests route consistently.
     const shard = this.ensureShardForProject(resolvedProjectId);
+    const previousOwner = this.terminalOwners.get(id);
+    const replacesPreserved = previousOwner !== undefined && !this.pendingSpawns.has(id);
     this.terminalOwners.set(id, shard.key);
     // A duplicate still awaiting its answer keeps the entry it displaced — that
     // is the terminal actually running, not the attempt queued behind it.
@@ -1598,6 +1607,8 @@ export class PtyClient extends EventEmitter {
     }
     this.pendingSpawns.set(id, resolvedOptions);
     this.recovery.sendSpawnWithPostInput(shard, id, resolvedOptions);
+    // The preserved entry left on another shard no longer holds it (#16811).
+    if (replacesPreserved && previousOwner !== shard.key) this.scheduleIdleSweep();
   }
 
   /**

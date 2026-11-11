@@ -1482,6 +1482,15 @@ export class PtyManager extends EventEmitter {
     // without killing. Fall back to immediate kill in that case.
     if (!terminal.getInfo().wasKilled && !terminal.getInfo().isExited) {
       this.kill(id, "graceful-kill-fallback", options);
+    } else if (
+      terminal.getInfo().isExited &&
+      !options?.preserveSession &&
+      this.registry.get(id) === terminal
+    ) {
+      // An exited entry still registered was kept for its final output. Closing
+      // its pane removes it, as a plain kill does, or it would outlive the pane
+      // and hold its shard (#16811). A session-preserving teardown keeps it.
+      this.kill(id, "graceful-kill-exited");
     }
 
     return { sessionId };
