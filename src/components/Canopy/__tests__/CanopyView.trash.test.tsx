@@ -199,6 +199,10 @@ function trashBar(): HTMLButtonElement | null {
   return document.querySelector<HTMLButtonElement>("button[aria-controls=canopy-trash]");
 }
 
+function assistantsBar(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>("button[aria-controls=canopy-assistants]");
+}
+
 function archivedBar(): HTMLButtonElement | null {
   return document.querySelector<HTMLButtonElement>("button[aria-controls=canopy-archived]");
 }
@@ -239,8 +243,10 @@ afterEach(() => {
     unreadOnly: false,
     trashExpanded: false,
     archivedExpanded: false,
+    assistantsExpanded: true,
   });
   window.localStorage.removeItem("daintree-canopy-order");
+  window.localStorage.removeItem("daintree-canopy-assistants-folded");
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
@@ -783,6 +789,64 @@ describe("CanopyView arrow order across the Archived and Trash bars", () => {
     fireEvent.keyDown(archivedBar()!, { key: "ArrowDown" });
     expect(document.activeElement).toBe(trashBar());
     fireEvent.keyDown(trashBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(archivedBar());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("stops on a shut Assistants bar between the last row and the Archived and Trash bars", async () => {
+    useCanopyStore.setState({ assistantsExpanded: false });
+    await open(TRASH, ["live"], ["done"]);
+    expect(assistantsBar()!.getAttribute("aria-expanded")).toBe("false");
+    const last = card("live");
+    act(() => last.focus());
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(assistantsBar());
+    fireEvent.keyDown(assistantsBar()!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(archivedBar());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(trashBar());
+    fireEvent.keyDown(trashBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(archivedBar());
+    fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(assistantsBar());
+    fireEvent.keyDown(assistantsBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("goes between a shut Assistants bar and the Trash bar with no Archived between them", async () => {
+    useCanopyStore.setState({ assistantsExpanded: false });
+    await open(TRASH, ["live"]);
+    act(() => assistantsBar()!.focus());
+    fireEvent.keyDown(assistantsBar()!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(trashBar());
+    fireEvent.keyDown(trashBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(assistantsBar());
+  });
+
+  it("goes down from the search to a shut Assistants bar when the inbox is empty, and back up", async () => {
+    useCanopyStore.setState({ assistantsExpanded: false });
+    await open(TRASH, []);
+    fireEvent.keyDown(searchInput(), { key: "ArrowDown" });
+    expect(document.activeElement).toBe(assistantsBar());
+    fireEvent.keyDown(assistantsBar()!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(searchInput());
+  });
+
+  it("walks past an open Assistants bar with nothing in it, as it walked before the fold", async () => {
+    await open(TRASH, ["live"], ["done"]);
+    expect(assistantsBar()!.getAttribute("aria-expanded")).toBe("true");
+    const startLine = () =>
+      document.body.textContent!.includes("Start an assistant from the Assistant panel");
+    expect(startLine()).toBe(true);
+    // Its empty line folds away with it.
+    fireEvent.click(assistantsBar()!);
+    expect(startLine()).toBe(false);
+    fireEvent.click(assistantsBar()!);
+    expect(startLine()).toBe(true);
+    const last = card("live");
+    act(() => last.focus());
+    fireEvent.keyDown(last, { key: "ArrowDown" });
     expect(document.activeElement).toBe(archivedBar());
     fireEvent.keyDown(archivedBar()!, { key: "ArrowUp" });
     expect(document.activeElement).toBe(last);

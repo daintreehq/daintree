@@ -67,13 +67,17 @@ export function SectionBar({
       aria-controls={foldState.controls}
       onClick={foldState.onToggle}
       onKeyDown={(event) => {
-        if (event.key === "ArrowUp" && foldState.onLeaveUp) {
+        // j and k step as the arrows do, as they do on the rows around the bar.
+        const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+        const up = event.key === "ArrowUp" || (plain && event.key === "k");
+        const down = event.key === "ArrowDown" || (plain && event.key === "j");
+        if (up && foldState.onLeaveUp) {
           event.preventDefault();
           event.stopPropagation();
           foldState.onLeaveUp();
           return;
         }
-        if (event.key !== "ArrowDown") return;
+        if (!down) return;
         if (foldState.expanded) {
           event.preventDefault();
           event.stopPropagation();

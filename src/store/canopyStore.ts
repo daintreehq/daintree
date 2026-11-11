@@ -61,6 +61,12 @@ interface CanopyState {
   /** The inbox's "Trash" group is unfolded; kept across opens. */
   trashExpanded: boolean;
   setTrashExpanded: (expanded: boolean) => void;
+  /**
+   * The inbox's "Assistants" group is unfolded: open until the user shuts it,
+   * then shut for every project view, the Canopy window and across launches.
+   */
+  assistantsExpanded: boolean;
+  setAssistantsExpanded: (expanded: boolean) => void;
   /** The inbox shows only unread runs; kept across opens for the session. */
   unreadOnly: boolean;
   setUnreadOnly: (unreadOnly: boolean) => void;
@@ -185,6 +191,7 @@ const PANE_OFFER_DISMISSED_STORAGE_KEY = "daintree-canopy-pane-offer-dismissed";
 const LIST_WIDTH_STORAGE_KEY = "daintree-canopy-list-width";
 const GLOBAL_DOCKED_STORAGE_KEY = "daintree-canopy-global-docked";
 const DOCK_WIDTH_STORAGE_KEY = "daintree-canopy-dock-width";
+const ASSISTANTS_FOLDED_STORAGE_KEY = "daintree-canopy-assistants-folded";
 /** Assistants whose seen handback is kept at most, the oldest seen dropped first: as many as one directory names. */
 const MAX_HANDBACKS_SEEN = AGENT_DIRECTORY_ENTRIES_MAX;
 
@@ -287,6 +294,23 @@ function saveGlobalDocked(docked: boolean): void {
     else window.localStorage.removeItem(GLOBAL_DOCKED_STORAGE_KEY);
   } catch {
     // Best effort: the choice still holds for this session.
+  }
+}
+
+function loadAssistantsExpanded(): boolean {
+  try {
+    return window.localStorage.getItem(ASSISTANTS_FOLDED_STORAGE_KEY) !== "1";
+  } catch {
+    return true;
+  }
+}
+
+function saveAssistantsExpanded(expanded: boolean): void {
+  try {
+    if (expanded) window.localStorage.removeItem(ASSISTANTS_FOLDED_STORAGE_KEY);
+    else window.localStorage.setItem(ASSISTANTS_FOLDED_STORAGE_KEY, "1");
+  } catch {
+    // Best effort: this view still keeps it for the session.
   }
 }
 
@@ -501,6 +525,11 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
   setArchivedExpanded: (expanded) => set({ archivedExpanded: expanded }),
   trashExpanded: false,
   setTrashExpanded: (expanded) => set({ trashExpanded: expanded }),
+  assistantsExpanded: loadAssistantsExpanded(),
+  setAssistantsExpanded: (expanded) => {
+    saveAssistantsExpanded(expanded);
+    set({ assistantsExpanded: expanded });
+  },
   unreadOnly: false,
   setUnreadOnly: (unreadOnly) => set({ unreadOnly }),
   roleFilter: loadRoleFilter(),
@@ -682,6 +711,10 @@ if (typeof window !== "undefined") {
     }
     if (event.key === DOCK_WIDTH_STORAGE_KEY) {
       useCanopyStore.setState({ dockWidth: loadDockWidth() });
+      return;
+    }
+    if (event.key === ASSISTANTS_FOLDED_STORAGE_KEY) {
+      useCanopyStore.setState({ assistantsExpanded: loadAssistantsExpanded() });
     }
   });
 }

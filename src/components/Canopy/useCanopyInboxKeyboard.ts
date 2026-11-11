@@ -71,6 +71,7 @@ export function useCanopyInboxKeyboard({
   markAllRead,
   onSelectAll,
   onPastEnd,
+  sectionStop,
 }: {
   /** What the keyboard walks: the list, then the archived runs once shown. */
   visible: CanopyItem[];
@@ -98,6 +99,12 @@ export function useCanopyInboxKeyboard({
   onSelectAll?: () => void;
   /** Down off the inbox's last row, on to the section bar below it (Archived, else Trash): false when there is none. */
   onPastEnd?: () => boolean;
+  /**
+   * A shut section bar drawn between two rows of the walk, just above the row
+   * at `before`: the keyboard stops on it going either way. Its `focus` is
+   * false when there is no shut bar to stop on, and the walk goes on as rows.
+   */
+  sectionStop?: { before: number; focus: () => boolean };
 }) {
   const focusEntryNow = (entry: CanopyInboxEntry) =>
     entry.role === "worker" ? focusCardNow(entry.item.runId) : focusAssistantNow(entry.item.id);
@@ -108,16 +115,32 @@ export function useCanopyInboxKeyboard({
         null);
   // The pane's own run, assistant or worker: where a step from the search starts.
   const shownKey = selectedAssistant?.id ?? keyOfWorker(focusedItem?.runId);
+  // An assistant with a row to land on: none folded away under a shut bar.
+  const drawn = (item: CanopyAssistantItem) => navigation.some((entry) => entry.key === item.id);
   // What the search's keys act on. An assistant in the pane, or no worker row
   // ahead of the assistants: the assistant, never a worker the person can't see.
   const searchAssistant =
-    selectedAssistant ??
-    (listed.length === 0 && shownAssistants.length > 0 ? shownAssistants[0]! : null);
+    selectedAssistant ?? (listed.length === 0 ? (shownAssistants.find(drawn) ?? null) : null);
   const searchSelected = focusedIndex !== -1 ? visible[focusedIndex]! : (visible[0] ?? null);
   // Down off the bottom of the inbox, from the row with that key: on to the bar below it.
   const pastEnd = (key: string | null, event: KeyboardEvent<HTMLElement>): boolean => {
     if (key === null || navigation[navigation.length - 1]?.key !== key) return false;
     if (!onPastEnd?.()) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  };
+  // A step across a shut section bar, from the row on either side of it: onto the bar.
+  const ontoStop = (
+    key: string | null,
+    direction: -1 | 1,
+    event: KeyboardEvent<HTMLElement>
+  ): boolean => {
+    if (!sectionStop || key === null) return false;
+    const index = navigation.findIndex((entry) => entry.key === key);
+    if (index === -1) return false;
+    const crosses = direction > 0 ? index + 1 === sectionStop.before : index === sectionStop.before;
+    if (!crosses || !sectionStop.focus()) return false;
     event.preventDefault();
     event.stopPropagation();
     return true;
@@ -132,9 +155,10 @@ export function useCanopyInboxKeyboard({
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     let next: CanopyInboxEntry | undefined;
     if (event.key === "ArrowDown" || event.key === "j") {
-      if (pastEnd(assistant.id, event)) return;
+      if (ontoStop(assistant.id, 1, event) || pastEnd(assistant.id, event)) return;
       next = stepEntry(navigation, assistant.id, 1);
     } else if (event.key === "ArrowUp" || event.key === "k") {
+      if (ontoStop(assistant.id, -1, event)) return;
       if (navigation[0]?.key === assistant.id) {
         event.preventDefault();
         event.stopPropagation();
@@ -254,6 +278,7 @@ export function useCanopyInboxKeyboard({
     // Back to the search: "/" from any row, or up off the top of the list.
     const search = searchRef.current;
     const activeKey = keyOfWorker(visible[activeIndex]?.runId);
+    if ((event.key === "ArrowUp" || event.key === "k") && ontoStop(activeKey, -1, event)) return;
     if (
       search &&
       (event.key === "/" || (event.key === "ArrowUp" && navigation[0]?.key === activeKey))
@@ -265,7 +290,7 @@ export function useCanopyInboxKeyboard({
     }
     let next: CanopyInboxEntry | undefined;
     if (event.key === "ArrowDown" || event.key === "j") {
-      if (pastEnd(activeKey, event)) return;
+      if (ontoStop(activeKey, 1, event) || pastEnd(activeKey, event)) return;
       next = stepEntry(navigation, activeKey, 1);
     } else if (event.key === "ArrowUp" || event.key === "k") {
       next = stepEntry(navigation, activeKey, -1);
@@ -313,9 +338,10 @@ export function useCanopyInboxKeyboard({
     if (plain && searchAssistant !== null) {
       const target = searchAssistant;
       if (event.key === "Tab" || (event.key === "ArrowDown" && listed.length === 0)) {
+        // The pane's assistant folded away under its shut bar: the bar is where the keyboard goes.
+        if (drawn(target) || !sectionStop?.focus()) focusAssistantNow(target.id);
         event.preventDefault();
         event.stopPropagation();
-        focusAssistantNow(target.id);
         return;
       }
       if (event.key === "Enter") {
@@ -326,7 +352,12 @@ export function useCanopyInboxKeyboard({
     }
     const selected = searchSelected;
     // Nothing in the inbox: down from the search is down to the bar below it.
-    if (plain && event.key === "ArrowDown" && navigation.length === 0 && onPastEnd?.()) {
+    if (
+      plain &&
+      event.key === "ArrowDown" &&
+      navigation.length === 0 &&
+      (sectionStop?.focus() || onPastEnd?.())
+    ) {
       event.preventDefault();
       return;
     }

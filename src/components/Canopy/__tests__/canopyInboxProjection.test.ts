@@ -471,6 +471,30 @@ describe("navigation order", () => {
 
     expect(order.map((entry) => entry.role)).toEqual(["worker", "worker", "assistant"]);
   });
+
+  it("walks only the section's drawn assistants, and says where they start below its bar", () => {
+    const helpers = assistants([live(OWN, "asks", asking), live(OWN, "quiet")]);
+    const items = workers([
+      { host: OWN, run: run("ask", approval) },
+      { host: OWN, run: run("idle", idle) },
+    ]);
+    const open = project(items, helpers);
+    expect(open.sectionStart).toBe(3);
+    expect(open.navigation).toHaveLength(4);
+    // A shut section draws nothing of its quiet assistants; the band's ask stays.
+    const shut = project(items, helpers, { sectionAssistants: [] });
+    expect(shut.navigation.map((entry) => entry.role)).toEqual(["worker", "assistant", "worker"]);
+    expect(shut.sectionStart).toBe(shut.navigation.length);
+    expect(names(shut.needsYou)).toEqual([`own:${allHostsKey(OWN, "ask")}`, helpers[0]!.id]);
+    expect(shut.needsYou).toEqual(open.needsYou);
+    // Assistants alone: no band, and the ask it still draws under the shut bar starts the section.
+    const alone = project([], helpers, {
+      askingAssistantsInBand: false,
+      sectionAssistants: helpers.filter((item) => item.ask !== null),
+    });
+    expect(alone.sectionStart).toBe(0);
+    expect(alone.navigation.map((entry) => entry.key)).toEqual([helpers[0]!.id]);
+  });
 });
 
 describe("nextAfterEntry", () => {
