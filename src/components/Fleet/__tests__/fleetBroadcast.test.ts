@@ -104,7 +104,7 @@ function installViewStore(worktrees: Map<string, WorktreeSnapshot>) {
     setManualAssociation: () => {},
     clearManualAssociation: () => {},
     startDelete: () => {},
-    retryDelete: () => {},
+    retryDelete: () => "none",
     clearDeleteError: () => {},
     startAttachIssue: () => {},
     startDetachIssue: () => {},

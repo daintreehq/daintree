@@ -18,6 +18,7 @@ import {
 } from "./worktreeSnapshotReconciliation";
 import {
   abandonDelete,
+  deleteRetryNeedsReview,
   discardDeleteRestores,
   findDeleteOutboxEntryForWorktree,
   findIssueOutboxEntryForWorktree,
@@ -27,6 +28,7 @@ import {
   runDeleteAsync,
   runIssueMutationAsync,
   type AttachIssueOutboxEntry,
+  type DeleteRetryOutcome,
   type DetachIssueOutboxEntry,
   type IssueMutationError,
   type MutationOutboxEntry,
@@ -38,6 +40,7 @@ export type { ManualIssueAssociation, WorktreeChangedDirs };
 export { OUTBOX_RETRY_CAP } from "./worktreeMutationOutbox";
 export type {
   AttachIssueOutboxEntry,
+  DeleteRetryOutcome,
   DeleteWorktreeOutboxEntry,
   DetachIssueOutboxEntry,
   IssueMutationError,
@@ -206,7 +209,13 @@ export interface WorktreeViewActions {
   setManualAssociation(worktreeId: string, assoc: ManualIssueAssociation): void;
   clearManualAssociation(worktreeId: string): void;
   startDelete(worktreeId: string, options: WorktreeDeleteOptions): void;
-  retryDelete(worktreeId: string): void;
+  /**
+   * The delete banner's Retry. Re-fires the failed delete with its stored
+   * options, or answers `"needs-review"` without touching anything when the
+   * tree has to be previewed and confirmed again first — the caller opens the
+   * delete dialog, whose submit goes through `startDelete` (#16791).
+   */
+  retryDelete(worktreeId: string): DeleteRetryOutcome;
   clearDeleteError(worktreeId: string): void;
   /**
    * Attach an issue to a worktree through the resilient outbox (#9163). Creates
@@ -770,15 +779,27 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       void runDeleteAsync(get, set, worktreeId, options, mutationId);
     },
 
-    retryDelete(worktreeId: string) {
+    retryDelete(worktreeId: string): DeleteRetryOutcome {
       const prev = get();
       const args = prev.deleteErrorArgs.get(worktreeId);
-      if (!args) return;
+      const error = prev.deleteErrors.get(worktreeId);
+      if (!args || error === undefined) return "none";
+      // Reconnect replay re-runs a parked delete without clearing its banner,
+      // so a Retry can land on one that is already running. Opening the dialog
+      // over it would offer a second delete of the same worktree.
+      if (prev.deletingIds.has(worktreeId)) return "none";
+      if (
+        findDeleteOutboxEntryForWorktree(prev.mutationOutbox, worktreeId)?.status === "in-flight"
+      ) {
+        return "none";
+      }
+      if (deleteRetryNeedsReview(args, error)) return "needs-review";
       // Re-fire with the original confirm-dialog options. `startDelete`
       // clears the previous error and re-marks `deletingIds` atomically, and
       // reuses the existing outbox `mutationId` if one is still in flight so
       // the host's ack map dedupes correctly.
       get().startDelete(worktreeId, args);
+      return "dispatched";
     },
 
     clearDeleteError(worktreeId: string) {

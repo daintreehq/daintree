@@ -8,7 +8,7 @@
  */
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createPortal } from "react-dom";
 import type { WorktreeState } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -98,7 +98,13 @@ vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
 // that shape: whatever layer a test puts here is portalled from inside the
 // card, so React bubbles its events through the card's handlers.
 let renderDialogLayer: () => React.ReactNode = () => null;
-vi.mock("../WorktreeDialogs", () => ({ WorktreeDialogs: () => renderDialogLayer() }));
+let deleteDialogOpen = false;
+vi.mock("../WorktreeDialogs", () => ({
+  WorktreeDialogs: ({ showDeleteDialog }: { showDeleteDialog: boolean }) => {
+    deleteDialogOpen = showDeleteDialog;
+    return renderDialogLayer();
+  },
+}));
 
 vi.mock("framer-motion", () => {
   const MotionDiv = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
@@ -190,7 +196,7 @@ function renderCard({
       </TooltipProvider>
     </WorktreeStoreContext.Provider>
   );
-  return { ...utils, onSelect };
+  return { ...utils, onSelect, store };
 }
 
 function card(): HTMLElement {
@@ -229,6 +235,7 @@ beforeEach(() => {
   dispatch.mockClear();
   mockTerminals = [SESSION];
   renderDialogLayer = () => null;
+  deleteDialogOpen = false;
   useFleetArmingStore.getState().clear();
   useWorktreeSelectionStore.setState({
     expandedWorktrees: new Set(),
@@ -490,5 +497,52 @@ describe.each(["comfortable", "compact"] as const)("WorktreeCard selection — %
       fireEvent.doubleClick(screen.getByText("3 files"));
       expect(useWorktreeFilterStore.getState().collapsedWorktrees).toContain(WORKTREE.id);
     });
+  });
+});
+
+// #16791 — the store decides whether a Retry can re-fire as it stands; the card
+// owns the dialog that a retry needing a fresh look goes back through.
+describe("WorktreeCard delete Retry", () => {
+  it.each([
+    ["needs-review", true],
+    ["dispatched", false],
+    ["none", false],
+  ] as const)("a %s retry opens the delete dialog: %s", (outcome, opens) => {
+    const { store, onSelect } = renderCard({ isActive: false, deleteError: "fatal: refused" });
+    const retryDelete = vi.fn(() => outcome);
+    store.setState({ retryDelete });
+    expect(deleteDialogOpen).toBe(false);
+
+    press(screen.getByTestId("worktree-delete-retry"));
+
+    expect(retryDelete).toHaveBeenCalledWith(WORKTREE.id);
+    expect(deleteDialogOpen).toBe(opens);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("opens the dialog against the real store when a dirty refusal is retried", () => {
+    const { store } = renderCard({
+      isActive: false,
+      deleteError: "Worktree has untracked files. Use force delete to proceed.",
+    });
+    store.setState({ deleteErrorArgs: new Map([[WORKTREE.id, { force: false }]]) });
+
+    press(screen.getByTestId("worktree-delete-retry"));
+
+    expect(deleteDialogOpen).toBe(true);
+    expect(store.getState().deletingIds.has(WORKTREE.id)).toBe(false);
+    // The failure stays on the card until the dialog's own submit replaces it.
+    expect(screen.getByTestId("worktree-delete-error-banner")).toBeTruthy();
+  });
+
+  it("closes the reopened dialog once a reconnect replay starts the delete anyway", () => {
+    const { store } = renderCard({ isActive: false, deleteError: "fatal: refused" });
+    store.setState({ deleteErrorArgs: new Map([[WORKTREE.id, { force: true }]]) });
+    press(screen.getByTestId("worktree-delete-retry"));
+    expect(deleteDialogOpen).toBe(true);
+
+    act(() => store.setState({ deletingIds: new Set([WORKTREE.id]) }));
+
+    expect(deleteDialogOpen).toBe(false);
   });
 });
