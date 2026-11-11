@@ -33,12 +33,15 @@ vi.mock("@/store/projectStore", () => ({
 
 const drafts = vi.hoisted(() => new Map<string, string>());
 const inputs = vi.hoisted(() => ({
+  hybridInputAutoFocus: true,
   getDraftInput: (terminalId: string) => drafts.get(terminalId) ?? "",
   setDraftInput: (terminalId: string, value: string) => drafts.set(terminalId, value),
   bumpExternalDraftRevision: vi.fn(),
 }));
 vi.mock("@/store/terminalInputStore", () => ({
   useTerminalInputStore: { getState: () => inputs },
+  selectHomeFocusTarget: (state: { hybridInputAutoFocus: boolean }) =>
+    state.hybridInputAutoFocus ? "hybridInput" : "xterm",
 }));
 
 import { HeldComposerSendRow } from "../HeldComposerSend";
@@ -67,6 +70,7 @@ beforeEach(() => {
   sendNow.mockReset().mockResolvedValue({ outcome: "sending" });
   requestPaneFocus.mockReset();
   inputs.bumpExternalDraftRevision.mockReset();
+  inputs.hybridInputAutoFocus = true;
   drafts.clear();
   pane("working");
 });
@@ -283,5 +287,133 @@ describe("HeldComposerSendRow", () => {
       expect(screen.getByTestId("held-composer-send").textContent).not.toContain("into that");
       unmount();
     }
+  });
+  it("counts a dropped send's images beside its text, as a held one does", () => {
+    useHeldComposerSendStore.getState().applyChange({
+      terminalId: "t1",
+      held: null,
+      ended: {
+        token: "token-1",
+        outcome: { kind: "dropped", reason: "typed" },
+        text: "look at /tmp/a.png and /tmp/b.png",
+        imagePaths: ["/tmp/a.png", "/tmp/b.png"],
+      },
+    });
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+    expect(screen.getByTestId("held-composer-send-dropped").textContent).toContain(
+      "look at /tmp/a.png and /tmp/b.png · 2 images"
+    );
+  });
+
+  describe("the keyboard, once the control it pressed goes", () => {
+    function dropSend(): void {
+      useHeldComposerSendStore.getState().applyChange({
+        terminalId: "t1",
+        held: null,
+        ended: {
+          token: "token-1",
+          outcome: { kind: "dropped", reason: "typed" },
+          text: "held text",
+        },
+      });
+    }
+
+    it("goes back to the pane after Dismiss", () => {
+      dropSend();
+      render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+      const dismiss = screen.getByRole("button", { name: "Dismiss unsent held message" });
+      dismiss.focus();
+      fireEvent.click(dismiss);
+      expect(screen.queryByTestId("held-composer-send-dropped")).toBeNull();
+      expect(requestPaneFocus).toHaveBeenCalledWith("t1", "hybridInput");
+    });
+
+    it("goes to the pane's home surface, the terminal when that is home", () => {
+      inputs.hybridInputAutoFocus = false;
+      dropSend();
+      render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+      const dismiss = screen.getByRole("button", { name: "Dismiss unsent held message" });
+      dismiss.focus();
+      fireEvent.click(dismiss);
+      expect(requestPaneFocus).toHaveBeenCalledWith("t1", "xterm");
+    });
+
+    it("is left alone by a Dismiss clicked while it was somewhere else", () => {
+      dropSend();
+      render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss unsent held message" }));
+      expect(screen.queryByTestId("held-composer-send-dropped")).toBeNull();
+      expect(requestPaneFocus).not.toHaveBeenCalled();
+    });
+
+    it("goes back to the pane after Withdraw", async () => {
+      withdraw.mockImplementation(async () => {
+        useHeldComposerSendStore.getState().applyChange({
+          terminalId: "t1",
+          held: null,
+          ended: { token: "token-1", outcome: { kind: "withdrawn" } },
+        });
+        return true;
+      });
+      useHeldComposerSendStore.getState().noteHeld(send());
+      render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+      const button = screen.getByRole("button", { name: "Withdraw held message" });
+      button.focus();
+      fireEvent.click(button);
+      await waitFor(() => expect(requestPaneFocus).toHaveBeenCalledWith("t1", "hybridInput"));
+      expect(screen.queryByTestId("held-composer-send")).toBeNull();
+    });
+
+    it("goes back to the pane after Send now", async () => {
+      useHeldComposerSendStore.getState().noteHeld(send());
+      render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+      const button = screen.getByRole("button", { name: "Send now" });
+      button.focus();
+      fireEvent.click(button);
+      await waitFor(() => expect(requestPaneFocus).toHaveBeenCalledWith("t1", "hybridInput"));
+    });
+
+    it("goes back to the pane when Edit finds the send already on its way", async () => {
+      withdraw.mockResolvedValue(false);
+      useHeldComposerSendStore.getState().noteHeld(send());
+      render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+      const button = screen.getByRole("button", { name: "Edit" });
+      button.focus();
+      fireEvent.click(button);
+      await waitFor(() => expect(requestPaneFocus).toHaveBeenCalledWith("t1", "hybridInput"));
+      expect(drafts.has("t1")).toBe(false);
+    });
+
+    it("stays where the user took it while Send now was on its way", async () => {
+      let answer!: () => void;
+      sendNow.mockImplementationOnce(
+        () => new Promise((resolve) => (answer = () => resolve({ outcome: "sending" })))
+      );
+      useHeldComposerSendStore.getState().noteHeld(send());
+      render(
+        <>
+          <HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />
+          <input aria-label="elsewhere" />
+        </>
+      );
+      const button = screen.getByRole("button", { name: "Send now" });
+      button.focus();
+      fireEvent.click(button);
+      await waitFor(() => expect(sendNow).toHaveBeenCalledTimes(1));
+      screen.getByRole("textbox", { name: "elsewhere" }).focus();
+      await act(async () => answer());
+      expect(requestPaneFocus).not.toHaveBeenCalled();
+    });
+
+    it("stays on the row when Send now fails, so it can be pressed again", async () => {
+      sendNow.mockRejectedValueOnce(new Error("ipc down"));
+      useHeldComposerSendStore.getState().noteHeld(send());
+      render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+      const button = screen.getByRole("button", { name: "Send now" });
+      button.focus();
+      fireEvent.click(button);
+      await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+      expect(requestPaneFocus).not.toHaveBeenCalled();
+    });
   });
 });

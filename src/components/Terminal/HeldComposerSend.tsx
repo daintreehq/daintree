@@ -1,4 +1,4 @@
-import { useId, useState, type ReactElement } from "react";
+import { useId, useRef, useState, type ReactElement } from "react";
 import { Clock } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -10,7 +10,7 @@ import { logWarn } from "@/utils/logger";
 import { useHeldComposerSendStore } from "@/store/heldComposerSendStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
-import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { selectHomeFocusTarget, useTerminalInputStore } from "@/store/terminalInputStore";
 import { requestPaneFocus } from "./paneFocusRequest";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { ComposerHoldDropReason } from "@shared/types/ipc/composerHold";
@@ -42,6 +42,27 @@ const ANSWERED_BY_TEXT = new Set(["question", "approval"]);
 function previewOf(text: string): string {
   const line = text.split("\n").find((candidate) => candidate.trim() !== "") ?? "";
   return line.trim().slice(0, 200);
+}
+
+/** The images that go with the text, after its preview: they come back on Edit too. */
+function imageCountOf(imagePaths: readonly string[]): string {
+  return imagePaths.length > 0 ? ` · ${pluralize(imagePaths.length, "image")}` : "";
+}
+
+/** Whether the keyboard is inside `row`, read before the control pressed there acts and goes. */
+function holdsFocus(row: HTMLElement | null): boolean {
+  const active = document.activeElement;
+  return row !== null && active !== null && row.contains(active);
+}
+
+/**
+ * The control pressed in `row` is gone or going: the keyboard goes back to the
+ * pane rather than the page, unless it has already moved on somewhere else.
+ */
+function returnFocusToPane(terminalId: string, row: HTMLElement | null): void {
+  const active = document.activeElement;
+  if (active !== null && active !== document.body && !(row?.contains(active) ?? false)) return;
+  requestPaneFocus(terminalId, selectHomeFocusTarget(useTerminalInputStore.getState()));
 }
 
 /**
@@ -89,6 +110,7 @@ export function HeldComposerSendRow({
   const projectId = useProjectStore((s) => s.currentProject?.id);
   const [busy, setBusy] = useState(false);
   const sendNowHintId = useId();
+  const rowRef = useRef<HTMLDivElement>(null);
 
   if (held === undefined && dropped === undefined) return null;
   const agentName =
@@ -96,10 +118,14 @@ export function HeldComposerSendRow({
 
   const withdraw = async (thenEdit: boolean): Promise<void> => {
     if (held === undefined || busy) return;
+    const row = rowRef.current;
+    const hadFocus = holdsFocus(row);
     setBusy(true);
     try {
       const withdrawn = await composerHoldClient.withdraw(terminalId, held.token);
       if (withdrawn && thenEdit) restoreToDraft(terminalId, projectId, held.text);
+      // Withdrawn, or already on its way: either way the row's controls go.
+      else if (hadFocus) returnFocusToPane(terminalId, row);
     } catch (err) {
       logWarn("[HeldComposerSend] withdraw failed", { terminalId, error: err });
     } finally {
@@ -110,9 +136,13 @@ export function HeldComposerSendRow({
   // Main types it, or drops it saying why, and its push moves the row on.
   const sendNow = async (): Promise<void> => {
     if (held === undefined || busy) return;
+    const row = rowRef.current;
+    const hadFocus = holdsFocus(row);
     setBusy(true);
     try {
+      // Whatever main answers, the held row's controls go: it is sending, dropped or gone.
       await composerHoldClient.sendNow(terminalId, held.token, inputBlocked);
+      if (hadFocus) returnFocusToPane(terminalId, row);
     } catch (err) {
       logWarn("[HeldComposerSend] send now failed", { terminalId, error: err });
     } finally {
@@ -124,8 +154,6 @@ export function HeldComposerSendRow({
     const sending = held.status === "sending";
     const answers =
       waitingReason !== undefined && ANSWERED_BY_TEXT.has(waitingReason) ? waitingReason : null;
-    const images =
-      held.imagePaths.length > 0 ? ` · ${pluralize(held.imagePaths.length, "image")}` : "";
     const status = sending
       ? "Sending the held message…"
       : waitingOn !== undefined
@@ -137,6 +165,7 @@ export function HeldComposerSendRow({
         size="compact"
         icon={Clock}
         role="status"
+        ref={rowRef}
         data-testid="held-composer-send"
         className="mx-2 mb-1"
         action={
@@ -178,7 +207,7 @@ export function HeldComposerSendRow({
         <p>{status}</p>
         <p className="truncate text-text-secondary">
           {previewOf(held.text)}
-          {images}
+          {imageCountOf(held.imagePaths)}
         </p>
         {answers !== null && !sending && (
           <p id={sendNowHintId} className="text-text-secondary">
@@ -197,11 +226,18 @@ export function HeldComposerSendRow({
   }
 
   if (dropped === undefined) return null;
+  const dismissDropped = (): void => {
+    const row = rowRef.current;
+    const hadFocus = holdsFocus(row);
+    useHeldComposerSendStore.getState().clearDropped(terminalId);
+    if (hadFocus) returnFocusToPane(terminalId, row);
+  };
   return (
     <Callout
       severity="warning"
       size="compact"
       role="status"
+      ref={rowRef}
       data-testid="held-composer-send-dropped"
       className="mx-2 mb-1"
       action={
@@ -223,12 +259,15 @@ export function HeldComposerSendRow({
       dismiss={
         <DismissButton
           aria-label="Dismiss unsent held message"
-          onClick={() => useHeldComposerSendStore.getState().clearDropped(terminalId)}
+          onClick={dismissDropped}
         />
       }
     >
       <p>Held message not sent: {DROP_REASON[dropped.reason]}</p>
-      <p className="truncate text-text-secondary">{previewOf(dropped.text)}</p>
+      <p className="truncate text-text-secondary">
+        {previewOf(dropped.text)}
+        {imageCountOf(dropped.imagePaths)}
+      </p>
     </Callout>
   );
 }
