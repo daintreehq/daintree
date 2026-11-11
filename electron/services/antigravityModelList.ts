@@ -6,10 +6,13 @@ export interface AgyListedModel {
 }
 
 // `<id>  <Display Name>`: the id, then a gap of two or more spaces (or a tab).
-// A single space never separates them, so prose and notices can't read as rows.
-const MODEL_ROW = /^([A-Za-z0-9][A-Za-z0-9._:/-]*)(?: {2,}|\t+)(\S.*)$/;
+// A single space never separates them, so prose can't read as a row, and an
+// id ends on a letter or digit, so a label (`Error:  …`) can't either.
+const MODEL_ROW = /^([A-Za-z0-9](?:[A-Za-z0-9._:/-]*[A-Za-z0-9])?)(?: {2,}|\t+)(\S.*)$/;
 // A marker some list printers put before the current choice.
 const ROW_MARKER = /^[*>•●✓]\s+/;
+// Column headers have a row's shape.
+const HEADER_IDS = new Set(["id", "model", "models", "name", "slug"]);
 
 /**
  * Reads `agy models` output into its model rows, in printed order.
@@ -28,9 +31,7 @@ export function parseAgyModelsOutput(output: string): AgyListedModel[] {
     const match = MODEL_ROW.exec(line);
     if (!match) continue;
     const id = match[1]!;
-    // A column header (`ID  NAME`) has the row's shape; an id never lacks
-    // lowercase letters and digits both.
-    if (!/[a-z0-9]/.test(id) || seen.has(id)) continue;
+    if (HEADER_IDS.has(id.toLowerCase()) || seen.has(id)) continue;
     seen.add(id);
     models.push({ id, name: match[2]!.trim() });
   }

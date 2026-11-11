@@ -425,7 +425,10 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
   setAgentVersionService(versionSvc);
 
   if (!getAgentModelCatalogService()) {
-    const modelCatalogSvc = new AgentModelCatalogService();
+    const modelCatalogSvc = new AgentModelCatalogService({
+      getCliDetail: async (agentId) =>
+        (await cliAvailabilityService.getSettledDetails())?.[agentId],
+    });
     setAgentModelCatalogService(modelCatalogSvc);
     // Warm the cache in the background so the first renderer request hits
     // populated data. Errors are already silenced inside getCatalog().
