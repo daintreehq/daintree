@@ -3026,6 +3026,10 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: import("../plugin.js").PluginBackgroundUpdateCheckSettings;
   };
+  "plugin:browse-catalog": {
+    args: [];
+    result: import("../plugin.js").PluginCatalogBrowseResult;
+  };
   "plugin:cancel-install": {
     args: [jobId: string];
     result: boolean;

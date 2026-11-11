@@ -784,6 +784,7 @@ export const CHANNEL_LOCALITY = {
   "plugin:actions-register": "host",
   "plugin:actions-unregister": "host",
   "plugin:activate-for-view": "host",
+  "plugin:browse-catalog": "host",
   "plugin:capture-panel": "shell",
   "plugin:agents-get": "host",
   "plugin:bg-update-check-latest": "host",

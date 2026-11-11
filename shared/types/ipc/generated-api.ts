@@ -1175,6 +1175,9 @@ export interface GeneratedElectronAPI {
     backupDatabases(
       ...args: IpcInvokeMap["plugin:backup-databases"]["args"]
     ): Promise<IpcInvokeMap["plugin:backup-databases"]["result"]>;
+    browseCatalog(
+      ...args: IpcInvokeMap["plugin:browse-catalog"]["args"]
+    ): Promise<IpcInvokeMap["plugin:browse-catalog"]["result"]>;
     cancelAccountConnect(
       ...args: IpcInvokeMap["plugin:account-cancel-connect"]["args"]
     ): Promise<IpcInvokeMap["plugin:account-cancel-connect"]["result"]>;

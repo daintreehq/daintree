@@ -30,6 +30,7 @@ import {
   handlePreviewFromUrlOp,
   handlePreviewFromCatalogOp,
   handleInstallFromCatalogOp,
+  handleBrowseCatalog,
   handleCancelInstall,
   handleUninstall,
   handleCheckForUpdate,
@@ -191,6 +192,7 @@ export const pluginNamespace = defineIpcNamespace({
     installFromCatalog: op(PLUGIN_METHOD_CHANNELS.installFromCatalog, handleInstallFromCatalogOp, {
       withContext: true,
     }),
+    browseCatalog: op(PLUGIN_METHOD_CHANNELS.browseCatalog, handleBrowseCatalog),
     cancelInstall: op(PLUGIN_METHOD_CHANNELS.cancelInstall, handleCancelInstall),
     uninstall: op(PLUGIN_METHOD_CHANNELS.uninstall, handleUninstall),
     checkForUpdate: op(PLUGIN_METHOD_CHANNELS.checkForUpdate, handleCheckForUpdate),

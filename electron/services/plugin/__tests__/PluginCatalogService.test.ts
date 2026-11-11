@@ -641,4 +641,97 @@ describe("PluginCatalogService", () => {
       });
     });
   });
+
+  describe("browse listings", () => {
+    it("lists each plugin once, at its newest release, in id order", async () => {
+      const result = await service(respondWith(ok())).browse();
+      expect(result).toEqual({
+        status: "available",
+        stale: false,
+        fetchedAt: T0,
+        listings: [
+          {
+            id: "acme.linear-context",
+            version: "2.0.0-rc.1+build.7",
+            repo: "https://github.com/acme/linear-context",
+            capabilities: [],
+          },
+          {
+            id: "daintreehq.continue-session",
+            version: "0.1.1",
+            repo: "https://github.com/daintreehq/plugin-continue-session",
+            capabilities: ["fs:user-data-read", "mcp:expose"],
+          },
+        ],
+      });
+    });
+
+    it("picks the release an unversioned install link would, by semver", async () => {
+      const release = (version: string) =>
+        catalogEntry({
+          version,
+          url: `https://github.com/daintreehq/plugin-continue-session/releases/download/v${version}/daintreehq.continue-session-${version}.dntr`,
+          capabilities: [`cap:${version}`],
+        });
+      const result = await service(
+        respondWith(ok({ entries: [release("0.10.0"), release("1.0.0-rc.1"), release("0.9.0")] }))
+      ).browse();
+      expect(result).toMatchObject({
+        status: "available",
+        listings: [{ version: "0.10.0", capabilities: ["cap:0.10.0"] }],
+      });
+    });
+
+    it("hands out listings the caller may change without touching the cache", async () => {
+      const svc = service(respondWith(ok()));
+      const first = await svc.browse();
+      if (first.status !== "available") throw new Error("expected listings");
+      first.listings[1].capabilities.push("injected");
+      const again = await svc.browse();
+      expect(again).toMatchObject({
+        listings: [{}, { capabilities: ["fs:user-data-read", "mcp:expose"] }],
+      });
+    });
+
+    it("answers from a young cache without fetching", async () => {
+      const fetchedAt = T0 - 1000;
+      await seedCache(fetchedAt);
+      const fetchImpl = respondWith();
+      const result = await service(fetchImpl).browse();
+      expect(result).toMatchObject({ status: "available", stale: false, fetchedAt });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("marks an old cache stale, with why it couldn't refresh", async () => {
+      const fetchedAt = T0 - PLUGIN_CATALOG_BROWSE_TTL_MS * 4;
+      await seedCache(fetchedAt);
+      const result = await service(respondWith(offline)).browse();
+      expect(result).toMatchObject({
+        status: "available",
+        stale: true,
+        failure: "unreachable",
+        fetchedAt,
+      });
+    });
+
+    it("says why when there is no catalog at all", async () => {
+      expect(await service(respondWith(notFound)).browse()).toEqual({
+        status: "unavailable",
+        failure: "not-published",
+      });
+      expect(await service(respondWith(offline)).browse()).toEqual({
+        status: "unavailable",
+        failure: "unreachable",
+      });
+    });
+
+    it("lists nothing from an empty catalog", async () => {
+      expect(await service(respondWith(ok({ entries: [] }))).browse()).toEqual({
+        status: "available",
+        stale: false,
+        fetchedAt: T0,
+        listings: [],
+      });
+    });
+  });
 });
