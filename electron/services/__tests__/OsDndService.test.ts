@@ -5,14 +5,18 @@ type ExecFileCallback = (err: Error | null, stdout: string, stderr: string) => v
 const childProcessMock = vi.hoisted(() => {
   const pending: ExecFileCallback[] = [];
   const children: Array<{ kill: ReturnType<typeof vi.fn> }> = [];
-  const execFile = vi.fn(
-    (_file: string, _args: string[], _options: unknown, callback: ExecFileCallback) => {
-      pending.push(callback);
-      const child = { kill: vi.fn() };
-      children.push(child);
-      return child;
-    }
-  );
+  const launch = (
+    _file: string,
+    _args: string[],
+    _options: unknown,
+    callback: ExecFileCallback
+  ): { kill: ReturnType<typeof vi.fn> } => {
+    pending.push(callback);
+    const child = { kill: vi.fn() };
+    children.push(child);
+    return child;
+  };
+  const execFile = vi.fn(launch);
   const execFileSync = vi.fn();
   return {
     execFile,
@@ -22,7 +26,10 @@ const childProcessMock = vi.hoisted(() => {
     __reset(): void {
       pending.length = 0;
       children.length = 0;
-      execFile.mockClear();
+      // mockReset, not mockClear: an unconsumed mockImplementationOnce must
+      // not leak into the next test.
+      execFile.mockReset();
+      execFile.mockImplementation(launch);
       execFileSync.mockReset();
     },
   };
@@ -34,34 +41,42 @@ vi.mock("node:child_process", () => ({
 }));
 
 const systemPreferencesMock = vi.hoisted(() => {
-  const handlers = new Map<number, () => void>();
+  const subscriptions = new Map<number, { name: string; callback: () => void }>();
   let nextId = 1;
-  const subscribeNotification = vi.fn((_name: string, cb: () => void): number => {
+  const subscribe = (name: string, callback: () => void): number => {
     const id = nextId++;
-    handlers.set(id, cb);
+    subscriptions.set(id, { name, callback });
     return id;
-  });
+  };
+  const subscribeNotification = vi.fn(subscribe);
   const unsubscribeNotification = vi.fn((id: number): void => {
-    handlers.delete(id);
+    subscriptions.delete(id);
   });
   return {
     subscribeNotification,
     unsubscribeNotification,
     __fireByName(name: string): void {
-      // Each subscribe call records its name on the mock's call list; find
-      // the id by index and invoke its handler.
-      const calls = subscribeNotification.mock.calls;
-      for (let i = 0; i < calls.length; i++) {
-        if (calls[i]?.[0] === name) {
-          const id = i + 1;
-          handlers.get(id)?.();
-        }
+      for (const subscription of [...subscriptions.values()]) {
+        if (subscription.name === name) subscription.callback();
       }
     },
+    /** IDs handed back by successful subscribe calls, in call order. */
+    __returnedIds(): number[] {
+      return subscribeNotification.mock.results
+        .filter((result) => result.type === "return")
+        .map((result) => result.value as number);
+    },
+    /** The raw callback a subscribe call registered, even after unsubscribe. */
+    __callbackAt(callIndex: number): () => void {
+      const callback = subscribeNotification.mock.calls[callIndex]?.[1];
+      if (!callback) throw new Error(`no subscribe call at ${callIndex}`);
+      return callback;
+    },
     __reset(): void {
-      handlers.clear();
+      subscriptions.clear();
       nextId = 1;
-      subscribeNotification.mockClear();
+      subscribeNotification.mockReset();
+      subscribeNotification.mockImplementation(subscribe);
       unsubscribeNotification.mockClear();
     },
   };
@@ -71,6 +86,8 @@ vi.mock("electron", () => ({
   systemPreferences: systemPreferencesMock,
 }));
 
+import os from "node:os";
+import path from "node:path";
 import { __resetOsDndServiceForTests, getOsDndService } from "../OsDndService.js";
 
 const originalPlatform = process.platform;
@@ -99,9 +116,9 @@ async function initializeWithProbe(stdout: string): Promise<ReturnType<typeof ge
 }
 
 beforeEach(() => {
+  __resetOsDndServiceForTests();
   childProcessMock.__reset();
   systemPreferencesMock.__reset();
-  __resetOsDndServiceForTests();
 });
 
 afterEach(() => {
@@ -122,8 +139,24 @@ describe("OsDndService — macOS", () => {
     expect(childProcessMock.execFile).toHaveBeenCalledTimes(1);
     const [file, args, options] = childProcessMock.execFile.mock.calls[0]!;
     expect(file).toBe("/usr/bin/plutil");
-    expect(args).toContain("data.0.storeAssertionRecords.0.assertionDetailsModeIdentifier");
-    expect(options).toMatchObject({ encoding: "utf8", timeout: expect.any(Number) });
+    expect(args).toEqual([
+      "-extract",
+      "data.0.storeAssertionRecords.0.assertionDetailsModeIdentifier",
+      "raw",
+      "-o",
+      "-",
+      path.join(os.homedir(), "Library", "DoNotDisturb", "DB", "Assertions.json"),
+    ]);
+    // Hydration awaits this probe, so it must be bounded in time and output.
+    const { encoding, timeout, maxBuffer } = options as {
+      encoding: string;
+      timeout: number;
+      maxBuffer: number;
+    };
+    expect(encoding).toBe("utf8");
+    expect(timeout).toBeGreaterThan(0);
+    expect(timeout).toBeLessThanOrEqual(5000);
+    expect(maxBuffer).toBeGreaterThan(0);
     // Unknown until the probe settles: the sync audio gate treats this as
     // "do not gate".
     expect(svc.getState()).toBeUndefined();
@@ -233,6 +266,41 @@ describe("OsDndService — macOS", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps taking live notifications while the probe is in flight, and the last one wins", async () => {
+    const svc = getOsDndService();
+    svc.initialize();
+    const listener = vi.fn();
+    svc.onStateChanged(listener);
+    const ready = svc.getStateWhenReady();
+
+    systemPreferencesMock.__fireByName("_NSDoNotDisturbEnabledNotification");
+    systemPreferencesMock.__fireByName("_NSDoNotDisturbDisabledNotification");
+    await settleProbe("com.apple.focus.work\n");
+
+    expect(svc.getState()).toBe(false);
+    await expect(ready).resolves.toBe(false);
+    expect(listener.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("a failed subscription leaves the other subscription and the probe working", async () => {
+    systemPreferencesMock.subscribeNotification.mockImplementationOnce(() => {
+      throw new Error("unsupported notification");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const svc = getOsDndService();
+    svc.initialize();
+
+    expect(systemPreferencesMock.subscribeNotification).toHaveBeenCalledTimes(2);
+    expect(childProcessMock.execFile).toHaveBeenCalledTimes(1);
+    await settleProbe("com.apple.focus.work\n");
+    expect(svc.getState()).toBe(true);
+
+    systemPreferencesMock.__fireByName("_NSDoNotDisturbDisabledNotification");
+    expect(svc.getState()).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
   it("a live disabled notification during the probe is not overwritten by the older probe result", async () => {
     const svc = getOsDndService();
     svc.initialize();
@@ -297,10 +365,60 @@ describe("OsDndService — macOS", () => {
 
   it("dispose unsubscribes every notification and clears state", async () => {
     const svc = await initializeWithProbe("");
-    const subCount = systemPreferencesMock.subscribeNotification.mock.calls.length;
+    const subscribedIds = systemPreferencesMock.__returnedIds();
+    expect(subscribedIds).toHaveLength(2);
     svc.dispose();
-    expect(systemPreferencesMock.unsubscribeNotification.mock.calls.length).toBe(subCount);
+    const unsubscribedIds = systemPreferencesMock.unsubscribeNotification.mock.calls.map(
+      ([id]) => id
+    );
+    expect(unsubscribedIds.sort()).toEqual([...subscribedIds].sort());
     expect(svc.getState()).toBeUndefined();
+  });
+
+  it("dispose detaches listeners from the next lifecycle", async () => {
+    const svc = await initializeWithProbe("");
+    const staleListener = vi.fn();
+    svc.onStateChanged(staleListener);
+    svc.dispose();
+
+    svc.initialize();
+    await settleProbe("com.apple.focus.work\n");
+    systemPreferencesMock.__fireByName("_NSDoNotDisturbDisabledNotification");
+    expect(staleListener).not.toHaveBeenCalled();
+  });
+
+  it("a notification callback from a disposed lifecycle cannot write into the next one", async () => {
+    const svc = getOsDndService();
+    svc.initialize();
+    // Capture the first lifecycle's raw enabled callback: a notification
+    // already queued when dispose ran can still be delivered.
+    const staleEnabled = systemPreferencesMock.__callbackAt(0);
+    svc.dispose();
+    svc.initialize();
+    const listener = vi.fn();
+    svc.onStateChanged(listener);
+
+    staleEnabled();
+    expect(svc.getState()).toBeUndefined();
+    expect(listener).not.toHaveBeenCalled();
+
+    await settleProbe(""); // the disposed lifecycle's probe: discarded
+    await settleProbe(""); // the fresh probe: accepted
+    expect(svc.getState()).toBe(false);
+    expect(listener).toHaveBeenCalledWith(false);
+  });
+
+  it("a waiter from a disposed lifecycle never reports the next lifecycle's state", async () => {
+    const svc = getOsDndService();
+    svc.initialize();
+    const staleWaiter = svc.getStateWhenReady();
+    svc.dispose();
+    svc.initialize();
+    // Synchronously, before the stale waiter can resume.
+    systemPreferencesMock.__fireByName("_NSDoNotDisturbEnabledNotification");
+    expect(svc.getState()).toBe(true);
+
+    await expect(staleWaiter).resolves.toBeUndefined();
   });
 
   it("dispose kills the in-flight probe and settles waiters without its callback", async () => {
