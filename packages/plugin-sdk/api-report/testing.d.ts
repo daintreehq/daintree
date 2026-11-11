@@ -3858,8 +3858,9 @@ interface PluginAgentsApi {
      * through `host.dispatch(..., { hostId, projectId })` (#16767): the host
      * answers from its own record of what this plugin launched there from this
      * machine. It also needs `host:dispatch` and "Allow host targeting", and
-     * `not-found` covers an agent this plugin didn't launch there or launched
-     * before it was last loaded.
+     * `not-found` covers an agent this plugin didn't launch there, launched
+     * before it was last disabled or uninstalled, or launched before this
+     * machine restarted.
      */
     interrupt(terminalId: string, options?: PluginAgentInputOptions): Promise<PluginAgentInterruptResult>;
     /**
@@ -6711,6 +6712,8 @@ interface AgentInputRecord {
     /** What `sendKeys` pressed, or the text `submit` sent. */
     input?: PluginAgentKeysInput | string;
     result: PluginAgentInputResult | PluginAgentInterruptResult | PluginAgentKeysResult;
+    /** The Remote Host the call named (#16767); absent for an agent on this machine. */
+    hostId?: string;
 }
 /** Captured `host.terminals.readScreen(terminalId, options)` calls, with what each resolved. */
 interface ReadScreenRecord {

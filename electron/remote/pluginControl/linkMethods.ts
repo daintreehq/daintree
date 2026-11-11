@@ -47,38 +47,50 @@ const pluginId = z.string().min(1).max(256);
 const terminalId = z.string().min(1).max(SEND_TO_AGENT_MAX_ID_LENGTH);
 
 /**
- * Whether a value is plain JSON: no Map, Set, bigint, function, class instance
- * or non-finite number. The link would carry some of those whole, so a JSON
- * measure of them would not be a measure of what is sent. An `undefined` field
- * is let through, as JSON drops it.
+ * Whether a plugin's call arguments are plain JSON within the relay's bound:
+ * no Map, Set, bigint, function, class instance or non-finite number. The link
+ * encoder would carry some of those whole, and an `undefined` field's key, so
+ * the walk measures every key and string it would send rather than their
+ * JSON. Every value it visits counts, so it stops as soon as the bound is
+ * passed: a cycle (a worker's structured clone keeps them) or a shared value
+ * counts each time it is reached, as JSON would write it out.
  */
-function isPlainJson(root: unknown): boolean {
-  const pending: unknown[] = [root];
+export function isPluginControlArgs(args: unknown): boolean {
+  let bytes = 0;
+  const pending: unknown[] = [args];
   while (pending.length > 0) {
     const value = pending.pop();
-    if (value === undefined || value === null) continue;
-    if (typeof value === "string" || typeof value === "boolean") continue;
+    bytes += 8;
+    if (bytes > MAX_RELAY_ARGS_BYTES) return false;
+    if (value === undefined || value === null || typeof value === "boolean") continue;
+    if (typeof value === "string") {
+      bytes += Buffer.byteLength(value, "utf8");
+      if (bytes > MAX_RELAY_ARGS_BYTES) return false;
+      continue;
+    }
     if (typeof value === "number") {
       if (!Number.isFinite(value)) return false;
       continue;
     }
+    if (typeof value !== "object") return false;
     if (Array.isArray(value)) {
-      pending.push(...(value as unknown[]));
+      for (const item of value as unknown[]) {
+        bytes += 1;
+        if (bytes > MAX_RELAY_ARGS_BYTES) return false;
+        pending.push(item);
+      }
       continue;
     }
-    if (typeof value !== "object") return false;
     const proto: unknown = Object.getPrototypeOf(value);
     if (proto !== Object.prototype && proto !== null) return false;
-    pending.push(...Object.values(value as Record<string, unknown>));
+    for (const key in value) {
+      if (!Object.hasOwn(value, key)) continue;
+      bytes += Buffer.byteLength(key, "utf8");
+      if (bytes > MAX_RELAY_ARGS_BYTES) return false;
+      pending.push((value as Record<string, unknown>)[key]);
+    }
   }
   return true;
-}
-
-/** Whether a plugin's call arguments are plain JSON within the relay's bound. */
-export function isPluginControlArgs(args: unknown): boolean {
-  if (args === undefined) return true;
-  if (!isPlainJson(args)) return false;
-  return Buffer.byteLength(JSON.stringify(args), "utf8") <= MAX_RELAY_ARGS_BYTES;
 }
 
 /** Longest a plugin's call may run on a host before the Shell stops waiting. */

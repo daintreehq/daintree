@@ -9,7 +9,7 @@ import {
   type HostPluginAuditEntry,
   type HostPluginControlDeps,
 } from "../hostPluginControl.js";
-import { pluginCredentialFor } from "../linkMethods.js";
+import { isPluginControlArgs, pluginCredentialFor, PluginControlMethod } from "../linkMethods.js";
 
 const HOST_ID = "studio";
 const PROJECT = "p".repeat(64);
@@ -213,6 +213,55 @@ describe("HostPluginControlClient before anything is sent (#16767)", () => {
     ).rejects.toThrow(/switched off/);
     expect(host.runWithoutView).not.toHaveBeenCalled();
     expect(host.audits).toEqual([]);
+    host.dispose();
+  });
+});
+
+describe("isPluginControlArgs (#16767)", () => {
+  it("takes plain JSON, undefined fields and shared values within the bound", () => {
+    const shared = { branch: "main" };
+    expect(isPluginControlArgs(undefined)).toBe(true);
+    expect(isPluginControlArgs({ agentId: "claude", prompt: undefined, n: 1, ok: null })).toBe(
+      true
+    );
+    expect(isPluginControlArgs({ a: shared, b: shared, list: [1, "two", [3]] })).toBe(true);
+    expect(isPluginControlArgs(Object.assign(Object.create(null) as object, { a: 1 }))).toBe(true);
+  });
+
+  it("refuses what the link would carry but JSON would not, and anything past the bound", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const cyclicList: unknown[] = [];
+    cyclicList.push(cyclicList);
+    for (const args of [
+      cyclic,
+      cyclicList,
+      { when: new Date(0) },
+      { ids: new Set([1]) },
+      { big: 1n },
+      { n: Number.NaN },
+      { ["k".repeat(300_000)]: undefined },
+      { text: "x".repeat(300_000) },
+      new Array(400_000).fill(0),
+    ]) {
+      expect(isPluginControlArgs(args)).toBe(false);
+    }
+  });
+});
+
+describe("the host's own check on a plugin call's arguments (#16767)", () => {
+  it("refuses a payload past the bound sent straight over the link, running nothing", async () => {
+    const host = installOnHost();
+    await expect(
+      links.client.call(PluginControlMethod.DISPATCH, {
+        credential: pluginCredentialFor(SHELL_SECRET),
+        pluginId: "acme.beads",
+        projectId: PROJECT,
+        actionId: "worktree.list",
+        args: { ["k".repeat(300_000)]: undefined },
+      })
+    ).rejects.toThrow();
+    expect(host.runWithoutView).not.toHaveBeenCalled();
     host.dispose();
   });
 });
