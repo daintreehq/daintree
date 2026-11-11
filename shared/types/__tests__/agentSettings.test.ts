@@ -10,6 +10,7 @@ import {
   resolveDangerousMode,
   combineDangerousModes,
   reconcileBypassFlags,
+  hasBypassFlags,
   reconcileInlineModeFlag,
   reconcileDecorationFlags,
   isAgentBypassSupported,
@@ -1466,6 +1467,84 @@ describe("reconcileBypassFlags", () => {
       const flags = ["-c", "model_reasoning_effort=high", "approval_policy=never"];
       expect(reconcileBypassFlags(flags, "codex", false, customBypass)).toEqual(flags);
     });
+  });
+});
+
+describe("hasBypassFlags (#16785)", () => {
+  afterEach(() => clearPluginAgentRegistryForTests());
+
+  it("recognises every built-in agent's own default bypass flag", () => {
+    for (const [agentId, args] of Object.entries(DEFAULT_DANGEROUS_ARGS)) {
+      const flags = ["--model", "x", ...args.split(" ")];
+      expect(hasBypassFlags(flags, agentId, null), agentId).toBe(true);
+    }
+  });
+
+  it("ignores a flag that is only another agent's bypass", () => {
+    expect(hasBypassFlags(["--force"], "claude", null)).toBe(false);
+    expect(hasBypassFlags(["--yolo"], "codex", null)).toBe(false);
+    expect(hasBypassFlags(["--dangerously-skip-permissions"], "cursor", null)).toBe(false);
+  });
+
+  it("matches nothing without a launch agent", () => {
+    expect(hasBypassFlags(["--dangerously-skip-permissions"], undefined, null)).toBe(false);
+    expect(hasBypassFlags(undefined, "claude", null)).toBe(false);
+  });
+
+  it("reads the flags, not today's bypass mode", () => {
+    const settings = {
+      agents: { claude: { dangerousMode: "off" as const, dangerousEnabled: false } },
+    };
+    expect(hasBypassFlags(["--dangerously-skip-permissions"], "claude", settings)).toBe(true);
+    expect(hasBypassFlags(["--model", "opus"], "claude", settings)).toBe(false);
+  });
+
+  it("recognises a configured multi-token bypass as a whole option and value", () => {
+    const settings = { agents: { codex: { dangerousArgs: "-c approval_policy=never" } } };
+    expect(
+      hasBypassFlags(
+        ["-c", "tui.whimsy=false", "-c", "approval_policy=never"],
+        "codex",
+        settings
+      )
+    ).toBe(true);
+    expect(hasBypassFlags(["-c", "tui.whimsy=false"], "codex", settings)).toBe(false);
+    expect(hasBypassFlags(["approval_policy=never"], "codex", settings)).toBe(false);
+  });
+
+  it("still recognises the registry default after dangerousArgs is customised", () => {
+    const settings = { agents: { codex: { dangerousArgs: "-c approval_policy=never" } } };
+    expect(
+      hasBypassFlags(["--dangerously-bypass-approvals-and-sandbox"], "codex", settings)
+    ).toBe(true);
+  });
+
+  it("recognises a retired default the pane was launched with", () => {
+    expect(hasBypassFlags(["--auto_run"], "interpreter", null)).toBe(true);
+  });
+
+  it("recognises a plugin agent's declared bypass, and keeps recognising it from history", () => {
+    registerPluginAgents("me.extra-agents", [
+      {
+        id: "hermes",
+        name: "Hermes",
+        color: "#3366ff",
+        iconId: "terminal",
+        command: "hermes",
+        permissionBypassArgs: ["--yes-to-all"],
+      },
+    ]);
+    expect(hasBypassFlags(["--tui", "--yes-to-all"], "hermes", null)).toBe(true);
+    expect(hasBypassFlags(["--yes-to-all"], "claude", null)).toBe(false);
+
+    clearPluginAgentRegistryForTests();
+    expect(hasBypassFlags(["--yes-to-all"], "hermes", null)).toBe(false);
+    const settings = { agents: {}, pluginBypassArgHistory: { hermes: [["--yes-to-all"]] } };
+    expect(hasBypassFlags(["--yes-to-all"], "hermes", settings)).toBe(true);
+  });
+
+  it("does not read an inherited object member as an agent's settings", () => {
+    expect(hasBypassFlags(["--yolo"], "toString", { agents: {} })).toBe(false);
   });
 });
 
