@@ -328,7 +328,7 @@ export class PluginDevWorkerHost extends EventEmitter {
 
     this.installLogForwarding();
 
-    // Bind both listeners to THIS child so a superseded or retiring worker can
+    // Bind every listener to THIS child so a superseded or retiring worker can
     // never speak for the host (#12279).
     const child = this.child;
 
@@ -355,6 +355,19 @@ export class PluginDevWorkerHost extends EventEmitter {
         }
         this.failProtocolViolation("worker message handling failed");
       }
+    });
+
+    // A fatal V8 error in the worker, such as the plugin hitting its heap cap.
+    // UtilityProcess is an EventEmitter, so with no listener this would throw in
+    // main and take the whole app down over one plugin. The exit that always
+    // follows owns the crash ladder; the diagnostic report stays out of the log.
+    child.on("error", (type, location) => {
+      logger.warn(`[${this.serviceName}] Worker fatal error`, {
+        pluginId: this.pluginId,
+        pid: child.pid ?? null,
+        type,
+        location,
+      });
     });
 
     child.on("exit", (code) => {

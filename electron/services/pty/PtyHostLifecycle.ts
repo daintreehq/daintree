@@ -443,7 +443,17 @@ export class PtyHostLifecycle {
       this.callbacks.onMessage(msg);
     });
 
+    // A fatal V8 error in the host, such as its heap cap. UtilityProcess is an
+    // EventEmitter, so with no listener this would throw in main. The exit that
+    // always follows owns crash accounting and the restart; the diagnostic
+    // report stays out of the log.
     const child = this.child;
+    child.on("error", (type, location) => {
+      this.callbacks.logWarn(
+        `[PtyClient] Pty Host ${this.serviceName} fatal error (pid=${child.pid ?? "unknown"}, heapMb=${heapMb}, type=${type}, location=${location})`
+      );
+    });
+
     child.on("exit", (code) => {
       this.dropSpawnKill(child);
       this.handleExit(code);
