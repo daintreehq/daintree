@@ -9,7 +9,15 @@ import {
   open,
   unlink as fsUnlink,
 } from "fs/promises";
-import { chmodSync, closeSync, fsyncSync, openSync, unlinkSync, writeFileSync } from "fs";
+import {
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  openSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
 import type { Stats } from "fs";
 import stubbornFs from "stubborn-fs";
 
@@ -207,12 +215,15 @@ export async function prepareAtomicWriteFile(
  * leaves a torn file. Those two syncs only protect against power loss or a
  * kernel panic, and on macOS each one is a full drive-cache flush. Opt out only
  * for a file that is worthless after a reboot anyway.
+ *
+ * `onCommitted` runs as soon as the rename lands, before the directory sync,
+ * which can still throw with the new contents already in place.
  */
 export function resilientAtomicWriteFileSync(
   filePath: string,
   data: string,
   encoding: BufferEncoding = "utf-8",
-  options?: { mode?: number; durable?: boolean }
+  options?: { mode?: number; durable?: boolean; onCommitted?: () => void }
 ): void {
   const tempPath = generateTempPath(filePath);
   const applyMode = options?.mode !== undefined && process.platform !== "win32";
@@ -229,6 +240,7 @@ export function resilientAtomicWriteFileSync(
       chmodSync(tempPath, options!.mode!);
     }
     resilientRenameSync(tempPath, filePath);
+    options?.onCommitted?.();
     if (durable) syncParentDirectorySync(filePath);
   } catch (error) {
     try {
@@ -238,6 +250,63 @@ export function resilientAtomicWriteFileSync(
     }
     throw error;
   }
+}
+
+const RENAME_RETRY_INITIAL_DELAY_MS = 20;
+const RENAME_RETRY_MAX_DELAY_MS = 200;
+
+// The lock-contention codes stubborn-fs retries. EACCES/EPERM are only
+// transient on Windows; on POSIX they are a real permission denial.
+function isTransientRenameError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "EBUSY" || code === "EMFILE" || code === "ENFILE" || code === "EAGAIN") return true;
+  return process.platform === "win32" && (code === "EPERM" || code === "EACCES");
+}
+
+/**
+ * {@link resilientAtomicWriteFile} for a writer that a later write or a delete
+ * can supersede while it is in flight. The temp write, its flush and the
+ * directory sync stay async; only the rename is synchronous, and it runs in the
+ * same tick as `shouldCommit()`, so nothing on this thread can supersede the
+ * write between the check and the commit. A transient rename failure waits
+ * asynchronously and checks again before the next single attempt, instead of
+ * spinning the event loop the way {@link resilientRenameSync} does.
+ *
+ * Resolves `false`, with the temp file removed, when `shouldCommit()` refused.
+ */
+export async function resilientAtomicWriteFileIf(
+  filePath: string,
+  data: string | Buffer | Uint8Array,
+  shouldCommit: () => boolean,
+  encoding: BufferEncoding = "utf-8",
+  options?: { mode?: number }
+): Promise<boolean> {
+  const tempPath = await prepareAtomicWriteFile(filePath, data, encoding, options);
+  let committed = false;
+  try {
+    const deadline = Date.now() + RETRY_TIMEOUT_MS;
+    let delayMs = RENAME_RETRY_INITIAL_DELAY_MS;
+    while (shouldCommit()) {
+      try {
+        renameSync(tempPath, filePath);
+        committed = true;
+        break;
+      } catch (error) {
+        if (!isTransientRenameError(error) || Date.now() >= deadline) throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      delayMs = Math.min(delayMs * 2, RENAME_RETRY_MAX_DELAY_MS);
+    }
+  } catch (error) {
+    await fsUnlink(tempPath).catch(() => {});
+    throw error;
+  }
+  if (!committed) {
+    await fsUnlink(tempPath).catch(() => {});
+    return false;
+  }
+  await syncParentDirectory(filePath);
+  return true;
 }
 
 // Owner-only permission bits for persisted runtime data (POSIX). Files land at

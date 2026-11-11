@@ -13,6 +13,7 @@ const shared = vi.hoisted(() => ({
   agentEmitKilled: vi.fn(),
   disposeSerializer: vi.fn(),
   deleteSessionFile: vi.fn(),
+  flushPendingSessionWritesSync: vi.fn(),
   persistAgentSession: vi.fn(),
   execFileSync: vi.fn(),
   readlinkSync: vi.fn(),
@@ -243,6 +244,7 @@ vi.mock("../pty/TerminalSerializerService.js", () => ({
 
 vi.mock("../pty/terminalSessionPersistence.js", () => ({
   deleteSessionFile: shared.deleteSessionFile,
+  flushPendingSessionWritesSync: shared.flushPendingSessionWritesSync,
 }));
 
 vi.mock("../pty/agentSessionHistory.js", () => ({
@@ -626,6 +628,47 @@ describe("PtyManager adversarial", () => {
     expect(shared.created[1]!.dispose).toHaveBeenCalledTimes(1);
     expect(manager.listenerCount("data")).toBe(0);
     expect(shared.disposeSerializer).toHaveBeenCalledTimes(1);
+  });
+
+  it("DISPOSE_LANDS_PENDING_SESSION_WRITES_AFTER_EVERY_TERMINAL", () => {
+    const manager = new PtyManager();
+    manager.spawn("term-1", spawnOptions({ projectId: "project-a" }));
+    manager.spawn("term-2", spawnOptions({ projectId: "project-a" }));
+    const order: string[] = [];
+    shared.created[0]!.dispose.mockImplementation(() => order.push("term-1"));
+    shared.created[1]!.dispose.mockImplementation(() => order.push("term-2"));
+    shared.flushPendingSessionWritesSync.mockImplementationOnce(() => order.push("flush"));
+
+    manager.dispose();
+
+    expect(order).toEqual(["term-1", "term-2", "flush"]);
+  });
+
+  it("DISPOSE_LANDS_PENDING_SESSION_WRITES_WITH_NO_TERMINALS_LEFT", () => {
+    // A terminal that exited and was killed is gone from the registry, but its
+    // capture's write can still be in flight.
+    new PtyManager().dispose();
+
+    expect(shared.flushPendingSessionWritesSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("DISPOSE_LANDS_PENDING_SESSION_WRITES_AFTER_TERMINALS_EVEN_WHEN_ONE_THROWS", () => {
+    const manager = new PtyManager();
+    manager.spawn("term-1", spawnOptions({ projectId: "project-a" }));
+    manager.spawn("term-2", spawnOptions({ projectId: "project-a" }));
+    const order: string[] = [];
+    shared.created[0]!.dispose.mockImplementation(() => {
+      order.push("term-1");
+      throw new Error("dispose boom");
+    });
+    shared.flushPendingSessionWritesSync.mockImplementationOnce(() => order.push("flush"));
+
+    expect(() => manager.dispose()).toThrow("dispose boom");
+
+    // A terminal's own dispose flush runs first and supersedes what it covers;
+    // the drain still runs when a dispose throws, since pty-host exits next.
+    expect(order).toEqual(["term-1", "flush"]);
+    expect(shared.flushPendingSessionWritesSync).toHaveBeenCalledTimes(1);
   });
 
   it("RESIZE_BEFORE_SPAWN_APPLIES_BUFFERED_DIMS", () => {

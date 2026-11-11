@@ -39,7 +39,10 @@ import {
 import { GRACEFUL_KILL_TERMINAL_BUDGET_MS, type GracefulCaptureHost } from "./pty/types.js";
 import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
-import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
+import {
+  deleteSessionFile,
+  flushPendingSessionWritesSync,
+} from "./pty/terminalSessionPersistence.js";
 import { ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { attributeClose } from "./pty/closeAttribution.js";
 import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleLedger.js";
@@ -1653,12 +1656,21 @@ export class PtyManager extends EventEmitter {
    * Clean up all terminals.
    */
   dispose(): void {
-    for (const [_id, terminal] of this.registry.entries()) {
-      const terminalInfo = terminal.getInfo();
-      if (terminalInfo.launchAgentId) {
-        this.agentStateService.emitAgentKilled(terminalInfo, "cleanup");
+    try {
+      for (const [_id, terminal] of this.registry.entries()) {
+        const terminalInfo = terminal.getInfo();
+        if (terminalInfo.launchAgentId) {
+          this.agentStateService.emitAgentKilled(terminalInfo, "cleanup");
+        }
+        terminal.dispose();
       }
-      terminal.dispose();
+    } finally {
+      // After the terminals' own dispose flushes, which supersede what they
+      // cover. pty-host exits without draining promises, so a session write
+      // still in flight (a terminal that exited just before shutdown) lands
+      // here or not at all — including one whose terminal already left the
+      // registry.
+      flushPendingSessionWritesSync();
     }
 
     this.registry.dispose();
