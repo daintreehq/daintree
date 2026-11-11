@@ -4,21 +4,27 @@
  * draws changes (#16801). Background tabs stream status every frame while an
  * agent works; the pane in front, and the strip inside it, must not pay for
  * fields no tab shows. `GridPanel` is a memoized spy, so every call it records
- * is a render the real one would have done.
+ * is a render the real one would have done. The group's attention still
+ * reaches the pane by context, which a memoized parent never blocks.
  */
+import { StrictMode, useContext } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import type { PanelInstance, PtyPanelData, TabGroup } from "@shared/types/panel";
+import type { AgentState } from "@shared/types/agent";
 import type { GridPanelProps } from "../GridPanel";
 
-const gridPanel = vi.hoisted(() => ({ renders: [] as GridPanelProps[] }));
+const gridPanel = vi.hoisted(() => ({
+  renders: [] as GridPanelProps[],
+  ambient: [] as (AgentState | undefined)[],
+}));
 
 vi.mock("../GridPanel", async () => {
   const { memo } = await import("react");
   return {
     GridPanel: memo(function GridPanelSpy(props: GridPanelProps) {
       gridPanel.renders.push(props);
-      return null;
+      return <AttentionProbe />;
     }),
   };
 });
@@ -38,13 +44,22 @@ vi.mock("@/services/layout/reorderGroupTabs", () => ({ reorderGroupTabsWithUndo:
 vi.mock("../useContentGridContext", () => ({ addTabForPanel: vi.fn() }));
 
 import { GridTabGroup } from "../GridTabGroup";
+import { GridGroupAttentionContext } from "@/components/Panel/gridGroupAttention";
 import { usePanelStore } from "@/store/panelStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import {
+  cancelPanelStatusBuffer,
   enqueueActivityUpdate,
+  enqueueFlowStatusUpdate,
   enqueueHeldDurationUpdate,
   flushPanelStatusBuffer,
 } from "@/store/panelStatusBuffer";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+
+function AttentionProbe() {
+  gridPanel.ambient.push(useContext(GridGroupAttentionContext)?.ambientAgentState);
+  return null;
+}
 
 const GROUP = "g-1";
 const SHOWN = "shown";
@@ -66,16 +81,17 @@ function pty(id: string, fields: Partial<PtyPanelData> = {}): PtyPanelData {
     runtimeStatus: "running",
     flowStatus: "running",
     flowStatusTimestamp: 1,
+    agentLaunchFlags: ["--model", "opus"],
     ...fields,
   };
 }
 
 const group: TabGroup = { id: GROUP, location: "grid", activeTabId: SHOWN, panelIds: [SHOWN, BACK] };
 
-function seed(back: Partial<PtyPanelData> = {}) {
+function seed(fields: { shown?: Partial<PtyPanelData>; back?: Partial<PtyPanelData> } = {}) {
   const panelsById: Record<string, PanelInstance> = {
-    [SHOWN]: pty(SHOWN),
-    [BACK]: pty(BACK, back),
+    [SHOWN]: pty(SHOWN, fields.shown),
+    [BACK]: pty(BACK, fields.back),
     [OUTSIDE]: pty(OUTSIDE),
   };
   usePanelStore.setState({
@@ -97,8 +113,16 @@ function patch(id: string, fields: Partial<PtyPanelData>) {
   });
 }
 
-function renderGroup() {
-  render(<GridTabGroup group={group} focusedId={SHOWN} isMultiPanelGrid />);
+function flush(enqueue: () => void) {
+  act(() => {
+    enqueue();
+    flushPanelStatusBuffer();
+  });
+}
+
+function renderGroup(strict = false) {
+  const tree = <GridTabGroup group={group} focusedId={SHOWN} isMultiPanelGrid />;
+  render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   expect(gridPanel.renders.length).toBeGreaterThan(0);
 }
 
@@ -109,37 +133,42 @@ const backTab = () => lastProps().tabs?.find((tab) => tab.id === BACK);
 describe("GridTabGroup render isolation", () => {
   beforeEach(() => {
     gridPanel.renders.length = 0;
+    gridPanel.ambient.length = 0;
     vi.mocked(requestPanelClose).mockClear();
   });
 
   afterEach(() => {
     cleanup();
+    cancelPanelStatusBuffer();
+    useProjectPresetsStore.getState().reset();
   });
 
-  describe("fields no tab draws", () => {
+  describe.each([
+    ["", false],
+    [" under StrictMode", true],
+  ])("fields no tab draws%s", (_label, strict) => {
     beforeEach(() => {
       seed();
-      renderGroup();
+      renderGroup(strict);
     });
 
     it("leaves the shown pane alone when a panel outside the group streams status", () => {
       const before = renderCount();
-      act(() => {
+      flush(() => {
         enqueueActivityUpdate(OUTSIDE, "Running tests", "working", "interactive", "npm test");
         enqueueHeldDurationUpdate(OUTSIDE, 2_000);
-        flushPanelStatusBuffer();
       });
       expect(renderCount()).toBe(before);
     });
 
     it("leaves the shown pane alone when a background tab's activity changes", () => {
       const before = renderCount();
-      act(() => {
-        enqueueActivityUpdate(BACK, "Running tests", "working", "interactive", "npm test");
-        flushPanelStatusBuffer();
-      });
+      flush(() =>
+        enqueueActivityUpdate(BACK, "Running tests", "working", "interactive", "npm test")
+      );
+      flush(() => enqueueActivityUpdate(BACK, "Editing files", "working", "interactive", "vim"));
       expect(usePanelStore.getState().panelsById[BACK]).toMatchObject({
-        activityHeadline: "Running tests",
+        activityHeadline: "Editing files",
       });
       expect(renderCount()).toBe(before);
     });
@@ -147,10 +176,7 @@ describe("GridTabGroup render isolation", () => {
     it("leaves the shown pane alone when a background tab's held-duration gauge ticks", () => {
       const before = renderCount();
       for (const ms of [2_000, 4_000, 6_000]) {
-        act(() => {
-          enqueueHeldDurationUpdate(BACK, ms);
-          flushPanelStatusBuffer();
-        });
+        flush(() => enqueueHeldDurationUpdate(BACK, ms));
       }
       expect(usePanelStore.getState().panelsById[BACK]).toMatchObject({ heldDurationMs: 6_000 });
       expect(renderCount()).toBe(before);
@@ -158,8 +184,25 @@ describe("GridTabGroup render isolation", () => {
 
     it("leaves the shown pane alone when a background tab's flow timestamp moves", () => {
       const before = renderCount();
-      patch(BACK, { flowStatusTimestamp: 2 });
+      flush(() => enqueueFlowStatusUpdate(BACK, "running", 2));
       patch(BACK, { flowStatusTimestamp: 3 });
+      expect(usePanelStore.getState().panelsById[BACK]).toMatchObject({
+        flowStatus: "running",
+        flowStatusTimestamp: 3,
+        runtimeStatus: "running",
+      });
+      expect(renderCount()).toBe(before);
+    });
+
+    it("leaves the shown pane alone when a background tab's fields are replaced with equal ones", () => {
+      patch(BACK, {
+        runtimeIdentity: { kind: "agent", id: "claude", iconId: "claude", agentId: "claude" },
+      });
+      const before = renderCount();
+      patch(BACK, {
+        agentLaunchFlags: ["--model", "opus"],
+        runtimeIdentity: { kind: "agent", id: "claude", iconId: "claude", agentId: "claude" },
+      });
       expect(renderCount()).toBe(before);
     });
   });
@@ -195,26 +238,70 @@ describe("GridTabGroup render isolation", () => {
       seed();
       renderGroup();
       expect(backTab()?.chrome.hasExited).toBe(false);
-      patch(BACK, { runtimeStatus: "exited", exitCode: 1 });
+      patch(BACK, { runtimeStatus: "exited" });
       expect(backTab()?.chrome.hasExited).toBe(true);
     });
 
-    it("re-renders with the background tab's permission-bypass flag", () => {
+    it("re-renders with the background tab's exit code in its chrome", () => {
+      seed();
+      renderGroup();
+      patch(BACK, { exitCode: 1 });
+      expect(backTab()?.chrome.hasExited).toBe(true);
+    });
+
+    it("re-renders with the background tab's permission-bypass flag, on and off", () => {
       seed();
       renderGroup();
       expect(backTab()?.hasDangerousFlags).toBe(false);
       patch(BACK, { agentLaunchFlags: ["--dangerously-skip-permissions"] });
       expect(backTab()?.hasDangerousFlags).toBe(true);
+      patch(BACK, { agentLaunchFlags: [] });
+      expect(backTab()?.hasDangerousFlags).toBe(false);
     });
+
+    it("re-renders with the background tab's renamed preset", () => {
+      act(() =>
+        useProjectPresetsStore.setState({
+          presetsByAgent: { claude: [{ id: "team", name: "Team", color: "#ff0000" }] },
+        })
+      );
+      seed({ back: { agentPresetId: "team" } });
+      renderGroup();
+      expect(backTab()?.presetName).toBe("Team");
+      act(() =>
+        useProjectPresetsStore.setState({
+          presetsByAgent: { claude: [{ id: "team", name: "Team review", color: "#00ff00" }] },
+        })
+      );
+      expect(backTab()?.presetName).toBe("Team review");
+      expect(backTab()?.presetColor).toBe("#00ff00");
+    });
+  });
+
+  it("hands a background tab's new activity to the pane by context, not a re-render", () => {
+    seed({ shown: { agentState: "idle" }, back: { agentState: "idle" } });
+    renderGroup();
+    expect(gridPanel.ambient.at(-1)).toBeUndefined();
+    const before = renderCount();
+    flush(() => enqueueActivityUpdate(BACK, "Thinking", "working", "interactive", undefined));
+    expect(gridPanel.ambient.at(-1)).toBe("working");
+    expect(renderCount()).toBe(before);
+  });
+
+  it("keeps the strip's tab objects for tabs that didn't change", () => {
+    seed();
+    renderGroup();
+    const shownTab = lastProps().tabs?.find((tab) => tab.id === SHOWN);
+    patch(BACK, { title: "Renamed" });
+    expect(lastProps().tabs?.find((tab) => tab.id === SHOWN)).toBe(shownTab);
   });
 
   it("closes the shown tab onto its neighbour after background churn", () => {
     seed();
     renderGroup();
-    act(() => {
-      enqueueActivityUpdate(BACK, "Running tests", "working", "interactive", "npm test");
-      flushPanelStatusBuffer();
-    });
+    flush(() =>
+      enqueueActivityUpdate(BACK, "Running tests", "working", "interactive", "npm test")
+    );
     lastProps().onTabClose?.(SHOWN);
     const request = vi.mocked(requestPanelClose).mock.calls[0]![0];
     act(() => request.onOutcome?.(true));
