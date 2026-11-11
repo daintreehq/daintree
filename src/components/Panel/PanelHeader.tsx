@@ -69,6 +69,7 @@ import { Button } from "@/components/ui/button";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { returnFocusFromScratchpad } from "@/components/Terminal/scratchpadFocus";
 import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
 import { PluginPanelActivityIndicator } from "@/components/Panel/PluginPanelActivity";
 import { TerminalPluginStatusChips } from "@/components/Terminal/TerminalPluginStatusChips";
@@ -1719,7 +1720,10 @@ function PanelHeaderComponent({
                 onClick={(e) => {
                   e.stopPropagation();
                   if (scratchpadState === "collapsed") showScratchpad(id);
-                  else collapseScratchpad(id);
+                  else {
+                    returnFocusFromScratchpad(id);
+                    collapseScratchpad(id);
+                  }
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 aria-label={scratchpadToggleLabel}
