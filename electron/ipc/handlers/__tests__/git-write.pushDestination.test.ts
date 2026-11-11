@@ -1417,20 +1417,40 @@ describe("git-write commit and working diff", () => {
 
   describe("git:commit handler", () => {
     it("invokes git.commit when staged content is clean", async () => {
-      const git = makeFakeGit({
-        diff: stagedDiff(["src/foo.ts"]),
-        raw: vi.fn().mockResolvedValue("clean\n"),
-      });
+      const oid = "abc123".padEnd(40, "0");
+      const parent = "f".repeat(40);
+      const raw = vi.fn(async (args: string[]) =>
+        args[0] === "rev-list" ? `${oid} ${parent}\n` : "clean\n"
+      );
+      const git = makeFakeGit({ diff: stagedDiff(["src/foo.ts"]), raw });
       createHardenedGitMock.mockReturnValue(git);
       registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
       const handler = getHandler("git:commit");
 
       const result = await handler(null, { cwd: "/tmp/repo", message: "feat: add foo" });
       expect(git.commit).toHaveBeenCalledWith("feat: add foo");
+      // Read back from the hash git printed, never from HEAD.
+      expect(raw).toHaveBeenCalledWith(["rev-list", "--parents", "--max-count=1", "abc123^{commit}"]);
       expect(result).toEqual({
         hash: "abc123",
         summary: "1 changed, 1 insertions(+), 0 deletions(-)",
+        oid,
+        parentOids: [parent],
       });
+    });
+
+    it("still reports a commit it could not read back, with nothing to pin a push to", async () => {
+      const raw = vi.fn(async (args: string[]) => {
+        if (args[0] === "rev-list") throw new Error("ambiguous argument");
+        return "clean\n";
+      });
+      const git = makeFakeGit({ diff: stagedDiff(["src/foo.ts"]), raw });
+      createHardenedGitMock.mockReturnValue(git);
+      registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+      const handler = getHandler("git:commit");
+
+      const result = await handler(null, { cwd: "/tmp/repo", message: "feat: add foo" });
+      expect(result).toMatchObject({ hash: "abc123", oid: null, parentOids: [] });
     });
 
     it("blocks the commit when a staged file carries conflict markers", async () => {

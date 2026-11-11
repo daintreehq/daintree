@@ -1273,7 +1273,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     unstageFiles(cwd: string, filePaths: string[]): Promise<void>;
     stageAll(cwd: string): Promise<void>;
     unstageAll(cwd: string): Promise<void>;
-    commit(cwd: string, message: string): Promise<{ hash: string; summary: string }>;
+    commit(cwd: string, message: string): Promise<import("../git.js").GitCommitResult>;
     /**
      * Push the checked-out branch to its push destination.
      *

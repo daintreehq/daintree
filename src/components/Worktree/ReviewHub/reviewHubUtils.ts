@@ -1,4 +1,5 @@
 import type { StagingFileEntry } from "@shared/types";
+import type { GitCommitResult, GitPushDestination, GitPushReview } from "@shared/types/git";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { getGitRecoveryHint } from "@shared/utils/gitOperationErrors";
 import { isClientGitError } from "@/utils/clientGitError";
@@ -8,6 +9,40 @@ import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 import { pluralize } from "@/lib/pluralize";
 
 export type DiffMode = "working-tree" | "base-branch" | "since-review";
+
+/**
+ * Where Commit & push publishes, and the branch tip its confirm put on screen.
+ * `reviewedHeadOid` is `null` only when the confirm was opted out and nothing
+ * was previewed.
+ */
+export interface CommitPushTarget {
+  branch: string;
+  destination: GitPushDestination;
+  reviewedHeadOid: string | null;
+}
+
+/**
+ * The push review for the commit Commit & push just made, or `null` when the
+ * push must not run (#16790).
+ *
+ * Pinned to that commit, so neither the push nor a Retry after it can publish
+ * a commit an agent lands later: main refuses with `push-review-stale` once the
+ * branch has moved past it. A confirmed push also requires the commit to sit
+ * directly on the tip the confirm previewed. An agent commit landing while the
+ * confirm was open would otherwise ride along beneath it, and a merge commit
+ * would bring in history the preview never listed.
+ */
+export function reviewForCommittedPush(
+  committed: GitCommitResult,
+  target: CommitPushTarget
+): GitPushReview | null {
+  if (!committed.oid) return null;
+  if (target.reviewedHeadOid !== null) {
+    const [parent, ...rest] = committed.parentOids;
+    if (rest.length > 0 || parent !== target.reviewedHeadOid.toLowerCase()) return null;
+  }
+  return { branch: target.branch, headOid: committed.oid, destination: target.destination };
+}
 
 export interface PushErrorState {
   reason: GitOperationReason;

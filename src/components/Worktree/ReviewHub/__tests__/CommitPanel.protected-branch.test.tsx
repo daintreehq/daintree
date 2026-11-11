@@ -95,6 +95,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
 }));
 
 import { CommitPanel } from "../CommitPanel";
+import type { CommitPushTarget } from "../reviewHubUtils";
 
 interface RenderProps {
   currentBranch?: string | null;
@@ -102,7 +103,7 @@ interface RenderProps {
   pushDestination?: { remote: string; branch: string } | null;
   commitMessage?: string;
   skipPushConfirm?: boolean;
-  onCommitAndPush?: (message: string) => Promise<void>;
+  onCommitAndPush?: (message: string, target: CommitPushTarget) => Promise<void>;
   onSetSkipPushConfirm?: (value: boolean) => void;
 }
 
@@ -157,6 +158,22 @@ function pushPreview(overrides: Partial<GitPushCommitPreview> = {}): GitPushComm
     headOid: "0".repeat(40),
     ...overrides,
   };
+}
+
+/**
+ * What a confirmed push is pinned to (#16790): the branch, and the destination
+ * and tip its preview measured.
+ */
+function previewed(
+  branch: string,
+  destination: { remote: string; branch: string } = { remote: "origin", branch }
+) {
+  return { branch, destination, reviewedHeadOid: pushPreview().headOid };
+}
+
+/** An opted-out push previewed nothing, so only the commit itself pins it. */
+function unpreviewed(branch: string) {
+  return { branch, destination: { remote: "origin", branch }, reviewedHeadOid: null };
 }
 
 function earlierCommits(count: number): GitPushCommitPreview["commits"] {
@@ -236,7 +253,7 @@ describe("CommitPanel — push confirm", () => {
     expect(onCommitAndPush).not.toHaveBeenCalled();
 
     await confirmWhenReady(/Push to origin\/develop/);
-    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", previewed("develop"));
   });
 
   it("cancelling the dialog does not call onCommitAndPush", () => {
@@ -273,7 +290,7 @@ describe("CommitPanel — push confirm", () => {
     // A history recall that resolves after the dialog opened.
     setCommitMessage("feat: recalled late");
     await confirmWhenReady(/Push to origin\/develop/);
-    expect(onCommitAndPush).toHaveBeenCalledWith("feat: previewed");
+    expect(onCommitAndPush).toHaveBeenCalledWith("feat: previewed", previewed("develop"));
   });
 
   it("warns about protected branches in the description copy", () => {
@@ -297,9 +314,33 @@ describe("CommitPanel — push confirm", () => {
       skipPushConfirm: true,
     });
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
-    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", unpreviewed("feature/x"));
     expect(screen.queryByTestId("push-confirm-dialog")).toBeNull();
     expect(onSetSkipPushConfirm).not.toHaveBeenCalled();
+  });
+
+  it("pins a confirmed push to the tip and destination its preview measured", async () => {
+    const headOid = "c".repeat(40);
+    listPushCommits.mockResolvedValueOnce(pushPreview({ headOid }));
+    const { onCommitAndPush } = renderPanel({ currentBranch: "feature/x" });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    await confirmWhenReady(/Push to origin\/feature\/x/);
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", {
+      branch: "feature/x",
+      destination: { remote: "origin", branch: "feature/x" },
+      reviewedHeadOid: headOid,
+    });
+  });
+
+  it("opens the confirm despite the opt-out when there is no branch to pin the push to", () => {
+    const { onCommitAndPush } = renderPanel({
+      currentBranch: null,
+      pushDestination: { remote: "origin", branch: "feature/x" },
+      skipPushConfirm: true,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    expect(onCommitAndPush).not.toHaveBeenCalled();
+    expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
   });
 
   it("confirming with the 'don't ask again' checkbox checked calls onSetSkipPushConfirm(true)", async () => {
@@ -310,7 +351,7 @@ describe("CommitPanel — push confirm", () => {
     expect(checkbox.getAttribute("aria-checked")).toBe("true");
     await confirmWhenReady(/Push to origin\/feature\/x/);
     expect(onSetSkipPushConfirm).toHaveBeenCalledWith(true);
-    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", previewed("feature/x"));
   });
 
   it("confirming without checking the box calls onSetSkipPushConfirm(false)", async () => {
@@ -415,7 +456,7 @@ describe("CommitPanel — push confirm", () => {
     await confirmWhenReady(/Push to origin\/feature\/x/);
     expect(onSetSkipPushConfirm).toHaveBeenCalledWith(true);
     // The push attempt itself was made.
-    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", previewed("feature/x"));
   });
 });
 
@@ -530,7 +571,7 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
     const rows = screen.getByRole("region", { name: "Earlier commits in this push" });
     expect(rowSubjects(rows).some((row) => row.includes("feat: earlier 2"))).toBe(true);
     await confirmWhenReady(CONFIRM);
-    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", previewed("feature/x"));
   });
 
   it("does not run the confirm handler while the read is in flight", async () => {
@@ -568,7 +609,7 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
       retryRead.resolve(pushPreview());
     });
     await confirmWhenReady(CONFIRM);
-    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", previewed("feature/x"));
   });
 
   it("treats a read that throws before it starts as a failed read", async () => {
@@ -635,7 +676,7 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
       rowSubjects(screen.getByRole("region", { name: "Earlier commits found locally" }))
     ).toHaveLength(2);
     await confirmWhenReady(CONFIRM);
-    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", previewed("feature/x"));
   });
 
   it("re-reads an unverified range from its Retry, blocking until the new answer lands", async () => {
@@ -657,7 +698,7 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
     });
     expect(screen.queryByTestId("commit-panel-push-confirm-unverified")).toBeNull();
     await confirmWhenReady(CONFIRM);
-    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", previewed("feature/x"));
   });
 
   it("marks an empty unverified range instead of rendering nothing, and still allows the push", async () => {
@@ -670,7 +711,7 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
     );
     expect(screen.queryByTestId("commit-panel-push-confirm-unpushed")).toBeNull();
     await confirmWhenReady(CONFIRM);
-    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", previewed("feature/x"));
   });
 
   it("renders nothing extra for an empty tracked range", async () => {
@@ -689,7 +730,7 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
     expect(notice.textContent).toContain("Git will refuse this push");
     // Not blocked: git's own refusal is where the force-push lease is captured.
     await confirmWhenReady(CONFIRM);
-    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", previewed("feature/x"));
   });
 
   it("reads the range again on each opening rather than trusting the last one", async () => {
@@ -740,7 +781,7 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
       expect(range.textContent).toContain("Also pushes 1 earlier commit");
       expect(screen.queryByTestId("commit-panel-push-confirm-unpushed-error")).toBeNull();
       await confirmWhenReady(CONFIRM);
-      expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+      expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", previewed("feature/x"));
     }
   );
 
@@ -781,7 +822,11 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
         replacement.resolve(pushPreview({ destination: next.destination }));
       });
       await confirmWhenReady(label);
-      expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+      // Pinned to what the replacement read measured, never the first answer.
+      expect(onCommitAndPush).toHaveBeenCalledWith(
+        "fix: bug",
+        previewed(next.currentBranch, next.destination)
+      );
     }
   );
 
@@ -839,7 +884,7 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
       await confirmWhenReady(label);
       expect(listPushCommits).toHaveBeenCalledTimes(2);
       expect(onPushDestinationChanged).toHaveBeenCalledTimes(1);
-      expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+      expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", previewed("feature/x", resolved));
     }
   );
 
@@ -847,7 +892,7 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
     const { onCommitAndPush } = renderPanel({ currentBranch: "feature/x", skipPushConfirm: true });
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     await flushReadStart();
-    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", unpreviewed("feature/x"));
     expect(listPushCommits).not.toHaveBeenCalled();
     expect(screen.queryByTestId("push-confirm-dialog")).toBeNull();
   });

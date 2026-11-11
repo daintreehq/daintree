@@ -515,3 +515,100 @@ describe("approved push — publishes what was reviewed or nothing", () => {
     expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(fixture.published);
   });
 });
+
+describe("commit then push — pinned to the commit just made (#16790)", () => {
+  interface Committed {
+    hash: string;
+    oid: string | null;
+    parentOids: string[];
+  }
+
+  function stage(repo: string, file: string): void {
+    fs.writeFileSync(path.join(repo, file), file);
+    git(repo, ["add", file]);
+  }
+
+  async function commitThroughHandler(repo: string, message: string): Promise<Committed> {
+    return (await getHandler("git:commit")(FAKE_EVENT, { cwd: repo, message })) as Committed;
+  }
+
+  /** The push the hub runs after its commit, pinned to what the commit reported. */
+  function pushCommitted(
+    repo: string,
+    branch: string,
+    oid: string,
+    destination: { remote: string; branch: string }
+  ): Promise<unknown> {
+    return getHandler("git:push")(FAKE_EVENT, {
+      cwd: repo,
+      expectedBranch: branch,
+      expectedHeadOid: oid,
+      expectedRemote: destination.remote,
+      expectedRemoteBranch: destination.branch,
+    });
+  }
+
+  it("reports the full OID of the commit it made and the tip it was made on", async () => {
+    const fixture = makeFixture();
+    stage(fixture.repo, "user.txt");
+
+    const committed = await commitThroughHandler(fixture.repo, "user change");
+
+    expect(committed.oid).toBe(git(fixture.repo, ["rev-parse", "HEAD"]));
+    expect(committed.oid?.startsWith(committed.hash)).toBe(true);
+    expect(committed.parentOids).toEqual([fixture.reviewed]);
+  });
+
+  it("reports no parent for a root commit", async () => {
+    const repo = fs.mkdtempSync(path.join(tmpRoot, "root-"));
+    git(repo, ["init", "-q", "-b", "main"]);
+    git(repo, ["config", "user.email", "test@example.com"]);
+    git(repo, ["config", "user.name", "Test"]);
+    stage(repo, "first.txt");
+
+    const committed = await commitThroughHandler(repo, "first");
+
+    expect(committed.oid).toBe(git(repo, ["rev-parse", "HEAD"]));
+    expect(committed.parentOids).toEqual([]);
+  });
+
+  it("reports every parent of a merge commit, the branch tip first", async () => {
+    const fixture = makeFixture();
+    git(fixture.repo, ["checkout", "-q", "-b", "side", fixture.published]);
+    const side = commit(fixture.repo, "side.txt");
+    git(fixture.repo, ["checkout", "-q", "topic"]);
+    git(fixture.repo, ["merge", "-q", "--no-ff", "--no-commit", "side"]);
+
+    const committed = await commitThroughHandler(fixture.repo, "merge side");
+
+    expect(committed.parentOids).toEqual([fixture.reviewed, side]);
+  });
+
+  it("refuses a retry after an agent commit lands on top, and publishes nothing", async () => {
+    const fixture = makeFixture();
+    stage(fixture.repo, "user.txt");
+    const committed = await commitThroughHandler(fixture.repo, "user change");
+    const destination = { remote: "origin", branch: "topic" };
+
+    commit(fixture.repo, "agent.txt");
+    const error = await rejection(
+      pushCommitted(fixture.repo, "topic", committed.oid!, destination)
+    );
+
+    expectStale(error);
+    expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(fixture.published);
+  });
+
+  it("publishes exactly the commit it made when nothing moved", async () => {
+    const fixture = makeFixture();
+    stage(fixture.repo, "user.txt");
+    const committed = await commitThroughHandler(fixture.repo, "user change");
+
+    await pushCommitted(fixture.repo, "topic", committed.oid!, {
+      remote: "origin",
+      branch: "topic",
+    });
+
+    expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(committed.oid);
+  });
+});

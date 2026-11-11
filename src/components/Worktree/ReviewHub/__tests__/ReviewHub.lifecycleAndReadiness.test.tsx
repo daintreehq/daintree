@@ -294,6 +294,14 @@ import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
+/** What main reports for the commit Commit & push makes: the OID its push is pinned to. */
+const COMMITTED = {
+  hash: "abc123",
+  summary: "commit",
+  oid: "abc123".padEnd(40, "0"),
+  parentOids: ["f".repeat(40)],
+};
+
 const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
   staged: [{ path: "src/index.ts", status: "modified", insertions: 5, deletions: 2 }],
   unstaged: [{ path: "src/app.ts", status: "modified", insertions: 3, deletions: 1 }],
@@ -416,7 +424,7 @@ describe("ReviewHub", () => {
     unstageFilesMock.mockReset().mockResolvedValue(undefined);
     stageAllMock.mockReset().mockResolvedValue(undefined);
     unstageAllMock.mockReset().mockResolvedValue(undefined);
-    commitMock.mockReset().mockResolvedValue({ hash: "abc123", summary: "commit" });
+    commitMock.mockReset().mockResolvedValue(COMMITTED);
     pushMock.mockReset().mockResolvedValue(undefined);
     pullRebaseMock.mockReset().mockResolvedValue(undefined);
     forcePushWithLeaseMock.mockReset().mockResolvedValue(undefined);

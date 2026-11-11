@@ -280,6 +280,14 @@ import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
+/** What main reports for the commit Commit & push makes: the OID its push is pinned to. */
+const COMMITTED = {
+  hash: "abc123",
+  summary: "commit",
+  oid: "abc123".padEnd(40, "0"),
+  parentOids: ["f".repeat(40)],
+};
+
 const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
   staged: [{ path: "src/index.ts", status: "modified", insertions: 5, deletions: 2 }],
   unstaged: [{ path: "src/app.ts", status: "modified", insertions: 3, deletions: 1 }],
@@ -362,7 +370,7 @@ describe("ReviewHub", () => {
     unstageFilesMock.mockReset().mockResolvedValue(undefined);
     stageAllMock.mockReset().mockResolvedValue(undefined);
     unstageAllMock.mockReset().mockResolvedValue(undefined);
-    commitMock.mockReset().mockResolvedValue({ hash: "abc123", summary: "commit" });
+    commitMock.mockReset().mockResolvedValue(COMMITTED);
     pushMock.mockReset().mockResolvedValue(undefined);
     pullRebaseMock.mockReset().mockResolvedValue(undefined);
     forcePushWithLeaseMock.mockReset().mockResolvedValue(undefined);
@@ -1228,6 +1236,67 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(pushMock).toHaveBeenCalledTimes(2));
       expect(commitMock).toHaveBeenCalledTimes(1);
       await waitFor(() => expect(screen.queryByTestId("review-hub-push-error")).toBeNull());
+    });
+
+    // #16790: an unpinned retry would publish whatever the branch holds by then,
+    // including an agent commit that landed while the user fixed the network.
+    it("pins the push and its Retry to the commit it made", async () => {
+      pushMock.mockRejectedValueOnce(
+        Object.assign(new Error("Could not resolve host: github.com"), {
+          name: "GitOperationError",
+          gitReason: "network-unavailable",
+        })
+      );
+
+      await triggerCommitAndPush();
+      await screen.findByTestId("review-hub-push-error");
+
+      const pinned = {
+        branch: "feature/test",
+        headOid: COMMITTED.oid,
+        destination: { remote: "origin", branch: "feature/test" },
+      };
+      expect(pushMock.mock.calls[0][0]).toBe(WORKTREE_PATH);
+      expect(pushMock.mock.calls[0][3]).toEqual(pinned);
+
+      // Main refuses the retry once the branch has moved past the commit.
+      pushMock.mockRejectedValueOnce(
+        Object.assign(new Error("The branch changed since this push was reviewed"), {
+          name: "GitOperationError",
+          gitReason: "push-review-stale",
+        })
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(pushMock).toHaveBeenCalledTimes(2));
+      expect(pushMock.mock.calls[1][3]).toEqual(pinned);
+      await waitFor(() =>
+        expect(screen.getByTestId("review-hub-push-error").getAttribute("data-reason")).toBe(
+          "push-review-stale"
+        )
+      );
+      // No approval is left to retry under: the next step is a fresh review.
+      expect(screen.queryByTestId("review-hub-push-error-cta")).toBeNull();
+      expect(commitMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the commit but pushes nothing when the commit can't be read back", async () => {
+      commitMock.mockResolvedValueOnce({ ...COMMITTED, oid: null, parentOids: [] });
+
+      await triggerCommitAndPush();
+
+      const banner = await screen.findByTestId("review-hub-push-error");
+      expect(banner.getAttribute("data-reason")).toBe("push-review-stale");
+      expect(screen.queryByTestId("review-hub-push-error-cta")).toBeNull();
+      expect(commitMock).toHaveBeenCalledTimes(1);
+      expect(pushMock).not.toHaveBeenCalled();
+      // The commit landed, so its message is no longer an unsent draft.
+      await waitFor(() =>
+        expect((screen.getByLabelText("Commit message") as HTMLTextAreaElement).value).toBe("")
+      );
     });
 
     it("renders the banner with the classified reason when push rejects (throws)", async () => {

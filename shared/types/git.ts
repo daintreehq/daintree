@@ -275,6 +275,25 @@ export interface GitPushReview {
   destination: GitPushDestination;
 }
 
+/** The commit `git.commit` just made. */
+export interface GitCommitResult {
+  /** The hash as git printed it, which may be abbreviated. */
+  hash: string;
+  summary: string;
+  /**
+   * The commit's full OID, read back from that printed hash rather than from
+   * `HEAD`, which another commit may already have moved. `null` when it could
+   * not be read: the commit still landed, but nothing can be pinned to it.
+   */
+  oid: string | null;
+  /**
+   * Its parents, first parent first: the branch tip it was made on top of, then
+   * anything a merge commit brought in. Empty for a root commit, or when `oid`
+   * is `null`.
+   */
+  parentOids: string[];
+}
+
 /**
  * The commits a `git pull --rebase` would replay, and what it would replay them onto.
  *
