@@ -487,14 +487,15 @@ export function persistSessionSnapshotSync(
     return;
   }
 
+  // Voided before the write rather than after it: the rename can land and the
+  // directory fsync still throw, and an older async write must not then cover
+  // the newer screen.
+  pendingSessionWrites.delete(sessionPath);
   mkdirSync(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
   tightenDirPermissionsSync(dir);
   resilientAtomicWriteFileSync(sessionPath, formatSessionFile(snapshot), "utf8", {
     mode: OWNER_RW_FILE_MODE,
   });
-  // Written in one tick, so no async write committed in between: anything
-  // still in flight carries an older screen.
-  pendingSessionWrites.delete(sessionPath);
 }
 
 /**
@@ -508,12 +509,13 @@ export interface SessionWriteClaim {
   readonly sessionPath: string;
   // Set once the payload is known, so pty-host teardown can still land it.
   snapshot: SerializedTerminalSnapshot | null;
+  // The payload of the in-flight write this claim superseded, landed in its
+  // place if this claim ends up writing nothing.
+  fallback: SerializedTerminalSnapshot | null;
 }
 
 // Keyed by path, not id: ids are trimmed on the way to a path, so two
-// spellings can name one file. Holds only claims not yet written; one whose
-// capture never landed carries no payload and goes at the next write, delete
-// or teardown of its file.
+// spellings can name one file. Holds only claims not yet written.
 const pendingSessionWrites = new Map<string, SessionWriteClaim>();
 
 /**
@@ -527,19 +529,42 @@ export function claimSessionWrite(terminalId: string): SessionWriteClaim | null 
   if (isScreenNeverSaved(terminalId)) return null;
   const sessionPath = getSessionPath(terminalId);
   if (!sessionPath) return null;
-  const claim: SessionWriteClaim = { terminalId, sessionPath, snapshot: null };
+  const previous = pendingSessionWrites.get(sessionPath);
+  const claim: SessionWriteClaim = {
+    terminalId,
+    sessionPath,
+    snapshot: null,
+    fallback: previous?.snapshot ?? previous?.fallback ?? null,
+  };
   pendingSessionWrites.set(sessionPath, claim);
   return claim;
 }
 
+/**
+ * Give up a claim whose own write will not happen. When it superseded a write
+ * still in flight, that write's payload lands under this claim instead, so a
+ * claim taken ahead of a capture that then fails, or comes out over the cap,
+ * costs the file nothing.
+ */
 export function releaseSessionWrite(claim: SessionWriteClaim): void {
-  if (pendingSessionWrites.get(claim.sessionPath) === claim) {
-    pendingSessionWrites.delete(claim.sessionPath);
+  if (!holdsSessionWrite(claim)) return;
+  const fallback = claim.snapshot === null ? claim.fallback : null;
+  claim.fallback = null;
+  if (fallback) {
+    persistSessionSnapshotAsync(claim.terminalId, fallback, claim).catch(() => {
+      // best-effort only
+    });
+    return;
   }
+  pendingSessionWrites.delete(claim.sessionPath);
 }
 
 function holdsSessionWrite(claim: SessionWriteClaim): boolean {
   return pendingSessionWrites.get(claim.sessionPath) === claim;
+}
+
+function dropSessionWrite(claim: SessionWriteClaim): void {
+  if (holdsSessionWrite(claim)) pendingSessionWrites.delete(claim.sessionPath);
 }
 
 /**
@@ -553,21 +578,26 @@ export async function persistSessionSnapshotAsync(
   snapshot: SerializedTerminalSnapshot,
   claim?: SessionWriteClaim
 ): Promise<void> {
-  if (claim && !holdsSessionWrite(claim)) return;
+  if (claim) {
+    if (!holdsSessionWrite(claim)) return;
+  } else if (isScreenNeverSaved(terminalId) || !getSessionPath(terminalId)) {
+    return;
+  }
+  const bytes = Buffer.byteLength(snapshot.data, "utf8");
+  if (bytes > SESSION_SNAPSHOT_MAX_BYTES) {
+    console.warn(
+      `[terminalSessionPersistence] Snapshot for ${terminalId} exceeds cap (${bytes} > ${SESSION_SNAPSHOT_MAX_BYTES} bytes); skipping persist`
+    );
+    if (claim) releaseSessionWrite(claim);
+    return;
+  }
+  // Claimed only past the cap: a write that will not happen must not void the
+  // one already in flight.
   const owned = claim ?? claimSessionWrite(terminalId);
   if (!owned) return;
+  owned.snapshot = snapshot;
   try {
-    const dir = getSessionDir();
-    if (!dir) return;
-    const bytes = Buffer.byteLength(snapshot.data, "utf8");
-    if (bytes > SESSION_SNAPSHOT_MAX_BYTES) {
-      console.warn(
-        `[terminalSessionPersistence] Snapshot for ${terminalId} exceeds cap (${bytes} > ${SESSION_SNAPSHOT_MAX_BYTES} bytes); skipping persist`
-      );
-      return;
-    }
-    owned.snapshot = snapshot;
-
+    const dir = path.dirname(owned.sessionPath);
     await mkdir(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
     await tightenDirPermissions(dir);
     await resilientAtomicWriteFileIf(
@@ -578,7 +608,7 @@ export async function persistSessionSnapshotAsync(
       { mode: OWNER_RW_FILE_MODE }
     );
   } finally {
-    releaseSessionWrite(owned);
+    dropSessionWrite(owned);
   }
 }
 
@@ -593,9 +623,10 @@ export function flushPendingSessionWritesSync(): void {
   pendingSessionWrites.clear();
   if (!TERMINAL_SESSION_PERSISTENCE_ENABLED || isSessionPersistSuppressed()) return;
   for (const claim of claims) {
-    if (!claim.snapshot) continue;
+    const payload = claim.snapshot ?? claim.fallback;
+    if (!payload) continue;
     try {
-      persistSessionSnapshotSync(claim.terminalId, claim.snapshot);
+      persistSessionSnapshotSync(claim.terminalId, payload);
     } catch (error) {
       console.warn(
         `[terminalSessionPersistence] Failed to flush pending session for ${claim.terminalId}:`,

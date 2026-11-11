@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "fs/promises";
 import os from "os";
 import path from "path";
 
-const { renameTap } = vi.hoisted(() => ({ renameTap: vi.fn() }));
+const { renameTap, openTap } = vi.hoisted(() => ({ renameTap: vi.fn(), openTap: vi.fn() }));
 
 // The tap records the call and then defers to the real rename; a tap that
 // throws stops the real call, which is how a failing attempt is injected.
@@ -15,6 +15,19 @@ vi.mock("fs", async (importOriginal) => {
     renameSync: (...args: Parameters<typeof actual.renameSync>) => {
       renameTap(...args);
       return actual.renameSync(...args);
+    },
+  };
+});
+
+// Only the parent-directory fsync opens through fs/promises, so the open tap
+// is how the directory sync is observed or failed.
+vi.mock("fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs/promises")>();
+  return {
+    ...actual,
+    open: (...args: Parameters<typeof actual.open>) => {
+      openTap(...args);
+      return actual.open(...args);
     },
   };
 });
@@ -33,6 +46,7 @@ describe("resilientAtomicWriteFileIf", () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "daintree-atomic-if-"));
     target = path.join(tmpDir, "session.restore");
     renameTap.mockReset();
+    openTap.mockReset();
   });
 
   afterEach(async () => {
@@ -97,6 +111,28 @@ describe("resilientAtomicWriteFileIf", () => {
   });
 
   const posixIt = process.platform === "win32" ? it.skip : it;
+  const dirSyncs = () => openTap.mock.calls.filter(([opened]) => opened === tmpDir);
+
+  posixIt("syncs the parent directory after the rename, and not when refused", async () => {
+    await resilientAtomicWriteFileIf(target, "payload", () => false);
+    expect(dirSyncs()).toEqual([]);
+
+    await resilientAtomicWriteFileIf(target, "payload", () => true);
+    expect(dirSyncs()).toEqual([[tmpDir, "r"]]);
+  });
+
+  posixIt("surfaces a failed directory sync with the file already in place", async () => {
+    openTap.mockImplementationOnce(() => {
+      throw errno("EIO");
+    });
+
+    await expect(resilientAtomicWriteFileIf(target, "payload", () => true)).rejects.toMatchObject({
+      code: "EIO",
+    });
+
+    expect(readFileSync(target, "utf8")).toBe("payload");
+    expect(stragglers()).toEqual([]);
+  });
 
   posixIt("writes the committed file with the requested mode", async () => {
     await resilientAtomicWriteFileIf(target, "payload", () => true, "utf8", { mode: 0o600 });

@@ -1824,6 +1824,8 @@ export class TerminalProcess {
     // passed through kill / natural exit, persistence has already been handled.
     this.sessionSnapshotter.flushSyncOnDispose();
     this.sessionSnapshotter.dispose();
+    // A preserved exit still capturing never lands once the mirror goes below.
+    this.preservedSnapshotCapture.cancel();
 
     const wonTeardown = this.teardown("dispose");
     this.semanticBufferManager.dispose();

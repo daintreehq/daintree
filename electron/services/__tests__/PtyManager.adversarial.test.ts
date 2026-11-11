@@ -530,6 +530,28 @@ describe("PtyManager adversarial", () => {
     expect(shared.disposeSerializer).toHaveBeenCalledTimes(1);
   });
 
+  it("DISPOSE_LANDS_PENDING_SESSION_WRITES_AFTER_EVERY_TERMINAL", () => {
+    const manager = new PtyManager();
+    manager.spawn("term-1", spawnOptions({ projectId: "project-a" }));
+    manager.spawn("term-2", spawnOptions({ projectId: "project-a" }));
+    const order: string[] = [];
+    shared.created[0]!.dispose.mockImplementation(() => order.push("term-1"));
+    shared.created[1]!.dispose.mockImplementation(() => order.push("term-2"));
+    shared.flushPendingSessionWritesSync.mockImplementationOnce(() => order.push("flush"));
+
+    manager.dispose();
+
+    expect(order).toEqual(["term-1", "term-2", "flush"]);
+  });
+
+  it("DISPOSE_LANDS_PENDING_SESSION_WRITES_WITH_NO_TERMINALS_LEFT", () => {
+    // A terminal that exited and was killed is gone from the registry, but its
+    // capture's write can still be in flight.
+    new PtyManager().dispose();
+
+    expect(shared.flushPendingSessionWritesSync).toHaveBeenCalledTimes(1);
+  });
+
   it("DISPOSE_LANDS_PENDING_SESSION_WRITES_AFTER_TERMINALS_EVEN_WHEN_ONE_THROWS", () => {
     const manager = new PtyManager();
     manager.spawn("term-1", spawnOptions({ projectId: "project-a" }));

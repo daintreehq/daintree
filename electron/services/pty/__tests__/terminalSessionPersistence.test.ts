@@ -21,6 +21,7 @@ import {
   getHibernatedMarkerPath,
   claimSessionWrite,
   flushPendingSessionWritesSync,
+  releaseSessionWrite,
   setSessionPersistSuppressed,
 } from "../terminalSessionPersistence.js";
 import {
@@ -28,6 +29,24 @@ import {
   DECISIONS_REMOVE_TERMINAL_PREFIX,
 } from "../../../../shared/config/terminalScreenPersistence.js";
 import { HOST_THROWAWAY_TERMINAL_PREFIX } from "../../../../shared/config/hostThrowaway.js";
+
+// Pass-through by default; a test swaps in a writer that lands the rename and
+// then throws, the way a failed parent-directory fsync does.
+const syncWriter = vi.hoisted(() => ({
+  afterWrite: null as null | (() => void),
+}));
+vi.mock("../../../utils/fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/fs.js")>();
+  return {
+    ...actual,
+    resilientAtomicWriteFileSync: (
+      ...args: Parameters<typeof actual.resilientAtomicWriteFileSync>
+    ) => {
+      actual.resilientAtomicWriteFileSync(...args);
+      syncWriter.afterWrite?.();
+    },
+  };
+});
 
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
@@ -697,6 +716,7 @@ describe("terminalSessionPersistence", () => {
         : [];
 
     afterEach(() => {
+      syncWriter.afterWrite = null;
       setSessionPersistSuppressed(false);
       flushPendingSessionWritesSync();
     });
@@ -740,18 +760,118 @@ describe("terminalSessionPersistence", () => {
       expect(stragglers()).toEqual([]);
     });
 
-    it("keeps the later claim's screen when the earlier write finishes last", async () => {
-      const earlier = claimSessionWrite("term-order")!;
-      const later = claimSessionWrite("term-order")!;
+    it("keeps a sync write that renamed before its directory fsync threw", async () => {
+      const write = persistSessionSnapshotAsync("term-fsync", {
+        data: "older",
+        cols: 80,
+        rows: 24,
+      });
+      syncWriter.afterWrite = () => {
+        throw Object.assign(new Error("fsync failed"), { code: "EIO" });
+      };
+      expect(() =>
+        persistSessionSnapshotSync("term-fsync", { data: "newer", cols: 80, rows: 24 })
+      ).toThrow("fsync failed");
+      await write;
 
+      expect(readSession("term-fsync")).toBe("DAINTREE_SESSION_v2\n80x24\nnewer");
+    });
+
+    it("lets a write superseded mid-flight neither land nor give up the newer claim", async () => {
+      const earlier = persistSessionSnapshotAsync("term-order", {
+        data: "earlier",
+        cols: 80,
+        rows: 24,
+      });
+      const later = claimSessionWrite("term-order")!;
+      await earlier;
+
+      expect(fs.existsSync(getSessionPath("term-order")!)).toBe(false);
       await persistSessionSnapshotAsync("term-order", { data: "later", cols: 80, rows: 24 }, later);
+      expect(readSession("term-order")).toBe("DAINTREE_SESSION_v2\n80x24\nlater");
+    });
+
+    it("lands the superseded write's screen when the newer claim writes nothing", async () => {
+      const periodic = persistSessionSnapshotAsync("term-fallback", {
+        data: "periodic",
+        cols: 80,
+        rows: 24,
+      });
+      const exitClaim = claimSessionWrite("term-fallback")!;
+      await periodic;
+      expect(fs.existsSync(getSessionPath("term-fallback")!)).toBe(false);
+
+      releaseSessionWrite(exitClaim);
+
+      await vi.waitFor(() => {
+        expect(readSession("term-fallback")).toBe("DAINTREE_SESSION_v2\n80x24\nperiodic");
+      });
+    });
+
+    it("lands the superseded write's screen when the claimed payload is over the cap", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const periodic = persistSessionSnapshotAsync("term-over", {
+        data: "periodic",
+        cols: 80,
+        rows: 24,
+      });
+      const exitClaim = claimSessionWrite("term-over")!;
+      await periodic;
+
       await persistSessionSnapshotAsync(
-        "term-order",
-        { data: "earlier", cols: 80, rows: 24 },
-        earlier
+        "term-over",
+        { data: "x".repeat(SESSION_SNAPSHOT_MAX_BYTES + 1), cols: 80, rows: 24 },
+        exitClaim
       );
 
-      expect(readSession("term-order")).toBe("DAINTREE_SESSION_v2\n80x24\nlater");
+      await vi.waitFor(() => {
+        expect(readSession("term-over")).toBe("DAINTREE_SESSION_v2\n80x24\nperiodic");
+      });
+      warnSpy.mockRestore();
+    });
+
+    it("does not let an over-cap write void the one already in flight", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const small = persistSessionSnapshotAsync("term-cap", { data: "small", cols: 80, rows: 24 });
+      await persistSessionSnapshotAsync("term-cap", {
+        data: "x".repeat(SESSION_SNAPSHOT_MAX_BYTES + 1),
+        cols: 80,
+        rows: 24,
+      });
+      await small;
+
+      expect(readSession("term-cap")).toBe("DAINTREE_SESSION_v2\n80x24\nsmall");
+      warnSpy.mockRestore();
+    });
+
+    it("drops the superseded write's screen too when the file is deleted", async () => {
+      const periodic = persistSessionSnapshotAsync("term-gone", {
+        data: "periodic",
+        cols: 80,
+        rows: 24,
+      });
+      const exitClaim = claimSessionWrite("term-gone")!;
+      await periodic;
+      await deleteSessionFile("term-gone");
+
+      releaseSessionWrite(exitClaim);
+      flushPendingSessionWritesSync();
+
+      expect(fs.existsSync(getSessionPath("term-gone")!)).toBe(false);
+    });
+
+    it("lands the superseded write's screen at teardown when the newer claim has none yet", async () => {
+      const periodic = persistSessionSnapshotAsync("term-drain-fallback", {
+        data: "periodic",
+        cols: 80,
+        rows: 24,
+      });
+      claimSessionWrite("term-drain-fallback");
+      await periodic;
+
+      flushPendingSessionWritesSync();
+
+      expect(readSession("term-drain-fallback")).toBe("DAINTREE_SESSION_v2\n80x24\nperiodic");
     });
 
     it("lands an in-flight write synchronously at teardown, and the async one stands down", async () => {

@@ -22,7 +22,19 @@ export interface PreservedSnapshotCaptureHost {
 }
 
 export class PreservedSnapshotCapture {
+  // The exit write's claim until the capture hands it on or gives it up.
+  private claim: SessionWriteClaim | null = null;
+
   constructor(private readonly host: PreservedSnapshotCaptureHost) {}
+
+  /**
+   * Give up the exit write when the capture will never land: a cleared mirror
+   * queue drops its flush callback, so nothing else would release the claim.
+   */
+  cancel(): void {
+    const claim = this.takeClaim();
+    if (claim) releaseSessionWrite(claim);
+  }
 
   /**
    * Preserved exited terminals don't need a live headless xterm — the buffer
@@ -46,14 +58,14 @@ export class PreservedSnapshotCapture {
     if (!headless || !terminal.serializeAddon) {
       return;
     }
-    const claim = this.claimFinalWrite();
+    this.claimFinalWrite();
     // Route the drain-sentinel through the scheduler: it fires only after all
     // feeds held for this terminal have been released AND parsed, preserving
     // the "tail of the output must land in the buffer" contract now that
     // chunks can be held outside xterm's own write queue.
     headlessMirrorScheduler.flush(this.host.id, headless, () => {
       if (terminal.headlessTerminal !== headless || !terminal.serializeAddon) {
-        if (claim) releaseSessionWrite(claim);
+        this.cancel();
         return;
       }
       let snapshot: SerializedTerminalSnapshot;
@@ -71,7 +83,7 @@ export class PreservedSnapshotCapture {
           `[TerminalProcess] Failed to snapshot preserved terminal ${this.host.id}:`,
           error
         );
-        if (claim) releaseSessionWrite(claim);
+        this.cancel();
         return;
       }
       // sessionSnapshotter.dispose() already ran in the onExit handler,
@@ -79,6 +91,7 @@ export class PreservedSnapshotCapture {
       // crash recovery sees the post-exit buffer (#3177). Banner-aware like
       // flushSyncOnKill. Async: a sync write of up to 5 MB here stalls every
       // terminal on this pty-host (#16806).
+      const claim = this.takeClaim();
       if (claim) {
         let payload: SerializedTerminalSnapshot | null;
         try {
@@ -116,7 +129,7 @@ export class PreservedSnapshotCapture {
   // keep-on-serialize-failure semantics.
   private snapshotAndDisposeViaWorker(): void {
     const terminal = this.host.terminalInfo;
-    const claim = this.claimFinalWrite();
+    this.claimFinalWrite();
     void this.host.analysis.captureFinalSnapshot().then(
       ({ snapshot, persistence }) => {
         // dispose() may have run while the capture was in flight (LRU eviction,
@@ -125,9 +138,10 @@ export class PreservedSnapshotCapture {
         // fire onPreserved. Mirrors the in-thread capture's same-headless-
         // instance guard.
         if (this.host.isDisposed || snapshot === null) {
-          if (claim) releaseSessionWrite(claim);
+          this.cancel();
           return;
         }
+        const claim = this.takeClaim();
         if (claim) this.persistFinal(claim, persistence ?? snapshot);
         terminal.preservedSnapshot = snapshot;
         terminal.preservedAt = Date.now();
@@ -137,8 +151,12 @@ export class PreservedSnapshotCapture {
         this.host.onPreserved();
       },
       (error: unknown) => {
-        if (claim) releaseSessionWrite(claim);
-        throw error;
+        // Kept live, as on an in-thread serialize failure.
+        console.error(
+          `[TerminalProcess] Failed to capture final snapshot for ${this.host.id}:`,
+          error
+        );
+        this.cancel();
       }
     );
   }
@@ -149,15 +167,21 @@ export class PreservedSnapshotCapture {
   // is still out. The delete voids this claim, and the late capture then
   // leaves the file deleted. Same gates as every crash-recovery write; agent
   // sessions are never replayed by crash recovery.
-  private claimFinalWrite(): SessionWriteClaim | null {
+  private claimFinalWrite(): void {
     if (
       !TERMINAL_SESSION_PERSISTENCE_ENABLED ||
       isSessionPersistSuppressed() ||
       this.host.terminalInfo.launchAgentId
     ) {
-      return null;
+      return;
     }
-    return claimSessionWrite(this.host.id);
+    this.claim = claimSessionWrite(this.host.id);
+  }
+
+  private takeClaim(): SessionWriteClaim | null {
+    const claim = this.claim;
+    this.claim = null;
+    return claim;
   }
 
   private persistFinal(claim: SessionWriteClaim, payload: SerializedTerminalSnapshot): void {
