@@ -29,14 +29,12 @@ vi.mock("../GridPanel", async () => {
   };
 });
 
+// The real preferences store, the one GridTabGroup reads, so a test that sets
+// it is setting what the group sees.
 vi.mock("@/store", async () => {
   const { usePanelStore } = await import("@/store/panelStore");
-  return {
-    usePanelStore,
-    usePreferencesStore: (
-      selector: (s: { showGridAgentHighlights: boolean; showAgentTaskTitles: boolean }) => unknown
-    ) => selector({ showGridAgentHighlights: false, showAgentTaskTitles: true }),
-  };
+  const { usePreferencesStore } = await import("@/store/preferencesStore");
+  return { usePanelStore, usePreferencesStore };
 });
 
 vi.mock("@/services/terminal/optimisticPanelClose", () => ({ requestPanelClose: vi.fn() }));
@@ -45,7 +43,9 @@ vi.mock("../useContentGridContext", () => ({ addTabForPanel: vi.fn() }));
 
 import { GridTabGroup } from "../GridTabGroup";
 import { GridGroupAttentionContext } from "@/components/Panel/gridGroupAttention";
+import { isPtyPanel } from "@shared/types/panel";
 import { usePanelStore } from "@/store/panelStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import {
   cancelPanelStatusBuffer,
@@ -61,9 +61,13 @@ function AttentionProbe() {
   return null;
 }
 
+const initialPanelState = usePanelStore.getState();
+const initialPreferences = usePreferencesStore.getState();
+
 const GROUP = "g-1";
 const SHOWN = "shown";
 const BACK = "back";
+const MIDDLE = "middle";
 const OUTSIDE = "outside";
 
 function pty(id: string, fields: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -93,29 +97,45 @@ const group: TabGroup = {
   panelIds: [SHOWN, BACK],
 };
 
-function seed(fields: { shown?: Partial<PtyPanelData>; back?: Partial<PtyPanelData> } = {}) {
+function seed(
+  fields: { shown?: Partial<PtyPanelData>; back?: Partial<PtyPanelData> } = {},
+  tabGroup: TabGroup = group
+) {
   const panelsById: Record<string, PanelInstance> = {
     [SHOWN]: pty(SHOWN, fields.shown),
     [BACK]: pty(BACK, fields.back),
+    [MIDDLE]: pty(MIDDLE),
     [OUTSIDE]: pty(OUTSIDE),
   };
   usePanelStore.setState({
     panelsById,
-    panelIds: [SHOWN, BACK, OUTSIDE],
-    tabGroups: new Map([[GROUP, group]]),
+    panelIds: [SHOWN, BACK, MIDDLE, OUTSIDE],
+    tabGroups: new Map([[GROUP, tabGroup]]),
     focusedId: SHOWN,
   });
 }
 
 function patch(id: string, fields: Partial<PtyPanelData>) {
   act(() => {
-    usePanelStore.setState((state) => ({
-      panelsById: {
-        ...state.panelsById,
-        [id]: { ...state.panelsById[id], ...fields } as PanelInstance,
-      },
-    }));
+    usePanelStore.setState((state) => {
+      const current = state.panelsById[id];
+      if (!current || !isPtyPanel(current)) throw new Error(`no terminal ${id}`);
+      const next: PtyPanelData = { ...current, ...fields };
+      return { panelsById: { ...state.panelsById, [id]: next } };
+    });
   });
+}
+
+function setTaskTitles(show: boolean) {
+  act(() => {
+    void usePreferencesStore.setState({ showAgentTaskTitles: show });
+  });
+}
+
+function closeAndApprove(tabId: string) {
+  lastProps().onTabClose?.(tabId);
+  const request = vi.mocked(requestPanelClose).mock.calls.at(-1)![0];
+  act(() => request.onOutcome?.(true));
 }
 
 function flush(enqueue: () => void) {
@@ -145,6 +165,8 @@ describe("GridTabGroup render isolation", () => {
   afterEach(() => {
     cleanup();
     cancelPanelStatusBuffer();
+    usePanelStore.setState(initialPanelState, true);
+    usePreferencesStore.setState(initialPreferences, true);
     useProjectPresetsStore.getState().reset();
   });
 
@@ -162,6 +184,10 @@ describe("GridTabGroup render isolation", () => {
       flush(() => {
         enqueueActivityUpdate(OUTSIDE, "Running tests", "working", "interactive", "npm test");
         enqueueHeldDurationUpdate(OUTSIDE, 2_000);
+      });
+      expect(usePanelStore.getState().panelsById[OUTSIDE]).toMatchObject({
+        activityHeadline: "Running tests",
+        heldDurationMs: 2_000,
       });
       expect(renderCount()).toBe(before);
     });
@@ -190,6 +216,8 @@ describe("GridTabGroup render isolation", () => {
     it("leaves the shown pane alone when a background tab's flow timestamp moves", () => {
       const before = renderCount();
       flush(() => enqueueFlowStatusUpdate(BACK, "running", 2));
+      expect(usePanelStore.getState().panelsById[BACK]).toMatchObject({ flowStatusTimestamp: 2 });
+      expect(renderCount()).toBe(before);
       patch(BACK, { flowStatusTimestamp: 3 });
       expect(usePanelStore.getState().panelsById[BACK]).toMatchObject({
         flowStatus: "running",
@@ -210,6 +238,19 @@ describe("GridTabGroup render isolation", () => {
       });
       expect(renderCount()).toBe(before);
     });
+
+    it("stays put on the status writes that follow a background tab's rename", () => {
+      patch(BACK, { title: "Renamed" });
+      const renamed = lastProps().tabs;
+      const before = renderCount();
+      flush(() =>
+        enqueueActivityUpdate(BACK, "Running tests", "working", "interactive", "npm test")
+      );
+      flush(() => enqueueHeldDurationUpdate(BACK, 2_000));
+      expect(renderCount()).toBe(before);
+      expect(lastProps().tabs).toBe(renamed);
+      expect(backTab()?.fullTitle).toBe("Renamed");
+    });
   });
 
   describe("fields a tab draws", () => {
@@ -223,12 +264,22 @@ describe("GridTabGroup render isolation", () => {
     });
 
     it("re-renders with the background tab's observed task title", () => {
+      setTaskTitles(true);
       seed();
       renderGroup();
       const before = renderCount();
       patch(BACK, { lastObservedTitle: "Fix the auth tests" });
       expect(renderCount()).toBeGreaterThan(before);
       expect(backTab()?.title).toBe("Fix the auth tests");
+    });
+
+    it("re-renders with the identity title once task titles are turned off", () => {
+      setTaskTitles(true);
+      seed({ back: { lastObservedTitle: "Fix the auth tests" } });
+      renderGroup();
+      expect(backTab()?.title).toBe("Fix the auth tests");
+      setTaskTitles(false);
+      expect(backTab()?.title).toBe(BACK);
     });
 
     it("re-renders with the background tab's new agent state", () => {
@@ -297,18 +348,46 @@ describe("GridTabGroup render isolation", () => {
     seed();
     renderGroup();
     const shownTab = lastProps().tabs?.find((tab) => tab.id === SHOWN);
+    const back = backTab();
     patch(BACK, { title: "Renamed" });
+    expect(backTab()).not.toBe(back);
+    expect(backTab()?.fullTitle).toBe("Renamed");
     expect(lastProps().tabs?.find((tab) => tab.id === SHOWN)).toBe(shownTab);
   });
 
-  it("closes the shown tab onto its neighbour after background churn", () => {
-    seed();
-    renderGroup();
-    flush(() => enqueueActivityUpdate(BACK, "Running tests", "working", "interactive", "npm test"));
-    lastProps().onTabClose?.(SHOWN);
-    const request = vi.mocked(requestPanelClose).mock.calls[0]![0];
-    act(() => request.onOutcome?.(true));
-    expect(usePanelStore.getState().tabGroups.get(GROUP)?.activeTabId).toBe(BACK);
-    expect(usePanelStore.getState().focusedId).toBe(BACK);
+  describe("closing the shown tab", () => {
+    const activeTab = () => usePanelStore.getState().tabGroups.get(GROUP)?.activeTabId;
+
+    it("lands on its neighbour after background churn", () => {
+      seed();
+      renderGroup();
+      flush(() =>
+        enqueueActivityUpdate(BACK, "Running tests", "working", "interactive", "npm test")
+      );
+      closeAndApprove(SHOWN);
+      expect(activeTab()).toBe(BACK);
+      expect(usePanelStore.getState().focusedId).toBe(BACK);
+    });
+
+    it("lands on its neighbour in the group's current order", () => {
+      seed();
+      const { rerender } = render(
+        <GridTabGroup group={group} focusedId={SHOWN} isMultiPanelGrid />
+      );
+      const reordered: TabGroup = { ...group, panelIds: [SHOWN, MIDDLE, BACK] };
+      act(() => usePanelStore.setState({ tabGroups: new Map([[GROUP, reordered]]) }));
+      rerender(<GridTabGroup group={reordered} focusedId={SHOWN} isMultiPanelGrid />);
+      closeAndApprove(SHOWN);
+      expect(activeTab()).toBe(MIDDLE);
+      expect(usePanelStore.getState().focusedId).toBe(MIDDLE);
+    });
+
+    it("lands on the tab before it when it is the last", () => {
+      const lastShown: TabGroup = { ...group, panelIds: [BACK, MIDDLE, SHOWN] };
+      seed({}, lastShown);
+      render(<GridTabGroup group={lastShown} focusedId={SHOWN} isMultiPanelGrid />);
+      closeAndApprove(SHOWN);
+      expect(activeTab()).toBe(MIDDLE);
+    });
   });
 });
