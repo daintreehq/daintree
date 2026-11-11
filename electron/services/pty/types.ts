@@ -341,7 +341,9 @@ export interface PtyManagerEvents {
     launchGeneration?: number,
     preserveSession?: boolean,
     /** The exiting incarnation's `TerminalInfo.spawnedAt`. */
-    spawnedAt?: number
+    spawnedAt?: number,
+    /** The registry keeps the entry past the exit, for its final screen and scrollback. */
+    preserved?: boolean
   ) => void;
   /**
    * The exit of an incarnation a same-id respawn already replaced: its facts
@@ -356,6 +358,8 @@ export interface PtyManagerEvents {
   ) => void;
   error: (id: string, error: string) => void;
   "resize-result": (id: string, result: TerminalResizeResult) => void;
+  /** The registry dropped the terminal's entry, whatever removed it. */
+  "terminal-removed": (id: string) => void;
 }
 
 /**

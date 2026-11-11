@@ -2897,6 +2897,42 @@ describe("pty-host adversarial", () => {
     ]);
   });
 
+  it("EXIT_RELAYS_PRESERVED_ENTRY_AND_ITS_REMOVAL", async () => {
+    // Main keeps routing to a shard while it holds a preserved entry, and
+    // lets the shard go once the host says the entry is gone (#16811).
+    const parentPort = await loadHost();
+    const manager = hostState.currentPtyManager as MiniEmitter;
+
+    manager.emit("exit", "kept", 0, undefined, 5, undefined, 1_000, true);
+    manager.emit("exit", "dropped", 0, undefined, 6, undefined, 2_000, false);
+    manager.emit("terminal-removed", "kept");
+    await flushMicrotasks();
+
+    const relayed = parentPort.postMessage.mock.calls
+      .map((c: unknown[]) => c[0] as { type?: string } | null)
+      .filter((m) => m?.type === "exit" || m?.type === "terminal-removed");
+    expect(relayed).toEqual([
+      {
+        type: "exit",
+        id: "kept",
+        exitCode: 0,
+        signal: undefined,
+        launchGeneration: 5,
+        spawnedAt: 1_000,
+        preserved: true,
+      },
+      {
+        type: "exit",
+        id: "dropped",
+        exitCode: 0,
+        signal: undefined,
+        launchGeneration: 6,
+        spawnedAt: 2_000,
+      },
+      { type: "terminal-removed", id: "kept" },
+    ]);
+  });
+
   describe("graceful capture (#12432)", () => {
     type CaptureHost = {
       open(id: string): { shouldDiscard(data: string): boolean; close(): void } | null;

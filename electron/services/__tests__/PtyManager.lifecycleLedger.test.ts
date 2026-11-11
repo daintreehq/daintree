@@ -299,7 +299,7 @@ describe("PtyManager lifecycle ledger", () => {
     expect(manager.getTerminal("t1")?.launchGeneration).toBe(2);
 
     second!.callbacks.onExit("t1", 0);
-    expect(exits).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined, 2, undefined, 2_000);
+    expect(exits).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined, 2, undefined, 2_000, false);
     expect(superseded).toHaveBeenCalledTimes(1);
   });
 

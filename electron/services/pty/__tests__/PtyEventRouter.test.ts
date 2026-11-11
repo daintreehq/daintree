@@ -314,6 +314,52 @@ describe("routeHostEvent", () => {
     expect(state.pendingSpawns.has("t1")).toBe(false);
   });
 
+  it("reports whether the host kept the entry, after the pending maps settle and before the public exit (#16811)", () => {
+    const { deps, emitter, state } = makeDeps();
+    const order: string[] = [];
+    deps.callbacks.onCurrentExit = (id, preserved) =>
+      order.push(`current:${id}:${preserved}:${state.pendingSpawns.has(id)}`);
+    emitter.on("exit", (id: string) => order.push(`exit:${id}`));
+    state.pendingSpawns.set("kept", { cwd: "/", cols: 80, rows: 24 });
+    state.pendingSpawns.set("dropped", { cwd: "/", cols: 80, rows: 24 });
+
+    routeHostEvent({ type: "exit", id: "kept", exitCode: 0, preserved: true }, deps);
+    routeHostEvent({ type: "exit", id: "dropped", exitCode: 1 }, deps);
+
+    expect(order).toEqual([
+      "current:kept:true:false",
+      "exit:kept",
+      "current:dropped:false:false",
+      "exit:dropped",
+    ]);
+  });
+
+  it("keeps a superseded exit away from the current incarnation's exit callback (#16811)", () => {
+    const { deps, state } = makeDeps();
+    const onCurrentExit = vi.fn();
+    deps.callbacks.onCurrentExit = onCurrentExit;
+    state.pendingSpawns.set("t1", { cwd: "/", cols: 80, rows: 24, launchGeneration: 2 });
+
+    routeHostEvent(
+      { type: "exit", id: "t1", exitCode: 0, launchGeneration: 1, preserved: true },
+      deps
+    );
+
+    expect(onCurrentExit).not.toHaveBeenCalled();
+  });
+
+  it("hands a host's entry removal to its callback without a public event (#16811)", () => {
+    const { deps, emitter } = makeDeps();
+    const onTerminalRemoved = vi.fn();
+    deps.callbacks.onTerminalRemoved = onTerminalRemoved;
+    const emitted = vi.spyOn(emitter, "emit");
+
+    expect(routeHostEvent({ type: "terminal-removed", id: "t1" }, deps)).toBe(true);
+
+    expect(onTerminalRemoved).toHaveBeenCalledExactlyOnceWith("t1");
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
   it.each([0, 1])("preserves a successor on a stale exit with %i pending kills", (killCount) => {
     const { deps, emitter, state, callbacks } = makeDeps();
     const successor: PtyHostSpawnOptions = { cwd: "/", cols: 80, rows: 24, launchGeneration: 2 };

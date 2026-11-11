@@ -201,3 +201,67 @@ describe("PtyManager stream offsets", () => {
     expect(offsetsOf(manager).get("t1")).toBe(base + 200);
   });
 });
+
+describe("PtyManager registry retention reporting (#16811)", () => {
+  let manager: InstanceType<typeof PtyManager>;
+  let events: Array<[string, string, boolean?]>;
+
+  beforeEach(() => {
+    constructed.length = 0;
+    preserveOnExit = false;
+    infoState = { wasKilled: false, isExited: true };
+    vi.mocked(acquirePtyProcess).mockReturnValue({ ptyProcess: createMockPty(), prelude: "" });
+    manager = new PtyManager();
+    events = [];
+    manager.on(
+      "exit",
+      (
+        id: string,
+        _code: number,
+        _signal?: number,
+        _generation?: number,
+        _preserveSession?: boolean,
+        _spawnedAt?: number,
+        preserved?: boolean
+      ) => events.push(["exit", id, preserved])
+    );
+    manager.on("terminal-removed", (id: string) => events.push(["removed", id]));
+  });
+
+  it("reports an unpreserved exit's entry removed right after the exit", () => {
+    manager.spawn("t1", spawnOptions);
+    constructed[0].onExit("t1", 0);
+
+    expect(events).toEqual([
+      ["exit", "t1", false],
+      ["removed", "t1"],
+    ]);
+  });
+
+  it("marks a preserved exit and reports its entry removed only when killed", () => {
+    preserveOnExit = true;
+    manager.spawn("t1", spawnOptions);
+    constructed[0].onExit("t1", 0);
+    expect(events).toEqual([["exit", "t1", true]]);
+
+    manager.kill("t1");
+
+    expect(events).toEqual([
+      ["exit", "t1", true],
+      ["removed", "t1"],
+    ]);
+  });
+
+  it("reports a preserved entry removed when a respawn replaces it", () => {
+    preserveOnExit = true;
+    manager.spawn("t1", spawnOptions);
+    constructed[0].onExit("t1", 0);
+
+    manager.spawn("t1", spawnOptions);
+
+    expect(events).toEqual([
+      ["exit", "t1", true],
+      ["removed", "t1"],
+    ]);
+  });
+});

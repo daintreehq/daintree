@@ -172,6 +172,8 @@ export class PtyManager extends EventEmitter {
   constructor() {
     super();
     this.registry = new TerminalRegistry(undefined, (id) => {
+      // Main keeps a preserved entry's shard routing until it hears this.
+      this.emit("terminal-removed", id);
       const streamEnd = this.streamOffsets.get(id);
       if (streamEnd === undefined) return;
       this.streamOffsets.delete(id);
@@ -610,6 +612,7 @@ export class PtyManager extends EventEmitter {
               );
               return;
             }
+            const preserved = terminalProcess.shouldPreserveOnExit(exitCode);
             this.emit(
               "exit",
               termId,
@@ -617,9 +620,10 @@ export class PtyManager extends EventEmitter {
               signal,
               options.launchGeneration,
               this.sessionPreservingTeardowns.has(terminalProcess) || undefined,
-              terminalProcess.getInfo().spawnedAt
+              terminalProcess.getInfo().spawnedAt,
+              preserved
             );
-            if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
+            if (!preserved) {
               this.registry.delete(termId);
             }
             this.syncTreeKillHelperWarmth();
