@@ -8,14 +8,14 @@ import type { WindowContext } from "./WindowRegistry.js";
 type SignalWindow = Pick<WindowContext, "browserWindow" | "services">;
 
 /**
- * Whether a project view can take ProcessMemoryMonitor's periodic pushes now.
- * A frozen one would either wake its JS or hold the work until thaw and run
- * it all inside the warm paint gate (#16810); a loading one is still booting
- * and has no settled memory to report. A frozen view's last Blink sample stays
- * recorded, so diagnostics keep its pre-freeze reading.
+ * Whether a renderer can take ProcessMemoryMonitor's periodic pushes now. A
+ * frozen one would either wake its JS or hold the work until thaw and run it
+ * all inside the warm paint gate (#16810); a loading one, first load or
+ * reload, has no settled memory and may not be listening yet. A skipped view's
+ * last Blink sample stays recorded, so diagnostics keep its pre-freeze reading.
  */
 function canTakePeriodicPush(wc: WebContents): boolean {
-  return !wc.isDestroyed() && !isWebContentsFrozen(wc);
+  return !wc.isDestroyed() && !wc.isLoadingMainFrame() && !isWebContentsFrozen(wc);
 }
 
 /**

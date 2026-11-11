@@ -2142,6 +2142,25 @@ describe("ProcessMemoryMonitor", () => {
       );
     });
 
+    it("keeps a view's last sample through polls it isn't asked in, until a new report (#16810)", () => {
+      // A frozen view is skipped by the sampler, so its pre-freeze reading
+      // must survive any number of polls to stay in the diagnostics export.
+      recordBlinkSample(7, { allocated: 30 * 1024 });
+      const preFreeze = getBlinkSamples().get(7);
+      stop = startAppMetricsMonitor({
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+        sampleBlinkMemory: vi.fn(),
+      });
+
+      vi.advanceTimersByTime(30_000 * (WARMUP_INTERVALS + 20));
+      expect(getBlinkSamples().get(7)).toBe(preFreeze);
+
+      recordBlinkSample(7, { allocated: 40 * 1024 });
+      expect(getBlinkSamples().get(7)?.allocated).toBe(40 * 1024);
+      expect(getBlinkSamples().get(7)?.timestamp).toBeGreaterThan(preFreeze!.timestamp);
+    });
+
     it("startAppMetricsMonitor invokes actions.sampleBlinkMemory once per poll", () => {
       const sampleBlinkMemory = vi.fn();
       const actions: MemoryPressureActions = {

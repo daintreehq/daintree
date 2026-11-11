@@ -23,11 +23,14 @@ interface FakeWebContents {
 }
 
 let nextId = 1;
-function makeWebContents(opts: { destroyed?: boolean; freezeError?: string } = {}) {
+function makeWebContents(
+  opts: { destroyed?: boolean; loadingMainFrame?: boolean; freezeError?: string } = {}
+) {
   const send = vi.fn();
   const wc = {
     id: nextId++,
     isDestroyed: () => opts.destroyed ?? false,
+    isLoadingMainFrame: () => opts.loadingMainFrame ?? false,
     send,
     debugger: {
       isAttached: () => true,
@@ -131,14 +134,30 @@ describe("rendererMemorySignals (#16810)", () => {
       expect(sentBlinkSample(view)).toBe(true);
     });
 
-    it("keeps asking a view whose freeze failed, since it never froze", async () => {
+    it("holds a view whose freeze failed until a thaw succeeds", async () => {
       const view = makeWebContents({ freezeError: "Target crashed unexpectedly" });
       const win = makeWindow([{ fake: view, state: "cached" }]);
 
       await freezeWebContents(view.wc);
       sampleBlinkMemory([win]);
+      expect(view.send).not.toHaveBeenCalled();
 
+      await unfreezeWebContents(view.wc);
+      sampleBlinkMemory([win]);
       expect(sentBlinkSample(view)).toBe(true);
+    });
+
+    it("skips a settled view while it reloads, and a bootstrap shell still loading", () => {
+      const reloading = makeWebContents({ loadingMainFrame: true });
+      const loadingShell = makeWebContents({ loadingMainFrame: true });
+
+      sampleBlinkMemory([
+        makeWindow([{ fake: reloading, state: "active" }]),
+        makeWindow(null, loadingShell),
+      ]);
+
+      expect(reloading.send).not.toHaveBeenCalled();
+      expect(loadingShell.send).not.toHaveBeenCalled();
     });
 
     it("falls back to the app webContents for a window with no project views yet", () => {
@@ -170,6 +189,7 @@ describe("rendererMemorySignals (#16810)", () => {
       const cached = makeWebContents();
       const frozen = makeWebContents();
       const loading = makeWebContents();
+      const reloading = makeWebContents({ loadingMainFrame: true });
       const otherWindowApp = makeWebContents();
       await freezeWebContents(frozen.wc);
       const win = makeWindow([
@@ -177,6 +197,7 @@ describe("rendererMemorySignals (#16810)", () => {
         { fake: cached, state: "cached" },
         { fake: frozen, state: "cached" },
         { fake: loading, state: "loading" },
+        { fake: reloading, state: "cached" },
       ]);
 
       releaseRendererMemory([win, makeWindow(null, otherWindowApp)]);
@@ -187,6 +208,7 @@ describe("rendererMemorySignals (#16810)", () => {
       expect(skip(otherWindowApp.wc)).toBe(false);
       expect(skip(frozen.wc)).toBe(true);
       expect(skip(loading.wc)).toBe(true);
+      expect(skip(reloading.wc)).toBe(true);
     });
 
     it("reaches a view again once it is unfrozen", async () => {

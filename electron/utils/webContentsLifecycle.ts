@@ -63,14 +63,15 @@ export function ensureAttached(wc: Electron.WebContents): void {
 }
 
 /**
- * Renderers whose latest lifecycle request was a freeze, each mapped to that
- * request. Marked when the freeze is asked for rather than when CDP acks it:
- * one debugger session runs its commands in order, so the latest request is
- * the state the page ends in, and a push sent before the ack lands in the
- * freeze anyway. A freeze that fails takes its own mark back, unless a later
- * request has already replaced it.
+ * Renderers that may be frozen, each mapped to its latest lifecycle request.
+ * Held from the moment a freeze is asked for, not when CDP acks it, since a
+ * push sent before the ack lands in the freeze anyway. Released only when a
+ * thaw that is still the latest request succeeds: a failed freeze or thaw
+ * proves nothing about the page (an earlier freeze still applies, and Chromium
+ * keeps a page's frozen state on its host across a reload). Holding too long
+ * costs a skipped periodic push, and every activation thaws.
  */
-const freezeRequests = new WeakMap<Electron.WebContents, object>();
+const lifecycleHolds = new WeakMap<Electron.WebContents, object>();
 
 async function setLifecycleState(
   wc: Electron.WebContents,
@@ -93,25 +94,25 @@ async function setLifecycleState(
 
 export async function freezeWebContents(wc: Electron.WebContents): Promise<void> {
   if (wc.isDestroyed()) return;
-  const request = {};
-  freezeRequests.set(wc, request);
-  const frozen = await setLifecycleState(wc, "frozen");
-  if (!frozen && freezeRequests.get(wc) === request) freezeRequests.delete(wc);
+  lifecycleHolds.set(wc, {});
+  await setLifecycleState(wc, "frozen");
 }
 
-export function unfreezeWebContents(wc: Electron.WebContents): Promise<void> {
-  freezeRequests.delete(wc);
-  return setLifecycleState(wc, "active").then(() => undefined);
+export async function unfreezeWebContents(wc: Electron.WebContents): Promise<void> {
+  const request = {};
+  if (lifecycleHolds.has(wc)) lifecycleHolds.set(wc, request);
+  const thawed = await setLifecycleState(wc, "active");
+  if (thawed && lifecycleHolds.get(wc) === request) lifecycleHolds.delete(wc);
 }
 
 /**
- * Whether this renderer was last asked to freeze. A push to a frozen renderer
- * either wakes JS in a page frozen to stay idle or schedules work that all
- * fires at once on thaw, inside the warm paint gate, so periodic work that can
- * simply skip a frozen view should (#16810).
+ * Whether this renderer may be frozen: asked to freeze and not since thawed.
+ * A push to a frozen renderer either wakes JS in a page frozen to stay idle or
+ * schedules work that all fires at once on thaw, inside the warm paint gate,
+ * so periodic work that can simply skip a frozen view should (#16810).
  */
 export function isWebContentsFrozen(wc: Electron.WebContents): boolean {
-  return freezeRequests.has(wc);
+  return lifecycleHolds.has(wc);
 }
 
 /**

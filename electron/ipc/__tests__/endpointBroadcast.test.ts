@@ -37,6 +37,7 @@ import {
   broadcastToProjectRenderersExcept,
   broadcastToRemoteEndpoints,
   broadcastToRenderer,
+  broadcastToRendererExcept,
   broadcastToVisibleRenderers,
   sendToRenderer,
   sendToRendererContext,
@@ -175,6 +176,28 @@ describe("broadcast helpers with remote endpoints", () => {
     ]);
     expect(local.send).not.toHaveBeenCalled();
     expect(view.send).toHaveBeenCalledTimes(3);
+  });
+
+  it("a broadcast that skips every local view still reaches remote endpoints (#16810)", () => {
+    const skipped = localView(1);
+    const withheld = localView(2);
+    const kept = localView(3);
+    localViews.push(skipped, withheld, kept);
+    const remote = endpoint(-1, "proj-1");
+    getEndpointRegistry().add(remote);
+    const uninstall = setRemoteBoundViewFilter((webContentsId) => webContentsId !== 2);
+
+    broadcastToRendererExcept((wc) => wc.id === 1, "a:b", 1);
+    broadcastToRendererExcept(() => true, "a:c", 2);
+    uninstall();
+
+    expect(skipped.send).not.toHaveBeenCalled();
+    expect(withheld.send).not.toHaveBeenCalled();
+    expect(kept.send.mock.calls).toEqual([["a:b", 1]]);
+    expect(remote.send.mock.calls).toEqual([
+      [{ type: "event", channel: "a:b", args: [1] }],
+      [{ type: "event", channel: "a:c", args: [2] }],
+    ]);
   });
 
   it("scope project broadcasts to the project's remote endpoints and honour exclusions", () => {
