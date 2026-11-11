@@ -15,7 +15,11 @@
 
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import type { PluginHostApi, PluginMcpCaller } from "../../../shared/types/plugin.js";
+import type {
+  PluginActionContext,
+  PluginHostApi,
+  PluginMcpCaller,
+} from "../../../shared/types/plugin.js";
 import type {
   PluginHostCallMethod,
   PluginHostNotifyMethod,
@@ -96,6 +100,18 @@ function projectMcpCaller(caller: PluginMcpCaller): PluginMcpCaller {
       ? { launchAgentIdHint: caller.launchAgentIdHint }
       : {}),
     ...(caller.consumer !== undefined ? { consumer: caller.consumer } : {}),
+  };
+}
+
+/**
+ * The dispatch context as plain data for the port, holding only the contract's
+ * fields, so nothing a handler hung on the frozen original crosses with it.
+ */
+function projectActionContext(context: PluginActionContext): PluginActionContext {
+  return {
+    dispatchSource: context.dispatchSource,
+    ...(context.origin !== undefined ? { origin: context.origin } : {}),
+    ...(context.approval !== undefined ? { approval: context.approval } : {}),
   };
 }
 
@@ -936,7 +952,12 @@ export class PluginDevWorkerMainBridge {
    * checked. Public because `PluginService` is the caller; every other kind is
    * driven by the proxies `ContributionsDomain` registers on the host.
    */
-  invokeCommand(namespacedId: string, resolvedPath: string, args: unknown): Promise<unknown> {
+  invokeCommand(
+    namespacedId: string,
+    resolvedPath: string,
+    args: unknown,
+    context: PluginActionContext
+  ): Promise<unknown> {
     // Only a generation that has COMMITTED activation can serve a command.
     // `workerHost.isReady()` alone is not that test: it is true the instant a
     // child exists, which after a crash means the replacement counts as ready
@@ -953,7 +974,7 @@ export class PluginDevWorkerMainBridge {
         new Error(`Plugin "${this.pluginId}" worker is not ready to run command "${namespacedId}"`)
       );
     }
-    return this.invoke({ kind: "command", namespacedId, resolvedPath, args });
+    return this.invoke({ kind: "command", namespacedId, resolvedPath, args, context });
   }
 
   /**
@@ -1024,6 +1045,7 @@ export class PluginDevWorkerMainBridge {
           kind: "action",
           namespacedId: target.namespacedId,
           args: target.args,
+          context: projectActionContext(target.context),
         });
       } else if (target.kind === "command") {
         sent = this.workerHost.send({
@@ -1033,6 +1055,7 @@ export class PluginDevWorkerMainBridge {
           namespacedId: target.namespacedId,
           resolvedPath: target.resolvedPath,
           args: target.args,
+          context: projectActionContext(target.context),
         });
       } else if (target.kind === "search-provider") {
         sent = this.workerHost.send({

@@ -479,6 +479,9 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin-mcp:set-config": "free",
   "plugin-process:list": "free",
   "plugin:actions-get": "free",
+  // The action form of `plugin:invoke`, with the dispatch context beside the
+  // args: its handler checks the lease the same way (#16751).
+  "plugin:actions-invoke": "handler",
   "plugin:actions-register": "free",
   "plugin:actions-unregister": "free",
   "plugin:activate-for-view": "free",

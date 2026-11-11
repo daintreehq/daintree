@@ -1925,6 +1925,12 @@ export function useMcpBridge(): void {
                 ...(approvedRecipeRun ? { hostApprovedRecipeRun: approvedRecipeRun } : {}),
                 ...(approvedPush ? { hostApprovedPush: approvedPush } : {}),
                 ...(approvedPresetWrite ? { hostApprovedPresetWrite: approvedPresetWrite } : {}),
+                // Who asked and whether a person answered, for a plugin action's
+                // handler (#16751). Only this callback's own approved dialog
+                // counts: a grant or Never ask arrives confirmed and shows no one
+                // anything.
+                ...(sessionOrigin === "help" ? { hostCallerOrigin: "assistant" as const } : {}),
+                ...(confirmationDecision === "approved" ? { hostPersonApproved: true } : {}),
                 // An approval's run budget replaces the deadline main first
                 // sent; a dispatch nobody was asked about keeps that one. An
                 // action that waits on a person gives up at it (#15648).

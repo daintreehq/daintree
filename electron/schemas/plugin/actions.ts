@@ -150,6 +150,10 @@ export const CommandContributionSchema = z
     category: z.string().min(1).max(PLUGIN_ACTION_CATEGORY_MAX_LENGTH),
     kind: z.enum(["command", "query"]),
     danger: z.enum(["safe", "confirm"]),
+    // Puts the command on the project Assistant's MCP tools (#16751). Only a
+    // command declared `danger: "confirm"` may opt in, so every Assistant call
+    // meets the host's confirm dialog unless the person said not to ask.
+    assistantReach: z.literal("confirm-only").optional(),
     keywords: z.array(z.string().min(1)).optional(),
     when: z.string().min(1).optional(),
     enablement: z.string().min(1).optional(),
@@ -165,7 +169,16 @@ export const CommandContributionSchema = z
     // PluginService re-checks the subset against manifest.capabilities.
     requires: z.array(PluginCapabilitySchema).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((command, ctx) => {
+    if (command.assistantReach !== undefined && command.danger !== "confirm") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["assistantReach"],
+        message: 'assistantReach needs danger "confirm" on the same command',
+      });
+    }
+  });
 
 /**
  * One manifest `eventRoutes` entry (#13816): an event from the host's closed

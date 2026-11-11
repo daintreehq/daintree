@@ -8,9 +8,9 @@ import {
 const undefinedRead = new TypeError("Cannot read properties of undefined (reading 'worktreeId')");
 
 describe("actionHandlerArityHint", () => {
-  it("hints when a handler declares a context parameter it will never receive", () => {
+  it("names the (args, context) order when a two-parameter handler reads through undefined", () => {
     const hint = actionHandlerArityHint((_ctx: unknown, _args: unknown) => null, undefinedRead);
-    expect(hint).toContain("only parameter");
+    expect(hint).toContain("(args, context)");
   });
 
   it("stays quiet for the correct single-parameter shape", () => {

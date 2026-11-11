@@ -119,6 +119,7 @@ describe("plugin worker bootstrap", () => {
       namespacedId: "acme.demo.go",
       resolvedPath: handler,
       args: { n: 1 },
+      context: { dispatchSource: "user" },
     });
 
     expect(await invoked).toMatchObject({

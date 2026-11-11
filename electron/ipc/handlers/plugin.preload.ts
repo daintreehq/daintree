@@ -35,6 +35,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   validateActionIds: "plugin:validate-action-ids",
   validateManifest: "plugin:validate-manifest",
   getActions: "plugin:actions-get",
+  invokeAction: "plugin:actions-invoke",
   registerAction: "plugin:actions-register",
   unregisterAction: "plugin:actions-unregister",
   getPanelKinds: "plugin:panel-kinds-get",

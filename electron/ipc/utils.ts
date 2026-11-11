@@ -75,6 +75,7 @@ export const channelToCategory: Record<string, IpcChannelCategory> = {
   "git:list-commits": "gitOps",
   "terminal:spawn": "terminalSpawn",
   "plugin:invoke": "pluginInvoke",
+  "plugin:actions-invoke": "pluginInvoke",
 };
 
 export function checkRateLimit(channel: string, maxCalls: number, windowMs: number): void {

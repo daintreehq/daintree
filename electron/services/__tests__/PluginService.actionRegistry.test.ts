@@ -212,7 +212,11 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
   PluginDevWorkerMainBridge: devWorkerMock.MockPluginDevWorkerMainBridge,
 }));
 
-import { PluginService } from "../PluginService.js";
+import { PluginService, pluginService } from "../PluginService.js";
+import {
+  isPluginAssistantReachAction,
+  pluginAssistantReachActionIds,
+} from "../plugin/pluginAssistantReach.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { type PluginIpcContext } from "../../../shared/types/plugin.js";
@@ -287,6 +291,71 @@ describe("Plugin action registry", () => {
       name: "plugin:actions-changed",
       payload: { actions },
     });
+  });
+
+  describe("assistantReach (#16751)", () => {
+    const reaching = () => ({
+      ...validContribution(),
+      danger: "confirm" as const,
+      assistantReach: "confirm-only" as const,
+    });
+
+    it("keeps the opt-in on the descriptor and reports the action as reachable", () => {
+      service.registerPluginAction("acme.my-plugin", reaching());
+
+      expect(service.listPluginActions()[0]).toMatchObject({ assistantReach: "confirm-only" });
+      expect(service.isAssistantReachAction("acme.my-plugin.doThing")).toBe(true);
+      expect(service.listAssistantReachActionIds()).toEqual(["acme.my-plugin.doThing"]);
+    });
+
+    it("refuses the opt-in on an action declared safe", () => {
+      expect(() =>
+        service.registerPluginAction("acme.my-plugin", { ...reaching(), danger: "safe" })
+      ).toThrow(/needs danger "confirm"/);
+      expect(service.listPluginActions()).toHaveLength(0);
+    });
+
+    it("refuses any value but confirm-only", () => {
+      expect(() =>
+        service.registerPluginAction("acme.my-plugin", {
+          ...reaching(),
+          assistantReach: "always" as never,
+        })
+      ).toThrow(/invalid assistantReach/);
+    });
+
+    it("drops reach the moment the action goes", () => {
+      service.registerPluginAction("acme.my-plugin", reaching());
+      service.unregisterPluginAction("acme.my-plugin", "acme.my-plugin.doThing");
+      expect(service.isAssistantReachAction("acme.my-plugin.doThing")).toBe(false);
+      expect(service.listAssistantReachActionIds()).toEqual([]);
+    });
+
+    it("leaves an action without the opt-in off the Assistant's tools", () => {
+      service.registerPluginAction("acme.my-plugin", { ...validContribution(), danger: "confirm" });
+      expect(service.isAssistantReachAction("acme.my-plugin.doThing")).toBe(false);
+    });
+  });
+
+  it("answers the MCP tier gate from the app's own plugin service (#16751)", () => {
+    // The gate reads reach through the source the singleton installs when its
+    // module loads; without that, no opted-in action would ever be offered.
+    const has = vi.spyOn(pluginService, "isAssistantReachAction").mockReturnValue(true);
+    const ids = vi
+      .spyOn(pluginService, "listAssistantReachActionIds")
+      .mockReturnValue(["acme.my-plugin.doThing"]);
+    try {
+      expect(isPluginAssistantReachAction("acme.my-plugin.doThing")).toBe(true);
+      expect(has).toHaveBeenCalledWith("acme.my-plugin.doThing");
+      expect(pluginAssistantReachActionIds()).toEqual(["acme.my-plugin.doThing"]);
+      has.mockReturnValue(false);
+      ids.mockReturnValue([]);
+      expect(isPluginAssistantReachAction("acme.my-plugin.doThing")).toBe(false);
+      expect(pluginAssistantReachActionIds()).toEqual([]);
+    } finally {
+      has.mockRestore();
+      ids.mockRestore();
+    }
   });
 
   it("registerPluginAction throws when the plugin is not loaded", () => {
@@ -822,6 +891,7 @@ type ActionDescriptorInput = {
   category: string;
   kind: "command" | "query";
   danger: "safe" | "confirm";
+  assistantReach?: "confirm-only";
   keywords?: string[];
   inputSchema?: Record<string, unknown>;
   resultSchema?: Record<string, unknown>;
@@ -894,20 +964,97 @@ describe("createHost — registerAction", () => {
     expect(service.listPluginActions()).toHaveLength(3);
   });
 
-  it("invokes the handler with the args payload only — no IPC ctx", async () => {
+  it("invokes the handler with the args payload and the dispatch context — no IPC ctx", async () => {
     const handler = vi.fn().mockResolvedValue({ done: true });
     const { host } = getHost("acme.act-test");
     host.registerAction(descriptor(), handler);
+    const context = Object.freeze({
+      dispatchSource: "agent" as const,
+      origin: "assistant" as const,
+      approval: "person" as const,
+    });
 
     const result = await service.dispatchHandler(
       "acme.act-test",
       "acme.act-test.plan-from-issue",
       makeCtx("acme.act-test"),
-      [{ issue: 42 }]
+      [{ issue: 42 }],
+      context
     );
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith({ issue: 42 });
+    expect(handler).toHaveBeenCalledWith({ issue: 42 }, context);
     expect(result).toEqual({ done: true });
+  });
+
+  it("drops Assistant reach when host.registerAction replaces the action without the opt-in (#16751)", async () => {
+    const { host } = getHost("acme.act-test");
+    host.registerAction(
+      descriptor({ danger: "confirm", assistantReach: "confirm-only" }),
+      () => "first"
+    );
+    expect(service.isAssistantReachAction("acme.act-test.plan-from-issue")).toBe(true);
+
+    host.registerAction(descriptor({ danger: "confirm" }), () => "second");
+    expect(service.isAssistantReachAction("acme.act-test.plan-from-issue")).toBe(false);
+  });
+
+  it("hands a call nothing attested the plugin-source context, frozen (#16751)", async () => {
+    const handler = vi.fn().mockReturnValue("ran");
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), handler);
+
+    await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      [{}]
+    );
+    const context = handler.mock.calls[0]![1];
+    expect(context).toEqual({ dispatchSource: "plugin" });
+    expect(Object.isFrozen(context)).toBe(true);
+  });
+
+  it("still runs an action served by a channel handler under its id when a context comes with it (#16751)", async () => {
+    // The palette's synthetic action sends a context on every dispatch, so an
+    // action registered over plugin:actions-register and answered by a channel
+    // handler must keep working.
+    const channelHandler = vi.fn().mockReturnValue("from channel");
+    service.registerPluginAction("acme.act-test", {
+      id: "acme.act-test.plan-from-issue",
+      title: "Plan from issue",
+      description: "Turn an issue into a session",
+      category: "Planner",
+      kind: "command",
+      danger: "safe",
+    });
+    service.registerHandler("acme.act-test", "acme.act-test.plan-from-issue", channelHandler);
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      [{ issue: 1 }],
+      Object.freeze({ dispatchSource: "user" as const })
+    );
+
+    expect(result).toBe("from channel");
+    expect(channelHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a dispatch context aimed at a channel handler rather than an action (#16751)", async () => {
+    const channelHandler = vi.fn().mockReturnValue("channel");
+    service.registerHandler("acme.act-test", "get-data", channelHandler);
+
+    await expect(
+      service.dispatchHandler(
+        "acme.act-test",
+        "get-data",
+        makeCtx("acme.act-test"),
+        [{}],
+        Object.freeze({ dispatchSource: "user" as const, approval: "person" as const })
+      )
+    ).rejects.toThrow(/No plugin action registered/);
+    expect(channelHandler).not.toHaveBeenCalled();
   });
 
   it("invokes the handler with {} when dispatched with no args", async () => {
@@ -923,7 +1070,7 @@ describe("createHost — registerAction", () => {
     );
     // Defaults to {} (matching the input-schema validation default) rather than
     // undefined, so a handler can safely destructure the args object.
-    expect(handler).toHaveBeenCalledWith({});
+    expect(handler).toHaveBeenCalledWith({}, { dispatchSource: "plugin" });
     expect(result).toBe("ran");
   });
 
@@ -1050,7 +1197,7 @@ describe("createHost — registerAction", () => {
       []
     );
     // Handler receives the same {} the validator accepted — not undefined.
-    expect(handler).toHaveBeenCalledWith({});
+    expect(handler).toHaveBeenCalledWith({}, { dispatchSource: "plugin" });
     expect(result).toBe("ok");
   });
 

@@ -961,7 +961,9 @@ describe("Manifest event routes (#13816)", () => {
     expect(devWorkerMock.bridges[base.bridges].invokeCommand).toHaveBeenCalledWith(
       "acme.routed.onShown",
       expect.stringContaining("onShown.mjs"),
-      { event: "projectForeground", presence: { projectId: BETA, state: "foreground" } }
+      { event: "projectForeground", presence: { projectId: BETA, state: "foreground" } },
+      // An event route wakes the command with nobody behind it (#16751).
+      { dispatchSource: "plugin" }
     );
 
     // The route is not a live subscription: the worker is still idle-disposable.

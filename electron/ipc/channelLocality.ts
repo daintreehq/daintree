@@ -774,6 +774,7 @@ export const CHANNEL_LOCALITY = {
   "plugin-parity:claim-switch-notice": "shell",
   "plugin-process:list": "host",
   "plugin:actions-get": "host",
+  "plugin:actions-invoke": "host",
   "plugin:actions-get-request": "shell",
   "plugin:actions-get-response": "shell",
   "plugin:actions-list-request": "shell",

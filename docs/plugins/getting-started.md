@@ -69,11 +69,11 @@ The scaffolded `command` template already contains a working command: `run`, tit
 }
 ```
 
-The `commands[].id` maps to a **compiled** `src/say-hello.js` (or `.mjs`) by filesystem convention — its default export becomes the command handler. `.ts` and `.tsx` are not probed, so author in TypeScript and build to `src/{id}.js`. See [Contribution points → Commands](./contribution-points.md#commands--shipped) for the full rules, including why a filesystem-convention handler gets `args` but no `host`.
+The `commands[].id` maps to a **compiled** `src/say-hello.js` (or `.mjs`) by filesystem convention — its default export becomes the command handler. `.ts` and `.tsx` are not probed, so author in TypeScript and build to `src/{id}.js`. See [Contribution points → Commands](./contribution-points.md#commands--shipped) for the full rules, including why a filesystem-convention handler gets `args` and the dispatch context but no `host`.
 
 ## Write the command
 
-The filesystem-convention handler is a default export that receives the action args only — it has no `host`. To call host APIs like `showToast`, register the command imperatively from `activate` instead:
+The filesystem-convention handler is a default export that receives the action args and the dispatch context — it has no `host`. To call host APIs like `showToast`, register the command imperatively from `activate` instead:
 
 ```ts
 // src/index.ts

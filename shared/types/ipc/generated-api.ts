@@ -1346,6 +1346,9 @@ export interface GeneratedElectronAPI {
     installFromUrl(
       ...args: IpcInvokeMap["plugin:install-from-url"]["args"]
     ): Promise<IpcInvokeMap["plugin:install-from-url"]["result"]>;
+    invokeAction(
+      ...args: IpcInvokeMap["plugin:actions-invoke"]["args"]
+    ): Promise<IpcInvokeMap["plugin:actions-invoke"]["result"]>;
     keybindings(
       ...args: IpcInvokeMap["plugin:keybindings"]["args"]
     ): Promise<IpcInvokeMap["plugin:keybindings"]["result"]>;

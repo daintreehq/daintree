@@ -23,6 +23,7 @@ import {
   seedLiveSession,
   makeManifestEntry,
 } from "./helpers/sessionServerFixture.js";
+import { setPluginAssistantReachSource } from "../../plugin/pluginAssistantReach.js";
 
 describe("sessionServer tier-mismatch notifier", () => {
   async function callTool(
@@ -1550,6 +1551,79 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     const names = (await listTools(server)).tools.map((t) => t.name);
     for (const id of RESERVED) expect(names).not.toContain(id);
   });
+});
+
+// A plugin action declared `assistantReach: "confirm-only"` joins the project
+// Assistant's tools at both tiers (#16751), and only the Assistant's.
+describe("plugin actions opted into the project Assistant (#16751)", () => {
+  const REACH = "acme.stages.resume";
+  let uninstall: () => void = () => {};
+
+  afterEach(() => uninstall());
+
+  function reachDeps(origin: "help" | "external", tier: "core" | "full") {
+    uninstall = setPluginAssistantReachSource({
+      has: (id) => id === REACH,
+      ids: () => [REACH],
+    });
+    const manifest = [
+      {
+        ...makeManifestEntry(REACH),
+        kind: "command" as const,
+        danger: "confirm" as const,
+        pluginId: "acme.stages",
+      },
+      makeManifestEntry("mcp.surface"),
+    ];
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore(tier),
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+    });
+    deps.sessionStore.sessionOriginMap.set("s-reach", origin);
+    return deps;
+  }
+
+  it.each(["core", "full"] as const)(
+    "lists and dispatches it for the Assistant's session at %s",
+    async (tier) => {
+      const deps = reachDeps("help", tier);
+      const server = createSessionServer("s-reach", deps);
+
+      expect((await listTools(server)).tools.map((t) => t.name)).toContain(REACH);
+      const result = await callTool(server, { name: REACH, arguments: { stageId: "s1" } });
+
+      expect(result.isError).toBeUndefined();
+      expect(deps.dispatchAction).toHaveBeenCalledWith(REACH, { stageId: "s1" }, expect.anything());
+    }
+  );
+
+  it.each([
+    ["an agent pane", true],
+    ["an api-key client's ladder session", false],
+  ] as const)(
+    "keeps it from %s, saying it is a plugin's rather than blaming a tier",
+    async (_label, pane) => {
+      const deps = reachDeps("external", "full");
+      // A pane is the session that can ask for what is above its tier.
+      const requestApproval = vi.fn();
+      const server = createSessionServer(
+        "s-reach",
+        pane ? Object.assign(deps, { requestApproval }) : deps
+      );
+
+      expect((await listTools(server)).tools.map((t) => t.name)).not.toContain(REACH);
+      const result = await callTool(server, { name: REACH, arguments: { stageId: "s1" } });
+
+      expect(result.isError).toBe(true);
+      const text = JSON.stringify(result.content);
+      expect(text).toContain("TIER_NOT_PERMITTED");
+      expect(text).toContain("offered only to Daintree's own assistant");
+      expect(text).not.toContain("can reach any terminal");
+      expect(requestApproval).not.toHaveBeenCalled();
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    }
+  );
 });
 
 // Picking work, triaging it and confirming an agent's PR passed CI happen in the

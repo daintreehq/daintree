@@ -19,6 +19,7 @@ import {
   isWithheldFromRelaySession,
   isWithheldFromRelayDiscovery,
   isTierPermitted,
+  pluginActionMinimumTier,
   isApprovalRequestable,
   type TargetPolicySessionSnapshot,
   getReachableActionIds,
@@ -323,8 +324,17 @@ export function admitToolCall(
     // tier — true of the gate, and useless to a caller deciding what to do
     // next (#12407). An unscoped tool with an owned twin names the twin,
     // which is the call that would have worked.
+    // A plugin's opted-in action is offered to the project Assistant alone
+    // (#16751); it reaches no terminal, so the reasons below don't fit it.
+    const pluginAssistantOnly =
+      !rendererOwnedOrigin &&
+      tier !== "external" &&
+      pluginActionMinimumTier(actionId, true) !== null;
     const withheldByOrigin =
-      !rendererOwnedOrigin && tier !== "external" && isTierPermitted(tier, actionId, true);
+      !pluginAssistantOnly &&
+      !rendererOwnedOrigin &&
+      tier !== "external" &&
+      isTierPermitted(tier, actionId, true);
     const ownedTwin = withheldByOrigin
       ? (OWNED_TWIN_TOOLS as Readonly<Record<string, string>>)[actionId]
       : undefined;
@@ -341,8 +351,11 @@ export function admitToolCall(
       kind: "return",
       result: buildToolError({
         code: TIER_NOT_PERMITTED_CODE,
-        message:
-          ownedTwin !== undefined
+        message: pluginAssistantOnly
+          ? relayed
+            ? `action '${actionId}' is a plugin's, offered only to the assistant of the machine it runs on.`
+            : `action '${actionId}' is a plugin's, offered only to Daintree's own assistant.`
+          : ownedTwin !== undefined
             ? relayed
               ? `action '${actionId}' can reach any terminal or worktree on this host, so another machine's assistant uses '${ownedTwin}' here, which acts on what its calls created or started.`
               : `action '${actionId}' can reach any terminal or worktree, so it is reserved for Daintree's own assistant. Use '${ownedTwin}', which acts on what this connection created.`

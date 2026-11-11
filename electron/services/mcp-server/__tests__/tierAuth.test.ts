@@ -38,9 +38,11 @@ import {
   type TargetPolicySessionSnapshot,
   getReachableActionIds,
   isApprovalRequestable,
+  pluginActionMinimumTier,
   isPaneAutoConfirmed,
   PANE_APPROVAL_CEILING,
 } from "../tierAuth.js";
+import { setPluginAssistantReachSource } from "../../plugin/pluginAssistantReach.js";
 import { McpUnavailableActionStubSchema } from "../../../../shared/types/mcpIntrospection.js";
 import { findWireStrippedKeywords } from "../../../../shared/utils/mcpWireSchema.js";
 import { TIER_ALLOWLISTS, TIER_NOT_PERMITTED_CODE, minimumPermittingTier } from "../shared.js";
@@ -1300,6 +1302,78 @@ describe("getTierPermittedActionIds", () => {
     // Naming the collapsed pairs makes a regression point at the two tiers that
     // merged rather than just reporting "not distinct".
     expect(collapsed).toEqual([]);
+  });
+});
+
+describe("plugin actions opted into the project Assistant (#16751)", () => {
+  const REACH = "acme.stages.resume";
+  let uninstall: () => void = () => {};
+
+  beforeEach(() => {
+    uninstall = setPluginAssistantReachSource({
+      has: (id) => id === REACH,
+      ids: () => [REACH],
+    });
+  });
+
+  afterEach(() => uninstall());
+
+  const entry = () =>
+    makeEntry({
+      id: REACH as ActionManifestEntry["id"],
+      name: REACH,
+      category: "Stages",
+      kind: "command",
+      danger: "confirm",
+      pluginId: "acme.stages",
+    });
+
+  it.each(["core", "full"] as const)(
+    "lists, admits and enumerates it for the project Assistant at %s",
+    (tier) => {
+      const assistant = { ...UNBOUND_SESSION_SURFACE, rendererOwnedOrigin: true };
+      expect(shouldExposeTool(entry(), tier, assistant)).toBe(true);
+      expect(isTierPermitted(tier, REACH, true)).toBe(true);
+      expect(getTierPermittedActionIds(tier, true).has(REACH)).toBe(true);
+    }
+  );
+
+  it.each(["core", "full", "external"] as const)(
+    "keeps it from every session whose origin isn't the Assistant, at %s",
+    (tier) => {
+      // An agent pane, an api-key client, and another machine's assistant
+      // relaying through host.call are all `external` by origin.
+      expect(shouldExposeTool(entry(), tier, UNBOUND_SESSION_SURFACE)).toBe(false);
+      expect(isTierPermitted(tier, REACH, false)).toBe(false);
+      expect(getTierPermittedActionIds(tier, false).has(REACH)).toBe(false);
+      expect(getReachableActionIds(tier, false, true).has(REACH)).toBe(false);
+      expect(isApprovalRequestable(tier, REACH, true)).toBe(false);
+    }
+  );
+
+  it("is not on the external tier even for an Assistant origin", () => {
+    expect(isTierPermitted("external", REACH, true)).toBe(false);
+  });
+
+  it("admits nothing a source no longer names", () => {
+    uninstall();
+    expect(isTierPermitted("core", REACH, true)).toBe(false);
+    // With no plugin action to add, the built-in set itself comes back: a
+    // vanilla install allocates nothing per call.
+    expect(getTierPermittedActionIds("core", true)).toBe(getTierPermittedActionIds("core", true));
+    expect(getTierPermittedActionIds("core", true).has(REACH)).toBe(false);
+  });
+
+  it("describes it at core, so actions.getSchema answers rather than failing closed", () => {
+    const policy = buildTargetPolicy(entry(), {
+      tier: "full",
+      rendererOwnedOrigin: true,
+      perToolGrantedActionIds: new Set<string>(),
+      nativeGrantedActionIds: new Set<string>(),
+    });
+    expect(policy).toMatchObject({ minimumTier: "core", authorizedBy: "tier" });
+    expect(pluginActionMinimumTier(REACH, true)).toBe("core");
+    expect(pluginActionMinimumTier(REACH, false)).toBeNull();
   });
 });
 

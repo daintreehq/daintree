@@ -246,6 +246,26 @@ export interface ActionContext {
    */
   callerReportsFailure?: boolean;
   /**
+   * `"assistant"` when the MCP session that dispatched this is the person's
+   * Daintree Assistant (session origin `help`), as main resolved it from the
+   * session's bearer (#16751). Set by `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.hostCallerOrigin} for `source: "agent"` only,
+   * stamped over whatever a `contextOverride` claimed, and never on any
+   * `argsSchema`. Provenance, not proof that a person asked. A plugin action
+   * hands it to its handler as `origin`.
+   */
+  hostCallerOrigin?: "assistant";
+  /**
+   * True only when a person answered the host's confirm dialog for THIS
+   * dispatch (#16751). Narrower than {@link hostConfirmed}, which an automation
+   * grant or the Assistant's Never ask also sets: neither of those shows anyone
+   * a dialog, so neither sets this. Set by `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.hostPersonApproved} for an agent dispatch the
+   * gate let through as confirmed, stamped over whatever a `contextOverride`
+   * claimed. A plugin action hands it to its handler as `approval: "person"`.
+   */
+  hostPersonApproved?: boolean;
+  /**
    * When main gives up on the agent dispatch running this action, as epoch ms
    * on this machine's clock (#15648). Set by `ActionService.dispatch` from
    * {@link ActionDispatchOptions.dispatchDeadlineAt} on the same terms as
@@ -716,6 +736,18 @@ export interface ActionDispatchOptions {
   hostApprovedPresetWrite?: string;
   /** See {@link ActionContext.callerReportsFailure}. */
   callerReportsFailure?: boolean;
+  /**
+   * The MCP session's origin as main resolved it — NOT a client-supplied
+   * value. See {@link ActionContext.hostCallerOrigin}. Set only by the MCP
+   * renderer bridge, from the `sessionOrigin` main attached to the request.
+   */
+  hostCallerOrigin?: "assistant";
+  /**
+   * A person answered the host confirm dialog for this dispatch — NOT a
+   * client-supplied value. See {@link ActionContext.hostPersonApproved}. Set
+   * only by the MCP renderer bridge, after its own dialog came back approved.
+   */
+  hostPersonApproved?: boolean;
   /**
    * Main's deadline for the MCP dispatch this runs — NOT a client-supplied
    * value. See {@link ActionContext.dispatchDeadlineAt}. Set only by the MCP

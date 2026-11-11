@@ -771,6 +771,16 @@ export class ActionService {
         // failure toast, so only the caller that will show the failure itself
         // may set it, never a `contextOverride`.
         callerReportsFailure: options?.callerReportsFailure,
+        // Same unconditional stamp (#16751), and only for the agent source the
+        // MCP bridge dispatches as: a plugin action hands both to its handler,
+        // which may let an operator-only step through on them. A person's
+        // approval needs the confirmation the gate above already required.
+        hostCallerOrigin:
+          source === "agent" && options?.hostCallerOrigin === "assistant" ? "assistant" : undefined,
+        hostPersonApproved:
+          source === "agent" && options?.confirmed === true && options.hostPersonApproved === true
+            ? true
+            : undefined,
         // Same unconditional stamp (#15648): an action that waits on a person
         // gives up at this deadline, so a `contextOverride` must not be able
         // to stretch or plant one.

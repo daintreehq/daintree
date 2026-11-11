@@ -131,6 +131,7 @@ export type {
   PluginPromptCallOptions,
   PluginHostSubscriptionOptions,
   ActionHandler,
+  PluginActionContext,
   PluginToastOptions,
   PluginNotifyAction,
   PluginNotifyOptions,
