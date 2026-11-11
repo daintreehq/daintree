@@ -1539,8 +1539,42 @@ describe("hasBypassFlags (#16785)", () => {
     expect(hasBypassFlags(["--yes-to-all"], "hermes", settings)).toBe(true);
   });
 
-  it("does not read an inherited object member as an agent's settings", () => {
-    expect(hasBypassFlags(["--yolo"], "toString", { agents: {} })).toBe(false);
+  // Codex launches always carry these (its inline flag and decoration pair),
+  // so a declaration that mixes one in needs its bypass half as well.
+  it("needs every option of a declaration that mixes in an ordinary flag", () => {
+    const settings = {
+      agents: { codex: { dangerousArgs: "-c approval_policy=never --no-alt-screen" } },
+    };
+    expect(hasBypassFlags(["--no-alt-screen", "-c", "tui.whimsy=false"], "codex", settings)).toBe(
+      false
+    );
+    expect(
+      hasBypassFlags(
+        ["--no-alt-screen", "-c", "tui.whimsy=false", "-c", "approval_policy=never"],
+        "codex",
+        settings
+      )
+    ).toBe(true);
+  });
+
+  it("reads only an agent's own settings entry, never an inherited one", () => {
+    const agents = Object.create({ custom: { dangerousArgs: "--approve" } }) as Record<
+      string,
+      AgentSettingsEntry
+    >;
+    expect(hasBypassFlags(["--approve"], "custom", { agents })).toBe(false);
+    expect(
+      hasBypassFlags(["--approve"], "custom", {
+        agents: { custom: { dangerousArgs: "--approve" } },
+      })
+    ).toBe(true);
+  });
+
+  it("falls back to the default when the written dangerousArgs is not a string", () => {
+    const settings = {
+      agents: { claude: { dangerousArgs: 42 as unknown as string } },
+    };
+    expect(hasBypassFlags(["--dangerously-skip-permissions"], "claude", settings)).toBe(true);
   });
 });
 

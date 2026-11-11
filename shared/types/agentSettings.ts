@@ -534,65 +534,62 @@ function optionGroups(tokens: readonly string[]): string[][] {
 }
 
 /**
- * Every option group that counts as `agentId`'s permission bypass, longest
- * first so an option/value pair wins over a lone token of its own: the
- * resolved `dangerousArgs`, the registry default (a snapshot captured before
- * the user customized `dangerousArgs` carries it), retired defaults, and every
- * plugin declaration on record.
+ * Every declaration of `agentId`'s permission bypass, as argv: the resolved
+ * `dangerousArgs`, the registry default (a snapshot captured before the user
+ * customized `dangerousArgs` carries it), retired defaults, and every plugin
+ * declaration on record.
  */
-function bypassArgGroups(
+function bypassArgSources(
   agentId: string,
   resolved: string,
   pluginBypassArgHistory: readonly (readonly string[])[]
-): string[][] {
+): (readonly string[])[] {
+  return [
+    ...[
+      resolved,
+      getDefaultDangerousArgs(agentId),
+      ...(ownEntry(RETIRED_DANGEROUS_ARGS, agentId) ?? []),
+    ].map((source) => source.trim().split(/\s+/).filter(Boolean)),
+    ...pluginBypassArgHistory,
+  ];
+}
+
+/** The distinct option groups of every bypass declaration, longest first. */
+function bypassArgGroups(sources: readonly (readonly string[])[]): string[][] {
   const groups: string[][] = [];
-  const addGroups = (tokens: readonly string[]) => {
+  for (const tokens of sources) {
     for (const group of optionGroups(tokens)) {
       if (!groups.some((known) => known.join(" ") === group.join(" "))) groups.push(group);
     }
-  };
-  for (const source of [
-    resolved,
-    getDefaultDangerousArgs(agentId),
-    ...(ownEntry(RETIRED_DANGEROUS_ARGS, agentId) ?? []),
-  ]) {
-    addGroups(source?.trim().split(/\s+/).filter(Boolean) ?? []);
   }
-  for (const declared of pluginBypassArgHistory) addGroups(declared);
+  // Longest first, so an option/value pair wins over a lone token of its own.
   return groups.sort((a, b) => b.length - a.length);
 }
 
 /**
- * The length of the bypass group starting at an index of `flags`, or 0. A
- * standing instruction is free text that can equal a bypass token, and Codex's
- * shares a `-c` with config-override bypass args (#12431), so neither half of
- * one ever matches.
+ * Whether `group` starts at `index` of `flags`. A standing instruction is free
+ * text that can equal a bypass token, and Codex's shares a `-c` with
+ * config-override bypass args (#12431), so neither half of one ever matches.
  */
-function bypassGroupMatcher(
+function bypassGroupAt(
   flags: readonly string[],
-  agentId: string,
-  groups: readonly (readonly string[])[]
-): (index: number) => number {
-  const instruction = systemPromptArgPositions(flags, agentId);
-  return (index) => {
-    for (const group of groups) {
-      if (
-        group.every(
-          (token, offset) => flags[index + offset] === token && !instruction.has(index + offset)
-        )
-      ) {
-        return group.length;
-      }
-    }
-    return 0;
-  };
+  index: number,
+  group: readonly string[],
+  instruction: ReadonlySet<number>
+): boolean {
+  return group.every(
+    (token, offset) => flags[index + offset] === token && !instruction.has(index + offset)
+  );
 }
 
 /**
- * Whether a pane's launch flags carry its agent's permission bypass (#16785),
- * by the same option groups {@link reconcileBypassFlags} strips: so the warning
- * reads what the CLI was handed, not today's bypass mode, and a flag that only
- * means bypass to another agent never trips it.
+ * Whether a pane's launch flags carry its agent's permission bypass (#16785):
+ * every option group of one of the declarations {@link reconcileBypassFlags}
+ * strips. So the warning reads what the CLI was handed, not today's bypass
+ * mode; a flag that only means bypass to another agent never trips it; and a
+ * declaration that mixes in an ordinary flag (`-c approval_policy=never
+ * --no-alt-screen`) needs its bypass half too, since every launch carries the
+ * other.
  */
 export function hasBypassFlags(
   flags: readonly string[] | undefined,
@@ -601,14 +598,21 @@ export function hasBypassFlags(
 ): boolean {
   if (!flags?.length || !agentId) return false;
   const written = settings?.agents ? ownEntry(settings.agents, agentId)?.dangerousArgs : undefined;
-  const groups = bypassArgGroups(
+  const sources = bypassArgSources(
     agentId,
     resolveDangerousArgs(typeof written === "string" ? written : undefined, agentId),
     getPluginBypassArgHistory(settings, agentId)
   );
-  if (groups.length === 0) return false;
-  const matchLengthAt = bypassGroupMatcher(flags, agentId, groups);
-  return flags.some((_, index) => matchLengthAt(index) > 0);
+  const instruction = systemPromptArgPositions(flags, agentId);
+  return sources.some((tokens) => {
+    const groups = optionGroups(tokens);
+    return (
+      groups.length > 0 &&
+      groups.every((group) =>
+        flags.some((_, index) => bypassGroupAt(flags, index, group, instruction))
+      )
+    );
+  });
 }
 
 /**
@@ -651,9 +655,15 @@ export function reconcileBypassFlags(
   pluginBypassArgHistory: readonly (readonly string[])[] = []
 ): string[] {
   const resolved = resolveDangerousArgs(bypassArgs, agentId);
-  const groups = bypassArgGroups(agentId, resolved, pluginBypassArgHistory);
+  const groups = bypassArgGroups(bypassArgSources(agentId, resolved, pluginBypassArgHistory));
   if (groups.length === 0) return [...flags];
-  const matchLengthAt = bypassGroupMatcher(flags, agentId, groups);
+  // A standing instruction is free text that can equal a bypass token, and
+  // Codex's shares a `-c` with config-override bypass args (#12431). Stripping
+  // either half would orphan the other — a lone value becomes the first-turn
+  // prompt — so both are left alone.
+  const instruction = systemPromptArgPositions(flags, agentId);
+  const matchLengthAt = (index: number): number =>
+    groups.find((group) => bypassGroupAt(flags, index, group, instruction))?.length ?? 0;
 
   // Bypass wanted: replace the first canonical occurrence in place with the
   // currently-resolved args (preserving flag order so a snapshot that already

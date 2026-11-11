@@ -2176,6 +2176,33 @@ describe("PanelHeader", () => {
       expect(screen.queryByLabelText("Launched with dangerous permissions")).toBeNull();
     });
 
+    it("follows the launch flags and agent it is handed", () => {
+      const { rerender } = render(
+        <PanelHeader {...makeProps({ agentId: "claude", agentLaunchFlags: ["--model", "opus"] })} />
+      );
+      expect(screen.queryByLabelText("Launched with dangerous permissions")).toBeNull();
+
+      rerender(
+        <PanelHeader
+          {...makeProps({
+            agentId: "claude",
+            agentLaunchFlags: ["--dangerously-skip-permissions"],
+          })}
+        />
+      );
+      expect(screen.queryByLabelText("Launched with dangerous permissions")).not.toBe(null);
+
+      rerender(
+        <PanelHeader
+          {...makeProps({
+            agentId: "cursor",
+            agentLaunchFlags: ["--dangerously-skip-permissions"],
+          })}
+        />
+      );
+      expect(screen.queryByLabelText("Launched with dangerous permissions")).toBeNull();
+    });
+
     it("shows the mark once a configured multi-token bypass is read from settings", () => {
       const previous = useAgentSettingsStore.getState().settings;
       try {
@@ -2201,14 +2228,18 @@ describe("PanelHeader", () => {
     });
 
     it("does not show indicator when agentLaunchFlags does not contain dangerous flag", () => {
-      render(<PanelHeader {...makeProps({ agentLaunchFlags: ["--model", "claude-3-7"] })} />);
+      render(
+        <PanelHeader
+          {...makeProps({ agentId: "claude", agentLaunchFlags: ["--model", "claude-3-7"] })}
+        />
+      );
 
       const indicator = screen.queryByLabelText("Launched with dangerous permissions");
       expect(indicator).toBeNull();
     });
 
     it("does not show indicator when agentLaunchFlags is undefined", () => {
-      render(<PanelHeader {...makeProps()} />);
+      render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
 
       const indicator = screen.queryByLabelText("Launched with dangerous permissions");
       expect(indicator).toBeNull();

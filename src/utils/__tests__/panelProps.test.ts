@@ -183,3 +183,18 @@ describe("buildPanelProps dev-preview", () => {
     expect(result.cwd).toBe("/repo/app");
   });
 });
+
+describe("buildPanelProps launch identity", () => {
+  // The pane header reads these two together for its bypass warning (#16785).
+  it("forwards the launch agent and its launch flags", () => {
+    const result = build(
+      makeTerminal({
+        kind: "terminal",
+        launchAgentId: "grok",
+        agentLaunchFlags: ["--always-approve"],
+      })
+    );
+    expect(result.agentId).toBe("grok");
+    expect(result.agentLaunchFlags).toEqual(["--always-approve"]);
+  });
+});
