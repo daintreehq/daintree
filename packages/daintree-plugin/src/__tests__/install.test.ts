@@ -120,7 +120,10 @@ describe("runInstall --sha256", () => {
 
     await runInstall("https://example.com/p.dntr", { sha256: ` ${"AB".repeat(32)} ` });
     expect(received!.method).toBe("plugin.install.verified");
-    expect(received!.params).toEqual({ url: "https://example.com/p.dntr", sha256: "ab".repeat(32) });
+    expect(received!.params).toEqual({
+      url: "https://example.com/p.dntr",
+      sha256: "ab".repeat(32),
+    });
   });
 
   it("refuses a malformed digest without contacting Daintree", async () => {

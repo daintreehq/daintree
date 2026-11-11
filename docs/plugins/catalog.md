@@ -25,7 +25,7 @@ How community plugins become discoverable, and the trust policy that comes with 
 
 "Native" is what the option gives without Daintree building anything; the rest is what Daintree would have to build or run.
 
-| | GitHub list | Open VSX | Harbor + ORAS | Verdaccio |
+|  | GitHub list | Open VSX | Harbor + ORAS | Verdaccio |
 | --- | --- | --- | --- | --- |
 | `.dntr` compatibility | Native: release assets are plain files | None: packages are VS Code `.vsix` with `package.json` extension metadata; `.dntr` would need wrapping and its own manifest mapping | Native as an opaque OCI artifact; Daintree defines the media type and a pull client | None: npm tarballs; `.dntr` would need wrapping in a package |
 | Discovery | Build: the list and a Browse view | Native web UI and API, VS Code–shaped | Build: Harbor lists repositories, not plugins | Native npm search and web UI, npm-shaped |
