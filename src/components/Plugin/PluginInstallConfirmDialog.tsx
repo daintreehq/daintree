@@ -465,9 +465,8 @@ function ArchiveIdentityCard({
           )}
           {source.kind === "catalog" ? (
             <span className="break-words min-w-0">
-              Community listing from{" "}
-              <span className="font-mono break-all">{source.repoLabel}</span>. Review checked the
-              source and the bytes, not that the code is safe.
+              Community listing from <span className="font-mono break-all">{source.repoLabel}</span>
+              . Review checked the source and the bytes, not that the code is safe.
             </span>
           ) : (
             <span className="font-mono break-all min-w-0">

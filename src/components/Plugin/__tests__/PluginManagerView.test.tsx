@@ -2071,7 +2071,12 @@ describe("PluginManagerView", () => {
         const sha256 = "d".repeat(64);
         vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(async (url) => ({
           status: "preview",
-          preview: { url, archiveHash: sha256, installedOnDisk: false, manifest: previewManifest() },
+          preview: {
+            url,
+            archiveHash: sha256,
+            installedOnDisk: false,
+            manifest: previewManifest(),
+          },
         }));
         renderIntent({ action: "install", url: "https://example.com/p.dntr", sha256 });
 
@@ -2107,7 +2112,9 @@ describe("PluginManagerView", () => {
         renderIntent({ action: "install-catalog", pluginId: "acme.demo" });
 
         expect(
-          await screen.findByText("The plugin catalog couldn't be refreshed, so nothing was installed.")
+          await screen.findByText(
+            "The plugin catalog couldn't be refreshed, so nothing was installed."
+          )
         ).toBeTruthy();
         expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
         expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();

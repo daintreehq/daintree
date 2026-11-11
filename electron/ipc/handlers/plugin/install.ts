@@ -150,7 +150,10 @@ export async function handleInstall(
     return {
       status: "failed",
       errors: [
-        { code: "catalog_mismatch", message: "Only the catalog install can record a catalog listing." },
+        {
+          code: "catalog_mismatch",
+          message: "Only the catalog install can record a catalog listing.",
+        },
       ],
     };
   }
@@ -677,7 +680,9 @@ async function previewArchive(
     ]);
     archiveHash = await computeArchiveHash(archivePath);
     if (check.sha256 !== undefined && archiveHash !== check.sha256) {
-      return cancelled() ? { status: "cancelled" } : downloadFailed("digest_mismatch", check.mismatch);
+      return cancelled()
+        ? { status: "cancelled" }
+        : downloadFailed("digest_mismatch", check.mismatch);
     }
     manifest = await readArchiveManifestPreview(archivePath);
   } catch (err) {

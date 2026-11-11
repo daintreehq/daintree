@@ -416,7 +416,11 @@ describe("Plugin provenance persistence", () => {
         JSON.stringify({ name: `acme.${name}`, version: "1.0.0" })
       );
     }
-    const listing = { id: "acme.catalog-listed", version: "1.0.0", repo: "https://github.com/acme/x" };
+    const listing = {
+      id: "acme.catalog-listed",
+      version: "1.0.0",
+      repo: "https://github.com/acme/x",
+    };
     const base = {
       installedAt: Date.now(),
       archiveHash: null,

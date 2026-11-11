@@ -539,8 +539,7 @@ describe("PluginDetailPane contributors (issue #10516)", () => {
     renderOverview(
       makePlugin({
         source: "catalog",
-        originalUrl:
-          "https://github.com/acme/demo/releases/download/v1.0.0/acme.demo-1.0.0.dntr",
+        originalUrl: "https://github.com/acme/demo/releases/download/v1.0.0/acme.demo-1.0.0.dntr",
         catalog: { id: "acme.demo", version: "1.0.0", repo: "https://github.com/acme/demo" },
       })
     );

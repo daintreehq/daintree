@@ -283,9 +283,7 @@ export class PluginCatalogService {
  * semver precedence, never by catalog order, with build metadata breaking ties
  * so the choice is deterministic.
  */
-function newestRelease(
-  releases: readonly PluginCatalogEntry[]
-): PluginCatalogEntry | undefined {
+function newestRelease(releases: readonly PluginCatalogEntry[]): PluginCatalogEntry | undefined {
   const stable = releases.filter((e) => semver.prerelease(e.version) === null);
   const pool = stable.length > 0 ? stable : releases;
   return [...pool].sort((a, b) => semver.compareBuild(b.version, a.version))[0];
