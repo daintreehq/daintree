@@ -64,6 +64,22 @@ export type PluginCatalogLookup =
   | { readonly status: "not-listed"; readonly fetchedAt: number }
   | PluginCatalogBlocked;
 
+/**
+ * What a fresh catalog says about an installed release (#16781). `update` is
+ * the release to offer; `current` means the installed release is still listed
+ * and nothing newer is; `delisted` means nothing newer is listed and neither is
+ * the plugin (`plugin`) or the installed release (`release`).
+ */
+export type PluginCatalogUpdateLookup =
+  | { readonly status: "update"; readonly entry: PluginCatalogEntry; readonly fetchedAt: number }
+  | { readonly status: "current"; readonly fetchedAt: number }
+  | {
+      readonly status: "delisted";
+      readonly scope: "plugin" | "release";
+      readonly fetchedAt: number;
+    }
+  | PluginCatalogBlocked;
+
 type CatalogFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 export interface PluginCatalogDeps {
@@ -169,6 +185,25 @@ export class PluginCatalogService {
     return result.fresh
       ? { status: "available", listings, fetchedAt, stale: false }
       : { status: "available", listings, fetchedAt, stale: true, failure: result.failure };
+  }
+
+  /**
+   * The update for an installed release, read from a catalog fetched for this
+   * call like an install's. The installed version is never offered again and
+   * an older one never is, so a catalog that lists only older releases can't
+   * downgrade anyone (see {@link newestUpdate}).
+   */
+  async lookupUpdate(id: string, installedVersion: string): Promise<PluginCatalogUpdateLookup> {
+    const result = await this.getCatalog("install");
+    if (result.status !== "available") return result;
+    const { fetchedAt } = result;
+    const releases = result.catalog.entries.filter((e) => e.id === id);
+    const entry = newestUpdate(releases, installedVersion);
+    if (entry) return { status: "update", entry, fetchedAt };
+    if (releases.length === 0) return { status: "delisted", scope: "plugin", fetchedAt };
+    return releases.some((e) => e.version === installedVersion)
+      ? { status: "current", fetchedAt }
+      : { status: "delisted", scope: "release", fetchedAt };
   }
 
   /** A clock that went backwards must not make an old catalog look fresh. */
@@ -319,6 +354,23 @@ function newestRelease(releases: readonly PluginCatalogEntry[]): PluginCatalogEn
   const stable = releases.filter((e) => semver.prerelease(e.version) === null);
   const pool = stable.length > 0 ? stable : releases;
   return [...pool].sort((a, b) => semver.compareBuild(b.version, a.version))[0];
+}
+
+/**
+ * The release an update offers: the highest stable version above the installed
+ * one, or when there is none and the installed version is itself a prerelease,
+ * the highest prerelease above it, so a stable install never moves onto a
+ * prerelease. Build metadata alone is never newer: precedence ignores it.
+ */
+function newestUpdate(
+  releases: readonly PluginCatalogEntry[],
+  installedVersion: string
+): PluginCatalogEntry | undefined {
+  const newer = releases.filter((e) => semver.gt(e.version, installedVersion));
+  const allowPrerelease = semver.prerelease(installedVersion) !== null;
+  return newestRelease(
+    allowPrerelease ? newer : newer.filter((e) => semver.prerelease(e.version) === null)
+  );
 }
 
 let sharedService: PluginCatalogService | null = null;

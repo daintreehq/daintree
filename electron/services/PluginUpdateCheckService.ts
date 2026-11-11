@@ -301,7 +301,10 @@ export class PluginUpdateCheckService {
 
     const targets = pluginService
       .listPlugins()
-      .filter((p) => !p.isBuiltin && !!p.originalUrl && !!p.archiveHash)
+      // A catalog install is checked against the catalog, not its URL (#16781).
+      .filter(
+        (p) => !p.isBuiltin && (p.source === "catalog" || (!!p.originalUrl && !!p.archiveHash))
+      )
       .map((p) => p.manifest.name);
 
     const { found, hadError } = await this.checkAll(pluginService, targets);
@@ -337,9 +340,11 @@ export class PluginUpdateCheckService {
               version: result.version,
               capabilities: result.capabilities,
             });
-          } else if (result.status === "fetch-failed") {
+          } else if (result.status === "fetch-failed" || result.status === "catalog-unavailable") {
             failedIds.push(id);
           }
+          // A delisted plugin is neither an update nor a failed check: nothing
+          // newer is listed, and the installed copy keeps running.
         } catch (err) {
           // Isolate per plugin — one failed fetch never aborts the batch.
           failedIds.push(id);

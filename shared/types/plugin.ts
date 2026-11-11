@@ -4283,25 +4283,29 @@ export type PluginUrlInstallPreviewResult =
   | { status: "invalid-url" };
 
 /**
- * Discriminant for {@link PluginCheckUpdateResult}. A manual update check
- * (`plugin:check-for-update`) re-fetches the plugin's `originalUrl`, hashes the
- * archive, and compares it against the installed `archiveHash` — the check is
- * purely informational and never installs. Manual reinstall (preserving
- * settings, never auto) is the user's follow-up action.
+ * Outcome of a manual update check (`plugin:check-for-update`). Returned as
+ * plain data (never thrown) so the structured result survives Electron's
+ * structured-clone IPC boundary (#3769). The check is purely informational and
+ * never installs; the user's follow-up is a reinstall held to the previewed
+ * digest.
  *
- * - `up-to-date` — the re-fetched archive hashes identically to the installed one
- * - `available` — the hashes differ; the result carries the new manifest preview
- * - `invalid-id` — no installed record, or the record has no `originalUrl`
- *   (sideload/builtin); the UI gate makes the no-URL case unreachable in practice
- * - `fetch-failed` — network error, non-2xx response, bad content-type, or an
- *   archive that exceeds the size cap / fails to parse; carries a `message`
- */
-export type PluginUpdateCheckStatus = "available" | "up-to-date" | "invalid-id" | "fetch-failed";
-
-/**
- * Outcome of a manual update check. Returned as plain data (never thrown) so the
- * structured result survives Electron's structured-clone IPC boundary (#3769) —
- * domain failures (`fetch-failed`) come back as data, not as a rejected promise.
+ * A URL install re-fetches its `originalUrl` and compares digests. A catalog
+ * install reads a freshly fetched catalog instead (#16781), since its URL pins
+ * one reviewed release:
+ *
+ * - `up-to-date` — the URL serves the installed bytes, or the catalog still
+ *   lists the installed release and nothing newer
+ * - `available` — a different archive, with its manifest preview; for a catalog
+ *   install, the newest reviewed release above the installed version
+ * - `delisted` — catalog installs only: the catalog lists nothing newer, and no
+ *   longer lists the plugin (`scope: "plugin"`) or the installed release
+ *   (`scope: "release"`). The installed copy keeps running.
+ * - `catalog-unavailable` — catalog installs only: no fresh catalog could be
+ *   read, so nothing is offered. `stale` means an older copy exists but isn't
+ *   used for updates.
+ * - `invalid-id` — no installed record, or no source to check
+ * - `fetch-failed` — the archive couldn't be downloaded or read, or wasn't the
+ *   one expected; carries a `message`
  */
 export type PluginCheckUpdateResult =
   | { status: "up-to-date" }
@@ -4323,9 +4327,28 @@ export type PluginCheckUpdateResult =
        * install refuses any bytes other than the ones the user reviewed (#12612).
        */
       archiveHash: string;
+      /**
+       * The catalog release offered to a catalog install (#16781). Its confirm
+       * installs this release by name, never the URL the plugin came from.
+       */
+      catalog?: PluginCatalogProvenance;
+      /**
+       * The repository the installed release was listed from, present only when
+       * the offered release is listed from a different one.
+       */
+      previousRepo?: string;
+    }
+  | { status: "delisted"; scope: "plugin" | "release"; version: string }
+  | {
+      status: "catalog-unavailable";
+      catalog: "stale" | "unavailable";
+      failure: PluginCatalogFailure;
     }
   | { status: "invalid-id" }
   | { status: "fetch-failed"; message: string };
+
+/** Discriminant for {@link PluginCheckUpdateResult}. */
+export type PluginUpdateCheckStatus = PluginCheckUpdateResult["status"];
 
 /**
  * One URL-installed plugin found to have an update available by the opt-in
