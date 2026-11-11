@@ -54,7 +54,7 @@ export async function fetchRemoteBlocklist(url, fetchImpl = fetch, timeoutMs = F
       throw transient(`expected HTTP 200 for ${url}, got ${response.status}`);
     }
     const contentType = response.headers?.get?.("content-type") ?? "";
-    if (!/^application\/json\b/i.test(contentType)) {
+    if (contentType.split(";")[0].trim().toLowerCase() !== "application/json") {
       throw new Error(`expected a JSON content type from ${url}, got "${contentType}"`);
     }
     let body;

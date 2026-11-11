@@ -22,8 +22,10 @@ on:
 permissions:
   contents: read
 
+# Keyed by ref so a refused dispatch from another branch can't replace a
+# develop run waiting in the queue.
 concurrency:
-  group: publish-plugin-blocklist
+  group: publish-plugin-blocklist-${{ github.ref }}
   cancel-in-progress: false
 
 env:
