@@ -68,6 +68,7 @@ vi.mock("../../utils/performance.js", async (importOriginal) => {
 import {
   sendToRenderer,
   broadcastToRenderer,
+  broadcastToRendererExcept,
   broadcastToProjectRenderers,
   getProjectRendererTargets,
   broadcastToVisibleRenderers,
@@ -266,6 +267,22 @@ describe("broadcastToRenderer", () => {
 
     expect(() => broadcastToRenderer("channel:test")).not.toThrow();
     expect(send2).toHaveBeenCalledWith("channel:test");
+  });
+
+  it("leaves out only the views the skip predicate names", () => {
+    const keptSend = vi.fn();
+    const skippedSend = vi.fn();
+    const kept = { isDestroyed: () => false, send: keptSend };
+    const skipped = { isDestroyed: () => false, send: skippedSend };
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      { isDestroyed: () => false, webContents: kept },
+      { isDestroyed: () => false, webContents: skipped },
+    ]);
+
+    broadcastToRendererExcept((wc) => wc === skipped, "channel:test", { payload: true });
+
+    expect(keptSend).toHaveBeenCalledWith("channel:test", { payload: true });
+    expect(skippedSend).not.toHaveBeenCalled();
   });
 });
 

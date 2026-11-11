@@ -8,6 +8,7 @@ import {
   unthrottleCpuWebContents,
   purgeMemoryWebContents,
   readJsHeapUsedBytes,
+  isWebContentsFrozen,
 } from "../webContentsLifecycle.js";
 
 interface MockDebugger {
@@ -85,6 +86,82 @@ describe("webContentsLifecycle", () => {
         (c) => c[0] === "Page.setWebLifecycleState"
       );
       expect(lifecycle?.[1]).toEqual({ state: "active" });
+    });
+  });
+
+  describe("isWebContentsFrozen (#16810)", () => {
+    const asWc = (wc: MockWebContents) => wc as unknown as Electron.WebContents;
+
+    function failFreezeAfter(wc: MockWebContents, release: Promise<void>, message: string): void {
+      wc.debugger.sendCommand.mockImplementation(
+        async (method: string, params?: { state?: string }) => {
+          if (method === "Page.setWebLifecycleState" && params?.state === "frozen") {
+            await release;
+            throw new Error(message);
+          }
+        }
+      );
+    }
+
+    it("reads frozen from the freeze request until an unfreeze is requested", async () => {
+      const wc = createMockWc();
+      expect(isWebContentsFrozen(asWc(wc))).toBe(false);
+
+      const freezing = freezeWebContents(asWc(wc));
+      expect(isWebContentsFrozen(asWc(wc))).toBe(true);
+      await freezing;
+      expect(isWebContentsFrozen(asWc(wc))).toBe(true);
+
+      const thawing = unfreezeWebContents(asWc(wc));
+      expect(isWebContentsFrozen(asWc(wc))).toBe(false);
+      await thawing;
+      expect(isWebContentsFrozen(asWc(wc))).toBe(false);
+    });
+
+    it("is per renderer", async () => {
+      const frozen = createMockWc();
+      const other = createMockWc();
+      await freezeWebContents(asWc(frozen));
+      expect(isWebContentsFrozen(asWc(other))).toBe(false);
+    });
+
+    it("never marks a destroyed renderer", async () => {
+      const wc = createMockWc({ destroyed: true });
+      await freezeWebContents(asWc(wc));
+      expect(isWebContentsFrozen(asWc(wc))).toBe(false);
+    });
+
+    it.each(["Target closed", "Debugger.sendCommand blew up"])(
+      "takes the mark back when the freeze fails (%s)",
+      async (message) => {
+        const wc = createMockWc();
+        failFreezeAfter(wc, Promise.resolve(), message);
+        await freezeWebContents(asWc(wc));
+        expect(isWebContentsFrozen(asWc(wc))).toBe(false);
+      }
+    );
+
+    it("a failed freeze leaves a later freeze's mark alone", async () => {
+      const wc = createMockWc();
+      let release!: () => void;
+      failFreezeAfter(wc, new Promise<void>((r) => (release = r)), "Target closed");
+      const first = freezeWebContents(asWc(wc));
+      wc.debugger.sendCommand.mockResolvedValue(undefined);
+      await unfreezeWebContents(asWc(wc));
+      const second = freezeWebContents(asWc(wc));
+
+      release();
+      await Promise.all([first, second]);
+
+      expect(isWebContentsFrozen(asWc(wc))).toBe(true);
+    });
+
+    it("an unfreeze requested while a freeze is in flight wins", async () => {
+      const wc = createMockWc();
+      const freezing = freezeWebContents(asWc(wc));
+      const thawing = unfreezeWebContents(asWc(wc));
+      await Promise.all([freezing, thawing]);
+      expect(isWebContentsFrozen(asWc(wc))).toBe(false);
     });
   });
 
