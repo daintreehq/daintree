@@ -406,7 +406,8 @@ describe("a URL install's review (#16776)", () => {
   });
 
   it("makes an archive's own entry names safe to show when it can't be read", async () => {
-    // The manifest reader quotes the first entry's name, which the author picks.
+    // The manifest reader quotes the first entry's name, which the author
+    // picks. Astral characters check the clamp counts code points, not units.
     const hostile = path.join(root, "hostile.dntr");
     const { ZipArchive } = await import("archiver");
     const zip = new ZipArchive({ zlib: { level: 1 } });
@@ -416,7 +417,7 @@ describe("a URL install's review (#16776)", () => {
       out.on("error", reject);
       zip.on("error", reject);
       zip.pipe(out);
-      zip.append("x", { name: `\u202Eexe.${"a".repeat(400)}.txt` });
+      zip.append("x", { name: `\u202E${"\u{1F600}".repeat(300)}.txt` });
       void zip.finalize();
     });
     servesInOrder(hostile);
@@ -426,9 +427,14 @@ describe("a URL install's review (#16776)", () => {
     expect(result.status).toBe("failed");
     if (result.status !== "failed") return;
     const message = result.errors[0]!.message;
-    expect(message).toContain("isn't a valid plugin archive");
-    expect(message).not.toContain("\u202E");
-    expect([...message].length).toBeLessThan(300);
+    const prefix = "The download isn't a valid plugin archive: ";
+    expect(message.startsWith(prefix)).toBe(true);
+    const detail = message.slice(prefix.length);
+    // The reason survives, without the bidi override, cut at 200 code points.
+    expect(detail.startsWith('First entry must be plugin.json, got "\u{1F600}')).toBe(true);
+    expect(detail).not.toContain("\u202E");
+    expect([...detail]).toHaveLength(201);
+    expect(detail.endsWith("\u{1F600}…")).toBe(true);
   });
 
   it("reports a download that isn't a plugin archive, and removes it", async () => {
@@ -447,7 +453,11 @@ describe("a URL install's review (#16776)", () => {
     const result = await handlePreviewFromUrl(URL);
 
     expect(result.status).toBe("failed");
-    if (result.status === "failed") expect(result.errors[0]?.code).toBe("archive_invalid");
+    if (result.status === "failed") {
+      expect(result.errors[0]?.code).toBe("archive_invalid");
+      // A short reason is kept whole, not reduced to the prefix.
+      expect(result.errors[0]?.message).toMatch(/isn't a valid plugin archive: \S/);
+    }
     expect(await downloadsLeft()).toEqual([]);
   });
 

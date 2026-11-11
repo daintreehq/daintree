@@ -574,7 +574,6 @@ export async function handlePreviewFromUrl(
           `The download isn't a valid plugin archive: ${previewErrorDetail(err)}`
         );
       }
-      if (cancelled()) return { status: "cancelled" };
       // The installer counts a plugin as installed when its folder exists,
       // while the plugin manager lists only plugins that loaded or were
       // skipped. An install whose manifest no longer validates is in the
@@ -585,6 +584,9 @@ export async function handlePreviewFromUrl(
         () => true,
         () => false
       );
+      // Checked last, after every await: a cancel that lands while the
+      // archive is read or the probe runs still wins over the preview.
+      if (cancelled()) return { status: "cancelled" };
       return {
         status: "preview",
         preview: { url: target.trimmed, archiveHash, installedOnDisk, manifest },

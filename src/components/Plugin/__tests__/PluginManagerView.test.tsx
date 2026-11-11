@@ -1406,6 +1406,42 @@ describe("PluginManagerView", () => {
     );
   });
 
+  it("replaces an install the list can't show, bound as a replacement", async () => {
+    // Its folder is there, but it never loaded, so the list has no row for it.
+    vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(async (url) => ({
+      status: "preview",
+      preview: {
+        url,
+        archiveHash: PREVIEW_HASH,
+        installedOnDisk: true,
+        manifest: previewManifest(),
+      },
+    }));
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    const review = within(await urlReviewDialog());
+    await waitFor(() =>
+      expect(review.getByTestId("archive-installed-version").textContent).toMatch(
+        /couldn.t be loaded/
+      )
+    );
+    await approveUrlReview();
+
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+        "https://example.com/p.dntr",
+        expect.any(String),
+        { kind: "update", pluginId: "acme.demo", archiveHash: PREVIEW_HASH }
+      )
+    );
+  });
+
   it("installs nothing when the review is cancelled", async () => {
     renderDialog();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());

@@ -266,6 +266,50 @@ describe("PluginInstallConfirmDialog for a URL install", () => {
     expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
   });
 
+  const onDisk = () =>
+    urlRequest({ source: { kind: "url", label: "example.com/acme.dntr", installedOnDisk: true } });
+
+  it("names the listed version over an unlisted copy when the list has it", async () => {
+    list.mockResolvedValue([installedRow("1.0.0")]);
+    renderReview(onDisk());
+    await settle();
+
+    expect(screen.getByTestId("archive-installed-version").textContent).toContain("v1.0.0");
+    expect(screen.queryByText(/couldn.t be loaded/)).toBeNull();
+  });
+
+  it("claims no unlisted copy while it can't read what's installed", async () => {
+    list.mockRejectedValue(new Error("host unreachable"));
+    renderReview(onDisk());
+    await settle();
+    elapse(60_000);
+
+    expect(screen.queryByTestId("archive-installed-version")).toBeNull();
+    expect(screen.getByText("Couldn't check which version is installed")).toBeTruthy();
+    expect(isArmed()).toBe(false);
+  });
+
+  it("re-arms the cooldown when a retry turns up an unlisted copy", async () => {
+    list.mockRejectedValue(new Error("host unreachable"));
+    renderReview(onDisk());
+    await settle();
+    // Long past the cooldown while the failed read holds the confirm.
+    elapse(60_000);
+
+    list.mockResolvedValue([]);
+    click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+
+    // New copy on screen, so a fresh read-time gate before it can be approved.
+    expect(screen.getByTestId("archive-installed-version").textContent).toContain(
+      "couldn’t be loaded"
+    );
+    expect(isArmed()).toBe(false);
+    elapse(60_000);
+    click(confirmButton());
+    expect(onConfirm).toHaveBeenCalledWith({ replacesInstalled: true });
+  });
+
   it("keeps an opened archive's copy when the source is a file", async () => {
     renderReview(urlRequest({ source: { kind: "archive", fileName: "acme.dntr" } }));
     await settle();
