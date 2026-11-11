@@ -36,12 +36,14 @@ vi.mock("../TelemetryService.js", () => ({
 
 vi.mock("../../utils/logger.js", () => ({
   createLogger: () => ({
-    debug: vi.fn(),
+    debug: (message: string, context?: unknown) =>
+      shared.loggerCalls.push({ level: "debug", message, context }),
     info: (message: string, context?: unknown) =>
       shared.loggerCalls.push({ level: "info", message, context }),
     warn: (message: string, context?: unknown) =>
       shared.loggerCalls.push({ level: "warn", message, context }),
-    error: vi.fn(),
+    error: (message: string, error?: unknown, context?: unknown) =>
+      shared.loggerCalls.push({ level: "error", message, context: { error, context } }),
   }),
 }));
 

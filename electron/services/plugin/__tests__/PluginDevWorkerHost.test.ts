@@ -366,6 +366,8 @@ describe("PluginDevWorkerHost", () => {
       type: "FatalError",
       location: "Reached heap limit",
     });
+    const logged = Object.values(loggerMock).flatMap((fn) => fn.mock.calls);
+    expect(JSON.stringify(logged)).not.toContain("diagnostic-report-16807");
   });
 
   it("dispose sends a cooperative dispose then force-kills after the grace period", async () => {
