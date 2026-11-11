@@ -719,14 +719,26 @@ async function launchHelpAgent(
   // An agent this launch settles on by itself is gated as well, and also
   // before the claim: whatever it could settle on is probed here, and one too
   // old is passed over the way a CLI that isn't installed is. A kept
-  // conversation outlives a restart, and the CLI may have changed since.
-  const tooOldCandidates = parsed?.agentId
-    ? new Map<string, VersionTooOld>()
-    : await tooOldAssistantAgents([
+  // conversation outlives a restart, and the CLI may have changed since. The
+  // panel can change while a probe is out, so it is read again until it names
+  // nothing unprobed; the lane and agent are then chosen from that same read.
+  const tooOldCandidates = new Map<string, VersionTooOld>();
+  if (!parsed?.agentId) {
+    const probed = new Set<string>();
+    for (;;) {
+      const unprobed = [
         ...keptAgents.values(),
         ...implicitLaneAgentCandidates(useHelpPanelStore.getState(), workspace.id),
         resolvedDefault,
-      ]);
+        agentId,
+      ].filter((id): id is string => !!id && !probed.has(id));
+      if (unprobed.length === 0) break;
+      for (const id of unprobed) probed.add(id);
+      for (const [id, block] of await tooOldAssistantAgents(unprobed)) {
+        tooOldCandidates.set(id, block);
+      }
+    }
+  }
   const panelState = useHelpPanelStore.getState();
   const lane: {
     slot: number;

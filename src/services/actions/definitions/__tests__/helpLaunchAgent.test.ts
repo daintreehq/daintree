@@ -378,6 +378,62 @@ describe("help.launchAgent", () => {
       expect(claimedHelpLaneKeys.size).toBe(0);
     });
 
+    it("gates the Claude fallback a cold start settles on", async () => {
+      vi.mocked(window.electron.system.getAgentVersion).mockImplementation(async (agentId) => ({
+        agentId,
+        installedVersion: agentId === "claude" ? "0.9.0" : null,
+        latestVersion: null,
+        updateAvailable: false,
+        lastChecked: null,
+      }));
+      mockGetCliAvailabilityState.mockReturnValue({ availability: {}, isInitialized: false });
+
+      await action.run(undefined, stubCtx);
+
+      expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", message: expect.stringMatching(/0\.9\.0/) })
+      );
+    });
+
+    it("probes an agent the panel comes to prefer while another probe is out", async () => {
+      mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "codex" });
+      mockGetCliAvailabilityState.mockReturnValue({
+        availability: allAvailability({ antigravity: "ready", copilot: "ready" }),
+        isInitialized: true,
+      });
+      Object.assign(window.electron.help, {
+        listPendingHibernationSlots: vi.fn().mockResolvedValue([1]),
+        peekPendingHibernation: vi.fn(async () => ({
+          agentId: "antigravity",
+          agentSessionId: "s",
+          cwd: "/repo",
+        })),
+      });
+      vi.mocked(window.electron.system.getAgentVersion).mockImplementation(async (agentId) => {
+        // A preference synced from the host lands mid-probe, naming an agent
+        // whose CLI is below its floor.
+        if (agentId === "antigravity") useHelpPanelStore.setState({ preferredAgentId: "copilot" });
+        return {
+          agentId,
+          installedVersion: agentId === "copilot" ? "1.0.0" : "9.9.9",
+          latestVersion: null,
+          updateAvailable: false,
+          lastChecked: null,
+        };
+      });
+
+      await action.run(undefined, stubCtx);
+
+      expect(window.electron.system.getAgentVersion).toHaveBeenCalledWith(
+        "copilot",
+        expect.anything()
+      );
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "codex", slot: 0 })
+      );
+    });
+
     it("refuses silently for a caller that asked for a vacant lane", async () => {
       agyVersion("1.0.0");
 
