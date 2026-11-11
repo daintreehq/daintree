@@ -93,6 +93,7 @@ import { detectClientBundle, downloadArtifact } from "./clientBuild.js";
 import { HostSetupService, RELEASE_FEED_PREFIXES } from "./HostSetupService.js";
 import { HostBringBackService } from "./HostBringBackService.js";
 import { sendWakePacket, wakeRouteFor } from "./wakeOnLan.js";
+import { markEnteringFullScreen } from "../../window/fullScreenEntry.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -598,6 +599,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
           created.setBounds(bounds);
           if (maximized) created.maximize();
           if (fullScreen) {
+            markEnteringFullScreen(created);
             created.once("show", () => {
               if (!created.isDestroyed()) created.setFullScreen(true);
             });
