@@ -59,9 +59,14 @@
     border-color: var(--theme-text-primary);
   }
 
-  /* Group dividers stay visible between framed buttons. */
-  .toolbar-divider {
-    background-color: var(--theme-text-secondary);
+  /* Group dividers stay visible between framed buttons. Guarded like the
+     highlighted-row block below: under forced colours this theme ink would
+     replace the toolbar's `CanvasText` divider at equal specificity, and the UA
+     would then reset it to Canvas, so every group boundary vanished. */
+  @media (forced-colors: none) {
+    .toolbar-divider {
+      background-color: var(--theme-text-secondary);
+    }
   }
 
   /* A preset split is one control: one frame, one seam. */

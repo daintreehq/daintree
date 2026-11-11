@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import { readToolbarCss } from "@/__tests__/support/cssManifest";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 import { readToolbarSource } from "./toolbarSource";
 
 const BUTTON_PATH = path.resolve(__dirname, "../../ui/button.tsx");
@@ -595,6 +596,24 @@ describe("Toolbar strip — composition invariants", () => {
       expect(block).not.toBeNull();
       expect(block![1]).toMatch(/background-color:\s*CanvasText/);
     });
+
+    it("the increased-contrast divider ink stands aside under forced colours, which report prefers-contrast too", () => {
+      // Chromium matches `prefers-contrast: more` on a Windows high-contrast
+      // palette, and the host sheet comes after the toolbar's at equal
+      // specificity: an unguarded theme ink there replaces CanvasText, and
+      // forced colours then reset it to Canvas on Canvas.
+      const inks = cssRules(readIndexCss()).filter(
+        (rule) =>
+          rule.selectors.includes(".toolbar-divider") &&
+          /(^|[;\s])background(-color)?\s*:/.test(rule.body) &&
+          rule.media.includes("(prefers-contrast: more)")
+      );
+      expect(inks.length).toBeGreaterThan(0);
+      for (const rule of inks) {
+        expect(rule.media, rule.body.trim()).toContain("(forced-colors: none)");
+      }
+      expect(inks.some((rule) => /var\(--theme-text-secondary\)/.test(rule.body))).toBe(true);
+    });
   });
 
   describe("geometry", () => {
@@ -688,3 +707,51 @@ describe("Toolbar strip — composition invariants", () => {
     });
   });
 });
+
+/**
+ * Every style rule in `css`, with its selector list and the media queries around
+ * it. Comments are dropped in the same pass that skips strings: a regex strip
+ * reads the `@source` globs (`"../*.md"`) as comment openers.
+ */
+function cssRules(css: string): { selectors: string[]; body: string; media: string[] }[] {
+  let text = "";
+  for (let i = 0; i < css.length; i++) {
+    if (css.startsWith("/*", i)) {
+      const close = css.indexOf("*/", i + 2);
+      i = close === -1 ? css.length : close + 1;
+      text += " ";
+    } else if (css[i] === '"' || css[i] === "'") {
+      const close = css.indexOf(css[i]!, i + 1);
+      const end = close === -1 ? css.length : close + 1;
+      text += css.slice(i, end).replace(/[{};]/g, " ");
+      i = end - 1;
+    } else {
+      text += css[i];
+    }
+  }
+  const rules: { selectors: string[]; body: string; media: string[] }[] = [];
+  const open: { prelude: string; from: number }[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === ";") {
+      start = i + 1;
+    } else if (ch === "{") {
+      open.push({ prelude: text.slice(start, i).trim(), from: i + 1 });
+      start = i + 1;
+    } else if (ch === "}") {
+      const block = open.pop();
+      if (block && !block.prelude.startsWith("@")) {
+        rules.push({
+          selectors: block.prelude.split(",").map((s) => s.replace(/\s+/g, " ").trim()),
+          body: text.slice(block.from, i),
+          media: open
+            .filter((b) => b.prelude.startsWith("@media"))
+            .map((b) => b.prelude.replace(/^@media\s+/, "")),
+        });
+      }
+      start = i + 1;
+    }
+  }
+  return rules;
+}
