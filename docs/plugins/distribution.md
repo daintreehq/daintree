@@ -175,7 +175,7 @@ Daintree:
 4. Atomically swaps the temp dir into `~/.daintree/plugins/{publisher}.{name}/`.
 5. Loads and activates the plugin.
 
-Only the double-click route shows that preview. Drag-and-drop, **Install from file**, URL installs and `daintree-plugin install` install without a pre-install confirmation enumerating capabilities or publisher; the only other interstitial prompt is the update confirm when re-fetching an already-installed plugin's URL ([Updating a plugin](#updating-a-plugin)). On every route, capabilities are also enforced at use: the gated calls ask through the TOFU consent prompt the first time — see [Trust model](./trust-model.md).
+The double-click route and [URL installs](#url-install) show that preview. Drag-and-drop, **Install from file** and `daintree-plugin install` install without a pre-install confirmation enumerating capabilities or publisher; the only other interstitial prompt is the update confirm when re-fetching an already-installed plugin's URL ([Updating a plugin](#updating-a-plugin)). On every route, capabilities are also enforced at use: the gated calls ask through the TOFU consent prompt the first time — see [Trust model](./trust-model.md).
 
 If a plugin with the same `name` is already installed, Daintree replaces it: it unloads the old plugin and atomically swaps the new directory into place (`electron/services/plugin/PluginInstaller.ts`). There is no semver comparison between installed and incoming versions, no downgrade confirmation, and no identical-version block. The swap preserves the original `installedAt` and records `updatedAt`, and it revokes the plugin's MCP consent pins and capability grants, so the new code asks again. Two exceptions: reinstalling a byte-identical archive (same `archiveHash`) keeps them, and after a replacing install Daintree offers back, in one approval, the capability grants the new version still declares. (Version-aware upgrade/downgrade gating is not yet implemented.) Two cases are refused or undone:
 
@@ -192,7 +192,9 @@ The user pastes an `https://` URL pointing to a `.dntr` file. Daintree:
 
 1. Fetches the URL with a 30 MB size cap and a 30 s timeout (shared with the manual update-check path). The URL must be `https:` — see the security notes below.
 2. Accepts the response when the content-type is one of `application/zip`, `application/x-zip`, `application/x-dntr`, or `application/octet-stream`, or — when none of those match — when the original URL's path ends in `.dntr`.
-3. Runs the same flow as file install from that point.
+3. Reads `plugin.json` and the archive's SHA-256 without extracting it, deletes the download, and shows the same preview as a double-clicked archive: name, id, version, authors, declared capabilities, recipes, project templates, and the full-privilege warning, plus the installed version it would replace. Nothing is installed until the user confirms, and the confirm button stays disabled for a moment after the preview opens, or after what it would replace changes.
+4. On confirm, downloads the URL again and installs it only if its SHA-256 matches the previewed one. The confirm is also held to what the preview said about the installed plugin: a fresh install refuses to replace one installed since, and a replacement refuses when the plugin has gone. A refused install is never retried unbound; installing from the URL again previews what it serves now.
+5. Runs the same flow as file install from that point.
 
 **Typical URL patterns:**
 
@@ -207,7 +209,7 @@ The user pastes an `https://` URL pointing to a `.dntr` file. Daintree:
 - Redirects are followed **manually**, up to 5 hops (`MAX_REDIRECT_HOPS`), and every hop is independently re-validated: each `Location` must stay `https:` (an `https→http` downgrade is rejected) and its host must clear both the literal SSRF guard and a DNS-resolution check (a public URL that 30x-redirects to a private/loopback/link-local address is rejected before the body is fetched). Acceptance is decided from the final response's content-type; the `.dntr`-suffix fallback is checked against the **original** pasted URL's path, since the resolved URL isn't reliable through Electron's fetch.
 - Private, loopback, and link-local hosts are rejected — a literal private address before the fetch runs, and a hostname that resolves to one at every hop (SSRF guard).
 - A URL carrying credentials (`https://user:pass@host/…`) is rejected outright, so they are never fetched or stored as the plugin's update URL.
-- Declared capabilities are not enumerated at install time on this route — consent is gathered per call at runtime (TOFU; see [Trust model](./trust-model.md)).
+- Declared capabilities are listed in the preview before install, and consent is still gathered per call at runtime (TOFU; see [Trust model](./trust-model.md)).
 
 Install only from URLs you trust.
 
@@ -215,7 +217,7 @@ Install only from URLs you trust.
 
 A web page or README can hand a plugin to Daintree with a `daintree://` link (`electron/setup/deepLinkInstall.ts`):
 
-- `daintree://plugin/install?url=<url>` opens the plugin manager with the **Install from URL** dialog pre-filled with `<url>` (URL-encoded). It never installs by itself: the user presses install, and the URL goes through every rule above, so it must be `https:`. If an install dialog is already open, the link doesn't replace what the user is typing.
+- `daintree://plugin/install?url=<url>` opens the plugin manager with the **Install from URL** dialog pre-filled with `<url>` (URL-encoded). It never installs by itself: the user presses install, and the URL goes through every rule above, preview included, so it must be `https:`. If an install dialog is already open, or a URL install is already behind the HTTP warning, downloading for its preview, or under review, the link doesn't replace it.
 - `daintree://plugin/open?id=<publisher.name>` opens the plugin manager on that plugin, or says it isn't installed.
 
 Any other `daintree://` link is ignored.
