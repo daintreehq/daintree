@@ -557,14 +557,13 @@ export class AgentModelCatalogService {
     const command = await this.resolveCliCommand("antigravity", config?.command ?? "agy");
     if (!command) return null;
     const exec = this.deps.execFileImpl ?? execFileAsync;
-    let stdout = "";
-    let stderr = "";
+    let output: { stdout: string; stderr: string };
     try {
       const env = buildNetworkProbeEnv(
         config?.account?.kind === "api-key" ? config.account.keyVars : []
       );
       const target = await cliSpawnTarget(command, ["models"], process.platform, { env });
-      const result = await exec(target.command, target.args, {
+      output = await exec(target.command, target.args, {
         timeout: AGY_TIMEOUT_MS,
         maxBuffer: MAX_AGY_BUFFER,
         shell: target.shell,
@@ -572,8 +571,6 @@ export class AgentModelCatalogService {
         windowsHide: true,
         env: { ...env, ...target.env },
       });
-      stdout = result.stdout;
-      stderr = result.stderr;
     } catch (err: unknown) {
       if (isNodeError(err) && err.code === "ENOENT") return null;
       // Offline, signed out, or a timeout: the stale or bundled list stands in.
@@ -581,8 +578,8 @@ export class AgentModelCatalogService {
       return null;
     }
 
-    const rows = parseAgyModelsOutput(stdout);
-    const listed = rows.length > 0 ? rows : parseAgyModelsOutput(stderr);
+    const rows = parseAgyModelsOutput(output.stdout);
+    const listed = rows.length > 0 ? rows : parseAgyModelsOutput(output.stderr);
     if (listed.length === 0) return null;
     return listed.map(({ id, name }) => ({ id, name, shortLabel: deriveShortLabel(name, id) }));
   }
