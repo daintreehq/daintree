@@ -34,6 +34,7 @@ import type {
   PluginAgentInputResult,
   PluginAgentInterruptResult,
   PluginAgentKeysResult,
+  PluginRemoteHost,
   PluginPanelLifecycleEvent,
   PluginSystemWakeEvent,
 } from "../../types/plugin.js";
@@ -60,6 +61,7 @@ export type WorkspaceMembers = Pick<
   | "getAgentState"
   | "sendToActiveAgent"
   | "agents"
+  | "remoteHosts"
   | "terminals"
   | "sendToAgent"
   | "runRecipe"
@@ -208,6 +210,7 @@ export function createWorkspaceFacet(
   const runRecipeCalls: RunRecipeRecord[] = [];
   let runRecipeResult: PluginRunRecipeResult = { status: "cancelled" };
   let agentPanes: PluginAgentPane[] = options.agents ?? [];
+  const remoteHosts: PluginRemoteHost[] = options.remoteHosts ?? [];
   let allAgentsSnapshot: PluginAllAgentsSnapshot = normalizePluginAllAgentsSnapshot(
     options.allAgents ?? { agents: [], degraded: false, lastSuccessfulAt: 0 }
   );
@@ -445,6 +448,26 @@ export function createWorkspaceFacet(
           : { status: "not-found" };
         agentInputCalls.push({ method: "submit", terminalId, input: text, result });
         return result;
+      },
+    },
+    // Capability and binding as production checks them; the switch is taken to
+    // be on, since a test that declares `host:dispatch` means to use it.
+    remoteHosts: {
+      async list() {
+        if (mockProjectId !== null) {
+          throw new Error(
+            "PERMISSION_REQUIRED: remoteHosts.list reaches Remote Hosts, which only an installed plugin may"
+          );
+        }
+        if (!capabilities.has("host:dispatch")) {
+          throw new Error(
+            'PERMISSION_REQUIRED: remoteHosts.list requires "host:dispatch", which is not declared in manifest.capabilities'
+          );
+        }
+        return remoteHosts.map((host) => ({
+          ...host,
+          projects: host.projects ? host.projects.map((project) => ({ ...project })) : null,
+        }));
       },
     },
     terminals: {

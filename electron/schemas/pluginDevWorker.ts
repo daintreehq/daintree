@@ -45,6 +45,7 @@ const HOST_CALL_METHODS = {
   "agents.interrupt": true,
   "agents.sendKeys": true,
   "agents.submit": true,
+  "remoteHosts.list": true,
   "terminals.readScreen": true,
   sendToAgent: true,
   runRecipe: true,

@@ -59,6 +59,7 @@ import type {
   PluginTerminalLifecycleEvent,
   PluginAgentPane,
   PluginAllAgentsSnapshot,
+  PluginRemoteHost,
   PluginFocusedPanel,
   PluginProjectPresence,
   PluginSendToAgentOptions,
@@ -839,6 +840,11 @@ export interface CreateMockHostOptions {
    * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`).
    */
   allAgents?: PluginAllAgentsSnapshot;
+  /**
+   * What `remoteHosts.list()` reports for an installed plugin that declares
+   * `host:dispatch` (#16767). Defaults to none.
+   */
+  remoteHosts?: PluginRemoteHost[];
   /**
    * The focus `onDidChangeFocusedPanel` replays on subscribe. Defaults to no
    * focused panel (`kind: null`). For a project plugin it is taken to be inside

@@ -59,6 +59,7 @@ import type {
   PluginAgentInputResult,
   PluginAgentInterruptResult,
   PluginAgentKeysResult,
+  PluginRemoteHost,
   PluginToolbarButtonRuntimeState,
 } from "../../../shared/types/plugin.js";
 import { PLUGIN_SERVICE_MAX_ARGS_BYTES } from "../../../shared/config/pluginBudgets.js";
@@ -663,12 +664,26 @@ export class PluginDevWorkerCapabilityFacet {
             .then(normalizePluginAllAgentsSnapshot),
         // Ownership, capability, consent and the write all run on the real host
         // in main.
-        interrupt: (terminalId) =>
-          this.callAgentInput<PluginAgentInterruptResult>("agents.interrupt", { terminalId }),
-        sendKeys: (terminalId, input) =>
-          this.callAgentInput<PluginAgentKeysResult>("agents.sendKeys", { terminalId, input }),
-        submit: (terminalId, text) =>
-          this.callAgentInput<PluginAgentInputResult>("agents.submit", { terminalId, text }),
+        interrupt: (terminalId, options) =>
+          this.callAgentInput<PluginAgentInterruptResult>(
+            "agents.interrupt",
+            options === undefined ? { terminalId } : { terminalId, options }
+          ),
+        sendKeys: (terminalId, input, options) =>
+          this.callAgentInput<PluginAgentKeysResult>(
+            "agents.sendKeys",
+            options === undefined ? { terminalId, input } : { terminalId, input, options }
+          ),
+        submit: (terminalId, text, options) =>
+          this.callAgentInput<PluginAgentInputResult>(
+            "agents.submit",
+            options === undefined ? { terminalId, text } : { terminalId, text, options }
+          ),
+      },
+      // Capability, the user's switch and the hosts' links all live on the real
+      // host in main; the grace value is the host's own unload answer.
+      remoteHosts: {
+        list: () => this.rpc.callWithGrace<PluginRemoteHost[]>("remoteHosts.list", undefined, []),
       },
       // Capability, consent, rate limit and project scope all live on the real
       // host in main; the grace value is the host's own unload answer.

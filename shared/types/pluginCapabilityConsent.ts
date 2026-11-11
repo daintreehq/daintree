@@ -303,6 +303,20 @@ export interface PluginProjectTargetingUpdate {
 }
 
 /**
+ * Renderer → main read of an app-wide plugin's "Allow host targeting" switch
+ * (#16767) — the `host:dispatch` grant in the `"global"` scope.
+ */
+export interface PluginHostTargetingQuery {
+  pluginId: string;
+}
+
+/** Renderer → main write of the "Allow host targeting" switch (#16767). */
+export interface PluginHostTargetingUpdate {
+  pluginId: string;
+  enabled: boolean;
+}
+
+/**
  * Renderer → main read of a plugin's "Allow OS notifications" switch (#13505)
  * — the `notification:os` grant in the `"global"` scope, keyed by the plugin's
  * instance id, so each project's instance of a project plugin has its own.

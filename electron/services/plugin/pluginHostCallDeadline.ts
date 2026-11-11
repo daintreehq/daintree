@@ -44,6 +44,8 @@ const HOST_CALL_DEADLINES = {
   "agents.interrupt": INTERACTIVE,
   "agents.sendKeys": INTERACTIVE,
   "agents.submit": INTERACTIVE,
+  // May dial a host whose link went idle (8 s) and then read its projects (5 s).
+  "remoteHosts.list": INTERACTIVE,
   "terminals.readScreen": INTERACTIVE,
   // Without a target the host opens a picker and waits on the person; with one
   // it is a consent check followed by an immediate draft.

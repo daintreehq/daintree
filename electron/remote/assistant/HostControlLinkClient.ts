@@ -31,6 +31,7 @@ import {
   type ThrowawayReleasePayload,
 } from "./linkMethods.js";
 import { createLogger } from "../../utils/logger.js";
+import { pluginCredentialFor } from "../pluginControl/linkMethods.js";
 
 const logger = createLogger("main:HostControlLinkClient");
 
@@ -147,6 +148,15 @@ export class HostControlLinkClient {
   senderIdOf(hostId: HostId): string | null {
     const credential = this.deps.existingCredential?.(hostId) ?? null;
     return credential === null ? null : senderIdForCredential(credential);
+  }
+
+  /**
+   * The credential this Shell's installed plugins prove themselves to a host
+   * with (#16767): derived from this Shell's secret for the host, never the
+   * one its assistants present.
+   */
+  pluginCredential(hostId: HostId): string {
+    return pluginCredentialFor(this.deps.credential(hostId));
   }
 
   start(): void {

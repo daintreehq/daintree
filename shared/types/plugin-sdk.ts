@@ -121,6 +121,9 @@ export type {
   PluginActivate,
   PluginHostApi,
   PluginDispatchOptions,
+  PluginRemoteHost,
+  PluginRemoteHostProject,
+  PluginRemoteHostsApi,
   PluginIdentity,
   PluginHostActionsApi,
   PluginActivationApi,
@@ -340,6 +343,7 @@ export type {
 // constants and the helper are value exports.
 
 export type {
+  PluginAgentInputOptions,
   PluginAgentInputResult,
   PluginAgentInterruptResult,
   PluginAgentKeysInput,

@@ -50,6 +50,7 @@ import { installDecisionsHost } from "../decisions/hostInstall.js";
 import { installVoicePaneHost } from "../voice/hostInstall.js";
 import { installAssistantSenderHost } from "../assistant/hostSenders.js";
 import { installHostMcpRelay, relayCallerOf } from "../assistant/hostMcpRelay.js";
+import { installHostPluginControlHost } from "../pluginControl/hostInstall.js";
 import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { observeAgents } from "../metrics/hostSources.js";
@@ -250,6 +251,8 @@ async function buildHostListener(
     },
   });
   teardowns.push(() => relay.dispose());
+  // A Shell's installed plugins reaching this host, as themselves (#16767).
+  teardowns.push(installHostPluginControlHost(server));
 
   // Previews, downloads and host pickers for remote views; revoked with the listener.
   const files = installHostFileService();

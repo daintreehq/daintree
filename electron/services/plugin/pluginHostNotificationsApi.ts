@@ -4,7 +4,8 @@ import { getPluginCapabilityConsentStore } from "../plugin-capability/instances.
 import { admitPluginToast } from "./pluginToastBudget.js";
 import type { PluginUIPromptDispatcher, PromptRequestOptions } from "./PluginUIPromptDispatcher.js";
 import { resolvePluginFrontend } from "./pluginFrontendRouting.js";
-import { recordPluginLaunch } from "./pluginLaunchedAgents.js";
+import { recordPluginLaunch, recordRemotePluginLaunch } from "./pluginLaunchedAgents.js";
+import { assertMayTargetHosts, getPluginHostTargets, parseHostId } from "./pluginHostTargets.js";
 import { PluginFrontendMethod } from "./pluginFrontendRequests.js";
 import { type PluginTaskApi } from "../../../shared/types/plugin.js";
 import {
@@ -250,17 +251,28 @@ function sanitizeConfirmOptions(options: PluginConfirmOptions): PluginConfirmOpt
  * the shape is checked here; an empty or non-string id is refused rather than
  * read as "no target", since that would silently route to the focused project.
  */
-function parseDispatchTarget(pluginId: string, options: unknown): string | undefined {
-  if (options === undefined || options === null) return undefined;
+function parseDispatchTarget(
+  pluginId: string,
+  options: unknown
+): { projectId?: string; hostId?: string } {
+  if (options === undefined || options === null) return {};
   if (typeof options !== "object" || Array.isArray(options)) {
     throw new Error(`Plugin "${pluginId}" dispatch: options must be an object`);
   }
-  const { projectId } = options as { projectId?: unknown };
-  if (projectId === undefined) return undefined;
-  if (typeof projectId !== "string" || projectId.trim().length === 0) {
+  const { projectId, hostId } = options as { projectId?: unknown; hostId?: unknown };
+  if (projectId !== undefined && (typeof projectId !== "string" || projectId.trim().length === 0)) {
     throw new Error(`Plugin "${pluginId}" dispatch: options.projectId must be a non-empty string`);
   }
-  return projectId;
+  if (hostId === undefined) return projectId === undefined ? {} : { projectId };
+  // A host never falls through to this machine: a malformed id or a missing
+  // project is refused rather than routed to the focused view (#16767).
+  const host = parseHostId(pluginId, "dispatch", hostId);
+  if (projectId === undefined) {
+    throw new Error(
+      `Plugin "${pluginId}" dispatch: options.hostId needs options.projectId, the host's project to run in`
+    );
+  }
+  return { projectId, hostId: host };
 }
 
 /**
@@ -461,6 +473,57 @@ export function buildNotificationsHostApi(
       : dispatcher.sendDispatchToRenderer(actionId, args, projectId, pluginId, approval));
     if (isBound()) recordPluginLaunch(pluginId, actionId, args, result, projectId);
     return result;
+  };
+  /**
+   * A dispatch to a project on a Remote Host (#16767), as this plugin from this
+   * machine. Checked here first: an installed plugin, the capability and the
+   * user's switch. The host then holds it to a plugin dispatch's rules there.
+   * Never the preset launch prompt: a host has no way to show it.
+   */
+  const dispatchToHost = async (
+    hostId: string,
+    projectId: string,
+    actionId: string,
+    args: unknown
+  ): Promise<ActionDispatchResult> => {
+    assertMayTargetHosts(
+      deps.declaredCapabilities(pluginId),
+      pluginId,
+      boundProjectId,
+      "dispatch with options.hostId"
+    );
+    const targets = getPluginHostTargets();
+    if (targets === null || !targets.knows(hostId)) {
+      return {
+        ok: false,
+        error: { code: "NOT_FOUND", message: `This machine has no Remote Host "${hostId}"` },
+      };
+    }
+    const startedAt = Date.now();
+    const audit = (result: "success" | "error", errorMessage: string): void => {
+      deps.safeAppendAudit({
+        pluginId,
+        actionId: `dispatch:${hostId}:${projectId}:${actionId}`,
+        recordType: "ipc-invoke",
+        channel: "plugin:dispatch-host",
+        result,
+        errorMessage,
+        argsHash: deps.safeArgsHash([args]),
+        durationMs: Date.now() - startedAt,
+      });
+    };
+    try {
+      const result = await targets.dispatch({ hostId, pluginId }, { projectId, actionId, args });
+      // An unload while the host ran it reaches nothing it launched.
+      if (deps.plugins.has(pluginId)) {
+        recordRemotePluginLaunch(pluginId, hostId, actionId, args, result);
+      }
+      audit(result.ok ? "success" : "error", result.ok ? "" : result.error.code);
+      return result;
+    } catch (err) {
+      audit("error", "ERROR");
+      throw err;
+    }
   };
   const pluginUnloaded = (): ActionDispatchResult => ({
     ok: false,
@@ -795,7 +858,11 @@ export function buildNotificationsHostApi(
           },
         };
       }
-      const requestedProjectId = parseDispatchTarget(pluginId, options);
+      const target = parseDispatchTarget(pluginId, options);
+      if (target.hostId !== undefined) {
+        return dispatchToHost(target.hostId, target.projectId!, actionId, args);
+      }
+      const requestedProjectId = target.projectId;
       if (requestedProjectId === undefined) {
         // A bound dispatch reaches only its own project's renderer and rejects
         // with PROJECT_VIEW_UNAVAILABLE when that project has no live view;

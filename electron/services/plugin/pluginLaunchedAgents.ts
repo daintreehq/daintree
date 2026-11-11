@@ -225,6 +225,51 @@ export function launchedAgentProject(
 }
 
 /**
+ * Agents an installed plugin launched on a Remote Host with
+ * `host.dispatch(..., { hostId, projectId })` (#16767), keyed by host and
+ * terminal. The host keeps the record that decides what the plugin reaches
+ * there; this one ends that reach when the plugin unloads, and answers
+ * `not-found` here before any consent prompt. Kept in memory only.
+ */
+const remoteLaunches = new Map<string, string>();
+
+/** Remote launches remembered at once; past it the oldest go. */
+export const MAX_REMOTE_PLUGIN_LAUNCHES = 512;
+
+function remoteLaunchKey(hostId: string, terminalId: string): string {
+  return `${hostId}\0${terminalId}`;
+}
+
+/** Record the agent a successful remote `agent.launch` result says it started, as {@link recordPluginLaunch} does. */
+export function recordRemotePluginLaunch(
+  pluginId: string,
+  hostId: string,
+  actionId: string,
+  args: unknown,
+  result: ActionDispatchResult
+): void {
+  if (actionId !== AGENT_LAUNCH_ACTION_ID || !result.ok) return;
+  if (args !== null && typeof args === "object" && "requestedId" in args) return;
+  const launched = result.result as { launched?: unknown; terminalId?: unknown } | null;
+  if (launched?.launched !== true) return;
+  const terminalId = launched.terminalId;
+  if (typeof terminalId !== "string" || terminalId.length === 0) return;
+  const key = remoteLaunchKey(hostId, terminalId);
+  remoteLaunches.delete(key);
+  remoteLaunches.set(key, pluginId);
+  while (remoteLaunches.size > MAX_REMOTE_PLUGIN_LAUNCHES) {
+    const oldest = remoteLaunches.keys().next().value;
+    if (oldest === undefined) break;
+    remoteLaunches.delete(oldest);
+  }
+}
+
+/** Whether `pluginId` launched `terminalId` on `hostId` while it has been loaded. */
+export function isRemotePluginLaunch(pluginId: string, hostId: string, terminalId: string): boolean {
+  return remoteLaunches.get(remoteLaunchKey(hostId, terminalId)) === pluginId;
+}
+
+/**
  * Drop every agent the matching plugin instances launched, on disk as well, so
  * they reach none of them after a restart either. A stored record restore
  * hasn't handed back yet goes too, whether or not its plugin is loaded.
@@ -232,6 +277,9 @@ export function launchedAgentProject(
 export function forgetPluginLaunchesWhere(matches: (pluginId: string) => boolean): void {
   for (const [terminalId, record] of launches) {
     if (matches(record.pluginId)) launches.delete(terminalId);
+  }
+  for (const [key, pluginId] of remoteLaunches) {
+    if (matches(pluginId)) remoteLaunches.delete(key);
   }
   let changed = false;
   for (const [terminalId, record] of stored) {
@@ -248,6 +296,7 @@ export function forgetPluginLaunches(pluginId: string): void {
 
 export function _resetPluginLaunchesForTests(): void {
   launches.clear();
+  remoteLaunches.clear();
   detachPluginLaunchPersistence();
 }
 

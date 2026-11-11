@@ -1013,6 +1013,13 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   // Not confirm-triggering — it changes where a dispatch lands, not which
   // actions a plugin can reach.
   "project:dispatch",
+  // Name a Remote Host on `host.dispatch(actionId, args, { hostId, projectId })`
+  // and list the hosts this Shell reaches (`host.remoteHosts`, #16767).
+  // Declaring it enables nothing: targeting stays off until the user turns on
+  // "Allow host targeting" for this plugin in the Plugin Manager, and only an
+  // installed plugin may. Not confirm-triggering, like `project:dispatch`: the
+  // host holds the call to the rules a plugin dispatch gets there.
+  "host:dispatch",
   // Observe which kind of panel has focus (`host.onDidChangeFocusedPanel`,
   // #13221): the kind, an agent flag and the worktree id, never a panel's id,
   // title, URL or content. Disclosure-only and not confirm-triggering.
@@ -1061,6 +1068,55 @@ export interface PluginDispatchOptions {
    * come from `host.dispatch("project.getAll")`.
    */
   projectId?: string;
+  /**
+   * Run the action in `projectId` on this Remote Host (#16767), as this plugin
+   * from this machine. Needs the `host:dispatch` capability and the user's
+   * "Allow host targeting" switch, and `projectId` alongside it. Ids come from
+   * {@link PluginRemoteHostsApi.list}.
+   */
+  hostId?: string;
+}
+
+/**
+ * Last argument to the {@link PluginAgentsApi} input methods (#16767): which
+ * Remote Host the agent runs on. Absent, the agent is one on this machine.
+ */
+export interface PluginAgentInputOptions {
+  hostId?: string;
+}
+
+/** One project on a Remote Host, as {@link PluginRemoteHostsApi.list} names it. */
+export interface PluginRemoteHostProject {
+  readonly projectId: string;
+  readonly name: string;
+}
+
+/**
+ * One Remote Host this machine drives, as observed when listed. `projects` is
+ * null when they couldn't be read: the host isn't connected, or didn't answer
+ * in time.
+ */
+export interface PluginRemoteHost {
+  readonly hostId: string;
+  readonly name: string;
+  readonly connection: "connected" | "connecting" | "disconnected";
+  readonly projects: readonly PluginRemoteHostProject[] | null;
+}
+
+/** `host.remoteHosts` — the Remote Hosts this machine drives (#16767). */
+export interface PluginRemoteHostsApi {
+  /**
+   * The Remote Hosts this machine drives, never this machine itself, with each
+   * connected host's projects: the `hostId` and `projectId` that
+   * `host.dispatch` takes. A host whose link went idle is dialled first, as a
+   * dispatch to it would be, and one the user disconnected is left alone.
+   * Resolves `[]` once the plugin is unloaded or when no host is set up.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+   *   `host:dispatch`, the user hasn't turned on "Allow host targeting", or
+   *   it is a project plugin.
+   */
+  list(): Promise<PluginRemoteHost[]>;
 }
 
 export interface MenuItemContribution {
@@ -5309,8 +5365,18 @@ export interface PluginAgentsApi {
    *   doesn't drive the agent's project.
    * @throws {Error} If `terminalId` is not a non-empty string of at most 512
    *   characters.
+   *
+   * `options.hostId` reaches an agent this plugin launched on that Remote Host
+   * through `host.dispatch(..., { hostId, projectId })` (#16767): the host
+   * answers from its own record of what this plugin launched there from this
+   * machine. It also needs `host:dispatch` and "Allow host targeting", and
+   * `not-found` covers an agent this plugin didn't launch there or launched
+   * before it was last loaded.
    */
-  interrupt(terminalId: string): Promise<PluginAgentInterruptResult>;
+  interrupt(
+    terminalId: string,
+    options?: PluginAgentInputOptions
+  ): Promise<PluginAgentInterruptResult>;
   /**
    * Press keys in an agent this plugin launched — most often to answer its
    * CLI's own dialog (a trust or permission prompt, a list). Keys go one at a
@@ -5322,7 +5388,11 @@ export interface PluginAgentsApi {
    * @throws {Error} If `input` does not hold exactly one of `keys` (1 to 16
    *   names) or `choose` (1 to 200 characters).
    */
-  sendKeys(terminalId: string, input: PluginAgentKeysInput): Promise<PluginAgentKeysResult>;
+  sendKeys(
+    terminalId: string,
+    input: PluginAgentKeysInput,
+    options?: PluginAgentInputOptions
+  ): Promise<PluginAgentKeysResult>;
   /**
    * Submit `text` to an agent this plugin launched, as one submission with one
    * Enter: the agent takes it as its next prompt, or a slash command such as
@@ -5333,7 +5403,11 @@ export interface PluginAgentsApi {
    *   {@link interrupt}.
    * @throws {Error} If `text` is blank.
    */
-  submit(terminalId: string, text: string): Promise<PluginAgentInputResult>;
+  submit(
+    terminalId: string,
+    text: string,
+    options?: PluginAgentInputOptions
+  ): Promise<PluginAgentInputResult>;
 }
 
 /** Options for {@link PluginTerminalsApi.readScreen}. */
@@ -7571,6 +7645,13 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   readonly agents: PluginAgentsApi;
   /**
+   * The Remote Hosts this machine drives and their projects, for
+   * `host.dispatch(actionId, args, { hostId, projectId })` (#16767). Gated on
+   * `host:dispatch` and the user's "Allow host targeting" switch, and only for
+   * installed plugins. See {@link PluginRemoteHostsApi}.
+   */
+  readonly remoteHosts: PluginRemoteHostsApi;
+  /**
    * Read what a terminal's screen shows, as plain text. Gated on
    * `terminal:read`. See {@link PluginTerminalsApi}.
    */
@@ -7985,6 +8066,16 @@ export interface PluginHostApi extends PluginActivationApi {
    * `PROJECT_VIEW_UNAVAILABLE` — nothing opens or wakes a closed project —
    * except an installed plugin's targeted `terminal.close`, which Daintree
    * runs itself and answers with `{ closedIds }` (#13507).
+   *
+   * `options.hostId` with `options.projectId` runs the action in that project on
+   * a Remote Host (#16767). An installed plugin must declare `host:dispatch`
+   * and the user must turn on "Allow host targeting", or the call rejects with
+   * `PERMISSION_REQUIRED`; a project plugin never can. The host admits the call
+   * as this plugin from this machine and holds it to a plugin dispatch's rules
+   * there: only built-in actions, no `RESTRICTED` or confirm-gated ones, its
+   * own "Accept tools run for other machines" setting, and its drive lease. A
+   * change runs in the view that drives the project only when that view is on
+   * this machine, and in the host itself when nobody drives it.
    */
   dispatch(
     actionId: ActionId,

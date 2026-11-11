@@ -144,15 +144,18 @@ export class WorkspaceDomain {
     },
     "agents.interrupt": async (params) => {
       const p = params as AgentsInterruptParams;
-      return this.ctx.host.agents.interrupt(p.terminalId);
+      return this.ctx.host.agents.interrupt(p.terminalId, p.options);
     },
     "agents.sendKeys": async (params) => {
       const p = params as AgentsSendKeysParams;
-      return this.ctx.host.agents.sendKeys(p.terminalId, p.input);
+      return this.ctx.host.agents.sendKeys(p.terminalId, p.input, p.options);
     },
     "agents.submit": async (params) => {
       const p = params as AgentsSubmitParams;
-      return this.ctx.host.agents.submit(p.terminalId, p.text);
+      return this.ctx.host.agents.submit(p.terminalId, p.text, p.options);
+    },
+    "remoteHosts.list": async () => {
+      return this.ctx.host.remoteHosts.list();
     },
     "terminals.readScreen": async (params) => {
       const p = params as TerminalsReadScreenParams;

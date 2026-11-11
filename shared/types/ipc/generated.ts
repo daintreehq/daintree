@@ -2821,6 +2821,10 @@ export interface GeneratedIpcInvokeMap {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityAcknowledgeConsentInput];
     result: void;
   };
+  "plugin-capability:get-host-targeting": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginHostTargetingQuery];
+    result: boolean;
+  };
   "plugin-capability:get-os-notifications": {
     args: [input: import("../pluginCapabilityConsent.js").PluginOsNotificationsQuery];
     result: boolean;
@@ -2852,6 +2856,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin-capability:revoke-preset-grant": {
     args: [input: import("../pluginCapabilityConsent.js").PluginPresetGrantRevoke];
     result: void;
+  };
+  "plugin-capability:set-host-targeting": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginHostTargetingUpdate];
+    result: boolean;
   };
   "plugin-capability:set-os-notifications": {
     args: [input: import("../pluginCapabilityConsent.js").PluginOsNotificationsUpdate];

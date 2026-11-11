@@ -130,6 +130,9 @@ function PluginCapabilityList({
       {plugin.origin === "global" && granted.includes("project:dispatch") && (
         <PluginGrantSwitch pluginId={plugin.instanceId} grant="project-targeting" />
       )}
+      {plugin.origin === "global" && granted.includes("host:dispatch") && (
+        <PluginGrantSwitch pluginId={plugin.instanceId} grant="host-targeting" />
+      )}
       {granted.includes("notification:os") && (
         <PluginGrantSwitch pluginId={plugin.instanceId} grant="os-notifications" />
       )}
