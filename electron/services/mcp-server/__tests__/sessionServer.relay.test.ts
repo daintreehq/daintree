@@ -135,7 +135,11 @@ function errorCode(result: { content: unknown }): string {
 
 describe("telling a relayed assistant which tier an action needs (#16764)", () => {
   const SCHEMA_MANIFEST = [...MANIFEST, entry("actions.getSchema")];
-  const GLOBAL_RELAY = { shellName: "greg-mbp", global: true, refuseWrite: vi.fn(() => null) };
+  const GLOBAL_RELAY = {
+    shellName: "greg-mbp",
+    global: true as const,
+    refuseWrite: vi.fn(() => null),
+  };
 
   /** A relay whose view answers `actions.getSchema` with `target`, as the renderer does. */
   function schemaRead(target: ActionManifestEntry): Partial<SessionServerDeps> {
