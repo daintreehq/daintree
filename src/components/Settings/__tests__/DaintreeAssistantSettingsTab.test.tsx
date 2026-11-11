@@ -678,6 +678,41 @@ describe("DaintreeAssistantSettingsTab", () => {
       );
     });
 
+    it("offers ask-except to a host whose answer carries the list, and saves it (#16752)", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      const setSettings = vi.fn().mockResolvedValue(undefined);
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: false,
+          auditRetention: 7,
+          customArgs: "",
+          daintreeConfirmations: "always-ask",
+          daintreeConfirmationsExcept: [],
+        }),
+        setSettings,
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Daintree confirmations");
+      const combobox = screen.getByRole("combobox", { name: "Daintree confirmations" });
+      await waitFor(() =>
+        expect(within(combobox).queryByRole("option", { name: "Ask, except for…" })).toBeTruthy()
+      );
+
+      fireEvent.change(combobox, { target: { value: "ask-except" } });
+
+      await waitFor(() =>
+        expect(setSettings).toHaveBeenCalledWith({ daintreeConfirmations: "ask-except" })
+      );
+      await waitForContent(container, "Delete a worktree it created");
+    });
+
     it("doesn't offer ask-except to a host whose answer has no list (#16752)", async () => {
       helpPanelState.preferredAgentId = "claude";
       installApi({

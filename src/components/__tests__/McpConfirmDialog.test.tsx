@@ -2140,6 +2140,16 @@ describe("McpConfirmDialog", () => {
       });
     });
 
+    it("still shows ask-except as chosen when it is the stored mode, list or not", async () => {
+      helpAssistantApi.getSettings.mockResolvedValue({ daintreeConfirmations: "ask-except" });
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      const chosen = segment("Ask, except for…");
+      expect(chosen.getAttribute("aria-checked")).toBe("true");
+      expect(chosen.tabIndex).toBe(0);
+    });
+
     it("leaves ask-except out for a Daintree too old to keep it", async () => {
       helpAssistantApi.getSettings.mockResolvedValue({ daintreeConfirmations: "never-ask" });
       void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
