@@ -1255,7 +1255,9 @@ export class HelpSessionService {
       getEffectiveAgentConfig(input.agentId)?.capabilities?.launchMcp !== undefined;
     const [projectFacts, pluginKnowledge, hostInventory] = await Promise.all([
       this.readProjectFacts(input.projectId, input.projectPath),
-      agentSupportsAssistantContent(input.agentId) && takesPluginTools && mcpServerService.isEnabled()
+      agentSupportsAssistantContent(input.agentId) &&
+      takesPluginTools &&
+      mcpServerService.isEnabled()
         ? resolveAssistantPluginKnowledge({
             projectId: input.projectId,
             projectPath: input.projectPath,

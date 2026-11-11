@@ -124,7 +124,11 @@ describe("syncAssistantContent", () => {
 
   it("mirrors only the shared skills tree and references for antigravity sessions", async () => {
     await writeSource(globalDir, ".agents/skills/shared-thing/SKILL.md", "global shared");
-    await writeSource(projectPath, ".daintree/assistant/.agents/skills/shared-thing/SKILL.md", "project shared");
+    await writeSource(
+      projectPath,
+      ".daintree/assistant/.agents/skills/shared-thing/SKILL.md",
+      "project shared"
+    );
     await writeSource(globalDir, ".claude/skills/claude-only/SKILL.md", "claude skill");
     await writeSource(globalDir, ".claude/commands/review.md", "claude command");
     await writeSource(globalDir, ".codex/skills/codex-only/SKILL.md", "codex skill");
