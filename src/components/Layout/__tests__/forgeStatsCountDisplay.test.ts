@@ -68,9 +68,11 @@ describe("formatForgeBadgeCount / formatExactCount", () => {
     expect(formatExactCount(23_645)).toBe("23,645");
   });
 
-  it("keeps the approximate marker on the list's N+ form", () => {
+  it("keeps the approximate marker below a thousand and drops it once compacted", () => {
     expect(formatForgeBadgeCount("20+")).toBe("20+");
-    expect(formatForgeBadgeCount("1500+")).toMatch(/\+$/);
+    // A compacted figure already truncates, and the marker would be a fifth
+    // character; the exact form keeps it.
+    expect(formatForgeBadgeCount("1500+")).toBe("1.5k");
     expect(formatExactCount("1500+")).toBe("1,500+");
   });
 

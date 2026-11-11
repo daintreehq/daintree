@@ -107,7 +107,12 @@
      hover lift says; shape and order still tell issues from pull requests. */
   .toolbar-stats [data-stat-segment] svg,
   .toolbar-stats
-    .toolbar-stat-status:is(:hover, :focus-visible, [data-state="delayed-open"], [data-state="instant-open"])
+    .toolbar-stat-status:is(
+      :hover,
+      :focus-visible,
+      [data-state="delayed-open"],
+      [data-state="instant-open"]
+    )
     > svg {
     color: ButtonText;
   }

@@ -32,7 +32,7 @@ beforeAll(async () => {
 
 /** Every opening tag in `source` whose class list contains `fragment`. */
 function tagsWithClass(source: string, fragment: string): string[] {
-  return [...source.matchAll(/<(?:div|Button)\b[^>]*>/g)]
+  return [...source.matchAll(/<(?:div|Button|button)\b[^>]*>/g)]
     .map((m) => m[0])
     .filter((tag) => tag.includes(fragment));
 }

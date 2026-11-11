@@ -415,7 +415,12 @@
   transition: color var(--duration-150) ease-out;
 }
 
-.toolbar-stat-status:is(:hover, :focus-visible, [data-state="delayed-open"], [data-state="instant-open"])
+.toolbar-stat-status:is(
+    :hover,
+    :focus-visible,
+    [data-state="delayed-open"],
+    [data-state="instant-open"]
+  )
   > svg {
   color: var(--theme-text-primary);
 }

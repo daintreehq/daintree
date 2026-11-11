@@ -171,9 +171,10 @@ describe("toolbar press contract", () => {
     expect(classes).toBeDefined();
     expect(classes!.some((c) => c.startsWith("transition"))).toBe(false);
     expect(PILL_SOURCE).not.toMatch(/open\s*&&\s*"bg-/);
-    // Open, it takes the same armed fill as the icon buttons.
-    expect(decl(rulesFor('.toolbar-stat-pill[aria-expanded="true"]')[0]!.body, "background")).toBe(
-      decl(rulesFor('.toolbar-icon-button[data-state="open"]')[0]!.body, "background")
-    );
+    // Open, it takes the same armed fill as the icon buttons. The pill sets the
+    // colour alone: its divider is a background image the fill paints under.
+    expect(
+      decl(rulesFor('.toolbar-stat-pill[aria-expanded="true"]')[0]!.body, "background-color")
+    ).toBe(decl(rulesFor('.toolbar-icon-button[data-state="open"]')[0]!.body, "background"));
   });
 });

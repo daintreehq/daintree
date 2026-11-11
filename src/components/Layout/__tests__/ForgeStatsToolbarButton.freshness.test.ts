@@ -81,10 +81,11 @@ describe("ForgeStatsToolbarButton freshness wiring", () => {
 
   it("derives commitFreshnessLevel that maps errored to fresh for the commits pill", () => {
     // Commits are from git, not GitHub — GitHub connectivity errors shouldn't
-    // degrade the commits pill.
+    // degrade the commits pill. Without a forge, a failure is commit data's
+    // own, so the mask only applies in forge mode.
     expect(source).toContain("commitFreshnessLevel");
     expect(source).toMatch(
-      /commitFreshnessLevel\s*=\s*freshnessLevel\s*===\s*"errored"\s*\?\s*"fresh"\s*:\s*freshnessLevel/
+      /commitFreshnessLevel\s*=\s*forgeMode\s*&&\s*freshnessLevel\s*===\s*"errored"\s*\?\s*"fresh"\s*:\s*freshnessLevel/
     );
   });
 });
@@ -435,15 +436,19 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
     expect(source).toContain("count={prCount}");
   });
 
-  it("uses the exact display count in the issue + PR aria-labels and tooltips", () => {
-    // The badge is compacted; names and tooltips carry the exact figure.
+  it("names the issue + PR segments from the display count and keeps the exact one in tooltips", () => {
+    // The badge is compacted; names lead with the figure on screen and add the
+    // exact one, and the stale-state tooltips carry the exact figure.
+    expect(source).toContain('${countName(issueDisplayCount, "open issue", "open issues"');
+    expect(source).toContain(
+      '${countName(prDisplayCount, "open pull request", "open pull requests"'
+    );
     expect(source).toContain(
       '${formatExactCountNoun(issueDisplayCount, "open issue", "open issues")}'
     );
     expect(source).toContain(
       '${formatExactCountNoun(prDisplayCount, "open pull request", "open pull requests")}'
     );
-    expect(source).toContain('${formatExactCountNoun(prDisplayCount, "open PR", "open PRs")}');
   });
 
   it("resets the list counts + timestamps via a project-path effect (issue #9741)", () => {
