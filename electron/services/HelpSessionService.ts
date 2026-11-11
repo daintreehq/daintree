@@ -56,6 +56,7 @@ import {
   assistantSlotKey,
   isAssistantSessionDirName,
   isValidAssistantSlot,
+  projectIdFromSlotKey,
 } from "../../shared/config/assistantSlots.js";
 
 export { codexTrustArgs, projectRuleRoots } from "./AssistantSessionFiles.js";
@@ -1906,6 +1907,29 @@ export class HelpSessionService {
       agentSessionId,
       capturedAt: Date.now(),
     });
+  }
+
+  /**
+   * Records which lanes a restart to install an update is leaving running
+   * (#16753), after shutdown's captures have landed, so the next launch resumes
+   * exactly those conversations. A lane counts only while it still points where
+   * it did at the snapshot, at a conversation it can be resumed into by id: a
+   * discard or relaunch during the kill, or a Codex lane whose id never came
+   * back, is left to the ordinary restart rule (#10815).
+   */
+  recordLanesToResumeAtLaunch(lanes: Iterable<AssistantLaneSnapshot>): Promise<void> {
+    const store = this.pendingHibernationStore;
+    if (!store) return Promise.resolve();
+    const resume: Record<string, string> = {};
+    for (const lane of lanes) {
+      if (isGlobalAssistantId(projectIdFromSlotKey(lane.slotKey))) continue;
+      const entry = store.get(lane.slotKey);
+      if (!entry?.agentSessionId) continue;
+      if ((this.laneRevisionBySlotKey.get(lane.slotKey) ?? 0) !== lane.revision) continue;
+      if (!getEffectiveAgentConfig(entry.agentId)?.resume) continue;
+      resume[lane.slotKey] = entry.agentSessionId;
+    }
+    return store.recordResumeAtLaunch(resume);
   }
 
   private bumpLaneRevision(slotKey: string): void {

@@ -40,9 +40,23 @@ export interface PendingHelpHibernation {
 // Persisted shape excludes `panelWasOpen` — it is an in-memory-only field.
 type PersistedHelpHibernation = Omit<PendingHelpHibernation, "panelWasOpen">;
 
+/**
+ * The lanes a restart to install an update left running (#16753), each with
+ * the conversation it ran, for the next launch to resume. The entries alone
+ * can't say this: they also keep conversations that stopped long before the
+ * quit, which a restart must not bring back (#10815).
+ */
+export interface LaunchResume {
+  recordedAt: number;
+  /** `assistantSlotKey(projectId, slot)` → the lane's `agentSessionId`. */
+  lanes: Record<string, string>;
+}
+
 interface FileShape {
   version: number;
   entries: Record<string, PersistedHelpHibernation>;
+  // Optional, so a build that predates it reads the file and drops it on its next write.
+  resumeAtLaunch?: LaunchResume;
 }
 
 /**
@@ -58,6 +72,10 @@ interface FileShape {
 export class PendingHelpHibernationStore {
   private entries = new Map<string, PendingHelpHibernation>();
   private loaded = false;
+  // What the last update shutdown recorded, until it is persisted.
+  private resumeAtLaunch: LaunchResume | null = null;
+  // What this launch read back, handed out once by `takeResumeAtLaunch`.
+  private loadedResumeAtLaunch: LaunchResume | null = null;
   private filePath: string;
   // Serialize writes so a rapid capture-then-clear can't race on disk.
   private writeChain: Promise<void> = Promise.resolve();
@@ -92,6 +110,12 @@ export class PendingHelpHibernationStore {
         const { panelWasOpen: _panelWasOpen, ...safeEntry } = entry as PendingHelpHibernation;
         this.entries.set(key, safeEntry);
       }
+      if (parsed.resumeAtLaunch !== undefined && !legacyUnslotted) {
+        this.loadedResumeAtLaunch = this.readResumeAtLaunch(parsed.resumeAtLaunch);
+        // Off disk before anything can resume from it: a crash during this
+        // launch must bring back nothing on the next one (#10815).
+        await this.persist();
+      }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
       console.warn("[PendingHelpHibernationStore] Failed to load:", err);
@@ -106,6 +130,23 @@ export class PendingHelpHibernationStore {
   set(slotKey: string, entry: PendingHelpHibernation): Promise<void> {
     this.entries.set(slotKey, entry);
     return this.persist();
+  }
+
+  /**
+   * Records the lanes an update shutdown is leaving running (#16753), replacing
+   * any earlier record. An empty record writes nothing new.
+   */
+  recordResumeAtLaunch(lanes: Record<string, string>, recordedAt = Date.now()): Promise<void> {
+    if (Object.keys(lanes).length === 0) return Promise.resolve();
+    this.resumeAtLaunch = { recordedAt, lanes: { ...lanes } };
+    return this.persist();
+  }
+
+  /** What the previous run's update shutdown recorded, once per launch; null after. */
+  takeResumeAtLaunch(): LaunchResume | null {
+    const taken = this.loadedResumeAtLaunch;
+    this.loadedResumeAtLaunch = null;
+    return taken;
   }
 
   /** Resolves once every queued write has landed. */
@@ -165,6 +206,20 @@ export class PendingHelpHibernationStore {
     );
   }
 
+  private readResumeAtLaunch(value: unknown): LaunchResume | null {
+    if (!value || typeof value !== "object") return null;
+    const { recordedAt, lanes } = value as Record<string, unknown>;
+    if (typeof recordedAt !== "number" || !Number.isFinite(recordedAt)) return null;
+    if (recordedAt > Date.now()) return null;
+    if (!lanes || typeof lanes !== "object") return null;
+    const valid: Record<string, string> = {};
+    for (const [slotKey, agentSessionId] of Object.entries(lanes)) {
+      if (!slotKey || typeof agentSessionId !== "string" || agentSessionId === "") continue;
+      valid[slotKey] = agentSessionId;
+    }
+    return Object.keys(valid).length > 0 ? { recordedAt, lanes: valid } : null;
+  }
+
   private persist(): Promise<void> {
     // Strip `panelWasOpen` (in-memory only) so reloaded entries on app restart
     // are treated as prior-session tokens that never auto-resume.
@@ -176,6 +231,7 @@ export class PendingHelpHibernationStore {
     const snapshot: FileShape = {
       version: FILE_VERSION,
       entries: persistedEntries,
+      ...(this.resumeAtLaunch ? { resumeAtLaunch: this.resumeAtLaunch } : {}),
     };
     const work = this.writeChain
       .catch(() => undefined)

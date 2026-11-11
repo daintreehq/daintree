@@ -635,6 +635,19 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
 
       await Promise.all(assistantCaptureWrites);
 
+      // A restart to install an update brings back the lanes it stops, by the
+      // ids just captured (#16753); any other quit leaves them to be resumed by
+      // hand (#10815).
+      if (
+        helpSessions &&
+        assistantLanes.size > 0 &&
+        getActiveShutdown()?.initiator === "update-install"
+      ) {
+        await helpSessions.recordLanesToResumeAtLaunch(assistantLanes.values()).catch((err) => {
+          console.warn("[MAIN] Recording assistant lanes to resume after the update failed:", err);
+        });
+      }
+
       // Journal a resume record per captured agent session, matching the
       // trash-expiry / kill / gracefulKill close paths. Non-agent terminals
       // and sessions with no resumable id are skipped. Branch lookups are
