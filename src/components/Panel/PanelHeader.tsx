@@ -85,6 +85,7 @@ import { TerminalHostSuffix } from "@/components/Terminal/TerminalHostSuffix";
 import { TerminalScheduleChip } from "@/components/Terminal/TerminalScheduleChip";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
   DropdownMenu,
@@ -147,6 +148,7 @@ import {
   isPanelClosePending,
 } from "@/services/panelCloseGuard";
 import { isPtyPanel } from "@shared/types/panel";
+import { hasBypassFlags } from "@shared/types/agentSettings";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { scratchpadHasContent } from "@/lib/terminalScratchpad";
@@ -423,16 +425,11 @@ function PanelHeaderComponent({
   const readoutClear = useReadoutClearance(readoutRef, isMaximized && activeCount > 0);
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
 
-  // Check if panel has dangerous launch flags
-  const hasDangerousFlags = (() => {
-    const dangerousFlags = new Set([
-      "--dangerously-skip-permissions",
-      "--yolo",
-      "--dangerously-bypass-approvals-and-sandbox",
-      "--force",
-    ]);
-    return agentLaunchFlags?.some((flag) => dangerousFlags.has(flag)) ?? false;
-  })();
+  // Selected as a boolean, so a settings change re-renders only a header whose
+  // mark flips.
+  const hasDangerousFlags = useAgentSettingsStore((s) =>
+    hasBypassFlags(agentLaunchFlags, agentId, s.settings)
+  );
 
   // Watch state — only relevant for agent panels
   const isWatched = usePanelStore((state) => state.watchedPanels.has(id));

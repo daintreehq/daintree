@@ -534,6 +534,109 @@ function optionGroups(tokens: readonly string[]): string[][] {
 }
 
 /**
+ * Every declaration of `agentId`'s permission bypass, as argv: the resolved
+ * `dangerousArgs`, the registry default (a snapshot captured before the user
+ * customized `dangerousArgs` carries it), retired defaults, and every plugin
+ * declaration on record.
+ */
+function bypassArgSources(
+  agentId: string,
+  resolved: string,
+  pluginBypassArgHistory: readonly (readonly string[])[]
+): (readonly string[])[] {
+  return [
+    ...[
+      resolved,
+      getDefaultDangerousArgs(agentId),
+      ...(ownEntry(RETIRED_DANGEROUS_ARGS, agentId) ?? []),
+    ].map((source) => source.trim().split(/\s+/).filter(Boolean)),
+    ...pluginBypassArgHistory,
+  ];
+}
+
+/** The distinct option groups of every bypass declaration, longest first. */
+function bypassArgGroups(sources: readonly (readonly string[])[]): string[][] {
+  const groups: string[][] = [];
+  for (const tokens of sources) {
+    for (const group of optionGroups(tokens)) {
+      if (!groups.some((known) => known.join(" ") === group.join(" "))) groups.push(group);
+    }
+  }
+  // Longest first, so an option/value pair wins over a lone token of its own.
+  return groups.sort((a, b) => b.length - a.length);
+}
+
+/**
+ * Whether `group` starts at `index` of `flags`. A standing instruction is free
+ * text that can equal a bypass token, and Codex's shares a `-c` with
+ * config-override bypass args (#12431), so neither half of one ever matches.
+ */
+function bypassGroupAt(
+  flags: readonly string[],
+  index: number,
+  group: readonly string[],
+  instruction: ReadonlySet<number>
+): boolean {
+  return group.every(
+    (token, offset) => flags[index + offset] === token && !instruction.has(index + offset)
+  );
+}
+
+/**
+ * The option groups Daintree adds to the agent's launches itself (the
+ * registry's fixed args, the screen-mode flags, the decorations opt-out), which
+ * a launch carries whatever its bypass. A registry arg that is the agent's own
+ * declared bypass still counts as one.
+ */
+function managedLaunchGroups(agentId: string): string[] {
+  const config = getEffectiveAgentConfig(agentId);
+  const capabilities = config?.capabilities;
+  const declared = optionGroups(getDefaultDangerousArgs(agentId).split(/\s+/).filter(Boolean)).map(
+    (group) => group.join(" ")
+  );
+  return [
+    ...optionGroups(config?.args ?? [])
+      .map((group) => group.join(" "))
+      .filter((group) => !declared.includes(group)),
+    ...[capabilities?.inlineModeFlag, capabilities?.altScreenFlag].filter(
+      (flag): flag is string => !!flag
+    ),
+    ...optionGroups(capabilities?.decorations?.offArgs ?? []).map((group) => group.join(" ")),
+  ];
+}
+
+/**
+ * Whether a pane's launch flags carry its agent's permission bypass (#16785):
+ * an option group {@link reconcileBypassFlags} would strip, other than the
+ * groups Daintree adds to every launch itself. So
+ * the warning reads what the CLI was handed, not today's bypass mode; a flag
+ * that only means bypass to another agent never trips it; and, like the
+ * stripping, each option of a declaration counts on its own, so cleanup that
+ * drops another part of it (a model, a conversation selector) can't hide it.
+ */
+export function hasBypassFlags(
+  flags: readonly string[] | undefined,
+  agentId: string | undefined,
+  settings: Pick<AgentSettings, "agents" | "pluginBypassArgHistory"> | null | undefined
+): boolean {
+  if (!flags?.length || !agentId) return false;
+  const written = settings?.agents ? ownEntry(settings.agents, agentId)?.dangerousArgs : undefined;
+  const managed = managedLaunchGroups(agentId);
+  const groups = bypassArgGroups(
+    bypassArgSources(
+      agentId,
+      resolveDangerousArgs(typeof written === "string" ? written : undefined, agentId),
+      getPluginBypassArgHistory(settings, agentId)
+    )
+  ).filter((group) => !managed.includes(group.join(" ")));
+  if (groups.length === 0) return false;
+  const instruction = systemPromptArgPositions(flags, agentId);
+  return flags.some((_, index) =>
+    groups.some((group) => bypassGroupAt(flags, index, group, instruction))
+  );
+}
+
+/**
  * Reconciles a persisted `agentLaunchFlags` snapshot against the current
  * effective bypass setting (#10432, the "resume trap").
  *
@@ -573,43 +676,15 @@ export function reconcileBypassFlags(
   pluginBypassArgHistory: readonly (readonly string[])[] = []
 ): string[] {
   const resolved = resolveDangerousArgs(bypassArgs, agentId);
-  // Strip both the resolved args and the registry default: a snapshot may have
-  // been captured before the user customized `dangerousArgs`, so cleaning only
-  // the current value could leave a stale default flag behind.
-  const groups: string[][] = [];
-  const addGroups = (tokens: readonly string[]) => {
-    for (const group of optionGroups(tokens)) {
-      if (!groups.some((known) => known.join(" ") === group.join(" "))) groups.push(group);
-    }
-  };
-  for (const source of [
-    resolved,
-    getDefaultDangerousArgs(agentId),
-    ...(ownEntry(RETIRED_DANGEROUS_ARGS, agentId) ?? []),
-  ]) {
-    addGroups(source?.trim().split(/\s+/).filter(Boolean) ?? []);
-  }
-  for (const declared of pluginBypassArgHistory) addGroups(declared);
+  const groups = bypassArgGroups(bypassArgSources(agentId, resolved, pluginBypassArgHistory));
   if (groups.length === 0) return [...flags];
-  // Longest first, so an option/value pair wins over a lone token of its own.
-  groups.sort((a, b) => b.length - a.length);
   // A standing instruction is free text that can equal a bypass token, and
   // Codex's shares a `-c` with config-override bypass args (#12431). Stripping
   // either half would orphan the other — a lone value becomes the first-turn
   // prompt — so both are left alone.
   const instruction = systemPromptArgPositions(flags, agentId);
-  const matchLengthAt = (index: number): number => {
-    for (const group of groups) {
-      if (
-        group.every(
-          (token, offset) => flags[index + offset] === token && !instruction.has(index + offset)
-        )
-      ) {
-        return group.length;
-      }
-    }
-    return 0;
-  };
+  const matchLengthAt = (index: number): number =>
+    groups.find((group) => bypassGroupAt(flags, index, group, instruction))?.length ?? 0;
 
   // Bypass wanted: replace the first canonical occurrence in place with the
   // currently-resolved args (preserving flag order so a snapshot that already

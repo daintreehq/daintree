@@ -412,6 +412,7 @@ export {
   resolveDangerousMode,
   combineDangerousModes,
   reconcileBypassFlags,
+  hasBypassFlags,
   reconcileInlineModeFlag,
   resolveKeepDecorations,
   reconcileDecorationFlags,
