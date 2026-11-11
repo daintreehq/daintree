@@ -129,28 +129,25 @@ describe("PortalDock — context menu over the native page view", () => {
     ["Close all tabs", "portal.closeAllTabs", undefined],
     ["Reset width", "portal.resetWidth", undefined],
     ["Portal settings…", "app.settings.openTab", { tab: "portal" }],
-  ])(
-    "runs %s only after the menu has released its claim",
-    async (label, actionId, args) => {
-      const claimsAtDispatch: string[][] = [];
-      dispatchMock.mockImplementation(() => {
-        claimsAtDispatch.push([...useUIStore.getState().overlayStack]);
-        return Promise.resolve({ ok: true });
-      });
-      renderDock();
+  ])("runs %s only after the menu has released its claim", async (label, actionId, args) => {
+    const claimsAtDispatch: string[][] = [];
+    dispatchMock.mockImplementation(() => {
+      claimsAtDispatch.push([...useUIStore.getState().overlayStack]);
+      return Promise.resolve({ ok: true });
+    });
+    renderDock();
 
-      fireEvent.contextMenu(dock());
-      fireEvent.click(screen.getByRole("menuitem", { name: label }));
+    fireEvent.contextMenu(dock());
+    fireEvent.click(screen.getByRole("menuitem", { name: label }));
 
-      await waitFor(() => expect(dispatchMock).toHaveBeenCalledOnce());
-      expect(dispatchMock).toHaveBeenCalledWith(
-        actionId,
-        args,
-        expect.objectContaining({ source: "context-menu" })
-      );
-      expect(claimsAtDispatch).toEqual([[]]);
-    }
-  );
+    await waitFor(() => expect(dispatchMock).toHaveBeenCalledOnce());
+    expect(dispatchMock).toHaveBeenCalledWith(
+      actionId,
+      args,
+      expect.objectContaining({ source: "context-menu" })
+    );
+    expect(claimsAtDispatch).toEqual([[]]);
+  });
 
   it("releases only its own claim when the dock unmounts with the menu open", () => {
     useUIStore.setState({ overlayStack: ["unrelated"] });
