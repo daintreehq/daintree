@@ -91,6 +91,25 @@ describe("buildPluginSettingsSearchEntries", () => {
     expect(filterSettings(index, "quokka").map((e) => e.id)).toContain("plugin:acme.sync:interval");
   });
 
+  it("finds a labelled setting by its key, as its plugin's own form does (#16770)", () => {
+    const index = [
+      ...SETTINGS_SEARCH_INDEX,
+      ...buildPluginSettingsSearchEntries([
+        {
+          name: "Driver",
+          plugin: plugin("acme.driver", [
+            { id: "openPrCap", type: "number", label: "Open pull request limit" },
+          ] as SettingDefinition[]),
+        },
+      ]),
+    ];
+    const hit = filterSettings(index, "openprcap")[0];
+    expect(hit?.id).toBe("plugin:acme.driver:openPrCap");
+    // The key finds the row; it still opens the setting and reads as its label.
+    expect(hit?.plugin).toEqual({ instanceId: "acme.driver", settingId: "openPrCap" });
+    expect(hit?.title).toBe("Open pull request limit");
+  });
+
   it("drops project-home entries when no project is open", () => {
     const index = buildPluginSettingsSearchEntries([
       {
