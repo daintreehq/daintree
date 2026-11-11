@@ -18,7 +18,7 @@ import { HostNameText } from "@/components/Hosts/HostNameText";
 import { PlatformGlyph } from "@/components/Hosts/PlatformGlyph";
 import { LinkMark } from "@/components/Hosts/LinkMark";
 import { hostLinkTone, isHostNotAnswering } from "@/components/Hosts/hostModel";
-import { openProjectOnHost } from "@/components/Hosts/OpenOnHostSubmenu";
+import { openProjectOnHost } from "@/components/Hosts/openProjectOnHost";
 import { isNewWindowClick, switchToHost } from "@/components/Hosts/hostSwitching";
 import { isProjectThere, useProjectHosts, type ProjectHost } from "@/components/Hosts/projectHosts";
 import {
