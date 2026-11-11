@@ -105,6 +105,84 @@ describe("ProjectPluginWatcher sentinel recovery", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  describe("native sentinel events", () => {
+    type SentinelListener = (event: string, filename: string | null) => void;
+
+    function sentinelListener(dir: string): SentinelListener {
+      const calls = vi.mocked(watch).mock.calls.filter(([watched]) => watched === dir);
+      const call = calls[calls.length - 1];
+      if (!call) throw new Error(`no sentinel was opened on ${dir}`);
+      return call[2] as unknown as SentinelListener;
+    }
+
+    function watchCount(dir: string): number {
+      return vi.mocked(watch).mock.calls.filter(([watched]) => watched === dir).length;
+    }
+
+    it("skips the existence checks for root entries that cannot become .daintree", async () => {
+      await watcher.ensure("project", root);
+      const onRootEvent = sentinelListener(root);
+      const statSpy = vi.spyOn(fsModule, "existsSync");
+      try {
+        for (const name of ["package-lock.json", ".DS_Store", "dist", ".daintree.tmp", "plugins"]) {
+          onRootEvent("change", name);
+          onRootEvent("rename", name);
+        }
+        expect(statSpy).not.toHaveBeenCalled();
+      } finally {
+        statSpy.mockRestore();
+      }
+    });
+
+    it.each([".daintree", ".DAINTREE", null, ""])(
+      "moves inward when a %j root event lands after .daintree appears",
+      async (filename) => {
+        await watcher.ensure("project", root);
+        const onRootEvent = sentinelListener(root);
+        const daintreeDir = path.join(root, ".daintree");
+        await fsp.mkdir(daintreeDir);
+
+        onRootEvent("rename", filename);
+        expect(watchCount(daintreeDir)).toBe(1);
+      }
+    );
+
+    it("skips .daintree entries other than plugins and arms on plugins", async () => {
+      const daintreeDir = path.join(root, ".daintree");
+      await fsp.mkdir(daintreeDir);
+      await watcher.ensure("project", root);
+      const onDaintreeEvent = sentinelListener(daintreeDir);
+      const statSpy = vi.spyOn(fsModule, "existsSync");
+      try {
+        for (const name of ["recipes", "settings.json", "plugins.bak"]) {
+          onDaintreeEvent("rename", name);
+        }
+        expect(statSpy).not.toHaveBeenCalled();
+      } finally {
+        statSpy.mockRestore();
+      }
+
+      await fsp.mkdir(path.join(daintreeDir, "plugins"));
+      onDaintreeEvent("rename", "plugins");
+      await vi.waitFor(() => expect(watcher.isWatching("project")).toBe(true));
+      await vi.waitFor(() => expect(reload).toHaveBeenCalledWith("project", root, []));
+    });
+
+    it("moves back out to the project root when .daintree reports its own removal", async () => {
+      // inotify names a watched directory's own deletion after the directory
+      // itself, not after any entry inside it.
+      const daintreeDir = path.join(root, ".daintree");
+      await fsp.mkdir(daintreeDir);
+      await watcher.ensure("project", root);
+      const onDaintreeEvent = sentinelListener(daintreeDir);
+      expect(watchCount(root)).toBe(0);
+
+      await fsp.rm(daintreeDir, { recursive: true });
+      onDaintreeEvent("rename", ".daintree");
+      expect(watchCount(root)).toBe(1);
+    });
+  });
+
   it.each(["stop", "dispose"] as const)(
     "%s cancels recovery before the folder appears",
     async (method) => {
