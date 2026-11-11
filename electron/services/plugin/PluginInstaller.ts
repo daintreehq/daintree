@@ -31,7 +31,10 @@ import { getPluginCapabilityConsentService } from "../plugin-capability/instance
 import { clearProjectPluginVisibilityForPlugin } from "./projectPluginVisibility.js";
 import { findUnusablePluginAssets } from "./pluginManifestAssetFiles.js";
 import { parseInstallExpectation } from "./installExpectation.js";
-import { isCommunityPluginId, isRequestablePluginVersion } from "../../schemas/pluginIdentifiers.js";
+import {
+  isCommunityPluginId,
+  isRequestablePluginVersion,
+} from "../../schemas/pluginIdentifiers.js";
 import type {
   PluginManifest,
   PluginInstallError,
