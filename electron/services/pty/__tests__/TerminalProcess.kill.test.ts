@@ -721,7 +721,7 @@ describe("TerminalProcess snapshots", () => {
     });
 
     it("still preserves the snapshot in memory when the async persist rejects", async () => {
-      persistAsyncMock.mockReturnValueOnce(Promise.reject(new Error("disk full")));
+      persistAsyncMock.mockImplementationOnce(() => Promise.reject(new Error("disk full")));
       const pty = createControllablePty();
       const terminal = createTerminal({ launchAgentId: undefined }, pty);
       terminal.getInfo().everDetectedAgent = true;

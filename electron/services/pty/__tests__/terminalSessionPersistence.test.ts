@@ -19,6 +19,9 @@ import {
   writeHibernatedMarker,
   readAndDeleteHibernatedMarker,
   getHibernatedMarkerPath,
+  claimSessionWrite,
+  flushPendingSessionWritesSync,
+  setSessionPersistSuppressed,
 } from "../terminalSessionPersistence.js";
 import {
   DECISIONS_DEPLOY_TERMINAL_PREFIX,
@@ -682,6 +685,112 @@ describe("terminalSessionPersistence", () => {
 
     it("no-ops on a missing file (ENOENT-safe)", async () => {
       await expect(deleteSessionFile("nonexistent-term")).resolves.toBeUndefined();
+    });
+  });
+
+  describe("late async writes (#16806)", () => {
+    const sessionDir = () => path.join(userDataDir, "terminal-sessions");
+    const readSession = (id: string) => fs.readFileSync(getSessionPath(id)!, "utf8");
+    const stragglers = () =>
+      fs.existsSync(sessionDir())
+        ? fs.readdirSync(sessionDir()).filter((name) => name.endsWith(".tmp"))
+        : [];
+
+    afterEach(() => {
+      setSessionPersistSuppressed(false);
+      flushPendingSessionWritesSync();
+    });
+
+    it("leaves a session deleted when the delete lands while its write is in flight", async () => {
+      const write = persistSessionSnapshotAsync("term-del-race", {
+        data: "late screen",
+        cols: 80,
+        rows: 24,
+      });
+      await deleteSessionFile("term-del-race");
+      await write;
+
+      expect(fs.existsSync(getSessionPath("term-del-race")!)).toBe(false);
+      expect(stragglers()).toEqual([]);
+    });
+
+    it("writes nothing for a claim a delete voided before its payload arrived", async () => {
+      const claim = claimSessionWrite("term-claimed")!;
+      await deleteSessionFile("term-claimed");
+
+      await persistSessionSnapshotAsync("term-claimed", { data: "exit screen", cols: 80, rows: 24 }, claim);
+
+      expect(fs.existsSync(getSessionPath("term-claimed")!)).toBe(false);
+    });
+
+    it("keeps a sync write over an async write that was already in flight", async () => {
+      const write = persistSessionSnapshotAsync("term-sync-wins", {
+        data: "older",
+        cols: 80,
+        rows: 24,
+      });
+      persistSessionSnapshotSync("term-sync-wins", { data: "newer", cols: 80, rows: 24 });
+      await write;
+
+      expect(readSession("term-sync-wins")).toBe("DAINTREE_SESSION_v2\n80x24\nnewer");
+      expect(stragglers()).toEqual([]);
+    });
+
+    it("keeps the later claim's screen when the earlier write finishes last", async () => {
+      const earlier = claimSessionWrite("term-order")!;
+      const later = claimSessionWrite("term-order")!;
+
+      await persistSessionSnapshotAsync("term-order", { data: "later", cols: 80, rows: 24 }, later);
+      await persistSessionSnapshotAsync(
+        "term-order",
+        { data: "earlier", cols: 80, rows: 24 },
+        earlier
+      );
+
+      expect(readSession("term-order")).toBe("DAINTREE_SESSION_v2\n80x24\nlater");
+    });
+
+    it("lands an in-flight write synchronously at teardown, and the async one stands down", async () => {
+      const write = persistSessionSnapshotAsync("term-drain", {
+        data: "final screen",
+        cols: 100,
+        rows: 30,
+      });
+      const unpaid = claimSessionWrite("term-unpaid")!;
+
+      flushPendingSessionWritesSync();
+
+      expect(readSession("term-drain")).toBe("DAINTREE_SESSION_v2\n100x30\nfinal screen");
+      // A claim with no payload yet has nothing to land, and is void afterwards.
+      expect(fs.existsSync(getSessionPath("term-unpaid")!)).toBe(false);
+      await persistSessionSnapshotAsync("term-unpaid", { data: "too late", cols: 80, rows: 24 }, unpaid);
+      expect(fs.existsSync(getSessionPath("term-unpaid")!)).toBe(false);
+
+      await write;
+      expect(readSession("term-drain")).toBe("DAINTREE_SESSION_v2\n100x30\nfinal screen");
+      expect(stragglers()).toEqual([]);
+    });
+
+    it("lands nothing at teardown while persistence is suppressed", async () => {
+      const write = persistSessionSnapshotAsync("term-suppressed", {
+        data: "screen",
+        cols: 80,
+        rows: 24,
+      });
+      setSessionPersistSuppressed(true);
+
+      flushPendingSessionWritesSync();
+      await write;
+
+      expect(fs.existsSync(getSessionPath("term-suppressed")!)).toBe(false);
+    });
+
+    it("does not let one terminal's delete void another terminal's write", async () => {
+      const write = persistSessionSnapshotAsync("term-keep", { data: "kept", cols: 80, rows: 24 });
+      await deleteSessionFile("term-other");
+      await write;
+
+      expect(readSession("term-keep")).toBe("DAINTREE_SESSION_v2\n80x24\nkept");
     });
   });
 

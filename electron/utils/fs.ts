@@ -9,7 +9,15 @@ import {
   open,
   unlink as fsUnlink,
 } from "fs/promises";
-import { chmodSync, closeSync, fsyncSync, openSync, unlinkSync, writeFileSync } from "fs";
+import {
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  openSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
 import type { Stats } from "fs";
 import stubbornFs from "stubborn-fs";
 
@@ -152,6 +160,30 @@ export async function resilientAtomicWriteFile(
   encoding: BufferEncoding = "utf-8",
   options?: { mode?: number }
 ): Promise<void> {
+  const tempPath = await prepareAtomicWriteFile(filePath, data, encoding, options);
+  try {
+    await resilientRename(tempPath, filePath);
+    await syncParentDirectory(filePath);
+  } catch (error) {
+    fsUnlink(tempPath).catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * The first half of {@link resilientAtomicWriteFile}: writes `data` to a flushed
+ * sibling temp file at its final mode and returns the temp's path, leaving the
+ * rename and the parent-directory sync to the caller, who then owns the temp.
+ * For a caller that has to order the rename itself, such as against a
+ * synchronous writer of the same path (an async rename queued on libuv's
+ * threadpool can land after a later synchronous write).
+ */
+export async function prepareAtomicWriteFile(
+  filePath: string,
+  data: string | Buffer | Uint8Array,
+  encoding: BufferEncoding = "utf-8",
+  options?: { mode?: number }
+): Promise<string> {
   const tempPath = generateTempPath(filePath);
   const applyMode = options?.mode !== undefined && process.platform !== "win32";
   const baseWriteOptions = typeof data === "string" ? { encoding, flush: true } : { flush: true };
@@ -166,8 +198,7 @@ export async function resilientAtomicWriteFile(
     if (applyMode) {
       await fsChmod(tempPath, options!.mode!);
     }
-    await resilientRename(tempPath, filePath);
-    await syncParentDirectory(filePath);
+    return tempPath;
   } catch (error) {
     fsUnlink(tempPath).catch(() => {});
     throw error;
@@ -215,6 +246,63 @@ export function resilientAtomicWriteFileSync(
     }
     throw error;
   }
+}
+
+const RENAME_RETRY_INITIAL_DELAY_MS = 20;
+const RENAME_RETRY_MAX_DELAY_MS = 200;
+
+// The lock-contention codes stubborn-fs retries. EACCES/EPERM are only
+// transient on Windows; on POSIX they are a real permission denial.
+function isTransientRenameError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "EBUSY" || code === "EMFILE" || code === "ENFILE" || code === "EAGAIN") return true;
+  return process.platform === "win32" && (code === "EPERM" || code === "EACCES");
+}
+
+/**
+ * {@link resilientAtomicWriteFile} for a writer that a later write or a delete
+ * can supersede while it is in flight. The temp write, its flush and the
+ * directory sync stay async; only the rename is synchronous, and it runs in the
+ * same tick as `shouldCommit()`, so nothing on this thread can supersede the
+ * write between the check and the commit. A transient rename failure waits
+ * asynchronously and checks again before the next single attempt, instead of
+ * spinning the event loop the way {@link resilientRenameSync} does.
+ *
+ * Resolves `false`, with the temp file removed, when `shouldCommit()` refused.
+ */
+export async function resilientAtomicWriteFileIf(
+  filePath: string,
+  data: string | Buffer | Uint8Array,
+  shouldCommit: () => boolean,
+  encoding: BufferEncoding = "utf-8",
+  options?: { mode?: number }
+): Promise<boolean> {
+  const tempPath = await prepareAtomicWriteFile(filePath, data, encoding, options);
+  let committed = false;
+  try {
+    const deadline = Date.now() + RETRY_TIMEOUT_MS;
+    let delayMs = RENAME_RETRY_INITIAL_DELAY_MS;
+    while (shouldCommit()) {
+      try {
+        renameSync(tempPath, filePath);
+        committed = true;
+        break;
+      } catch (error) {
+        if (!isTransientRenameError(error) || Date.now() >= deadline) throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      delayMs = Math.min(delayMs * 2, RENAME_RETRY_MAX_DELAY_MS);
+    }
+  } catch (error) {
+    await fsUnlink(tempPath).catch(() => {});
+    throw error;
+  }
+  if (!committed) {
+    await fsUnlink(tempPath).catch(() => {});
+    return false;
+  }
+  await syncParentDirectory(filePath);
+  return true;
 }
 
 // Owner-only permission bits for persisted runtime data (POSIX). Files land at

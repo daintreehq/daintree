@@ -2,7 +2,7 @@
 import { readFileSync, statSync, unlinkSync, mkdirSync } from "fs";
 import { mkdir, readdir, stat, unlink } from "node:fs/promises";
 import {
-  resilientAtomicWriteFile,
+  resilientAtomicWriteFileIf,
   resilientAtomicWriteFileSync,
   tightenDirPermissions,
   tightenDirPermissionsSync,
@@ -492,34 +492,125 @@ export function persistSessionSnapshotSync(
   resilientAtomicWriteFileSync(sessionPath, formatSessionFile(snapshot), "utf8", {
     mode: OWNER_RW_FILE_MODE,
   });
+  // Written in one tick, so no async write committed in between: anything
+  // still in flight carries an older screen.
+  pendingSessionWrites.delete(sessionPath);
 }
 
+/**
+ * The right to commit the next async write of one session file. Identity is
+ * the token: a later writer replaces the map entry and a delete clears it, and
+ * a write whose claim is no longer the entry drops its temp file instead of
+ * landing over a newer screen or bringing a deleted session back (#16806).
+ */
+export interface SessionWriteClaim {
+  readonly terminalId: string;
+  readonly sessionPath: string;
+  // Set once the payload is known, so pty-host teardown can still land it.
+  snapshot: SerializedTerminalSnapshot | null;
+}
+
+// Keyed by path, not id: ids are trimmed on the way to a path, so two
+// spellings can name one file. Holds only claims not yet written; one whose
+// capture never landed carries no payload and goes at the next write, delete
+// or teardown of its file.
+const pendingSessionWrites = new Map<string, SessionWriteClaim>();
+
+/**
+ * Claim the next write of a terminal's session file ahead of having its
+ * payload, superseding any async write already in flight for it. Null when the
+ * terminal's screen is never saved. Hand the claim to
+ * {@link persistSessionSnapshotAsync}, or to {@link releaseSessionWrite} if no
+ * write follows.
+ */
+export function claimSessionWrite(terminalId: string): SessionWriteClaim | null {
+  if (isScreenNeverSaved(terminalId)) return null;
+  const sessionPath = getSessionPath(terminalId);
+  if (!sessionPath) return null;
+  const claim: SessionWriteClaim = { terminalId, sessionPath, snapshot: null };
+  pendingSessionWrites.set(sessionPath, claim);
+  return claim;
+}
+
+export function releaseSessionWrite(claim: SessionWriteClaim): void {
+  if (pendingSessionWrites.get(claim.sessionPath) === claim) {
+    pendingSessionWrites.delete(claim.sessionPath);
+  }
+}
+
+function holdsSessionWrite(claim: SessionWriteClaim): boolean {
+  return pendingSessionWrites.get(claim.sessionPath) === claim;
+}
+
+/**
+ * Write a snapshot off the event loop. Without `claim` the write claims the
+ * file when it is called; with one it writes only if that claim still stands.
+ * Either way it commits only while nothing newer has claimed, written or
+ * deleted the file since.
+ */
 export async function persistSessionSnapshotAsync(
   terminalId: string,
-  snapshot: SerializedTerminalSnapshot
+  snapshot: SerializedTerminalSnapshot,
+  claim?: SessionWriteClaim
 ): Promise<void> {
-  if (isScreenNeverSaved(terminalId)) return;
-  const sessionPath = getSessionPath(terminalId);
-  const dir = getSessionDir();
-  if (!sessionPath || !dir) return;
-  const bytes = Buffer.byteLength(snapshot.data, "utf8");
-  if (bytes > SESSION_SNAPSHOT_MAX_BYTES) {
-    console.warn(
-      `[terminalSessionPersistence] Snapshot for ${terminalId} exceeds cap (${bytes} > ${SESSION_SNAPSHOT_MAX_BYTES} bytes); skipping persist`
-    );
-    return;
-  }
+  if (claim && !holdsSessionWrite(claim)) return;
+  const owned = claim ?? claimSessionWrite(terminalId);
+  if (!owned) return;
+  try {
+    const dir = getSessionDir();
+    if (!dir) return;
+    const bytes = Buffer.byteLength(snapshot.data, "utf8");
+    if (bytes > SESSION_SNAPSHOT_MAX_BYTES) {
+      console.warn(
+        `[terminalSessionPersistence] Snapshot for ${terminalId} exceeds cap (${bytes} > ${SESSION_SNAPSHOT_MAX_BYTES} bytes); skipping persist`
+      );
+      return;
+    }
+    owned.snapshot = snapshot;
 
-  await mkdir(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
-  await tightenDirPermissions(dir);
-  await resilientAtomicWriteFile(sessionPath, formatSessionFile(snapshot), "utf8", {
-    mode: OWNER_RW_FILE_MODE,
-  });
+    await mkdir(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
+    await tightenDirPermissions(dir);
+    await resilientAtomicWriteFileIf(
+      owned.sessionPath,
+      formatSessionFile(snapshot),
+      () => holdsSessionWrite(owned),
+      "utf8",
+      { mode: OWNER_RW_FILE_MODE }
+    );
+  } finally {
+    releaseSessionWrite(owned);
+  }
+}
+
+/**
+ * Land every async write whose payload is known, synchronously, and void the
+ * rest. pty-host teardown exits without draining promises, so the final screen
+ * of a terminal that exited moments before shutdown would otherwise go down
+ * with its unfinished write.
+ */
+export function flushPendingSessionWritesSync(): void {
+  const claims = [...pendingSessionWrites.values()];
+  pendingSessionWrites.clear();
+  if (!TERMINAL_SESSION_PERSISTENCE_ENABLED || isSessionPersistSuppressed()) return;
+  for (const claim of claims) {
+    if (!claim.snapshot) continue;
+    try {
+      persistSessionSnapshotSync(claim.terminalId, claim.snapshot);
+    } catch (error) {
+      console.warn(
+        `[terminalSessionPersistence] Failed to flush pending session for ${claim.terminalId}:`,
+        error
+      );
+    }
+  }
 }
 
 export async function deleteSessionFile(terminalId: string): Promise<void> {
   const sessionPath = getSessionPath(terminalId);
   if (!sessionPath) return;
+  // Before the unlink is issued, so a write still in flight either landed
+  // already (and the unlink takes it) or sees its claim gone and stands down.
+  pendingSessionWrites.delete(sessionPath);
   await unlink(sessionPath).catch((e: NodeJS.ErrnoException) => {
     if (e.code !== "ENOENT") throw e;
   });

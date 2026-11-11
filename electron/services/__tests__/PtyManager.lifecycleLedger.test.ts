@@ -20,6 +20,7 @@ const shared = vi.hoisted(() => ({
   agentEmitKilled: vi.fn(),
   disposeSerializer: vi.fn(),
   deleteSessionFile: vi.fn(),
+  flushPendingSessionWritesSync: vi.fn(),
   getGitBranch: vi.fn(),
 }));
 
@@ -216,6 +217,7 @@ vi.mock("../pty/TerminalSerializerService.js", () => ({
 
 vi.mock("../pty/terminalSessionPersistence.js", () => ({
   deleteSessionFile: shared.deleteSessionFile,
+  flushPendingSessionWritesSync: shared.flushPendingSessionWritesSync,
 }));
 
 vi.mock("../../utils/gitUtils.js", () => ({
