@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ActionError } from "@shared/types/actions";
 
 const { dispatch, notify, logWarn } = vi.hoisted(() => ({
   dispatch: vi.fn(),
@@ -19,20 +20,27 @@ beforeEach(() => {
 });
 
 describe("openProjectOnHost", () => {
-  it("dispatches project.openOnHost as navigate-only with the caller's source", async () => {
-    dispatch.mockResolvedValue({ ok: true, result: undefined });
-    await openProjectOnHost("studio-01", "proj-1", true, "user");
-    expect(dispatch).toHaveBeenCalledWith(
-      "project.openOnHost",
-      { hostId: "studio-01", projectId: "proj-1", newWindow: true, navigateOnly: true },
-      { source: "user" }
-    );
-    expect(notify).not.toHaveBeenCalled();
-    expect(logWarn).not.toHaveBeenCalled();
-  });
+  it.each([
+    { newWindow: true, source: "context-menu" as const },
+    { newWindow: false, source: "user" as const },
+    { newWindow: true, source: "menu" as const },
+  ])(
+    "dispatches project.openOnHost as navigate-only with newWindow=$newWindow from $source",
+    async ({ newWindow, source }) => {
+      dispatch.mockResolvedValue({ ok: true, result: undefined });
+      await openProjectOnHost("studio-01", "proj-1", newWindow, source);
+      expect(dispatch).toHaveBeenCalledWith(
+        "project.openOnHost",
+        { hostId: "studio-01", projectId: "proj-1", newWindow, navigateOnly: true },
+        { source }
+      );
+      expect(notify).not.toHaveBeenCalled();
+      expect(logWarn).not.toHaveBeenCalled();
+    }
+  );
 
   it("logs and notifies when the dispatch fails", async () => {
-    const error = { code: "INTERNAL", message: "boom" };
+    const error = { code: "EXECUTION_ERROR", message: "boom" } satisfies ActionError;
     dispatch.mockResolvedValue({ ok: false, error });
     await openProjectOnHost("studio-01", "proj-1", false, "user");
     expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("Opening a project"), { error });
