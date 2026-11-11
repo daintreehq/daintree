@@ -264,8 +264,15 @@ function startedByCaller(caller: AssistantCaller): HelpSessionStartedBy {
  */
 export function wasStartedBy(target: AssistantTarget, caller: AssistantCaller): boolean {
   const startedBy = target.startedBy;
-  // A schedule's run was asked for by no assistant (#16169).
-  if (startedBy === undefined || startedBy.kind === "schedule") return false;
+  // A schedule's run, or a lane an update restart resumed, was asked for by no
+  // assistant (#16169, #16753).
+  if (
+    startedBy === undefined ||
+    startedBy.kind === "schedule" ||
+    startedBy.kind === "update-restart"
+  ) {
+    return false;
+  }
   if (startedBy.kind !== caller.kind) return false;
   if (startedBy.askingHelpSessionId !== caller.helpSessionId) return false;
   return (

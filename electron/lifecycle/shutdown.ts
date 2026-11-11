@@ -637,13 +637,21 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
 
       // A restart to install an update brings back the lanes it stops, by the
       // ids just captured (#16753); any other quit leaves them to be resumed by
-      // hand (#10815).
+      // hand (#10815). Running means its process was alive in the pre-kill
+      // snapshot: a lane binding can outlast an assistant that exited, and a
+      // snapshot that failed records nothing.
       if (
         helpSessions &&
         assistantLanes.size > 0 &&
         getActiveShutdown()?.initiator === "update-install"
       ) {
-        await helpSessions.recordLanesToResumeAtLaunch(assistantLanes.values()).catch((err) => {
+        const running = [...assistantLanes]
+          .filter(([terminalId]) => {
+            const info = terminalInfoById.get(terminalId);
+            return info !== undefined && info.isExited !== true;
+          })
+          .map(([, lane]) => lane);
+        await helpSessions.recordLanesToResumeAtLaunch(running).catch((err) => {
           console.warn("[MAIN] Recording assistant lanes to resume after the update failed:", err);
         });
       }

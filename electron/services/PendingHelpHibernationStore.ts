@@ -7,6 +7,7 @@ import {
   DEFAULT_ASSISTANT_SLOT,
   assistantSlotKey,
   projectIdFromSlotKey,
+  slotFromSlotKey,
 } from "../../shared/config/assistantSlots.js";
 import { isRetiredAgentId } from "../../shared/config/agentIds.js";
 
@@ -71,7 +72,8 @@ interface FileShape {
  */
 export class PendingHelpHibernationStore {
   private entries = new Map<string, PendingHelpHibernation>();
-  private loaded = false;
+  // Shared, so a caller arriving mid-load waits for the entries instead of reading none.
+  private loading: Promise<void> | null = null;
   // What the last update shutdown recorded, until it is persisted.
   private resumeAtLaunch: LaunchResume | null = null;
   // What this launch read back, handed out once by `takeResumeAtLaunch`.
@@ -84,9 +86,12 @@ export class PendingHelpHibernationStore {
     this.filePath = filePath ?? path.join(app.getPath("userData"), FILE_NAME);
   }
 
-  async load(): Promise<void> {
-    if (this.loaded) return;
-    this.loaded = true;
+  load(): Promise<void> {
+    this.loading ??= this.readFromDisk();
+    return this.loading;
+  }
+
+  private async readFromDisk(): Promise<void> {
     try {
       const raw = await fs.readFile(this.filePath, "utf-8");
       const parsed = JSON.parse(raw) as Partial<FileShape>;
@@ -110,11 +115,12 @@ export class PendingHelpHibernationStore {
         const { panelWasOpen: _panelWasOpen, ...safeEntry } = entry as PendingHelpHibernation;
         this.entries.set(key, safeEntry);
       }
-      if (parsed.resumeAtLaunch !== undefined && !legacyUnslotted) {
-        this.loadedResumeAtLaunch = this.readResumeAtLaunch(parsed.resumeAtLaunch);
+      if (parsed.resumeAtLaunch !== undefined) {
         // Off disk before anything can resume from it: a crash during this
-        // launch must bring back nothing on the next one (#10815).
-        await this.persist();
+        // launch must bring back nothing on the next one (#10815). A launch that
+        // can't take it off resumes nothing either.
+        const resume = legacyUnslotted ? null : this.readResumeAtLaunch(parsed.resumeAtLaunch);
+        if (await this.write()) this.loadedResumeAtLaunch = resume;
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
@@ -214,13 +220,19 @@ export class PendingHelpHibernationStore {
     if (!lanes || typeof lanes !== "object") return null;
     const valid: Record<string, string> = {};
     for (const [slotKey, agentSessionId] of Object.entries(lanes)) {
-      if (!slotKey || typeof agentSessionId !== "string" || agentSessionId === "") continue;
+      if (!projectIdFromSlotKey(slotKey) || slotFromSlotKey(slotKey) === null) continue;
+      if (typeof agentSessionId !== "string" || agentSessionId === "") continue;
       valid[slotKey] = agentSessionId;
     }
     return Object.keys(valid).length > 0 ? { recordedAt, lanes: valid } : null;
   }
 
   private persist(): Promise<void> {
+    return this.write().then(() => undefined);
+  }
+
+  /** Queues a write of everything held now; resolves whether it landed. */
+  private write(): Promise<boolean> {
     // Strip `panelWasOpen` (in-memory only) so reloaded entries on app restart
     // are treated as prior-session tokens that never auto-resume.
     const persistedEntries: Record<string, PersistedHelpHibernation> = {};
@@ -238,11 +250,15 @@ export class PendingHelpHibernationStore {
       .then(() =>
         resilientAtomicWriteFile(this.filePath, JSON.stringify(snapshot, null, 2) + "\n", "utf-8", {
           mode: 0o600,
-        }).catch((err) => {
-          console.warn("[PendingHelpHibernationStore] Failed to persist:", err);
-        })
+        }).then(
+          () => true,
+          (err: unknown) => {
+            console.warn("[PendingHelpHibernationStore] Failed to persist:", err);
+            return false;
+          }
+        )
       );
-    this.writeChain = work;
+    this.writeChain = work.then(() => undefined);
     return work;
   }
 }

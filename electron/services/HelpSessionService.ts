@@ -104,6 +104,7 @@ const DEFAULT_BYPASS_PERMISSIONS = false;
 const SCHEDULED_RUN_SESSIONS_KEPT = 64;
 
 function isValidStartedBy(startedBy: HelpSessionStartedBy): boolean {
+  if (startedBy.kind === "update-restart") return true;
   const parts =
     startedBy.kind === "relay"
       ? [startedBy.senderId, startedBy.linkSessionId, startedBy.askingHelpSessionId]
@@ -192,7 +193,9 @@ export type HelpSessionStartedBy =
   | { kind: "local"; askingHelpSessionId: string }
   | { kind: "relay"; senderId: string; linkSessionId: string; askingHelpSessionId: string }
   /** A due schedule whose agent is the Assistant (#16169), for one run of it. */
-  | { kind: "schedule"; scheduleId: string; runId: string };
+  | { kind: "schedule"; scheduleId: string; runId: string }
+  /** A lane a restart to install an update stopped, resumed by the next launch (#16753). */
+  | { kind: "update-restart" };
 
 export interface ProvisionResult {
   sessionId: string;

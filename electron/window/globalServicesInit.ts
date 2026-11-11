@@ -1482,14 +1482,16 @@ export async function initGlobalServices(
     // finishes in single-digit ms, long before loadURL even resolves, so
     // floating keeps the disk I/O off the renderer-load dispatch path while
     // comfortably beating the deadline.
-    void (async () => {
+    const pendingStoreWired = (async () => {
       const { getPendingHelpHibernationStore } =
         await import("../services/PendingHelpHibernationStore.js");
       const pendingStore = getPendingHelpHibernationStore();
       await pendingStore.load();
       helpSessionService.setPendingHibernationStore(pendingStore);
+      return pendingStore;
     })().catch((err) => {
       console.warn("[MAIN] Failed to wire pending-hibernation store:", err);
+      return null;
     });
 
     registerDeferredTask({
@@ -1566,6 +1568,27 @@ export async function initGlobalServices(
         } catch (err) {
           console.warn("[MAIN] Failed to wire HelpSessionService PtyClient:", err);
         }
+      },
+    });
+
+    // The Assistant lanes a restart to install an update stopped come back now,
+    // each into its own conversation (#16753). After `help-session-pty`, so a
+    // displaced or revoked lane can still be killed. Nothing is loaded unless
+    // the last quit was that restart, and the queue doesn't wait on the starts.
+    registerDeferredTask({
+      name: "assistant-update-resume",
+      run: async () => {
+        const record = (await pendingStoreWired)?.takeResumeAtLaunch();
+        const ptyClient = getPtyClient();
+        if (!record || !ptyClient) return;
+        void (async () => {
+          await ptyClient.waitForReady();
+          const { resumeLanesAfterUpdateLive } =
+            await import("../services/assistants/updateRestartResume.js");
+          await resumeLanesAfterUpdateLive(record);
+        })().catch((err) => {
+          console.warn("[MAIN] Resuming assistant lanes after the update failed:", err);
+        });
       },
     });
   }
