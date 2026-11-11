@@ -47,17 +47,29 @@ import { getElementBoundsAsDip } from "@/lib/portalBounds";
 import { debounce } from "@/utils/debounce";
 
 /**
- * The dock is closing, and closing unmounts it. When it held the keyboard (its
- * own chrome, or the page in its native view), hand focus to the selected pane,
- * or failing that the toolbar toggle that reopens it, rather than letting it
- * drop to the page body. Runs while the dock is still in the DOM, so the moving
- * focus keeps the ring state of the control that closed it.
+ * What held the keyboard as the dock closes: its own chrome, a layer it opened
+ * (its menus render in portals outside the `<aside>`), the page in its native
+ * view, or nothing of the dock's. `lastFocused` is the last element focused
+ * anywhere in the dock's React tree, which still holds focus only if nothing
+ * outside the dock has taken it since.
  */
-function returnFocusFromClosingDock(dock: HTMLElement | null, pageHadFocus: boolean): void {
+function closingDockFocusOwner(
+  dock: HTMLElement | null,
+  lastFocused: EventTarget | null,
+  pageHadFocus: boolean
+): "chrome" | "layer" | "page" | null {
   const active = document.activeElement;
-  const dockHadFocus = dock !== null && active !== null && dock.contains(active);
-  const nothingFocused = active === null || active === document.body;
-  if (!dockHadFocus && !(pageHadFocus && nothingFocused)) return;
+  if (active === null || active === document.body) return pageHadFocus ? "page" : null;
+  if (dock?.contains(active)) return "chrome";
+  return active === lastFocused ? "layer" : null;
+}
+
+/**
+ * Closing unmounts the dock, so focus it held would drop to the page body. Hand
+ * it to the selected pane, or failing that the toolbar toggle that reopens the
+ * dock.
+ */
+function returnFocusToWorkspace(): void {
   // A cached view is off screen; its keyboard is not ours to move.
   if (isProjectViewCached()) return;
   if (enterFocusedPanel(usePanelStore.getState().focusedId)) return;
@@ -423,9 +435,18 @@ export function PortalDock() {
     };
   }, []);
 
-  const handleDockFocus = useCallback(() => {
-    setIsFocused(true);
+  const lastFocusedRef = useRef<EventTarget | null>(null);
+  const noteFocus = useCallback((e: React.FocusEvent) => {
+    lastFocusedRef.current = e.target;
   }, []);
+
+  const handleDockFocus = useCallback(
+    (e: React.FocusEvent) => {
+      noteFocus(e);
+      setIsFocused(true);
+    },
+    [noteFocus]
+  );
 
   const handleDockBlur = useCallback((e: React.FocusEvent) => {
     if (dockRef.current && !dockRef.current.contains(e.relatedTarget as Node)) {
@@ -453,14 +474,34 @@ export function PortalDock() {
   // Every way the dock closes (its Close button, the toggle shortcut, the
   // assistant opening) goes through the store. The parent unmounts the dock on
   // that change, so it is caught here, synchronously, while the dock still
-  // holds focus to give back.
+  // holds focus to give back. Focus in its chrome moves at once, so it keeps
+  // the ring state of the control that closed it. Focus in a layer it opened
+  // waits for the unmount: a modal menu's focus trap would pull it straight
+  // back, and then take it down with the menu.
+  const restoreOnUnmountRef = useRef(false);
   useEffect(
     () =>
       usePortalStore.subscribe((state, prev) => {
-        if (prev.isOpen && !state.isOpen) {
-          returnFocusFromClosingDock(dockRef.current, pageFocusedRef.current);
-        }
+        if (prev.isOpen === state.isOpen) return;
+        restoreOnUnmountRef.current = false;
+        if (state.isOpen) return;
+        const owner = closingDockFocusOwner(
+          dockRef.current,
+          lastFocusedRef.current,
+          pageFocusedRef.current
+        );
+        if (owner === "layer") restoreOnUnmountRef.current = true;
+        else if (owner !== null) returnFocusToWorkspace();
       }),
+    []
+  );
+  useEffect(
+    () => () => {
+      if (!restoreOnUnmountRef.current) return;
+      restoreOnUnmountRef.current = false;
+      const active = document.activeElement;
+      if (active === null || active === document.body) returnFocusToWorkspace();
+    },
     []
   );
 
@@ -566,7 +607,9 @@ export function PortalDock() {
           {showDevDashboard && <DevServerDashboard onHide={handleHideDevDashboard} />}
         </aside>
       </ContextMenuTrigger>
-      <ContextMenuContent>
+      {/* A sibling of the dock in the React tree, not a child, so its focus
+          never reaches the `<aside>`'s handler. */}
+      <ContextMenuContent onFocus={noteFocus}>
         <NativeViewMenuActionItem actionId="portal.newTab" afterClose={afterClose}>
           <Plus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           New tab
