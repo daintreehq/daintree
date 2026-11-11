@@ -121,6 +121,13 @@ export const CORE_TIER_TOOLS = [
   // a model the user names ("use Sol") is resolved here rather than from a slug
   // the prompt would have to carry (#13437).
   "agent.listModels",
+  // Bringing agents back after a restart is part of the loop (#16764): the
+  // history is a read, and the reopen launches into a pane the caller owns,
+  // the reach `agent.launch` already has. `agentSessionHistory.resume` stays
+  // in `full`, since the pane it opens is never the caller's.
+  "agentSessionHistory.list",
+  // Run in main so it needs no view (#16341).
+  "agent.resumeOwned",
 
   "terminal.list",
   "terminal.getStatus",
@@ -246,10 +253,7 @@ export const FULL_TIER_ADDONS = [
   "worktree.setCustomTitle",
 
   // Resume spawns a pane; the record owns its launch directory (#11908).
-  "agentSessionHistory.list",
   "agentSessionHistory.resume",
-  // The same reopen as a pane the caller owns, run in main so it needs no view (#16341).
-  "agent.resumeOwned",
 
   "terminal.new",
   "terminal.inject",
