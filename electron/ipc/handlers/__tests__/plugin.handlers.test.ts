@@ -331,6 +331,7 @@ describe("registerPluginHandlers", () => {
     cleanup();
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:list");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:install-from-path");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:preview-from-url");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:invoke");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:toolbar-buttons");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:validate-action-ids");
@@ -696,6 +697,29 @@ describe("registerPluginHandlers", () => {
       expect(mockInstallPlugin).not.toHaveBeenCalled();
     }
   );
+
+  // #16776: the review step downloads and reads, and never installs.
+  it("PLUGIN_PREVIEW_FROM_URL is registered and refuses an empty URL", async () => {
+    const handler = getHandler("plugin:preview-from-url");
+    await expect(handler({ sender: { id: 1 } }, "  ")).resolves.toEqual({
+      status: "invalid-url",
+    });
+    expect(mockNetFetch).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_PREVIEW_FROM_URL never reaches the installer, whatever it downloads", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zip" } })
+    );
+    const handler = getHandler("plugin:preview-from-url");
+    const result = (await handler({ sender: { id: 1 } }, "https://example.com/p.dntr")) as {
+      status: string;
+      errors: Array<{ code: string }>;
+    };
+    expect(result.status).toBe("failed");
+    expect(result.errors[0]!.code).toBe("archive_invalid");
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
 
   it("PLUGIN_INSTALL_FROM_URL keeps the download on disk until the installer settles", async () => {
     mockNetFetch.mockResolvedValue(

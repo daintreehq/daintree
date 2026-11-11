@@ -27,6 +27,7 @@ import {
   handleInstallFromFile,
   handleInstallFromPathOp,
   handleInstallFromUrlOp,
+  handlePreviewFromUrlOp,
   handleCancelInstall,
   handleUninstall,
   handleCheckForUpdate,
@@ -177,6 +178,9 @@ export const pluginNamespace = defineIpcNamespace({
       withContext: true,
     }),
     installFromUrl: op(PLUGIN_METHOD_CHANNELS.installFromUrl, handleInstallFromUrlOp, {
+      withContext: true,
+    }),
+    previewFromUrl: op(PLUGIN_METHOD_CHANNELS.previewFromUrl, handlePreviewFromUrlOp, {
       withContext: true,
     }),
     cancelInstall: op(PLUGIN_METHOD_CHANNELS.cancelInstall, handleCancelInstall),

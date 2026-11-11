@@ -9,12 +9,16 @@ import type {
   LoadedPluginInfo,
   PluginDeepLinkIntent,
   PluginInstallError,
+  PluginInstallExpectation,
+  PluginInstallResult,
   PluginUpdateExpectation,
   PluginInstallProgressEvent,
+  PluginUrlInstallPreview,
 } from "@shared/types/plugin";
 import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
 import { pluralize } from "@/lib/pluralize";
 import { UNSAVED_READ_FAILED, hasUnshownPanels, readUnsavedPanels } from "./unsavedPluginPanels";
+import type { PluginInstallApproval } from "./PluginInstallConfirmDialog";
 
 /**
  * Alphabetical by display name, regardless of enabled state. Disabled plugins
@@ -36,7 +40,10 @@ const UP_TO_DATE_NOTIFICATION_DURATION_MS = 4000;
  * (F24) and manifest schema failures get tailored guidance; everything else
  * falls back to the error's own message.
  */
-function installErrorMessage(error: PluginInstallError | undefined): string {
+function installErrorMessage(
+  error: PluginInstallError | undefined,
+  intent: InstallIntent = "install"
+): string {
   switch (error?.code) {
     case "fetch_timeout":
       return "The download timed out. Check your connection and try again.";
@@ -64,9 +71,11 @@ function installErrorMessage(error: PluginInstallError | undefined): string {
     }
     case "archive_mismatch":
       // The install no longer matches the preview the user approved — the
-      // server sent different bytes, or the plugin is gone (#12612).
-      // Re-checking shows what's actually there now.
-      return "This update no longer matches what you reviewed, so nothing was installed. Check for updates again.";
+      // server sent different bytes, or the plugin was installed or removed
+      // since (#12612, #16776). Reviewing again shows what's there now.
+      return intent === "update"
+        ? "This update no longer matches what you reviewed, so nothing was installed. Check for updates again."
+        : "This plugin no longer matches what you reviewed, so nothing was installed. Install it from the URL again to review it.";
   }
   return error?.message ?? "Installation failed. Check the file and try again.";
 }
@@ -113,6 +122,23 @@ type PendingOutcome = Omit<InstallOutcome, "nonce" | "plugins">;
  * answers both with `installed`, and only an install moves the selection.
  */
 type InstallIntent = "install" | "update";
+
+/** A URL install's archive under review (#16776), with a key per review. */
+export type UrlInstallReview = PluginUrlInstallPreview & { key: string };
+
+/**
+ * A URL failure the user can fix by editing the URL: a malformed URL, a
+ * download error (404 / DNS), or a response that wasn't a plugin archive. These
+ * keep the URL dialog open; size and timeout failures close it.
+ */
+function isCorrectableUrlFailure(result: PluginInstallResult): boolean {
+  return (
+    result.status === "invalid-url" ||
+    (result.status === "failed" &&
+      (result.errors[0]?.code === "fetch_failed" ||
+        result.errors[0]?.code === "content_type_rejected"))
+  );
+}
 
 /**
  * All plugin-management state and lifecycle handlers for the plugin manager
@@ -212,6 +238,25 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const [showUrlDialog, setShowUrlDialog] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [isInstalling, setIsInstalling] = useState(false);
+  // A URL install's review (#16776): the archive main downloaded and read,
+  // held until the user confirms or cancels. Fixed once shown — the confirm
+  // installs its own `url` bound to its `archiveHash`, never `urlInput`. The
+  // ref is the live value, so confirm and cancel are one-shot.
+  const [urlReview, setUrlReviewState] = useState<UrlInstallReview | null>(null);
+  const urlReviewRef = useRef<UrlInstallReview | null>(null);
+  const setUrlReview = (next: UrlInstallReview | null) => {
+    urlReviewRef.current = next;
+    setUrlReviewState(next);
+  };
+  // Held from the moment a preview is asked for until it settles: two presses
+  // in one tick would otherwise both read a stale `isInstalling` and start two
+  // downloads.
+  const urlPreviewingRef = useRef(false);
+  // The preview download's job, so closing the manager can cancel it.
+  const previewJobIdRef = useRef<string | null>(null);
+  // Bumped when the manager closes or reopens. A preview that lands across a
+  // bump belongs to a session the user left, so it is dropped.
+  const urlFlowGenerationRef = useRef(0);
   const openUrlDialog = useCallback(() => {
     setError(null);
     setShowUrlDialog(true);
@@ -452,7 +497,20 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // never fetches directly, so it can't cross-cancel the load effect (#4958).
   const initialMountRef = useRef(true);
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      // Closing abandons a URL install's review: one still downloading is
+      // cancelled, and whatever it returns is dropped (#16776).
+      urlFlowGenerationRef.current++;
+      urlReviewRef.current = null;
+      setUrlReviewState(null);
+      const previewJobId = previewJobIdRef.current;
+      if (previewJobId !== null) {
+        safeFireAndForget(window.electron.plugin.cancelInstall(previewJobId), {
+          context: "usePluginManager.cancelPreviewOnClose",
+        });
+      }
+      return;
+    }
     if (initialMountRef.current) {
       initialMountRef.current = false;
       return;
@@ -471,6 +529,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     pendingDiscardRef.current = null;
     setPendingDiscardState(null);
     listGenerationRef.current++;
+    urlFlowGenerationRef.current++;
+    urlReviewRef.current = null;
+    setUrlReviewState(null);
     // Abandon any in-flight "Update all" batch — the fresh list supersedes it.
     isBatchActiveRef.current = false;
     pendingQueueRef.current = [];
@@ -499,8 +560,14 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     if (deepLinkIntent.action === "install") {
       // Don't clobber an install dialog the user already has open — they may be
       // mid-edit, and silently swapping in a fresh (attacker-supplied) URL is a
-      // social-engineering risk. Skip the pre-fill; the user can paste it.
-      if (!showUrlDialogRef.current) {
+      // social-engineering risk. The same goes for an install from a URL that
+      // is past the dialog: behind the HTTP warning, downloading for review,
+      // or under review (#16776). Skip the pre-fill; the user can paste it.
+      const urlFlowBusy =
+        urlPreviewingRef.current ||
+        urlReviewRef.current !== null ||
+        pendingHttpUrlRef.current !== null;
+      if (!showUrlDialogRef.current && !urlFlowBusy) {
         // The URL dialog and the uninstall confirm each render the shared
         // error themselves, on the assumption that only one is ever open. A
         // deep link is the one path that can open this one over the other.
@@ -754,7 +821,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         return;
       case "failed": {
         if (intent === "install") setNotice(null);
-        setError(installErrorMessage(result.errors[0]));
+        setError(installErrorMessage(result.errors[0], intent));
         return;
       }
     }
@@ -774,35 +841,32 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     }
   };
 
-  const performInstallFromUrl = async (url: string, expected?: PluginUpdateExpectation) => {
+  /**
+   * Install from a URL held to `expected`: an update approved from its review
+   * (#12612), or a URL install approved from its own (#16776). `intent` says
+   * which, since a URL install that replaces a plugin still reads as an install.
+   */
+  const performInstallFromUrl = async (
+    url: string,
+    expected: PluginInstallExpectation,
+    intent: InstallIntent
+  ) => {
     setIsInstalling(true);
-    if (expected) setUpdatingPluginId(expected.pluginId);
+    if (intent === "update" && expected.pluginId !== undefined) {
+      setUpdatingPluginId(expected.pluginId);
+    }
     try {
       const result = await runInstallJob(
-        (jobId) =>
-          expected
-            ? window.electron.plugin.installFromUrl(url, jobId, expected)
-            : window.electron.plugin.installFromUrl(url, jobId),
+        (jobId) => window.electron.plugin.installFromUrl(url, jobId, expected),
         url
       );
-      // An expectation binds the install to a reviewed update; a manual URL
-      // install has none.
-      handleInstallResult(result, expected ? "update" : "install");
-      // Keep the dialog open for URL-correctable failures so the user can edit
-      // in place: a malformed URL, a download error (404 / DNS), or a response
-      // that wasn't a plugin archive. Size/timeout failures and successful
-      // installs close it.
-      const correctable =
-        result.status === "invalid-url" ||
-        (result.status === "failed" &&
-          (result.errors[0]?.code === "fetch_failed" ||
-            result.errors[0]?.code === "content_type_rejected"));
-      if (!correctable) {
+      handleInstallResult(result, intent);
+      if (!isCorrectableUrlFailure(result)) {
         setShowUrlDialog(false);
         setUrlInput("");
       }
     } catch (err) {
-      if (expected) setUpdatingPluginId(null);
+      if (intent === "update") setUpdatingPluginId(null);
       setError(formatErrorMessage(err, "Failed to install plugin"));
       logError("Failed to install plugin from URL", err);
     } finally {
@@ -810,9 +874,80 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     }
   };
 
+  /**
+   * Download a URL's archive and put what it would install up for review
+   * (#16776). Nothing is installed here: main reads the archive, deletes the
+   * download, and returns its disclosure and digest. A failure is reported the
+   * way an install's is, keeping the URL dialog open when the URL is the
+   * problem.
+   */
+  const previewInstallFromUrl = async (url: string) => {
+    if (urlPreviewingRef.current) return;
+    urlPreviewingRef.current = true;
+    const generation = urlFlowGenerationRef.current;
+    setIsInstalling(true);
+    try {
+      const result = await runInstallJob((jobId) => {
+        previewJobIdRef.current = jobId;
+        return window.electron.plugin.previewFromUrl(url, jobId).finally(() => {
+          if (previewJobIdRef.current === jobId) previewJobIdRef.current = null;
+        });
+      }, url);
+      if (urlFlowGenerationRef.current !== generation) return;
+      if (result.status === "preview") {
+        setError(null);
+        setShowUrlDialog(false);
+        setUrlInput("");
+        setUrlReview({ ...result.preview, key: crypto.randomUUID() });
+        return;
+      }
+      handleInstallResult(result, "install");
+      if (!isCorrectableUrlFailure(result)) {
+        setShowUrlDialog(false);
+        setUrlInput("");
+      }
+    } catch (err) {
+      // A host too old to preview refuses the call; nothing installs unbound.
+      if (urlFlowGenerationRef.current !== generation) return;
+      setError(formatErrorMessage(err, "Failed to download plugin"));
+      logError("Failed to preview plugin from URL", err);
+    } finally {
+      urlPreviewingRef.current = false;
+      setIsInstalling(false);
+    }
+  };
+
+  /**
+   * Install the reviewed archive. The confirm downloads the URL again, so it is
+   * bound to the digest the review was read from, and to what the review said
+   * about the installed plugin: a fresh install refuses to replace one that
+   * turned up since, a replacement refuses when it has gone. Main refuses
+   * anything else, and nothing is ever retried unbound.
+   */
+  const confirmUrlReview = async ({ replacesInstalled }: PluginInstallApproval) => {
+    const review = urlReviewRef.current;
+    if (review === null || isInstalling) return;
+    setUrlReview(null);
+    const binding = {
+      pluginId: review.manifest.name,
+      archiveHash: review.archiveHash,
+    };
+    await performInstallFromUrl(
+      review.url,
+      replacesInstalled ? { kind: "update", ...binding } : { kind: "install", ...binding },
+      "install"
+    );
+  };
+
+  /** Close the review. Its download is already gone, so nothing is left behind. */
+  const cancelUrlReview = () => {
+    if (urlReviewRef.current === null) return;
+    setUrlReview(null);
+  };
+
   const handleInstallFromUrl = async () => {
     const url = urlInput.trim();
-    if (!url || isInstalling) return;
+    if (!url || isInstalling || urlPreviewingRef.current) return;
     // Tier D2: a plaintext HTTP download is unauthenticated and unencrypted, so
     // gate it behind an explicit confirm before the request leaves the app. The
     // IPC handler still accepts http:// — this is the renderer's risk surface.
@@ -821,7 +956,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       protocol = new URL(url).protocol;
     } catch {
       // Let the handler return invalid-url so the messaging stays consistent.
-      await performInstallFromUrl(url);
+      await previewInstallFromUrl(url);
       return;
     }
     if (protocol === "http:") {
@@ -835,7 +970,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       setPendingHttpUrl(url);
       return;
     }
-    await performInstallFromUrl(url);
+    await previewInstallFromUrl(url);
   };
 
   const confirmHttpInstall = async () => {
@@ -851,11 +986,17 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     httpFromReinstallRef.current = false;
     setPendingHttpUrl(null);
     setPendingHttpFromReinstall(false);
+    // A manual install downloads its archive for review first (#16776); only
+    // an update, reviewed already, installs straight from here.
+    if (!expected) {
+      await previewInstallFromUrl(url);
+      return;
+    }
     // The staleness check `confirmReinstall` makes before its own download: a
     // plugin uninstalled (say, in another window) while this confirm was open
     // has nothing left to update. Main refuses it anyway; this skips the
     // download and the misleading "no longer matches" error it would surface.
-    if (expected && !plugins.some((p) => p.manifest.name === expected.pluginId)) {
+    if (!plugins.some((p) => p.manifest.name === expected.pluginId)) {
       if (fromReinstall && isBatchActiveRef.current) advanceUpdateQueue();
       return;
     }
@@ -878,7 +1019,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         return;
       }
     }
-    await performInstallFromUrl(url, expected);
+    await performInstallFromUrl(url, expected, "update");
     // A reinstall-over-http came from the update flow, not the manual install
     // dialog — advance the "Update all" queue if one is draining (#10893).
     if (fromReinstall && isBatchActiveRef.current) advanceUpdateQueue();
@@ -1351,6 +1492,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     cancelActiveInstall,
     handleInstallFromFile,
     handleInstallFromUrl,
+    urlReview,
+    confirmUrlReview,
+    cancelUrlReview,
     pendingHttpUrl,
     pendingHttpFromReinstall,
     confirmHttpInstall,

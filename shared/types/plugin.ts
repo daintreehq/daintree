@@ -4139,6 +4139,38 @@ export interface PluginArchiveInstallIntent {
 }
 
 /**
+ * A URL install's archive, downloaded and read before anything is written
+ * (#16776), with the same disclosure as an archive opened from the operating
+ * system. The download is deleted once it has been read, so the confirm fetches
+ * `url` again and passes `archiveHash` back as its
+ * {@link PluginInstallExpectation}: the installer refuses any other bytes.
+ */
+export interface PluginUrlInstallPreview {
+  /** The URL as fetched, trimmed; the confirm installs from this exact string. */
+  url: string;
+  /** SHA-256 of the archive the preview was read from. */
+  archiveHash: string;
+  /**
+   * Whether the installer would find this plugin already installed: its folder
+   * exists, whether or not it loaded. `plugin.list()` holds only plugins that
+   * loaded or were skipped, so an install whose manifest no longer validates
+   * shows here and nowhere else.
+   */
+  installedOnDisk: boolean;
+  manifest: PluginArchiveManifestPreview;
+}
+
+/**
+ * Outcome of `plugin.previewFromUrl`. Failures carry the same shapes and error
+ * codes as {@link PluginInstallResult}, so one message table covers both.
+ */
+export type PluginUrlInstallPreviewResult =
+  | { status: "preview"; preview: PluginUrlInstallPreview }
+  | { status: "failed"; errors: PluginInstallError[] }
+  | { status: "cancelled" }
+  | { status: "invalid-url" };
+
+/**
  * Discriminant for {@link PluginCheckUpdateResult}. A manual update check
  * (`plugin:check-for-update`) re-fetches the plugin's `originalUrl`, hashes the
  * archive, and compares it against the installed `archiveHash` — the check is

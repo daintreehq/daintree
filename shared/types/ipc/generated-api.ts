@@ -1370,6 +1370,9 @@ export interface GeneratedElectronAPI {
     pickPath(
       ...args: IpcInvokeMap["plugin:pick-path"]["args"]
     ): Promise<IpcInvokeMap["plugin:pick-path"]["result"]>;
+    previewFromUrl(
+      ...args: IpcInvokeMap["plugin:preview-from-url"]["args"]
+    ): Promise<IpcInvokeMap["plugin:preview-from-url"]["result"]>;
     previewProjectTemplate(
       ...args: IpcInvokeMap["plugin:project-template-preview"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-template-preview"]["result"]>;

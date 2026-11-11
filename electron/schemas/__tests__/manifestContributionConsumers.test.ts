@@ -154,7 +154,7 @@ const CREATE_PROJECT_DIALOG = "src/components/Project/CreateProjectFolderDialog.
 const RECIPE_SANITIZER = "shared/utils/recipeSanitizer.ts";
 const RECIPE_AGENT_STEP = "src/utils/recipeAgentStep.ts";
 const PLUGIN_RECIPE_AGENT_TOOLS = "src/utils/pluginRecipeAgentTools.ts";
-const ARCHIVE_INSTALL_INTENT = "electron/setup/archiveInstallIntent.ts";
+const ARCHIVE_MANIFEST_PREVIEW = "electron/services/plugin/archiveManifestPreview.ts";
 const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
 const PLUGIN_ICON_ASSETS = "electron/services/plugin/pluginIconAssets.ts";
 const PROCESS_DETECTOR_REGISTRIES = "electron/services/ProcessDetector/registries.ts";
@@ -2039,7 +2039,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
         { file: "shared/types/agentSettings.ts", symbol: "getDefaultDangerousArgs" },
         { file: "shared/types/agentSettings.ts", symbol: "isAgentTerminalBypassSupported" },
-        { file: "electron/setup/archiveInstallIntent.ts", symbol: "permissionBypassAgents" },
+        { file: ARCHIVE_MANIFEST_PREVIEW, symbol: "permissionBypassAgents" },
         { file: "electron/services/plugin/PluginInstaller.ts", symbol: "permissionBypassAgents" },
         {
           file: "electron/services/plugin/pluginAgentBypassHistory.ts",
@@ -2539,7 +2539,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [
         { file: RECIPE_REGISTRY, symbol: "toTerminalRecipe (TerminalRecipe.name)" },
-        { file: ARCHIVE_INSTALL_INTENT, symbol: "runPreviewWorker (install-time disclosure)" },
+        {
+          file: ARCHIVE_MANIFEST_PREVIEW,
+          symbol: "readArchiveManifestPreview (install-time disclosure)",
+        },
       ],
       note: "Displayed name of the merged recipe, and listed in the archive install confirmation.",
     },
@@ -3161,8 +3164,8 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PROJECT_TEMPLATE_FILES, symbol: "resolveProjectTemplateDir" },
         { file: PROJECT_TEMPLATE_REGISTRY, symbol: "getPluginProjectTemplatePluginDir" },
         {
-          file: ARCHIVE_INSTALL_INTENT,
-          symbol: "runPreviewWorker (readArchiveTemplateProjectPlugins)",
+          file: ARCHIVE_MANIFEST_PREVIEW,
+          symbol: "readArchiveManifestPreview (readArchiveTemplateProjectPlugins)",
         },
       ],
       note: "Names the payload folder, project-templates/<id>/, the host lists and copies from; with the plugin id, it is what a create request names.",
@@ -3172,7 +3175,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [
         { file: PROJECT_TEMPLATE_REGISTRY, symbol: "registerPluginProjectTemplates" },
         { file: CREATE_PROJECT_DIALOG, symbol: "CreateProjectFolderDialog (template Select)" },
-        { file: ARCHIVE_INSTALL_INTENT, symbol: "runPreviewWorker (projectTemplates)" },
+        { file: ARCHIVE_MANIFEST_PREVIEW, symbol: "readArchiveManifestPreview (projectTemplates)" },
       ],
       note: "The choice in the Create project dialog's template picker, and the name the archive install confirmation lists.",
     },
