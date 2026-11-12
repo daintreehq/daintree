@@ -7,9 +7,8 @@
  * controls at the same coordinates and size, never change the terminal grid,
  * and a click on the original close coordinate must still close the pane.
  *
- * The one thing past close is the agent state glyph, in a box PanelHeader
- * reserves whether or not it is showing — so it never moves the controls and
- * never moves itself.
+ * Transient status leads the metadata and collapses when idle. It can change
+ * its own box as it arrives, but must stay ahead of the window controls.
  *
  * Flow holds and submit status are delivered over their production IPC
  * channels from the main process, so the renderer path under test is the one
@@ -312,7 +311,6 @@ const STATUS_STEPS: StatusStep[] = [
 async function runStatusSteps(page: Page, panel: Locator, terminalId: string): Promise<void> {
   const geometry = await captureGeometry(page, panel, terminalId);
   const baseline = await measureControls(panel);
-  const slot = await boxOf(panel.locator(STATUS_SLOT), "Status slot");
   await expect(panel.locator(AGENT_SLOT), "plain shell has no agent slot").toHaveCount(0);
 
   for (const step of STATUS_STEPS) {
@@ -326,11 +324,16 @@ async function runStatusSteps(page: Page, panel: Locator, terminalId: string): P
       await expect(glyph, step.label).toHaveCount(0, { timeout: T_MEDIUM });
     }
     await expectControlsUnmoved(page, panel, baseline, step.label);
-    expectSameBox(
-      await boxOf(panel.locator(STATUS_SLOT), "Status slot"),
-      slot,
-      `status slot after ${step.label}`
-    );
+    const slot = await boxOf(panel.locator(STATUS_SLOT), "Status slot");
+    if (step.glyph) {
+      expect(slot.width, `status takes space after ${step.label}`).toBeGreaterThan(0);
+    } else {
+      expect(slot.width, `idle status collapses after ${step.label}`).toBe(0);
+    }
+    expect(
+      slot.x + slot.width,
+      `status stays ahead of controls after ${step.label}`
+    ).toBeLessThanOrEqual(baseline.maximize.x);
     await expect(panel.locator(AGENT_SLOT), `agent slot after ${step.label}`).toHaveCount(0);
     await expectGeometryUnchanged(page, panel, terminalId, geometry, step.label);
   }
