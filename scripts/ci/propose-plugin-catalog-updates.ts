@@ -1,6 +1,6 @@
 #!/usr/bin/env -S npx tsx
 // Opens a catalog pull request for each new release of a listed plugin
-// (#16780). For every repository the catalog lists, it reads the newest GitHub
+// (#16780). For every repository the catalog names, it reads the newest GitHub
 // releases, downloads each `.dntr` asset that could be new, and proposes an
 // entry built from those bytes: their SHA-256, and the id, version and
 // capabilities of the manifest inside. Each pull request says whether the
@@ -9,9 +9,11 @@
 //
 //   npx tsx scripts/ci/propose-plugin-catalog-updates.ts [--dry-run] [--catalog <path>]
 //
-// A dry run reads GitHub and downloads assets but opens nothing. --catalog
-// (dry runs only) reads that file instead of the committed catalog. Reads
-// GITHUB_TOKEN, PLUGIN_CATALOG_BOT_TOKEN when set, and GITHUB_REPOSITORY.
+// Pull requests are opened with PLUGIN_CATALOG_BOT_TOKEN, since one opened with
+// the workflow's own token starts no checks. Without it the run is a dry run: it
+// reads GitHub (with GITHUB_TOKEN when set) and downloads assets, but opens
+// nothing. --catalog, for dry runs only, reads that file instead of the
+// committed catalog.
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -27,8 +29,10 @@ import {
   parsePluginCatalog,
   type PluginCatalogEntry,
 } from "../../electron/services/plugin/pluginCatalogSchema.js";
+import { PLUGIN_CATALOG_MAX_BYTES } from "../../shared/config/pluginCatalog.js";
 import {
   CATALOG_FILE,
+  changedEntries,
   downloadArchive,
   entriesNeedingPerson,
   escapeAnnotation,
@@ -40,9 +44,14 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const GITHUB_API = "https://api.github.com";
 const API_TIMEOUT_MS = 30_000;
 const DEFAULT_REPOSITORY = "daintreehq/daintree";
-const DEFAULT_BASE_BRANCH = "develop";
-/** GitHub lists releases newest first; anything older than this is long settled. */
+export const DEFAULT_BASE_BRANCH = "develop";
+/**
+ * GitHub lists releases newest first, and only a release above the newest
+ * listed one is proposed, so the first page covers anything published since
+ * the last run.
+ */
 const RELEASES_PER_REPOSITORY = 30;
+const OPEN_PULL_REQUEST_PAGES = 10;
 export const BRANCH_PREFIX = "plugin-catalog/";
 export const LABELS = {
   catalog: "plugin-catalog",
@@ -96,14 +105,18 @@ export interface CatalogGitHub {
   listReleases(owner: string, name: string): Promise<readonly Release[]>;
   /** Every pull request, in any state, whose head is `branch` in this repository. */
   pullRequestsFor(branch: string): Promise<readonly PullRequestRef[]>;
+  /** The open pull requests into `base`, from any author or fork. */
+  openPullRequests(base: string): Promise<readonly PullRequestRef[]>;
+  /** The catalog's text at `ref`, or `undefined` when it has none. */
+  catalogAt(ref: string): Promise<string | undefined>;
   openPullRequest(request: OpenPullRequestRequest): Promise<OpenedPullRequest>;
 }
 
 export interface WatchedRepository {
   readonly owner: string;
   readonly name: string;
-  /** The newest entry of each plugin whose newest entry names this repository. */
-  readonly newest: ReadonlyMap<string, PluginCatalogEntry>;
+  /** The plugins that have an entry naming this repository. */
+  readonly ids: ReadonlySet<string>;
 }
 
 export interface Proposal {
@@ -135,14 +148,14 @@ export interface ProposeResult {
 }
 
 export interface ProposeOptions {
-  /** The catalog's text at `base.sha`. */
+  /** The catalog's text at `baseCommit`. */
   readonly catalogText: string;
   readonly github: CatalogGitHub;
-  /** Where pull requests start. Required unless `dryRun`. */
-  readonly base?: { readonly branch: string; readonly sha: string; readonly blobSha: string };
+  /** The branch pull requests go into. */
+  readonly baseBranch?: string;
+  /** Where each pull request's branch starts. Required unless `dryRun`. */
+  readonly baseCommit?: { readonly sha: string; readonly blobSha: string };
   readonly dryRun?: boolean;
-  /** Whether a pull request opened with this token starts CI. */
-  readonly ciStarts: boolean;
   readonly download?: DownloadOptions;
   readonly tmpRoot?: string;
   readonly format?: (text: string) => Promise<string>;
@@ -151,8 +164,23 @@ export interface ProposeOptions {
 const entryKey = (entry: Pick<PluginCatalogEntry, "id" | "version">): string =>
   `${entry.id}@${entry.version}`;
 
+/** Build metadata is dropped: it can't make a release newer, and it can spell an invalid ref. */
 export const branchName = (entry: Pick<PluginCatalogEntry, "id" | "version">): string =>
-  `${BRANCH_PREFIX}${entry.id}-${entry.version}`;
+  `${BRANCH_PREFIX}${entry.id}-${semver.parse(entry.version)?.version ?? entry.version}`;
+
+/** The spelling the catalog requires: `semver.parse` also takes a leading "v". */
+export function isCanonicalSemver(value: string): boolean {
+  const parsed = semver.parse(value);
+  if (!parsed) return false;
+  const build = parsed.build.length > 0 ? `+${parsed.build.join(".")}` : "";
+  return value === `${parsed.version}${build}`;
+}
+
+/** `https://github.com/{owner}/{repo}` from any URL under that repository. */
+export function repoOfUrl(url: string): string {
+  const [owner = "", name = ""] = new URL(url).pathname.split("/").slice(1);
+  return `https://github.com/${owner}/${name}`;
+}
 
 /** Each plugin's newest entry by semver, the one a new release is compared with. */
 export function newestEntries(
@@ -169,56 +197,46 @@ export function newestEntries(
 }
 
 /**
- * The repositories to watch: the one each plugin's newest entry names, so a
- * plugin that moved is watched where it went. Names compare without case, as
+ * Every repository an entry names, each with the plugins listed from it. A
+ * repository proposes releases only of those plugins, so listing one plugin
+ * never lets its repository propose another. Names compare without case, as
  * GitHub does.
  */
 export function watchedRepositories(entries: readonly PluginCatalogEntry[]): WatchedRepository[] {
-  const byRepo = new Map<
-    string,
-    { owner: string; name: string; newest: Map<string, PluginCatalogEntry> }
-  >();
-  for (const entry of newestEntries(entries).values()) {
+  const byRepo = new Map<string, { owner: string; name: string; ids: Set<string> }>();
+  for (const entry of entries) {
     const [owner, name] = new URL(entry.repo).pathname.split("/").slice(1);
     const key = `${owner}/${name}`.toLowerCase();
     let repo = byRepo.get(key);
     if (!repo) {
-      repo = { owner, name, newest: new Map() };
+      repo = { owner, name, ids: new Set() };
       byRepo.set(key, repo);
     }
-    repo.newest.set(entry.id, entry);
+    repo.ids.add(entry.id);
   }
   return [...byRepo.values()];
 }
 
-const isPlainSemver = (value: string): boolean => semver.valid(value) === value;
-
 /**
- * Whether an asset can't hold a release newer than what's listed, judged before
- * downloading it: by its file name as `daintree-plugin package` writes it,
- * `{id}-{version}.dntr`, or failing that by its release's tag. Only ever used
- * to skip a download; the manifest decides what is proposed.
+ * Whether an asset's file name, as `daintree-plugin package` writes it
+ * (`{id}-{version}.dntr`), says it can't be proposed: a version no newer than
+ * the plugin's newest entry, or a prerelease. Only ever used to skip a
+ * download; for anything else the manifest decides.
  */
 export function cannotBeNew(
   asset: ReleaseAsset,
-  release: Release,
-  watched: WatchedRepository
+  watched: WatchedRepository,
+  newest: ReadonlyMap<string, PluginCatalogEntry>
 ): boolean {
-  for (const [id, newest] of watched.newest) {
+  for (const id of watched.ids) {
+    const listed = newest.get(id);
     const prefix = `${id}-`;
-    if (!asset.name.startsWith(prefix)) continue;
+    if (!listed || !asset.name.startsWith(prefix)) continue;
     const version = asset.name.slice(prefix.length, -".dntr".length);
-    if (isPlainSemver(version)) return !semver.gt(version, newest.version);
+    if (!isCanonicalSemver(version)) continue;
+    return semver.prerelease(version) !== null || !semver.gt(version, listed.version);
   }
-  const tagVersion = release.tag_name.replace(/^v/, "");
-  if (!isPlainSemver(tagVersion)) return false;
-  return [...watched.newest.values()].every((newest) => !semver.gt(tagVersion, newest.version));
-}
-
-/** `https://github.com/{owner}/{repo}`, from a release asset's download URL. */
-export function repoOfAssetUrl(url: string): string {
-  const [owner, name] = new URL(url).pathname.split("/").slice(1);
-  return `https://github.com/${owner}/${name}`;
+  return false;
 }
 
 export async function formatCatalog(text: string): Promise<string> {
@@ -230,7 +248,8 @@ export async function formatCatalog(text: string): Promise<string> {
 
 /**
  * The catalog with `entry` added after the plugin's last entry in the file, so
- * pull requests for different plugins touch different lines.
+ * pull requests for different plugins touch different lines. Everything else
+ * in the file is kept as it is.
  */
 export async function catalogWithEntry(
   text: string,
@@ -257,7 +276,34 @@ export async function catalogWithEntry(
   return format(`${JSON.stringify({ ...raw, entries }, null, 2)}\n`);
 }
 
-const code = (text: string): string => `\`${text.replace(/[`\r\n]/g, "")}\``;
+/**
+ * Why `content` isn't exactly the base catalog plus `entry`, or `undefined`
+ * when it is: it must pass the app's parser, stay under the size the app
+ * reads, and differ from the base by that one entry and nothing else.
+ */
+export function rewriteProblem(
+  base: readonly PluginCatalogEntry[],
+  content: string,
+  entry: PluginCatalogEntry
+): string | undefined {
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (bytes > PLUGIN_CATALOG_MAX_BYTES) {
+    return `the catalog would be ${bytes} bytes, over the ${PLUGIN_CATALOG_MAX_BYTES} byte limit`;
+  }
+  const parsed = parsePluginCatalog(JSON.parse(content));
+  if (!parsed.ok) return `its entry would make the catalog invalid: ${parsed.error}`;
+  const changed = changedEntries(base, parsed.catalog.entries);
+  if (
+    parsed.catalog.entries.length !== base.length + 1 ||
+    changed.length !== 1 ||
+    entryKey(changed[0]) !== entryKey(entry)
+  ) {
+    return "rewriting the catalog changed more than the one entry";
+  }
+  return undefined;
+}
+
+const code = (text: string): string => `\`${text.replace(/[`\r\n|\\]/g, "")}\``;
 const capabilityList = (capabilities: readonly string[]): string =>
   capabilities.length === 0 ? "none" : capabilities.map(code).join(", ");
 
@@ -266,14 +312,14 @@ export function describeProposal(
   entry: PluginCatalogEntry,
   previous: PluginCatalogEntry,
   needsPerson: readonly string[],
-  release: Release,
-  ciStarts: boolean
+  release: Release
 ): { title: string; body: string; labels: string[] } {
   const title = `chore(catalog): add ${entry.id} ${entry.version}`;
+  const added = entry.capabilities.filter((cap) => !previous.capabilities.includes(cap));
   const removed = previous.capabilities.filter((cap) => !entry.capabilities.includes(cap));
   const sameRepo = previous.repo.toLowerCase() === entry.repo.toLowerCase();
   const lines = [
-    `Adds ${code(entry.id)} ${code(entry.version)} to the plugin catalog, from the release [${escapeMarkdown(release.tag_name)}](${release.html_url}).`,
+    `Adds ${code(entry.id)} ${code(entry.version)} to the plugin catalog, from the release ${code(release.tag_name)}: ${entry.url}`,
     "",
   ];
   if (needsPerson.length === 0) {
@@ -289,24 +335,21 @@ export function describeProposal(
     `| | ${code(previous.version)} (listed) | ${code(entry.version)} (this release) |`,
     "| --- | --- | --- |",
     `| Repository | ${previous.repo} | ${entry.repo}${sameRepo ? "" : " (changed)"} |`,
-    `| Capabilities | ${capabilityList(previous.capabilities)} | ${capabilityList(entry.capabilities)} |`
+    `| Capabilities | ${capabilityList(previous.capabilities)} | ${capabilityList(entry.capabilities)} |`,
+    `| SHA-256 | ${code(previous.sha256)} | ${code(entry.sha256)} |`
   );
   if (removed.length > 0) {
     lines.push("", `Capabilities no longer declared: ${capabilityList(removed)}.`);
+  }
+  if (added.length === 0 && removed.length === 0 && entry.capabilities.join() !== previous.capabilities.join()) {
+    lines.push("", "The same capabilities, in a different order.");
   }
   lines.push(
     "",
     "The SHA-256 is of the asset as downloaded, and the archive passed the installer's own check; the id, version and capabilities come from its manifest. The `plugin-catalog` check downloads it again.",
     "",
-    "Merging is a person's decision either way: a quick merge means the release matches what was reviewed before, not that it was reviewed again. Review confirms the source and the bytes, never that the code is safe."
+    "A person merges this either way: a quick merge means the release matches what was reviewed before, not that anyone has looked at it. Review confirms the source and the bytes, never that the code is safe."
   );
-  if (!ciStarts) {
-    lines.push(
-      "",
-      "> [!NOTE]",
-      "> Opened with the workflow's own token, which starts no checks. Close and reopen this pull request to run CI."
-    );
-  }
   const labels = [LABELS.catalog, needsPerson.length === 0 ? LABELS.quickMerge : LABELS.needsPerson];
   return { title, body: `${lines.join("\n")}\n`, labels };
 }
@@ -340,18 +383,25 @@ async function inspectAsset(
   }
 }
 
+interface Candidate {
+  readonly entry: PluginCatalogEntry;
+  readonly release: Release;
+  readonly what: string;
+}
+
 /**
- * Find every release of a watched repository that's newer than its plugin's
- * newest entry and has no pull request yet, in any state, and open one for it.
- * A closed pull request counts: a person declined that release, or it merged
- * and was later delisted, and neither should be proposed again.
+ * Find every release of a watched repository above its plugin's newest entry
+ * and open a pull request for each one nothing has proposed yet. A bot pull
+ * request for the release in any state counts: closed unmerged, a person
+ * declined it; merged, it was listed and perhaps later delisted. Neither is
+ * proposed again. So does an open pull request from anyone that adds it.
  */
 export async function proposeCatalogUpdates({
   catalogText,
   github,
-  base,
+  baseBranch = DEFAULT_BASE_BRANCH,
+  baseCommit,
   dryRun = false,
-  ciStarts,
   download = {},
   tmpRoot = os.tmpdir(),
   format = formatCatalog,
@@ -362,7 +412,7 @@ export async function proposeCatalogUpdates({
   const errors: string[] = [];
   const result = () => ({ proposed, skipped, warnings, errors });
 
-  if (!dryRun && !base) throw new Error("a base commit is needed to open pull requests");
+  if (!dryRun && !baseCommit) throw new Error("a base commit is needed to open pull requests");
   let parsedJson: unknown;
   try {
     parsedJson = JSON.parse(catalogText);
@@ -377,10 +427,12 @@ export async function proposeCatalogUpdates({
   }
   const entries = parsed.catalog.entries;
   const newest = newestEntries(entries);
-  const seen = new Set<string>();
+  const listedUrls = new Set(entries.map((entry) => entry.url));
 
+  const candidates: Candidate[] = [];
   const workDir = await mkdtemp(path.join(tmpRoot, "plugin-catalog-propose-"));
   try {
+    let downloads = 0;
     for (const watched of watchedRepositories(entries)) {
       const repoName = `${watched.owner}/${watched.name}`;
       let releases: readonly Release[];
@@ -392,23 +444,42 @@ export async function proposeCatalogUpdates({
       }
       for (const release of releases) {
         if (release.draft || release.prerelease) continue;
+        // After a rename or transfer GitHub answers for the old name and links
+        // the new one, which is the repository a new entry names.
+        const releaseRepo = repoOfUrl(release.html_url);
         for (const asset of release.assets) {
-          if (!asset.name.endsWith(".dntr") || cannotBeNew(asset, release, watched)) continue;
+          if (!asset.name.endsWith(".dntr")) continue;
+          if (listedUrls.has(asset.browser_download_url)) continue;
+          if (cannotBeNew(asset, watched, newest)) continue;
           const what = `${repoName} ${release.tag_name} ${asset.name}`;
-          const archivePath = path.join(workDir, `${seen.size}-${proposed.length}.dntr`);
+          if (repoOfUrl(asset.browser_download_url).toLowerCase() !== releaseRepo.toLowerCase()) {
+            warnings.push(`${what}: the asset isn't under its release's repository ${releaseRepo}`);
+            continue;
+          }
+          const archivePath = path.join(workDir, `${downloads++}.dntr`);
           const inspected = await inspectAsset(asset, archivePath, download);
           if (typeof inspected === "string") {
             warnings.push(`${what}: ${inspected}`);
             continue;
           }
-          const previous = newest.get(inspected.id);
-          if (!previous) {
+          if (!watched.ids.has(inspected.id)) {
             skipped.push({
               what,
-              reason: `${inspected.id} isn't listed; a first listing is its author's pull request`,
+              reason: newest.has(inspected.id)
+                ? `${inspected.id} isn't listed from ${repoName}`
+                : `${inspected.id} isn't listed; a first listing is its author's pull request`,
             });
             continue;
           }
+          if (!isCanonicalSemver(inspected.version)) {
+            warnings.push(`${what}: its manifest version "${inspected.version}" isn't canonical semver`);
+            continue;
+          }
+          if (semver.prerelease(inspected.version)) {
+            skipped.push({ what, reason: `${inspected.version} is a prerelease` });
+            continue;
+          }
+          const previous = newest.get(inspected.id)!;
           if (!semver.gt(inspected.version, previous.version)) {
             skipped.push({
               what,
@@ -416,82 +487,121 @@ export async function proposeCatalogUpdates({
             });
             continue;
           }
-          const entry: PluginCatalogEntry = {
-            id: inspected.id,
-            repo: repoOfAssetUrl(asset.browser_download_url),
-            version: inspected.version,
-            url: asset.browser_download_url,
-            sha256: inspected.sha256,
-            capabilities: inspected.capabilities,
-          };
-          const key = entryKey(entry);
-          if (seen.has(key)) continue;
-          seen.add(key);
-
-          let content: string;
-          try {
-            content = await catalogWithEntry(catalogText, entry, format);
-          } catch (err) {
-            errors.push(`${key}: the catalog couldn't be rewritten: ${errorText(err)}`);
-            continue;
-          }
-          const check = parsePluginCatalog(JSON.parse(content));
-          if (!check.ok) {
-            warnings.push(`${what}: its entry would make the catalog invalid: ${check.error}`);
-            continue;
-          }
-
-          const branch = branchName(entry);
-          let existing: readonly PullRequestRef[];
-          try {
-            existing = await github.pullRequestsFor(branch);
-          } catch (err) {
-            errors.push(`${key}: its pull requests couldn't be read: ${errorText(err)}`);
-            continue;
-          }
-          if (existing.length > 0) {
-            const pr = existing[0];
-            skipped.push({
-              what,
-              reason: `pull request #${pr.number} (${pr.merged_at ? "merged" : pr.state}) already proposed ${key}`,
-            });
-            continue;
-          }
-
-          const needsPerson = entriesNeedingPerson(entries, [entry]).map((note) => note.reason);
-          const text = describeProposal(entry, previous, needsPerson, release, ciStarts);
-          const proposal = { entry, previous, needsPerson, release, branch, ...text };
-          if (dryRun || !base) {
-            proposed.push(proposal);
-            continue;
-          }
-          try {
-            const pullRequest = await github.openPullRequest({
-              branch,
-              base: base.branch,
-              baseSha: base.sha,
-              path: CATALOG_FILE,
-              blobSha: base.blobSha,
-              content,
-              ...text,
-            });
-            proposed.push({ ...proposal, pullRequest });
-            if (pullRequest.labelError) {
-              warnings.push(`${key}: #${pullRequest.number} has no labels: ${pullRequest.labelError}`);
-            }
-          } catch (err) {
-            errors.push(`${key}: the pull request couldn't be opened: ${errorText(err)}`);
-          }
+          candidates.push({
+            entry: {
+              id: inspected.id,
+              repo: releaseRepo,
+              version: inspected.version,
+              url: asset.browser_download_url,
+              sha256: inspected.sha256,
+              capabilities: inspected.capabilities,
+            },
+            release,
+            what,
+          });
         }
       }
     }
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }
+
+  // Two different assets claiming one release leave no way to tell which is
+  // the real one, so neither is proposed.
+  const byKey = new Map<string, Candidate[]>();
+  for (const candidate of candidates) {
+    const key = entryKey(candidate.entry);
+    byKey.set(key, [...(byKey.get(key) ?? []), candidate]);
+  }
+
+  let openProposals: Promise<Map<string, PullRequestRef>> | undefined;
+  const readOpenProposals = async (): Promise<Map<string, PullRequestRef>> => {
+    const index = new Map<string, PullRequestRef>();
+    for (const pr of await github.openPullRequests(baseBranch)) {
+      const text = await github.catalogAt(`refs/pull/${pr.number}/head`);
+      if (text === undefined) continue;
+      let head: unknown;
+      try {
+        head = JSON.parse(text);
+      } catch {
+        continue;
+      }
+      const headCatalog = parsePluginCatalog(head);
+      if (!headCatalog.ok) continue;
+      for (const added of changedEntries(entries, headCatalog.catalog.entries)) {
+        if (!index.has(entryKey(added))) index.set(entryKey(added), pr);
+      }
+    }
+    return index;
+  };
+
+  for (const [key, group] of byKey) {
+    const distinct = new Map(group.map((c) => [`${c.entry.url} ${c.entry.sha256}`, c]));
+    if (distinct.size > 1) {
+      const urls = [...distinct.values()].map((c) => c.entry.url).join(", ");
+      warnings.push(`${key}: ${distinct.size} different assets claim it (${urls}), so none is proposed`);
+      continue;
+    }
+    const { entry, release, what } = group[0];
+
+    let content: string;
+    try {
+      content = await catalogWithEntry(catalogText, entry, format);
+    } catch (err) {
+      errors.push(`${key}: the catalog couldn't be rewritten: ${errorText(err)}`);
+      continue;
+    }
+    const problem = rewriteProblem(entries, content, entry);
+    if (problem) {
+      warnings.push(`${what}: ${problem}`);
+      continue;
+    }
+
+    const branch = branchName(entry);
+    let existing: PullRequestRef | undefined;
+    try {
+      existing = (await github.pullRequestsFor(branch))[0];
+      existing ??= (await (openProposals ??= readOpenProposals())).get(key);
+    } catch (err) {
+      errors.push(`${key}: pull requests couldn't be read, so none is opened: ${errorText(err)}`);
+      continue;
+    }
+    if (existing) {
+      const state = existing.merged_at ? "merged" : existing.state;
+      skipped.push({ what, reason: `pull request #${existing.number} (${state}) already proposed ${key}` });
+      continue;
+    }
+
+    const previous = newest.get(entry.id)!;
+    const needsPerson = entriesNeedingPerson(entries, [entry]).map((note) => note.reason);
+    const text = describeProposal(entry, previous, needsPerson, release);
+    const proposal = { entry, previous, needsPerson, release, branch, ...text };
+    if (dryRun || !baseCommit) {
+      proposed.push(proposal);
+      continue;
+    }
+    try {
+      const pullRequest = await github.openPullRequest({
+        branch,
+        base: baseBranch,
+        baseSha: baseCommit.sha,
+        path: CATALOG_FILE,
+        blobSha: baseCommit.blobSha,
+        content,
+        ...text,
+      });
+      proposed.push({ ...proposal, pullRequest });
+      if (pullRequest.labelError) {
+        warnings.push(`${key}: #${pullRequest.number} has no labels: ${pullRequest.labelError}`);
+      }
+    } catch (err) {
+      errors.push(`${key}: the pull request couldn't be opened: ${errorText(err)}`);
+    }
+  }
   return result();
 }
 
-class GitHubApiError extends Error {
+export class GitHubApiError extends Error {
   constructor(
     message: string,
     readonly status: number
@@ -500,8 +610,7 @@ class GitHubApiError extends Error {
   }
 }
 
-const encodePath = (value: string): string =>
-  value.split("/").map(encodeURIComponent).join("/");
+const encodePath = (value: string): string => value.split("/").map(encodeURIComponent).join("/");
 
 /** `CatalogGitHub` over GitHub's REST API. */
 export class RestCatalogGitHub implements CatalogGitHub {
@@ -515,11 +624,15 @@ export class RestCatalogGitHub implements CatalogGitHub {
     this.owner = repository.split("/")[0];
   }
 
-  private async call<T>(method: string, route: string, body?: unknown): Promise<T> {
+  private async request(
+    method: string,
+    route: string,
+    { body, raw = false }: { body?: unknown; raw?: boolean } = {}
+  ): Promise<string> {
     const response = await this.fetchImpl(`${GITHUB_API}${route}`, {
       method,
       headers: {
-        accept: "application/vnd.github+json",
+        accept: raw ? "application/vnd.github.raw+json" : "application/vnd.github+json",
         "x-github-api-version": "2022-11-28",
         "user-agent": "daintree-plugin-catalog",
         ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
@@ -541,58 +654,106 @@ export class RestCatalogGitHub implements CatalogGitHub {
         response.status
       );
     }
+    return text;
+  }
+
+  private async json<T>(method: string, route: string, body?: unknown): Promise<T> {
+    const text = await this.request(method, route, { body });
     return (text ? JSON.parse(text) : undefined) as T;
   }
 
   async listReleases(owner: string, name: string): Promise<readonly Release[]> {
     const route = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/releases`;
-    return this.call<Release[]>("GET", `${route}?per_page=${RELEASES_PER_REPOSITORY}`);
+    return this.json<Release[]>("GET", `${route}?per_page=${RELEASES_PER_REPOSITORY}`);
   }
 
   async pullRequestsFor(branch: string): Promise<readonly PullRequestRef[]> {
     const head = encodeURIComponent(`${this.owner}:${branch}`);
-    return this.call<PullRequestRef[]>(
+    return this.json<PullRequestRef[]>(
       "GET",
       `/repos/${this.repository}/pulls?state=all&per_page=100&head=${head}`
     );
   }
 
+  async openPullRequests(base: string): Promise<readonly PullRequestRef[]> {
+    const all: PullRequestRef[] = [];
+    for (let page = 1; page <= OPEN_PULL_REQUEST_PAGES; page++) {
+      const batch = await this.json<PullRequestRef[]>(
+        "GET",
+        `/repos/${this.repository}/pulls?state=open&base=${encodeURIComponent(base)}&per_page=100&page=${page}`
+      );
+      all.push(...batch);
+      if (batch.length < 100) return all;
+    }
+    throw new Error(`more than ${OPEN_PULL_REQUEST_PAGES * 100} open pull requests into ${base}`);
+  }
+
+  async catalogAt(ref: string): Promise<string | undefined> {
+    try {
+      return await this.request(
+        "GET",
+        `/repos/${this.repository}/contents/${encodePath(CATALOG_FILE)}?ref=${encodeURIComponent(ref)}`,
+        { raw: true }
+      );
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 404) return undefined;
+      throw err;
+    }
+  }
+
   async openPullRequest(request: OpenPullRequestRequest): Promise<OpenedPullRequest> {
     const repo = `/repos/${this.repository}`;
     try {
-      await this.call("POST", `${repo}/git/refs`, {
+      await this.json("POST", `${repo}/git/refs`, {
         ref: `refs/heads/${request.branch}`,
         sha: request.baseSha,
       });
     } catch (err) {
-      // Left behind by a run that stopped before opening its pull request, the
-      // only way it can exist when no pull request names it.
       if (!(err instanceof GitHubApiError) || err.status !== 422) throw err;
-      await this.call("PATCH", `${repo}/git/refs/heads/${encodePath(request.branch)}`, {
-        sha: request.baseSha,
-        force: true,
-      });
+      await this.reclaimBranch(request);
     }
-    await this.call("PUT", `${repo}/contents/${encodePath(request.path)}`, {
+    await this.json("PUT", `${repo}/contents/${encodePath(request.path)}`, {
       message: request.title,
       content: Buffer.from(request.content, "utf8").toString("base64"),
       sha: request.blobSha,
       branch: request.branch,
     });
-    const pr = await this.call<PullRequestRef>("POST", `${repo}/pulls`, {
+    const pr = await this.json<PullRequestRef>("POST", `${repo}/pulls`, {
       title: request.title,
       head: request.branch,
       base: request.base,
       body: request.body,
     });
     try {
-      await this.call("POST", `${repo}/issues/${pr.number}/labels`, {
-        labels: request.labels,
-      });
+      await this.json("POST", `${repo}/issues/${pr.number}/labels`, { labels: request.labels });
       return pr;
     } catch (err) {
       return { ...pr, labelError: errorText(err) };
     }
+  }
+
+  /**
+   * The branch exists although no pull request names it: an earlier run
+   * stopped between creating it and opening its pull request. It is reset only
+   * when it changes nothing but the catalog in at most one commit, so a branch
+   * someone else made is never thrown away.
+   */
+  private async reclaimBranch(request: OpenPullRequestRequest): Promise<void> {
+    const repo = `/repos/${this.repository}`;
+    const compare = await this.json<{ ahead_by: number; files?: { filename: string }[] }>(
+      "GET",
+      `${repo}/compare/${request.baseSha}...${encodePath(request.branch)}`
+    );
+    const files = compare.files ?? [];
+    if (compare.ahead_by > 1 || files.some((file) => file.filename !== request.path)) {
+      throw new Error(
+        `branch ${request.branch} already exists with other changes and no pull request; delete it to let the bot propose this release`
+      );
+    }
+    await this.json("PATCH", `${repo}/git/refs/heads/${encodePath(request.branch)}`, {
+      sha: request.baseSha,
+      force: true,
+    });
   }
 }
 
@@ -611,7 +772,7 @@ function writeSummary(result: ProposeResult, dryRun: boolean): void {
   const lines = [dryRun ? "## Plugin catalog updates (dry run)" : "## Plugin catalog updates", ""];
   if (result.proposed.length === 0) lines.push("No new release to propose.");
   else {
-    lines.push("### Proposed", "");
+    lines.push(dryRun ? "### Would propose" : "### Proposed", "");
     for (const proposal of result.proposed) {
       const verdict =
         proposal.needsPerson.length === 0
@@ -632,25 +793,33 @@ function writeSummary(result: ProposeResult, dryRun: boolean): void {
 }
 
 async function main(argv: readonly string[]): Promise<number> {
-  const dryRun = argv.includes("--dry-run");
   const catalogPath = argValue(argv, "--catalog");
+  let dryRun = argv.includes("--dry-run");
   if (catalogPath && !dryRun) {
     throw new Error("--catalog needs --dry-run: a pull request starts from the committed catalog");
   }
-  const repository = process.env.GITHUB_REPOSITORY || DEFAULT_REPOSITORY;
   const botToken = process.env.PLUGIN_CATALOG_BOT_TOKEN || undefined;
+  if (!dryRun && !botToken) {
+    const notice =
+      "PLUGIN_CATALOG_BOT_TOKEN isn't set, so this run opens nothing and only lists what it would propose. .github/workflows/README.md says how to create it.";
+    console.log(`::notice::${escapeAnnotation(notice)}`);
+    dryRun = true;
+  }
   const token = botToken ?? (process.env.GITHUB_TOKEN || process.env.GH_TOKEN || undefined);
-  if (!dryRun && !token) throw new Error("GITHUB_TOKEN is needed to open pull requests");
+  const repository = process.env.GITHUB_REPOSITORY || DEFAULT_REPOSITORY;
 
   const git = (...args: string[]) =>
-    execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    execFileSync("git", args, {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: PLUGIN_CATALOG_MAX_BYTES * 4,
+    });
   const catalogText = catalogPath
     ? readFileSync(catalogPath, "utf8")
     : git("show", `HEAD:${CATALOG_FILE}`);
-  const base = catalogPath
+  const baseCommit = catalogPath
     ? undefined
     : {
-        branch: process.env.PLUGIN_CATALOG_BASE || DEFAULT_BASE_BRANCH,
         sha: git("rev-parse", "HEAD").trim(),
         blobSha: git("rev-parse", `HEAD:${CATALOG_FILE}`).trim(),
       };
@@ -658,9 +827,9 @@ async function main(argv: readonly string[]): Promise<number> {
   const result = await proposeCatalogUpdates({
     catalogText,
     github: new RestCatalogGitHub(repository, token),
-    base,
+    baseBranch: process.env.PLUGIN_CATALOG_BASE || DEFAULT_BASE_BRANCH,
+    baseCommit,
     dryRun,
-    ciStarts: Boolean(botToken),
   });
 
   for (const proposal of result.proposed) {
