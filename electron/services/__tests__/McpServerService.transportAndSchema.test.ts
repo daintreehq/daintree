@@ -892,6 +892,7 @@ describe("McpServerService", () => {
     service.setHelpSessionWebContentsResolver((token) =>
       token === helpToken ? (pins.length > 1 ? pins.shift()! : pins[0]!) : null
     );
+    service.setHelpSessionIdResolver((token) => (token === helpToken ? "help-1" : null));
     const httpSessions = (
       service as unknown as { sessionStore: { httpSessions: Map<string, unknown> } }
     ).sessionStore.httpSessions;

@@ -181,6 +181,24 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
     ordinary!.close();
   });
 
+  // #16765 — a relay reads as one, whichever assistant's call it carries.
+  it("answers mcp.surface as a relay, for a global caller and an ordinary one", async () => {
+    const withSurface = [...MANIFEST, entry("mcp.surface", "query", true)];
+    const { lc } = await startedLifecycle({
+      requestManifestForWorkspace: vi.fn().mockResolvedValue(withSurface),
+      getCachedManifestForWorkspace: vi.fn(() => withSurface),
+    });
+    for (const caller of [{ ...CALLER, global: true as const }, CALLER]) {
+      const session = await lc.openRelaySession({ tier: "core", workspaceId: "project-1", caller });
+
+      const result = await session!.callTool("mcp.surface", {}, { timeoutMs: 5_000, callId: "c1" });
+
+      expect(result.isError).not.toBe(true);
+      expect((result.structuredContent as { role?: string }).role).toBe("relay");
+      session!.close();
+    }
+  });
+
   it("admits an external-origin session bound to the project, under the relay principal", async () => {
     const { lc, store } = await startedLifecycle();
     const session = await lc.openRelaySession({

@@ -13,6 +13,24 @@ import type { ActionKind } from "./actions.js";
  */
 export type McpSurfaceTier = HelpAssistantTier | "external";
 
+const SESSION_ROLE_VALUES = [
+  "global-assistant",
+  "project-assistant",
+  "agent-pane",
+  "external-client",
+  "relay",
+] as const;
+
+/**
+ * Which kind of session the server took a connection for (#16765), settled
+ * from its credential at the handshake and fixed for the session's life:
+ * this machine's global Assistant, a project's Assistant (with a view or
+ * without), an agent pane's own bearer, an api-key client, or another
+ * assistant's `host.call` into this host. What the server resolved, never a
+ * guess from the tools it ended up offering.
+ */
+export type McpSessionRole = (typeof SESSION_ROLE_VALUES)[number];
+
 /**
  * Why a tool is on its way out, and what to call instead. Absent on every tool
  * that is not deprecated — presence is the signal.
@@ -79,6 +97,13 @@ export interface McpSurfaceManifest {
    */
   tier: McpSurfaceTier;
   /**
+   * Which kind of session this server took the caller for (#16765). A client
+   * that knows what it should be compares this first: a mismatch means the
+   * connection reached the server under another credential, and the tools
+   * below are that credential's, not its own.
+   */
+  role: McpSessionRole;
+  /**
    * Lowercase hex SHA-256 over the canonical form of the surface. Changes iff
    * the surface a client depends on changes; see `buildSurfaceManifest` for the
    * exact preimage. Comparing this is the cheap drift check — it never changes
@@ -105,6 +130,7 @@ export const McpSurfaceResultSchema = z.object({
     .describe("Payload shape version, bumped when a field changes meaning"),
   appVersion: z.string().describe("The running Daintree build"),
   tier: z.enum(TIER_VALUES).describe("The authorization tier this call was admitted at"),
+  role: z.enum(SESSION_ROLE_VALUES).describe("The kind of session the server took this for"),
   hash: z
     .string()
     .regex(/^[0-9a-f]{64}$/)

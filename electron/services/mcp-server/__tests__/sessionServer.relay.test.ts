@@ -78,6 +78,7 @@ async function relayed(
   store.sessionWorkspaceMap.set(sessionId, projectId);
   const deps: SessionServerDeps = {
     sessionStore: store,
+    sessionRole: "relay",
     workspaceBinding: { workspaceId: projectId },
     requestManifest: vi.fn().mockResolvedValue(MANIFEST),
     dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: { ran: true } } }),
@@ -775,6 +776,7 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
     }));
     const server = createSessionServer(sessionId, {
       sessionStore: store,
+      sessionRole: "relay",
       requestManifest: vi.fn().mockResolvedValue(MANIFEST),
       dispatchAction: vi.fn(),
       handleWaitUntilIdle: vi.fn(),
@@ -845,6 +847,7 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
     const appendAuditRecord = vi.fn();
     const server = createSessionServer(sessionId, {
       sessionStore: store,
+      sessionRole: "relay",
       requestManifest: vi.fn().mockResolvedValue(MANIFEST),
       dispatchAction: vi.fn(),
       handleWaitUntilIdle: vi.fn(),
@@ -916,6 +919,7 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
     const manifest = [...MANIFEST, entry("host.settings", "command")];
     const server = createSessionServer(sessionId, {
       sessionStore: store,
+      sessionRole: "relay",
       requestManifest: vi.fn().mockResolvedValue(manifest),
       dispatchAction: vi.fn(),
       handleWaitUntilIdle: vi.fn(),

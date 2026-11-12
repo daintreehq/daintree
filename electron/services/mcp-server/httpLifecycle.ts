@@ -33,6 +33,8 @@ import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./works
 import { helpOwnershipPrincipal, relayOwnershipPrincipal } from "./resourceOwnership.js";
 import { WorkspaceBindingError } from "./rendererBridge.js";
 import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
+import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
+import type { McpSessionRole } from "../../../shared/types/mcpSurface.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import {
   assertHeldRoutePath,
@@ -58,6 +60,7 @@ import {
   extractBearerToken,
   isAuthorized,
   precomputeApiKeyBearerHash,
+  resolveCredentialKind,
   resolveTokenTier,
 } from "./tierAuth.js";
 import { createSessionServer } from "./sessionServer.js";
@@ -90,11 +93,18 @@ import {
   MCP_WORKSPACE_ID_HEADER,
   MCP_WORKSPACE_ID_QUERY_PARAM,
   MCP_HANDSHAKE_REJECTED_CODE,
+  ASSISTANT_BINDING_INCOMPLETE_CODE,
   RELAY_CALL_ID_META_KEY,
   minimumPermittingTier,
 } from "./shared.js";
 
 export { sendToPinnedView };
+
+const ASSISTANT_BINDING_INCOMPLETE_REJECTION = {
+  code: ASSISTANT_BINDING_INCOMPLETE_CODE,
+  message:
+    "This Daintree Assistant's connection isn't fully bound to its Assistant, so it was refused rather than given another session's tools. Start the Assistant again.",
+} as const;
 
 export interface HttpLifecycleDeps extends SessionServerDepsSource {
   /**
@@ -421,8 +431,8 @@ export class HttpLifecycle {
    *
    * A help bearer with no view (#13511) pins `NO_VIEW_HANDLE` and names its
    * project, which routes it to the host's own form of each action. One whose
-   * project can't be read keeps the bare pin, which no view answers: it fails
-   * closed rather than following focus.
+   * project can't be read keeps the bare pin, which
+   * {@link resolveSessionRole} refuses at the handshake (#16765).
    */
   private resolveSessionPin(
     authHeader: string
@@ -438,6 +448,34 @@ export class HttpLifecycle {
     }
     if (fromHelp !== null) return { origin: "help", webContentsId: fromHelp };
     return null;
+  }
+
+  /**
+   * Which kind of session a handshake admits this bearer as (#16765), from
+   * the pin and help-session id it resolved; null to refuse it.
+   *
+   * A Daintree Assistant's bearer is admitted only with its whole binding: its
+   * help session, and its view or, with none, its project. Missing any of it,
+   * the session would fall through to another kind's tools (an external
+   * client's, or a project Assistant's for a global one that lost its
+   * project), and nothing later can tell it was ever an Assistant's. So it is
+   * refused here, the one place that still knows. Any trace of one counts, not
+   * only the validator's word, so a resolver that answered alone is held to
+   * the same rule.
+   */
+  private resolveSessionRole(
+    authHeader: string,
+    pin: ReturnType<HttpLifecycle["resolveSessionPin"]>,
+    helpSessionId: string | null
+  ): McpSessionRole | null {
+    const kind = resolveCredentialKind(authHeader, this.apiKeyBearerHash, this.helpTokenValidator);
+    if (kind !== "assistant" && pin === null && helpSessionId === null) {
+      return kind === "agent-pane" ? "agent-pane" : "external-client";
+    }
+    if (pin === null || helpSessionId === null) return null;
+    if (pin.webContentsId !== NO_VIEW_HANDLE) return "project-assistant";
+    if (pin.viewlessProjectId === undefined) return null;
+    return isGlobalAssistantId(pin.viewlessProjectId) ? "global-assistant" : "project-assistant";
   }
 
   /**
@@ -619,7 +657,12 @@ export class HttpLifecycle {
    * `data.code` clients can branch on, and deliberately no `Mcp-Session-Id` —
    * there is no session to resume.
    */
-  private rejectHandshake(res: http.ServerResponse, rejection: WorkspaceSelectorRejection): void {
+  private rejectHandshake(
+    res: http.ServerResponse,
+    rejection:
+      | WorkspaceSelectorRejection
+      | { code: typeof ASSISTANT_BINDING_INCOMPLETE_CODE; message: string }
+  ): void {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
@@ -1485,6 +1528,16 @@ export class HttpLifecycle {
         return;
       }
 
+      // An Assistant's bearer with half its binding is refused before the
+      // transport exists (#16765), so nothing is left behind.
+      const pin = this.resolveSessionPin(authHeader);
+      const helpSessionId = this.resolveHelpSessionId(authHeader);
+      const role = this.resolveSessionRole(authHeader, pin, helpSessionId);
+      if (role === null) {
+        this.rejectHandshake(res, ASSISTANT_BINDING_INCOMPLETE_REJECTION);
+        return;
+      }
+
       const allowedHosts = [`127.0.0.1:${this.port}`, `localhost:${this.port}`];
       const allowedOrigins = [`http://127.0.0.1:${this.port}`, `http://localhost:${this.port}`];
       const transport = new SSEServerTransport("/messages", res, {
@@ -1497,7 +1550,6 @@ export class HttpLifecycle {
       // An agent pane's launch workspace (#12486) is resolved before any session
       // state is written, as the /mcp selector is, so an unexpected resolver
       // failure leaves nothing behind. This is the transport Claude panes use.
-      const pin = this.resolveSessionPin(authHeader);
       const paneBinding = pin === null ? this.resolvePaneWorkspaceBinding(authHeader) : null;
       const workspaceBinding =
         paneBinding !== null ? this.describePaneWorkspaceBinding(paneBinding.workspaceId) : null;
@@ -1531,13 +1583,13 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionContextMap.set(sessionId, boundActionContext);
       }
 
-      const helpSessionId = this.resolveHelpSessionId(authHeader);
       if (helpSessionId !== null) {
         this.deps.sessionStore.sessionHelpIdMap.set(sessionId, helpSessionId);
       }
 
       const deps = this.buildSessionServerDeps(
         sessionId,
+        role,
         workspaceBinding ?? undefined,
         paneBinding ?? undefined,
         this.resolveOwnPane(authHeader, ownershipPrincipal)
@@ -1702,6 +1754,13 @@ export class HttpLifecycle {
     const authHeader = req.headers.authorization ?? "";
     const tier = resolveTokenTier(authHeader, this.apiKeyBearerHash, this.helpTokenValidator);
     const pin = this.resolveSessionPin(authHeader);
+    const helpSessionId = this.resolveHelpSessionId(authHeader);
+    // Refused before anything is allocated (#16765), as a bad selector is below.
+    const role = this.resolveSessionRole(authHeader, pin, helpSessionId);
+    if (role === null) {
+      this.rejectHandshake(res, ASSISTANT_BINDING_INCOMPLETE_REJECTION);
+      return;
+    }
     const origin: McpSessionOrigin = pin?.origin ?? "external";
 
     // Resolve the workspace selector before anything is allocated (#11789). A
@@ -1751,13 +1810,13 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionContextMap.set(newSessionId, boundActionContext);
     }
 
-    const helpSessionId = this.resolveHelpSessionId(authHeader);
     if (helpSessionId !== null) {
       this.deps.sessionStore.sessionHelpIdMap.set(newSessionId, helpSessionId);
     }
 
     const deps = this.buildSessionServerDeps(
       newSessionId,
+      role,
       workspaceBinding ?? undefined,
       paneBinding ?? undefined,
       this.resolveOwnPane(authHeader, ownershipPrincipal)
@@ -1902,7 +1961,7 @@ export class HttpLifecycle {
     );
     const server = createSessionServer(
       sessionId,
-      this.buildSessionServerDeps(sessionId, workspaceBinding, undefined, null, caller)
+      this.buildSessionServerDeps(sessionId, "relay", workspaceBinding, undefined, null, caller)
     );
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     store.relaySessions.set(sessionId, { transport: serverTransport, server });
@@ -1945,6 +2004,7 @@ export class HttpLifecycle {
   /** One session's dispatch deps, from what its handshake settled: see {@link createSessionServerDeps}. */
   private buildSessionServerDeps(
     sessionId: string,
+    role: McpSessionRole,
     workspaceBinding?: McpWorkspaceBinding,
     paneBinding?: PaneWorkspaceBinding,
     ownPane?: import("./terminalNotify.js").OwnPane | null,
@@ -1952,6 +2012,7 @@ export class HttpLifecycle {
   ): import("./sessionServer.js").SessionServerDeps {
     return createSessionServerDeps(this.deps, this.sessionDepsHost, {
       sessionId,
+      role,
       workspaceBinding,
       paneBinding,
       ownPane,

@@ -606,7 +606,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // agent has printed past it. The result schema is closed, so the field must
   // be advertised; the token argument's description was left as it was and
   // the field's own were trimmed first.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 60_400;
+  // 60_400 → 60_600 for #16765, measured at 60_555 B (+180 over develop's
+  // 60_375): `role` on `mcp.surface`'s answer, the kind of session the server
+  // took the caller for, so a client that reached it under another credential
+  // can see so. The result schema is closed, so the field must be advertised;
+  // its description was trimmed and the tool's own left as it was.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 60_600;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -1047,7 +1052,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // kept conversation, with the same closed output schema `assistant.start`
   // answers with, and `keptSlots` on the listing's output schema so a kept slot
   // is never read as vacant. Assistant-only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 193_000;
+  // 193_000 → 193_200 for #16765, measured at 193_103 B (+180 over develop's
+  // 192_923): the same `role` the external half above pays for, on a tool both
+  // surfaces list, so both totals moved by the identical amount.
+  const MAX_COHORT_PAYLOAD_BYTES = 193_200;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

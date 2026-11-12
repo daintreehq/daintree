@@ -54,22 +54,25 @@ export function precomputeApiKeyBearerHash(apiKey: string | null): Buffer | null
   return createHash("sha256").update(`Bearer ${apiKey}`).digest();
 }
 
+/**
+ * Whether the header is the api key, or the empty header a server with no key
+ * admits: an external client either way. Shared by every bearer classifier so
+ * they can never disagree on which header that is.
+ */
+function isExternalClientHeader(authHeader: string, apiKeyBearerHash: Buffer | null): boolean {
+  if (!apiKeyBearerHash) return authHeader.length === 0;
+  const actualHash = createHash("sha256").update(authHeader).digest();
+  return (
+    apiKeyBearerHash.length === actualHash.length && timingSafeEqual(actualHash, apiKeyBearerHash)
+  );
+}
+
 export function isAuthorized(
   authHeader: string,
   apiKeyBearerHash: Buffer | null,
   helpTokenValidator: HelpTokenValidator | null
 ): boolean {
-  if (apiKeyBearerHash) {
-    const actualHash = createHash("sha256").update(authHeader).digest();
-    if (
-      apiKeyBearerHash.length === actualHash.length &&
-      timingSafeEqual(actualHash, apiKeyBearerHash)
-    ) {
-      return true;
-    }
-  } else if (authHeader.length === 0) {
-    return true;
-  }
+  if (isExternalClientHeader(authHeader, apiKeyBearerHash)) return true;
 
   const token = extractBearerToken(authHeader);
   if (token === null) return false;
@@ -89,17 +92,7 @@ export function resolveTokenTier(
   apiKeyBearerHash: Buffer | null,
   helpTokenValidator: HelpTokenValidator | null
 ): McpTier {
-  if (apiKeyBearerHash) {
-    const actualHash = createHash("sha256").update(authHeader).digest();
-    if (
-      apiKeyBearerHash.length === actualHash.length &&
-      timingSafeEqual(actualHash, apiKeyBearerHash)
-    ) {
-      return "external";
-    }
-  } else if (authHeader.length === 0) {
-    return "external";
-  }
+  if (isExternalClientHeader(authHeader, apiKeyBearerHash)) return "external";
 
   const token = extractBearerToken(authHeader);
   if (token === null) return "core";
@@ -114,6 +107,27 @@ export function resolveTokenTier(
   }
 
   return "core";
+}
+
+/**
+ * Which kind of credential a bearer is (#16765), checked in the order
+ * {@link isAuthorized} admits them. Null for a bearer nothing here
+ * recognises, which that has already turned away.
+ *
+ * Kept apart from the tier because the tier can't say it: an agent pane and a
+ * Daintree Assistant both hold `core` or `full`.
+ */
+export function resolveCredentialKind(
+  authHeader: string,
+  apiKeyBearerHash: Buffer | null,
+  helpTokenValidator: HelpTokenValidator | null
+): "external-client" | "agent-pane" | "assistant" | null {
+  if (isExternalClientHeader(authHeader, apiKeyBearerHash)) return "external-client";
+  const token = extractBearerToken(authHeader);
+  if (token === null) return null;
+  if (mcpPaneConfigService.isValidPaneToken(token)) return "agent-pane";
+  if (helpTokenValidator?.(token)) return "assistant";
+  return null;
 }
 
 /**

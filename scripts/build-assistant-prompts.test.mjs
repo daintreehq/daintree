@@ -584,7 +584,7 @@ describe("global assistant prompts (#14546)", () => {
     ["global/AGENTS.md", readFileSync(path.join(root, "assistant/global/AGENTS.md"), "utf8")],
   ];
 
-  it.each(GLOBAL)("%s carries the routing guidance and its six tools", (_name, body) => {
+  it.each(GLOBAL)("%s carries the routing guidance and its seven tools", (_name, body) => {
     for (const tool of [
       "host.list",
       "host.call",
@@ -592,11 +592,22 @@ describe("global assistant prompts (#14546)", () => {
       "host.settings",
       "host.watch",
       "host.bringBack",
+      "mcp.surface",
       "actions.search",
     ]) {
       expect(body).toContain(tool);
     }
     expect(body).toContain("<!-- DAINTREE_RUNBOOKS_START -->");
+  });
+
+  // #16765 — the role is how it sees it reached the server as something else.
+  it.each(GLOBAL)("%s says what to do with a role other than its own", (_name, body) => {
+    const line = body.split("\n").find((text) => text.startsWith("- **`mcp.surface`**"));
+    expect(line).toBeDefined();
+    expect(line).toContain("If `host.list` is missing");
+    expect(line).toContain('`role: "global-assistant"`');
+    expect(line).toContain("Tell the user which `role` you got");
+    expect(line).toContain("use none of them");
   });
 
   // #14995: `host.call` carries the caller's own tier and the global

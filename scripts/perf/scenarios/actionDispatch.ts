@@ -447,7 +447,8 @@ export const actionDispatchScenarios: PerfScenario[] = [
         toolsByTier.set(tier, tools);
 
         const hashStart = performance.now();
-        const surface = mods.buildSurfaceManifest(manifest, tier, "0.0.0-perf");
+        const role = tier === "external" ? "external-client" : "project-assistant";
+        const surface = mods.buildSurfaceManifest(manifest, tier, role, "0.0.0-perf");
         surfaceHashMs += performance.now() - hashStart;
         surfaceByTier.set(tier, { hash: surface.hash, toolCount: surface.tools.length });
       }

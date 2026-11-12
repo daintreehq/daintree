@@ -2819,7 +2819,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (actionId === MCP_SURFACE_TOOL_ID) {
           emitToolCallStarted(false, false);
           try {
-            const manifest = await resolveManifest(MCP_SURFACE_TOOL_ID);
+            const resolved = await resolveManifest(MCP_SURFACE_TOOL_ID);
+            // The global assistant's report keeps to its own set, as its
+            // listing does (#16765), whichever manifest answered.
+            const manifest = isGlobalSession()
+              ? resolved.filter((entry) => GLOBAL_ASSISTANT_TOOL_IDS.has(entry.id))
+              : resolved;
             // Build against the tier captured at dispatch start — the one the
             // permission gate above actually authorized this call at — rather
             // than re-reading after the await. Authorization has one lifetime
@@ -2833,6 +2838,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             const result = buildSurfaceManifest(
               manifest,
               tier,
+              deps.sessionRole,
               app.getVersion(),
               // Same binding and origin the gate above authorized this call
               // against, and the same ones `tools/list` filters by — so the

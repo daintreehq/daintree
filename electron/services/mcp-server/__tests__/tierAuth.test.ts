@@ -23,6 +23,7 @@ import {
   parseToolArguments,
   precomputeApiKeyBearerHash,
   readSearchLimit,
+  resolveCredentialKind,
   resolveTokenTier,
   shouldExposeTool,
   isWithheldFromBoundSession,
@@ -211,6 +212,52 @@ describe("resolveTokenTier", () => {
 
   it("falls back to core when the header has no whitespace after the scheme", () => {
     expect(resolveTokenTier("Bearerfoo", null, null)).toBe("core");
+  });
+});
+
+// #16765 — the tier can't tell a pane from an assistant; the kind can.
+describe("resolveCredentialKind", () => {
+  const helpValidator = (t: string) => (t === "help-tok" ? ("core" as const) : false);
+
+  beforeEach(() => {
+    mockPaneConfigService.isValidPaneToken.mockImplementation((t) => t === "pane-tok");
+  });
+
+  afterEach(() => {
+    mockPaneConfigService.isValidPaneToken.mockImplementation(() => false);
+  });
+
+  it("reads the api key, and the empty header a keyless server admits, as an external client", () => {
+    const hash = precomputeApiKeyBearerHash("secret");
+    expect(resolveCredentialKind("Bearer secret", hash, helpValidator)).toBe("external-client");
+    expect(resolveCredentialKind("", null, helpValidator)).toBe("external-client");
+    expect(resolveCredentialKind("", hash, helpValidator)).toBeNull();
+  });
+
+  it("tells a pane bearer from an assistant's at the same tier", () => {
+    expect(resolveCredentialKind("Bearer pane-tok", null, helpValidator)).toBe("agent-pane");
+    expect(resolveCredentialKind("Bearer\thelp-tok", null, helpValidator)).toBe("assistant");
+  });
+
+  it("reads the api key as an external client before asking anything else", () => {
+    const hash = precomputeApiKeyBearerHash("secret");
+    mockPaneConfigService.isValidPaneToken.mockClear();
+    mockPaneConfigService.isValidPaneToken.mockImplementation(() => true);
+    const validator = vi.fn(() => "core" as const);
+
+    expect(resolveCredentialKind("Bearer secret", hash, validator)).toBe("external-client");
+    expect(mockPaneConfigService.isValidPaneToken).not.toHaveBeenCalled();
+    expect(validator).not.toHaveBeenCalled();
+  });
+
+  it("checks the pane service before the help validator, as isAuthorized does", () => {
+    expect(resolveCredentialKind("Bearer pane-tok", null, () => "full")).toBe("agent-pane");
+  });
+
+  it("recognises nothing else, and no assistant without a validator", () => {
+    expect(resolveCredentialKind("Bearer unknown", null, helpValidator)).toBeNull();
+    expect(resolveCredentialKind("Bearer help-tok", null, null)).toBeNull();
+    expect(resolveCredentialKind("Bearerfoo", null, helpValidator)).toBeNull();
   });
 });
 

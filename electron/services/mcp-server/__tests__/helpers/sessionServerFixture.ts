@@ -115,6 +115,7 @@ export function fakeSessionStore(tier: "core" | "full" | "external" = "core"): S
 export function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
   return {
     sessionStore: fakeSessionStore(),
+    sessionRole: "external-client",
     requestManifest: vi.fn().mockResolvedValue([]),
     dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: null } }),
     handleWaitUntilIdle: vi.fn(),

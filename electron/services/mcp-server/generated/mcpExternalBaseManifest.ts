@@ -1111,6 +1111,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           enum: ["core", "full", "external"],
           description: "The authorization tier this call was admitted at",
         },
+        role: {
+          type: "string",
+          enum: ["global-assistant", "project-assistant", "agent-pane", "external-client", "relay"],
+          description: "The kind of session the server took this for",
+        },
         hash: {
           type: "string",
           pattern: "^[0-9a-f]{64}$",
@@ -1162,7 +1167,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description: "Every tool `tools/list` advertises here, sorted by id",
         },
       },
-      required: ["manifestVersion", "appVersion", "tier", "hash", "tools"],
+      required: ["manifestVersion", "appVersion", "tier", "role", "hash", "tools"],
       additionalProperties: false,
     },
     requiresArgs: false,
