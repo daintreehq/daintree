@@ -1,9 +1,12 @@
 #!/usr/bin/env node
-// Verifies that the plugin blocklist just uploaded to R2 is what the update
-// host serves: HTTP 200, a JSON content type, and a body equal to the
-// committed file. A successful PUT doesn't prove the CDN edge serves it (#9122),
-// and a kill-switch entry that never reaches clients fails silently, since the
-// client treats a missing list as "block nothing".
+// Verifies that a plugin list just uploaded to R2, the blocklist or the
+// community catalog, is what the update host serves: HTTP 200, a JSON content
+// type, and a body equal to the committed file. A successful PUT doesn't prove
+// the CDN edge serves it (#9122). A kill-switch entry that never reaches
+// clients fails silently, since the client treats a missing blocklist as
+// "block nothing", and a catalog client treats a missing catalog as unpublished.
+//
+//   LIST_URL=<public url> LIST_FILE=<committed file> node scripts/ci/verify-plugin-list.mjs
 
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
@@ -12,7 +15,7 @@ import { setTimeout as defaultSleep } from "node:timers/promises";
 
 const FETCH_TIMEOUT_MS = 15_000;
 
-export function loadLocalBlocklist(filePath) {
+export function loadLocalList(filePath) {
   let raw;
   try {
     raw = readFileSync(filePath, "utf8");
@@ -37,7 +40,7 @@ function transient(message) {
   return error;
 }
 
-export async function fetchRemoteBlocklist(url, fetchImpl = fetch, timeoutMs = FETCH_TIMEOUT_MS) {
+export async function fetchRemoteList(url, fetchImpl = fetch, timeoutMs = FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -77,16 +80,16 @@ export async function fetchRemoteBlocklist(url, fetchImpl = fetch, timeoutMs = F
   }
 }
 
-export async function verifyBlocklistOnce(url, filePath, fetchImpl = fetch) {
+export async function verifyListOnce(url, filePath, fetchImpl = fetch) {
   let local;
   try {
-    local = loadLocalBlocklist(filePath);
+    local = loadLocalList(filePath);
   } catch (err) {
     return { ok: false, error: err.message, transient: false };
   }
   let remote;
   try {
-    remote = await fetchRemoteBlocklist(url, fetchImpl);
+    remote = await fetchRemoteList(url, fetchImpl);
   } catch (err) {
     return { ok: false, error: err.message, transient: err.transient === true };
   }
@@ -98,7 +101,7 @@ export async function verifyBlocklistOnce(url, filePath, fetchImpl = fetch) {
   return { ok: true };
 }
 
-export async function verifyBlocklistWithRetries({
+export async function verifyListWithRetries({
   url,
   filePath,
   fetch: fetchFn = fetch,
@@ -112,20 +115,20 @@ export async function verifyBlocklistWithRetries({
   }
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const result = await verifyBlocklistOnce(url, filePath, fetchFn);
+    const result = await verifyListOnce(url, filePath, fetchFn);
     if (result.ok) {
-      log(`[verify-blocklist] ${url} verified (attempt ${attempt})`);
+      log(`[verify-plugin-list] ${url} verified (attempt ${attempt})`);
       return null;
     }
     lastError = result.error;
     if (!result.transient) {
-      log(`[verify-blocklist] permanent error, not retrying: ${result.error}`);
+      log(`[verify-plugin-list] permanent error, not retrying: ${result.error}`);
       break;
     }
     if (attempt >= maxAttempts) break;
     const delay = baseDelayMs * Math.pow(2, attempt - 1);
     log(
-      `[verify-blocklist] attempt ${attempt}/${maxAttempts} failed: ${result.error} — retrying in ${delay}ms`
+      `[verify-plugin-list] attempt ${attempt}/${maxAttempts} failed: ${result.error} — retrying in ${delay}ms`
     );
     await sleepFn(delay);
   }
@@ -133,13 +136,13 @@ export async function verifyBlocklistWithRetries({
 }
 
 async function main() {
-  const url = process.env.BLOCKLIST_URL;
-  const filePath = process.env.BLOCKLIST_FILE;
+  const url = process.env.LIST_URL;
+  const filePath = process.env.LIST_FILE;
   if (!url || !filePath) {
-    console.error("::error::BLOCKLIST_URL and BLOCKLIST_FILE env vars are required");
+    console.error("::error::LIST_URL and LIST_FILE env vars are required");
     process.exit(1);
   }
-  const error = await verifyBlocklistWithRetries({ url, filePath });
+  const error = await verifyListWithRetries({ url, filePath });
   if (error) {
     console.error(`::error file=${filePath}::${error}`);
     process.exit(1);

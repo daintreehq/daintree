@@ -223,6 +223,48 @@ jobs:
       - name: Package consumer smoke
         run: node scripts/ci/packages-consumer-smoke.mjs
 
+  # Downloads every community catalog entry a pull request adds or changes and
+  # holds it to its listing (#16778). A pull request that leaves
+  # plugins/catalog.json alone stops after the diff. The checkout is the merge
+  # commit, so its first parent is exactly the base the pull request changes.
+  plugin-catalog:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Find catalog changes
+        id: diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=$(git rev-parse HEAD^1)
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          if git diff --quiet "${base}" HEAD -- plugins/catalog.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "plugins/catalog.json is unchanged."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.diff.outputs.changed == 'true'
+        uses: ./.github/actions/install
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Check added and changed entries
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          BASE_SHA: ${{ steps.diff.outputs.base }}
+        run: npx tsx scripts/ci/check-plugin-catalog.ts --base "${BASE_SHA}"
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -306,7 +348,7 @@ jobs:
   # Insulates against matrix/job name changes breaking required checks.
   ci-ok:
     if: always()
-    needs: [static, lint, test, perf-liveness, host-scripts-macos, packages, build]
+    needs: [static, lint, test, perf-liveness, host-scripts-macos, packages, plugin-catalog, build]
     runs-on: ubuntu-latest
     timeout-minutes: 2
 

@@ -7,11 +7,11 @@ import path from "node:path";
 import os from "node:os";
 
 import {
-  loadLocalBlocklist,
-  fetchRemoteBlocklist,
-  verifyBlocklistOnce,
-  verifyBlocklistWithRetries,
-} from "./verify-plugin-blocklist.mjs";
+  loadLocalList,
+  fetchRemoteList,
+  verifyListOnce,
+  verifyListWithRetries,
+} from "./verify-plugin-list.mjs";
 
 const REMOTE_URL = "https://updates.example.test/plugins/blocklist.json";
 const LIST = {
@@ -34,7 +34,7 @@ let dir;
 let filePath;
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(os.tmpdir(), "verify-blocklist-"));
+  dir = await mkdtemp(path.join(os.tmpdir(), "verify-plugin-list-"));
   filePath = path.join(dir, "blocklist.json");
   await writeFile(filePath, JSON.stringify(LIST, null, 2));
 });
@@ -43,30 +43,30 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-describe("loadLocalBlocklist", () => {
+describe("loadLocalList", () => {
   it("reads the committed list", () => {
-    expect(loadLocalBlocklist(filePath)).toEqual(LIST);
+    expect(loadLocalList(filePath)).toEqual(LIST);
   });
 
   it("throws when the file is missing", () => {
-    expect(() => loadLocalBlocklist(path.join(dir, "missing.json"))).toThrow(/failed to read/);
+    expect(() => loadLocalList(path.join(dir, "missing.json"))).toThrow(/failed to read/);
   });
 
   it("throws on malformed JSON", async () => {
     await writeFile(filePath, "{ entries: ");
-    expect(() => loadLocalBlocklist(filePath)).toThrow(/failed to parse/);
+    expect(() => loadLocalList(filePath)).toThrow(/failed to parse/);
   });
 
   it("throws when entries is not an array", async () => {
     await writeFile(filePath, JSON.stringify({ entries: {} }));
-    expect(() => loadLocalBlocklist(filePath)).toThrow(/"entries" array/);
+    expect(() => loadLocalList(filePath)).toThrow(/"entries" array/);
   });
 });
 
-describe("fetchRemoteBlocklist", () => {
+describe("fetchRemoteList", () => {
   it("returns the parsed body on 200 with a JSON content type", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse());
-    await expect(fetchRemoteBlocklist(REMOTE_URL, fetchImpl)).resolves.toEqual(LIST);
+    await expect(fetchRemoteList(REMOTE_URL, fetchImpl)).resolves.toEqual(LIST);
     expect(fetchImpl).toHaveBeenCalledWith(
       REMOTE_URL,
       expect.objectContaining({ signal: expect.any(AbortSignal) })
@@ -77,12 +77,12 @@ describe("fetchRemoteBlocklist", () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValue(makeResponse({ contentType: "application/json; charset=utf-8" }));
-    await expect(fetchRemoteBlocklist(REMOTE_URL, fetchImpl)).resolves.toEqual(LIST);
+    await expect(fetchRemoteList(REMOTE_URL, fetchImpl)).resolves.toEqual(LIST);
   });
 
   it("treats a 404 as transient", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse({ status: 404, body: "Not Found" }));
-    await expect(fetchRemoteBlocklist(REMOTE_URL, fetchImpl)).rejects.toMatchObject({
+    await expect(fetchRemoteList(REMOTE_URL, fetchImpl)).rejects.toMatchObject({
       message: expect.stringContaining("got 404"),
       transient: true,
     });
@@ -90,7 +90,7 @@ describe("fetchRemoteBlocklist", () => {
 
   it("treats a network error as transient", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error("ECONNRESET"));
-    await expect(fetchRemoteBlocklist(REMOTE_URL, fetchImpl)).rejects.toMatchObject({
+    await expect(fetchRemoteList(REMOTE_URL, fetchImpl)).rejects.toMatchObject({
       message: expect.stringContaining("ECONNRESET"),
       transient: true,
     });
@@ -98,7 +98,7 @@ describe("fetchRemoteBlocklist", () => {
 
   it("rejects a non-JSON content type as permanent", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse({ contentType: "text/plain" }));
-    const err = await fetchRemoteBlocklist(REMOTE_URL, fetchImpl).catch((e) => e);
+    const err = await fetchRemoteList(REMOTE_URL, fetchImpl).catch((e) => e);
     expect(err.message).toContain('got "text/plain"');
     expect(err.transient).toBeUndefined();
   });
@@ -107,20 +107,18 @@ describe("fetchRemoteBlocklist", () => {
     "rejects the look-alike media type %s",
     async (contentType) => {
       const fetchImpl = vi.fn().mockResolvedValue(makeResponse({ contentType }));
-      await expect(fetchRemoteBlocklist(REMOTE_URL, fetchImpl)).rejects.toThrow(
-        /JSON content type/
-      );
+      await expect(fetchRemoteList(REMOTE_URL, fetchImpl)).rejects.toThrow(/JSON content type/);
     }
   );
 
   it("rejects a missing content type", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse({ contentType: null }));
-    await expect(fetchRemoteBlocklist(REMOTE_URL, fetchImpl)).rejects.toThrow(/JSON content type/);
+    await expect(fetchRemoteList(REMOTE_URL, fetchImpl)).rejects.toThrow(/JSON content type/);
   });
 
   it("rejects a body that is not JSON as permanent", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse({ body: "<html>" }));
-    const err = await fetchRemoteBlocklist(REMOTE_URL, fetchImpl).catch((e) => e);
+    const err = await fetchRemoteList(REMOTE_URL, fetchImpl).catch((e) => e);
     expect(err.message).toContain("failed to parse JSON");
     expect(err.transient).toBeUndefined();
   });
@@ -129,7 +127,7 @@ describe("fetchRemoteBlocklist", () => {
     const response = makeResponse();
     response.text = () => Promise.reject(new Error("socket hang up"));
     await expect(
-      fetchRemoteBlocklist(REMOTE_URL, vi.fn().mockResolvedValue(response))
+      fetchRemoteList(REMOTE_URL, vi.fn().mockResolvedValue(response))
     ).rejects.toMatchObject({
       message: expect.stringContaining("socket hang up"),
       transient: true,
@@ -141,7 +139,7 @@ describe("fetchRemoteBlocklist", () => {
       new Promise((_resolve, reject) =>
         signal.addEventListener("abort", () => reject(signal.reason))
       );
-    await expect(fetchRemoteBlocklist(REMOTE_URL, fetchImpl, 20)).rejects.toMatchObject({
+    await expect(fetchRemoteList(REMOTE_URL, fetchImpl, 20)).rejects.toMatchObject({
       message: expect.stringContaining("network error"),
       transient: true,
     });
@@ -158,37 +156,37 @@ describe("fetchRemoteBlocklist", () => {
       signal = init.signal;
       return Promise.resolve(response);
     };
-    await expect(fetchRemoteBlocklist(REMOTE_URL, fetchImpl, 20)).rejects.toMatchObject({
+    await expect(fetchRemoteList(REMOTE_URL, fetchImpl, 20)).rejects.toMatchObject({
       message: expect.stringContaining("failed to read body"),
       transient: true,
     });
   });
 });
 
-describe("verifyBlocklistOnce", () => {
+describe("verifyListOnce", () => {
   it("passes when the served list equals the committed one, whatever its formatting", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse({ body: JSON.stringify(LIST) }));
-    await expect(verifyBlocklistOnce(REMOTE_URL, filePath, fetchImpl)).resolves.toEqual({
+    await expect(verifyListOnce(REMOTE_URL, filePath, fetchImpl)).resolves.toEqual({
       ok: true,
     });
   });
 
   it("reports a content mismatch as transient so a lagging edge gets another look", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse({ body: '{"entries":[]}' }));
-    const result = await verifyBlocklistOnce(REMOTE_URL, filePath, fetchImpl);
+    const result = await verifyListOnce(REMOTE_URL, filePath, fetchImpl);
     expect(result).toMatchObject({ ok: false, transient: true });
     expect(result.error).toContain("does not match");
   });
 
   it("fails permanently when the committed file can't be read", async () => {
     const fetchImpl = vi.fn();
-    const result = await verifyBlocklistOnce(REMOTE_URL, path.join(dir, "missing.json"), fetchImpl);
+    const result = await verifyListOnce(REMOTE_URL, path.join(dir, "missing.json"), fetchImpl);
     expect(result).toMatchObject({ ok: false, transient: false });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 
-describe("verifyBlocklistWithRetries", () => {
+describe("verifyListWithRetries", () => {
   it("retries a 404 with backoff until the edge serves the list", async () => {
     const fetchImpl = vi
       .fn()
@@ -196,7 +194,7 @@ describe("verifyBlocklistWithRetries", () => {
       .mockResolvedValueOnce(makeResponse({ body: '{"entries":[]}' }))
       .mockResolvedValueOnce(makeResponse());
     const sleep = vi.fn().mockResolvedValue(undefined);
-    const error = await verifyBlocklistWithRetries({
+    const error = await verifyListWithRetries({
       url: REMOTE_URL,
       filePath,
       fetch: fetchImpl,
@@ -215,7 +213,7 @@ describe("verifyBlocklistWithRetries", () => {
       .mockResolvedValueOnce(makeResponse({ status: 503, body: "" }))
       .mockResolvedValueOnce(makeResponse({ status: 502, body: "" }));
     const sleep = vi.fn().mockResolvedValue(undefined);
-    const error = await verifyBlocklistWithRetries({
+    const error = await verifyListWithRetries({
       url: REMOTE_URL,
       filePath,
       fetch: fetchImpl,
@@ -231,7 +229,7 @@ describe("verifyBlocklistWithRetries", () => {
   it("stops at a permanent error without retrying", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse({ contentType: "text/html" }));
     const sleep = vi.fn();
-    const error = await verifyBlocklistWithRetries({
+    const error = await verifyListWithRetries({
       url: REMOTE_URL,
       filePath,
       fetch: fetchImpl,
@@ -248,7 +246,7 @@ describe("verifyBlocklistWithRetries", () => {
     async (maxAttempts) => {
       const fetchImpl = vi.fn();
       await expect(
-        verifyBlocklistWithRetries({
+        verifyListWithRetries({
           url: REMOTE_URL,
           filePath,
           fetch: fetchImpl,
@@ -262,7 +260,7 @@ describe("verifyBlocklistWithRetries", () => {
 });
 
 describe("command line", () => {
-  const SCRIPT = fileURLToPath(new URL("./verify-plugin-blocklist.mjs", import.meta.url));
+  const SCRIPT = fileURLToPath(new URL("./verify-plugin-list.mjs", import.meta.url));
 
   function run(env) {
     return new Promise((resolve, reject) => {
@@ -293,13 +291,13 @@ describe("command line", () => {
   it("fails without its environment", async () => {
     const { code, output } = await run({});
     expect(code).toBe(1);
-    expect(output).toContain("BLOCKLIST_URL and BLOCKLIST_FILE");
+    expect(output).toContain("LIST_URL and LIST_FILE");
   });
 
   it("exits 0 when the host serves the committed list", async () => {
     const server = await serve("application/json", JSON.stringify(LIST));
     try {
-      const { code } = await run({ BLOCKLIST_URL: server.url, BLOCKLIST_FILE: filePath });
+      const { code } = await run({ LIST_URL: server.url, LIST_FILE: filePath });
       expect(code).toBe(0);
     } finally {
       await server.close();
@@ -309,7 +307,7 @@ describe("command line", () => {
   it("exits 1 when the host serves something else", async () => {
     const server = await serve("text/plain", "Not Found");
     try {
-      const { code, output } = await run({ BLOCKLIST_URL: server.url, BLOCKLIST_FILE: filePath });
+      const { code, output } = await run({ LIST_URL: server.url, LIST_FILE: filePath });
       expect(code).toBe(1);
       expect(output).toContain("JSON content type");
     } finally {

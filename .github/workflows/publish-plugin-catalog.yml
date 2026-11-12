@@ -1,0 +1,99 @@
+# Publishes `plugins/catalog.json`, the community plugin catalog, to
+# https://updates.daintree.org/plugins/catalog.json whenever a change to it
+# lands on develop (#16778). Daintree reads that URL to browse, install and
+# update community plugins (`PluginCatalogService`). It is the blocklist's
+# publish path, the same bucket, credentials, upload and edge check, run as its
+# own workflow so a catalog problem can never hold up the kill-switch.
+#
+# Before uploading it downloads every entry's asset again, not just the ones
+# the last pull request changed, so a direct push, a dispatch or a queued run
+# publishing a newer tip can't ship an entry nobody checked. An asset that has
+# since disappeared fails the publish until its entry is removed.
+#
+# Every run publishes the develop tip, not the commit that triggered it, and
+# runs alone, so a late, queued or re-run job can never roll the live catalog
+# back to an older commit. To republish by hand:
+#   gh workflow run publish-plugin-catalog.yml --ref develop
+
+name: Publish plugin catalog
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - plugins/catalog.json
+      - .github/workflows/publish-plugin-catalog.yml
+      - scripts/ci/check-plugin-catalog.ts
+      - scripts/ci/verify-plugin-list.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Keyed by ref so a refused dispatch from another branch can't replace a
+# develop run waiting in the queue.
+concurrency:
+  group: publish-plugin-catalog-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  LIST_FILE: plugins/catalog.json
+  LIST_KEY: plugins/catalog.json
+  LIST_URL: https://updates.daintree.org/plugins/catalog.json
+
+jobs:
+  publish:
+    # A dispatch from any other branch, or a fork's develop, must not publish
+    # a catalog that was never merged here.
+    if: github.repository == 'daintreehq/daintree' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the develop tip
+        uses: actions/checkout@v6
+        with:
+          ref: develop
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record what is being published
+        shell: bash
+        run: |
+          echo "Publishing ${LIST_FILE} from develop at $(git rev-parse HEAD)"
+          sha256sum "${LIST_FILE}"
+
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+          install_args: --ignore-scripts
+
+      # The JSON Schema and the production parser, with nothing the parser
+      # would silently drop or rewrite.
+      - name: Validate the catalog
+        shell: bash
+        run: npm test -- electron/services/plugin/__tests__/publishedPluginCatalog.test.ts
+
+      - name: Check every entry's asset
+        shell: bash
+        run: npx tsx scripts/ci/check-plugin-catalog.ts --catalog "${LIST_FILE}"
+
+      - name: Upload to R2
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.DAINTREE_R2_BUCKET }}
+        run: |
+          aws s3 cp "${LIST_FILE}" "s3://${R2_BUCKET}/${LIST_KEY}" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --no-progress \
+            --content-type application/json \
+            --cache-control "no-cache, no-store, must-revalidate"
+
+      - name: Verify the catalog at the CDN edge
+        shell: bash
+        run: node scripts/ci/verify-plugin-list.mjs
