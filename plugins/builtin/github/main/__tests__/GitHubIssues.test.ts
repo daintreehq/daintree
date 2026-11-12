@@ -357,7 +357,21 @@ describe("listIssues — mid-flight count-buster guard", () => {
     // …but it must not be committed anywhere shared: the cache write would pin
     // a pre-change page for 60s, and its total is older than the count main
     // already holds (#16866).
-    expect(issueListCache.get("issue:testowner/testrepo:open::created:")).toBeUndefined();
+    expect(
+      issueListCache.get(
+        buildListCacheKey({
+          type: "issue",
+          owner: "testowner",
+          repo: "testrepo",
+          state: "open",
+          search: "",
+          sortOrder: "created",
+          direction: "desc",
+          perPage: DEFAULT_LIST_PER_PAGE,
+          cursor: "",
+        })
+      )
+    ).toBeUndefined();
     expect(repoStatsCache.get("testowner/testrepo")?.issueCount).toBe(6);
   });
 

@@ -489,6 +489,15 @@ async function settleRestCounts(
     if (verified) {
       observeRepoCount(cacheKey, "issue", verified.issueCount, verified.requestedAt);
       observeRepoCount(cacheKey, "pr", verified.prCount, verified.requestedAt);
+      // A confirmed change disproves the page snapshot's counts, and a pair
+      // with no prior baseline never reached the REST count-buster that would
+      // otherwise have dropped it; a replay would pair them with old pages.
+      if (
+        (state?.issue !== undefined && state.issue.value !== verified.issueCount) ||
+        (state?.pr !== undefined && state.pr.value !== verified.prCount)
+      ) {
+        repoStatsAndPageSnapshotCache.invalidate(cacheKey);
+      }
     } else {
       confirmed = false;
     }
@@ -738,10 +747,18 @@ export async function getRepoStatsAndPageForContext(
       //
       // With no REST counts either (a list read disproved and dropped them),
       // the state's counts are the cached count instead.
+      //
+      // Not while the state holds only one count: the REST pair's value for
+      // the other is unconfirmed (a confirmation may still be in flight), so
+      // the poll reads again and joins it instead.
+      const countState = getRepoCountState(cacheKey);
+      const partialState =
+        countState !== undefined &&
+        (countState.issue === undefined) !== (countState.pr === undefined);
       const freshStats: RepoStats | undefined =
         probe.status !== "unchanged" || snapshot
           ? undefined
-          : restCounts
+          : restCounts && !partialState
             ? withRepoCountState(cacheKey, {
                 issueCount: restCounts.combinedCount - restCounts.prCount,
                 prCount: restCounts.prCount,

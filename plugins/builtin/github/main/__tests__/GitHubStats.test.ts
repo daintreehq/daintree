@@ -705,7 +705,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBe(snapshotBefore);
     });
 
-    it("serves REST-fresher counts with the snapshot pages on an unchanged probe", async () => {
+    it("serves confirmed REST-fresher counts on an unchanged probe, without the snapshot pages they disproved", async () => {
       // Explicit refresh writes the snapshot (5 issues / 3 PRs)…
       routeGraphQL({ stats: statsResponse(5, 3), openCounts: openCountsResponse(10, 2) });
       routeFetch({
@@ -726,8 +726,11 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
 
       expect(result.stats?.issueCount).toBe(10);
       expect(result.stats?.prCount).toBe(2);
-      expect(result.issues).not.toBeNull();
-      expect(result.prs).not.toBeNull();
+      // The confirmed change dropped the snapshot whose pages it disproved,
+      // as the REST count-buster would had the pair had a prior baseline.
+      expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBeUndefined();
+      expect(result.issues).toBeNull();
+      expect(result.prs).toBeNull();
     });
 
     it("re-fetches REST counts after clearPRCaches drops the baselines", async () => {
@@ -1278,6 +1281,35 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       expect(result.stats).toBeNull();
       expect(restCountsCache.get(CACHE_KEY)).toBeUndefined();
       expect(repoEventsETagCache.get(CACHE_KEY)).toBeUndefined();
+    });
+
+    it("never replays an unconfirmed pair while its confirmation is in flight", async () => {
+      expect(updateRepoStatsCount(CACHE_KEY, "pr", 0)).toBe(true);
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' })],
+        repo: [repoOk(1)],
+        pulls: [pullsOk(0)],
+      });
+      let confirm!: (value: unknown) => void;
+      mockClient.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            confirm = resolve;
+          })
+      );
+
+      const first = getRepoStatsAndPage("/test", false);
+      await vi.waitFor(() => expect(openCountsQueryCount()).toBe(1));
+      // Another view polls inside the backoff while GraphQL is still out.
+      const second = getRepoStatsAndPage("/test", false);
+      await vi.waitFor(() => expect(repoCallCount()).toBe(2));
+      confirm(openCountsResponse(0, 0));
+      const [a, b] = await Promise.all([first, second]);
+
+      expect(a.stats).toMatchObject({ issueCount: 0, prCount: 0 });
+      expect(b.stats).toMatchObject({ issueCount: 0, prCount: 0 });
+      // The second poll joined the one confirmation rather than replaying.
+      expect(openCountsQueryCount()).toBe(1);
     });
 
     it("orders a REST pair by when it was sent, so a list sent while it was in flight outranks it", async () => {
