@@ -663,34 +663,33 @@ export async function listPullRequests(
           totalCount,
         };
 
-        // Mid-flight count-buster guard — see `getRepoListEpoch`. The stats
-        // updates sit behind the same guard: a response too old to repopulate
-        // the list cache is also too old to roll `repoStatsCache` (or the
-        // disk stats) back to its pre-change total under a fresh
-        // `lastUpdated`.
+        // Mid-flight count-buster guard — see `getRepoListEpoch`.
         if (getRepoListEpoch("pr", context.owner, context.repo) === epochAtStart) {
           prListCache.set(cacheKey, result);
+        }
 
-          if (
-            (!options.state || options.state === "open") &&
-            !options.cursor &&
-            totalCount !== undefined
-          ) {
-            const statsCacheKey = `${context.owner}/${context.repo}`;
-            const taken = updateRepoStatsCount(statsCacheKey, "pr", totalCount, requestedAt);
+        // The open total doesn't wait on the epoch: it is ordered by when this
+        // read was sent, so it can't roll back a count read after it, and the
+        // REST pair that bumped the epoch may itself be lagging (#16866).
+        if (
+          (!options.state || options.state === "open") &&
+          !options.cursor &&
+          totalCount !== undefined
+        ) {
+          const statsCacheKey = `${context.owner}/${context.repo}`;
+          const taken = updateRepoStatsCount(statsCacheKey, "pr", totalCount, requestedAt);
 
-            const memoryStats = repoStatsCache.get(statsCacheKey);
-            if (taken && memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
-              const persistentCache = GitHubStatsCache.getInstance();
-              persistentCache.set(
-                statsCacheKey,
-                {
-                  issueCount: memoryStats.issueCount,
-                  prCount: memoryStats.prCount,
-                },
-                options.cwd
-              );
-            }
+          const memoryStats = repoStatsCache.get(statsCacheKey);
+          if (taken && memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
+            const persistentCache = GitHubStatsCache.getInstance();
+            persistentCache.set(
+              statsCacheKey,
+              {
+                issueCount: memoryStats.issueCount,
+                prCount: memoryStats.prCount,
+              },
+              options.cwd
+            );
           }
         }
       }

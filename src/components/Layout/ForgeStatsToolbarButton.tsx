@@ -737,7 +737,8 @@ export const ForgeStatsToolbarButton = memo(
 
         // Hover prefetch primes the list cache silently. The count badge stays
         // fresh via the 30s background poll and the click-time refresh —
-        // refreshing stats here would flicker the toolbar status indicator.
+        // refreshing stats on every hover would flicker the toolbar status
+        // indicator, so only a prefetch that moved the count refreshes (below).
         inFlightRef.current = true;
         const startedAt = Date.now();
         // Cache-first: a warm main-process list cache (60s TTL) serves this
@@ -788,6 +789,18 @@ export const ForgeStatsToolbarButton = memo(
               // so the count fingerprint arms the count-as-cache-buster.
               ...(result.totalCount != null ? { countAtWrite: result.totalCount } : {}),
             });
+            // A prefetch that read the forge had its total taken into main's
+            // counts (#16866), but the dropdown then opens on these rows
+            // through a cached read, which reports no count. When the total
+            // moved, refresh now so the badge doesn't wait for the next poll.
+            const known = type === "issue" ? issueCountRef.current : prCountRef.current;
+            if (
+              result.source === "network" &&
+              result.totalCount != null &&
+              result.totalCount !== known
+            ) {
+              void refreshStats();
+            }
           })
           .catch(() => {
             // Swallow prefetch errors — the click path will retry, surface
@@ -798,7 +811,7 @@ export const ForgeStatsToolbarButton = memo(
             inFlightRef.current = false;
           });
       },
-      [currentProject, isTokenError, rateLimitActive]
+      [currentProject, isTokenError, rateLimitActive, refreshStats]
     );
 
     const handlePrefetchPointerEnter = useCallback(

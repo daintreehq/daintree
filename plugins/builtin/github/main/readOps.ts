@@ -56,6 +56,7 @@ import {
   type PRRequiredStatusEntry,
 } from "./GitHubCaches.js";
 import { probeOpenPRList } from "./GitHubPRDiscovery.js";
+import { isValidOpenCount } from "./repoCountState.js";
 import { deriveRequiredCIStatus, mapRollupContextToCheckRun } from "./prRequiredCIStatus.js";
 import type { RollupContextNode } from "./prRequiredCIStatus.js";
 import { getIssuesByNumbersForContext } from "./GitHubIssues.js";
@@ -358,20 +359,21 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
       items: nodes.filter(Boolean).map(toForgeIssue),
       nextCursor: issues.pageInfo?.endCursor ?? null,
       hasMore: issues.pageInfo?.hasNextPage ?? false,
-      ...(typeof issues.totalCount === "number" ? { totalCount: issues.totalCount } : {}),
+      ...(isValidOpenCount(issues.totalCount) ? { totalCount: issues.totalCount } : {}),
     };
 
     // Skip the shared-cache write when a newer bypass call has superseded us
     // or the count buster invalidated this repo's issue pages mid-flight, so
-    // a slow stale fetch can't clobber the fresher committed result. The
-    // stats-count update sits behind the same epoch guard: a response too old
-    // to repopulate the list cache is also too old to roll `repoStatsCache`
-    // back to its pre-change total under a fresh `lastUpdated`.
-    if (isCurrent() && getRepoListEpoch("issue", repo.owner, repo.repo) === epochAtStart) {
+    // a slow stale fetch can't clobber the fresher committed result.
+    const current = isCurrent();
+    if (current && getRepoListEpoch("issue", repo.owner, repo.repo) === epochAtStart) {
       forgeIssueListCache.set(cacheKey, page);
-      if (state === "open" && !cursor && typeof issues.totalCount === "number") {
-        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", issues.totalCount, requestedAt);
-      }
+    }
+    // The open total doesn't wait on the epoch: it is ordered by when this
+    // read was sent, so it can't roll back a count read after it, and the REST
+    // pair that bumped the epoch may itself be lagging behind it (#16866).
+    if (current && state === "open" && !cursor && page.totalCount !== undefined) {
+      updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", page.totalCount, requestedAt);
     }
     return { ...page, source: "network" };
   });
@@ -623,14 +625,16 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
       items: await enrichPRPageWithRequiredStatus(repo, nodes.filter(Boolean).map(toForgePR)),
       nextCursor: prs.pageInfo?.endCursor ?? null,
       hasMore: prs.pageInfo?.hasNextPage ?? false,
-      ...(typeof prs.totalCount === "number" ? { totalCount: prs.totalCount } : {}),
+      ...(isValidOpenCount(prs.totalCount) ? { totalCount: prs.totalCount } : {}),
     };
 
-    if (isCurrent() && getRepoListEpoch("pr", repo.owner, repo.repo) === epochAtStart) {
+    // Same guards as the issues list above.
+    const current = isCurrent();
+    if (current && getRepoListEpoch("pr", repo.owner, repo.repo) === epochAtStart) {
       forgePRListCache.set(cacheKey, page);
-      if (state === "open" && !cursor && typeof prs.totalCount === "number") {
-        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", prs.totalCount, requestedAt);
-      }
+    }
+    if (current && state === "open" && !cursor && page.totalCount !== undefined) {
+      updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", page.totalCount, requestedAt);
     }
     return { ...page, source: "network" };
   });

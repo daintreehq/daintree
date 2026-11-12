@@ -853,6 +853,7 @@ describe("GitHubResourceList SWR behavior", () => {
         return networkPage([], 0);
       });
       const onCountUpdate = vi.fn();
+      const renderedAt = Date.now();
 
       render(
         <GitHubResourceList type="issue" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
@@ -860,8 +861,9 @@ describe("GitHubResourceList SWR behavior", () => {
 
       await waitFor(() => expect(onCountUpdate).toHaveBeenCalledTimes(1));
       const observedAt = onCountUpdate.mock.calls[0]?.[2] as number;
-      expect(sentAt).toBeGreaterThan(0);
+      expect(observedAt).toBeGreaterThanOrEqual(renderedAt);
       expect(observedAt).toBeLessThanOrEqual(sentAt);
+      expect(Date.now() - observedAt).toBeGreaterThanOrEqual(25);
     });
 
     it("leaves the badge alone when the read is rejected", async () => {

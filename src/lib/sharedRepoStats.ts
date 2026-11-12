@@ -22,7 +22,9 @@
  * Each count is then taken from whichever reading observed it most recently,
  * not from the newest reading as a whole (#16866): a host repeats a count it
  * still believes without re-dating it, so its next poll, still lagging a close
- * another host's list already saw, doesn't put the closed item back.
+ * another host's list already saw, doesn't put the closed item back. That
+ * outranking lasts a bounded while, so a host that missed a change can't
+ * freeze another host's older count either.
  *
  * Every storage access is best-effort — a blocked or full store reads as empty.
  */
@@ -146,25 +148,51 @@ function newer(a: SharedRepoStats, b: SharedRepoStats): boolean {
   return a.receivedAt !== b.receivedAt ? a.receivedAt > b.receivedAt : a.hostId > b.hostId;
 }
 
-function observedLater(
-  a: SharedRepoStats,
-  b: SharedRepoStats,
-  observedAt: "issueObservedAt" | "prObservedAt"
-): boolean {
-  return a[observedAt] !== b[observedAt] ? a[observedAt] > b[observedAt] : newer(a, b);
+// How long a count one reading observed can outrank the newest reading's own
+// count of that kind. Long enough to outlast the REST lag a host's repeat of
+// an older read comes from; short enough that a host which never saw a close
+// and a reopen can't freeze a count another host read once (#16866).
+const COUNT_HOLD_MS = 10 * 60 * 1000;
+
+type ObservedAtField = "issueObservedAt" | "prObservedAt";
+
+/**
+ * The reading whose count of one kind stands: the newest reading's, unless
+ * another observed that count later and recently enough to hold. A reading
+ * that couldn't count the kind (`null`) has nothing to offer for it.
+ */
+function pickCount(
+  records: SharedRepoStats[],
+  newest: SharedRepoStats,
+  count: "issueCount" | "prCount",
+  observedAt: ObservedAtField,
+  now: number
+): SharedRepoStats | null {
+  let best = newest[count] === null ? null : newest;
+  for (const record of records) {
+    if (record === newest || record[count] === null) continue;
+    if (record[observedAt] < now - COUNT_HOLD_MS) continue;
+    if (
+      best === null ||
+      (record[observedAt] !== best[observedAt]
+        ? record[observedAt] > best[observedAt]
+        : newer(record, best))
+    ) {
+      best = record;
+    }
+  }
+  return best;
 }
 
 /**
  * The origin's record: the newest reading any host made of it, as this Shell
- * received them, with each count taken from the reading that observed it
- * most recently.
+ * received them, with each count taken from the reading that observed it most
+ * recently while that observation holds (see {@link COUNT_HOLD_MS}).
  */
 export function readSharedRepoStats(repoKey: string): SharedRepoStats | null {
   const scope = recordScope(repoKey);
+  const records: SharedRepoStats[] = [];
   let newest: SharedRepoStats | null = null;
-  // A reading that couldn't count a kind (`null`) has nothing to offer for it.
-  let issue: SharedRepoStats | null = null;
-  let pr: SharedRepoStats | null = null;
   try {
     const storage = window.localStorage;
     for (let i = 0; i < storage.length; i++) {
@@ -172,21 +200,16 @@ export function readSharedRepoStats(repoKey: string): SharedRepoStats | null {
       if (key === null || !key.startsWith(scope)) continue;
       const record = parseRecord(readJson(key));
       if (!record) continue;
+      records.push(record);
       if (newest === null || newer(record, newest)) newest = record;
-      if (
-        record.issueCount !== null &&
-        (issue === null || observedLater(record, issue, "issueObservedAt"))
-      ) {
-        issue = record;
-      }
-      if (record.prCount !== null && (pr === null || observedLater(record, pr, "prObservedAt"))) {
-        pr = record;
-      }
     }
   } catch {
     return null;
   }
   if (newest === null) return null;
+  const now = Date.now();
+  const issue = pickCount(records, newest, "issueCount", "issueObservedAt", now);
+  const pr = pickCount(records, newest, "prCount", "prObservedAt", now);
   return {
     ...newest,
     ...(issue ? { issueCount: issue.issueCount, issueObservedAt: issue.issueObservedAt } : {}),

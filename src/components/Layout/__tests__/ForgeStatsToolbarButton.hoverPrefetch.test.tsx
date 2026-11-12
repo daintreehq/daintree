@@ -249,6 +249,34 @@ describe("ForgeStatsToolbarButton hover prefetch", () => {
     expect(mockListIssues).toHaveBeenCalledTimes(1);
   });
 
+  it("refreshes the badge once a prefetch read a moved count from the forge (#16866)", async () => {
+    // The badge reads 3 open issues; the prefetch reads none from GitHub.
+    mockListIssues.mockResolvedValue({ ...makeIssuePage([]), totalCount: 0, source: "network" });
+    const { container } = renderToolbar();
+
+    await act(async () => {
+      pointerEnter(getIssuesButton(container));
+    });
+    await settle();
+
+    expect(refreshStatsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["matches the badge", { totalCount: 3, source: "network" as const }],
+    ["came from the provider's cache", { totalCount: 0, source: "cache" as const }],
+  ])("stays silent when the prefetch's total %s", async (_label, page) => {
+    mockListIssues.mockResolvedValue({ ...makeIssuePage([]), ...page });
+    const { container } = renderToolbar();
+
+    await act(async () => {
+      pointerEnter(getIssuesButton(container));
+    });
+    await settle();
+
+    expect(refreshStatsMock).not.toHaveBeenCalled();
+  });
+
   it("writes prefetch result to the default open/created cache slot", async () => {
     mockListIssues.mockResolvedValue({
       items: [makeIssue(11), makeIssue(12)],

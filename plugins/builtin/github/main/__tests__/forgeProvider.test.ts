@@ -42,7 +42,7 @@ vi.mock("../GitHubErrors.js", () => ({
 }));
 
 import { githubForgeProvider } from "../forgeProvider.js";
-import { buildListCacheKey } from "../GitHubPRs.js";
+import { buildListCacheKey, updateRepoStatsCount } from "../GitHubPRs.js";
 import {
   _resetForgeQueryCachesForTests,
   clearGitHubCaches,
@@ -50,6 +50,7 @@ import {
   forgeIssueListCache,
   forgePRListCache,
   forgeQueryCache,
+  invalidateRepoListCachesForCountChange,
   issueTooltipCache,
   prRequiredStatusCache,
   prTooltipCache,
@@ -1212,32 +1213,62 @@ describe("list provenance and the open-count write-back (#16866)", () => {
   });
 
   it.each([
-    ["issue", () => githubForgeProvider.listIssues(repo, { state: "open" }), issueListResponse(0)],
-    ["pr", () => githubForgeProvider.listPRs(repo, { state: "open" }), prListResponse(0)],
+    ["issue", () => githubForgeProvider.listIssues(repo, { state: "open" }), issueListResponse(7)],
+    ["pr", () => githubForgeProvider.listPRs(repo, { state: "open" }), prListResponse(4)],
   ] as const)(
     "takes an open first page's %s total as the open count",
     async (kind, list, response) => {
       mockGraphQLClient.mockResolvedValue(response);
       await list();
 
-      expect(repoCountStateCache.get("owner/repo")?.[kind]?.value).toBe(0);
+      const total = kind === "issue" ? 7 : 4;
+      expect(repoCountStateCache.get("owner/repo")?.[kind]?.value).toBe(total);
       expect(repoStatsCache.get("owner/repo")?.[kind === "issue" ? "issueCount" : "prCount"]).toBe(
-        0
+        total
       );
     }
   );
+
+  it("takes the total even when a REST poll busted the list pages mid-flight", async () => {
+    mockGraphQLClient.mockImplementation(async () => {
+      // The REST pair that bumped the epoch may itself be lagging; the page's
+      // total is ordered by when it was sent instead.
+      invalidateRepoListCachesForCountChange("owner", "repo", { issues: true, prs: false });
+      return issueListResponse(0);
+    });
+
+    await githubForgeProvider.listIssues(repo, { state: "open" });
+
+    expect(repoCountStateCache.get("owner/repo")?.issue?.value).toBe(0);
+    // The page itself predates the bust, so it isn't cached.
+    expect(forgeIssueListCache.get(defaultListKey("issue"))).toBeUndefined();
+  });
+
+  it("leaves an invalid total off the page and out of the count", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse(-1));
+
+    const page = await githubForgeProvider.listIssues(repo, { state: "open" });
+
+    expect(page.totalCount).toBeUndefined();
+    expect(repoCountStateCache.get("owner/repo")).toBeUndefined();
+  });
 
   it.each([
     ["a closed list", { state: "closed" as const }],
     ["a later page", { state: "open" as const, cursor: "next" }],
   ])("leaves the open count alone for %s", async (_label, opts) => {
+    updateRepoStatsCount("owner/repo", "issue", 3, 1_000);
+    updateRepoStatsCount("owner/repo", "pr", 2, 1_000);
     mockGraphQLClient.mockResolvedValue(issueListResponse(7));
     await githubForgeProvider.listIssues(repo, opts);
     mockGraphQLClient.mockResolvedValue(prListResponse(7));
     await githubForgeProvider.listPRs(repo, opts);
 
-    expect(repoCountStateCache.get("owner/repo")).toBeUndefined();
-    expect(repoStatsCache.get("owner/repo")).toBeUndefined();
+    expect(repoCountStateCache.get("owner/repo")).toEqual({
+      issue: { value: 3, observedAt: 1_000 },
+      pr: { value: 2, observedAt: 1_000 },
+    });
+    expect(repoStatsCache.get("owner/repo")).toMatchObject({ issueCount: 3, prCount: 2 });
   });
 
   it.each([

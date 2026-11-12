@@ -286,6 +286,7 @@ async function fetchRestCountsImpl(
   if (prior?.repoEtag) repoHeaders["If-None-Match"] = prior.repoEtag;
   const prHeaders = { ...baseHeaders };
   if (prior?.prEtag) prHeaders["If-None-Match"] = prior.prEtag;
+  const requestedAt = Date.now();
 
   try {
     const [repoRes, prRes] = await Promise.all([
@@ -376,15 +377,15 @@ async function fetchRestCountsImpl(
       });
     }
 
-    // The refreshed-at stamps match `lastUpdated` here even on a 304 replay:
-    // a 304 is a direct GitHub confirmation that the count endpoint's content
-    // is unchanged, so the counts were genuinely re-verified now.
+    // The refreshed-at stamps are when the pair was requested, not when it
+    // landed: the count state orders reads by send time, so a list sent while
+    // this read was in flight still outranks it (#16866).
     return {
       issueCount,
       prCount,
       lastUpdated,
-      issueCountRefreshedAt: lastUpdated,
-      prCountRefreshedAt: lastUpdated,
+      issueCountRefreshedAt: requestedAt,
+      prCountRefreshedAt: requestedAt,
     };
   } catch {
     return null;
@@ -450,10 +451,10 @@ async function fetchOpenCountsImpl(
  * Settle a REST count pair against the counts main already serves (#16866).
  * The pair lags: `open_issues_count` can still include an issue or PR closed
  * moments ago, and subtracting a `/pulls` total that has already dropped turns
- * a closed PR into a phantom open issue. So the pair seeds a kind the state
- * doesn't hold yet and re-confirms one it agrees with, but a pair that
- * disagrees moves nothing until the GraphQL totals the dropdown lists read
- * confirm the change. `confirmed` is false when that read failed: the state's
+ * a closed PR into a phantom open issue. So the pair seeds an empty state and
+ * re-confirms counts it agrees with, but a pair that disagrees, or that only
+ * one held kind can vouch for, moves nothing until the GraphQL totals the
+ * dropdown lists read confirm it. `confirmed` is false when that read failed: the state's
  * counts are served unchanged, and the caller leaves the events ETag
  * uncommitted so the next probe looks again.
  */
@@ -462,18 +463,27 @@ async function settleRestCounts(
   cacheKey: string,
   rest: RepoStats
 ): Promise<{ stats: RepoStats; confirmed: boolean }> {
-  const readAt = rest.lastUpdated ?? Date.now();
   const state = getRepoCountState(cacheKey);
   const issueAgrees = state?.issue === undefined || state.issue.value === rest.issueCount;
   const prAgrees = state?.pr === undefined || state.pr.value === rest.prCount;
-  // Agreement keeps the count's stamp: it dates when the value was read, and
-  // a lagging pair that merely repeats it mustn't look newer than another
-  // host's read of the change (#15546). It does keep the state alive.
-  if (state?.issue === undefined) observeRepoCount(cacheKey, "issue", rest.issueCount, readAt);
-  if (state?.pr === undefined) observeRepoCount(cacheKey, "pr", rest.prCount, readAt);
-  if (state && issueAgrees && prAgrees) touchRepoCountState(cacheKey);
+  // With only one kind held, agreeing on it says nothing about the other: the
+  // issue count is a subtraction, and a PR list that already saw a close
+  // agrees with a `/pulls` total while `open_issues_count` still lags.
+  const partial = state !== undefined && (state.issue === undefined) !== (state.pr === undefined);
   let confirmed = true;
-  if (!issueAgrees || !prAgrees) {
+  if (issueAgrees && prAgrees && !partial) {
+    // An empty state takes the pair as its first reading. Agreement keeps
+    // each count's stamp: it dates when the value was read, and a lagging
+    // pair that merely repeats it mustn't look newer than another host's read
+    // of the change (#15546). It does keep the state alive.
+    if (state) {
+      touchRepoCountState(cacheKey);
+    } else {
+      const readAt = rest.issueCountRefreshedAt ?? rest.lastUpdated ?? Date.now();
+      observeRepoCount(cacheKey, "issue", rest.issueCount, readAt);
+      observeRepoCount(cacheKey, "pr", rest.prCount, rest.prCountRefreshedAt ?? readAt);
+    }
+  } else {
     const verified = await fetchOpenCounts(context, cacheKey);
     if (verified) {
       observeRepoCount(cacheKey, "issue", verified.issueCount, verified.requestedAt);
@@ -882,22 +892,30 @@ export async function getRepoStatsAndPageForContext(
     const parsedIssues = (issuesData?.nodes ?? []).filter(Boolean).map(parseIssueNode);
     const parsedPRs = (prsData?.nodes ?? []).filter(Boolean).map(parsePRNode);
 
-    GitHubFirstPageCache.getInstance().set(
-      cacheKey,
-      {
-        issues: {
-          items: parsedIssues,
-          endCursor: issuesData?.pageInfo?.endCursor ?? null,
-          hasNextPage: issuesData?.pageInfo?.hasNextPage ?? false,
+    // A first page whose total a newer read has already disproved (a list
+    // sent while this query was in flight) is older than what the user has
+    // seen, so it isn't cached, persisted or handed out to prime a view.
+    const issuePageCurrent = stats.issueCount === issueCount;
+    const prPageCurrent = stats.prCount === prCount;
+
+    if (issuePageCurrent && prPageCurrent) {
+      GitHubFirstPageCache.getInstance().set(
+        cacheKey,
+        {
+          issues: {
+            items: parsedIssues,
+            endCursor: issuesData?.pageInfo?.endCursor ?? null,
+            hasNextPage: issuesData?.pageInfo?.hasNextPage ?? false,
+          },
+          prs: {
+            items: parsedPRs,
+            endCursor: prsData?.pageInfo?.endCursor ?? null,
+            hasNextPage: prsData?.pageInfo?.hasNextPage ?? false,
+          },
         },
-        prs: {
-          items: parsedPRs,
-          endCursor: prsData?.pageInfo?.endCursor ?? null,
-          hasNextPage: prsData?.pageInfo?.hasNextPage ?? false,
-        },
-      },
-      projectPath
-    );
+        projectPath
+      );
+    }
 
     const issuesPage = {
       items: parsedIssues,
@@ -911,14 +929,11 @@ export async function getRepoStatsAndPageForContext(
       hasNextPage: prsData?.pageInfo?.hasNextPage ?? false,
       totalCount: prCount,
     };
-    // A page whose total a newer read has already disproved is as stale as
-    // one the count-buster dropped mid-flight.
     const issueEpochUnchanged =
       getRepoListEpoch("issue", context.owner, context.repo) === issueEpochAtStart &&
-      stats.issueCount === issueCount;
+      issuePageCurrent;
     const prEpochUnchanged =
-      getRepoListEpoch("pr", context.owner, context.repo) === prEpochAtStart &&
-      stats.prCount === prCount;
+      getRepoListEpoch("pr", context.owner, context.repo) === prEpochAtStart && prPageCurrent;
     if (issueEpochUnchanged) {
       issueListCache.set(issuesListCacheKey, {
         items: issuesPage.items,
@@ -948,8 +963,8 @@ export async function getRepoStatsAndPageForContext(
 
     return {
       stats,
-      issues: issuesPage,
-      prs: prsPage,
+      issues: issuePageCurrent ? issuesPage : null,
+      prs: prPageCurrent ? prsPage : null,
       source: "network",
       nextPollIntervalMs: eventsProbeDelayMs(cacheKey),
     };

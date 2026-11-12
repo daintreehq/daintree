@@ -1225,6 +1225,62 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       expect(openCountsQueryCount()).toBe(1);
       // The change the probe saw stays unsettled, so its ETag isn't committed.
       expect(repoEventsETagCache.get(CACHE_KEY)).toBe('"e1"');
+
+      // So the next probe asks against the old ETag, sees the change again,
+      // and this time GraphQL settles it.
+      expireMemoryCaches();
+      expireBackoffWindow();
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e3"' })],
+        repo: [restResponse(304)],
+        pulls: [restResponse(304)],
+      });
+      routeGraphQL({ openCounts: openCountsResponse(0, 2) });
+      const retried = await getRepoStatsAndPage("/test", false);
+
+      expect(callsTo("/events").at(-1)?.[1].headers["If-None-Match"]).toBe('"e1"');
+      expect(retried.stats).toMatchObject({ issueCount: 0, prCount: 2 });
+      expect(openCountsQueryCount()).toBe(2);
+      expect(repoEventsETagCache.get(CACHE_KEY)).toBe('"e3"');
+    });
+
+    it("confirms a pair that only one held count can vouch for", async () => {
+      // A PR list saw the sole PR close before any poll filled the state.
+      expect(updateRepoStatsCount(CACHE_KEY, "pr", 0)).toBe(true);
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' })],
+        repo: [repoOk(1)],
+        pulls: [pullsOk(0)],
+      });
+      routeGraphQL({ openCounts: openCountsResponse(0, 0) });
+
+      // REST agrees on PRs, but open_issues_count still counts the closed PR.
+      const result = await getRepoStatsAndPage("/test", false);
+
+      expect(result.stats).toMatchObject({ issueCount: 0, prCount: 0 });
+      expect(openCountsQueryCount()).toBe(1);
+    });
+
+    it("orders a REST pair by when it was sent, so a list sent while it was in flight outranks it", async () => {
+      let sentAt = 0;
+      mockFetch.mockImplementation(async (input: unknown) => {
+        const url = String(input);
+        if (url.includes("/events")) return eventsResponse(200, { etag: '"e1"' });
+        sentAt ||= Date.now();
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return url.includes("/pulls") ? pullsOk(2) : repoOk(3);
+      });
+
+      const result = await getRepoStatsAndPage("/test", false);
+      expect(result.stats?.issueCountRefreshedAt).toBeLessThanOrEqual(sentAt);
+      expect(result.stats!.lastUpdated! - sentAt).toBeGreaterThanOrEqual(20);
+
+      // A list sent after the pair went out, answered after it landed.
+      expect(updateRepoStatsCount(CACHE_KEY, "issue", 0, sentAt + 5)).toBe(true);
+      expireMemoryCaches();
+      const next = await getRepoStatsAndPage("/test", false);
+
+      expect(next.stats?.issueCount).toBe(0);
     });
 
     it("refuses a list total read before the count already held", async () => {
@@ -1252,11 +1308,16 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
         updateRepoStatsCount(CACHE_KEY, "issue", 0, Date.now() + 1);
         return statsResponse(1, 2);
       });
+      mockFirstPageCache.set.mockClear();
 
       const result = await getRepoStatsAndPage("/test", true);
 
       expect(result.stats).toMatchObject({ issueCount: 0, prCount: 2 });
-      // Its first issue page predates the list's total, so it isn't kept.
+      // Its first issue page predates the list's total, so it isn't kept,
+      // persisted or handed out to prime a view.
+      expect(result.issues).toBeNull();
+      expect(result.prs).not.toBeNull();
+      expect(mockFirstPageCache.set).not.toHaveBeenCalled();
       expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBeUndefined();
       expect(issueListCache.get("issue:testowner/testrepo:open::created:desc:20:")).toBeUndefined();
       // The PR total agreed, so that page is current and kept.

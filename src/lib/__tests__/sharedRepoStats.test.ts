@@ -60,6 +60,10 @@ describe("sharedRepoStats", () => {
   });
 
   describe("per-count pick (#16866)", () => {
+    beforeEach(() => {
+      vi.spyOn(Date, "now").mockReturnValue(NOW + 30);
+    });
+
     it("takes each count from the reading that observed it most recently", () => {
       // local's dropdown read the issue count (0) after the close, at NOW + 5.
       publishSharedRepoStats(REPO, { ...reading("local", 1_000, 0), prCount: 2 }, NOW + 5);
@@ -75,6 +79,21 @@ describe("sharedRepoStats", () => {
       expect(record).toMatchObject({ hostId: "studio", issueCount: 0, prCount: 1 });
       expect(record?.issueObservedAt).toBe(NOW + 5);
       expect(record?.prObservedAt).toBe(NOW + 20);
+    });
+
+    it("lets the newest reading's count stand again once the other's hold lapses", () => {
+      publishSharedRepoStats(REPO, { ...reading("local", 1_000, 0), prCount: 2 }, NOW + 5);
+      publishSharedRepoStats(
+        REPO,
+        { ...reading("studio", 9_000, 1), issueRefreshedAt: 1_000, prRefreshedAt: 9_000 },
+        NOW + 20
+      );
+      expect(readSharedRepoStats(REPO)?.issueCount).toBe(0);
+
+      // Ten minutes on, studio's own count is what its newest reading says.
+      vi.mocked(Date.now).mockReturnValue(NOW + 5 + 10 * 60 * 1000 + 1);
+
+      expect(readSharedRepoStats(REPO)).toMatchObject({ hostId: "studio", issueCount: 1 });
     });
 
     it("lets a later read of a change win back from an earlier one", () => {
