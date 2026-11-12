@@ -447,11 +447,24 @@ describe("DaintreeLocalStore", () => {
     expect(await store.getMeta("small")).toBeNull();
     expect(sqlite.pragma("synchronous", { simple: true })).toBe(SYNCHRONOUS_NORMAL);
     expect(faults).toEqual(["disk-full"]);
-    // One line, when it stopped, with the cause's code and nothing it was writing.
+    // One line, when it stopped, with the cause's code, where the batch was
+    // (#16840), and nothing it was writing.
     const latched = logWarn.mock.calls.filter(([message]) =>
       String(message).includes("stopped taking writes")
     );
-    expect(latched).toEqual([[expect.any(String), { reason: "disk-full", code: "SQLITE_FULL" }]]);
+    expect(latched).toEqual([
+      [
+        expect.any(String),
+        {
+          reason: "disk-full",
+          code: "SQLITE_FULL",
+          step: "call",
+          writes: true,
+          calls: 1,
+          elapsedMs: expect.any(Number),
+        },
+      ],
+    ]);
     warn.mockRestore();
   });
 
@@ -1245,7 +1258,11 @@ async function holdWriteLock(file: string, holdMs: number) {
     `,
     {
       eval: true,
-      workerData: { module: createRequire(import.meta.url).resolve("better-sqlite3"), file, holdMs },
+      workerData: {
+        module: createRequire(import.meta.url).resolve("better-sqlite3"),
+        file,
+        holdMs,
+      },
     }
   );
   workers.push(worker);
@@ -1290,5 +1307,70 @@ describe("DaintreeLocalStore under write-lock contention (#16840)", () => {
     expect(store.isFaulted()).toBe(false);
     expect(await store.getMeta("held")).toBe("1");
     expect(await store.getMeta("alias")).toBe("1");
+  });
+
+  it("stops writing once the lock outlasts the busy timeout, saying it failed to begin and how long it waited", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const faults: string[] = [];
+    store.onFault((reason) => faults.push(reason));
+    sqlite.pragma("busy_timeout = 100");
+    logWarn.mockClear();
+    const lock = await holdWriteLock(dbPath, 0);
+
+    await expect(store.nextAlias()).rejects.toMatchObject({ reason: "storage-busy" });
+    lock.release();
+    expect(await lock.released).toBe("released");
+
+    expect(faults).toEqual(["storage-busy"]);
+    const latched = logWarn.mock.calls.filter(([message]) =>
+      String(message).includes("stopped taking writes")
+    );
+    expect(latched).toEqual([
+      [
+        expect.any(String),
+        {
+          reason: "storage-busy",
+          code: "SQLITE_BUSY",
+          step: "begin",
+          writes: true,
+          calls: 1,
+          elapsedMs: expect.any(Number),
+        },
+      ],
+    ]);
+    // Waited out the timeout rather than refused at once.
+    expect((latched[0]![1] as { elapsedMs: number }).elapsedMs).toBeGreaterThanOrEqual(50);
+    // The lock is gone, but this store still never writes again.
+    await expect(store.setMeta("later", "1")).rejects.toMatchObject({ reason: "storage-busy" });
+    expect(await store.getMeta("alias")).toBeNull();
+  });
+
+  it.each(["SQLITE_BUSY", "SQLITE_BUSY_SNAPSHOT", "SQLITE_BUSY_RECOVERY", "SQLITE_BUSY_TIMEOUT"])(
+    "takes %s as the database being busy, and says which call failed",
+    async (code) => {
+      const store = new DaintreeLocalStore(sqlite);
+      logWarn.mockClear();
+      failNextRead(sqlite, "FROM decisions_meta WHERE key", sqliteError(code));
+
+      await expect(store.getMeta("k")).rejects.toMatchObject({ reason: "storage-busy" });
+
+      expect(store.faultReason()).toBe("storage-busy");
+      expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("stopped taking writes"), {
+        reason: "storage-busy",
+        code,
+        step: "call",
+        writes: false,
+        calls: 1,
+        elapsedMs: expect.any(Number),
+      });
+    }
+  );
+
+  it("keeps a lock held on this connection's own tables a storage fault", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    failNextRead(sqlite, "FROM decisions_meta WHERE key", sqliteError("SQLITE_LOCKED"));
+
+    await expect(store.getMeta("k")).rejects.toMatchObject({ reason: "storage-fault" });
+    expect(store.faultReason()).toBe("storage-fault");
   });
 });

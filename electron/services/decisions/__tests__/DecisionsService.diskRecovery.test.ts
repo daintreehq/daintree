@@ -27,7 +27,7 @@ import { resetWritesSuppressedForTesting, setWritesSuppressed } from "../../disk
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import { DecisionsService } from "../DecisionsService.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
-import { DISK_FULL_RESTART_DELAYS_MS } from "../storageRecovery.js";
+import { BUSY_RESTART_DELAYS_MS, DISK_FULL_RESTART_DELAYS_MS } from "../storageRecovery.js";
 import type { RelayConnectionOptions } from "../relayConnection.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -163,5 +163,80 @@ describe("DecisionsService over real stores, after a disk-space fault (#16605)",
     expect(await running.diskSpaceRecovered()).toBe(false);
     expect(running.getStore()).toBe(old);
     expect(made).toHaveLength(1);
+  });
+});
+
+describe("DecisionsService over real stores, after a busy database (#16840)", () => {
+  /** Makes every write of meta key `busy` fail as a database held past the busy timeout. */
+  function busyOnKey(): void {
+    sqlite.function("refuse_as_busy", () => {
+      throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    });
+    sqlite.exec(`CREATE TRIGGER busy_probe BEFORE INSERT ON decisions_meta
+      WHEN NEW.key = 'busy' BEGIN SELECT refuse_as_busy(); END`);
+  }
+
+  it("replaces the store after a wait, and the fresh one still has the refused step to apply", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { running, made } = service(async () => true);
+    await running.start({ ...defaultDecisionsSettings(), enabled: true, ...RELAY });
+    const old = running.getStore()!;
+    await old.insertEvent(event(1));
+    busyOnKey();
+
+    // The library's apply is refused for a busy database, then its next step.
+    await expect(old.setMeta("busy", "1")).rejects.toMatchObject({ reason: "storage-busy" });
+    await expect(old.markEventProcessed(1, 5)).rejects.toMatchObject({ reason: "storage-busy" });
+    // The disk-space exit replaces only a store stopped for disk space.
+    expect(await running.diskSpaceRecovered()).toBe(false);
+    expect(running.getStore()).toBe(old);
+
+    await vi.advanceTimersByTimeAsync(BUSY_RESTART_DELAYS_MS[0]!);
+    await vi.waitFor(() => {
+      expect(running.getStore()).not.toBeNull();
+      expect(running.getStore()).not.toBe(old);
+      expect(made).toHaveLength(2);
+    });
+
+    const fresh = running.getStore()!;
+    expect((await fresh.unprocessedEvents(10)).map((e) => e.seq)).toEqual([1]);
+    await fresh.markEventProcessed(1, 5);
+    expect(await fresh.unprocessedEvents(10)).toEqual([]);
+    await expect(old.setMeta("late", "1")).rejects.toMatchObject({ reason: "closed" });
+  });
+
+  it("leaves a store the database stays busy for stopped after its restarts, until Decisions is turned off and on", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { running, made } = service(async () => true);
+    const settings = { ...defaultDecisionsSettings(), enabled: true, ...RELAY };
+    await running.start(settings);
+    busyOnKey();
+    const replaced = async (count: number) =>
+      vi.waitFor(() => {
+        expect(made).toHaveLength(count);
+        expect(running.getStore()).not.toBeNull();
+      });
+
+    for (const [i, wait] of BUSY_RESTART_DELAYS_MS.entries()) {
+      await expect(running.getStore()!.setMeta("busy", "1")).rejects.toMatchObject({
+        reason: "storage-busy",
+      });
+      await vi.advanceTimersByTimeAsync(wait);
+      await replaced(i + 2);
+    }
+    const last = running.getStore()!;
+    await expect(last.setMeta("busy", "1")).rejects.toMatchObject({ reason: "storage-busy" });
+    await vi.advanceTimersByTimeAsync(Math.max(...BUSY_RESTART_DELAYS_MS) * 2);
+    expect(running.getStore()).toBe(last);
+    expect(made).toHaveLength(BUSY_RESTART_DELAYS_MS.length + 1);
+
+    await running.stop();
+    await running.start(settings);
+    const afterRestart = made.length;
+    await expect(running.getStore()!.setMeta("busy", "1")).rejects.toMatchObject({
+      reason: "storage-busy",
+    });
+    await vi.advanceTimersByTimeAsync(BUSY_RESTART_DELAYS_MS[0]!);
+    await replaced(afterRestart + 1);
   });
 });
