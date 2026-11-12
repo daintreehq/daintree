@@ -59,6 +59,39 @@ describe("sharedRepoStats", () => {
     expect(readSharedRepoStats(REPO)?.hostId).toBe(first);
   });
 
+  describe("per-count pick (#16866)", () => {
+    it("takes each count from the reading that observed it most recently", () => {
+      // local's dropdown read the issue count (0) after the close, at NOW + 5.
+      publishSharedRepoStats(REPO, { ...reading("local", 1_000, 0), prCount: 2 }, NOW + 5);
+      // studio polls later, still repeating the 1 it read long before, beside
+      // a PR count it has just read.
+      publishSharedRepoStats(
+        REPO,
+        { ...reading("studio", 9_000, 1), issueRefreshedAt: 1_000, prRefreshedAt: 9_000 },
+        NOW + 20
+      );
+      const record = readSharedRepoStats(REPO);
+
+      expect(record).toMatchObject({ hostId: "studio", issueCount: 0, prCount: 1 });
+      expect(record?.issueObservedAt).toBe(NOW + 5);
+      expect(record?.prObservedAt).toBe(NOW + 20);
+    });
+
+    it("lets a later read of a change win back from an earlier one", () => {
+      publishSharedRepoStats(REPO, reading("local", 1_000, 0), NOW);
+      publishSharedRepoStats(REPO, reading("studio", 5_000, 2), NOW + 10);
+
+      expect(readSharedRepoStats(REPO)?.issueCount).toBe(2);
+    });
+
+    it("never takes a count from a reading that couldn't make it", () => {
+      publishSharedRepoStats(REPO, reading("local", 1_000, 4), NOW);
+      publishSharedRepoStats(REPO, { ...reading("studio", 5_000), issueCount: null }, NOW + 10);
+
+      expect(readSharedRepoStats(REPO)).toMatchObject({ hostId: "studio", issueCount: 4 });
+    });
+  });
+
   it("never lets a host republish a reading, or replace it with an older one", () => {
     expect(publishSharedRepoStats(REPO, reading("studio", 2_000, 5), NOW)).toBe(true);
     publishSharedRepoStats(REPO, reading("local", 2_500, 9), NOW + 10);

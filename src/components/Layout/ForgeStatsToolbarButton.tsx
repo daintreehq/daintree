@@ -282,8 +282,10 @@ export const ForgeStatsToolbarButton = memo(
     const [prListCount, setPrListCount] = useState<number | null>(null);
     const [prListHasMore, setPrListHasMore] = useState(false);
 
-    // Epoch-ms timestamp of the most recent `onCountUpdate` for each kind, used
-    // to arbitrate recency against the stats poll's `lastUpdated` (issue #9741).
+    // When the read behind the most recent `onCountUpdate` for each kind was
+    // sent (epoch ms), used to arbitrate recency against the stats poll's
+    // per-count refreshed-at (issue #9741). The send time, not the arrival: a
+    // slow response must not outrank a count read after it went out (#16866).
     // State rather than a ref because the display derivation reads it during
     // render, which the React Compiler rejects for refs; it is set in the same
     // batch as the count, so it costs no extra render. Cleared on project switch
@@ -296,24 +298,30 @@ export const ForgeStatsToolbarButton = memo(
     // activity baseline silently; otherwise the poll that later confirms the
     // same total reads as an increase and re-arms the chip. A paginated `N+` is
     // only a lower bound and never seeds an exact baseline.
-    const handleIssueListCountUpdate = useCallback((count: number, hasMore: boolean) => {
-      if (!hasMore && issueCountRef.current !== undefined) {
-        issueCountRef.current = count;
-        issueBaselineAtRef.current = Date.now();
-      }
-      setIssueListTimestamp(Date.now());
-      setIssueListCount(count);
-      setIssueListHasMore(hasMore);
-    }, []);
-    const handlePrListCountUpdate = useCallback((count: number, hasMore: boolean) => {
-      if (!hasMore && prCountRef.current !== undefined) {
-        prCountRef.current = count;
-        prBaselineAtRef.current = Date.now();
-      }
-      setPrListTimestamp(Date.now());
-      setPrListCount(count);
-      setPrListHasMore(hasMore);
-    }, []);
+    const handleIssueListCountUpdate = useCallback(
+      (count: number, hasMore: boolean, observedAt: number) => {
+        if (!hasMore && issueCountRef.current !== undefined) {
+          issueCountRef.current = count;
+          issueBaselineAtRef.current = observedAt;
+        }
+        setIssueListTimestamp(observedAt);
+        setIssueListCount(count);
+        setIssueListHasMore(hasMore);
+      },
+      []
+    );
+    const handlePrListCountUpdate = useCallback(
+      (count: number, hasMore: boolean, observedAt: number) => {
+        if (!hasMore && prCountRef.current !== undefined) {
+          prCountRef.current = count;
+          prBaselineAtRef.current = observedAt;
+        }
+        setPrListTimestamp(observedAt);
+        setPrListCount(count);
+        setPrListHasMore(hasMore);
+      },
+      []
+    );
 
     // Clear the list-loaded counts and their recency timestamps whenever the
     // project changes (issue #9741). Keyed directly on the project path rather

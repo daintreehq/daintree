@@ -29,6 +29,7 @@ import {
   isValidOpenCount,
   observeRepoCount,
   statsFromCountState,
+  touchRepoCountState,
   withRepoCountState,
 } from "./repoCountState.js";
 import type { RepoContext, RepoStats, RestCountsSnapshot } from "./types.js";
@@ -465,8 +466,12 @@ async function settleRestCounts(
   const state = getRepoCountState(cacheKey);
   const issueAgrees = state?.issue === undefined || state.issue.value === rest.issueCount;
   const prAgrees = state?.pr === undefined || state.pr.value === rest.prCount;
-  if (issueAgrees) observeRepoCount(cacheKey, "issue", rest.issueCount, readAt);
-  if (prAgrees) observeRepoCount(cacheKey, "pr", rest.prCount, readAt);
+  // Agreement keeps the count's stamp: it dates when the value was read, and
+  // a lagging pair that merely repeats it mustn't look newer than another
+  // host's read of the change (#15546). It does keep the state alive.
+  if (state?.issue === undefined) observeRepoCount(cacheKey, "issue", rest.issueCount, readAt);
+  if (state?.pr === undefined) observeRepoCount(cacheKey, "pr", rest.prCount, readAt);
+  if (state && issueAgrees && prAgrees) touchRepoCountState(cacheKey);
   let confirmed = true;
   if (!issueAgrees || !prAgrees) {
     const verified = await fetchOpenCounts(context, cacheKey);

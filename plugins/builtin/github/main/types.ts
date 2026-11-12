@@ -12,13 +12,16 @@ export interface RepoStats {
   stale?: boolean;
   lastUpdated?: number;
   /**
-   * Wall-clock ms when each count was last read from a GitHub count endpoint
-   * (GraphQL `totalCount`, the REST count pair, or a list query's
-   * write-back). Unlike `lastUpdated`, these are NOT re-stamped when an
-   * activity-probe "unchanged" result re-serves cached counts — they are the
-   * honest recency signals for the renderer's badge arbitration and the
-   * dropdown-open force-refresh gate, both of which must distinguish "we
-   * asked GitHub about this count" from "we assumed nothing changed".
+   * Wall-clock ms when each count's value was read from GitHub: the request
+   * time of the GraphQL `totalCount` (a list query's write-back, the stats
+   * query, a verification read) or REST count pair that established it. A
+   * REST pair that only repeats the value doesn't move it (#16866): the pair
+   * lags, so a repeat is no newer a read. Unlike `lastUpdated`, these are NOT
+   * re-stamped when an activity-probe "unchanged" result re-serves cached
+   * counts — they are the honest recency signals for the renderer's badge
+   * arbitration and the dropdown-open force-refresh gate, both of which must
+   * distinguish "we asked GitHub about this count" from "we assumed nothing
+   * changed".
    * Per-count because a list query refreshes only its own kind: a PR
    * write-back must not make a stale issue count look freshly read.
    */

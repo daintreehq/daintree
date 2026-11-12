@@ -139,7 +139,7 @@ interface UseGitHubResourceListSWRParams {
   sortOrder: GitHubSortOrder;
   githubConfig: { hasToken: boolean } | null;
   onFreshFetch?: () => void;
-  onCountUpdate?: (count: number, hasMore: boolean) => void;
+  onCountUpdate?: (count: number, hasMore: boolean, observedAt: number) => void;
 }
 
 export interface UseGitHubResourceListSWRReturn {
@@ -368,6 +368,10 @@ export function useGitHubResourceListSWR({
 
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           try {
+            // When this read was sent: the badge ranks the list's count
+            // against stats by it, so a slow response can't outrank a count
+            // read after it went out (#16866).
+            const requestedAt = Date.now();
             const result =
               type === "issue"
                 ? await forgeClient.listIssues(projectPath, fetchOptions)
@@ -446,22 +450,28 @@ export function useGitHubResourceListSWR({
               // `onCountUpdate` with the closed/merged count and poison the
               // open badge. The last known open count stays correct while the
               // user browses other states.
-              if (filterState === "open") {
+              //
+              // A page the provider served from its cache is no observation:
+              // the read that fetched it already reported, and the count may
+              // have moved since (#16866).
+              if (filterState === "open" && result.source !== "cache") {
                 onCountUpdate?.(
                   result.totalCount ?? result.items.length,
-                  result.totalCount == null ? result.hasMore : false
+                  result.totalCount == null ? result.hasMore : false,
+                  requestedAt
                 );
               }
-              // Notify parent (toolbar count badge) that fresh first-page data
-              // landed. Gated on the request actually having sent
-              // `bypassCache: true` — the main process's
-              // `updateRepoStatsCount` runs on the GraphQL path that follows a
-              // bypass, so the toolbar's `refresh()` call is guaranteed to see
-              // an updated `repoStatsCache` entry. Cold-mount and downgraded
-              // revalidate fetches (`bypassCache: false`) may hit the
-              // main-process cache and skip the count update entirely; firing
-              // onFreshFetch there would be a wasted IPC round-trip.
-              if (usedBypass) {
+              // Notify parent (toolbar count badge) that a page read from the
+              // forge landed: the main process's `updateRepoStatsCount` took
+              // its total on the way, so the toolbar's `refresh()` serves it,
+              // and the shared record (#15546) gets it from that answer. Keyed
+              // on where the page came from, not on `bypassCache`: a cold
+              // mount or downgraded revalidate that missed the main-process
+              // cache reached the forge too (#16866). A provider that doesn't
+              // say falls back to the request having bypassed the cache.
+              const reachedForge =
+                result.source !== undefined ? result.source === "network" : usedBypass;
+              if (reachedForge) {
                 onFreshFetch?.();
               }
             }

@@ -28,15 +28,19 @@ export interface ForgeStatsDropdownProps {
   /** Close the dropdown (host restores focus to the trigger). */
   onClose: () => void;
   /**
-   * Called after a background revalidation lands fresh first-page data so the
-   * host can converge the badge count without waiting for the next poll.
+   * Called after an unfiltered open first page read from the forge (not a
+   * cached page) lands, so the host can converge the badge count without
+   * waiting for the next poll.
    */
   onFreshFetch?: () => void;
   /**
-   * Reports the loaded list length + whether more pages exist, so the badge
-   * can bind to what the dropdown actually shows (issues #9693/#9741).
+   * Reports an unfiltered open first page read from the forge: its total (or
+   * length) + whether more pages exist, so the badge can bind to what the
+   * dropdown actually shows (issues #9693/#9741). `observedAt` is when that
+   * read was sent, on this view's clock, so a slow response can't outrank a
+   * count read after it (#16866).
    */
-  onCountUpdate?: (count: number, hasMore: boolean) => void;
+  onCountUpdate?: (count: number, hasMore: boolean, observedAt: number) => void;
 }
 
 /**

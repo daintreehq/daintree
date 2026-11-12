@@ -53,6 +53,7 @@ import {
   issueTooltipCache,
   prRequiredStatusCache,
   prTooltipCache,
+  repoCountStateCache,
   repoStatsCache,
 } from "../GitHubCaches.js";
 import { GitHubAuth } from "../GitHubAuth.js";
@@ -1186,6 +1187,76 @@ function defaultListKey(
     ...overrides,
   });
 }
+
+describe("list provenance and the open-count write-back (#16866)", () => {
+  beforeEach(() => mockGraphQLClient.mockReset());
+
+  it("tags a page read from GitHub as network and a warm cache hit as cache", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse(3));
+    const first = await githubForgeProvider.listIssues(repo, { state: "open" });
+    const second = await githubForgeProvider.listIssues(repo, { state: "open" });
+
+    expect(first.source).toBe("network");
+    expect(second.source).toBe("cache");
+    // The cached entry carries no provenance, so no later hit can claim a read.
+    expect(forgeIssueListCache.get(defaultListKey("issue"))?.source).toBeUndefined();
+  });
+
+  it("tags PR pages the same way", async () => {
+    mockGraphQLClient.mockResolvedValue(prListResponse(1));
+    const first = await githubForgeProvider.listPRs(repo, { state: "open" });
+    const second = await githubForgeProvider.listPRs(repo, { state: "open" });
+
+    expect(first.source).toBe("network");
+    expect(second.source).toBe("cache");
+  });
+
+  it.each([
+    ["issue", () => githubForgeProvider.listIssues(repo, { state: "open" }), issueListResponse(0)],
+    ["pr", () => githubForgeProvider.listPRs(repo, { state: "open" }), prListResponse(0)],
+  ] as const)(
+    "takes an open first page's %s total as the open count",
+    async (kind, list, response) => {
+      mockGraphQLClient.mockResolvedValue(response);
+      await list();
+
+      expect(repoCountStateCache.get("owner/repo")?.[kind]?.value).toBe(0);
+      expect(repoStatsCache.get("owner/repo")?.[kind === "issue" ? "issueCount" : "prCount"]).toBe(
+        0
+      );
+    }
+  );
+
+  it.each([
+    ["a closed list", { state: "closed" as const }],
+    ["a later page", { state: "open" as const, cursor: "next" }],
+  ])("leaves the open count alone for %s", async (_label, opts) => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse(7));
+    await githubForgeProvider.listIssues(repo, opts);
+    mockGraphQLClient.mockResolvedValue(prListResponse(7));
+    await githubForgeProvider.listPRs(repo, opts);
+
+    expect(repoCountStateCache.get("owner/repo")).toBeUndefined();
+    expect(repoStatsCache.get("owner/repo")).toBeUndefined();
+  });
+
+  it.each([
+    ["issue", () => githubForgeProvider.listIssues(repo, { state: "open" }), { repository: null }],
+    ["pr", () => githubForgeProvider.listPRs(repo, { state: "open" }), { repository: {} }],
+  ] as const)(
+    "rejects a %s response missing its connection instead of reading it as an empty list",
+    async (_kind, list, response) => {
+      mockGraphQLClient.mockResolvedValue({
+        ...response,
+        rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+      });
+
+      await expect(list()).rejects.toThrow(/Repository not found/);
+      expect(repoCountStateCache.get("owner/repo")).toBeUndefined();
+      expect(repoStatsCache.get("owner/repo")).toBeUndefined();
+    }
+  );
+});
 
 describe("listIssues caching", () => {
   beforeEach(() => mockGraphQLClient.mockReset());

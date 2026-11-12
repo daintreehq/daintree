@@ -3323,6 +3323,63 @@ describe("useRepositoryStats", () => {
       });
     });
 
+    it("carries a list-settled count to the record and holds it against another host's lagging repeat (#16866)", async () => {
+      // This host's poll shows 1 open issue, as REST read it a minute ago.
+      const readBefore = Date.now() - 60_000;
+      getRepoStatsMock.mockResolvedValue(
+        freshAnswer(1, 2, { issueCountRefreshedAt: readBefore, prCountRefreshedAt: readBefore })
+      );
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(readSharedRepoStats(REPO_KEY)?.issueCount).toBe(1);
+      });
+      await waitFor(() => {
+        expect(result.current.isValidating).toBe(false);
+      });
+
+      // The dropdown's fresh open list read 0; its follow-up refresh gets the
+      // list's count back from main, dated by the list's read.
+      const listSentAt = Date.now();
+      getRepoStatsMock.mockResolvedValue(
+        freshAnswer(0, 2, { issueCountRefreshedAt: listSentAt, prCountRefreshedAt: readBefore })
+      );
+      await act(async () => {
+        await result.current.refresh();
+      });
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(0);
+      });
+      expect(readSharedRepoStats(REPO_KEY)?.issueCount).toBe(0);
+
+      // Another host polls afterwards, its REST pair still repeating the 1 it
+      // read before the close.
+      act(() => {
+        publishSharedRepoStats(
+          REPO_KEY,
+          {
+            issueCount: 1,
+            prCount: 2,
+            lastUpdated: Date.now(),
+            issueRefreshedAt: readBefore,
+            prRefreshedAt: Date.now(),
+            hostId: "local",
+          },
+          Date.now() + 1_000
+        );
+      });
+      // And this view's next poll gets main's settled count again.
+      getRepoStatsMock.mockResolvedValue(
+        freshAnswer(0, 2, { issueCountRefreshedAt: listSentAt, prCountRefreshedAt: readBefore })
+      );
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(readSharedRepoStats(REPO_KEY)).toMatchObject({ hostId: "local", issueCount: 0 });
+      expect(result.current.stats?.issueCount).toBe(0);
+      expect(result.current.sharedCounts).toBe(true);
+    });
+
     it("follows a poll another window publishes", async () => {
       getRepoStatsMock.mockResolvedValue(freshAnswer(9, 4));
       // What that window will write once this view has polled, captured here

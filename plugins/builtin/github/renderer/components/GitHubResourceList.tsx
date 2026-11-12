@@ -257,9 +257,10 @@ interface GitHubResourceListProps {
    * with the number of loaded items and whether more pages exist. The toolbar
    * count badge uses this to display what the dropdown actually lists (e.g.
    * `20+` when paginated) instead of the stats query's full `totalCount`,
-   * which can be higher than the loaded page (issue #9693).
+   * which can be higher than the loaded page (issue #9693). Only pages read
+   * from the forge report, with `observedAt` the time the read was sent.
    */
-  onCountUpdate?: (count: number, hasMore: boolean) => void;
+  onCountUpdate?: (count: number, hasMore: boolean, observedAt: number) => void;
 }
 
 export function GitHubResourceList({

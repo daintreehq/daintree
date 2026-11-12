@@ -47,6 +47,12 @@ export function observeRepoCount(
   return true;
 }
 
+/** Restart the state's TTL without redating any count: a REST read agreed with it. */
+export function touchRepoCountState(key: string): void {
+  const state = repoCountStateCache.get(key);
+  if (state) repoCountStateCache.set(key, state);
+}
+
 /**
  * The state's counts as a stats result, or `undefined` until it holds both:
  * a lone kind can't stand in for a whole poll answer.

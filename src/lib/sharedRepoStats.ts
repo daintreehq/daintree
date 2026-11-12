@@ -19,6 +19,11 @@
  * poll from the others. A reading the host served from its cache was made
  * before it arrived, so it is dated by when the host made it instead.
  *
+ * Each count is then taken from whichever reading observed it most recently,
+ * not from the newest reading as a whole (#16866): a host repeats a count it
+ * still believes without re-dating it, so its next poll, still lagging a close
+ * another host's list already saw, doesn't put the closed item back.
+ *
  * Every storage access is best-effort — a blocked or full store reads as empty.
  */
 
@@ -141,22 +146,52 @@ function newer(a: SharedRepoStats, b: SharedRepoStats): boolean {
   return a.receivedAt !== b.receivedAt ? a.receivedAt > b.receivedAt : a.hostId > b.hostId;
 }
 
-/** The origin's record: the newest reading any host made of it, as this Shell received them. */
+function observedLater(
+  a: SharedRepoStats,
+  b: SharedRepoStats,
+  observedAt: "issueObservedAt" | "prObservedAt"
+): boolean {
+  return a[observedAt] !== b[observedAt] ? a[observedAt] > b[observedAt] : newer(a, b);
+}
+
+/**
+ * The origin's record: the newest reading any host made of it, as this Shell
+ * received them, with each count taken from the reading that observed it
+ * most recently.
+ */
 export function readSharedRepoStats(repoKey: string): SharedRepoStats | null {
   const scope = recordScope(repoKey);
   let newest: SharedRepoStats | null = null;
+  // A reading that couldn't count a kind (`null`) has nothing to offer for it.
+  let issue: SharedRepoStats | null = null;
+  let pr: SharedRepoStats | null = null;
   try {
     const storage = window.localStorage;
     for (let i = 0; i < storage.length; i++) {
       const key = storage.key(i);
       if (key === null || !key.startsWith(scope)) continue;
       const record = parseRecord(readJson(key));
-      if (record && (newest === null || newer(record, newest))) newest = record;
+      if (!record) continue;
+      if (newest === null || newer(record, newest)) newest = record;
+      if (
+        record.issueCount !== null &&
+        (issue === null || observedLater(record, issue, "issueObservedAt"))
+      ) {
+        issue = record;
+      }
+      if (record.prCount !== null && (pr === null || observedLater(record, pr, "prObservedAt"))) {
+        pr = record;
+      }
     }
   } catch {
     return null;
   }
-  return newest;
+  if (newest === null) return null;
+  return {
+    ...newest,
+    ...(issue ? { issueCount: issue.issueCount, issueObservedAt: issue.issueObservedAt } : {}),
+    ...(pr ? { prCount: pr.prCount, prObservedAt: pr.prObservedAt } : {}),
+  };
 }
 
 export interface SharedRepoReading {

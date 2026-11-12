@@ -324,12 +324,13 @@ describe("ForgeStatsToolbarButton corner activity chip wiring", () => {
 
   it("advances the activity baseline from exact list totals, never from N+", () => {
     // A total the user has seen in the list must not re-arm the chip when the
-    // next poll confirms it; a paginated lower bound is not a total.
+    // next poll confirms it; a paginated lower bound is not a total. The
+    // baseline is dated by when the list's read was sent (#16866).
     expect(source).toMatch(
-      /if \(!hasMore && issueCountRef\.current !== undefined\) \{\s*issueCountRef\.current = count;\s*issueBaselineAtRef\.current = Date\.now\(\);/
+      /if \(!hasMore && issueCountRef\.current !== undefined\) \{\s*issueCountRef\.current = count;\s*issueBaselineAtRef\.current = observedAt;/
     );
     expect(source).toMatch(
-      /if \(!hasMore && prCountRef\.current !== undefined\) \{\s*prCountRef\.current = count;\s*prBaselineAtRef\.current = Date\.now\(\);/
+      /if \(!hasMore && prCountRef\.current !== undefined\) \{\s*prCountRef\.current = count;\s*prBaselineAtRef\.current = observedAt;/
     );
   });
 
@@ -403,18 +404,21 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
     expect(source).toMatch(
       /\[prListTimestamp, setPrListTimestamp\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
     );
-    // Each handler must record Date.now() so the resolver can compare it to the
-    // stats poll's lastUpdated.
+    // Each handler must record when the list's read was sent (#16866), not when
+    // it arrived, so the resolver ranks a slow response below a count the
+    // stats poll read after it went out.
     const issueHandler = source.slice(
       source.indexOf("handleIssueListCountUpdate = useCallback"),
       source.indexOf("handlePrListCountUpdate = useCallback")
     );
-    expect(issueHandler).toContain("setIssueListTimestamp(Date.now())");
+    expect(issueHandler).toContain("setIssueListTimestamp(observedAt)");
+    expect(issueHandler).not.toContain("Date.now()");
     const prHandler = source.slice(
       source.indexOf("handlePrListCountUpdate = useCallback"),
-      source.indexOf("handlePrListCountUpdate = useCallback") + 300
+      source.indexOf("handlePrListCountUpdate = useCallback") + 400
     );
-    expect(prHandler).toContain("setPrListTimestamp(Date.now())");
+    expect(prHandler).toContain("setPrListTimestamp(observedAt)");
+    expect(prHandler).not.toContain("Date.now()");
   });
 
   it("passes displayCount to the issue and PR pills", () => {

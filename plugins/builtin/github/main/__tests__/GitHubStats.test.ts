@@ -807,7 +807,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       expect(result.stats?.lastUpdated).toBeGreaterThan(baseline!);
     });
 
-    it("advances the refreshed-at stamps on a 304 count replay — the endpoints were re-verified", async () => {
+    it("keeps the refreshed-at stamps when a 304 count replay only repeats the counts in hand (#16866)", async () => {
       routeFetch({
         events: [eventsResponse(200, { etag: '"e1"' }), eventsResponse(200, { etag: '"e2"' })],
         repo: [repoOk(8, '"r1"'), restResponse(304)],
@@ -822,11 +822,13 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       vi.useFakeTimers();
       vi.setSystemTime(Date.now() + 60_000);
       const second = await getRepoStatsAndPage("/test", false);
-      // A 304 is a direct GitHub confirmation that the count endpoint's
-      // content is unchanged — unlike a probe re-serve, the counts were
-      // genuinely re-checked, so recency advances.
-      expect(second.stats?.prCountRefreshedAt).toBeGreaterThan(baseline!);
-      expect(second.stats?.issueCountRefreshedAt).toBeGreaterThan(baseline!);
+      // The REST pair lags, so repeating the counts in hand doesn't make them
+      // a newer read: dated as new, a lagging repeat would outrank another
+      // host's read of the change in the shared record (#15546).
+      expect(second.stats?.prCount).toBe(3);
+      expect(second.stats?.prCountRefreshedAt).toBe(baseline);
+      expect(second.stats?.issueCountRefreshedAt).toBe(baseline);
+      expect(second.stats?.lastUpdated).toBeGreaterThan(baseline!);
     });
 
     it("re-reads the count baselines after the probe await so a concurrent reconciliation sticks", async () => {
@@ -1093,6 +1095,194 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
 
       expect(forgeIssueListCache.get("issue:testowner/testrepo:open::created:")).toBeDefined();
       expect(forgePRListCache.get("pr:testowner/testrepo:open::created:")).toBeDefined();
+    });
+  });
+
+  describe("a fresh open list's total outranks a lagging REST read (#16866)", () => {
+    /** One background poll, so the REST pair sets the counts: `combined` open issues + PRs, `prs` of them PRs. */
+    async function establishRestBaseline(combined: number, prs: number): Promise<void> {
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' })],
+        repo: [repoOk(combined, '"r1"')],
+        pulls: [pullsOk(prs, '"p1"')],
+      });
+      await getRepoStatsAndPage("/test", false);
+      expireMemoryCaches();
+    }
+
+    it.each([
+      { kind: "issue", combined: 3, prs: 2, after: { issueCount: 0, prCount: 2 } },
+      { kind: "pr", combined: 3, prs: 1, after: { issueCount: 2, prCount: 0 } },
+    ] as const)(
+      "keeps the $kind count at 0 through the next polls while REST still reports 1",
+      async ({ kind, combined, prs, after }) => {
+        await establishRestBaseline(combined, prs);
+
+        // The dropdown's fresh open list: no items, no further pages, total 0.
+        expect(updateRepoStatsCount(CACHE_KEY, kind, 0)).toBe(true);
+
+        // Its follow-up refresh, still inside the probe backoff, serves the
+        // list's count without a request.
+        const requestsBefore = mockFetch.mock.calls.length;
+        const followUp = await getRepoStatsAndPage("/test", false);
+        expect(followUp.stats).toMatchObject(after);
+        expect(mockFetch.mock.calls.length).toBe(requestsBefore);
+
+        // Past the backoff, REST still counts the closed item, so the GraphQL
+        // totals settle it before anything moves.
+        expireMemoryCaches();
+        expireBackoffWindow();
+        routeFetch({
+          events: [eventsResponse(200, { etag: '"e2"' })],
+          repo: [repoOk(combined, '"r2"')],
+          pulls: [pullsOk(prs, '"p2"')],
+        });
+        routeGraphQL({ openCounts: openCountsResponse(after.issueCount, after.prCount) });
+        const nextPoll = await getRepoStatsAndPage("/test", false);
+        expect(nextPoll.stats).toMatchObject(after);
+        expect(openCountsQueryCount()).toBe(1);
+
+        // An unchanged probe after that replays the settled counts, not REST's.
+        expireMemoryCaches();
+        expireBackoffWindow();
+        routeFetch({ events: [eventsResponse(304)] });
+        const replay = await getRepoStatsAndPage("/test", false);
+        expect(replay.stats).toMatchObject(after);
+        expect(openCountsQueryCount()).toBe(1);
+      }
+    );
+
+    it("raises a count at 0 to the list's 1 inside the probe backoff window", async () => {
+      await establishRestBaseline(2, 2);
+
+      expect(updateRepoStatsCount(CACHE_KEY, "issue", 1)).toBe(true);
+      const requestsBefore = mockFetch.mock.calls.length;
+      const followUp = await getRepoStatsAndPage("/test", false);
+
+      expect(followUp.stats).toMatchObject({ issueCount: 1, prCount: 2 });
+      // The backoff held: no probe and no REST read replaced the list's count.
+      expect(mockFetch.mock.calls.length).toBe(requestsBefore);
+
+      // REST still lags at 0 once the window lapses; GraphQL settles it at 1.
+      expireMemoryCaches();
+      expireBackoffWindow();
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e2"' })],
+        repo: [repoOk(2, '"r2"')],
+        pulls: [pullsOk(2, '"p2"')],
+      });
+      routeGraphQL({ openCounts: openCountsResponse(1, 2) });
+      const next = await getRepoStatsAndPage("/test", false);
+      expect(next.stats).toMatchObject({ issueCount: 1, prCount: 2 });
+    });
+
+    it("doesn't turn a closed sole PR into an open issue while open_issues_count lags", async () => {
+      await establishRestBaseline(1, 1);
+      expireBackoffWindow();
+
+      // The PR closes: /pulls already shows none, open_issues_count still 1.
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e2"' })],
+        repo: [restResponse(304)],
+        pulls: [pullsOk(0, '"p2"')],
+      });
+      routeGraphQL({ openCounts: openCountsResponse(0, 0) });
+      const result = await getRepoStatsAndPage("/test", false);
+
+      expect(result.stats).toMatchObject({ issueCount: 0, prCount: 0 });
+      expect(openCountsQueryCount()).toBe(1);
+    });
+
+    it("confirms nothing when the REST pair agrees with the counts in hand", async () => {
+      await establishRestBaseline(3, 2);
+      expireBackoffWindow();
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e2"' })],
+        repo: [restResponse(304)],
+        pulls: [restResponse(304)],
+      });
+
+      const result = await getRepoStatsAndPage("/test", false);
+
+      expect(result.stats).toMatchObject({ issueCount: 1, prCount: 2 });
+      expect(openCountsQueryCount()).toBe(0);
+    });
+
+    it("holds the counts in hand when GraphQL can't confirm a disagreeing pair, and looks again next probe", async () => {
+      await establishRestBaseline(3, 2);
+      updateRepoStatsCount(CACHE_KEY, "issue", 0);
+      expireBackoffWindow();
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e2"' })],
+        repo: [repoOk(3, '"r2"')],
+        pulls: [pullsOk(2, '"p2"')],
+      });
+      routeGraphQL({});
+
+      const result = await getRepoStatsAndPage("/test", false);
+
+      expect(result.stats?.issueCount).toBe(0);
+      expect(openCountsQueryCount()).toBe(1);
+      // The change the probe saw stays unsettled, so its ETag isn't committed.
+      expect(repoEventsETagCache.get(CACHE_KEY)).toBe('"e1"');
+    });
+
+    it("refuses a list total read before the count already held", async () => {
+      await establishRestBaseline(3, 2);
+      const sentAt = Date.now();
+      expect(updateRepoStatsCount(CACHE_KEY, "issue", 0, sentAt)).toBe(true);
+
+      // A slower list sent before that one lands afterwards with the old total.
+      expect(updateRepoStatsCount(CACHE_KEY, "issue", 1, sentAt - 1_000)).toBe(false);
+      const result = await getRepoStatsAndPage("/test", false);
+
+      expect(result.stats?.issueCount).toBe(0);
+    });
+
+    it.each([-1, 1.5, Number.NaN])("refuses a total of %s", (total) => {
+      expect(updateRepoStatsCount(CACHE_KEY, "issue", total)).toBe(false);
+      expect(repoCountStateCache.get(CACHE_KEY)).toBeUndefined();
+      expect(repoStatsCache.get(CACHE_KEY)).toBeUndefined();
+    });
+
+    it("keeps a list total sent while an explicit refresh was in flight", async () => {
+      await establishRestBaseline(3, 2);
+      mockClient.mockImplementation(async () => {
+        // The dropdown's list, sent after the query, lands mid-flight.
+        updateRepoStatsCount(CACHE_KEY, "issue", 0, Date.now() + 1);
+        return statsResponse(1, 2);
+      });
+
+      const result = await getRepoStatsAndPage("/test", true);
+
+      expect(result.stats).toMatchObject({ issueCount: 0, prCount: 2 });
+      // Its first issue page predates the list's total, so it isn't kept.
+      expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBeUndefined();
+      expect(issueListCache.get("issue:testowner/testrepo:open::created:desc:20:")).toBeUndefined();
+      // The PR total agreed, so that page is current and kept.
+      expect(prListCache.get("pr:testowner/testrepo:open::created:desc:20:")).toBeDefined();
+    });
+
+    it("serves the list's count over a stale disk fallback", async () => {
+      await establishRestBaseline(3, 2);
+      updateRepoStatsCount(CACHE_KEY, "issue", 0);
+      mockStatsCache.get.mockReturnValue({
+        issueCount: 1,
+        prCount: 2,
+        lastUpdated: Date.now() - 60_000,
+        projectPath: "/test",
+      });
+      expireBackoffWindow();
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e2"' })],
+        repo: [restResponse(500)],
+        pulls: [restResponse(500)],
+      });
+
+      const result = await getRepoStatsAndPage("/test", false);
+
+      expect(result.error).toBeDefined();
+      expect(result.stats).toMatchObject({ issueCount: 0, prCount: 2, stale: true });
     });
   });
 });

@@ -776,6 +776,114 @@ describe("GitHubResourceList SWR behavior", () => {
     expect(onFreshFetch).not.toHaveBeenCalled();
   });
 
+  describe("page provenance (#16866)", () => {
+    const networkPage = (items: Issue[], totalCount?: number): Page<Issue> => ({
+      ...makeResponse(items, totalCount),
+      source: "network",
+    });
+    const cachedPage = (items: Issue[], totalCount?: number): Page<Issue> => ({
+      ...makeResponse(items, totalCount),
+      source: "cache",
+    });
+
+    it("reports a cold-mount page that reached the forge to both callbacks", async () => {
+      mockListIssues.mockResolvedValue(networkPage([], 0));
+      const onFreshFetch = vi.fn();
+      const onCountUpdate = vi.fn();
+
+      render(
+        <GitHubResourceList
+          type="issue"
+          projectPath="/test/proj"
+          onFreshFetch={onFreshFetch}
+          onCountUpdate={onCountUpdate}
+        />
+      );
+
+      await waitFor(() => expect(onFreshFetch).toHaveBeenCalledTimes(1));
+      expect(onCountUpdate).toHaveBeenCalledWith(0, false, expect.any(Number));
+      expect(mockListIssues.mock.calls[0]?.[0]?.bypassCache).toBe(false);
+    });
+
+    it("reports a downgraded revalidate that reached the forge", async () => {
+      const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+      setCache(cacheKey, {
+        items: [makeIssue(10)],
+        nextCursor: null,
+        hasMore: false,
+        timestamp: Date.now() - 30_000,
+        countAtWrite: 1,
+      });
+      mockListIssues.mockResolvedValue(networkPage([makeIssue(10)], 1));
+      const onFreshFetch = vi.fn();
+
+      render(
+        <GitHubResourceList type="issue" projectPath="/test/proj" onFreshFetch={onFreshFetch} />
+      );
+
+      await waitFor(() => expect(onFreshFetch).toHaveBeenCalledTimes(1));
+      expect(mockListIssues).toHaveBeenCalledWith(expect.objectContaining({ bypassCache: false }));
+    });
+
+    it("leaves the badge alone for a page the provider served from its cache", async () => {
+      mockListIssues.mockResolvedValue(cachedPage([makeIssue(1)], 1));
+      const onFreshFetch = vi.fn();
+      const onCountUpdate = vi.fn();
+
+      render(
+        <GitHubResourceList
+          type="issue"
+          projectPath="/test/proj"
+          onFreshFetch={onFreshFetch}
+          onCountUpdate={onCountUpdate}
+        />
+      );
+
+      await waitFor(() => expect(screen.getByTestId("item-1")).toBeTruthy());
+      await act(async () => {});
+      expect(onCountUpdate).not.toHaveBeenCalled();
+      expect(onFreshFetch).not.toHaveBeenCalled();
+    });
+
+    it("dates the count by when its read was sent, not when it landed", async () => {
+      let sentAt = 0;
+      mockListIssues.mockImplementation(async () => {
+        sentAt = Date.now();
+        await new Promise((r) => setTimeout(r, 30));
+        return networkPage([], 0);
+      });
+      const onCountUpdate = vi.fn();
+
+      render(
+        <GitHubResourceList type="issue" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
+      );
+
+      await waitFor(() => expect(onCountUpdate).toHaveBeenCalledTimes(1));
+      const observedAt = onCountUpdate.mock.calls[0]?.[2] as number;
+      expect(sentAt).toBeGreaterThan(0);
+      expect(observedAt).toBeLessThanOrEqual(sentAt);
+    });
+
+    it("leaves the badge alone when the read is rejected", async () => {
+      mockListIssues.mockRejectedValue(new Error("Repository not found or token lacks access."));
+      const onFreshFetch = vi.fn();
+      const onCountUpdate = vi.fn();
+
+      render(
+        <GitHubResourceList
+          type="issue"
+          projectPath="/test/proj"
+          onFreshFetch={onFreshFetch}
+          onCountUpdate={onCountUpdate}
+        />
+      );
+
+      await waitFor(() => expect(screen.getByText(/token lacks access/)).toBeTruthy());
+      expect(onCountUpdate).not.toHaveBeenCalled();
+      expect(onFreshFetch).not.toHaveBeenCalled();
+    });
+  });
+
   it("calls onCountUpdate with the loaded length and hasMore on a cold-mount fetch (issue #9693)", async () => {
     // No cache — cold mount. The badge must bind to what the list loads, not
     // the stats query's totalCount, so onCountUpdate fires even though this is
@@ -788,7 +896,7 @@ describe("GitHubResourceList SWR behavior", () => {
     );
 
     await waitFor(() => {
-      expect(onCountUpdate).toHaveBeenCalledWith(2, false);
+      expect(onCountUpdate).toHaveBeenCalledWith(2, false, expect.any(Number));
     });
     // Cold mount is the bypassCache:false path — onFreshFetch would skip here,
     // but onCountUpdate must still fire.
@@ -810,7 +918,7 @@ describe("GitHubResourceList SWR behavior", () => {
     );
 
     await waitFor(() => {
-      expect(onCountUpdate).toHaveBeenCalledWith(2, true);
+      expect(onCountUpdate).toHaveBeenCalledWith(2, true, expect.any(Number));
     });
   });
 
@@ -853,7 +961,7 @@ describe("GitHubResourceList SWR behavior", () => {
     );
 
     await waitFor(() => {
-      expect(onCountUpdate).toHaveBeenCalledWith(0, false);
+      expect(onCountUpdate).toHaveBeenCalledWith(0, false, expect.any(Number));
     });
   });
 
@@ -900,7 +1008,7 @@ describe("GitHubResourceList SWR behavior", () => {
     );
 
     await waitFor(() => {
-      expect(onCountUpdate).toHaveBeenCalledWith(2, false);
+      expect(onCountUpdate).toHaveBeenCalledWith(2, false, expect.any(Number));
     });
     expect(mockListIssues.mock.calls[0]?.[0]?.bypassCache).toBe(true);
   });
@@ -951,7 +1059,7 @@ describe("GitHubResourceList SWR behavior", () => {
     );
 
     await waitFor(() => {
-      expect(onCountUpdate).toHaveBeenCalledWith(2, false);
+      expect(onCountUpdate).toHaveBeenCalledWith(2, false, expect.any(Number));
     });
     onCountUpdate.mockClear();
 
@@ -4295,17 +4403,22 @@ describe("GitHubResourceList — Mine and Needs my review (#16384)", () => {
     expect(mockListIssues.mock.calls.at(-1)?.[0]?.search).toBeUndefined();
   });
 
-  it("leaves the open-count badge alone, since a scoped page is not the open total", async () => {
-    mockListPRs.mockResolvedValue(makeResponse([], 7));
-    useGitHubFilterStore.getState().setPrScope("mine");
-    const onCountUpdate = vi.fn();
+  it.each(["mine", "needs-review"] as const)(
+    "leaves the open-count badge alone for the %s scope, since a scoped page is not the open total",
+    async (scope) => {
+      mockListPRs.mockResolvedValue({ ...makeResponse([], 7), source: "network" });
+      useGitHubFilterStore.getState().setPrScope(scope);
+      const onCountUpdate = vi.fn();
 
-    render(<GitHubResourceList type="pr" projectPath="/test/proj" onCountUpdate={onCountUpdate} />);
+      render(
+        <GitHubResourceList type="pr" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
+      );
 
-    await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
-    await act(async () => {});
-    expect(onCountUpdate).not.toHaveBeenCalled();
-  });
+      await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
+      await act(async () => {});
+      expect(onCountUpdate).not.toHaveBeenCalled();
+    }
+  );
 
   it("never paints the unscoped cached page for a scoped view, nor writes the scoped page into it", async () => {
     const prKey = buildCacheKey("/test/proj", "pr", "open", "created");

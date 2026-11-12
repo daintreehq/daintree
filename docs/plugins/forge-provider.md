@@ -206,7 +206,7 @@ Read `shared/types/forge.ts` for their full contracts.
 
 `getIssue`, `getPR`, `getCIStatus` and `getRepoMetadata` take an optional `FetchOptions`, whose one field, `ifNotChangedSince`, is an opaque freshness token you returned earlier. The host only byte-compares tokens: pack an ETag, a timestamp tuple or whatever suits your transport into `freshnessToken` on the response, and when you honor `ifNotChangedSince` and nothing changed, set `notModified: true` and the host keeps its cached copy. It is advisory — ignore it if probing costs as much as fetching. A `null` return still means the resource doesn't exist; it is never a "not modified".
 
-`ListOptions` carries the same token as `ifNotChangedSince` for `listIssues` / `listPRs` (answered through `Page.freshnessToken` and `Page.notModified`), plus `bypassCache`: skip your in-memory list cache and any in-flight coalescing and fetch fresh, still populating the cache with the result. Every `ListOptions` field is advisory.
+`ListOptions` carries the same token as `ifNotChangedSince` for `listIssues` / `listPRs` (answered through `Page.freshnessToken` and `Page.notModified`), plus `bypassCache`: skip your in-memory list cache and any in-flight coalescing and fetch fresh, still populating the cache with the result. Every `ListOptions` field is advisory. Set `Page.source` to `"cache"` when you answer from that cache and `"network"` when the call read the forge: the toolbar's open-count badge follows an open first page's `totalCount` only when the page came from the forge, never from a cached one.
 
 ### Shape mapping
 

@@ -370,6 +370,13 @@ interface Page<T> {
      * `items` may be empty in this case.
      */
     notModified?: boolean;
+    /**
+     * Where this page came from: `network` when this call read it from the
+     * forge, `cache` when the provider served a page an earlier call read.
+     * Optional. The host never takes a `cache` page's `totalCount` as a fresh
+     * reading of the repository's open count.
+     */
+    source?: "network" | "cache";
 }
 /** Minimal actor projection. */
 interface ForgeUser {
