@@ -5,7 +5,9 @@
 #
 # Every run publishes the develop tip, not the commit that triggered it, and
 # runs alone, so a late, queued or re-run job can never roll the live list
-# back to an older commit. To republish by hand:
+# back to an older commit. `publish-plugin-catalog.yml` publishes the community
+# catalog the same way, as a separate workflow so a catalog problem can never
+# hold up the kill-switch. To republish by hand:
 #   gh workflow run publish-plugin-blocklist.yml --ref develop
 
 name: Publish plugin blocklist
@@ -16,7 +18,7 @@ on:
     paths:
       - plugins/blocklist.json
       - .github/workflows/publish-plugin-blocklist.yml
-      - scripts/ci/verify-plugin-blocklist.mjs
+      - scripts/ci/verify-plugin-list.mjs
   workflow_dispatch:
 
 permissions:
@@ -30,9 +32,9 @@ concurrency:
 
 env:
   NODE_VERSION: "22"
-  BLOCKLIST_FILE: plugins/blocklist.json
-  BLOCKLIST_KEY: plugins/blocklist.json
-  BLOCKLIST_URL: https://updates.daintree.org/plugins/blocklist.json
+  LIST_FILE: plugins/blocklist.json
+  LIST_KEY: plugins/blocklist.json
+  LIST_URL: https://updates.daintree.org/plugins/blocklist.json
 
 jobs:
   publish:
@@ -52,8 +54,8 @@ jobs:
       - name: Record what is being published
         shell: bash
         run: |
-          echo "Publishing ${BLOCKLIST_FILE} from develop at $(git rev-parse HEAD)"
-          sha256sum "${BLOCKLIST_FILE}"
+          echo "Publishing ${LIST_FILE} from develop at $(git rev-parse HEAD)"
+          sha256sum "${LIST_FILE}"
 
       - name: Set up Node.js and install dependencies
         uses: ./.github/actions/setup-node-install
@@ -76,7 +78,7 @@ jobs:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_BUCKET: ${{ secrets.DAINTREE_R2_BUCKET }}
         run: |
-          aws s3 cp "${BLOCKLIST_FILE}" "s3://${R2_BUCKET}/${BLOCKLIST_KEY}" \
+          aws s3 cp "${LIST_FILE}" "s3://${R2_BUCKET}/${LIST_KEY}" \
             --endpoint-url "${R2_ENDPOINT}" \
             --no-progress \
             --content-type application/json \
@@ -84,4 +86,4 @@ jobs:
 
       - name: Verify the list at the CDN edge
         shell: bash
-        run: node scripts/ci/verify-plugin-blocklist.mjs
+        run: node scripts/ci/verify-plugin-list.mjs

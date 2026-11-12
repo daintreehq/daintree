@@ -12,7 +12,8 @@ The release runbook is [`docs/release.md`](../../docs/release.md): signing, nota
 | `release-packages.yml` | npm publish for the plugin-ecosystem packages, triggered by per-package tags (not `v*`) |
 | `nightly-publish.yml` | Nightly macOS and Linux builds published to the nightly update channel; no unit or E2E suites, launch smoke tests still run |
 | `publish-plugin-blocklist.yml` | Publishes `plugins/blocklist.json`, the plugin kill-switch list, to `updates.daintree.org/plugins/blocklist.json` when a change to it lands on `develop`; validates it first and verifies the CDN edge after |
-| `ci.yml` | Checks and tests on pushes and pull requests to `main` and `develop` |
+| `publish-plugin-catalog.yml` | Publishes `plugins/catalog.json`, the community plugin catalog, to `updates.daintree.org/plugins/catalog.json` when a change to it lands on `develop`, the same way and as a separate run; validates it and downloads every entry's asset first, and verifies the CDN edge after |
+| `ci.yml` | Checks and tests on pushes and pull requests to `main` and `develop`; on a pull request that changes `plugins/catalog.json`, the `plugin-catalog` job downloads each added or changed entry's asset and checks it against the entry |
 | `e2e.yml`, `e2e-single.yml` | Reusable E2E runner (core smoke and the `full-*` buckets) and the single-spec runner |
 | `stabilize.yml` | On-demand cross-platform validation, driven by the `stabilize` skill |
 | `perf-ab.yml`, `pattern-discovery.yml`, `stale-quarantine.yml`, `test-ratio.yml` | Supporting automation; each file's header says what it does |
@@ -53,7 +54,7 @@ Manual dispatch inputs:
 
 Add these in **Settings → Secrets and variables → Actions**.
 
-R2 (read by the three per-OS release workflows, `nightly-publish.yml` and `publish-plugin-blocklist.yml`):
+R2 (read by the three per-OS release workflows, `nightly-publish.yml`, `publish-plugin-blocklist.yml` and `publish-plugin-catalog.yml`):
 
 | Secret                 | Value                                           |
 | ---------------------- | ----------------------------------------------- |
