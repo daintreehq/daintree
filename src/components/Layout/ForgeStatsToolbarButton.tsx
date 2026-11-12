@@ -754,7 +754,8 @@ export const ForgeStatsToolbarButton = memo(
 
         // Hover prefetch primes the list cache silently. The count badge stays
         // fresh via the 30s background poll and the click-time refresh —
-        // refreshing stats here would flicker the toolbar status indicator.
+        // refreshing stats on every hover would flicker the toolbar status
+        // indicator; only a read that reached the forge reports below.
         inFlightRef.current = true;
         const startedAt = Date.now();
         // Cache-first: a warm main-process list cache (60s TTL) serves this
@@ -805,6 +806,26 @@ export const ForgeStatsToolbarButton = memo(
               // so the count fingerprint arms the count-as-cache-buster.
               ...(result.totalCount != null ? { countAtWrite: result.totalCount } : {}),
             });
+            // A hover read that reached the forge is as good as the dropdown's
+            // own (#16866): the provider has held its total, and the dropdown
+            // that opens next may be served this very page from the cache,
+            // which doesn't report to the badge. So it reports here. With
+            // shared counts on, the badge reads the record, which only a stats
+            // answer carrying the held total moves.
+            const total = result.totalCount;
+            if (
+              result.source === "network" &&
+              (total === undefined || (Number.isSafeInteger(total) && total >= 0))
+            ) {
+              const report =
+                type === "issue" ? handleIssueListCountUpdate : handlePrListCountUpdate;
+              report(
+                total ?? result.items.length,
+                total === undefined && result.hasMore,
+                startedAt
+              );
+              if (sharedCounts) void refreshStats();
+            }
           })
           .catch(() => {
             // Swallow prefetch errors — the click path will retry, surface
@@ -815,7 +836,15 @@ export const ForgeStatsToolbarButton = memo(
             inFlightRef.current = false;
           });
       },
-      [currentProject, isTokenError, rateLimitActive]
+      [
+        currentProject,
+        isTokenError,
+        rateLimitActive,
+        handleIssueListCountUpdate,
+        handlePrListCountUpdate,
+        sharedCounts,
+        refreshStats,
+      ]
     );
 
     const handlePrefetchPointerEnter = useCallback(

@@ -1083,6 +1083,7 @@ describe("GitHubResourceList SWR behavior", () => {
         return { ...makeResponse([], 0), source: "network" };
       });
       const onCountUpdate = vi.fn();
+      const before = Date.now();
 
       render(
         <GitHubResourceList type="issue" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
@@ -1090,6 +1091,7 @@ describe("GitHubResourceList SWR behavior", () => {
 
       await waitFor(() => expect(onCountUpdate).toHaveBeenCalled());
       const observedAt = onCountUpdate.mock.calls[0]?.[2] as number;
+      expect(observedAt).toBeGreaterThanOrEqual(before);
       expect(observedAt).toBeLessThanOrEqual(requestedBy);
       expect(Date.now() - observedAt).toBeGreaterThanOrEqual(30);
     });

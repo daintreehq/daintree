@@ -118,50 +118,6 @@ export function updateRepoStatsCount(
 ): void {
   if (!holdObservedCount(cacheKey, type, count, readAt)) return;
 
-  const now = Date.now();
-  const cached = repoStatsCache.get(cacheKey);
-  const persistentCache = GitHubStatsCache.getInstance();
-  const diskCached = persistentCache.get(cacheKey);
-  // Stamp only the updated kind's refreshed-at: a PR list write-back says
-  // nothing about the issue count, and a shared stamp would make a stale
-  // issue count look freshly read — outranking a real issue-list observation
-  // in the renderer arbitration and suppressing its dropdown-open refresh.
-  let updated: RepoStats;
-  if (cached) {
-    updated = { ...cached, lastUpdated: now };
-  } else {
-    // The other kind comes from its held count when there is one, else the
-    // disk cache, dated by when that was written.
-    updated = {
-      issueCount: diskCached?.issueCount ?? 0,
-      prCount: diskCached?.prCount ?? 0,
-      lastUpdated: now,
-      ...(diskCached
-        ? {
-            issueCountRefreshedAt: diskCached.lastUpdated,
-            prCountRefreshedAt: diskCached.lastUpdated,
-          }
-        : {}),
-    };
-  }
-  if (type === "issue") {
-    updated.issueCount = count;
-    updated.issueCountRefreshedAt = now;
-  } else {
-    updated.prCount = count;
-    updated.prCountRefreshedAt = now;
-  }
-  updated = withHeldCounts(cacheKey, updated);
-  repoStatsCache.set(cacheKey, updated);
-
-  // The disk cache is what a failed poll falls back to, so it must not keep a
-  // count this list just disproved. Written only when the other kind is known
-  // too, so a guessed zero never lands on disk.
-  const otherKind = type === "issue" ? "pr" : "issue";
-  if (cached || diskCached || getHeldCount(cacheKey, otherKind)) {
-    persistentCache.set(cacheKey, updated, diskCached?.projectPath ?? "");
-  }
-
   // A disagreeing snapshot's first-page items are stale by the same evidence
   // as its count, so the whole entry goes. The REST baseline stays: the poll
   // draws every count it serves from the held counts, so a `304` replay of the
@@ -174,6 +130,48 @@ export function updateRepoStatsCount(
       repoStatsAndPageSnapshotCache.invalidate(cacheKey);
     }
   }
+
+  const now = Date.now();
+  const cached = repoStatsCache.get(cacheKey);
+  const persistentCache = GitHubStatsCache.getInstance();
+  const diskCached = persistentCache.get(cacheKey);
+  // With nothing known about the other kind, the held count waits for the
+  // next poll to pair it: a stats entry carrying a guessed zero would be
+  // served, and persisted, as a real count.
+  const otherKind = type === "issue" ? "pr" : "issue";
+  if (!cached && !diskCached && !getHeldCount(cacheKey, otherKind)) return;
+
+  // Stamp only the updated kind's refreshed-at: a PR list write-back says
+  // nothing about the issue count, and a shared stamp would make a stale
+  // issue count look freshly read — outranking a real issue-list observation
+  // in the renderer arbitration and suppressing its dropdown-open refresh.
+  // Without a memory entry, the other kind comes from its held count when
+  // there is one, else the disk cache, dated by when that was written.
+  let updated: RepoStats = cached
+    ? { ...cached, lastUpdated: now }
+    : {
+        issueCount: diskCached?.issueCount ?? 0,
+        prCount: diskCached?.prCount ?? 0,
+        lastUpdated: now,
+        ...(diskCached
+          ? {
+              issueCountRefreshedAt: diskCached.lastUpdated,
+              prCountRefreshedAt: diskCached.lastUpdated,
+            }
+          : {}),
+      };
+  if (type === "issue") {
+    updated.issueCount = count;
+    updated.issueCountRefreshedAt = now;
+  } else {
+    updated.prCount = count;
+    updated.prCountRefreshedAt = now;
+  }
+  updated = withHeldCounts(cacheKey, updated);
+  repoStatsCache.set(cacheKey, updated);
+  // The disk cache is what a failed poll falls back to, so it must not keep a
+  // count this list just disproved.
+  persistentCache.set(cacheKey, updated, diskCached?.projectPath ?? "");
 }
 
 export function parsePRNode(node: Record<string, unknown>): GitHubPR {
@@ -644,22 +642,21 @@ export async function listPullRequests(
           totalCount,
         };
 
-        // Mid-flight count-buster guard — see `getRepoListEpoch`. The stats
-        // updates sit behind the same guard: a response too old to repopulate
-        // the list cache is also too old to roll `repoStatsCache` (or the
-        // disk stats) back to its pre-change total under a fresh
-        // `lastUpdated`.
+        // Mid-flight count-buster guard — see `getRepoListEpoch`. The open
+        // total is held outside it: the ledger orders it by when this read was
+        // issued, and an epoch moved by an unconfirmed REST delta must not
+        // swallow it (#16866).
         if (getRepoListEpoch("pr", context.owner, context.repo) === epochAtStart) {
           prListCache.set(cacheKey, result);
-
-          if (
-            (!options.state || options.state === "open") &&
-            !options.cursor &&
-            totalCount !== undefined
-          ) {
-            const statsCacheKey = `${context.owner}/${context.repo}`;
-            updateRepoStatsCount(statsCacheKey, "pr", totalCount, readAt);
-          }
+        }
+        if (
+          (!options.state || options.state === "open") &&
+          !options.cursor &&
+          typeof totalCount === "number" &&
+          Number.isSafeInteger(totalCount) &&
+          totalCount >= 0
+        ) {
+          updateRepoStatsCount(`${context.owner}/${context.repo}`, "pr", totalCount, readAt);
         }
       }
 

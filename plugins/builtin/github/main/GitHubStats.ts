@@ -67,6 +67,12 @@ export interface RepoStatsAndPageResult {
   error?: string;
 }
 
+/**
+ * A REST count reading, with when its requests were issued: every caller that
+ * joins the same in-flight read gets that time, not its own.
+ */
+export type RestCountsReading = RepoStats & { readAt: number };
+
 /** Default `X-Poll-Interval` floor (ms) when the events feed hasn't advertised one. */
 const DEFAULT_EVENTS_POLL_INTERVAL_MS = 60_000;
 
@@ -244,7 +250,7 @@ export async function fetchRestCounts(
   token: string,
   owner: string,
   repo: string
-): Promise<RepoStats | null> {
+): Promise<RestCountsReading | null> {
   // Per-repo singleflight: concurrent polls (multi-window — each
   // `WebContentsView` runs its own poll loop) must not interleave. Two
   // overlapping fetches read the same `prior` baseline, so the slower one can
@@ -263,16 +269,17 @@ export async function fetchRestCounts(
   return promise;
 }
 
-const restCountsInflight = new Map<string, Promise<RepoStats | null>>();
+const restCountsInflight = new Map<string, Promise<RestCountsReading | null>>();
 
 async function fetchRestCountsImpl(
   token: string,
   owner: string,
   repo: string,
   cacheKey: string
-): Promise<RepoStats | null> {
+): Promise<RestCountsReading | null> {
   const block = gitHubRateLimitService.shouldBlockRequest("core");
   if (block.blocked) return null;
+  const readAt = Date.now();
 
   const prior = restCountsCache.get(cacheKey);
   const versionAtStart = getETagCacheVersion();
@@ -384,6 +391,7 @@ async function fetchRestCountsImpl(
       lastUpdated,
       issueCountRefreshedAt: lastUpdated,
       prCountRefreshedAt: lastUpdated,
+      readAt,
     };
   } catch {
     return null;
@@ -425,18 +433,21 @@ function isOpenCount(value: unknown): value is number {
  * it disagrees with (#16866). Both REST endpoints can trail a close, and the
  * issue count is the difference of the two, so a pull request closing can read
  * as an issue opening: a REST reading never moves a held count by itself.
- * Returns false when a disagreement went unsettled because GraphQL couldn't
- * answer; the held counts stand meanwhile.
+ * `unsettled` when GraphQL couldn't answer (the held counts stand meanwhile);
+ * `superseded` when a cache clear landed mid-read, so nothing it saw is kept.
  */
 async function settleRestCounts(
   context: RepoContext,
   cacheKey: string,
-  reading: RepoStats,
-  readAt: number
-): Promise<boolean> {
+  reading: RestCountsReading,
+  versionAtStart: number
+): Promise<"settled" | "unsettled" | "superseded"> {
   let settled = true;
   if (restDisagreements(cacheKey, reading).length > 0) {
     const confirmed = await fetchOpenCounts(context);
+    // A clear (token change, manual refresh) during the confirm dropped the
+    // held counts this read was settling against; nothing it saw may refill them.
+    if (getETagCacheVersion() !== versionAtStart) return "superseded";
     if (confirmed) {
       holdObservedCount(cacheKey, "issue", confirmed.issueCount, confirmed.readAt);
       holdObservedCount(cacheKey, "pr", confirmed.prCount, confirmed.readAt);
@@ -444,8 +455,9 @@ async function settleRestCounts(
       settled = false;
     }
   }
-  holdRestCounts(cacheKey, reading, readAt, reading.lastUpdated ?? Date.now());
-  return settled;
+  if (getETagCacheVersion() !== versionAtStart) return "superseded";
+  holdRestCounts(cacheKey, reading, reading.readAt, reading.lastUpdated ?? Date.now());
+  return settled ? "settled" : "unsettled";
 }
 
 export interface RepoStatsForContextOptions {
@@ -710,11 +722,14 @@ export async function getRepoStatsAndPageForContext(
   // transient REST error.
   if (!bypassCache) {
     const token = GitHubAuth.getToken();
-    const restReadAt = Date.now();
+    const versionAtStart = getETagCacheVersion();
     const restReading = token ? await fetchRestCounts(token, context.owner, context.repo) : null;
-    if (restReading) {
-      const settled = await settleRestCounts(context, cacheKey, restReading, restReadAt);
-      const restStats = withHeldCounts(cacheKey, restReading);
+    const settleOutcome = restReading
+      ? await settleRestCounts(context, cacheKey, restReading, versionAtStart)
+      : "superseded";
+    if (restReading && settleOutcome !== "superseded") {
+      const { readAt: _readAt, ...reading } = restReading;
+      const restStats = withHeldCounts(cacheKey, reading);
       repoStatsCache.set(cacheKey, restStats);
       persistentCache.set(cacheKey, restStats, projectPath);
       // Commit the changed-probe's events ETag in lockstep with the counts it
@@ -722,7 +737,7 @@ export async function getRepoStatsAndPageForContext(
       // failed count fetch leaves the old ETag so the next probe re-detects
       // the change instead of masking it behind a 304. A disagreement GraphQL
       // couldn't settle counts as a failed fetch here.
-      if (settled && pendingEventsEtag !== undefined) {
+      if (settleOutcome === "settled" && pendingEventsEtag !== undefined) {
         if (pendingEventsEtag) {
           repoEventsETagCache.set(cacheKey, pendingEventsEtag);
         } else {

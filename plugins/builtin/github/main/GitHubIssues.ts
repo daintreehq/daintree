@@ -566,22 +566,21 @@ export async function listIssues(
           totalCount,
         };
 
-        // Mid-flight count-buster guard — see `getRepoListEpoch`. The stats
-        // updates sit behind the same guard: a response too old to repopulate
-        // the list cache is also too old to roll `repoStatsCache` (or the
-        // disk stats) back to its pre-change total under a fresh
-        // `lastUpdated`.
+        // Mid-flight count-buster guard — see `getRepoListEpoch`. The open
+        // total is held outside it: the ledger orders it by when this read was
+        // issued, and an epoch moved by an unconfirmed REST delta must not
+        // swallow it (#16866).
         if (getRepoListEpoch("issue", context.owner, context.repo) === epochAtStart) {
           issueListCache.set(cacheKey, result);
-
-          if (
-            (!options.state || options.state === "open") &&
-            !options.cursor &&
-            totalCount !== undefined
-          ) {
-            const statsCacheKey = `${context.owner}/${context.repo}`;
-            updateRepoStatsCount(statsCacheKey, "issue", totalCount, readAt);
-          }
+        }
+        if (
+          (!options.state || options.state === "open") &&
+          !options.cursor &&
+          typeof totalCount === "number" &&
+          Number.isSafeInteger(totalCount) &&
+          totalCount >= 0
+        ) {
+          updateRepoStatsCount(`${context.owner}/${context.repo}`, "issue", totalCount, readAt);
         }
       }
 

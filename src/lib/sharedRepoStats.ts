@@ -12,15 +12,22 @@
  *
  * Records are keyed by repository origin alone (`forge-host/owner/repo`): the
  * forge account a host is signed in as doesn't split them. Each host writes
- * its own entry and readers take the newest, so views in different renderer
- * processes never race on one slot. "Newest" is the order this Shell received
- * the readings in, on its own clock: each host stamps its counts on its own
- * clock, and a host whose clock runs ahead would otherwise outrank every fresh
- * poll from the others. A reading the host served from its cache was made
- * before it arrived, so it is dated by when the host made it instead.
+ * its own entry, so views in different renderer processes never race on one
+ * slot. Entries are ordered on this Shell's clock, by when it received each
+ * reading: each host stamps its counts on its own clock, and a host whose
+ * clock runs ahead would otherwise outrank every fresh poll from the others. A
+ * reading the host served from its cache was made before it arrived, so it is
+ * dated by when the host made it instead.
+ *
+ * Each count comes from the entry that observed it last, not the newest entry
+ * whole (#16866): a host replaying a count it read minutes ago reports it
+ * again with a new reading time, and must not put back a count another host
+ * has since seen change.
  *
  * Every storage access is best-effort — a blocked or full store reads as empty.
  */
+
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 
 const RECORD_PREFIX = "daintree:repo-stats:origin:";
 
@@ -141,22 +148,43 @@ function newer(a: SharedRepoStats, b: SharedRepoStats): boolean {
   return a.receivedAt !== b.receivedAt ? a.receivedAt > b.receivedAt : a.hostId > b.hostId;
 }
 
-/** The origin's record: the newest reading any host made of it, as this Shell received them. */
+function observedLater(a: SharedRepoStats, b: SharedRepoStats, kind: "issue" | "pr"): boolean {
+  const at = kind === "issue" ? a.issueObservedAt : a.prObservedAt;
+  const bt = kind === "issue" ? b.issueObservedAt : b.prObservedAt;
+  return at !== bt ? at > bt : newer(a, b);
+}
+
+/**
+ * The origin's record: the newest reading any host made of it, as this Shell
+ * received them, with each count taken from the entry that observed it last.
+ */
 export function readSharedRepoStats(repoKey: string): SharedRepoStats | null {
   const scope = recordScope(repoKey);
   let newest: SharedRepoStats | null = null;
+  let issueFrom: SharedRepoStats | null = null;
+  let prFrom: SharedRepoStats | null = null;
   try {
     const storage = window.localStorage;
     for (let i = 0; i < storage.length; i++) {
       const key = storage.key(i);
       if (key === null || !key.startsWith(scope)) continue;
       const record = parseRecord(readJson(key));
-      if (record && (newest === null || newer(record, newest))) newest = record;
+      if (!record) continue;
+      if (newest === null || newer(record, newest)) newest = record;
+      if (issueFrom === null || observedLater(record, issueFrom, "issue")) issueFrom = record;
+      if (prFrom === null || observedLater(record, prFrom, "pr")) prFrom = record;
     }
   } catch {
     return null;
   }
-  return newest;
+  if (newest === null || issueFrom === null || prFrom === null) return newest;
+  return {
+    ...newest,
+    issueCount: issueFrom.issueCount,
+    issueObservedAt: issueFrom.issueObservedAt,
+    prCount: prFrom.prCount,
+    prObservedAt: prFrom.prObservedAt,
+  };
 }
 
 export interface SharedRepoReading {
@@ -207,7 +235,13 @@ export function publishSharedRepoStats(
   if (reading.replay) {
     const offset = existing?.clockOffset;
     const anchoredAt = existing?.clockAnchoredAt;
-    if (
+    if (reading.hostId === LOCAL_HOST_ID) {
+      // This machine's own host keeps this Shell's clock, so its replays are
+      // dated by when it made them without a measured offset: a fresh list
+      // total it read back from memory is never refused for want of one.
+      receivedAt = Math.max(1, Math.min(now, reading.lastUpdated));
+      clock = { clockOffset: 0, clockAnchoredAt: now };
+    } else if (
       offset !== undefined &&
       anchoredAt !== undefined &&
       now - anchoredAt < HOST_CLOCK_TRUST_MS

@@ -79,10 +79,11 @@ import {
   repoEventsNoChangeCount,
   repoEventsLastProbeAt,
   getRepoListEpoch,
+  clearGitHubCaches,
   clearPRCaches,
 } from "../GitHubCaches.js";
 import { gitHubRateLimitService } from "../GitHubRateLimitService.js";
-import { clearHeldCounts } from "../GitHubCountLedger.js";
+import { clearHeldCounts, getHeldCount } from "../GitHubCountLedger.js";
 import { updateRepoStatsCount } from "../GitHubPRs.js";
 
 const CACHE_KEY = "testowner/testrepo";
@@ -1217,24 +1218,85 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
     });
 
     it("keeps a list's count over an explicit refresh issued before the list", async () => {
-      let resolveQuery: (value: unknown) => void = () => {};
-      mockClient.mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            resolveQuery = resolve;
-          })
-      );
-      routeFetch({});
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(1_000_000);
+        let resolveQuery: (value: unknown) => void = () => {};
+        mockClient.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              resolveQuery = resolve;
+            })
+        );
+        routeFetch({});
 
-      const pending = getRepoStatsAndPage("/test", true);
-      await vi.waitFor(() => expect(mockClient).toHaveBeenCalled());
-      updateRepoStatsCount(CACHE_KEY, "issue", 0, Date.now() + 1_000);
-      resolveQuery(statsResponse(1, 2));
-      const result = await pending;
+        // The refresh is issued at 1,000,000, the list at 1,002,000, and the
+        // refresh's answer lands last, at 1,004,000.
+        const pending = getRepoStatsAndPage("/test", true);
+        await vi.waitFor(() => expect(mockClient).toHaveBeenCalled());
+        vi.setSystemTime(1_002_000);
+        updateRepoStatsCount(CACHE_KEY, "issue", 0);
+        vi.setSystemTime(1_004_000);
+        resolveQuery(statsResponse(1, 2));
+        const result = await pending;
 
-      expect(result.stats?.issueCount).toBe(0);
-      expect(result.stats?.prCount).toBe(2);
-      expect(repoStatsCache.get(CACHE_KEY)?.issueCount).toBe(0);
+        expect(result.stats?.issueCount).toBe(0);
+        expect(result.stats?.prCount).toBe(2);
+        expect(repoStatsCache.get(CACHE_KEY)?.issueCount).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("dates a joined REST read by when its requests went out, not when the joiner asked", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(1_000_000);
+        let resolveRepo: (value: FakeResponse) => void = () => {};
+        mockFetch.mockImplementation((input: unknown) => {
+          const url = String(input);
+          if (url.includes("/pulls")) return Promise.resolve(pullsOk(1));
+          return new Promise((resolve) => {
+            resolveRepo = resolve;
+          });
+        });
+
+        const leader = fetchRestCounts("test-token", "testowner", "testrepo");
+        vi.setSystemTime(1_005_000);
+        const joiner = fetchRestCounts("test-token", "testowner", "testrepo");
+        resolveRepo(repoOk(2));
+        const [a, b] = await Promise.all([leader, joiner]);
+
+        expect(a?.readAt).toBe(1_000_000);
+        expect(b?.readAt).toBe(1_000_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps nothing a confirm saw when a cache clear lands while it runs", async () => {
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' }), eventsResponse(200, { etag: '"e2"' })],
+        repo: [repoOk(2, '"r1"'), restResponse(304)],
+        pulls: [pullsOk(1, '"p1"'), restResponse(304)],
+      });
+      await getRepoStatsAndPage("/test", false);
+      updateRepoStatsCount(CACHE_KEY, "issue", 0);
+      mockClient.mockImplementation(async () => {
+        // A token change while the scalar confirm is in flight.
+        clearGitHubCaches();
+        return openCountsResponse(0, 1);
+      });
+
+      expireMemoryCaches();
+      expireBackoffWindow();
+      const result = await getRepoStatsAndPage("/test", false);
+
+      expect(result.error).toBeDefined();
+      expect(getHeldCount(CACHE_KEY, "issue")).toBeUndefined();
+      expect(getHeldCount(CACHE_KEY, "pr")).toBeUndefined();
+      expect(repoStatsCache.get(CACHE_KEY)).toBeUndefined();
+      expect(repoEventsETagCache.get(CACHE_KEY)).toBeUndefined();
     });
   });
 });

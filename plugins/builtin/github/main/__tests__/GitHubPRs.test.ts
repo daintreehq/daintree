@@ -601,13 +601,25 @@ describe("updateRepoStatsCount — long-lived count cache reconciliation", () =>
     expect(GitHubStatsCache.getInstance().get(KEY)).toMatchObject({ issueCount: 0, prCount: 1 });
   });
 
-  it("keeps a guessed zero for the other kind off disk when nothing knows it", () => {
+  it("holds the count but writes no stats pair while nothing knows the other kind", () => {
     repoStatsCache.clear();
 
     updateRepoStatsCount(KEY, "issue", 3);
 
-    expect(repoStatsCache.get(KEY)?.issueCount).toBe(3);
+    // A pair with a guessed PR zero would be served, and persisted, as real.
+    expect(getHeldCount(KEY, "issue")?.count).toBe(3);
+    expect(repoStatsCache.get(KEY)).toBeUndefined();
     expect(GitHubStatsCache.getInstance().get(KEY)).toBeNull();
+  });
+
+  it("pairs the count with the other kind's held count when there is no stats entry", () => {
+    repoStatsCache.clear();
+    updateRepoStatsCount(KEY, "pr", 4, 1_000);
+
+    updateRepoStatsCount(KEY, "issue", 3, 2_000);
+
+    expect(repoStatsCache.get(KEY)).toMatchObject({ issueCount: 3, prCount: 4 });
+    expect(GitHubStatsCache.getInstance().get(KEY)).toMatchObject({ issueCount: 3, prCount: 4 });
   });
 });
 

@@ -51,6 +51,7 @@ import {
   forgeIssueListCache,
   forgePRListCache,
   forgeQueryCache,
+  invalidateRepoListCachesForCountChange,
   issueTooltipCache,
   prRequiredStatusCache,
   prTooltipCache,
@@ -1203,12 +1204,47 @@ describe("listIssues caching", () => {
     expect(second.totalCount).toBe(1);
   });
 
-  it("holds an open first page's total as the repository's issue count", async () => {
-    mockGraphQLClient.mockResolvedValue(issueListResponse(0));
+  it("holds an open first page's total, not its length, as the repository's counts", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse(7));
+    await githubForgeProvider.listIssues(repo, { state: "open" });
+    mockGraphQLClient.mockResolvedValue(prListResponse(42));
+    await githubForgeProvider.listPRs(repo, { state: "open" });
+
+    expect(getHeldCount("owner/repo", "issue")?.count).toBe(7);
+    expect(getHeldCount("owner/repo", "pr")?.count).toBe(42);
+    expect(repoStatsCache.get("owner/repo")).toMatchObject({ issueCount: 7, prCount: 42 });
+  });
+
+  it("holds a complete page's length when the connection omits its total", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
     await githubForgeProvider.listIssues(repo, { state: "open" });
 
+    expect(getHeldCount("owner/repo", "issue")?.count).toBe(1);
+  });
+
+  it("holds nothing from a partial page with no total", async () => {
+    const response = issueListResponse();
+    mockGraphQLClient.mockResolvedValue({
+      ...response,
+      repository: {
+        issues: { ...response.repository.issues, pageInfo: { hasNextPage: true, endCursor: "c2" } },
+      },
+    });
+    await githubForgeProvider.listIssues(repo, { state: "open" });
+
+    expect(getHeldCount("owner/repo", "issue")).toBeUndefined();
+  });
+
+  it("holds the total even when a REST count delta moved the list epoch mid-flight", async () => {
+    mockGraphQLClient.mockImplementation(async () => {
+      invalidateRepoListCachesForCountChange("owner", "repo", { issues: true, prs: false });
+      return issueListResponse(0);
+    });
+    await githubForgeProvider.listIssues(repo, { state: "open" });
+
+    // The page is too old to cache, but its total is ordered by when it was read.
+    expect(forgeIssueListCache.get(defaultListKey("issue"))).toBeUndefined();
     expect(getHeldCount("owner/repo", "issue")?.count).toBe(0);
-    expect(repoStatsCache.get("owner/repo")?.issueCount).toBe(0);
   });
 
   it.each([

@@ -280,9 +280,27 @@ async function searchIssuesImpl(
   });
 }
 
-/** A connection total fit to stand as the repository's open count. */
 function isOpenTotal(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * The open count a first page proves: its `totalCount`, or, when the
+ * connection omits one, its length once it says there are no more pages. A
+ * total that isn't a count, or a page with no pagination, proves nothing.
+ */
+function openTotalOf(
+  connection:
+    { nodes?: unknown[]; pageInfo?: { hasNextPage?: boolean }; totalCount?: unknown } | undefined
+): number | undefined {
+  if (connection === undefined) return undefined;
+  if (connection.totalCount !== undefined) {
+    return isOpenTotal(connection.totalCount) ? connection.totalCount : undefined;
+  }
+  if (!Array.isArray(connection.nodes) || connection.pageInfo?.hasNextPage !== false) {
+    return undefined;
+  }
+  return connection.nodes.filter(Boolean).length;
 }
 
 export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
@@ -364,16 +382,16 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
 
     // Skip the shared-cache write when a newer bypass call has superseded us
     // or the count buster invalidated this repo's issue pages mid-flight, so
-    // a slow stale fetch can't clobber the fresher committed result. The
-    // stats-count update sits behind the same epoch guard: a response too old
-    // to repopulate the list cache is also too old to roll `repoStatsCache`
-    // back to its pre-change total under a fresh `lastUpdated`.
+    // a slow stale fetch can't clobber the fresher committed result.
     if (isCurrent() && getRepoListEpoch("issue", repo.owner, repo.repo) === epochAtStart) {
       forgeIssueListCache.set(cacheKey, page);
-      const openTotal = state === "open" && !cursor ? issues?.totalCount : undefined;
-      if (isOpenTotal(openTotal)) {
-        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", openTotal, readAt);
-      }
+    }
+    // The open total is held on its own terms: the ledger orders it by when
+    // this read was issued, so it needs no epoch guard, and an epoch moved by
+    // an unconfirmed REST delta must not swallow it (#16866).
+    const openTotal = state === "open" && !cursor ? openTotalOf(issues) : undefined;
+    if (openTotal !== undefined) {
+      updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", openTotal, readAt);
     }
     return page;
   });
@@ -627,10 +645,10 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
 
     if (isCurrent() && getRepoListEpoch("pr", repo.owner, repo.repo) === epochAtStart) {
       forgePRListCache.set(cacheKey, page);
-      const openTotal = state === "open" && !cursor ? prs?.totalCount : undefined;
-      if (isOpenTotal(openTotal)) {
-        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", openTotal, readAt);
-      }
+    }
+    const openTotal = state === "open" && !cursor ? openTotalOf(prs) : undefined;
+    if (openTotal !== undefined) {
+      updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", openTotal, readAt);
     }
     return page;
   });
