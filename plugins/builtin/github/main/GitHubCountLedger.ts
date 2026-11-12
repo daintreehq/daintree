@@ -145,7 +145,13 @@ export function heldCountsDisagree(repoKey: string, pair: CountPair): boolean {
   return restDisagreements(repoKey, pair).length > 0;
 }
 
+// The read stamp survives a clear: a read issued before it may still land, and
+// must not outrank one issued after.
 export function clearHeldCounts(): void {
   heldCounts.clear();
+}
+
+/** Test-only: start the read stamps again from the clock. */
+export function _resetReadStampForTests(): void {
   lastReadStamp = 0;
 }

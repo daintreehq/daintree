@@ -42,7 +42,7 @@ vi.stubGlobal("fetch", mockFetch);
 
 import { assignIssue, extractLinkedPR, listIssues } from "../GitHubIssues.js";
 import { buildListCacheKey, DEFAULT_LIST_PER_PAGE } from "../GitHubPRs.js";
-import { getHeldCount, holdObservedCount } from "../GitHubCountLedger.js";
+import { getHeldCount, holdObservedCount, issueReadStamp } from "../GitHubCountLedger.js";
 import { GitHubAuth } from "../GitHubAuth.js";
 import {
   issueListCache,
@@ -341,7 +341,7 @@ describe("listIssues — mid-flight count-buster guard", () => {
       // post-change total (issued later, at 1,002,000) and the count buster
       // fires.
       vi.setSystemTime(1_002_000);
-      holdObservedCount("testowner/testrepo", "issue", 6, 1_002_000);
+      holdObservedCount("testowner/testrepo", "issue", 6, issueReadStamp());
       repoStatsCache.set("testowner/testrepo", { issueCount: 6, prCount: 0, lastUpdated: 1 });
       invalidateRepoListCachesForCountChange("testowner", "testrepo", { issues: true, prs: false });
 

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  _resetReadStampForTests,
   clearHeldCounts,
   getHeldCount,
   holdObservedCount,
@@ -14,6 +15,7 @@ const KEY = "owner/repo";
 describe("GitHubCountLedger (#16866)", () => {
   beforeEach(() => {
     clearHeldCounts();
+    _resetReadStampForTests();
   });
 
   afterEach(() => {
@@ -45,15 +47,18 @@ describe("GitHubCountLedger (#16866)", () => {
     expect(getHeldCount(KEY, "issue")?.count).toBe(0);
   });
 
-  it("starts the stamps again from the clock after a clear", () => {
+  it("keeps the stamps increasing across a clear, so a read still in flight can't outrank a later one", () => {
     vi.spyOn(Date, "now").mockReturnValue(5_000);
     issueReadStamp();
-    issueReadStamp();
+    const inFlight = issueReadStamp();
 
     clearHeldCounts();
-    vi.mocked(Date.now).mockReturnValue(2_000);
+    const afterClear = issueReadStamp();
+    expect(afterClear).toBeGreaterThan(inFlight);
 
-    expect(issueReadStamp()).toBe(2_000);
+    expect(holdObservedCount(KEY, "issue", 0, afterClear)).toBe(true);
+    expect(holdObservedCount(KEY, "issue", 1, inFlight)).toBe(false);
+    expect(getHeldCount(KEY, "issue")?.count).toBe(0);
   });
 
   it("lets a REST reading fill an unknown count and re-stamp an agreeing one, never move a held one", () => {

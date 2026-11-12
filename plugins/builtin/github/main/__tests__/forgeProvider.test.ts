@@ -1238,21 +1238,25 @@ describe("listIssues caching", () => {
     expect(getHeldCount("owner/repo", "issue")).toBeUndefined();
   });
 
-  it("holds the later of two reads, whichever answers last", async () => {
-    const answers: Array<(value: unknown) => void> = [];
-    mockGraphQLClient.mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+  it("holds the later of two reads issued in the same millisecond, whichever answers last", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(1_000_000);
+      const answers: Array<(value: unknown) => void> = [];
+      mockGraphQLClient.mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
 
-    // Issued back to back, often in the same millisecond: the ledger's read
-    // stamp still orders them as issued.
-    const older = githubForgeProvider.listIssues(repo, { state: "open", bypassCache: true });
-    const newer = githubForgeProvider.listIssues(repo, { state: "open", bypassCache: true });
-    await vi.waitFor(() => expect(answers).toHaveLength(2));
-    answers[1]!(issueListResponse(0));
-    await newer;
-    answers[0]!(issueListResponse(1));
-    await older;
+      const older = githubForgeProvider.listIssues(repo, { state: "open", bypassCache: true });
+      const newer = githubForgeProvider.listIssues(repo, { state: "open", bypassCache: true });
+      await vi.waitFor(() => expect(answers).toHaveLength(2));
+      answers[1]!(issueListResponse(0));
+      await newer;
+      answers[0]!(issueListResponse(1));
+      await older;
 
-    expect(getHeldCount("owner/repo", "issue")?.count).toBe(0);
+      expect(getHeldCount("owner/repo", "issue")?.count).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("holds the total even when a REST count delta moved the list epoch mid-flight", async () => {

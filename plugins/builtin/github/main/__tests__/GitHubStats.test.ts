@@ -83,7 +83,7 @@ import {
   clearPRCaches,
 } from "../GitHubCaches.js";
 import { gitHubRateLimitService } from "../GitHubRateLimitService.js";
-import { clearHeldCounts, getHeldCount } from "../GitHubCountLedger.js";
+import { _resetReadStampForTests, clearHeldCounts, getHeldCount } from "../GitHubCountLedger.js";
 import { updateRepoStatsCount } from "../GitHubPRs.js";
 
 const CACHE_KEY = "testowner/testrepo";
@@ -1250,6 +1250,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
 
     it("dates a joined REST read by when its requests went out, not when the joiner asked", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
+      _resetReadStampForTests();
       try {
         vi.setSystemTime(1_000_000);
         let resolveRepo: (value: FakeResponse) => void = () => {};
