@@ -248,7 +248,9 @@ function useWholeItemFit(rowRef: React.RefObject<HTMLDivElement | null>): void {
     if (!row || !region || typeof ResizeObserver === "undefined") return;
     const overflows = () => row.scrollWidth > row.clientWidth + 0.5;
     const fit = () => {
-      const items = Array.from(row.children) as HTMLElement[];
+      const items = Array.from(row.children).filter(
+        (child): child is HTMLElement => child instanceof HTMLElement
+      );
       for (const item of items) item.removeAttribute("hidden");
       if (!overflows()) return;
       const leaving = items
@@ -287,7 +289,8 @@ function useWholeItemFit(rowRef: React.RefObject<HTMLDivElement | null>): void {
     });
     // An item kept because it held focus is weighed again once focus leaves.
     const onFocusOut = (event: FocusEvent) => {
-      if (!row.contains(event.relatedTarget as Node | null)) queueMicrotask(fit);
+      const next = event.relatedTarget;
+      if (!(next instanceof Node) || !row.contains(next)) queueMicrotask(fit);
     };
     row.addEventListener("focusout", onFocusOut);
     return () => {
