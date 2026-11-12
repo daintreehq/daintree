@@ -3267,6 +3267,52 @@ describe("useRepositoryStats", () => {
       expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("local");
     });
 
+    it("carries a dropdown's list total, read back from the local host's hot cache, onto the record (#16866)", async () => {
+      // A local view with a paired host: another host's reading says 1, and
+      // this host has never answered live, so no clock offset was measured.
+      delete window.__DAINTREE_HOST_ID__;
+      pairedHostRef.current = true;
+      const now = Date.now();
+      publishFrom("studio", 1, 1, now - 5_000);
+      // The dropdown's fresh empty list made the host hold 0; the toolbar's
+      // follow-up refresh reads that back from the host's memory cache.
+      getRepoStatsMock.mockResolvedValueOnce(
+        freshAnswer(0, 1, {
+          countsSource: "memory-cache",
+          lastUpdated: now - 1_000,
+          issueCountRefreshedAt: now - 1_000,
+          prCountRefreshedAt: now - 1_000,
+        })
+      );
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(readSharedRepoStats(REPO_KEY)?.issueCount).toBe(0);
+      });
+      expect(result.current.sharedCounts).toBe(true);
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(0);
+      });
+
+      // The other host's later answer replays the 1 it read before the close:
+      // it arrives after the correction but observed the count earlier.
+      publishSharedRepoStats(REPO_KEY, {
+        issueCount: 1,
+        prCount: 1,
+        lastUpdated: Date.now(),
+        issueRefreshedAt: Date.now() - 60_000,
+        prRefreshedAt: Date.now(),
+        hostId: "studio",
+      });
+      await waitFor(() => {
+        expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("studio");
+      });
+
+      expect(readSharedRepoStats(REPO_KEY)?.issueCount).toBe(0);
+      expect(result.current.stats?.issueCount).toBe(0);
+    });
+
     it("shares in a local view once a host is paired", async () => {
       delete window.__DAINTREE_HOST_ID__;
       pairedHostRef.current = true;

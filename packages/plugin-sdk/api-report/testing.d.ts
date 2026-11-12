@@ -370,6 +370,13 @@ interface Page<T> {
      * `items` may be empty in this case.
      */
     notModified?: boolean;
+    /**
+     * Where the provider got this page: `"network"` when it read the forge for
+     * this call, `"cache"` when it served a page it read earlier. Only a page
+     * read now moves the toolbar's open count; a cached page's `totalCount` is an
+     * older observation. Omit it when the provider can't say.
+     */
+    source?: "network" | "cache";
 }
 /** Minimal actor projection. */
 interface ForgeUser {

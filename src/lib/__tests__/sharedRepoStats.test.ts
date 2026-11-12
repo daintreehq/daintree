@@ -164,6 +164,49 @@ describe("sharedRepoStats", () => {
     });
   });
 
+  it("takes each count from the entry that observed it last (#16866)", () => {
+    // studio saw the last issue close at NOW.
+    publishSharedRepoStats(REPO, { ...reading("studio", 50_000, 0), prCount: 1 }, NOW);
+    // build-box answers later, replaying an issue count it read two minutes
+    // earlier alongside a PR count it just read.
+    publishSharedRepoStats(
+      REPO,
+      {
+        ...reading("build-box", 200_000, 1),
+        prCount: 2,
+        issueRefreshedAt: 80_000,
+        prRefreshedAt: 200_000,
+      },
+      NOW + 10_000
+    );
+
+    expect(readSharedRepoStats(REPO)).toMatchObject({
+      hostId: "build-box",
+      issueCount: 0,
+      issueObservedAt: NOW,
+      prCount: 2,
+      prObservedAt: NOW + 10_000,
+    });
+  });
+
+  it("dates this machine's own host's replay by when it made it, with no measured offset", () => {
+    publishSharedRepoStats(REPO, reading("studio", 9_000, 1), NOW);
+
+    // The local host never answered live, but it shares this Shell's clock.
+    expect(
+      publishSharedRepoStats(
+        REPO,
+        { ...reading("local", NOW + 5_000, 0), replay: true },
+        NOW + 6_000
+      )
+    ).toBe(true);
+    expect(readSharedRepoStats(REPO)).toMatchObject({
+      hostId: "local",
+      issueCount: 0,
+      receivedAt: NOW + 5_000,
+    });
+  });
+
   it("dates each count on this Shell's clock by the age the host reported", () => {
     publishSharedRepoStats(
       REPO,

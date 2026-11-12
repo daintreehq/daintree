@@ -58,6 +58,8 @@ import {
   forgeIssueListCache,
   invalidateRepoListCachesForCountChange,
 } from "../GitHubCaches.js";
+import { clearHeldCounts, getHeldCount } from "../GitHubCountLedger.js";
+import { GitHubStatsCache } from "../GitHubStatsCache.js";
 import type { Issue, Page } from "../../../../../shared/types/forge.js";
 
 function makeThreadNode(path: string, isResolved = false, isOutdated = false) {
@@ -501,8 +503,10 @@ describe("updateRepoStatsCount — long-lived count cache reconciliation", () =>
     repoStatsCache.clear();
     repoStatsAndPageSnapshotCache.clear();
     restCountsCache.clear();
+    clearHeldCounts();
+    GitHubStatsCache.getInstance().clear();
     // Seed the in-memory stats entry so the function takes the cached-update
-    // branch and never touches the real on-disk GitHubStatsCache.
+    // branch rather than seeding from disk.
     repoStatsCache.set(KEY, {
       issueCount: 5,
       prCount: 1,
@@ -569,39 +573,53 @@ describe("updateRepoStatsCount — long-lived count cache reconciliation", () =>
     expect(repoStatsAndPageSnapshotCache.get(KEY)).not.toBeUndefined();
   });
 
-  it("drops a REST count baseline whose PR count disagrees, forcing an unconditional re-read", () => {
+  it("keeps a disagreeing REST baseline and its ETags, holding the list's count over it", () => {
     seedRestCounts(6, 1);
     const versionBefore = getETagCacheVersion();
 
     updateRepoStatsCount(KEY, "pr", 2);
 
-    // Dropping the entry discards its ETags too — the next background poll
-    // must re-read both REST legs instead of 304-replaying the stale count.
-    expect(restCountsCache.get(KEY)).toBeUndefined();
-    // The version bump invalidates any in-flight conditional fetch that read
-    // its baseline before the drop, so it can't 304-recommit the stale value.
-    expect(getETagCacheVersion()).toBeGreaterThan(versionBefore);
-  });
-
-  it("keeps a REST count baseline that agrees with the list-observed total", () => {
-    seedRestCounts(6, 2);
-    const versionBefore = getETagCacheVersion();
-
-    updateRepoStatsCount(KEY, "pr", 2);
-
-    expect(restCountsCache.get(KEY)).not.toBeUndefined();
-    // No baseline dropped — in-flight conditional fetches stay valid.
+    // The poll serves the held count over the REST pair, so a 304 replay of
+    // the stale pair can't roll the badge back, and the kept ETags keep an
+    // idle poll free (#16866).
+    expect(restCountsCache.get(KEY)).toMatchObject({ prCount: 1, prEtag: '"p1"' });
+    expect(getHeldCount(KEY, "pr")?.count).toBe(2);
     expect(getETagCacheVersion()).toBe(versionBefore);
   });
 
-  it("compares issue updates against the derived REST issue count (combined − PRs)", () => {
-    seedRestCounts(6, 1);
+  it("ignores a list response to a request issued before the held count's read", () => {
+    updateRepoStatsCount(KEY, "issue", 0, 2_000);
+    updateRepoStatsCount(KEY, "issue", 1, 1_500);
 
-    updateRepoStatsCount(KEY, "issue", 5);
-    expect(restCountsCache.get(KEY)).not.toBeUndefined();
+    expect(repoStatsCache.get(KEY)?.issueCount).toBe(0);
+    expect(getHeldCount(KEY, "issue")?.count).toBe(0);
+  });
 
-    updateRepoStatsCount(KEY, "issue", 7);
-    expect(restCountsCache.get(KEY)).toBeUndefined();
+  it("writes the list total to disk, zero included, so a failed poll can't fall back to the old count", () => {
+    updateRepoStatsCount(KEY, "issue", 0);
+
+    expect(GitHubStatsCache.getInstance().get(KEY)).toMatchObject({ issueCount: 0, prCount: 1 });
+  });
+
+  it("holds the count but writes no stats pair while nothing knows the other kind", () => {
+    repoStatsCache.clear();
+
+    updateRepoStatsCount(KEY, "issue", 3);
+
+    // A pair with a guessed PR zero would be served, and persisted, as real.
+    expect(getHeldCount(KEY, "issue")?.count).toBe(3);
+    expect(repoStatsCache.get(KEY)).toBeUndefined();
+    expect(GitHubStatsCache.getInstance().get(KEY)).toBeNull();
+  });
+
+  it("pairs the count with the other kind's held count when there is no stats entry", () => {
+    repoStatsCache.clear();
+    updateRepoStatsCount(KEY, "pr", 4, 1_000);
+
+    updateRepoStatsCount(KEY, "issue", 3, 2_000);
+
+    expect(repoStatsCache.get(KEY)).toMatchObject({ issueCount: 3, prCount: 4 });
+    expect(GitHubStatsCache.getInstance().get(KEY)).toMatchObject({ issueCount: 3, prCount: 4 });
   });
 });
 

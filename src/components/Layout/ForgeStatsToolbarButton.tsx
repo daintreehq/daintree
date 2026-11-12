@@ -292,28 +292,52 @@ export const ForgeStatsToolbarButton = memo(
     const [issueListTimestamp, setIssueListTimestamp] = useState<number | null>(null);
     const [prListTimestamp, setPrListTimestamp] = useState<number | null>(null);
 
+    // When the latest list total each kind reported was read, so a response
+    // that lands after a later one can't replace it. Cleared with the counts on
+    // project switch.
+    const issueListObservedAtRef = useRef<number | null>(null);
+    const prListObservedAtRef = useRef<number | null>(null);
+
     // An exact list total is something the user has now seen, so it becomes the
     // activity baseline silently; otherwise the poll that later confirms the
     // same total reads as an increase and re-arms the chip. A paginated `N+` is
-    // only a lower bound and never seeds an exact baseline.
-    const handleIssueListCountUpdate = useCallback((count: number, hasMore: boolean) => {
-      if (!hasMore && issueCountRef.current !== undefined) {
-        issueCountRef.current = count;
-        issueBaselineAtRef.current = Date.now();
-      }
-      setIssueListTimestamp(Date.now());
-      setIssueListCount(count);
-      setIssueListHasMore(hasMore);
-    }, []);
-    const handlePrListCountUpdate = useCallback((count: number, hasMore: boolean) => {
-      if (!hasMore && prCountRef.current !== undefined) {
-        prCountRef.current = count;
-        prBaselineAtRef.current = Date.now();
-      }
-      setPrListTimestamp(Date.now());
-      setPrListCount(count);
-      setPrListHasMore(hasMore);
-    }, []);
+    // only a lower bound and never seeds an exact baseline. The list is dated
+    // by when its read was requested, not when it arrived, so a count read
+    // that started later still outranks it (#16866).
+    const handleIssueListCountUpdate = useCallback(
+      (count: number, hasMore: boolean, observedAt?: number) => {
+        const readAt = observedAt ?? Date.now();
+        if (issueListObservedAtRef.current !== null && readAt < issueListObservedAtRef.current) {
+          return;
+        }
+        issueListObservedAtRef.current = readAt;
+        if (!hasMore && issueCountRef.current !== undefined) {
+          issueCountRef.current = count;
+          issueBaselineAtRef.current = Date.now();
+        }
+        setIssueListTimestamp(readAt);
+        setIssueListCount(count);
+        setIssueListHasMore(hasMore);
+      },
+      []
+    );
+    const handlePrListCountUpdate = useCallback(
+      (count: number, hasMore: boolean, observedAt?: number) => {
+        const readAt = observedAt ?? Date.now();
+        if (prListObservedAtRef.current !== null && readAt < prListObservedAtRef.current) {
+          return;
+        }
+        prListObservedAtRef.current = readAt;
+        if (!hasMore && prCountRef.current !== undefined) {
+          prCountRef.current = count;
+          prBaselineAtRef.current = Date.now();
+        }
+        setPrListTimestamp(readAt);
+        setPrListCount(count);
+        setPrListHasMore(hasMore);
+      },
+      []
+    );
 
     // Clear the list-loaded counts and their recency timestamps whenever the
     // project changes (issue #9741). Keyed directly on the project path rather
@@ -331,6 +355,8 @@ export const ForgeStatsToolbarButton = memo(
       setPrListHasMore(false);
       setIssueListTimestamp(null);
       setPrListTimestamp(null);
+      issueListObservedAtRef.current = null;
+      prListObservedAtRef.current = null;
     }, [currentProject?.path]);
 
     // Badge display value: whichever of the list-loaded count (suffixed with
@@ -691,13 +717,12 @@ export const ForgeStatsToolbarButton = memo(
       };
     }, [prsPulseAt]);
 
-    // Wired to the dropdown view's `onFreshFetch` callback. When the
-    // dropdown's SWR revalidation lands fresh first-page data, the provider
-    // has already written the new total count to its stats cache. Calling
-    // `refreshStats()` (no force) reads that hot cache in a single IPC
-    // round-trip — no provider network call — and updates the toolbar count
-    // badge so the dropdown's count and the badge converge in the same user
-    // interaction.
+    // Wired to the dropdown view's `onFreshFetch` callback. When an open first
+    // page was just read from the forge, the provider has already held its
+    // total. Calling `refreshStats()` (no force) reads that back from its hot
+    // cache in a single IPC round-trip — no provider network call — so the
+    // dropdown's count and the badge converge in the same interaction, and with
+    // shared counts on the total reaches the shared record (#16866).
     const handleListFreshFetch = useCallback(() => {
       void refreshStats();
     }, [refreshStats]);
@@ -729,7 +754,8 @@ export const ForgeStatsToolbarButton = memo(
 
         // Hover prefetch primes the list cache silently. The count badge stays
         // fresh via the 30s background poll and the click-time refresh —
-        // refreshing stats here would flicker the toolbar status indicator.
+        // refreshing stats on every hover would flicker the toolbar status
+        // indicator; only a read that reached the forge reports below.
         inFlightRef.current = true;
         const startedAt = Date.now();
         // Cache-first: a warm main-process list cache (60s TTL) serves this
@@ -780,6 +806,26 @@ export const ForgeStatsToolbarButton = memo(
               // so the count fingerprint arms the count-as-cache-buster.
               ...(result.totalCount != null ? { countAtWrite: result.totalCount } : {}),
             });
+            // A hover read that reached the forge is as good as the dropdown's
+            // own (#16866): the provider has held its total, and the dropdown
+            // that opens next may be served this very page from the cache,
+            // which doesn't report to the badge. So it reports here. With
+            // shared counts on, the badge reads the record, which only a stats
+            // answer carrying the held total moves.
+            const total = result.totalCount;
+            if (
+              result.source === "network" &&
+              (total === undefined || (Number.isSafeInteger(total) && total >= 0))
+            ) {
+              const report =
+                type === "issue" ? handleIssueListCountUpdate : handlePrListCountUpdate;
+              report(
+                total ?? result.items.length,
+                total === undefined && result.hasMore,
+                startedAt
+              );
+              if (sharedCounts) void refreshStats();
+            }
           })
           .catch(() => {
             // Swallow prefetch errors — the click path will retry, surface
@@ -790,7 +836,15 @@ export const ForgeStatsToolbarButton = memo(
             inFlightRef.current = false;
           });
       },
-      [currentProject, isTokenError, rateLimitActive]
+      [
+        currentProject,
+        isTokenError,
+        rateLimitActive,
+        handleIssueListCountUpdate,
+        handlePrListCountUpdate,
+        sharedCounts,
+        refreshStats,
+      ]
     );
 
     const handlePrefetchPointerEnter = useCallback(
