@@ -82,6 +82,8 @@ import {
   clearPRCaches,
 } from "../GitHubCaches.js";
 import { gitHubRateLimitService } from "../GitHubRateLimitService.js";
+import { clearHeldCounts } from "../GitHubCountLedger.js";
+import { updateRepoStatsCount } from "../GitHubPRs.js";
 
 const CACHE_KEY = "testowner/testrepo";
 
@@ -101,6 +103,39 @@ function statsResponse(issueCount = 5, prCount = 3): Record<string, unknown> {
     },
     rateLimit: {},
   };
+}
+
+/** `GetRepoOpenCounts` — the scalar confirm the poll sends when REST disagrees with a held count. */
+function openCountsResponse(issueCount: number, prCount: number): Record<string, unknown> {
+  return {
+    repository: {
+      issues: { totalCount: issueCount },
+      pullRequests: { totalCount: prCount },
+    },
+    rateLimit: {},
+  };
+}
+
+/**
+ * Route the GraphQL client per query: the page-and-stats query for an explicit
+ * refresh, the open-counts confirm for a disagreeing REST poll. Each queue is
+ * consumed in order and its last entry is sticky; a query with no route rejects.
+ */
+function routeGraphQL(routes: {
+  stats?: Record<string, unknown>[];
+  openCounts?: Record<string, unknown>[];
+}): void {
+  const queues = { stats: [...(routes.stats ?? [])], openCounts: [...(routes.openCounts ?? [])] };
+  mockClient.mockImplementation((query: unknown) => {
+    const key = String(query).includes("GetRepoOpenCounts") ? "openCounts" : "stats";
+    const queue = queues[key];
+    if (queue.length === 0) return Promise.reject(new Error(`unexpected ${key} query`));
+    return Promise.resolve(queue.length > 1 ? queue.shift()! : queue[0]);
+  });
+}
+
+function openCountsQueryCount(): number {
+  return mockClient.mock.calls.filter((c) => String(c[0]).includes("GetRepoOpenCounts")).length;
 }
 
 interface FakeResponse {
@@ -263,6 +298,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
     prListCache.clear();
     repoStatsAndPageSnapshotCache.clear();
     restCountsCache.clear();
+    clearHeldCounts();
     repoEventsETagCache.clear();
     repoEventsPollIntervalCache.clear();
     repoEventsNoChangeCount.clear();
@@ -344,6 +380,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       repo: [repoOk(8, '"r1"'), repoOk(9, '"r2"')],
       pulls: [pullsOk(3, '"p1"'), restResponse(304)],
     });
+    routeGraphQL({ openCounts: [openCountsResponse(6, 3)] });
 
     await getRepoStatsAndPage("/test", false);
     expireMemoryCaches();
@@ -372,6 +409,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
     expireMemoryCaches();
     expireBackoffWindow();
     restCountsCache.clear();
+    clearHeldCounts();
     routeFetch({
       events: [eventsResponse(200, { etag: '"e1"' })],
       repo: [repoOk(4)],
@@ -666,9 +704,9 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBe(snapshotBefore);
     });
 
-    it("serves REST-fresher counts with the snapshot pages on an unchanged probe", async () => {
+    it("drops the snapshot once a confirmed count disproves it, serving the fresher counts", async () => {
       // Explicit refresh writes the snapshot (5 issues / 3 PRs)…
-      mockClient.mockResolvedValue(statsResponse(5, 3));
+      routeGraphQL({ stats: [statsResponse(5, 3)], openCounts: [openCountsResponse(10, 2)] });
       routeFetch({
         events: [eventsResponse(200, { etag: '"e1"' }), eventsResponse(304)],
         repo: [repoOk(12)],
@@ -676,19 +714,22 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       });
       await getRepoStatsAndPage("/test", true);
 
-      // …then a background REST poll observes fresher counts (10 / 2)…
+      // …then a background REST poll observes fresher counts (10 / 2), which
+      // GraphQL confirms…
       expireMemoryCaches();
       await getRepoStatsAndPage("/test", false);
 
-      // …so a later unchanged probe must not roll the pill back to 5 / 3.
+      // …so a later unchanged probe must not roll the pill back to 5 / 3, nor
+      // serve first pages read when the counts were different.
       expireMemoryCaches();
       expireBackoffWindow();
       const result = await getRepoStatsAndPage("/test", false);
 
       expect(result.stats?.issueCount).toBe(10);
       expect(result.stats?.prCount).toBe(2);
-      expect(result.issues).not.toBeNull();
-      expect(result.prs).not.toBeNull();
+      expect(result.issues).toBeNull();
+      expect(result.prs).toBeNull();
+      expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBeUndefined();
     });
 
     it("re-fetches REST counts after clearPRCaches drops the baselines", async () => {
@@ -707,6 +748,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
         repo: [repoOk(9, '"r2"')],
         pulls: [pullsOk(4, '"p2"')],
       });
+      routeGraphQL({ openCounts: [openCountsResponse(5, 4)] });
       const result = await getRepoStatsAndPage("/test", false);
 
       expect(result.stats?.issueCount).toBe(5);
@@ -791,7 +833,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
 
     it("re-reads the count baselines after the probe await so a concurrent reconciliation sticks", async () => {
       // Seed the snapshot (1 PR) via an explicit refresh.
-      mockClient.mockResolvedValue(statsResponse(5, 1));
+      routeGraphQL({ stats: [statsResponse(5, 1)], openCounts: [openCountsResponse(5, 2)] });
       routeFetch({});
       await getRepoStatsAndPage("/test", true);
       expireMemoryCaches();
@@ -975,6 +1017,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
         repo: [repoOk(9, '"r2"')],
         pulls: [restResponse(304)],
       });
+      routeGraphQL({ openCounts: [openCountsResponse(6, 3)] });
       const result = await getRepoStatsAndPage("/test", false);
       expect(result.stats?.issueCount).toBe(6);
       expect(result.stats?.prCount).toBe(3);
@@ -1051,6 +1094,146 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
 
       expect(forgeIssueListCache.get("issue:testowner/testrepo:open::created:")).toBeDefined();
       expect(forgePRListCache.get("pr:testowner/testrepo:open::created:")).toBeDefined();
+    });
+  });
+  describe("list totals against lagging REST counts (#16866)", () => {
+    function persistedIssueCounts(): number[] {
+      return mockStatsCache.set.mock.calls.map((c) => (c[1] as { issueCount: number }).issueCount);
+    }
+
+    it("holds a fresh empty list's 0 through the follow-up refresh and the next poll while REST still reads 1", async () => {
+      // Poll 1: one open issue and one open PR (combined 2).
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' }), eventsResponse(200, { etag: '"e2"' })],
+        repo: [repoOk(2, '"r1"'), restResponse(304)],
+        pulls: [pullsOk(1, '"p1"'), restResponse(304)],
+      });
+      routeGraphQL({ openCounts: [openCountsResponse(0, 1)] });
+      const first = await getRepoStatsAndPage("/test", false);
+      expect(first.stats?.issueCount).toBe(1);
+      mockStatsCache.set.mockClear();
+
+      // The last issue closes; the dropdown's fresh open list reads it.
+      updateRepoStatsCount(CACHE_KEY, "issue", 0);
+      expect(persistedIssueCounts().at(-1)).toBe(0);
+
+      // The dropdown's follow-up refresh reads that total back from the hot
+      // cache, without the legacy first pages and without touching REST.
+      const fetchesBefore = mockFetch.mock.calls.length;
+      const followUp = await getRepoStatsAndPage("/test", false);
+      expect(followUp.source).toBe("memory-cache");
+      expect(followUp.stats?.issueCount).toBe(0);
+      expect(followUp.stats?.prCount).toBe(1);
+      expect(mockFetch.mock.calls.length).toBe(fetchesBefore);
+
+      // Next poll: REST still replays the pair that counts the closed issue.
+      // GraphQL settles the disagreement, and the badge stays at 0.
+      expireMemoryCaches();
+      expireBackoffWindow();
+      const next = await getRepoStatsAndPage("/test", false);
+      expect(next.stats?.issueCount).toBe(0);
+      expect(next.stats?.prCount).toBe(1);
+      expect(openCountsQueryCount()).toBe(1);
+      expect(repoEventsETagCache.get(CACHE_KEY)).toBe('"e2"');
+
+      // And an unchanged-probe replay of that REST pair serves the held 0.
+      expireMemoryCaches();
+      const replay = await getRepoStatsAndPage("/test", false);
+      expect(replay.stats?.issueCount).toBe(0);
+      expect(persistedIssueCounts()).not.toContain(1);
+    });
+
+    it("keeps the held count and the old events ETag when GraphQL can't settle a disagreement", async () => {
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' }), eventsResponse(200, { etag: '"e2"' })],
+        repo: [repoOk(2, '"r1"'), restResponse(304)],
+        pulls: [pullsOk(1, '"p1"'), restResponse(304)],
+      });
+      await getRepoStatsAndPage("/test", false);
+      updateRepoStatsCount(CACHE_KEY, "issue", 0);
+      vi.mocked(gitHubRateLimitService.shouldBlockRequest).mockImplementation((resource?: string) =>
+        resource === "graphql"
+          ? { blocked: true, reason: "primary", resumeAt: Date.now() + 1000 }
+          : { blocked: false, reason: null }
+      );
+
+      expireMemoryCaches();
+      expireBackoffWindow();
+      const result = await getRepoStatsAndPage("/test", false);
+
+      expect(result.stats?.issueCount).toBe(0);
+      expect(result.error).toBeUndefined();
+      expect(mockClient).not.toHaveBeenCalled();
+      // Unsettled counts as a failed fetch: the next probe re-detects the
+      // change and asks again.
+      expect(repoEventsETagCache.get(CACHE_KEY)).toBe('"e1"');
+    });
+
+    it("moves 0 to 1 on a fresh one-item list inside the probe backoff window, with no request", async () => {
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' })],
+        repo: [repoOk(1)],
+        pulls: [pullsOk(1)],
+      });
+      const first = await getRepoStatsAndPage("/test", false);
+      expect(first.stats?.issueCount).toBe(0);
+
+      updateRepoStatsCount(CACHE_KEY, "issue", 1);
+      const fetchesBefore = mockFetch.mock.calls.length;
+
+      // The memory cache lapses but the backoff window is still open, so the
+      // poll replays the REST pair (0 issues) with the held 1 drawn over it.
+      expireMemoryCaches();
+      const result = await getRepoStatsAndPage("/test", false);
+
+      expect(result.stats?.issueCount).toBe(1);
+      expect(result.stats?.prCount).toBe(1);
+      expect(mockFetch.mock.calls.length).toBe(fetchesBefore);
+      expect(mockClient).not.toHaveBeenCalled();
+    });
+
+    it("raises no phantom issue when the sole PR closes and open_issues_count lags", async () => {
+      // Poll 1: no issues, one PR (combined 1).
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' }), eventsResponse(200, { etag: '"e2"' })],
+        repo: [repoOk(1, '"r1"'), restResponse(304)],
+        pulls: [pullsOk(1, '"p1"'), pullsOk(0, '"p2"')],
+      });
+      routeGraphQL({ openCounts: [openCountsResponse(0, 0)] });
+      await getRepoStatsAndPage("/test", false);
+      mockStatsCache.set.mockClear();
+
+      // The PR closes: `/pulls` already reads 0, `open_issues_count` still 1,
+      // so REST alone derives one open issue.
+      expireMemoryCaches();
+      expireBackoffWindow();
+      const result = await getRepoStatsAndPage("/test", false);
+
+      expect(result.stats?.issueCount).toBe(0);
+      expect(result.stats?.prCount).toBe(0);
+      expect(openCountsQueryCount()).toBe(1);
+      expect(persistedIssueCounts()).not.toContain(1);
+    });
+
+    it("keeps a list's count over an explicit refresh issued before the list", async () => {
+      let resolveQuery: (value: unknown) => void = () => {};
+      mockClient.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveQuery = resolve;
+          })
+      );
+      routeFetch({});
+
+      const pending = getRepoStatsAndPage("/test", true);
+      await vi.waitFor(() => expect(mockClient).toHaveBeenCalled());
+      updateRepoStatsCount(CACHE_KEY, "issue", 0, Date.now() + 1_000);
+      resolveQuery(statsResponse(1, 2));
+      const result = await pending;
+
+      expect(result.stats?.issueCount).toBe(0);
+      expect(result.stats?.prCount).toBe(2);
+      expect(repoStatsCache.get(CACHE_KEY)?.issueCount).toBe(0);
     });
   });
 });

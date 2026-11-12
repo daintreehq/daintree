@@ -3267,6 +3267,61 @@ describe("useRepositoryStats", () => {
       expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("local");
     });
 
+    it("carries a dropdown's list total, read back from the host's hot cache, onto the record (#16866)", async () => {
+      const now = Date.now();
+      getRepoStatsMock.mockResolvedValueOnce(
+        freshAnswer(1, 1, {
+          countsSource: "network",
+          lastUpdated: now - 2_000,
+          issueCountRefreshedAt: now - 2_000,
+          prCountRefreshedAt: now - 2_000,
+        })
+      );
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(readSharedRepoStats(REPO_KEY)?.issueCount).toBe(1);
+      });
+      expect(result.current.sharedCounts).toBe(true);
+
+      // The dropdown's fresh empty list made the host hold 0; the toolbar's
+      // follow-up refresh reads that back from the host's memory cache.
+      getRepoStatsMock.mockResolvedValueOnce(
+        freshAnswer(0, 1, {
+          countsSource: "memory-cache",
+          lastUpdated: now - 1_000,
+          issueCountRefreshedAt: now - 1_000,
+          prCountRefreshedAt: now - 2_000,
+        })
+      );
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(readSharedRepoStats(REPO_KEY)).toMatchObject({
+        issueCount: 0,
+        prCount: 1,
+        hostId: "studio",
+      });
+      expect(result.current.stats?.issueCount).toBe(0);
+
+      // The next poll, which the host now answers from its held counts, keeps it.
+      getRepoStatsMock.mockResolvedValueOnce(
+        freshAnswer(0, 1, {
+          countsSource: "network",
+          lastUpdated: now,
+          issueCountRefreshedAt: now - 1_000,
+          prCountRefreshedAt: now,
+        })
+      );
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(readSharedRepoStats(REPO_KEY)?.issueCount).toBe(0);
+      expect(result.current.stats?.issueCount).toBe(0);
+    });
+
     it("shares in a local view once a host is paired", async () => {
       delete window.__DAINTREE_HOST_ID__;
       pairedHostRef.current = true;

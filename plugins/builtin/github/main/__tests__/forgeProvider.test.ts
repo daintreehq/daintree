@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
 import { MAX_REVIEW_THREAD_PAGES } from "../GitHubCaches.js";
+import { getHeldCount } from "../GitHubCountLedger.js";
 import type { ShouldBlockResult } from "../GitHubRateLimitService.js";
 
 const mockGraphQLClient = vi.fn();
@@ -1189,6 +1190,46 @@ function defaultListKey(
 
 describe("listIssues caching", () => {
   beforeEach(() => mockGraphQLClient.mockReset());
+
+  it("labels a page read now as network and a warm cache hit as cache (#16866)", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse(1));
+    const first = await githubForgeProvider.listIssues(repo, { state: "open" });
+    const second = await githubForgeProvider.listIssues(repo, { state: "open" });
+
+    expect(first.source).toBe("network");
+    // The cached total was read earlier, so nothing downstream may treat it
+    // as a fresh observation of the open count.
+    expect(second.source).toBe("cache");
+    expect(second.totalCount).toBe(1);
+  });
+
+  it("holds an open first page's total as the repository's issue count", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse(0));
+    await githubForgeProvider.listIssues(repo, { state: "open" });
+
+    expect(getHeldCount("owner/repo", "issue")?.count).toBe(0);
+    expect(repoStatsCache.get("owner/repo")?.issueCount).toBe(0);
+  });
+
+  it.each([
+    ["a negative total", -1],
+    ["a fractional total", 1.5],
+  ])("leaves the held count alone for %s", async (_label, totalCount) => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse(totalCount));
+    await githubForgeProvider.listIssues(repo, { state: "open" });
+
+    expect(getHeldCount("owner/repo", "issue")).toBeUndefined();
+  });
+
+  it.each([
+    ["a closed list", { state: "closed" as const }],
+    ["a later page", { state: "open" as const, cursor: "next" }],
+  ])("leaves the held count alone for %s", async (_label, opts) => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse(7));
+    await githubForgeProvider.listIssues(repo, opts);
+
+    expect(getHeldCount("owner/repo", "issue")).toBeUndefined();
+  });
 
   it("serves a warm cache entry without a second query", async () => {
     mockGraphQLClient.mockResolvedValue(issueListResponse());

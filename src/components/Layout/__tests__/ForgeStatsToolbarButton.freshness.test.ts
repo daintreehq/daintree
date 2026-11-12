@@ -403,18 +403,24 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
     expect(source).toMatch(
       /\[prListTimestamp, setPrListTimestamp\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
     );
-    // Each handler must record Date.now() so the resolver can compare it to the
-    // stats poll's lastUpdated.
+    // Each handler dates the list by when its read was requested (falling back
+    // to arrival for a view that doesn't say), drops a response older than the
+    // last one, and records that time so the resolver can compare it to the
+    // stats poll's per-count refreshed-at (#16866).
     const issueHandler = source.slice(
       source.indexOf("handleIssueListCountUpdate = useCallback"),
       source.indexOf("handlePrListCountUpdate = useCallback")
     );
-    expect(issueHandler).toContain("setIssueListTimestamp(Date.now())");
+    expect(issueHandler).toMatch(/readAt\s*=\s*observedAt\s*\?\?\s*Date\.now\(\)/);
+    expect(issueHandler).toMatch(/readAt\s*<\s*issueListObservedAtRef\.current[\s\S]{0,20}return/);
+    expect(issueHandler).toContain("setIssueListTimestamp(readAt)");
     const prHandler = source.slice(
       source.indexOf("handlePrListCountUpdate = useCallback"),
-      source.indexOf("handlePrListCountUpdate = useCallback") + 300
+      source.indexOf("handlePrListCountUpdate = useCallback") + 700
     );
-    expect(prHandler).toContain("setPrListTimestamp(Date.now())");
+    expect(prHandler).toMatch(/readAt\s*=\s*observedAt\s*\?\?\s*Date\.now\(\)/);
+    expect(prHandler).toMatch(/readAt\s*<\s*prListObservedAtRef\.current[\s\S]{0,20}return/);
+    expect(prHandler).toContain("setPrListTimestamp(readAt)");
   });
 
   it("passes displayCount to the issue and PR pills", () => {
