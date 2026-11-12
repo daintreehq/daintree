@@ -293,24 +293,59 @@ describe("StorageRecovery for a busy database (#16840)", () => {
     expect(calls).toEqual(["restart"]);
   });
 
-  it("starts a full budget once reset, cancelling a wait already set", async () => {
+  it("cancels a wait already set when reset", async () => {
+    const { subject, calls } = busy();
+
+    subject.faulted();
+    subject.reset();
+    await vi.advanceTimersByTimeAsync(BUSY_SAME_OUTAGE_MS);
+
+    expect(calls).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("gives a spent budget back in full once reset, with no time passing", async () => {
     const { subject, calls } = busy();
     for (const wait of BUSY_RESTART_DELAYS_MS) {
       subject.faulted();
       await vi.advanceTimersByTimeAsync(wait);
     }
     subject.faulted();
-    expect(calls).toHaveLength(BUSY_RESTART_DELAYS_MS.length);
+    expect(vi.getTimerCount()).toBe(0);
 
     subject.reset();
+    // Every wait again, the shortest first, well inside the outage window.
+    for (const wait of BUSY_RESTART_DELAYS_MS) {
+      subject.faulted();
+      await vi.advanceTimersByTimeAsync(wait - 1);
+      const before = calls.length;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls).toHaveLength(before + 1);
+    }
     subject.faulted();
-    subject.reset();
-    await vi.advanceTimersByTimeAsync(BUSY_SAME_OUTAGE_MS);
-    expect(calls).toHaveLength(BUSY_RESTART_DELAYS_MS.length);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(calls).toHaveLength(BUSY_RESTART_DELAYS_MS.length * 2);
+  });
+
+  it("restarts nothing when reset while it reads free space, and the next fault waits the shortest", async () => {
+    let read!: (room: boolean) => void;
+    const { subject, calls } = recovery(
+      () =>
+        new Promise<boolean>((resolve) => {
+          read = resolve;
+        })
+    );
 
     subject.faulted();
-    await vi.advanceTimersByTimeAsync(BUSY_RESTART_DELAYS_MS[0]!);
-    expect(calls).toHaveLength(BUSY_RESTART_DELAYS_MS.length + 1);
+    await vi.advanceTimersByTimeAsync(FIRST);
+    subject.reset();
+    read(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["check"]);
+
+    subject.faulted();
+    await vi.advanceTimersByTimeAsync(FIRST);
+    expect(calls).toEqual(["check", "check"]);
   });
 
   it("counts no restart that finished after a reset toward the next lifetime's budget", async () => {

@@ -990,11 +990,11 @@ export class DaintreeLocalStore implements LocalStore {
     const writes = runnable.some((i) => ops[i].kind === "write");
     const batch = runnable.map((i) => ops[i]);
     const progress: BatchProgress = { step: "setup", since: performance.now() };
-    const siteOf = (step: FaultSite["step"], since: number): FaultSite => ({
+    const siteOf = (step: FaultSite["step"], elapsedMs: number): FaultSite => ({
       step,
       writes,
       calls: batch.length,
-      elapsedMs: elapsedSince(since),
+      elapsedMs,
     });
     try {
       const { results, fault } = this.withCommitLevel(writes, () =>
@@ -1003,11 +1003,11 @@ export class DaintreeLocalStore implements LocalStore {
       runnable.forEach((opIndex, j) => {
         outcomes[opIndex] = results[j];
       });
-      if (fault) this.latch(fault.error, siteOf("call", fault.since));
+      if (fault) this.latch(fault.error, siteOf("call", fault.elapsedMs));
     } catch (error) {
       // The batch rolled back whole, so nothing in it was stored; only the
       // database itself (begin, commit, an I/O error) fails a whole batch.
-      const refused = this.latch(error, siteOf(progress.step, progress.since));
+      const refused = this.latch(error, siteOf(progress.step, elapsedSince(progress.since)));
       for (const i of runnable) outcomes[i] = { ok: false, error: refused };
     }
     return outcomes;
@@ -1024,9 +1024,9 @@ export class DaintreeLocalStore implements LocalStore {
     ops: Op[],
     writes: boolean,
     progress: BatchProgress
-  ): { results: Outcome[]; fault: { error: unknown; since: number } | null } {
+  ): { results: Outcome[]; fault: { error: unknown; elapsedMs: number } | null } {
     const batch = this.sqlite.transaction(() => {
-      let fault: { error: unknown; since: number } | null = null;
+      let fault: { error: unknown; elapsedMs: number } | null = null;
       const results = ops.map((op): Outcome => {
         // A write after a storage error in the same batch must not commit
         // without the one that failed.
@@ -1042,7 +1042,8 @@ export class DaintreeLocalStore implements LocalStore {
           // carrying on would run the rest outside any transaction.
           if (!this.sqlite.inTransaction) throw error;
           if (!isStorageFault(error)) return { ok: false, error };
-          fault = { error, since: progress.since };
+          // Timed now: the calls after it and the commit aren't its wait.
+          fault = { error, elapsedMs: elapsedSince(progress.since) };
           return { ok: false, error: this.storageFault(error) };
         }
       });

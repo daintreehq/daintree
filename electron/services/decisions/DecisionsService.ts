@@ -585,13 +585,18 @@ export class DecisionsService {
    * Each cause replaces only its own fault, so a disk-space exit can't spend
    * a busy store's budget. A busy store is replaced even while disk space is
    * critical: the fresh one is refused its first write for disk pressure,
-   * and the monitor's exit replaces it from there.
+   * and the monitor's exit replaces it from there. Only the store attached
+   * when it was asked is replaced: a stop and start queued ahead of it may
+   * have opened another, which its own fault restarts on its own budget.
    */
   private restartStore(cause: "disk-space" | "busy"): Promise<boolean> {
+    const asked = this.store;
     return this.enqueue(async () => {
       const store = this.store;
       const reason = store?.faultReason() ?? null;
-      if (this.disposed || this.settings === null || store === null) return false;
+      if (this.disposed || this.settings === null || store === null || store !== asked) {
+        return false;
+      }
       const covered =
         cause === "busy"
           ? reason === "storage-busy"

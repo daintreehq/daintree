@@ -652,6 +652,7 @@ describe("DaintreeLocalStore ordering and failures", () => {
 
   it("refuses every call in a batch whose commit fails, and stores none of it", async () => {
     const store = new DaintreeLocalStore(sqlite);
+    logWarn.mockClear();
     // A deferred foreign key is only checked at COMMIT, after every call ran.
     sqlite.exec(`
       CREATE TABLE commit_probe_parent (id INTEGER PRIMARY KEY);
@@ -671,10 +672,37 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(count(sqlite, "decisions_audit")).toBe(0);
     expect(count(sqlite, "decisions_meta")).toBe(0);
     expect(store.isFaulted()).toBe(true);
+    expect(stopLines()).toEqual([
+      expect.objectContaining({ step: "commit", writes: true, calls: 2 }),
+    ]);
+  });
+
+  it("says a batch that couldn't raise its commit level failed before it began", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    logWarn.mockClear();
+    const original = sqlite.pragma.bind(sqlite);
+    vi.spyOn(sqlite, "pragma").mockImplementation(((source: string, options?: never) => {
+      if (source === "synchronous = FULL") throw sqliteError("SQLITE_IOERR_WRITE");
+      return original(source, options);
+    }) as typeof sqlite.pragma);
+
+    await expect(store.setMeta("k", "v")).rejects.toMatchObject({ reason: "storage-fault" });
+
+    expect(stopLines()).toEqual([
+      {
+        reason: "storage-fault",
+        code: "SQLITE_IOERR_WRITE",
+        step: "setup",
+        writes: true,
+        calls: 1,
+        elapsedMs: expect.any(Number),
+      },
+    ]);
   });
 
   it("refuses the writes after a storage error in the same batch, with the rest still committing", async () => {
     const store = new DaintreeLocalStore(sqlite);
+    logWarn.mockClear();
     sqlite.function("refuse_with_io_error", () => {
       throw sqliteError("SQLITE_IOERR_WRITE");
     });
@@ -699,6 +727,17 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(await store.getMeta("before")).toBe("1");
     expect(await store.getMeta("after")).toBeNull();
     expect(store.isFaulted()).toBe(true);
+    // The call that failed, in a batch of four that committed (#16840).
+    expect(stopLines()).toEqual([
+      {
+        reason: "storage-fault",
+        code: "SQLITE_IOERR_WRITE",
+        step: "call",
+        writes: true,
+        calls: 4,
+        elapsedMs: expect.any(Number),
+      },
+    ]);
   });
 
   it("stops writing after a batch of reads fails as a whole", async () => {
@@ -1296,10 +1335,11 @@ describe("DaintreeLocalStore under write-lock contention (#16840)", () => {
     const faults: string[] = [];
     store.onFault((reason) => faults.push(reason));
     const lock = await holdWriteLock(dbPath, 300);
+    releaseAsImmediateBegins(sqlite, lock.release);
 
-    // nextAlias reads the last alias, then writes the next one.
+    // nextAlias reads the last alias, then writes the next one. Begun deferred,
+    // nothing releases the lock, and its write is refused at once.
     const alias = store.nextAlias();
-    lock.release();
 
     await expect(alias).resolves.toBe(1);
     expect(await lock.released).toBe("released");
@@ -1374,3 +1414,32 @@ describe("DaintreeLocalStore under write-lock contention (#16840)", () => {
     expect(store.faultReason()).toBe("storage-fault");
   });
 });
+
+/** What each "stopped taking writes" line carried, in order. */
+function stopLines(): unknown[] {
+  return logWarn.mock.calls
+    .filter(([message]) => String(message).includes("stopped taking writes"))
+    .map(([, fields]) => fields);
+}
+
+/**
+ * Calls `release` as the store's next batch begins with `BEGIN IMMEDIATE`,
+ * and never for one begun deferred, so the lock is still held when the batch
+ * starts however late it is scheduled.
+ */
+function releaseAsImmediateBegins(db: Database.Database, release: () => void): void {
+  const original = db.transaction.bind(db);
+  vi.spyOn(db, "transaction").mockImplementation(((fn: (...args: unknown[]) => unknown) => {
+    const transaction = original(fn);
+    if (db.inTransaction) return transaction;
+    return Object.assign((...args: unknown[]) => transaction(...args), {
+      default: transaction.default,
+      deferred: transaction.deferred,
+      exclusive: transaction.exclusive,
+      immediate: (...args: unknown[]) => {
+        release();
+        return transaction.immediate(...args);
+      },
+    });
+  }) as typeof db.transaction);
+}
