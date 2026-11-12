@@ -1,5 +1,5 @@
 export interface ExitStatusDisplay {
-  /** The header badge, e.g. `[exit 1]` or `[exited]`. */
+  /** The header badge, e.g. `exit 1` or `exited`. */
   badge: string;
   /** The line the agent indicator's tooltip shows for the same exit. */
   detail: string;
@@ -15,7 +15,7 @@ export interface ExitStatusDisplay {
  */
 export function describeExitStatus(exitCode: number | null | undefined): ExitStatusDisplay {
   if (exitCode == null) {
-    return { badge: "[exited]", detail: "Exited without an exit code", failed: false };
+    return { badge: "exited", detail: "Exited without an exit code", failed: false };
   }
-  return { badge: `[exit ${exitCode}]`, detail: `Exit code: ${exitCode}`, failed: exitCode !== 0 };
+  return { badge: `exit ${exitCode}`, detail: `Exit code: ${exitCode}`, failed: exitCode !== 0 };
 }

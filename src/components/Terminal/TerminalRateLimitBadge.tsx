@@ -168,6 +168,7 @@ function RateLimitChip({
                   className={cn(chipClass, HEADER_CHIP_TRIGGER_CLASS)}
                   aria-haspopup="menu"
                   data-testid="terminal-rate-limit-badge"
+                  data-fit-priority="80"
                 >
                   {chipContent}
                 </button>
@@ -230,6 +231,7 @@ function RateLimitChip({
           aria-live="off"
           tabIndex={0}
           data-testid="terminal-rate-limit-badge"
+          data-fit-priority="80"
         >
           {chipContent}
         </div>

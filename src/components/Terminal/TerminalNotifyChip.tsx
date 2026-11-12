@@ -170,7 +170,7 @@ export function TerminalNotifyChip({
   return (
     <Popover>
       {/* Selecting the pane would close the popover this opens. */}
-      <span className="contents" onClick={holdPaneSelection}>
+      <span className="contents" onClick={holdPaneSelection} data-fit-priority="70">
         <Tooltip>
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>

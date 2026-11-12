@@ -113,7 +113,7 @@ describe("TerminalHeaderContent — settled-agent trace", () => {
     render(<TerminalHeaderContent id="t1" agentState="completed" isExited={true} exitCode={1} />);
 
     const badge = screen.getByRole("status");
-    expect(badge.textContent).toContain("[exit 1]");
+    expect(badge.textContent).toContain("exit 1");
   });
 
   it("shows exit code 0 correctly", () => {
@@ -122,7 +122,7 @@ describe("TerminalHeaderContent — settled-agent trace", () => {
     render(<TerminalHeaderContent id="t1" agentState="completed" isExited={true} exitCode={0} />);
 
     const badge = screen.getByRole("status");
-    expect(badge.textContent).toContain("[exit 0]");
+    expect(badge.textContent).toContain("exit 0");
   });
 
   it("marks a non-zero exit as failed, in shape and in name, and only that", () => {
@@ -130,7 +130,7 @@ describe("TerminalHeaderContent — settled-agent trace", () => {
 
     const { rerender } = render(<TerminalHeaderContent id="t1" isExited={true} exitCode={2} />);
     expect(screen.getByRole("status").querySelector("svg")).not.toBeNull();
-    expect(screen.getByRole("status").getAttribute("aria-label")).toBe("[exit 2], failed");
+    expect(screen.getByRole("status").getAttribute("aria-label")).toBe("exit 2, failed");
 
     rerender(<TerminalHeaderContent id="t1" isExited={true} exitCode={0} />);
     expect(screen.getByRole("status").querySelector("svg")).toBeNull();
@@ -140,13 +140,13 @@ describe("TerminalHeaderContent — settled-agent trace", () => {
     expect(screen.getByRole("status").querySelector("svg")).toBeNull();
   });
 
-  it("reads [exited] rather than a dangling 'exit' when there is no code", () => {
+  it("reads 'exited' rather than a dangling 'exit' when there is no code", () => {
     mockTerminal = { id: "t1" };
 
     render(<TerminalHeaderContent id="t1" isExited={true} exitCode={null} />);
 
     const badge = screen.getByRole("status");
-    expect(badge.textContent).toBe("[exited]");
+    expect(badge.textContent).toBe("exited");
     expect(badge.getAttribute("aria-live")).toBe("off");
   });
 
@@ -815,7 +815,7 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     const resource = screen.getByTestId("terminal-resource-badge");
     expect(allStatuses[0]).not.toBe(resource);
     expect(resource).toBeTruthy();
-    const exitBadge = allStatuses.find((el) => el.textContent?.includes("[exit 1]"));
+    const exitBadge = allStatuses.find((el) => el.textContent?.includes("exit 1"));
     expect(exitBadge).toBeTruthy();
     expect(
       exitBadge!.compareDocumentPosition(resource) & Node.DOCUMENT_POSITION_FOLLOWING
