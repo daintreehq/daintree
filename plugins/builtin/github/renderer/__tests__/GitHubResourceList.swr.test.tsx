@@ -1034,7 +1034,10 @@ describe("GitHubResourceList SWR behavior", () => {
       ["a negative total", -1],
       ["a fractional total", 2.5],
     ])("leaves both badge callbacks alone for %s", async (_label, totalCount) => {
-      mockListIssues.mockResolvedValue({ ...makeResponse([makeIssue(1)], totalCount), source: "network" });
+      mockListIssues.mockResolvedValue({
+        ...makeResponse([makeIssue(1)], totalCount),
+        source: "network",
+      });
       const onCountUpdate = vi.fn();
       const onFreshFetch = vi.fn();
 

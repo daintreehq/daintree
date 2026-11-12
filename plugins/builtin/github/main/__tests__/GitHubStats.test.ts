@@ -1151,10 +1151,11 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       });
       await getRepoStatsAndPage("/test", false);
       updateRepoStatsCount(CACHE_KEY, "issue", 0);
-      vi.mocked(gitHubRateLimitService.shouldBlockRequest).mockImplementation((resource?: string) =>
-        resource === "graphql"
-          ? { blocked: true, reason: "primary", resumeAt: Date.now() + 1000 }
-          : { blocked: false, reason: null }
+      vi.mocked(gitHubRateLimitService.shouldBlockRequest).mockImplementation(
+        (resource?: string) =>
+          resource === "graphql"
+            ? { blocked: true, reason: "primary", resumeAt: Date.now() + 1000 }
+            : { blocked: false, reason: null }
       );
 
       expireMemoryCaches();

@@ -189,7 +189,6 @@ export function getETagCacheVersion(): number {
   return etagCacheVersion;
 }
 
-
 /**
  * Per-repo, per-type list-cache epochs for the count-as-cache-buster
  * (#10122 family). Bumped by {@link invalidateRepoListCachesForCountChange}
