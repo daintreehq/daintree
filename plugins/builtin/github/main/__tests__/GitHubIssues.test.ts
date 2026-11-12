@@ -43,6 +43,7 @@ vi.stubGlobal("fetch", mockFetch);
 import { assignIssue, extractLinkedPR, listIssues } from "../GitHubIssues.js";
 import { buildListCacheKey, DEFAULT_LIST_PER_PAGE } from "../GitHubPRs.js";
 import { GitHubAuth } from "../GitHubAuth.js";
+import { observeRepoCount } from "../repoCountState.js";
 import {
   issueListCache,
   repoStatsCache,
@@ -322,7 +323,7 @@ describe("listIssues — mid-flight count-buster guard", () => {
     clearGitHubCaches();
   });
 
-  it("a response that started before a count bust neither repopulates the list cache nor rolls back the stats count", async () => {
+  it("a response that started before a count bust neither repopulates the list cache nor rolls back a count read after it", async () => {
     let resolveQuery!: (value: unknown) => void;
     const clientMock = vi.fn(
       () =>
@@ -332,11 +333,11 @@ describe("listIssues — mid-flight count-buster guard", () => {
     );
     vi.mocked(GitHubAuth.createClient).mockReturnValueOnce(clientMock as never);
 
-    // The count poll has already committed the post-change total.
-    repoStatsCache.set("testowner/testrepo", { issueCount: 6, prCount: 0, lastUpdated: 1 });
-
     const pending = listIssues({ cwd: "/test", bypassCache: true });
-    // The count buster fires while the list query is in flight.
+    // While the list query is in flight, the count poll settles the
+    // post-change total from a read sent after it, and busts the list caches.
+    observeRepoCount("testowner/testrepo", "issue", 6, Date.now() + 60_000);
+    repoStatsCache.set("testowner/testrepo", { issueCount: 6, prCount: 0, lastUpdated: 1 });
     invalidateRepoListCachesForCountChange("testowner", "testrepo", { issues: true, prs: false });
 
     // The stale response carries the pre-change total.
@@ -354,8 +355,8 @@ describe("listIssues — mid-flight count-buster guard", () => {
     // The caller still receives the page…
     expect(result.totalCount).toBe(5);
     // …but it must not be committed anywhere shared: the cache write would pin
-    // a pre-change page for 60s, and the stats write would roll the toolbar
-    // count back under a fresh lastUpdated.
+    // a pre-change page for 60s, and its total is older than the count main
+    // already holds (#16866).
     expect(issueListCache.get("issue:testowner/testrepo:open::created:")).toBeUndefined();
     expect(repoStatsCache.get("testowner/testrepo")?.issueCount).toBe(6);
   });
