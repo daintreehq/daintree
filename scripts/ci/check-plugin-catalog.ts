@@ -343,7 +343,7 @@ function argValue(argv: readonly string[], flag: string): string | undefined {
 export const escapeAnnotation = (text: string): string =>
   text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
 
-const escapeMarkdown = (text: string): string =>
+export const escapeMarkdown = (text: string): string =>
   text.replace(/\r?\n/g, " ").replace(/[\\`*_[\]<>|]/g, (char) => `\\${char}`);
 
 function writeSummary(result: CatalogCheckResult): void {

@@ -65,7 +65,22 @@ A new release from the same repository with the same capabilities can merge once
 - a repository other than the one the newest earlier listing named;
 - a change to a release that's already listed.
 
-The `plugin-catalog` job names each of these in its summary. It doesn't block on them, so approving them stays a reviewer's job. A bot that opens these pull requests when a listed repository publishes a release is planned separately.
+The `plugin-catalog` job names each of these in its summary. It doesn't block on them, so approving them stays a reviewer's job.
+
+### New releases of a listed plugin
+
+Once a plugin is listed, you don't need to open a pull request for each release. `propose-plugin-catalog-updates.yml` runs every six hours, reads the newest releases of every repository the catalog names, and opens one pull request per new release, built from the downloaded `.dntr`: its SHA-256, and the `id`, `version` and `capabilities` of its manifest. The pull request is labelled `catalog: quick merge` when the repository and capabilities match the plugin's newest entry, or `catalog: needs a person` with the reasons when they don't.
+
+A quick merge is still merged by a person. Merging same-capability releases automatically would let every release after the first reach people unreviewed, which pinning each release exists to prevent; the check proves the bytes match the entry, not that the release is the one its author meant to ship.
+
+The bot proposes a release when:
+
+- its repository is named by an entry for that plugin, so listing one plugin never lets its repository propose another;
+- it is a published release, not a draft or a GitHub prerelease, and its manifest version is canonical semver with no prerelease part;
+- that version is above the plugin's newest entry, so an older release, or one removed from the catalog below the newest, is never proposed;
+- no pull request has proposed it: none of the bot's own in any state, and no open one from anyone. A bot pull request that was closed without merging means a person declined that release, so it isn't proposed again; list it by hand if it should be.
+
+A first listing, a prerelease, or a backport below the newest entry is still the author's pull request. Two releases of the same plugin each get their own pull request against `develop`, so the second conflicts once the first merges; resolve it in place.
 
 ### Reporting an entry
 
