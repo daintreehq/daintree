@@ -578,27 +578,30 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     expect(screen.getByTestId("tooltip-content").textContent).toContain("Exit code: 1");
   });
 
-  it("colours the tooltip's exit line as an error only for a non-zero code", () => {
+  it("marks the tooltip's exit line as a failure only for a non-zero code", () => {
     mockTerminal = { id: "t1", sessionCost: 0.1 };
     const exitLine = () =>
       [...screen.getByTestId("tooltip-content").querySelectorAll("span")].find((el) =>
         /^Exit/.test(el.textContent ?? "")
       )!;
 
+    // A failure is marked in shape, by the severity glyph; the words stay in
+    // neutral ink, which the error hue on tooltip text could not hold to 4.5:1.
     const { rerender } = render(
       <TerminalAgentIndicator id="t1" agentState="exited" isExited={true} exitCode={1} />
     );
-    expect(exitLine().className).toContain("text-status-error");
+    expect(exitLine().querySelector("svg")).not.toBeNull();
+    expect(exitLine().className).not.toContain("text-status-error");
 
     rerender(<TerminalAgentIndicator id="t1" agentState="exited" isExited={true} exitCode={0} />);
     expect(exitLine().textContent).toContain("Exit code: 0");
-    expect(exitLine().className).not.toContain("text-status-error");
+    expect(exitLine().querySelector("svg")).toBeNull();
 
     rerender(
       <TerminalAgentIndicator id="t1" agentState="exited" isExited={true} exitCode={null} />
     );
     expect(exitLine().textContent).not.toMatch(/:\s*$/);
-    expect(exitLine().className).not.toContain("text-status-error");
+    expect(exitLine().querySelector("svg")).toBeNull();
   });
 
   it("does not show stalled state for working agent past 60 seconds", () => {

@@ -324,34 +324,33 @@ export function TerminalHeaderContent({
             data-header-fact=""
             data-testid="terminal-settled-trace"
           >
-            {noChanges && (
-              <span
-                className={cn("whitespace-pre", hasSummary && "@max-[760px]/header:hidden")}
-                aria-hidden="true"
-              >
-                Nothing to commit
-                {phraseSeparated && (
-                  <span className="ml-1">
-                    <FactSeparator />
-                  </span>
-                )}
-              </span>
-            )}
-            {sessionCost != null && (
-              <span className="whitespace-pre" aria-hidden="true">
-                {formatSessionCost(sessionCost)}
-              </span>
-            )}
-            {sessionTokens != null && (
-              <span className="whitespace-pre @max-[640px]/header:hidden" aria-hidden="true">
-                {sessionCost != null && (
-                  <span className="mr-1">
-                    <FactSeparator />
-                  </span>
-                )}
-                {formatTokenCount(sessionTokens)} tokens
-              </span>
-            )}
+            {/* One run of text, so the dots sit between real spaces as in every
+                FactRun and the parts copy out as words, not "commit·$0.42". */}
+            <span className="whitespace-pre" aria-hidden="true">
+              {noChanges && (
+                <span className={cn(hasSummary && "@max-[760px]/header:hidden")}>
+                  Nothing to commit
+                  {phraseSeparated && (
+                    <>
+                      {" "}
+                      <FactSeparator />{" "}
+                    </>
+                  )}
+                </span>
+              )}
+              {sessionCost != null && <span>{formatSessionCost(sessionCost)}</span>}
+              {sessionTokens != null && (
+                <span className="@max-[640px]/header:hidden">
+                  {sessionCost != null && (
+                    <>
+                      {" "}
+                      <FactSeparator />{" "}
+                    </>
+                  )}
+                  {formatTokenCount(sessionTokens)} tokens
+                </span>
+              )}
+            </span>
           </span>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="max-w-xs">

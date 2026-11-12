@@ -87,10 +87,8 @@ export function AgentContextUsageChip({ terminalId }: { terminalId: string }) {
             {formatTokenCount(reading.contextTokens)} context
             {percent !== null && (
               <>
-                <span className="px-1">
-                  <FactSeparator />
-                </span>
-                {percent}%
+                {" "}
+                <FactSeparator /> {percent}%
               </>
             )}
           </span>
